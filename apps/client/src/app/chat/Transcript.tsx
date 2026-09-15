@@ -36,6 +36,7 @@ import { IrisText } from './IrisText.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
 import { RunActivity, RunStream } from './RunSurface.js';
+import { collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
@@ -289,8 +290,10 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     while (index > 0 && session.messages[index - 1]!.run_id === runId && session.messages[index - 1]!.role === 'iris') index -= 1;
     return index;
   })();
-  const before = split === session.messages.length ? session.messages : session.messages.slice(0, split);
+  const before = collapseHistoricalMessages(split === session.messages.length ? session.messages : session.messages.slice(0, split));
   const during = split === session.messages.length ? [] : session.messages.slice(split);
+  const settled = Boolean(session.run && ['completed', 'stopped', 'error'].includes(session.run.status));
+  const currentRunMessages = partitionRunMessages(during, settled, settled ? session.run?.active_ms : null);
 
   const lastIris = [...session.messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
@@ -350,17 +353,13 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             ),
           )}
 
-          {/* The activity for the run in progress: LoadingState before the
-              first delta, ThinkingState over the step rows, ToolChips per tool
-              call, TaskRows for the queue. Above this run's own messages, not
-              below them (decision C40) — the trace is what produced the text,
-              so reading downwards is reading in order. */}
-          <RunActivity session={session} />
+          {/* One activity surface owns every internal provider turn. Model
+              progress and tool work never become duplicate answer bubbles. */}
+          <RunActivity session={session} progress={currentRunMessages.progress} />
 
-          {/* The messages this run has already finalised. */}
-          {during.map((message) => (
-            <IrisMessage key={message.id} message={message} session={session} />
-          ))}
+          {/* A run has one answer, even when tools required several provider
+              turns to produce it. */}
+          {currentRunMessages.answer && <IrisMessage message={currentRunMessages.answer} session={session} />}
 
           {/* And the text that has not finalised yet. */}
           <RunStream session={session} />

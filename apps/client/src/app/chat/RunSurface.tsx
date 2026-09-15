@@ -21,7 +21,7 @@
 // library component here is handed its rows explicitly — none of them is
 // allowed to fall back to the gallery's fixtures (decision C42).
 import { LoadingState, TaskRows, ToolChips } from '@hermes/motion-components';
-import type { RunStep } from '@hermes/shared';
+import type { Message, RunStep } from '@hermes/shared';
 import { useAdapter } from '../store-context.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
@@ -42,7 +42,13 @@ function toolSteps(steps: readonly RunStep[]) {
     }));
 }
 
-export function RunActivity({ session }: { session: SessionState }) {
+function progressLabel(messages: readonly Message[]): string | null {
+  const text = [...messages].reverse().find((message) => message.text.trim())?.text.trim().replace(/\s+/g, ' ');
+  if (!text) return null;
+  return text.length > 140 ? `${text.slice(0, 137).trimEnd()}…` : text;
+}
+
+export function RunActivity({ session, progress = [] }: { session: SessionState; progress?: readonly Message[] }) {
   const adapter = useAdapter();
   const run = session.run;
   if (!run) return null;
@@ -60,6 +66,11 @@ export function RunActivity({ session }: { session: SessionState }) {
   const tools = toolSteps(current);
   const earlierTools = toolSteps(earlier);
   const activeTool = current.find((step) => step.state === 'active' && step.tool_call_id);
+  const answerIsStreaming = Boolean(session.stream?.text.trim());
+  // `run.started` can reach the client one frame before its first provider
+  // step. The run status is already authoritative, so that frame still gets
+  // one thinking indicator instead of an apparently idle transcript.
+  const showWorkingActivity = working && (Boolean(activeTool) || !answerIsStreaming);
 
   // TaskRows is for the two things a person can act on: a queued follow-up, and
   // a run parked on a question. It is not a step list.
@@ -89,21 +100,21 @@ export function RunActivity({ session }: { session: SessionState }) {
   const rows = [...waitingRows, ...queueRows];
   const plural = (n: number): string => `${n} ${n === 1 ? 'step' : 'steps'}`;
 
-  // A turn with no tool call has no activity at all. Nothing was done that the
-  // reply does not already say, and a block that exists only to be collapsed is
-  // furniture (decision C40).
-  const anything = (working && tools.length > 0) || (settled && tools.length > 0) || earlierTools.length > 0 || rows.length > 0;
+  // While the run is working, one activity line bridges the quiet time before
+  // text arrives. After it settles, a turn with no tool call has no activity
+  // block: the answer already says everything the person needs.
+  const anything = showWorkingActivity || (settled && tools.length > 0) || earlierTools.length > 0 || rows.length > 0;
   if (!anything) return null;
 
   return (
     <div className="run-surface hermes-ui" style={{ paddingLeft: 40 }}>
       {/* Working, and a tool is running: one line, the tool's own label, the
           library's inline loader. No grid of rows growing under the reader. */}
-      {working && tools.length > 0 && (
+      {showWorkingActivity && (
         <LoadingState
           active
-          label={activeTool ? `${activeTool.label}…` : `${plural(tools.length)}`}
-          variant={activeTool?.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
+          label={activeTool ? `${activeTool.label}…` : progressLabel(progress) ?? 'Thinking…'}
+          variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
         />
       )}
 
