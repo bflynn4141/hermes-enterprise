@@ -290,7 +290,7 @@ describe('F5 · app.onError', () => {
     const response = await call(`/w/${fx.workspaceId}/provider-keys`, {
       method: 'POST',
       headers: asWriter(fx.adminId),
-      body: JSON.stringify({ provider: 'deepseek', label: 'test', key: 'sk-test-0123456789abcdef' }),
+      body: JSON.stringify({ provider: 'deepseek', label: 'test', key: 'fake-provider-key' }),
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'kek_unavailable' });

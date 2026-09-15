@@ -15,8 +15,8 @@ importers:
   apps/client:
     dependencies:
       '@hermes/motion-components':
-        specifier: file:../../../hermes-motion-components
-        version: file:../hermes-motion-components(motion@13.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: file:../../vendor/hermes-motion-components-0.1.0.tgz
+        version: file:vendor/hermes-motion-components-0.1.0.tgz(motion@13.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@hermes/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -518,8 +518,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hermes/motion-components@file:../hermes-motion-components':
-    resolution: {directory: ../hermes-motion-components, type: directory}
+  '@hermes/motion-components@file:vendor/hermes-motion-components-0.1.0.tgz':
+    resolution: {integrity: sha512-Bgm+3dMvhVgJEbxp2M2yqClwaSgmHMJf8bOFPh+Y0gtgAJy5JsmeuVGy4U7O+/vh7nperfg9QHOs/Tz0LkQ3ug==, tarball: file:vendor/hermes-motion-components-0.1.0.tgz}
+    version: 0.1.0
     peerDependencies:
       motion: ^13.3.0
       react: ^19.0.0
@@ -1938,7 +1939,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@hermes/motion-components@file:../hermes-motion-components(motion@13.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@hermes/motion-components@file:vendor/hermes-motion-components-0.1.0.tgz(motion@13.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       class-variance-authority: 0.7.1
       clsx: 2.1.1
