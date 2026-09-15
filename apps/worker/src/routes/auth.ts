@@ -17,8 +17,9 @@
 // membership itself, from the authentication response, and falls back to
 // `listOrganizationMemberships` when that response carries no organization.
 import type { Context } from 'hono';
-import { authSessionSchema } from '@hermes/shared';
+import { authSessionSchema, authWorkspacesSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
+import { isDevelopment } from '../env.js';
 import { getSession } from '../auth.js';
 import { AuthError } from '../auth/types.js';
 import { upsertUser, takeRefreshedCookie } from '../auth/adapters.js';
@@ -61,10 +62,47 @@ export function safeReturnPath(raw: string | undefined | null): string {
 const redirectUri = (c: Context<{ Bindings: Env }>): string =>
   c.env.WORKOS_REDIRECT_URI ?? `${new URL(c.req.url).origin}/auth/callback`;
 
+/**
+ * The development step-up.
+ *
+ * In `AUTH_MODE=fake` there is no AuthKit to send anyone to, and
+ * `auth_sessions.authenticated_at` is written once on the INSERT for
+ * `sid = dev-<user id>` and never moved — so five minutes after a dev
+ * workspace is first opened, every decision and every provider-key route
+ * answers `reauth_required` for ever (decision C24). `?step_up=1` re-stamps
+ * the row instead, which is exactly what `/auth/callback` does in the real
+ * flow, and then sends the browser back where it came from.
+ *
+ * Dev-only twice over: the branch is behind `AUTH_MODE === 'fake'`, which is
+ * refused outside development by `authAdapter`, and behind a second check that
+ * `ENVIRONMENT` is a development one. The five-minute rule is untouched — this
+ * moves the clock the rule reads, it does not widen the window. See decision F4.
+ */
+async function fakeStepUp(c: Context<{ Bindings: Env }>): Promise<Response> {
+  if (!isDevelopment(c.env)) {
+    throw new RouteError('the development step-up is not available here', 'not_configured', 503);
+  }
+  // The same adapter every route uses, so a missing or unknown `x-dev-user` is
+  // a 401 here exactly as it is everywhere else.
+  const session = await getSession(c);
+  const client = await connect(c.env, 'app');
+  try {
+    await client.query(
+      `UPDATE auth_sessions SET authenticated_at = now(), last_seen_at = now(), revoked_at = NULL
+        WHERE sid = $1 AND user_id = $2`,
+      [session.sid, session.userId],
+    );
+  } finally {
+    await client.end();
+  }
+  return c.redirect(safeReturnPath(c.req.query('return_to')), 302);
+}
+
 /** GET /auth/login */
-export function login(c: Context<{ Bindings: Env }>): Response {
-  const port = workosPort(c.env);
+export async function login(c: Context<{ Bindings: Env }>): Promise<Response> {
   const stepUp = c.req.query('step_up') === '1';
+  if (stepUp && c.env.AUTH_MODE === 'fake') return fakeStepUp(c);
+  const port = workosPort(c.env);
   const returnTo = safeReturnPath(c.req.query('return_to'));
   const url = port.authorizationUrl({
     redirectUri: redirectUri(c),
@@ -242,20 +280,38 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
     if (requested) {
       workspaceId = requested;
     } else {
-      // `members` is a tenant table, so "which workspaces am I in?" cannot be
-      // asked without a tenant key. The platform-side directory answers it, one
-      // workspace at a time, under each workspace's own key.
-      const directory = await client.query<{ workspace_id: string }>(
-        `SELECT workspace_id FROM workspace_directory ORDER BY created_at DESC LIMIT 200`,
+      // `members` is a tenant table under forced row-level security, so "which
+      // workspaces am I in?" cannot be asked without already knowing the
+      // answer. It used to be approximated by walking `workspace_directory`,
+      // which only the WorkOS mirror writes — so a seeded or locally created
+      // workspace was invisible and the route answered 404 `no_workspace` to
+      // someone who was plainly a member of one (decision F7).
+      //
+      // `hermes_user_workspaces` (migration 0013) answers it directly: a
+      // SECURITY DEFINER function filtered by `user_id`, returning ids, names
+      // and roles and nothing else.
+      const mine = await client.query<{ workspace_id: string; name: string; role: string }>(
+        `SELECT workspace_id, name, role FROM hermes_user_workspaces($1)`,
+        [session.userId],
       );
-      workspaceId = null;
-      for (const candidate of directory.rows) {
-        const found = await memberOf(c.env, candidate.workspace_id, session.userId);
-        if (found) {
-          workspaceId = candidate.workspace_id;
-          break;
-        }
+      if (mine.rows.length === 0) {
+        throw new RouteError('this account belongs to no workspace yet', 'no_workspace', 404);
       }
+      // No workspace was named, so there are no stream heads and no hub ticket
+      // to mint: both are per-workspace, and inventing them for a workspace the
+      // caller has not chosen would hand out an authorisation nobody asked for.
+      // The client picks one and asks again by id.
+      return c.json(
+        authWorkspacesSchema.parse({
+          user: { id: user.id, name: user.name ?? user.email, email: user.email },
+          workspaces: mine.rows.map((row) => ({
+            id: row.workspace_id,
+            name: row.name,
+            role: row.role === 'admin' ? 'admin' : 'member',
+          })),
+          authenticated_at: session.authenticatedAt.toISOString(),
+        }),
+      );
     }
   } finally {
     await client.end();
@@ -305,13 +361,4 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
   const refreshed = takeRefreshedCookie(c.req.raw);
   if (refreshed) response.headers.append('Set-Cookie', refreshed);
   return response;
-}
-
-/** Membership, asked under the workspace's own key. Null when not a member. */
-async function memberOf(env: Env, workspaceId: string, userId: string): Promise<boolean> {
-  try {
-    return await withTenantTransaction(env, 'app', { workspaceId, userId }, async () => true);
-  } catch {
-    return false;
-  }
 }

@@ -6,15 +6,17 @@ fallback and `run_worker_first` on the API prefixes.
 
 It runs against the real Worker. `pnpm e2e:live` boots Docker Postgres, the
 migrations, `wrangler dev --local` with `AUTH_MODE=fake` and `MODEL_SCRIPTED=1`,
-and drives fourteen scenarios through the live stack; `qa/live/` holds the
+and drives twenty-one scenarios through the live stack; `qa/live/` holds the
 screenshots that run produced.
 
 There is no framework and no router. Routing is `src/model/routes.ts`: two pure
 functions over `packages/shared/refs.ts`, so the URL and `sameRef` are driven by
 the same keys and a new ref key cannot be forgotten in one of them. The shell's
-own path prefix is `/workspace/:ws`, not `/w/:ws`, because `/w/*` is
-worker-first and its catch-all answers JSON — see "Server findings" below and
-decision C12.
+own path prefix is `/workspace/:ws`, and `/w/:ws` works too: the prefix moved
+because `/w/*` is worker-first and its catch-all used to answer JSON (decision
+C12), and the Worker's catch-all now serves the app to a navigation there
+(server decision F1). `parseRoute` has always accepted both, so both are live
+and nothing had to change.
 
 ## Commands
 
@@ -43,8 +45,9 @@ them: `maya@nous.example` (Admin) and `dana@nous.example` (Member). It is behind
 `__AUTH_MODE__ === 'fake'`, so a production build eliminates it.
 
 `apps/worker/.dev.vars` needs a `KEK_V1` (base64, 32 bytes) before a provider
-key can be added — without one the route answers 500. `wrangler` only reads
-`.dev.vars` at startup, so restart it after adding one.
+key can be added — without one the route answers 503 `kek_unavailable`, which
+says what is missing (server decision F5). `wrangler` only reads `.dev.vars` at
+startup, so restart it after adding one.
 
 Two things behave differently under fake auth, both of them the Worker's shape
 rather than a client choice, and both recorded as decisions C16 and C24:
@@ -54,10 +57,12 @@ rather than a client choice, and both recorded as decisions C16 and C24:
   the same replay route, with the same cursor and the same ordering, so
   everything works — it is just a little slower. Playwright can set the header,
   so the live suite exercises the socket path.
-* there is no step-up route, and `authenticated_at` is stamped once and never
-  moved, so decisions and provider-key changes start answering `reauth_required`
-  five minutes after a dev workspace is first opened.
-  `pnpm --filter client dev:step-up` re-stamps it.
+* `authenticated_at` used to be stamped once and never moved, so decisions and
+  provider-key changes started answering `reauth_required` five minutes after a
+  dev workspace was first opened. The Worker now has a development step-up:
+  `GET /auth/login?step_up=1` re-stamps the row in `AUTH_MODE=fake` and
+  redirects back (server decision F4). `pnpm --filter client dev:step-up` does
+  the same from the shell, which is what the fixtures use.
 
 ## Mock server mode
 
@@ -104,6 +109,7 @@ src/app/      Shell, Sidebar, chat/, views/, onboarding/, shared/, ui/
 e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
               qa-screens.spec.ts  the mock screenshots
               live.spec.ts        P4–P14, against wrangler dev
+              live-findings.spec.ts the scenarios the server fixes unblocked
               live-screens.spec.ts the live screenshots
 scripts/      e2e-live.mjs      boots the stack and runs the live suite
               live-fixture.mjs  a fresh workspace, and the step-up re-stamp
@@ -141,18 +147,59 @@ qa/live/      the same screens against the real Worker
 
 ## Server findings
 
-Things the Worker does that the client had to work around, in the order they
-cost the most. Each one is a small fix on the server side, and each has a
-decision explaining what the client does meanwhile.
+Things the Worker did that the client had to work around, in the order they cost
+the most. **All nine are now fixed on the server** (`docs/DECISIONS.md`, series
+F); the "what the client does meanwhile" decisions are left in place, because
+each of them is still correct — a client that treats a `run.focus` on an unseen
+request as its creation is right whether or not `request.created` also arrives.
 
-| # | Where | What is wrong |
-|---|---|---|
-| 1 | `apps/worker/wrangler.jsonc` `run_worker_first`, with `app.all('/w/*')` in `src/index.ts` | A navigation to `/w/:ws` gets `{"reason":"unknown_route"}` instead of the app: the catch-all fires before the SPA fallback. The shell moved to `/workspace/:ws` (C12). Fix: answer the catch-all from `env.ASSETS` for navigation requests. |
-| 2 | `apps/worker/src/engine/tools.ts` (`propose_request`) | No `request.created` is published. `stream_events` for the seeded workspace holds 24 `run.focus` rows and zero `request.created`. A member who is not on the proposing session's socket learns nothing until they reload (C21). |
-| 3 | `apps/worker/wrangler.jsonc` `run_worker_first` | `/workspaces` is not in the list, so `POST /workspaces` is answered by the assets binding with **405** and the create-workspace route is unreachable. The live suite writes the rows directly instead (`scripts/live-fixture.mjs`). Fix: add `/workspaces` to the list. |
-| 4 | `apps/worker/src/auth/adapters.ts`, and no `/auth/dev/step-up` | Fake auth stamps `authenticated_at` once and never moves it, and there is no route that can. Every step-up action starts failing five minutes in (C24). |
-| 5 | `apps/worker/src/keys/envelope.ts` via `src/routes/keys.ts` | A missing `KEK_V{n}` raises `KeyCryptoError`, which `app.onError` does not handle, so adding a provider key is a 500 with `reason: "internal"` rather than a 503 `not_configured`. `.dev.vars.example` ships `KEK_V1=""`, so a fresh checkout hits this. |
-| 6 | `apps/worker/src/keys/store.ts` `removeProviderKey` | Removing an already-revoked key throws `KeyStoreError`, also unhandled by `app.onError`: a double-click on Remove is a 500 rather than a 409. |
-| 7 | `apps/worker/src/routes/auth.ts` `authSession` | Without `?ws=` it walks `workspace_directory`, which only the WorkOS mirror writes, so a seeded development workspace answers 404 `no_workspace`. The client always passes `?ws=` (C18). |
-| 8 | `apps/worker/src/runs/workflow.ts` `DEV_SCRIPT` | `MODEL_SCRIPTED=1` is one fixed two-turn script with no failure path, so the spec's P8 (provider 5xx then retry) and P9 (a tear at 40 %) cannot be driven from the client at all. `SCRIPTS` in `src/model/scripted.ts` already has both; only the selection is missing. |
-| 9 | `apps/worker/src/runs/receipt.ts` | The receipt block names its request as `requestId`, where the contract's other blocks use a `command` or `request_id`. The client reads all three. |
+| # | Where | What was wrong | Fixed by |
+|---|---|---|---|
+| 1 | `apps/worker/wrangler.jsonc` `run_worker_first`, with `app.all('/w/*')` in `src/index.ts` | A navigation to `/w/:ws` got `{"reason":"unknown_route"}` instead of the app: the catch-all fired before the SPA fallback. The shell moved to `/workspace/:ws` (C12). | F1 — one catch-all that reads `Sec-Fetch-Mode`/`Accept` and serves `env.ASSETS` for a navigation. **`/w/:ws` and `/workspace/:ws` both work now**; `parseRoute` already accepted both, so nothing had to change here. |
+| 2 | `apps/worker/src/engine/tools.ts` (`propose_request`) | No `request.created` was published, so a member not on the proposing session's socket learned nothing until they reloaded (C21). | F3 — the outbox row is written in the same transaction as the `requests` insert and published to the WorkspaceHub. |
+| 3 | `apps/worker/wrangler.jsonc` `run_worker_first` | `/workspaces` was not in the list, so `POST /workspaces` was answered by the assets binding with **405**. | F1/F2 — `/workspaces`, `/invitations/*` and `/shared/*` added, and `POST /invitations/:token/accept` written. |
+| 4 | `apps/worker/src/auth/adapters.ts`, and no step-up route | Fake auth stamped `authenticated_at` once and never moved it, so every step-up action started failing five minutes in (C24). | F4 — `GET /auth/login?step_up=1` re-stamps it in `AUTH_MODE=fake`. Dev-only, and the five-minute rule is unchanged. |
+| 5 | `apps/worker/src/keys/envelope.ts` via `src/routes/keys.ts` | A missing `KEK_V{n}` was a 500 `internal` rather than a 503. | F5 — 503 `kek_unavailable`. |
+| 6 | `apps/worker/src/keys/store.ts` `removeProviderKey` | Removing an already-revoked key was a 500 rather than a 409. | F5 — 409 `already_revoked`. |
+| 7 | `apps/worker/src/routes/auth.ts` `authSession` | Without `?ws=` it walked `workspace_directory` and answered 404 for a seeded workspace (C18). | F7 — it answers the user's workspaces, from the `member_directory` platform table, with stream heads omitted. |
+| 8 | `apps/worker/src/runs/workflow.ts` `DEV_SCRIPT` | One fixed two-turn script with no failure path, so P8 and P9 could not be driven from the client. | F6 — the turn text or an `x-scripted-script` header names a scenario. |
+| 9 | `apps/worker/src/runs/receipt.ts` | The receipt block names its request as `requestId` where other blocks use `command` or `request_id`. | Unchanged on the server; the client reads all three. |
+
+### Driving the scripted scenarios
+
+With `MODEL_SCRIPTED=1` (which `wrangler dev` and `pnpm e2e:live` both set), a
+turn can name which `ScriptedProvider` script answers it — either in the text or
+with an `x-scripted-script` header:
+
+| Name | What happens |
+|---|---|
+| `completed` | The ordinary two-turn script: a proposal, then a reply. The default. |
+| `transient_5xx` | A provider 503 on the first attempt, then the ordinary script. P8. |
+| `partial_stream` | Deltas, then the stream tears; the step retries and the run completes. P9. |
+| `auth_401` | A provider 401 on the first attempt. |
+| `malformed_tool` | Tool arguments that are not JSON. |
+
+```sh
+# from the composer, as a person would
+Screen the applicant (partial_stream).
+
+# or explicitly
+curl -X POST .../turns -H 'x-scripted-script: transient_5xx' ...
+```
+
+The name is honoured on the **first attempt only**, so a Retry is allowed to
+succeed — which is what makes "a 503, then a Retry that works" one flag rather
+than two. It is refused outside `ENVIRONMENT=development`.
+
+### New read routes
+
+`GET /w/:ws/traces`, `GET /w/:ws/traces/:runId`, `GET|POST /w/:ws/skills`,
+`GET /w/:ws/instructions` with `accept`/`discard`, and
+`GET|PATCH /w/:ws/context-fields` all exist now, so the Agent tab's panes render
+real rows rather than "Not available yet". The trace detail carries the run's
+tool calls and their results (with the 8 KB truncation marker intact), the URLs
+`fetch_url` retrieved, the focus history and the allowed-tools line.
+
+`e2e/live-findings.spec.ts` is the suite that drives all of this: seven
+scenarios on top of the fourteen in `live.spec.ts`, and `pnpm e2e:live` runs
+both.

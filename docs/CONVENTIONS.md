@@ -94,7 +94,11 @@ Cross-package imports go one way: `apps/*` may import `@hermes/shared`;
    it to `EVENT_KINDS_CONTRACT` and give it a stream in `EVENT_STREAM`.
 2. Decide whether the `agent` role may publish it. If the kind is not
    `message.*` or `run.*`, the trigger in `0005` refuses it, which is the
-   default and usually correct answer.
+   default and usually correct answer. The one widening is in `0013`:
+   `request.created` and `entity.updated` are allowed, and only for a payload
+   naming a `requests` row this workspace's run engine actually wrote. If you
+   want a third exception, write the predicate — "this role may publish X" is
+   the shape that eventually lets a tool publish `decision.recorded`.
 3. If it changes the run state machine, add a rule to the run-log validator and
    a case to `test/run-log.test.ts`.
 4. Add it to the mock stream if a client will need to render it.

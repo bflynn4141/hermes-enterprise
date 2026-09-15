@@ -94,9 +94,21 @@ export interface AppendTurnInput {
  * whose header says why it will not be added, with a type test that fails.
  */
 export interface AgentWrites {
-  /** Writes a `requests` row in `pending`. Nothing else may move it out. */
-  proposeRequest(input: ProposeRequestInput): Promise<{ requestId: string; created: boolean }>;
-  saveReviewNote(input: SaveReviewNoteInput): Promise<{ noteId: string; created: boolean }>;
+  /**
+   * Writes a `requests` row in `pending`. Nothing else may move it out.
+   *
+   * `events` are the outbox rows written *in the same transaction as the
+   * insert* — `request.created` for a new row — already committed and ready to
+   * be handed to the WorkspaceHub. They are returned rather than published
+   * here because publishing is a network call and this method is inside a
+   * transaction; see decision F3.
+   */
+  proposeRequest(
+    input: ProposeRequestInput,
+  ): Promise<{ requestId: string; created: boolean; events?: readonly EmittedEvent[] }>;
+  saveReviewNote(
+    input: SaveReviewNoteInput,
+  ): Promise<{ noteId: string; created: boolean; events?: readonly EmittedEvent[] }>;
   setContextField(input: SetContextFieldInput): Promise<{ fieldId: string }>;
   proposeInstruction(input: ProposeInstructionInput): Promise<{ versionId: string; created: boolean }>;
   appendTurn(input: AppendTurnInput): Promise<{ turnId: string; created: boolean }>;

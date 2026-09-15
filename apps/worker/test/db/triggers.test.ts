@@ -30,7 +30,7 @@ describe('the outbox kind guard', () => {
         c.query(`INSERT INTO stream_events (workspace_id, kind, payload) VALUES ($1, 'decision.recorded', '{}'::jsonb)`, [
           fx.workspaceId,
         ]),
-      ).rejects.toThrow(/message\.\* and run\.\* only/);
+      ).rejects.toThrow(/the agent role may publish/);
       await c.query('ROLLBACK');
     });
   });

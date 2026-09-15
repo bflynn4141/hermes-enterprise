@@ -475,7 +475,45 @@ export class PgAgentDb implements AgentDb {
   // AgentWrites
   // -------------------------------------------------------------------------
 
-  async proposeRequest(input: ProposeRequestInput): Promise<{ requestId: string; created: boolean }> {
+  /**
+   * One outbox row, inside a transaction the caller already opened.
+   *
+   * Factored out of `emit` so that `proposeRequest` and `saveReviewNote` can
+   * write the event in the *same* transaction as the row it is about. The
+   * alternative — emit afterwards — has a window in which the request exists
+   * and no event says so, and a crash inside that window leaves a request
+   * nobody is told about until they reload. See decision F3.
+   *
+   * No RETURNING, for the reason `emit` gives: the `agent` role has INSERT on
+   * `stream_events` and no SELECT, and holds `USAGE, SELECT` on the sequence.
+   */
+  private async insertEvent(
+    q: <R>(text: string, values?: readonly unknown[]) => Promise<QueryResultLike<R>>,
+    event: EmitInput,
+  ): Promise<EmittedEvent | null> {
+    await q(
+      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5)`,
+      [this.workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), this.traceId],
+    );
+    const { rows } = await q<{ id: string; created_at: Date }>(
+      `SELECT currval('stream_events_id_seq')::text AS id, now() AS created_at`,
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      kind: event.kind,
+      sessionId: event.sessionId ?? null,
+      payload: event.payload,
+      traceId: this.traceId,
+      at: row.created_at.toISOString(),
+    };
+  }
+
+  async proposeRequest(
+    input: ProposeRequestInput,
+  ): Promise<{ requestId: string; created: boolean; events?: readonly EmittedEvent[] }> {
     return this.tx(async (q) => {
       const inserted = await q<{ id: string }>(
         `INSERT INTO requests (workspace_id, kind, subject_key, label, payload, status, run_id, session_id, tool_call_id)
@@ -495,16 +533,41 @@ export class PgAgentDb implements AgentDb {
         ],
       );
       const created = inserted.rows[0]?.id;
-      if (created) return { requestId: created, created: true };
+      if (created) {
+        // The event, in the transaction that made the row. The trigger in
+        // migration 0013 lets the `agent` role publish this one because the
+        // payload names a `requests` row with a `run_id` — a row only
+        // `proposeRequest` writes. It is a workspace event (`sessionId: null`)
+        // because every member's Inbox is what needs it, not the session's
+        // socket.
+        const event = await this.insertEvent(q, {
+          kind: 'request.created',
+          sessionId: null,
+          payload: {
+            request_id: created,
+            kind: input.kind,
+            status: 'pending',
+            label: input.label,
+            run_id: input.runId,
+            session_id: input.sessionId,
+          },
+        });
+        return { requestId: created, created: true, events: event ? [event] : [] };
+      }
       const existing = await q<{ id: string }>(
         `SELECT id FROM requests WHERE run_id = $1 AND tool_call_id = $2`,
         [input.runId, input.toolCallId],
       );
+      // A replayed step wrote nothing, so it publishes nothing: a second
+      // `request.created` for the same id would put the row in the Inbox twice
+      // on a client that had not seen the first.
       return { requestId: existing.rows[0]?.id ?? '', created: false };
     });
   }
 
-  async saveReviewNote(input: SaveReviewNoteInput): Promise<{ noteId: string; created: boolean }> {
+  async saveReviewNote(
+    input: SaveReviewNoteInput,
+  ): Promise<{ noteId: string; created: boolean; events?: readonly EmittedEvent[] }> {
     return this.tx(async (q) => {
       const inserted = await q<{ id: string }>(
         `INSERT INTO request_notes (workspace_id, request_id, body, author_type, run_id, tool_call_id)
@@ -515,7 +578,23 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, input.requestId, input.body, input.runId, input.toolCallId],
       );
       const created = inserted.rows[0]?.id;
-      if (created) return { noteId: created, created: true };
+      if (created) {
+        // A note changes what the review pane shows without changing the
+        // request's status, which is exactly what `entity.updated` is for. It
+        // names the request rather than the note, because the request is the
+        // thing a member has open.
+        const event = await this.insertEvent(q, {
+          kind: 'entity.updated',
+          sessionId: null,
+          payload: {
+            entity_type: 'request',
+            entity_id: input.requestId,
+            ref: { section: 'inbox', view: 'request', id: input.requestId },
+            version: null,
+          },
+        });
+        return { noteId: created, created: true, events: event ? [event] : [] };
+      }
       const existing = await q<{ id: string }>(
         `SELECT id FROM request_notes WHERE run_id = $1 AND tool_call_id = $2`,
         [input.runId, input.toolCallId],
@@ -591,29 +670,8 @@ export class PgAgentDb implements AgentDb {
     return this.tx(async (q) => {
       const written: EmittedEvent[] = [];
       for (const event of events) {
-        // No RETURNING: the `agent` role has INSERT on `stream_events` and no
-        // SELECT (migration 0004), and `RETURNING id` is a read. The id comes
-        // from the sequence the INSERT just advanced instead — the role does
-        // hold USAGE, SELECT on `stream_events_id_seq`, which is exactly the
-        // narrow privilege this needs and nothing wider.
-        await q(
-          `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
-           VALUES ($1, $2, $3, $4::jsonb, $5)`,
-          [this.workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), this.traceId],
-        );
-        const { rows } = await q<{ id: string; created_at: Date }>(
-          `SELECT currval('stream_events_id_seq')::text AS id, now() AS created_at`,
-        );
-        const row = rows[0];
-        if (!row) continue;
-        written.push({
-          id: row.id,
-          kind: event.kind,
-          sessionId: event.sessionId ?? null,
-          payload: event.payload,
-          traceId: this.traceId,
-          at: row.created_at.toISOString(),
-        });
+        const row = await this.insertEvent(q, event);
+        if (row) written.push(row);
       }
       return written;
     });

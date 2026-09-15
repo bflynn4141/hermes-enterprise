@@ -18,7 +18,10 @@ export class RouteError extends Error {
   constructor(
     message: string,
     readonly reason: string,
-    readonly status: 400 | 403 | 404 | 409 | 422 | 429 = 400,
+    // 503 is here for the conditions that are a *deployment* rather than a
+    // request: a missing KEK, a development-only route asked for in an
+    // environment that does not have it. See decision F5.
+    readonly status: 400 | 403 | 404 | 409 | 422 | 429 | 503 = 400,
   ) {
     super(message);
     this.name = 'RouteError';

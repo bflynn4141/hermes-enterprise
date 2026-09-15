@@ -2221,3 +2221,299 @@ Stated so the gaps are visible rather than discovered.
 * **No deployment was run.** Both deploy workflows are written and linted and
   neither has been executed; the first-deploy checklist in `docs/RUNBOOK.md` is
   what has to happen before either can be.
+
+---
+
+# Series F — the server findings the live client integration produced
+
+`apps/client/README.md` ends with a table of nine things the Worker did that the
+client had to work around. Each of these is one of them: what was wrong, what
+the server does now, and what it deliberately still refuses to do. Every one has
+a test, and the tests are collected in `apps/worker/test/db/server-findings.test.ts`,
+`apps/worker/test/unit/server-findings.test.ts` and
+`apps/client/e2e/live-findings.spec.ts` so the file itself answers "did we fix
+what the integration hit?".
+
+---
+
+## F1. The catch-all reads the request, not the path
+
+**Found by the client.** `app.all('/w/*')` answered `{"reason":"unknown_route"}`
+to a browser navigating to `/w/:ws`, because `/w/*` is `run_worker_first` and the
+catch-all fired before the assets binding's SPA fallback could. The shell moved
+to `/workspace/:ws` to get out of the way (decision C12).
+
+**Decided.** One catch-all, `app.all('*')`, that asks what the *request* wants
+rather than what the path looks like (`src/routes/spa.ts`):
+
+* `Sec-Fetch-Mode: navigate` on a GET or HEAD is a navigation, and gets
+  `index.html` from `env.ASSETS`;
+* without Fetch Metadata, `Accept` decides, and the *order* decides: `text/html`
+  before `application/json` is a page, the other way round is data;
+* anything else — every POST, every `fetch()`, anything under `/api/` — still
+  gets `{"reason":"unknown_route"}` as JSON. A client that asked for data is
+  never handed HTML, which is the property the old catch-all was protecting and
+  the reason it is still there in spirit.
+
+`/api/*` is exempt from the navigation branch on purpose: that prefix means
+"data", and a person who typed an API URL into the address bar is better served
+by the 404 than by the shell.
+
+**What this means for the client.** `/w/:ws` now works. `/workspace/:ws` also
+still works and nothing has to change — `parseRoute` already accepted both — so
+this is a fix the client can adopt at its leisure rather than a migration.
+
+**Also fixed here.** `run_worker_first` now lists `/workspaces`,
+`/invitations/*` and `/shared/*` alongside the four prefixes it had. A Worker
+route that is not in that list is not a broken route, it is an *absent* one: the
+assets binding answers first, and a POST to a static asset is 405.
+
+---
+
+## F2. Two routes have no tenant in their path, and the second one is new
+
+**Found by the client.** `POST /workspaces` was answered by the assets binding
+with 405, so the create-workspace flow was unreachable and the live suite wrote
+the rows directly (`scripts/live-fixture.mjs`). Accepting an invitation had no
+route at all: the client sent people to `/auth/login?invitation_token=…`, which
+is a 503 in `AUTH_MODE=fake`.
+
+**Decided.** `POST /invitations/:token/accept` (`src/routes/invitations.ts`),
+alongside `POST /workspaces`, with the run-worker-first entries that make both
+reachable. The accept route:
+
+* takes the token as *which invitation*, never as *who*. The signed-in session
+  says who, and the two have to agree — the person's email must be the address
+  the invitation was sent to — because a forwarded link would otherwise admit
+  whoever received it;
+* mirrors the membership through `mirrorMembership`, the same function
+  `/auth/callback` and the WorkOS events poller use, so a membership that
+  arrives by any of the three routes is one shape of row and flips the
+  invitation to `accepted` the same way;
+* answers with the whole bootstrap, from inside the transaction that admitted
+  them, so there is no window in which they are a member of a workspace that
+  reads as missing;
+* answers one thing — 404 `invitation_unavailable` — for unknown, withdrawn,
+  accepted and expired alike. Which of the four it is tells a guesser
+  something and tells the holder of a real link nothing they can act on.
+
+**The tenant problem, and the third platform table.** The route cannot set a
+tenant key until it knows which workspace, and `invitations` is a tenant table
+under forced row-level security. This is the same shape of question as "which
+workspace is WorkOS organization X?", so it gets the same answer 0008 gave:
+`invitation_directory`, a platform table holding a token, an invitation id and a
+workspace id, maintained by a trigger on `invitations` rather than by the routes
+— because three code paths write invitations and a fourth will exist by the time
+anyone reads this. A row disappears the moment the invitation stops being
+`pending`, so a forwarded link stops resolving when it stops being an invitation.
+
+---
+
+## F3. `propose_request` publishes `request.created`, in the insert's transaction
+
+**Found by the client.** The engine wrote the `requests` row and published
+`run.focus` and nothing else: the seeded workspace held 24 `run.focus` rows and
+zero `request.created`. The client worked around it by treating a focus on an
+unseen request as its creation (decision C21), which fixes the proposing
+session's own pane and fixes nothing for anybody else — `run.focus` is
+session-scoped, and another member is not on that socket.
+
+**Decided.** `PgAgentDb.proposeRequest` writes the `request.created` outbox row
+in the *same transaction* as the `requests` insert, and returns it; the tool
+passes it back as `ToolOutcome.published`; the engine hands it to the
+WorkspaceHub after the turn's session events. A note does the same with
+`entity.updated`. Three consequences worth stating:
+
+* **the same transaction, not "afterwards".** Emitting after the insert has a
+  window in which the request exists and no event says so, and a crash inside
+  that window leaves a request nobody is told about until they reload. That is
+  the exact failure this decision is about, so it is not reintroduced one layer
+  down;
+* **a replayed step publishes nothing.** `ON CONFLICT DO NOTHING` already made
+  the insert idempotent; the event is written only on the branch that inserted,
+  so a Workflow step that ran twice produces one request and one event;
+* **the publish is still best-effort.** A lost RPC costs a reconnect, not the
+  event: the row is committed and `GET /w/:ws/events?after=` replays it. That is
+  decision 40 unchanged.
+
+**The trigger, and why it was widened rather than bypassed.** Migration 0005
+refused every kind outside `message.*` and `run.*` from the `agent` role, which
+is the right default and is what stops a tool publishing `decision.recorded`.
+The alternative to widening it was to publish through the `app`-role Cron drain,
+which would have made a proposal visible up to a minute after it was made — the
+symptom this decision exists to remove.
+
+So 0013 widens it by a predicate rather than by a kind:
+`stream_events_agent_may_publish` allows `request.created` and
+`entity.updated` **only when the payload names a `requests` row, in this
+workspace, that carries a `run_id`** — and `run_id` is set by nothing but
+`proposeRequest`. A tool cannot forge an event about a request it did not
+create, and it still cannot publish `decision.recorded` at all.
+
+**The decision invariant is untouched.** `request.created` says a proposal
+exists and is `pending`. `pending` is the state the guarded decision route is
+the only thing that can move a request out of (CONVENTIONS invariant 1), and
+nothing in this change gives the agent role a way to write `decisions` or to
+move a status. A test asserts the trigger still refuses an event about a
+`requests` row a human made.
+
+---
+
+## F4. Fake mode has a step-up, and it is the clock rather than the rule
+
+**Found by the client.** `auth_sessions.authenticated_at` is written once, on
+the INSERT for `sid = dev-<user id>`, and nothing moved it. Five minutes after a
+dev workspace was first opened, every decision and every provider-key route
+answered `reauth_required` for ever; the client could only challenge in place
+(decision C24) and a script re-stamped the row by hand.
+
+**Decided.** `GET /auth/login?step_up=1` re-stamps the row when
+`AUTH_MODE === 'fake'`, then redirects to `return_to` — which is exactly what
+`/auth/callback` does in the real flow, and exactly what
+`scripts/dev-step-up.mjs` was doing from outside.
+
+**Dev-only, twice.** The branch is behind `AUTH_MODE === 'fake'`, which
+`authAdapter` refuses outside development, and behind a second `isDevelopment`
+check that answers 503 `not_configured` otherwise. It also goes through the
+ordinary `getSession`, so a missing or unknown `x-dev-user` is a 401 here as
+everywhere else, and `return_to` goes through `safeReturnPath`, so it cannot be
+used as an open redirect.
+
+**The five-minute rule is unchanged.** This moves the clock the rule reads. It
+does not widen the window, and `requireStepUp` is not touched.
+
+---
+
+## F5. A known condition is never a 500
+
+**Found by the client.** A missing `KEK_V{n}` raised `KeyCryptoError`, which
+`app.onError` did not handle, so adding a provider key on a fresh checkout — and
+`.dev.vars.example` ships `KEK_V1=""` — was a 500 with `reason: "internal"`.
+Removing an already-revoked key was the same: a double-click on Remove was a
+500 rather than a 409.
+
+**Decided.** Four more branches in `app.onError`, in this order:
+
+| Thrown | Answer | Why that one |
+|---|---|---|
+| `KeyCryptoError` `kek_missing` / `kek_version_unknown` / `kek_malformed` | 503 `kek_unavailable` | The deployment cannot encrypt anything until someone sets a secret. That is a configuration failure, and 503 is what says "not now" rather than "you broke it". |
+| `KeyCryptoError` `plaintext_empty` | 422 | The request is wrong, and it is the caller's to fix. |
+| `KeyCryptoError` `decrypt_failed` | still 500 | The key material is present and did not authenticate. Nothing about that is expected, and pretending it is would hide it. |
+| `KeyStoreError` `already_revoked` / `duplicate_key` | 409 | "That already happened" is not an error the caller has to recover from. |
+| `KeyStoreError` `not_found` | 404 | |
+| any thrown error carrying a numeric `status` and a string `reason` | that status | An error that named its own status has already decided how it should be answered; mapping it to 500 here loses that on the way out, which is the whole failure this block exists to stop. |
+
+`RouteError` gained `503` as an allowed status for the same reason: some
+conditions are a property of the deployment rather than of the request.
+
+---
+
+## F6. `MODEL_SCRIPTED` takes a scenario name
+
+**Found by the client.** `MODEL_SCRIPTED=1` was one fixed two-turn script with
+no failure path, so the spec's P8 (a provider 5xx, then a Retry) and P9 (a tear
+at 40 percent) could not be driven from the client at all — the scripts already
+existed in `src/model/scripted.ts`, only the selection was missing.
+
+**Decided.** `DEV_SCRIPTS` in `src/runs/workflow.ts` names five scenarios —
+`completed`, `transient_5xx`, `partial_stream`, `auth_401`, `malformed_tool` —
+and each one is *the failure followed by the ordinary script*, so a scenario
+reads as "this goes wrong, then the run does what it always does".
+`pickDevScript` takes an `x-scripted-script` header first and the turn's own
+text second, because the point is to drive a scenario from the composer a person
+is typing into: "Screen the applicant (partial_stream)" is a sentence and a
+selection at once. An unrecognised name is not an error — it is prose that
+happens to contain an underscore — so it falls back to the ordinary script.
+
+**Honoured on the first attempt only.** A Retry is the second half of the P8
+scenario and has to be allowed to succeed, so `RunAttempt` ignores the flag when
+`attempt > 1`. One flag, two attempts, the scenario the spec describes.
+
+**Still dev-only.** `MODEL_SCRIPTED=1` is itself refused outside
+`ENVIRONMENT=development` (decision 47), and the selection is read only when it
+is set — so no deployed environment can be asked for a scripted failure by
+header.
+
+---
+
+## F7. `GET /auth/session` with no `?ws` answers the question instead of 404
+
+**Found by the client.** Without `?ws=` the route walked `workspace_directory`,
+which only the WorkOS mirror writes, so a seeded or locally created workspace
+was invisible and a plainly-a-member account got 404 `no_workspace`. The client
+learned to always pass `?ws=` (decision C18), which works and means the client
+has to already know the answer.
+
+**Decided.** The route answers with the user and their workspaces —
+`authWorkspacesSchema`, a separate shape from `authSessionSchema` because the
+two answers mean different things. It carries no stream heads and no hub ticket:
+both are per-workspace, and minting a ticket for a workspace the caller has not
+chosen would hand out an authorisation nobody asked for. The client picks one
+and asks again by id, which is what it already does.
+
+**The fourth platform table.** `members` is a tenant table under forced
+row-level security and all three roles are `NOBYPASSRLS`, so "which workspaces
+is this person in?" cannot be asked by any connection in this system — which is
+the property the product is built on, not an obstacle to route around. A
+`SECURITY DEFINER` function does not help: FORCE applies to the owner too.
+
+So it gets the answer 0008 gave the other two cross-tenant questions:
+`member_directory`, holding a user id, a workspace id, a role and a display
+name, outside row-level security, **maintained by a trigger on `members`**. The
+trigger rather than the routes, because `mirrorMembership`, `revokeAccess` and
+the events poller all move that table and a mirror three code paths write is a
+mirror one of them will forget. A second trigger on `workspaces` carries a
+rename across. A membership that is not `active` loses its row, so the switcher
+cannot offer a workspace the person has been removed from.
+
+What a leak of it tells an attacker is which workspaces exist and who is in
+them — ids, a role and a name, no applicant text, no payload. That is the price
+0008 already paid for `job_ready`, stated again here rather than assumed.
+
+`scripts/seed-dev.mjs` now upserts its members rather than `DO NOTHING`, because
+the trigger fires on a write and a re-seed that wrote nothing would leave the
+seeded workspace out of the switcher.
+
+---
+
+## F8. The Agent tab's read routes
+
+**Found by the client.** `traces`, `skills`, `instructions` and `context-fields`
+were in the client's route table and not in the Worker's, so every one of them
+rendered "Not available yet" through `rest.optional()` (decision C19).
+
+**Decided.** `src/routes/traces.ts` and `src/routes/agent-config.ts`, all under
+`inWorkspace` with the `app` role like every other tenant route. Four things
+worth recording:
+
+* **A trace is a run, read back, and it is not new authority.** Every row it
+  shows is already readable by a member through `messages`, `requests` or the
+  replay stream; the point of the trace is that they are visible *together*, in
+  one order, so a reader can see what the agent read before it proposed
+  something. Opening one advances nothing and decides nothing.
+* **A tool result is shown exactly as the model saw it**, 8 KB truncation marker
+  and all. A trace that quietly re-expanded a truncated result would be a trace
+  of a run that did not happen.
+* **Saving an instruction version is Admin-only, and so is discarding one.**
+  Saving changes what every future run is told to do, which is the same class of
+  change as a provider key. Discarding is Admin-only for the duller reason that
+  a Member silently dropping a proposal an Admin has not read is a change nobody
+  can see afterwards. A second click on either is a 409, not a silent success.
+* **`PATCH /w/:ws/context-fields/:field` is the human half of
+  `ask_for_context`.** It writes the same row `POST .../runs/:runId/context`
+  writes and then wakes the same Workflow, with the same ordering: the row
+  commits inside the tenant transaction and only then is the run told, because a
+  run woken before the commit would read the old value. Several sessions can be
+  parked on one key, so it wakes all of them, and a lost wake-up costs latency
+  rather than the answer — the engine's wait has its own timeout.
+
+Both spellings of the two write routes are registered — `/instructions/:id/accept`
+and `/instructions/:id/save`, `/skills` and `/skills/:id/adopt` — because the
+client-port spec and the client's own route table disagree about the verb and
+neither is wrong. They are the same handler; there is no second behaviour to
+keep in step.
+
+The shapes are `packages/shared`'s, extended additively:
+`traceEntitySchema` gained `mode`, `model_id`, `active_ms`, `step_count`,
+`tool_calls`, `fetched_urls` and `focus`, all optional, so a client that ignores
+them still parses and a client that wants them does not need a second schema.

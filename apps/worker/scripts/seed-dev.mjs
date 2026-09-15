@@ -45,7 +45,10 @@ try {
     `INSERT INTO members (workspace_id, user_id, role, reviewer_roles) VALUES
        ($1, $2, 'admin', ARRAY['access','finance']),
        ($1, $3, 'member', ARRAY[]::text[])
-     ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+     -- DO UPDATE rather than DO NOTHING: the member_directory trigger (0013)
+     -- only fires on a write, and a re-seed that wrote nothing would leave the
+     -- seeded workspace missing from the workspace switcher.
+     ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
     [WORKSPACE_ID, ADMIN_ID, MEMBER_ID],
   );
   await client.query(

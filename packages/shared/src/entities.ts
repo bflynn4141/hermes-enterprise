@@ -368,6 +368,47 @@ export const traceEntitySchema = z
     ref: refSchema.nullable(),
     steps: z.array(runStepEntitySchema).max(100).default([]),
     allowed_tools: z.array(z.string().max(64)).max(40).default([]),
+    /**
+     * The run's mode, model and worked time. Optional because the list route
+     * fills them and an older server does not; the client renders without
+     * them.
+     */
+    mode: sessionModeSchema.nullable().optional(),
+    model_id: z.string().max(64).nullable().optional(),
+    active_ms: z.number().int().min(0).nullable().optional(),
+    step_count: z.number().int().min(0).optional(),
+    /**
+     * The detail half, filled only by `GET /w/:ws/traces/:runId`. Each of
+     * these is already visible to a member through another route — the point
+     * of the trace is that they are visible *together*, in one order, so a
+     * reader can see what the agent read before it proposed something.
+     *
+     * A `result` here is the tool-result envelope the model saw, truncation
+     * marker and all: a trace that showed the untruncated text would be a
+     * trace of a run that did not happen.
+     */
+    tool_calls: z
+      .array(
+        z
+          .object({
+            tool_call_id: z.string().max(128),
+            name: z.string().max(64),
+            turn: z.number().int().min(0),
+            arguments: z.string().max(20_000).nullable(),
+            result: z.string().max(20_000).nullable(),
+            truncated: z.boolean().default(false),
+          })
+          .strict(),
+      )
+      .max(200)
+      .optional(),
+    /** Every URL `fetch_url` actually retrieved, in order. */
+    fetched_urls: z.array(z.string().max(2000)).max(100).optional(),
+    /** `run.focus` events, so the reader can replay where the pane was sent. */
+    focus: z
+      .array(z.object({ at: z.iso.datetime({ offset: true }), ref: refSchema.nullable(), entity_type: z.string().max(32), entity_id: z.string().max(128) }).strict())
+      .max(100)
+      .optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();
@@ -388,6 +429,26 @@ export const authSessionSchema = z
   })
   .strict();
 export type AuthSessionResponse = z.infer<typeof authSessionSchema>;
+
+/**
+ * What `GET /auth/session` answers with no `?ws=`.
+ *
+ * A different shape rather than a looser `authSessionSchema`, because the two
+ * answers mean different things: this one says "here is who you are and the
+ * workspaces you are in", and it carries no stream heads and no hub ticket
+ * because neither exists until a workspace is named. The client picks one and
+ * asks again by id. See decision F7.
+ */
+export const authWorkspacesSchema = z
+  .object({
+    user: z.object({ id: uuidSchema, name: z.string().max(120), email: z.string().max(200) }).strict(),
+    workspaces: z
+      .array(z.object({ id: uuidSchema, name: z.string().max(200), role: memberRoleSchema }).strict())
+      .max(200),
+    authenticated_at: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type AuthWorkspacesResponse = z.infer<typeof authWorkspacesSchema>;
 
 export const turnResponseSchema = z
   .object({ run_id: uuidSchema, client_turn_id: z.string().max(128), duplicate: z.boolean().default(false) })

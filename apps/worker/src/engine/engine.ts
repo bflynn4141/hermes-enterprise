@@ -98,6 +98,18 @@ export interface EngineDeps {
   providerFor(transport: string): ModelProvider;
   /** Hand committed rows to the SessionHub; the reply carries Stop. */
   forward(sessionId: string, runId: string, events: readonly EmittedEvent[]): Promise<DeltaForwardResult>;
+  /**
+   * Hand committed *workspace*-scoped rows to the WorkspaceHub.
+   *
+   * `request.created` and `entity.updated` are read by every member, not by
+   * the session's owner, so they go to the other hub — and they carry
+   * `session_id: null`, which is what the hub's `maySee` and the replay
+   * route's `session_id IS NULL` filter both key on. Optional because the Node
+   * harness supplies neither hub; an absent forwarder means the rows are
+   * committed and picked up by the next replay, which is the same guarantee
+   * decision 40 already relies on.
+   */
+  forwardWorkspace?(events: readonly EmittedEvent[]): Promise<void>;
   readonly now: () => Date;
   readonly engineVersion: number;
   /** Set when the environment forces the scripted provider (MODEL_SCRIPTED=1). */
@@ -668,6 +680,7 @@ async function toolStep(
   let waitingLabel: string | null = null;
   let ok = false;
   let focusRef: import('./tools.js').ToolFocus | null = null;
+  const published: EmittedEvent[] = [];
 
   if (!tool || !allowed.has(call.name)) {
     outcomeText = toolResultEnvelope(
@@ -715,6 +728,10 @@ async function toolStep(
         waitingLabel = outcome.waiting.label;
       }
       if (outcome.focus && FOCUS_TOOLS.has(call.name)) focusRef = outcome.focus;
+      // Rows the tool's own transaction already committed. They are published,
+      // never re-emitted: the outbox has them, and a second INSERT would be a
+      // second `request.created` for one request.
+      if (outcome.published && outcome.published.length > 0) published.push(...outcome.published);
     } else {
       outcomeText = toolResultEnvelope(call.name, 'engine', { error: outcome.error }, deps.now());
       if (outcome.permanent) {
@@ -765,6 +782,12 @@ async function toolStep(
     });
   }
   await emitter.emit(events);
+  // The workspace-scoped rows the tool committed, handed to the WorkspaceHub
+  // after the session-scoped ones so a member's Inbox and the proposer's own
+  // pane do not disagree about the order. A lost publish costs a reconnect,
+  // not the event: the row is committed and `GET /w/:ws/events?after=` replays
+  // it (decision 40).
+  await emitter.publishCommitted(published);
 
   return { toolCallId, ok, waitingKey, waitingLabel };
 }
@@ -930,17 +953,49 @@ class Emitter {
 
   async emit(events: readonly EmitInput[]): Promise<EmittedEvent[]> {
     if (events.length === 0) return [];
+    // `'sessionId' in event` rather than `??`: an event that set `sessionId`
+    // to null meant it, and coalescing would quietly turn a workspace event
+    // into a session one — delivered to the wrong hub, and invisible to the
+    // `session_id IS NULL` half of the replay route.
     const written = await this.deps.db.emit(
-      events.map((event) => ({ ...event, sessionId: event.sessionId ?? this.run.sessionId })),
+      events.map((event) => ({
+        ...event,
+        sessionId: 'sessionId' in event ? (event.sessionId ?? null) : this.run.sessionId,
+      })),
     );
+    const workspaceEvents = written.filter((event) => event.sessionId === null);
+    const sessionEvents = written.filter((event) => event.sessionId !== null);
     try {
-      await this.deps.forward(this.run.sessionId, this.run.id, written);
+      if (sessionEvents.length > 0) await this.deps.forward(this.run.sessionId, this.run.id, sessionEvents);
+      if (workspaceEvents.length > 0) await this.deps.forwardWorkspace?.(workspaceEvents);
     } catch (error) {
       console.log(
         JSON.stringify({ at: 'engine.publish_failed', run_id: this.run.id, trace_id: this.input.traceId, error: String(error) }),
       );
     }
     return written;
+  }
+
+  /**
+   * Publish rows that are already in the outbox.
+   *
+   * Used for the events a tool wrote in its own transaction: there is nothing
+   * to emit, only something to deliver. Workspace-scoped rows go to the
+   * WorkspaceHub, session-scoped ones to the SessionHub, by the same
+   * `session_id === null` rule the replay route uses.
+   */
+  async publishCommitted(events: readonly EmittedEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    const workspaceEvents = events.filter((event) => event.sessionId === null);
+    const sessionEvents = events.filter((event) => event.sessionId !== null);
+    try {
+      if (sessionEvents.length > 0) await this.deps.forward(this.run.sessionId, this.run.id, sessionEvents);
+      if (workspaceEvents.length > 0) await this.deps.forwardWorkspace?.(workspaceEvents);
+    } catch (error) {
+      console.log(
+        JSON.stringify({ at: 'engine.publish_failed', run_id: this.run.id, trace_id: this.input.traceId, error: String(error) }),
+      );
+    }
   }
 
   /** Like `emit`, but the reply matters: it carries Stop. */

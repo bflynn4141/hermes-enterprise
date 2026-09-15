@@ -4,13 +4,15 @@
 // `AUTH_MODE=fake`:
 //
 //   fresh     a brand-new workspace with an Admin and a Member, for the
-//             empty-state sweep. `POST /workspaces` is the route that should do
-//             this; it is unreachable, because `/workspaces` is not in the
-//             Worker's `run_worker_first` list and so the Static Assets binding
-//             answers the POST with 405 before the Worker sees it. Until that
-//             one-line configuration fix lands, the rows are written directly.
-//   step-up   re-stamp `auth_sessions.authenticated_at`, because fake auth has
-//             no step-up route (see scripts/dev-step-up.mjs).
+//             empty-state sweep. `POST /workspaces` now reaches the Worker
+//             (server decision F1/F2) and `live-findings.spec.ts` drives it;
+//             this stays because it also needs a *Member* in the workspace,
+//             which the create route cannot produce without an invitation
+//             round trip the empty-state scenarios are not about.
+//   step-up   re-stamp `auth_sessions.authenticated_at`. The Worker now has a
+//             development step-up of its own — `GET /auth/login?step_up=1` in
+//             `AUTH_MODE=fake` (decision F4) — and this does the same thing
+//             without a round trip, which is what a fixture wants.
 //
 // Everything else the suite needs — sessions, turns, decisions — goes through
 // the real HTTP routes, because those are what is being tested.

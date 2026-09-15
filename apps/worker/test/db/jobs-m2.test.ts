@@ -11,10 +11,26 @@ import { seedWorkspace } from './helpers.js';
 import { makeEnv, readTenant } from './harness.js';
 import { drainJobs, publishEvents, withWorkspaceTransaction } from '../../src/jobs.js';
 
+/**
+ * `drainJobs` is cross-tenant by design — that is the whole point of the
+ * pointer table these tests exercise — so it also drains whatever another test
+ * in this suite left behind, and the hub calls that produces are not this
+ * test's. Draining to empty first is what makes the assertions below about
+ * *this* test's event rather than about the order the files ran in.
+ */
+async function drainBacklog(env: Parameters<typeof drainJobs>[0]): Promise<void> {
+  for (let i = 0; i < 20; i += 1) {
+    const drained = await drainJobs(env);
+    if (drained.claimed === 0) return;
+  }
+}
+
 describe('the outbox', () => {
   it('writes the event and the job that delivers it in one transaction', async () => {
     const fixture = await seedWorkspace();
     const { env, hubCalls } = makeEnv();
+    await drainBacklog(env);
+    hubCalls.length = 0;
 
     const jobIds = await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
       publishEvents(tx, fixture.workspaceId, [
@@ -35,6 +51,8 @@ describe('the outbox', () => {
   it('sends a session event to that session’s hub, not to the workspace’s', async () => {
     const fixture = await seedWorkspace();
     const { env, hubCalls } = makeEnv();
+    await drainBacklog(env);
+    hubCalls.length = 0;
 
     await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
       publishEvents(tx, fixture.workspaceId, [

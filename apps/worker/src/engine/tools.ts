@@ -133,6 +133,13 @@ export type ToolOutcome =
       readonly focus?: ToolFocus;
       /** Set by `ask_for_context`: the run parks until a human answers. */
       readonly waiting?: { readonly key: string; readonly label: string };
+      /**
+       * Outbox rows the tool's own write already committed, ready to be handed
+       * to a hub. `propose_request` and `save_review_note` write theirs in the
+       * transaction that made the row, so the engine publishes rather than
+       * emits them: emitting again would write a second copy. See decision F3.
+       */
+      readonly published?: readonly import('./agent-db.js').EmittedEvent[];
     }
   | { readonly ok: false; readonly error: string; readonly permanent?: boolean };
 
@@ -443,7 +450,7 @@ const proposeRequest: ToolDefinitionEntry = {
     const labelProblem = plainTextError('label', labelText);
     if (labelProblem) return labelProblem;
     const label = (labelText || subject || kind).slice(0, 200);
-    const { requestId, created } = await ctx.writes.proposeRequest({
+    const { requestId, created, events } = await ctx.writes.proposeRequest({
       runId: ctx.run.id,
       sessionId: ctx.run.sessionId,
       toolCallId: ctx.toolCallId,
@@ -457,6 +464,7 @@ const proposeRequest: ToolDefinitionEntry = {
       ok: true,
       data: { request_id: requestId, status: 'pending', created, awaiting: 'a human decision' },
       focus: { ref: refFor('request', requestId), entityType: 'request', entityId: requestId },
+      ...(events && events.length > 0 ? { published: events } : {}),
     };
   },
 };
@@ -475,13 +483,17 @@ const saveReviewNote: ToolDefinitionEntry = {
     if (!requestId || !body) return { ok: false, error: 'request_id and body are both required' };
     const problem = plainTextError('body', body);
     if (problem) return problem;
-    const { noteId, created } = await ctx.writes.saveReviewNote({
+    const { noteId, created, events } = await ctx.writes.saveReviewNote({
       runId: ctx.run.id,
       toolCallId: ctx.toolCallId,
       requestId,
       body,
     });
-    return { ok: true, data: { note_id: noteId, created } };
+    return {
+      ok: true,
+      data: { note_id: noteId, created },
+      ...(events && events.length > 0 ? { published: events } : {}),
+    };
   },
 };
 

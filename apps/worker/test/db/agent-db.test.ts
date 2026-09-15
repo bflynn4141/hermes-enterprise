@@ -91,7 +91,7 @@ describe('PgAgentDb on the agent role', () => {
     try {
       await expect(
         db.emit([{ kind: 'decision.recorded', sessionId: null, payload: { request_id: 'x' } }]),
-      ).rejects.toThrow(/message\.\* and run\.\* only/);
+      ).rejects.toThrow(/the agent role may publish/);
     } finally {
       await db.close();
     }
@@ -265,6 +265,164 @@ describe('PgAgentDb on the agent role', () => {
     const db = new PgAgentDb(env, mine.workspaceId, 'trace-agent-db');
     try {
       expect(await db.loadRun(theirRun)).toBeNull();
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3 · the request the agent proposed says so on the workspace stream
+// ---------------------------------------------------------------------------
+
+describe('F3 · proposeRequest publishes request.created', () => {
+  it('writes the outbox row in the same transaction as the request', async () => {
+    const fx = await seedWorkspace();
+    const runId = await seedRun(fx);
+    const db = new PgAgentDb(env, fx.workspaceId, 'trace-agent-db');
+    try {
+      const result = await db.proposeRequest({
+        runId,
+        sessionId: fx.sessionId,
+        toolCallId: 'call_f3',
+        kind: 'application',
+        subject: 'ada.ling@example.com',
+        subjectKey: 'email:ada.ling@example.com',
+        label: 'Ada Ling',
+        payload: APPLICATION,
+      });
+      expect(result.created).toBe(true);
+      expect(result.events).toHaveLength(1);
+      const event = result.events![0]!;
+      expect(event.kind).toBe('request.created');
+      // Workspace-scoped, because the Inbox of every member is what needs it —
+      // not the socket of the session that happened to propose it.
+      expect(event.sessionId).toBeNull();
+      expect(event.payload).toMatchObject({
+        request_id: result.requestId,
+        status: 'pending',
+        label: 'Ada Ling',
+        run_id: runId,
+      });
+
+      const row = await withClient('owner', async (c) => {
+        await c.query('BEGIN');
+        await setTenant(c, fx.workspaceId, fx.adminId);
+        const { rows } = await c.query<{ kind: string; session_id: string | null }>(
+          `SELECT kind, session_id::text FROM stream_events
+            WHERE workspace_id = $1 AND kind = 'request.created'
+              AND payload ->> 'request_id' = $2`,
+          [fx.workspaceId, result.requestId],
+        );
+        await c.query('COMMIT');
+        return rows[0];
+      });
+      expect(row?.kind).toBe('request.created');
+      expect(row?.session_id).toBeNull();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('publishes nothing on a replayed step, so the Inbox gets one row', async () => {
+    const fx = await seedWorkspace();
+    const runId = await seedRun(fx);
+    const db = new PgAgentDb(env, fx.workspaceId, 'trace-agent-db');
+    try {
+      const input = {
+        runId,
+        sessionId: fx.sessionId,
+        toolCallId: 'call_replay',
+        kind: 'application' as const,
+        subject: 'ada.ling@example.com',
+        subjectKey: 'email:ada.ling@example.com',
+        label: 'Ada Ling',
+        payload: APPLICATION,
+      };
+      const first = await db.proposeRequest(input);
+      const second = await db.proposeRequest(input);
+      expect(second.created).toBe(false);
+      expect(second.requestId).toBe(first.requestId);
+      expect(second.events ?? []).toHaveLength(0);
+
+      const count = await withClient('owner', async (c) => {
+        await c.query('BEGIN');
+        await setTenant(c, fx.workspaceId, fx.adminId);
+        const { rows } = await c.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM stream_events
+            WHERE workspace_id = $1 AND kind = 'request.created' AND payload ->> 'request_id' = $2`,
+          [fx.workspaceId, first.requestId],
+        );
+        await c.query('COMMIT');
+        return rows[0]!.n;
+      });
+      expect(count).toBe('1');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('publishes entity.updated when a note is saved', async () => {
+    const fx = await seedWorkspace();
+    const runId = await seedRun(fx);
+    const db = new PgAgentDb(env, fx.workspaceId, 'trace-agent-db');
+    try {
+      const proposed = await db.proposeRequest({
+        runId,
+        sessionId: fx.sessionId,
+        toolCallId: 'call_note_req',
+        kind: 'application',
+        subject: 'ada.ling@example.com',
+        subjectKey: 'email:ada.ling@example.com',
+        label: 'Ada Ling',
+        payload: APPLICATION,
+      });
+      const note = await db.saveReviewNote({
+        runId,
+        toolCallId: 'call_note',
+        requestId: proposed.requestId,
+        body: 'Two of three references replied.',
+      });
+      expect(note.created).toBe(true);
+      expect(note.events).toHaveLength(1);
+      expect(note.events![0]!.kind).toBe('entity.updated');
+      expect(note.events![0]!.sessionId).toBeNull();
+      expect(note.events![0]!.payload).toMatchObject({
+        entity_type: 'request',
+        entity_id: proposed.requestId,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('still refuses an event about a request the agent did not write', async () => {
+    const fx = await seedWorkspace();
+    const db = new PgAgentDb(env, fx.workspaceId, 'trace-agent-db');
+    try {
+      // A `requests` row with no `run_id` is a row no tool made. The trigger's
+      // widening is "about a request it wrote", not "about a request".
+      const requestId = await withClient('owner', async (c) => {
+        await c.query('BEGIN');
+        await setTenant(c, fx.workspaceId, fx.adminId);
+        const { rows } = await c.query<{ id: string }>(
+          `INSERT INTO requests (workspace_id, kind, label, payload, session_id)
+           VALUES ($1, 'application', 'Human made', '{"kind":"application"}'::jsonb, $2)
+           RETURNING id`,
+          [fx.workspaceId, fx.sessionId],
+        );
+        await c.query('COMMIT');
+        return rows[0]!.id;
+      });
+      await expect(
+        db.emit([
+          {
+            kind: 'request.created',
+            sessionId: null,
+            payload: { request_id: requestId, kind: 'application', status: 'pending', label: 'x', run_id: null, session_id: null },
+          },
+        ]),
+      ).rejects.toThrow(/the agent role may publish/);
     } finally {
       await db.close();
     }
