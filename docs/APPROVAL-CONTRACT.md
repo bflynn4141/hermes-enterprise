@@ -8,7 +8,7 @@ An agent or runtime calls `proposeApproval(input, context)`. `input` is `Propose
 
 The server resolves and validates `context.workspaceId`, `context.agentId`, `context.userId`, `context.sessionId`, and `context.runId` against the active tenant and agent binding. It loads the immutable policy identified by `policy_key`, verifies every named member/authority role in that workspace, chooses an allowed expiry, and computes `sha256:<canonical material fields>`. The stored `ApprovalPayload` is the flattened proposal plus that verified context, policy and authorization binding. Review notes are excluded from the hash and can never authorize work.
 
-Material fields include the type-specific details, evidence references, consequence, target audience/resources, dependent requests, expiry, policy id/version and, for a run plan, every model/tool/token/currency limit. A revision recomputes the hash, increments the revision, supersedes old votes and returns the request to review.
+Material fields include the type-specific details, evidence references, consequence, target audience/resources, dependent requests, expiry, policy id/version, server-resolved resource versions/content digests and, for a run plan, every model/tool/token/currency limit. A revision recomputes the hash, increments the revision, supersedes old votes and returns the request to review. IDs alone are not immutable evidence: `resource_bindings` records the version and SHA-256 the server actually resolved. A missing digest leaves the associated executor unavailable.
 
 ## Methods and routes
 
@@ -30,7 +30,7 @@ Routing selects a currently active member who already satisfies the immutable st
 
 The server's transition from `pending` to final `approved` writes `approval.finalized` and its `ApprovalFinalizedHook` payload transactionally and exactly once, keyed by `approval-finalized:<request_id>:<authorization_revision>:<authorization_hash>`. The runtime workstream consumes this durable outbox signal; it must still re-read `getApproval` before admission. This hook authorizes only continuation admission. It does not execute mail, access, disclosure, record changes, governance changes or any other provider effect.
 
-The hook carries request/workspace ids, approval type, authorization revision/hash, expiry, verified requester agent/member, source session/run, dependent request ids and the approved run-plan budget (when applicable). `declined`, `changes_requested`, `expired`, `superseded`, and `withdrawn` never emit a finalization hook. They remain queryable authorization states so retries can fail closed. A changed/expired/cancelled request cannot resume even if an earlier hook delivery is replayed.
+The hook carries request/workspace ids, approval type, authorization revision/hash, expiry, verified requester agent/member, source session/run, dependent request ids, resolved resource bindings and the approved run-plan budget (when applicable). `declined`, `changes_requested`, `expired`, `superseded`, and `withdrawn` never emit a finalization hook. They remain queryable authorization states so retries can fail closed. A changed/expired/cancelled request cannot resume even if an earlier hook delivery is replayed.
 
 Authorization, work and effect outcomes are separate in `ApprovalView`:
 
@@ -67,9 +67,11 @@ Every example below is the `details` value beside the common fields:
   participating_agents: [{ agent_id: AGENT_ID, role: 'Researcher' }],
   deliverables: ['Weekly shortlist'],
   schedule: 'Mondays at 09:00 America/Los_Angeles',
-  budget: { currency: 'USD', estimated_min_minor: 100, estimated_max_minor: 300, cap_minor: 500, estimated_input_tokens: 20000, estimated_output_tokens: 5000, model_ids: ['configured-model'], metered_tools: ['search'], retries_included: 1, illustrative: true }
+  budget: { currency: 'USD', estimated_min_minor: 100, estimated_max_minor: 300, cap_minor: 500, estimated_input_tokens: 20000, estimated_output_tokens: 5000, total_token_cap: 25000, call_cap: 4, max_output_tokens_per_call: 5000, max_parallel_calls: 1, model_ids: ['configured-model'], metered_tools: ['search'], retries_included: 1, illustrative: true }
 }
 ```
+
+The four explicit maxima are enforcement inputs, not estimates. `call_cap` includes retries. The runtime must fail closed if its adapter cannot enforce `total_token_cap`, `call_cap`, `max_output_tokens_per_call`, or `max_parallel_calls`; authorization does not turn an estimate into a hard cap.
 
 ### `team_commitment`
 

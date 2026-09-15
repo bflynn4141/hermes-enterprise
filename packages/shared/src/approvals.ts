@@ -70,7 +70,11 @@ export const runPlanDetailsSchema = z
         cap_minor: z.number().int().min(0),
         estimated_input_tokens: z.number().int().min(0).optional(),
         estimated_output_tokens: z.number().int().min(0).optional(),
-        model_ids: z.array(identifier).max(25).default([]),
+        total_token_cap: z.number().int().positive(),
+        call_cap: z.number().int().positive().max(10_000),
+        max_output_tokens_per_call: z.number().int().positive(),
+        max_parallel_calls: z.number().int().positive().max(100),
+        model_ids: z.array(identifier).min(1).max(25),
         metered_tools: z.array(identifier).max(25).default([]),
         retries_included: z.number().int().min(0).max(20).default(0),
         illustrative: z.boolean(),
@@ -320,10 +324,24 @@ export const approvalAuthorizationBindingSchema = z
   })
   .strict();
 
+export const approvalResourceBindingSchema = z
+  .object({
+    kind: z.enum(['attachment', 'agent_file', 'document', 'artifact', 'request', 'run', 'skill', 'resource']),
+    id: identifier,
+    version: z.string().trim().min(1).max(128).nullable(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    immutable: z.boolean(),
+    executor_available: z.boolean(),
+    reason: z.string().trim().max(1000).nullable(),
+  })
+  .strict();
+export type ApprovalResourceBinding = z.infer<typeof approvalResourceBindingSchema>;
+
 const storedApprovalFields = {
   context: approvalServerContextSchema,
   authorization: approvalAuthorizationBindingSchema,
   policy: approvalPolicySchema,
+  resource_bindings: z.array(approvalResourceBindingSchema).max(250),
 } as const;
 
 export const approvalPayloadSchema = z.discriminatedUnion('approval_type', [
@@ -552,6 +570,7 @@ export const approvalFinalizedHookSchema = z
     source_run_id: uuidSchema.nullable(),
     dependent_request_ids: z.array(uuidSchema).max(50),
     run_plan_budget: runPlanDetailsSchema.shape.budget.nullable(),
+    resource_bindings: z.array(approvalResourceBindingSchema).max(250),
     finalized_at: isoDateTime,
   })
   .strict();

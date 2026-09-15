@@ -26,7 +26,7 @@ const proposals: ApprovalProposal[] = [
       participating_agents: [{ agent_id: A, role: 'Researcher' }],
       deliverables: ['Weekly shortlist'],
       schedule: 'Mondays at 09:00 America/Los_Angeles',
-      budget: { currency: 'USD', estimated_min_minor: 100, estimated_max_minor: 300, cap_minor: 500, model_ids: ['model-1'], metered_tools: [], retries_included: 1, illustrative: true },
+      budget: { currency: 'USD', estimated_min_minor: 100, estimated_max_minor: 300, cap_minor: 500, total_token_cap: 25_000, call_cap: 4, max_output_tokens_per_call: 5_000, max_parallel_calls: 1, model_ids: ['model-1'], metered_tools: [], retries_included: 1, illustrative: true },
     },
   },
   {
@@ -100,6 +100,7 @@ describe('enterprise approval contract', () => {
       context: { requester: { agent_id: A, member_id: M, user_id: M }, target_agent_ids: [], target_member_ids: [], target_resource_ids: [], source: { session_id: null, run_id: null, dependent_request_ids: [] } },
       authorization: { revision: 1, hash: `sha256:${'b'.repeat(64)}`, expires_at: '2026-09-30T17:00:00-07:00' },
       policy: { id: B, key: 'run-plan-standard', version: 1, mode: 'sequential', prevent_self_review: true, require_distinct_reviewers: true, steps: [{ id: 'owner', label: 'Program owner', order: 0, reviewers: [{ kind: 'member', member_id: M }], quorum: 1 }] },
+      resource_bindings: [],
     });
     expect(parsed.approval_type).toBe('run_plan');
     expect(parsed.authorization.revision).toBe(1);
@@ -110,6 +111,13 @@ describe('enterprise approval contract', () => {
     if (proposal.approval_type !== 'run_plan') throw new Error('fixture drift');
     proposal.details.budget.estimated_max_minor = 501;
     expect(approvalProposalSchema.safeParse(proposal).success).toBe(false);
+  });
+
+  it('requires enforceable run-plan call and token ceilings', () => {
+    const proposal = structuredClone(proposals[0]!);
+    if (proposal.approval_type !== 'run_plan') throw new Error('fixture drift');
+    const unsafe = { ...proposal, details: { ...proposal.details, budget: { ...proposal.details.budget, total_token_cap: undefined } } };
+    expect(approvalProposalSchema.safeParse(unsafe).success).toBe(false);
   });
 
   it('normalizes an absent Inbox reviewer filter to for_me', () => {
