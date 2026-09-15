@@ -231,8 +231,8 @@
       },
       "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
       "hyperdrive": [
-        { "binding": "HYPERDRIVE_APP", "id": "0000000000000000000000000000app0" },
-        { "binding": "HYPERDRIVE_AGENT", "id": "0000000000000000000000000agent00" }
+        { "binding": "HYPERDRIVE_APP", "id": "0de9d1d5611a49cc826a529f82d44e4f" },
+        { "binding": "HYPERDRIVE_AGENT", "id": "c64a6075522a4c568c4d6db1789aa6e2" }
       ]
     },
 
@@ -307,8 +307,8 @@
       },
       "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
       "hyperdrive": [
-        { "binding": "HYPERDRIVE_APP", "id": "0000000000000000000000000000app0" },
-        { "binding": "HYPERDRIVE_AGENT", "id": "0000000000000000000000000agent00" }
+        { "binding": "HYPERDRIVE_APP", "id": "ea9b34a1a62747db981170cc56783119" },
+        { "binding": "HYPERDRIVE_AGENT", "id": "02a1409b651741b28fe13b9f262bd0b5" }
       ]
     }
   }
