@@ -30,6 +30,16 @@ export const LIMITS = {
   // completion: a script that mints a thousand presigned URLs and never uses
   // one has still asked us to sign a thousand URLs.
   upload: { action: 'attachment.create', limit: 10, windowSeconds: 60 },
+  /**
+   * Accepting an invitation, which is the one authenticated route that takes an
+   * opaque secret and tells the caller whether it was right. Without a limit it
+   * is a free guessing oracle — and each attempt is two Postgres connections,
+   * so it is a connection amplifier as well. Counted on a plain client rather
+   * than inside a transaction (see `acceptInvitation`), so a wrong guess is
+   * *not* refunded: refunding the failures would limit only the successes,
+   * which is the opposite of what a guessing limit is for.
+   */
+  acceptInvitation: { action: 'invitation.accept', limit: 10, windowSeconds: 3_600 },
 } as const satisfies Record<string, RateLimit>;
 
 /**

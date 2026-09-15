@@ -432,7 +432,12 @@ export async function rewrapProviderKey(
   if (stored.kekVersion === toVersion) return false;
 
   const rewrapped = await rewrapDek(env, { workspaceId, keyId }, stored, toVersion);
-  await tx.query(
+  // The rowcount is read, not discarded: the UPDATE is guarded on the version
+  // this call read, so a concurrent rotation of the same row makes it write
+  // nothing — and returning `true` anyway inflated `RotationReport.rewrapped`,
+  // which is the number an operator reads before deciding it is safe to delete
+  // the old KEK. Overcounting there is how a key becomes unreadable.
+  const updated = await tx.query(
     `UPDATE workspace_provider_keys
         SET wrapped_dek = $3, wrap_iv = $4, kek_version = $5
       WHERE workspace_id = $1 AND id = $2 AND kek_version = $6`,
@@ -445,5 +450,5 @@ export async function rewrapProviderKey(
       stored.kekVersion,
     ],
   );
-  return true;
+  return updated.rowCount === 1;
 }

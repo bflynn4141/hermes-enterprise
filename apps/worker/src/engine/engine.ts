@@ -1,4 +1,5 @@
 // The tool loop, written so that it can run outside workerd.
+import { redactMessage } from '../keys/redact.js';
 //
 // `runAttempt` takes an abstract `EngineStep` rather than Cloudflare's
 // `WorkflowStep`. In production the Workflow hands it the real one; in
@@ -186,7 +187,12 @@ export function classifyProviderError(error: unknown, stepId: string): RunErrorI
     }
   }
   if (error instanceof RunFailure) return error.detail;
-  const message = error instanceof Error ? error.message : String(error);
+  // Redacted, because this is the catch-all: the error it is handed came from
+  // an unknown throw site somewhere inside a step that had the workspace's
+  // provider key in scope, and `message` is written to `runs.error` and shown
+  // to the client. Every *known* error shape above is already credential-free;
+  // this branch is the one that cannot promise that about its input.
+  const message = redactMessage(error);
   return { class: 'transient', retryable: true, reason: 'step_failed', message, step_id: stepId };
 }
 

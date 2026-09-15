@@ -15,7 +15,7 @@ import { AnthropicProvider } from '../../src/model/anthropic.js';
 import { DeepSeekProvider } from '../../src/model/deepseek.js';
 import { OpenAiProvider } from '../../src/model/openai.js';
 import { classifyStatus } from '../../src/model/http.js';
-import { ProviderError, type Credential, type ProviderEvent, type StreamRequest } from '../../src/model/types.js';
+import { defaultFetch, ProviderError, type Credential, type ProviderEvent, type StreamRequest } from '../../src/model/types.js';
 
 const credential: Credential = {
   provider: 'test',
@@ -458,5 +458,41 @@ describe('an aborted stream', () => {
     // Stop is a user action, not an incident: it must not look like an error to
     // the run log or to Sentry.
     expect(events).toEqual([{ type: 'stop', reason: 'stopped' }]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The transport never follows a redirect
+// ---------------------------------------------------------------------------
+
+describe('defaultFetch', () => {
+  it('asks for a manual redirect, so a 30x cannot replay the key elsewhere', async () => {
+    // Every adapter puts the workspace's provider key in a header. workerd's
+    // `fetch` does not implement the browser's rule about stripping
+    // credentials on a cross-origin redirect, so with the default
+    // `redirect: 'follow'` a 30x from a provider host — an open redirect on
+    // it, or a hijacked resolution of it — replays a customer's key to
+    // whatever the Location named. `security/fetch-url.ts` already uses
+    // 'manual' for the same reason on the path that carries a URL; this is the
+    // path that carries a credential.
+    const seen: RequestInit[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = ((_input: string, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    try {
+      await defaultFetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': 'never-sent-twice' },
+      });
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.redirect).toBe('manual');
+    // The caller's own init survives alongside it.
+    expect(seen[0]?.method).toBe('POST');
   });
 });

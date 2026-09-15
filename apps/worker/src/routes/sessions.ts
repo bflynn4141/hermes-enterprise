@@ -26,8 +26,20 @@ import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './
 
 const MAX_PAGE = 100;
 
-/** `owner_id = me` or an unrevoked share. The one visibility rule. */
-const VISIBLE = `(s.owner_id = $2 OR EXISTS (
+/**
+ * `owner_id = me` or an unrevoked share. The one visibility rule.
+ *
+ * Exported because it is the *one* rule and there were already two verbatim
+ * copies of it (here and `routes/turns.ts`) while a third surface —
+ * `routes/traces.ts` — had no copy at all and so showed every member every
+ * session's runs. A rule that has to be remembered at each new read path is a
+ * rule that will be missed at the next one; importing it is how a reviewer can
+ * see who obeys it by grepping for the name.
+ *
+ * It binds `$2` to the caller's user id and expects the sessions table aliased
+ * `s`.
+ */
+export const VISIBLE = `(s.owner_id = $2 OR EXISTS (
   SELECT 1 FROM session_shares sh WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
 ))`;
 

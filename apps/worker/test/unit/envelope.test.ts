@@ -115,13 +115,22 @@ describe('KEK versions', () => {
     expect(kekVersions({ KEK_V1: kek(1), KEK_V2: '' } as unknown as KekEnv)).toEqual([1]);
   });
 
-  it('defaults to the highest version, and honours KEK_CURRENT', () => {
+  it('defaults to the lowest version present, and honours KEK_CURRENT', () => {
     const both = { KEK_V1: kek(1), KEK_V2: kek(2) } as unknown as KekEnv;
-    expect(currentKekVersion(both)).toBe(2);
-    // The two-deploy rotation: the secret lands first, the switch flips later,
-    // so an older instance still serving requests can read what a newer one
-    // has just written.
+    // The two-deploy rotation is only two deploys if putting `KEK_V2` in place
+    // does not, by itself, make v2 current. `KEK_CURRENT` is optional, so
+    // "unset" is the state every deployment starts a rotation from — and while
+    // this defaulted to the highest version, `wrangler secret put KEK_V2`
+    // alone made restarted instances write envelopes the instances that had
+    // not restarted could not read (`kek_version_unknown`, a 503 on every key
+    // read). The lowest version is the one every instance can read, which is
+    // the property the second deploy exists to move.
+    expect(currentKekVersion(both)).toBe(1);
+    expect(currentKekVersion({ ...both, KEK_CURRENT: '2' } as KekEnv)).toBe(2);
     expect(currentKekVersion({ ...both, KEK_CURRENT: '1' } as KekEnv)).toBe(1);
+    // One version present: the two rules agree, and a fresh deployment that
+    // never sets `KEK_CURRENT` still encrypts under the key it has.
+    expect(currentKekVersion({ KEK_V2: kek(2) } as unknown as KekEnv)).toBe(2);
   });
 
   it('refuses a KEK_CURRENT with no matching secret', () => {

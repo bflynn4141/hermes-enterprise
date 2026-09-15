@@ -7,6 +7,7 @@
 import type { Context } from 'hono';
 import type { Client } from 'pg';
 import type { Env } from '../env.js';
+import { isDevelopment } from '../env.js';
 import { connect } from '../db/client.js';
 import { AuthError, type AuthAdapter, type Session } from './types.js';
 import { SESSION_COOKIE, readCookie, sessionCookie } from './cookies.js';
@@ -39,14 +40,28 @@ export function takeRefreshedCookie(request: Request): string | null {
  * authenticating now, which is true: we are seeing it for the first time.
  */
 async function touchAuthSession(client: Client, sid: string, userId: string): Promise<Date> {
-  const { rows } = await client.query<{ authenticated_at: Date }>(
+  const { rows } = await client.query<{ authenticated_at: Date; revoked_at: Date | null }>(
     `INSERT INTO auth_sessions (sid, user_id, authenticated_at)
      VALUES ($1, $2, now())
      ON CONFLICT (sid) DO UPDATE SET last_seen_at = now()
-     RETURNING authenticated_at`,
+     RETURNING authenticated_at, revoked_at`,
     [sid, userId],
   );
-  return rows[0]?.authenticated_at ?? new Date();
+  const row = rows[0];
+  // `revoked_at` is written by `POST /auth/logout` and by the `user.deleted`
+  // half of the WorkOS poller, and until this line nothing read it: a sealed
+  // cookie captured before a sign-out kept working, and because `authenticated_at`
+  // was untouched by the revocation it also still satisfied `requireStepUp` —
+  // so a stolen cookie could still record a decision minutes after the person
+  // it belonged to had signed out. Signing out has to end the session on the
+  // server, not only in the browser that asked.
+  //
+  // `/auth/callback` and the development step-up both clear `revoked_at` when
+  // they re-stamp the row, so signing back in under the same `sid` recovers.
+  if (row?.revoked_at) {
+    throw new AuthError('this session was signed out', 'invalid_session');
+  }
+  return row?.authenticated_at ?? new Date();
 }
 
 /**
@@ -186,6 +201,24 @@ export const workosAuth: AuthAdapter = {
 export function authAdapter(env: Env): AuthAdapter {
   switch (env.AUTH_MODE) {
     case 'fake':
+      // The comment on `fakeStepUp` already claimed this was "refused outside
+      // development by `authAdapter`", and it was not: the switch honoured
+      // `AUTH_MODE` whatever `ENVIRONMENT` said. A staging or production deploy
+      // that shipped `AUTH_MODE=fake` — one line in wrangler.jsonc, one
+      // mistaken `wrangler deploy --var`, one environment block copied from the
+      // top-level one — would have accepted `x-dev-user: <any seeded email>` as
+      // proof of identity from anybody on the internet, and `requireCsrf` is a
+      // no-op outside `workos` mode, so the forged session would have reached
+      // the decision route too. The two switches are checked together here
+      // because a header-trusting adapter is not a fallback: an environment
+      // that cannot authenticate properly must refuse to answer.
+      if (!isDevelopment(env)) {
+        throw new AuthError(
+          'AUTH_MODE=fake is a development-only switch and this is not a development environment',
+          'not_configured',
+          503,
+        );
+      }
       return fakeAuth;
     case 'workos':
       return workosAuth;

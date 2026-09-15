@@ -79,6 +79,17 @@ export function kekVersions(env: KekEnv): number[] {
  * readable by every instance. Without it, the highest available version would
  * become current the instant the secret landed, and an older instance still
  * serving requests could not read what a newer one had just written.
+ *
+ * Which is why the unset default is the *lowest* version present, not the
+ * highest. `KEK_CURRENT` is optional, so "unset" is the state every
+ * single-version deployment is in and therefore the state a rotation starts
+ * from — and defaulting to the highest handed back exactly the one-deploy race
+ * this setting was introduced to remove: `wrangler secret put KEK_V2` alone
+ * would have made v2 current on every instance that had restarted, while the
+ * instances that had not could not decrypt what those had just written
+ * (`kek_version_unknown`, surfaced as a 503 on every key read). With one
+ * version present the two rules agree; with two, the lowest is the one every
+ * instance can read, which is the property the two-deploy dance is for.
  */
 export function currentKekVersion(env: KekEnv): number {
   const available = kekVersions(env);
@@ -86,7 +97,7 @@ export function currentKekVersion(env: KekEnv): number {
     throw new KeyCryptoError('no KEK_V{n} secret is set in this environment', 'kek_missing');
   }
   const declared = (env.KEK_CURRENT ?? '').trim();
-  if (declared === '') return available[available.length - 1] as number;
+  if (declared === '') return available[0] as number;
   const version = Number(declared);
   if (!Number.isInteger(version) || !available.includes(version)) {
     throw new KeyCryptoError(`KEK_CURRENT names version ${declared}, which has no secret`, 'kek_version_unknown');

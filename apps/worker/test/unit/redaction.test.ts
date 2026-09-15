@@ -125,4 +125,25 @@ describe('the redactor itself', () => {
     const url = 'https://bucket.r2.example/object?X-Amz-Signature=abc123def456&X-Amz-Expires=900';
     expect(redactString(url)).not.toContain('abc123def456');
   });
+
+  it('redacts a key-encryption key by name at every version, not only KEK_V1', () => {
+    // Raw AES material is base64 with none of the provider prefixes the shape
+    // rules look for, so the *name* is the only thing that can catch it — and
+    // the name list said `kek_v1` literally. The first rotation this system
+    // exists to support introduces a `KEK_V2` that no rule matched: a redactor
+    // that stops working at exactly the moment the thing it protects is being
+    // handled, with every test still green.
+    const material = 'D'.repeat(44);
+    for (const name of ['KEK', 'KEK_V1', 'KEK_V2', 'kek_v17']) {
+      const line = captureLog(() => logEvent({ at: 'rotation', [name]: material })).join('\n');
+      expect(line).not.toContain(material);
+    }
+    expect(redact({ KEK_V2: material })).toEqual({ KEK_V2: REDACTED });
+    // Not so broad that it eats an ordinary field that happens to start `kek`.
+    // `KEK_CURRENT` in particular names a *version number*, not key material,
+    // and redacting it would hide the one value an operator reads to tell
+    // where a rotation has got to.
+    expect(redact({ kek_rotation_count: 3 })).toEqual({ kek_rotation_count: 3 });
+    expect(redact({ KEK_CURRENT: '2' })).toEqual({ KEK_CURRENT: '2' });
+  });
 });

@@ -15,10 +15,19 @@
 //      Postgres connection for the life of a transaction; a probe inside one
 //      would hold it on a third party's availability.
 //   3. Audit rows carry `key_id` only.
+//   4. Every state-changing one passes the same `Origin` and double-submit CSRF
+//      guards as the rest of the product. They were missing here for a while,
+//      which made the four routes that install, replace and revoke a billing
+//      credential the only state-changing routes in the Worker with no CSRF
+//      check at all — the exact inversion of where the check is worth most.
+//      `SameSite=Strict` covered the ordinary browser case, but the
+//      double-submit layer exists precisely for the cases it does not (a
+//      same-site subdomain, an older browser), and "the highest-value route is
+//      the one without the guard" is not a position to be in.
 import type { Context } from 'hono';
 import { catalogPageSchema, providerKeyListSchema, PROVIDERS } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { requireStepUp } from '../auth.js';
+import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
 import { withTenantTransaction, type Tx } from '../db/client.js';
 import {
@@ -45,6 +54,18 @@ import { RouteError, inWorkspace, jsonBody, pathUuid } from './tenant.js';
  * provider's side, like us attacking our own customer's account.
  */
 const VERIFY_LIMIT: RateLimit = { action: 'provider_key.verify', limit: 5, windowSeconds: 3_600 };
+
+/**
+ * Adding and rotating count separately from verifying.
+ *
+ * They used to share `VERIFY_LIMIT`'s bucket, which meant an Admin who added
+ * five keys had spent the whole hour's budget for *re-verifying* any of them —
+ * so the reasonable act of setting a workspace up locked the operator out of
+ * the route they would reach for when one of those keys turned out not to work.
+ * The probe-per-call reasoning is the same, so the number is the same; only the
+ * bucket differs.
+ */
+const INSTALL_LIMIT: RateLimit = { action: 'provider_key.install', limit: 5, windowSeconds: 3_600 };
 
 /** A provider key is at least this long. Below it, nothing is worth storing. */
 const MIN_KEY_LENGTH = 16;
@@ -154,6 +175,8 @@ async function probeAndRecord(
  * paste it again, which is how a key ends up in a chat message.
  */
 export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
   const body = await jsonBody<AddKeyBody>(c);
   const provider = readProvider(body.provider);
   const plaintext = readKey(body.key);
@@ -162,7 +185,7 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
   const prepared = await inWorkspace(c, async (work) => {
     work.requireAdmin('adding a provider key');
     requireStepUp(work.session);
-    await consumeRate(work.tx, work.userId, work.workspaceId, VERIFY_LIMIT);
+    await consumeRate(work.tx, work.userId, work.workspaceId, INSTALL_LIMIT);
 
     const existing = await findByFingerprint(work.tx, work.workspaceId, plaintext);
     if (existing) {
@@ -231,6 +254,8 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
 
 /** POST /w/:ws/provider-keys/:id/verify — probe an existing row again. */
 export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
   const keyId = pathUuid(c, 'id');
 
   const prepared = await inWorkspace(c, async (work) => {
@@ -285,6 +310,8 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
  * key replaced it.
  */
 export async function rotateKey(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
   const previousKeyId = pathUuid(c, 'id');
   const body = await jsonBody<AddKeyBody>(c);
   const plaintext = readKey(body.key);
@@ -293,7 +320,7 @@ export async function rotateKey(c: Context<{ Bindings: Env }>): Promise<Response
   const prepared = await inWorkspace(c, async (work) => {
     work.requireAdmin('rotating a provider key');
     requireStepUp(work.session);
-    await consumeRate(work.tx, work.userId, work.workspaceId, VERIFY_LIMIT);
+    await consumeRate(work.tx, work.userId, work.workspaceId, INSTALL_LIMIT);
 
     const previous = await getProviderKey(work.tx, work.workspaceId, previousKeyId);
     if (!previous) throw new RouteError('no such key', 'not_found', 404);
@@ -353,6 +380,8 @@ export async function rotateKey(c: Context<{ Bindings: Env }>): Promise<Response
  * and the person who caused it should see both halves.
  */
 export async function deleteKey(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
   const keyId = pathUuid(c, 'id');
   const result = await inWorkspace(c, async (work) => {
     work.requireAdmin('removing a provider key');

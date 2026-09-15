@@ -6,11 +6,12 @@
 // the WorkOS check appears only in `AUTH_MODE=workos` — because in fake mode
 // there is no JWKS and a check that failed there would make every local
 // `/health` red for no reason.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { CONNECTION_ALARM, CONNECTION_CEILING, readConnectionMetric } from '../../src/ops/connections.js';
 import { setJwksFetcherForTests } from '../../src/auth/jwks.js';
 import { signingKeys } from '../stubs/fake-workos.js';
+import { resetHealthCacheForTests } from '../../src/routes/health.js';
 import { call, makeEnv, workosEnv } from './harness.js';
 
 interface HealthBody {
@@ -20,6 +21,10 @@ interface HealthBody {
 }
 
 afterEach(() => setJwksFetcherForTests(null));
+// The route memoises its answer per isolate for `CACHE_MS` so that an
+// unauthenticated poll does not cost three Postgres connections a hit. These
+// tests change the world between calls, which no real deployment does.
+beforeEach(() => resetHealthCacheForTests());
 
 describe('GET /health', () => {
   it('reports the connection count with its denominator', async () => {
@@ -34,11 +39,59 @@ describe('GET /health', () => {
     const connections = body.checks.find((check) => check.name === 'postgres:connections');
     expect(connections).toBeDefined();
     expect(connections?.ok).toBe(true);
-    // "152" means nothing and "152 of 209" means the afternoon is about to go
-    // badly, so the check carries both numbers and the threshold.
-    expect(connections?.detail).toMatch(/\d+ of 209 connections/);
-    expect(connections?.detail).toContain('alarm at 150');
-    expect(connections?.detail).toContain('idle in transaction');
+    // The verdict, not the arithmetic. "152 of 209, alarm at 150" is what an
+    // operator needs and it goes to the log; published on an unauthenticated
+    // route it is a capacity map — it tells an anonymous caller how many
+    // connections it takes to exhaust the origin. See the header of
+    // src/routes/health.ts.
+    expect(connections?.detail).toBe('within budget');
+    expect(connections?.detail).not.toMatch(/\d/);
+  });
+
+  // The regression test for the finding: `/health` is the one route that
+  // answers an unauthenticated caller, and its `detail` used to be the
+  // upstream's own `error.message`. That published our database's hostname,
+  // port and role names (`getaddrinfo ENOTFOUND ep-....neon.tech`, `password
+  // authentication failed for user "app"`) to anyone who could curl it, and
+  // the deploy smoke tests `cat` the body into CI logs as well.
+  it('never puts a host, a port, a role name or an upstream message in the body', async () => {
+    setJwksFetcherForTests(() =>
+      Promise.reject(new Error('getaddrinfo ENOTFOUND ep-secret-123.eu-central-1.aws.neon.tech:5432')),
+    );
+    const { env } = workosEnv();
+    const body = (await (await call(env, '/health')).json()) as HealthBody;
+
+    const failed = body.checks.filter((check) => !check.ok);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const check of body.checks) {
+      // A closed vocabulary rather than a blocklist: anything a future upstream
+      // invents has to be added here deliberately, which is the review this
+      // test exists to force.
+      expect([
+        'connected',
+        'answered',
+        'reachable',
+        'within budget',
+        'alarming',
+        'unauthorized',
+        'unreachable',
+        'misconfigured',
+        'failed',
+      ]).toContain(check.detail);
+    }
+    const serialised = JSON.stringify(body);
+    expect(serialised).not.toContain('neon.tech');
+    expect(serialised).not.toContain('5432');
+    expect(serialised).not.toContain('ENOTFOUND');
+  });
+
+  it('serves a cached answer rather than three Postgres connections a hit', async () => {
+    const { env } = makeEnv();
+    const first = (await (await call(env, '/health')).json()) as HealthBody;
+    const second = (await (await call(env, '/health')).json()) as HealthBody;
+    // Identical durations prove the second call did no work: a fresh round of
+    // checks cannot reproduce another round's millisecond timings.
+    expect(second.checks.map((c) => c.duration_ms)).toEqual(first.checks.map((c) => c.duration_ms));
   });
 
   it('does not fail the service at the alarm, because 151 connections is not an outage', async () => {
@@ -61,7 +114,7 @@ describe('GET /health', () => {
     expect(body.checks.map((c) => c.name)).not.toContain('workos:jwks');
   });
 
-  it('checks the WorkOS JWKS in workos mode, and counts the signing keys', async () => {
+  it('checks the WorkOS JWKS in workos mode', async () => {
     const keys = await signingKeys();
     setJwksFetcherForTests(() => Promise.resolve(keys.jwks));
     const { env } = workosEnv();
@@ -70,7 +123,7 @@ describe('GET /health', () => {
     const jwks = body.checks.find((check) => check.name === 'workos:jwks');
     expect(jwks).toBeDefined();
     expect(jwks?.ok).toBe(true);
-    expect(jwks?.detail).toContain('signing keys');
+    expect(jwks?.detail).toBe('reachable');
   });
 
   it('degrades, rather than lying, when the JWKS cannot be reached', async () => {
@@ -92,7 +145,11 @@ describe('GET /health', () => {
     const response = await call(env, '/health');
     expect(response.status).toBe(503);
     const body = (await response.json()) as HealthBody;
-    expect(body.checks.find((check) => check.name === 'workos:jwks')?.detail).toContain('no signing keys');
+    // An empty JWKS is a failure, not a 200 — but the caller is told the
+    // bucket, not the sentence. The sentence is in the log.
+    const jwks = body.checks.find((check) => check.name === 'workos:jwks');
+    expect(jwks?.ok).toBe(false);
+    expect(jwks?.detail).toBe('failed');
   });
 
   it('names the environment in the version, so a smoke test can tell them apart', async () => {

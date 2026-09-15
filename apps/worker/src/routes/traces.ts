@@ -23,6 +23,7 @@ import { paginatedSchema, refSchema, traceEntitySchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { TOOL_RESULT_TRUNCATION_MARKER } from '../engine/constants.js';
 import { inWorkspace, pathUuid } from './tenant.js';
+import { VISIBLE } from './sessions.js';
 import { RouteError } from './tenant.js';
 
 const tracePage = paginatedSchema(traceEntitySchema);
@@ -87,6 +88,16 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
     ...extra,
   });
 
+// `$1` is the workspace and `$2` is the caller, because `VISIBLE` needs the
+// caller: a run is readable exactly when the session it belongs to is.
+//
+// That predicate used to be absent here, and the module header above claimed
+// the tab was "not new authority over anything" on the grounds that every row
+// was already readable through `messages`. It was not. `messages` is gated by
+// `VISIBLE`; this was gated by workspace membership alone, so any member could
+// list every session's runs by title and then read that run's tool-call
+// arguments and results — which is where the applicant payload and the fetched
+// documents are — for a session they were never shown.
 const RUN_SELECT = `
   SELECT r.id, r.session_id, s.title, r.status, r.mode, r.model_id, r.active_ms, r.attempt,
          r.waiting_for, r.started_at,
@@ -99,8 +110,8 @@ export async function listTraces(c: Context<{ Bindings: Env }>): Promise<Respons
   const sessionId = c.req.query('session');
 
   const items = await inWorkspace(c, async (work) => {
-    const values: unknown[] = [work.workspaceId];
-    let where = 'WHERE r.workspace_id = $1';
+    const values: unknown[] = [work.workspaceId, work.userId];
+    let where = `WHERE r.workspace_id = $1 AND ${VISIBLE}`;
     if (sessionId) {
       values.push(sessionId);
       where += ` AND r.session_id = $${values.length}`;
@@ -168,11 +179,14 @@ export async function getTrace(c: Context<{ Bindings: Env }>): Promise<Response>
   const runId = pathUuid(c, 'runId');
 
   const entity = await inWorkspace(c, async (work) => {
-    const runs = await work.tx.query<RunRow>(`${RUN_SELECT} WHERE r.workspace_id = $1 AND r.id = $2`, [
-      work.workspaceId,
-      runId,
-    ]);
+    const runs = await work.tx.query<RunRow>(
+      `${RUN_SELECT} WHERE r.workspace_id = $1 AND ${VISIBLE} AND r.id = $3`,
+      [work.workspaceId, work.userId, runId],
+    );
     const run = runs.rows[0];
+    // A run in a session this caller cannot see is reported as a run that does
+    // not exist, for the reason `withTenantTransaction` answers 404 rather than
+    // 403: whether it exists is itself the thing being withheld.
     if (!run) throw new RouteError('no such run in this workspace', 'not_found', 404);
 
     const steps = await work.tx.query<StepRow>(

@@ -19,6 +19,7 @@ import { bootstrapSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
+import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
@@ -35,12 +36,32 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
   let email: string;
   let workspaceId: string;
   try {
+    // Before the lookup, so a guesser spends budget on every attempt including
+    // the ones that find nothing. Outside any transaction, so the count stands
+    // even though the attempt that follows it throws.
+    await consumeRate(client, session.userId, null, LIMITS.acceptInvitation);
+
     const user = await client.query<{ email: string; email_verified: boolean }>(
       `SELECT email, email_verified FROM users WHERE id = $1`,
       [session.userId],
     );
     const row = user.rows[0];
     if (!row) throw new RouteError('no such user', 'unknown_user', 404);
+    // The header comment promises the *verified* email must match, and the
+    // column was selected for that and then never read: the comparison below
+    // ran against `users.email` whatever its verification state. An identity
+    // provider that lets someone sign up claiming an address without proving
+    // it — which is a configuration, not an exotic one — therefore turned
+    // "forwarding the link does not admit the forwardee" into "anyone who
+    // learns the invited address can claim it". An unverified address is not
+    // an identity, so it cannot be the thing the invitation is matched on.
+    if (!row.email_verified) {
+      throw new RouteError(
+        'verify your email address before accepting an invitation',
+        'email_unverified',
+        403,
+      );
+    }
     email = row.email;
 
     const found = await client.query<{ workspace_id: string | null }>(

@@ -194,4 +194,19 @@ export interface GatewayRouting {
   readonly headers: Readonly<Record<string, string>>;
 }
 
-export const defaultFetch: FetchLike = (input, init) => fetch(input, init);
+/**
+ * The default transport, which refuses to follow a redirect.
+ *
+ * Every adapter puts the workspace's provider key in a header (`x-api-key` for
+ * Anthropic, `Authorization: Bearer` for the OpenAI-shaped ones). workerd's
+ * `fetch` does not implement the browser's rule about stripping credentials on
+ * a cross-origin redirect, so with the default `redirect: 'follow'` a 30x from
+ * a provider host — an open redirect on it, or a hijacked resolution of it —
+ * would replay a customer's key to wherever the `Location` pointed. There is no
+ * legitimate 3xx on these endpoints, so `manual` turns the whole class into an
+ * ordinary `ProviderError` from `errorFromResponse` instead.
+ *
+ * `security/fetch-url.ts` already validates every hop for the same reason; this
+ * is the same rule on the path that carries a credential rather than a URL.
+ */
+export const defaultFetch: FetchLike = (input, init) => fetch(input, { ...init, redirect: 'manual' });

@@ -152,6 +152,95 @@ describe('address checks', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The IPv6 forms that are an IPv4 address in disguise
+// ---------------------------------------------------------------------------
+
+/**
+ * The table this file was missing, and the reason it was missing it.
+ *
+ * `checkAddress` had exactly one IPv4-mapped rule and it matched the *dotted*
+ * spelling, `::ffff:127.0.0.1` — which is the one spelling a URL never
+ * produces, because the WHATWG parser rewrites it to hex:
+ *
+ *     new URL('http://[::ffff:127.0.0.1]/').hostname  ->  '[::ffff:7f00:1]'
+ *
+ * The fixture above (an AAAA answer of `::1`) passed throughout, because `::1`
+ * has its own rule. Every *embedded* form did not: `::ffff:a9fe:a9fe` is
+ * 169.254.169.254 — the cloud metadata endpoint this whole module exists to
+ * keep a tool away from — and it was allowed. `isIpLiteral` returns true for
+ * these, so `vetHost` skips DNS and treats the literal as its own resolved
+ * address: this function was the only thing between the allowlist and the
+ * socket.
+ *
+ * The reachable path is DNS rather than a pasted literal, since host matching
+ * is suffix-based: an allowlisted `example.com` covers `evil.example.com`, and
+ * whoever controls that name publishes an AAAA record of one of these.
+ */
+describe('IPv6 addresses that embed an IPv4 address', () => {
+  const refused: [string, string][] = [
+    ['::ffff:7f00:1', '127.0.0.0/8'],
+    ['::ffff:a9fe:a9fe', '169.254.0.0/16'],
+    ['::ffff:0a00:0001', '10.0.0.0/8'],
+    ['::ffff:ac10:0001', '172.16.0.0/12'],
+    ['::ffff:c0a8:0001', '192.168.0.0/16'],
+    ['::ffff:6440:0001', '100.64.0.0/10'],
+    // NAT64 (RFC 6052/8215): a network running it translates these straight to
+    // the embedded IPv4.
+    ['64:ff9b::a9fe:a9fe', '169.254.0.0/16'],
+    ['64:ff9b:1::a9fe:a9fe', '169.254.0.0/16'],
+    // 6to4 (RFC 3056): the IPv4 lives in groups 1 and 2.
+    ['2002:7f00:1::', '127.0.0.0/8'],
+    ['2002:a9fe:a9fe::', '169.254.0.0/16'],
+  ];
+
+  it.each(refused)('refuses %s, which reaches %s', (address, range) => {
+    // It has to be recognised as a literal at all, or `vetHost` would send it
+    // to DNS and the check below would never run on this value.
+    expect(isIpLiteral(address)).toBe(true);
+    const verdict = checkAddress(address);
+    expect(verdict.allowed).toBe(false);
+    // The refusal names the embedding and the range it reaches, so the trace
+    // says how the address got past the shape of the name.
+    expect(verdict.range).toContain(range);
+  });
+
+  it('refuses the site-local, documentation and discard ranges', () => {
+    for (const [address, range] of [
+      ['fec0::1', 'fec0::/10'],
+      ['2001:db8::1', '2001:db8::/32'],
+      ['100::1', '100::/64'],
+    ] as [string, string][]) {
+      const verdict = checkAddress(address);
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.range).toBe(range);
+    }
+  });
+
+  it('still allows a public address, including one embedded in a mapped or 6to4 form', () => {
+    // 8.8.8.8 by three spellings. The point of judging the embedded address in
+    // its own family is that there is one list of forbidden ranges, not two
+    // that drift: a public address stays public however it is written.
+    expect(checkAddress('::ffff:0808:0808').allowed).toBe(true);
+    expect(checkAddress('64:ff9b::0808:0808').allowed).toBe(true);
+    expect(checkAddress('2002:0808:0808::').allowed).toBe(true);
+    expect(checkAddress('2606:4700:4700::1111').allowed).toBe(true);
+  });
+
+  it('refuses a hostname whose AAAA answer is a mapped metadata address', async () => {
+    const result = await fetchUrl('https://example.com/x', 'GET', {
+      allowlist: ALLOWLIST,
+      resolve: () => Promise.resolve(['::ffff:a9fe:a9fe']),
+      fetchImpl: (() => Promise.reject(new Error('should never be fetched'))) as unknown as typeof fetch,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('private_address');
+      expect(result.error).toContain('169.254.0.0/16');
+    }
+  });
+});
+
 describe('the redirect fixtures the plan names', () => {
   it('refuses a redirect to 169.254.169.254 and records the hop that tried it', async () => {
     const resolve = tableResolver({ 'example.com': ['93.184.216.34'] });

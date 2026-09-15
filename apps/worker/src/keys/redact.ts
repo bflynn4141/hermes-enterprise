@@ -72,6 +72,22 @@ export function redactString(value: string): string {
 const MAX_DEPTH = 6;
 
 /**
+ * Is this field name one whose *value* is a secret whatever it looks like?
+ *
+ * The version suffix is matched by pattern rather than listed, because the
+ * list used to name `kek_v1` literally: the first rotation this system exists
+ * to support would have introduced a `KEK_V2` that no name rule matched and no
+ * value pattern could catch either — raw AES material is base64 with none of
+ * the provider prefixes `KEY_SHAPES` looks for. A redactor that stops working
+ * at exactly the moment the thing it protects is being handled is worse than
+ * none, because the tests still pass.
+ */
+function isSecretName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return SECRET_NAMES.has(lower) || /^kek(_v\d+)?$/.test(lower);
+}
+
+/**
  * Deep-redact a value for logging: secret-named fields by name, every string by
  * shape. Cycles and depth are bounded, because a log helper that throws turns
  * an incident into two incidents.
@@ -88,7 +104,7 @@ export function redact(value: unknown, depth = 0, seen: WeakSet<object> = new We
   if (value instanceof Headers) {
     const out: Record<string, unknown> = {};
     value.forEach((v, k) => {
-      out[k] = SECRET_NAMES.has(k.toLowerCase()) ? REDACTED : redactString(v);
+      out[k] = isSecretName(k) ? REDACTED : redactString(v);
     });
     return out;
   }
@@ -101,7 +117,7 @@ export function redact(value: unknown, depth = 0, seen: WeakSet<object> = new We
 
   const out: Record<string, unknown> = {};
   for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
-    out[name] = SECRET_NAMES.has(name.toLowerCase()) ? REDACTED : redact(item, depth + 1, seen);
+    out[name] = isSecretName(name) ? REDACTED : redact(item, depth + 1, seen);
   }
   return out;
 }
