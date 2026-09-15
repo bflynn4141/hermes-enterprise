@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2023"
+    ],
+    "types": [
+      "@cloudflare/workers-types",
+      "node"
+    ],
+    "paths": {
+      "@hermes/shared": [
+        "../../packages/shared/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "scripts/**/*.d.mts",
+    "vitest.config.ts",
+    "worker-configuration.d.ts"
+  ]
+}

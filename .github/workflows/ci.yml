@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The pipeline is part of the trust boundary: whoever can deploy can ship code
+# that decrypts every tenant's provider key. So CI gets read-only permissions
+# and never holds a deploy credential; the deploy job (M2) will live in a
+# separate workflow with an environment reviewer.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Matches docker-compose.yml, so the same scripts work here and locally.
+  PGHOST: 127.0.0.1
+  PGPORT: '5433'
+  PGDATABASE: hermes
+  PGSUPERUSER: postgres
+  PGSUPERPASSWORD: postgres
+  PGLOCALPASSWORD: localdev
+
+jobs:
+  test:
+    name: typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17.8-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hermes
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hermes"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Migrate, then re-apply to prove idempotence
+        run: pnpm db:migrate
+
+      - name: Test
+        run: pnpm test
+        env:
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP: postgres://app:localdev@127.0.0.1:5433/hermes
+          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT: postgres://agent:localdev@127.0.0.1:5433/hermes
+
+      - name: Grant assertion on its own
+        # Also run separately, so a failure here is unambiguous in the log: this
+        # is the check that the agent role cannot decide.
+        run: pnpm db:test
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  wrangler:
+    name: wrangler dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # No credential is needed for a dry run, and none is provided. What this
+      # proves is that both environments parse, that every binding resolves, and
+      # that the bundle builds — which is the failure a deploy would otherwise
+      # discover in production.
+      - name: Dry run, staging
+        run: pnpm --filter @hermes/worker exec wrangler deploy --dry-run --env staging
+
+      - name: Dry run, production
+        run: pnpm --filter @hermes/worker exec wrangler deploy --dry-run --env production

@@ -1,0 +1,242 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hermes-enterprise",
+  "main": "src/index.ts",
+  // Pinned to the newest date the workerd binary bundled with
+  // @cloudflare/vitest-pool-workers supports. A later date makes the Worker
+  // undeployable in tests, and a Worker we cannot run in workerd is a Worker we
+  // cannot test in workerd. Raise both together.
+  "compatibility_date": "2026-08-22",
+  // `nodejs_compat` is what lets node-postgres run in the Worker; Hyperdrive's
+  // own documentation assumes it.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // A runaway tool loop should cost a request, not a bill. 30 s is the paid
+  // ceiling; the alarm at 50 percent of the subrequest budget catches the other
+  // runaway, which is chattiness rather than compute.
+  "limits": { "cpu_ms": 30000 },
+
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+
+  // The client bundle. `run_worker_first` on the API prefixes means a route
+  // collision never serves index.html to a fetch(), and `single-page-application`
+  // means a deep link like /w/:id/inbox still boots the app.
+  "assets": {
+    "directory": "../client/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+  },
+
+  "vars": {
+    "ENVIRONMENT": "development",
+    "ENGINE_VERSION": "1",
+    "AUTH_MODE": "fake",
+    "MODEL_GATEWAY_MODE": "off",
+    "ENGINE_PAUSED": "0",
+    "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787"
+  },
+
+  // Durable Object classes are declared in `exports`, which the docs allow at
+  // the top level and overridden per environment. A rename is a `renamed`
+  // tombstone in that map, never an edit to the class name: removing a name
+  // deletes its namespace and all of its stored data permanently. Both hubs
+  // hold no truth, so that would cost one reconnect rather than data, but the
+  // rule stands. Gradual deployments are not supported with `exports`.
+  "durable_objects": {
+    "bindings": [
+      { "name": "SESSION_HUB", "class_name": "SessionHub" },
+      { "name": "WORKSPACE_HUB", "class_name": "WorkspaceHub" }
+    ]
+  },
+  // `exports` is the declarative form and is mutually exclusive with
+  // `migrations`. Both hubs are SQLite-backed Durable Objects.
+  "exports": {
+    "SessionHub": { "type": "durable-object", "storage": "sqlite" },
+    "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // One instance per run attempt, id `${run_id}-a${attempt}`.
+  "workflows": [
+    {
+      "name": "hermes-run-attempt",
+      "binding": "RUN_ATTEMPT",
+      "class_name": "RunAttempt"
+    }
+  ],
+
+  // Both queues carry a dead-letter queue. Without one, a message that exhausts
+  // its retries is deleted, and the row it was about keeps saying "preparing"
+  // forever. The DLQ consumer writes `failed` plus a reason instead.
+  "queues": {
+    "producers": [
+      { "binding": "EXTRACT_QUEUE", "queue": "hermes-extract" },
+      { "binding": "RENDERS_QUEUE", "queue": "hermes-renders" }
+    ],
+    "consumers": [
+      {
+        "queue": "hermes-extract",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30,
+        "max_retries": 3,
+        "dead_letter_queue": "hermes-extract-dlq"
+      },
+      {
+        "queue": "hermes-renders",
+        "max_batch_size": 5,
+        "max_batch_timeout": 30,
+        "max_retries": 3,
+        "dead_letter_queue": "hermes-renders-dlq"
+      },
+      { "queue": "hermes-extract-dlq", "max_batch_size": 5, "max_retries": 1 },
+      { "queue": "hermes-renders-dlq", "max_batch_size": 5, "max_retries": 1 }
+    ]
+  },
+
+  // Every minute: drain jobs, sweep orphaned runs, poll the WorkOS Events API.
+  // Nightly at 03:17 UTC: the run-log validator Workflow.
+  "triggers": {
+    "crons": ["* * * * *", "17 3 * * *"]
+  },
+
+  // Two configs because two database roles. Caching is disabled on both:
+  // Hyperdrive caches by query text and does not document whether session
+  // settings enter the key, and a cache that ignored `SET LOCAL app.workspace_id`
+  // would hand one tenant another tenant's rows.
+  "hyperdrive": [
+    // Local development points these at Docker Postgres through
+    // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP and
+    // ..._HYPERDRIVE_AGENT in .dev.vars, so no credential lives in this file.
+    { "binding": "HYPERDRIVE_APP", "id": "0000000000000000000000000000app0" },
+    { "binding": "HYPERDRIVE_AGENT", "id": "0000000000000000000000000agent00" }
+  ],
+
+  "env": {
+    "staging": {
+      "name": "hermes-enterprise-staging",
+      "limits": { "cpu_ms": 30000 },
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
+      "assets": {
+        "directory": "../client/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+      },
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "ENGINE_VERSION": "1",
+        "AUTH_MODE": "workos",
+        "MODEL_GATEWAY_MODE": "off",
+        "ENGINE_PAUSED": "0",
+        "ALLOWED_ORIGINS": "https://staging.hermes.example"
+      },
+      // CI asserts that staging and production declare the same classes: a
+      // mismatch is a namespace that exists in one environment and not the
+      // other, which is discovered at the worst possible moment.
+      "durable_objects": {
+        "bindings": [
+          { "name": "SESSION_HUB", "class_name": "SessionHub" },
+          { "name": "WORKSPACE_HUB", "class_name": "WorkspaceHub" }
+        ]
+      },
+      "exports": {
+        "SessionHub": { "type": "durable-object", "storage": "sqlite" },
+        "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
+      },
+      "workflows": [
+        { "name": "hermes-run-attempt-staging", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "EXTRACT_QUEUE", "queue": "hermes-extract-staging" },
+          { "binding": "RENDERS_QUEUE", "queue": "hermes-renders-staging" }
+        ],
+        "consumers": [
+          {
+            "queue": "hermes-extract-staging",
+            "max_batch_size": 5,
+            "max_batch_timeout": 30,
+            "max_retries": 3,
+            "dead_letter_queue": "hermes-extract-staging-dlq"
+          },
+          {
+            "queue": "hermes-renders-staging",
+            "max_batch_size": 5,
+            "max_batch_timeout": 30,
+            "max_retries": 3,
+            "dead_letter_queue": "hermes-renders-staging-dlq"
+          },
+          { "queue": "hermes-extract-staging-dlq", "max_batch_size": 5, "max_retries": 1 },
+          { "queue": "hermes-renders-staging-dlq", "max_batch_size": 5, "max_retries": 1 }
+        ]
+      },
+      "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+      "hyperdrive": [
+        { "binding": "HYPERDRIVE_APP", "id": "0000000000000000000000000000app0" },
+        { "binding": "HYPERDRIVE_AGENT", "id": "0000000000000000000000000agent00" }
+      ]
+    },
+
+    "production": {
+      "name": "hermes-enterprise-production",
+      "limits": { "cpu_ms": 30000 },
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
+      "assets": {
+        "directory": "../client/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+      },
+      "vars": {
+        "ENVIRONMENT": "production",
+        "ENGINE_VERSION": "1",
+        "AUTH_MODE": "workos",
+        "MODEL_GATEWAY_MODE": "off",
+        "ENGINE_PAUSED": "0",
+        "ALLOWED_ORIGINS": "https://app.hermes.example"
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "SESSION_HUB", "class_name": "SessionHub" },
+          { "name": "WORKSPACE_HUB", "class_name": "WorkspaceHub" }
+        ]
+      },
+      "exports": {
+        "SessionHub": { "type": "durable-object", "storage": "sqlite" },
+        "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
+      },
+      "workflows": [
+        { "name": "hermes-run-attempt-production", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "EXTRACT_QUEUE", "queue": "hermes-extract-production" },
+          { "binding": "RENDERS_QUEUE", "queue": "hermes-renders-production" }
+        ],
+        "consumers": [
+          {
+            "queue": "hermes-extract-production",
+            "max_batch_size": 5,
+            "max_batch_timeout": 30,
+            "max_retries": 3,
+            "dead_letter_queue": "hermes-extract-production-dlq"
+          },
+          {
+            "queue": "hermes-renders-production",
+            "max_batch_size": 5,
+            "max_batch_timeout": 30,
+            "max_retries": 3,
+            "dead_letter_queue": "hermes-renders-production-dlq"
+          },
+          { "queue": "hermes-extract-production-dlq", "max_batch_size": 5, "max_retries": 1 },
+          { "queue": "hermes-renders-production-dlq", "max_batch_size": 5, "max_retries": 1 }
+        ]
+      },
+      "triggers": { "crons": ["* * * * *", "17 3 * * *"] },
+      "hyperdrive": [
+        { "binding": "HYPERDRIVE_APP", "id": "0000000000000000000000000000app0" },
+        { "binding": "HYPERDRIVE_AGENT", "id": "0000000000000000000000000agent00" }
+      ]
+    }
+  }
+}

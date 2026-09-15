@@ -1,0 +1,25 @@
+{
+  "name": "hermes-enterprise",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @hermes/worker dev",
+    "build": "pnpm --filter @hermes/shared build && pnpm --filter @hermes/worker build",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "test": "pnpm --filter @hermes/shared test && pnpm --filter @hermes/worker test",
+    "test:unit": "pnpm --filter @hermes/shared test && pnpm --filter @hermes/worker test:unit",
+    "db:up": "node scripts/db-up.mjs",
+    "db:down": "docker compose down -v",
+    "db:migrate": "pnpm --filter @hermes/worker db:migrate",
+    "db:test": "pnpm --filter @hermes/worker db:test",
+    "lint:secrets": "gitleaks detect --no-git --redact"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,267 @@
+// The two tenant routes M1 serves: bootstrap and event replay.
+//
+// Both run inside one transaction with `SET LOCAL app.workspace_id` and
+// `app.user_id`, derived from the URL path plus a members lookup. Neither reads
+// a workspace id from a header or a query parameter, and a test forges both to
+// prove it.
+import type { Context } from 'hono';
+import {
+  bootstrapSchema,
+  eventsPageSchema,
+  safeParseStreamEvent,
+  type Bootstrap,
+  type EventsPage,
+  type Ref,
+  type StreamEvent,
+} from '@hermes/shared';
+import type { Env } from '../env.js';
+import { withTenantTransaction, type Tx } from '../db/client.js';
+import { getSession } from '../auth.js';
+
+/** The replay window. Older cursors get `resync` instead of a partial page. */
+const MAX_REPLAY_PAGE = 500;
+
+interface WorkspaceRow {
+  id: string;
+  name: string;
+  jurisdiction: string;
+  default_model_id: string;
+  default_effort: string | null;
+  default_runtime: string;
+  daily_token_cap: string | null;
+  max_concurrent_runs: number;
+  flags: Record<string, boolean>;
+  timezone: string;
+}
+
+async function loadBootstrap(tx: Tx, workspaceId: string, userId: string): Promise<Bootstrap> {
+  const workspace = await tx.query<WorkspaceRow>(
+    `SELECT w.id, w.name, w.jurisdiction,
+            COALESCE(s.default_model_id, 'deepseek-flash') AS default_model_id,
+            s.default_effort,
+            COALESCE(s.default_runtime, 'cloud') AS default_runtime,
+            s.daily_token_cap,
+            COALESCE(s.max_concurrent_runs, 3) AS max_concurrent_runs,
+            COALESCE(s.flags, '{}'::jsonb) AS flags,
+            COALESCE(s.timezone, 'UTC') AS timezone
+       FROM workspaces w
+       LEFT JOIN workspace_settings s ON s.workspace_id = w.id
+      WHERE w.id = $1`,
+    [workspaceId],
+  );
+  const ws = workspace.rows[0];
+  if (!ws) throw new Error('workspace row is not visible inside its own tenant transaction');
+
+  const viewer = await tx.query<{ role: string; reviewer_roles: string[] }>(
+    `SELECT role, reviewer_roles FROM members WHERE workspace_id = $1 AND user_id = $2`,
+    [workspaceId, userId],
+  );
+
+  // Counts come from the views, never from a stored counter: the demo's rule
+  // that 4 -> 0 works in any order is a property of deriving them.
+  const counts = await tx.query<{ inbox: number; grants: number; documents: number; decisions: number }>(
+    `SELECT COALESCE((SELECT pending FROM v_inbox_count WHERE workspace_id = $1), 0)     AS inbox,
+            COALESCE((SELECT pending FROM v_pending_grants WHERE workspace_id = $1), 0)  AS grants,
+            (SELECT count(*)::int FROM v_created_documents WHERE workspace_id = $1)      AS documents,
+            COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0) AS decisions`,
+    [workspaceId],
+  );
+
+  const sessions = await tx.query<{
+    id: string;
+    title: string;
+    mode: string;
+    model_id: string;
+    effort: string | null;
+    pinned: boolean;
+    archived: boolean;
+    focus_ref: Ref | null;
+    status: string;
+    last_activity_at: Date | null;
+  }>(
+    `SELECT s.id, s.title, s.mode, s.model_id, s.effort, s.pinned, s.archived, s.focus_ref,
+            v.status, s.last_activity_at
+       FROM sessions s
+       JOIN v_session_status v ON v.session_id = s.id
+      WHERE s.owner_id = $1 AND NOT s.archived
+      ORDER BY s.pinned DESC, s.last_activity_at DESC
+      LIMIT 50`,
+    [userId],
+  );
+
+  const requests = await tx.query<{ id: string; kind: string; status: string; label: string }>(
+    `SELECT id, kind, status, label FROM requests
+      WHERE status = 'pending' ORDER BY created_at DESC LIMIT 100`,
+  );
+
+  // A catalog row is offered only when this workspace holds a verified key for
+  // the row's provider. "Add a provider key in Settings to start" is an empty
+  // state, not an error.
+  const catalog = await tx.query<{
+    model_id: string;
+    label: string;
+    provider: string;
+    effort: string[] | null;
+    default_effort: string | null;
+    enabled: boolean;
+    disabled_reason: string | null;
+  }>(
+    `SELECT c.model_id, c.label, c.provider,
+            CASE WHEN c.effort_map IS NULL THEN NULL
+                 ELSE ARRAY(SELECT jsonb_object_keys(c.effort_map)) END AS effort,
+            c.default_effort,
+            (c.disabled_reason IS NULL AND EXISTS (
+               SELECT 1 FROM workspace_provider_keys k
+                WHERE k.workspace_id = $1 AND k.provider = c.provider
+                  AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
+             )) AS enabled,
+            c.disabled_reason
+       FROM catalog c
+      ORDER BY c.model_id`,
+    [workspaceId],
+  );
+
+  const heads = await tx.query<{ session_head: string; workspace_head: string }>(
+    `SELECT COALESCE(max(id) FILTER (WHERE session_id IS NOT NULL), 0)::text AS session_head,
+            COALESCE(max(id) FILTER (WHERE session_id IS NULL), 0)::text     AS workspace_head
+       FROM stream_events WHERE workspace_id = $1`,
+    [workspaceId],
+  );
+  const head = heads.rows[0] ?? { session_head: '0', workspace_head: '0' };
+  const count = counts.rows[0] ?? { inbox: 0, grants: 0, documents: 0, decisions: 0 };
+
+  return bootstrapSchema.parse({
+    workspace: {
+      id: ws.id,
+      name: ws.name,
+      jurisdiction: ws.jurisdiction,
+      settings: {
+        default_model_id: ws.default_model_id,
+        default_effort: ws.default_effort,
+        default_runtime: ws.default_runtime,
+        daily_token_cap: ws.daily_token_cap === null ? null : Number(ws.daily_token_cap),
+        max_concurrent_runs: ws.max_concurrent_runs,
+        timezone: ws.timezone,
+        flags: ws.flags,
+      },
+    },
+    viewer: {
+      user_id: userId,
+      role: viewer.rows[0]?.role ?? 'member',
+      reviewer_roles: viewer.rows[0]?.reviewer_roles ?? [],
+    },
+    heads: { session: head.session_head, workspace: head.workspace_head },
+    counts: {
+      inbox: count.inbox,
+      pending_grants: count.grants,
+      created_documents: count.documents,
+      decisions: count.decisions,
+    },
+    // node-postgres returns a Date for timestamptz; the contract carries an
+    // ISO string, because the client compares and sorts cursors as text.
+    sessions: sessions.rows.map((row) => ({
+      ...row,
+      last_activity_at: row.last_activity_at === null ? null : row.last_activity_at.toISOString(),
+    })),
+    requests: requests.rows,
+    catalog: catalog.rows,
+  });
+}
+
+export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const session = await getSession(c);
+  const workspaceId = c.req.param('ws') ?? '';
+  const body = await withTenantTransaction(
+    c.env,
+    'app',
+    { workspaceId, userId: session.userId },
+    (tx) => loadBootstrap(tx, workspaceId, session.userId),
+  );
+  return c.json(body);
+}
+
+/**
+ * GET /w/:ws/events?stream=session|workspace&after=<id>
+ *
+ * Replay runs in the API under the caller's own authorization, not the hub's:
+ * the session stream is filtered to sessions the caller owns or holds a share
+ * on, which is the same rule the hub applies to live delivery.
+ */
+export async function events(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const session = await getSession(c);
+  const workspaceId = c.req.param('ws') ?? '';
+  const stream = c.req.query('stream') === 'session' ? 'session' : 'workspace';
+  const afterRaw = c.req.query('after') ?? '0';
+  if (!/^\d{1,19}$/.test(afterRaw)) {
+    return c.json({ error: 'after must be a stream id', reason: 'bad_cursor' }, 400);
+  }
+
+  const page = await withTenantTransaction(
+    c.env,
+    'app',
+    { workspaceId, userId: session.userId },
+    async (tx): Promise<EventsPage> => {
+      const headRow = await tx.query<{ head: string }>(
+        `SELECT COALESCE(max(id), 0)::text AS head FROM stream_events
+          WHERE workspace_id = $1 AND ($2 = 'workspace') = (session_id IS NULL)`,
+        [workspaceId, stream],
+      );
+      const head = headRow.rows[0]?.head ?? '0';
+
+      const rows =
+        stream === 'session'
+          ? await tx.query(
+              `SELECT e.id::text AS id, e.workspace_id, e.session_id, e.kind, e.payload,
+                      e.schema_version, e.trace_id, e.created_at
+                 FROM stream_events e
+                 JOIN sessions s ON s.id = e.session_id
+                WHERE e.workspace_id = $1
+                  AND e.id > $2::bigint
+                  AND (
+                    s.owner_id = $3
+                    OR EXISTS (
+                      SELECT 1 FROM session_shares sh
+                       WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
+                    )
+                  )
+                ORDER BY e.id
+                LIMIT ${MAX_REPLAY_PAGE}`,
+              [workspaceId, afterRaw, session.userId],
+            )
+          : await tx.query(
+              `SELECT id::text AS id, workspace_id, session_id, kind, payload,
+                      schema_version, trace_id, created_at
+                 FROM stream_events
+                WHERE workspace_id = $1 AND session_id IS NULL AND id > $2::bigint
+                ORDER BY id
+                LIMIT ${MAX_REPLAY_PAGE}`,
+              [workspaceId, afterRaw],
+            );
+
+      // A row that no longer parses (a migrated schema, a pruned payload) is
+      // not silently dropped: the client is told to resync instead of being
+      // handed a transcript with a hole in it.
+      const parsed: StreamEvent[] = [];
+      let resync = false;
+      for (const row of rows.rows) {
+        const candidate = {
+          id: row.id,
+          workspace_id: row.workspace_id,
+          session_id: row.session_id,
+          kind: row.kind,
+          schema_version: row.schema_version,
+          trace_id: row.trace_id ?? 'unknown',
+          at: new Date(row.created_at as string).toISOString(),
+          payload: row.payload,
+        };
+        const result = safeParseStreamEvent(candidate);
+        if (result.success) parsed.push(result.data);
+        else resync = true;
+      }
+
+      return eventsPageSchema.parse({ stream, after: afterRaw, head, resync, events: parsed });
+    },
+  );
+
+  return c.json(page);
+}

@@ -1,0 +1,27 @@
+# gitleaks configuration.
+#
+# The default ruleset, plus one allowlist. Nothing in this repository is a real
+# credential; the only strings that look like one are the local Docker Postgres
+# password in the example env files and in the test helpers, which exists so
+# that `docker compose up` and `pnpm test` work offline on a loopback-bound
+# database that holds nothing.
+#
+# The allowlist is deliberately narrow: it matches that one literal, not a
+# pattern, so a real secret pasted next to it still fails the scan.
+
+title = "hermes-enterprise"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "The local-only Docker Postgres password, and generated lockfiles"
+regexTarget = "match"
+regexes = [
+  '''postgres://(app|agent|owner|postgres):(localdev|postgres)@127\.0\.0\.1:5433/hermes''',
+  '''PGLOCALPASSWORD''',
+  '''POSTGRES_PASSWORD: postgres''',
+]
+paths = [
+  '''pnpm-lock\.yaml''',
+]

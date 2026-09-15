@@ -1,0 +1,32 @@
+# Local Postgres for development and tests.
+# Port 5433 on the loopback interface only: 5432 is often already taken by a
+# system Postgres, and binding 127.0.0.1 keeps the database off the network.
+services:
+  postgres:
+    image: postgres:17.8-alpine
+    container_name: hermes-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hermes
+      # Deterministic collation so index order matches CI.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "127.0.0.1:5433:5432"
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - log_statement=none
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hermes"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hermes-pgdata:/var/lib/postgresql/data
+
+volumes:
+  hermes-pgdata:

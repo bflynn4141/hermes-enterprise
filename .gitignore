@@ -1,0 +1,16 @@
+node_modules/
+.wrangler/
+dist/
+!apps/client/dist/
+!apps/client/dist/**
+coverage/
+*.tsbuildinfo
+
+# Local secrets and local environment. The .example files beside them are
+# committed and are the documentation of what a deployment needs.
+.dev.vars
+.env
+.env.*
+!.env.example
+!.dev.vars.example
+*.env

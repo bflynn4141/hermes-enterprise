@@ -1,0 +1,33 @@
+# Copy to apps/worker/.dev.vars (gitignored) before `wrangler dev`.
+# Every secret the product uses is named here; none of them has a real value in
+# the repository, and CI runs gitleaks to keep it that way.
+
+# --- Local Postgres through Hyperdrive ---------------------------------------
+# Wrangler reads CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> in
+# local development and ignores the remote Hyperdrive config. Two strings,
+# because two database roles with different grants.
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP="postgres://app:localdev@127.0.0.1:5433/hermes"
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT="postgres://agent:localdev@127.0.0.1:5433/hermes"
+
+# --- WorkOS AuthKit (M2) ------------------------------------------------------
+# WORKOS_COOKIE_PASSWORD must be at least 32 characters. Rotating it signs
+# everyone out, so it happens off-hours.
+WORKOS_API_KEY=""
+WORKOS_CLIENT_ID=""
+WORKOS_COOKIE_PASSWORD=""
+
+# --- Bring your own key (M2) --------------------------------------------------
+# The key-encryption key. Base64, 32 bytes. A rotation adds KEK_V2 and keeps
+# KEK_V1 until every backup that could hold DEKs wrapped under it has expired.
+KEK_V1=""
+
+# --- Observability ------------------------------------------------------------
+SENTRY_DSN=""
+
+# --- Switches (also set as plain vars per environment in wrangler.jsonc) -------
+# fake: `x-dev-user` names a seeded user. workos: sealed cookie (M2).
+AUTH_MODE="fake"
+# off | passthrough. Whether model calls go through an AI Gateway.
+MODEL_GATEWAY_MODE="off"
+# 1 refuses to create new Workflow instances; part of the engine-version runbook.
+ENGINE_PAUSED="0"

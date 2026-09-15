@@ -1,0 +1,17 @@
+packages:
+  - packages/*
+  - apps/*
+
+# esbuild and workerd ship prebuilt binaries and need their install scripts.
+# Both are wrangler's own dependencies; nothing else in the tree may build.
+allowBuilds:
+  esbuild: true
+  workerd: true
+
+# These three were published inside pnpm's default minimum release age window.
+# They are the Cloudflare toolchain we deliberately pin; the pins are exact, so
+# a fresh install resolves to the same bytes.
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260915.1'
+  - miniflare@5.20260911.1-alpha
+  - wrangler@4.131.2
