@@ -1,0 +1,135 @@
+// Official Hermes run mappings and replay records on the existing restricted
+// agent role. Tool effects and traces share one transaction; no grants expand.
+import { PgAgentDb } from '../engine/pg-agent-db.js';
+import type { EngineRunRow } from '../engine/agent-db.js';
+import type { ProviderMessage, ToolCall } from '../model/types.js';
+import { RouteError } from '../routes/tenant.js';
+
+export interface RunBinding {
+  readonly runtimeKind: string;
+  readonly runtimeProfile: string | null;
+  readonly runtimeRunId: string | null;
+  readonly runtimeSessionId: string | null;
+  readonly runtimeAttempt: number | null;
+}
+export interface RuntimeCallRecord {
+  readonly turn: number;
+  readonly seq: number;
+  readonly call: ToolCall;
+  readonly result: string | null;
+  readonly ok: boolean | null;
+}
+export class RuntimeDb extends PgAgentDb {
+  async binding(runId: string): Promise<RunBinding | null> {
+    const { rows } = await this.runtimeQuery<RunBinding>(
+      `SELECT runtime_kind AS "runtimeKind", runtime_profile AS "runtimeProfile", runtime_run_id AS "runtimeRunId",
+              runtime_session_id AS "runtimeSessionId", runtime_attempt AS "runtimeAttempt" FROM runs WHERE id = $1`, [runId]);
+    return rows[0] ?? null;
+  }
+  async bindRun(runId: string, attempt: number, remoteRunId: string, sessionId: string, profile: string): Promise<boolean> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `UPDATE runs SET runtime_kind = 'hermes', runtime_run_id = $3, runtime_session_id = $4,
+              runtime_profile = $5, runtime_attempt = $2
+        WHERE id = $1 AND attempt = $2 AND NOT stop_requested AND status = 'working'
+          AND (runtime_attempt IS DISTINCT FROM $2 OR runtime_run_id IS NULL OR runtime_run_id = $3)
+        RETURNING id`, [runId, attempt, remoteRunId, sessionId, profile]);
+    return rows.length === 1;
+  }
+  async snapshotRequest(runId: string, attempt: number, proposed: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const run = await this.loadRun(runId);
+    if (!run?.agentId) throw new RouteError('The run has no runtime agent.', 'runtime_run_inactive', 409);
+    return this.withCallLock(run.agentId, async () => {
+      const busy = await this.runtimeQuery<{ id: string }>(
+        `SELECT id FROM runs WHERE agent_id = $1 AND id <> $2 AND runtime_kind = 'hermes'
+           AND status IN ('working','waiting','stopping')
+           AND (runtime_attempt = attempt OR runtime_request_attempt = attempt) LIMIT 1`, [run.agentId, runId]);
+      if (busy.rows.length) throw new RouteError('This Hermes agent already has an active run.', 'runtime_profile_busy', 409);
+      const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+        `UPDATE runs SET runtime_kind = 'hermes', runtime_profile = 'agent-' || agent_id::text,
+                runtime_request = CASE WHEN runtime_request_attempt = $2 AND runtime_request IS NOT NULL THEN runtime_request ELSE $3::jsonb END,
+                runtime_request_attempt = $2
+          WHERE id = $1 AND attempt = $2 AND NOT stop_requested AND status = 'working'
+          RETURNING runtime_request`, [runId, attempt, JSON.stringify(proposed)]);
+      if (!rows[0]) throw new RouteError('The run is no longer active.', 'runtime_run_inactive', 409);
+      return rows[0].runtime_request;
+    });
+  }
+  async findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `SELECT id FROM runs WHERE runtime_kind = 'hermes' AND runtime_run_id = $1 AND agent_id = $2
+         AND runtime_attempt = attempt`, [remoteRunId, agentId]);
+    return rows[0] ? this.loadRun(rows[0].id) : null;
+  }
+  async activeProfileRun(agentId: string): Promise<EngineRunRow | null> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `SELECT id FROM runs WHERE agent_id = $1 AND runtime_kind = 'hermes'
+         AND runtime_profile = 'agent-' || $1::text AND status = 'working' AND NOT stop_requested
+         AND (runtime_attempt = attempt OR runtime_request_attempt = attempt)
+       ORDER BY created_at DESC LIMIT 2`, [agentId]);
+    return rows.length === 1 && rows[0] ? this.loadRun(rows[0].id) : null;
+  }
+  async mappingPending(agentId: string): Promise<boolean> {
+    const run = await this.activeProfileRun(agentId);
+    if (!run) return false;
+    const binding = await this.binding(run.id);
+    return !binding?.runtimeRunId || binding.runtimeAttempt !== run.attempt;
+  }
+  async withCallLock<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
+    return this.runtimeTx(async (query) => {
+      // Transaction locks work with Hyperdrive pooling; session locks do not.
+      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`hermes-bridge:${agentId}`]);
+      return fn();
+    });
+  }
+  async lockRun(runId: string): Promise<void> {
+    await this.runtimeQuery('SELECT id FROM runs WHERE id = $1 FOR UPDATE', [runId]);
+  }
+  async runtimeCall(runId: string, callId: string): Promise<RuntimeCallRecord | null> {
+    const { rows } = await this.runtimeQuery<{ turn: number; seq: number; provider_message: ProviderMessage; result: string | null; ok: boolean | null }>(
+      `SELECT a.turn, a.seq, a.provider_message, t.provider_message->>'content' AS result, (t.provider_message->>'runtime_ok')::boolean AS ok
+         FROM run_turns a LEFT JOIN run_turns t ON t.run_id = a.run_id AND t.tool_call_id = $2 AND t.role = 'tool'
+        WHERE a.run_id = $1 AND a.role = 'assistant'
+          AND a.provider_message->'tool_calls' @> jsonb_build_array(jsonb_build_object('id', $2::text))
+        ORDER BY a.turn, a.seq LIMIT 1`, [runId, callId]);
+    const row = rows[0];
+    const call = row?.provider_message.tool_calls?.find((item) => item.id === callId);
+    return row && call ? { turn: row.turn, seq: row.seq, call, result: row.result, ok: row.ok } : null;
+  }
+  async nextRuntimeSequence(runId: string): Promise<number> {
+    const { rows } = await this.runtimeQuery<{ seq: number }>(
+      `SELECT coalesce(max(seq + CASE WHEN role = 'assistant' AND provider_message ? 'runtime_run_id' THEN 1 ELSE 0 END), -1) + 1 AS seq FROM run_turns WHERE run_id = $1 AND turn = 0`, [runId]);
+    return Number(rows[0]?.seq ?? 0);
+  }
+  async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
+    const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
+      `SELECT model_id, provider FROM catalog WHERE provider = 'openrouter' AND transport = 'openrouter_chat'
+         AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
+    return rows;
+  }
+  async finalizeRuntime<T>(runId: string, attempt: number, work: () => Promise<T>): Promise<T | null> {
+    return this.runtimeTx(async (query) => {
+      const { rows } = await query<{ attempt: number; status: string }>('SELECT attempt,status FROM runs WHERE id=$1 FOR UPDATE', [runId]);
+      const run = rows[0];
+      if (!run || run.attempt !== attempt || ['completed','stopped','error'].includes(run.status)) return null;
+      return work();
+    });
+  }
+  async carryGuidance(runId: string, ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.runtimeQuery(
+      `UPDATE messages SET run_id = NULL WHERE run_id = $1 AND id = ANY($2::uuid[])
+         AND kind = 'guidance' AND status = 'streaming'`, [runId, ids]);
+  }
+  async loadBootstrapHistory(run: EngineRunRow): Promise<ProviderMessage[]> {
+    const { rows } = await this.runtimeQuery<{ role: string; text: string }>(
+      `SELECT m.role, m.text FROM messages m
+        WHERE m.session_id = $1 AND m.run_id IS DISTINCT FROM $2 AND m.status = 'complete'
+          AND m.role IN ('user','iris') AND m.kind IS NULL
+          AND m.created_at < (SELECT created_at FROM runs WHERE id = $2)
+          AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND r.id <> $2
+                            AND r.runtime_kind = 'hermes' AND r.runtime_run_id IS NOT NULL
+                            AND r.created_at < (SELECT created_at FROM runs WHERE id = $2))
+        ORDER BY m.seq`, [run.sessionId, run.id]);
+    return rows.map((row) => ({ role: row.role === 'iris' ? 'assistant' : 'user', content: row.text }));
+  }
+}

@@ -1,0 +1,57 @@
+// The official-runtime allowlist and scoped bridge credentials. Neither a model
+// argument nor a runtime URL may select a different enterprise workspace.
+import { RouteError } from '../routes/tenant.js';
+
+export interface RuntimeEnv {
+  readonly ENVIRONMENT: string;
+  readonly AGENT_RUNTIME?: string;
+  readonly HERMES_RUNTIME_AGENTS?: string;
+  readonly HERMES_BRIDGE_SECRET?: string;
+}
+export interface RuntimeBinding {
+  readonly workspaceId: string;
+  readonly agentId: string;
+  readonly profile: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const misconfigured = (): never => {
+  throw new RouteError('The official Hermes runtime is not configured for this agent.', 'runtime_not_configured', 503);
+};
+export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: string): RuntimeBinding {
+  if (!UUID.test(workspaceId) || !UUID.test(agentId)) throw new RouteError('Invalid runtime path.', 'bad_id', 400);
+  if (env.AGENT_RUNTIME !== 'hermes' || !env.HERMES_BRIDGE_SECRET || env.HERMES_BRIDGE_SECRET.length < 32) return misconfigured();
+  let bindings: unknown;
+  try { bindings = JSON.parse(env.HERMES_RUNTIME_AGENTS ?? ''); } catch { return misconfigured(); }
+  if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) return misconfigured();
+  const entry = (bindings as Record<string, unknown>)[agentId];
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return misconfigured();
+  const row = entry as Record<string, unknown>;
+  if (row.workspace_id !== workspaceId) throw new RouteError('This runtime agent is not bound to this workspace.', 'runtime_binding_mismatch', 403);
+  if (typeof row.base_url !== 'string' || typeof row.api_key !== 'string' || !row.api_key.trim()) return misconfigured();
+  let url: URL;
+  try { url = new URL(row.base_url); } catch { return misconfigured(); }
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.username || url.password || url.search || url.hash ||
+      (url.protocol !== 'https:' && !(env.ENVIRONMENT === 'development' && local && url.protocol === 'http:'))) return misconfigured();
+  return { workspaceId, agentId, profile: `agent-${agentId}`, baseUrl: url.toString().replace(/\/$/, ''), apiKey: row.api_key };
+}
+async function signingKey(env: RuntimeEnv): Promise<CryptoKey> {
+  const secret = env.HERMES_BRIDGE_SECRET;
+  if (!secret || secret.length < 32) return misconfigured();
+  return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+export async function bridgeToken(env: RuntimeEnv, workspaceId: string, agentId: string): Promise<string> {
+  runtimeBinding(env, workspaceId, agentId);
+  const bytes = await crypto.subtle.sign('HMAC', await signingKey(env), new TextEncoder().encode(`${workspaceId}:${agentId}`));
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+export async function requireBridgeAuth(env: RuntimeEnv, workspaceId: string, agentId: string, authorization: string | null): Promise<RuntimeBinding> {
+  const binding = runtimeBinding(env, workspaceId, agentId);
+  const token = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
+  const bytes = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
+  const valid = await crypto.subtle.verify('HMAC', await signingKey(env), bytes, new TextEncoder().encode(`${workspaceId}:${agentId}`));
+  if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
+  return binding;
+}
