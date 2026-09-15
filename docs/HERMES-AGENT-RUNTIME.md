@@ -29,8 +29,11 @@ remain restricted to the agent and sessions the viewer can access.
    persist the real tool IDs, arguments and results in the existing trace rows.
 5. Final message, usage, duration and events commit atomically. Hub delivery
    happens afterward; delivery failure does not turn completed work into failure.
-6. Stop reaches the native run and waits for native cancellation. Human guidance
-   uses native steer; unconsumed guidance carries into the next message.
+6. Stop immediately reaches the native run. The app confirms terminal execution
+   before showing Stopped, including a native failure caused by revoking tool
+   authority after Stop. Human guidance uses native steer; unconsumed guidance
+   carries into the next message. Human-context pauses use the composer to answer
+   the same run. A persisted per-attempt clock excludes those waits from Worked.
 
 The native SSE queue has **no replay**. Reconnection uses native run status and
 final output; browser replay comes from durable enterprise events. No raw model
@@ -65,14 +68,22 @@ The legacy/scripted path remains available for existing deployments and offline
 contract tests during rollout.
 
 The first connected profile is Iris in the local workspace. The UI reports
-Local execution, separately from the remotely served model.
+Local execution, separately from the remotely served model. Existing sessions
+resolve their location from the current profile binding too. Iris’s dedicated
+state lives under `~/.he-runtime/44444444-4444-4444-8444-444444444444/`; the personal
+`~/.hermes` installation is untouched.
 
 ## Deployment limits
 
 This change does not deploy a runtime host to staging or production. The staging
 Worker cannot reach a loopback profile on this computer. A hosted deployment
 needs a private authenticated runtime endpoint for each configured profile and
-process/container supervision.
+process/container supervision. Provisioning additional profiles is explicit
+configuration today; this change does not automatically start a runtime for every
+new member. A native run keeps its process while waiting and is bounded by the
+adapter’s 55-minute execution window (60-minute Workflow step timeout). Multi-day
+human waits need a durable suspend/resume lifecycle before hosted rollout. Inbox
+proposals do not hold the runtime open while a reviewer decides.
 
 Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
 not enabled. Automatic memory extraction, background review and learning nudges
@@ -86,3 +97,28 @@ integration. Hermesmail remains a concept address, not a provisioned mailbox.
 Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server),
 [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),
 and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md).
+
+## Verified locally — September 15, 2026
+
+Real calls used the workspace’s encrypted OpenRouter credential and its selected
+`anthropic/claude-sonnet-5` catalog model, through the official pinned AIAgent.
+These checks are separate from the native probe’s fixture model.
+
+| Check | Observed result |
+| --- | --- |
+| Context and Inbox read | Native tools returned actual local data; one structured assistant response and correlated trace. |
+| Session continuity | A following turn recalled “silver lantern” from its prior native session. |
+| Human context answer | Run `0a2e656f-cf56-456c-abec-585406b11611` resumed through the composer; 8,673 ms active, 20,013 ms human wait excluded. |
+| Human-review proposal | Run `55dd1ac9-c4d3-4774-93c4-16edb2b5a1ca` created one fictional QA-only application, left pending, and focused it on the right. No decision, invitation or external message. |
+| Stop while waiting | Run `34434547-50e1-45b9-bd76-67c505425600` reached Stopped after native termination; further tools were blocked. |
+| Native state move/restart | Session and idempotency databases retained; watchdog healthy; durable native admission confirmed. |
+
+The QA session is **Official Hermes runtime verification**. Its deliberately
+labeled test request is `9ed1133e-aa40-4b71-b279-4dc006663838`. Initial failed
+verification attempts remain visible in Traces; they are not relabeled as
+successes.
+
+Automated verification includes shared/client/Worker unit checks, the full
+Worker database suite under the restricted roles, native workerd transport,
+eight isolated browser regressions for context/Stop/key disclosure, Python
+launcher/plugin checks and the real official-gateway fixture probe.

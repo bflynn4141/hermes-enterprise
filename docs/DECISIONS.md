@@ -4432,3 +4432,31 @@ read like a statistic.
 
 **Would change it if.** The footer becomes a workspace switcher rather than an
 identity, where a seat count would be about the thing being switched.
+
+
+---
+
+## C48. Iris executes in one official Hermes profile; the app owns enterprise authority
+
+**Decided September 15, 2026.** Brian approved the official Nous runtime and one
+agent per profile, including the necessary architecture change. The native
+Hermes process owns the agent loop and session transcript. The existing Worker
+continues to own identity, tool permissions, review decisions and the auditable
+record. OpenRouter supplies the selected model through the Worker’s credential
+proxy; it is no longer the implementation of the agent loop.
+
+An `agents.id` binds a separate profile/process and every session/run. Native
+run/session/attempt identifiers are recorded alongside enterprise IDs. Traces
+distinguish official execution from earlier runs, and remain scoped to the
+agent and the viewer’s authorized sessions. State directories do not claim OS
+sandboxing. Broad native tools and automatic memory/skill extraction stay off
+until the enterprise ownership and retention lifecycle is integrated.
+
+**Why.** A custom chat/tool loop cannot truthfully stand in for the official
+Hermes agent. At the same time, using that runtime must preserve human approval
+authority and the app’s existing isolation. Native plugin ContextVars provide
+trusted correlation; model arguments and static MCP headers do not.
+
+**Evidence and limits.** See [Official Hermes Agent runtime](HERMES-AGENT-RUNTIME.md)
+for the pinned source, actual conversation checks, configuration, and hosted
+rollout requirements. Verified locally; no hosted runtime deployed by this work.
