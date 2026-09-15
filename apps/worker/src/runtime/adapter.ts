@@ -166,7 +166,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const finalText = status.output ?? text;
       const parsed = extractBlocks(finalText);
       const completed = status.status === 'completed';
-      const stoppedStatus = status.status === 'cancelled';
+      // Revoking enterprise tool/model authority can terminate the native run
+      // before its polling loop receives /stop. A confirmed terminal failure
+      // after the person's Stop is still stopped work, not a retry prompt.
+      const stoppedStatus = status.status === 'cancelled' || (!completed && (stopped || await db.stopRequested(run.id)));
       const finalStatus = completed ? 'completed' : stoppedStatus ? 'stopped' : 'error';
       const error: RunErrorInput | null = finalStatus === 'error' ? {
         class: 'transient', retryable: true, reason: 'hermes_run_failed', message: 'Hermes could not finish this run. Retry to continue.',

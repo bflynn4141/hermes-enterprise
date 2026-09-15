@@ -294,6 +294,17 @@ describe('official Hermes enterprise projection', () => {
     expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges })).not.toContain(client.final.error);
   });
 
+  it('reports stopped after native authority revocation beats the stop poll to a terminal failure', async () => {
+    const db = new FakeRuntimeDb();
+    const client = new FakeHermesClient();
+    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 409: runtime_run_inactive' };
+    client.onStatus = () => { if (client.current.status === 'failed') db.stopFlag = true; };
+    await execute(db, client);
+    expect(db.statusChanges.at(-1)?.status).toBe('stopped');
+    expect(db.modelCalls[0]?.status).toBe('stopped');
+    expect(db.messages.get(0)?.status).toBe('incomplete');
+  });
+
   it('closes activity and preserves partial output when runtime status becomes unreachable', async () => {
     const client = new FakeHermesClient();
     client.onStatus = () => { if (client.statusReads > 1) throw new Error('private upstream failure'); };

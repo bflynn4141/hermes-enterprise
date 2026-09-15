@@ -31,7 +31,7 @@ export class HermesClient {
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${this.apiKey}`);
     if (init.body) headers.set('Content-Type', 'application/json');
-    const response = await this.send(`${this.baseUrl.replace(/\/$/, '')}${path}`, { ...init, headers, redirect: 'manual' });
+    const response = await this.send(`${this.baseUrl.replace(/\/$/, '')}${path}`, { ...init, headers, redirect: 'manual', signal: init.signal ?? AbortSignal.timeout(15_000) });
     if (!response.ok) {
       await response.body?.cancel();
       throw new HermesApiError(response.status, path.endsWith('/steer') ? 'steer' : path.endsWith('/stop') ? 'stop' : 'request');

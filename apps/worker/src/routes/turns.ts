@@ -19,6 +19,7 @@ import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { runtimeBinding } from '../runtime/config.js';
+import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
@@ -417,7 +418,7 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
     await loadSessionForWrite(work, sessionId);
     const run = await loadRun(work, sessionId, runId);
     if (!(ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
-      return { run, alreadyDone: true };
+      return { run, alreadyDone: true, nativeId: null };
     }
     // One transaction: the flag and the status. A reader that saw `stopping`
     // without the flag would resume the run.
@@ -441,10 +442,20 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
         },
       ])),
     );
-    return { run: { ...run, status: 'stopping' }, alreadyDone: false };
+    const native = await work.tx.query<{ runtime_run_id: string | null }>(
+      `SELECT runtime_run_id FROM runs WHERE id = $1 AND runtime_kind = 'hermes' AND runtime_attempt = attempt`, [runId]);
+    return { run: { ...run, status: 'stopping' }, alreadyDone: false, nativeId: native.rows[0]?.runtime_run_id ?? null };
   });
 
   if (!result.alreadyDone) {
+    if (result.nativeId) {
+      // Reach the native interruption flag immediately. The persisted Stop is
+      // still authoritative if this request is lost; Workflow polling retries.
+      try {
+        const binding = runtimeBinding(c.env, c.req.param('ws') ?? '', result.run.agent_id);
+        await new HermesClient(binding.baseUrl, binding.apiKey).stop(result.nativeId);
+      } catch { /* The committed flag prevents further enterprise tool calls. */ }
+    }
     // The hub's copy is a cache with one reader: the engine reads it from every
     // delta reply, which is what makes Stop land inside a streaming turn rather
     // than at the end of it.
