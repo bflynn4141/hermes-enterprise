@@ -29,6 +29,41 @@ const record = (value: unknown): RequestPayload =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as RequestPayload) : {};
 const text = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
 
+type ApplicantSource = { id: string; name: string; note: string; url: string | null };
+type SourceKind = 'linkedin' | 'github' | 'youtube' | 'x' | 'web';
+
+function titleCaseLabel(value: string): string {
+  return value
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function sourceKind(source: Pick<ApplicantSource, 'name' | 'url'>): SourceKind {
+  const haystack = `${source.name} ${source.url ?? ''}`.toLowerCase();
+  if (haystack.includes('linkedin')) return 'linkedin';
+  if (haystack.includes('github')) return 'github';
+  if (haystack.includes('youtube')) return 'youtube';
+  if (/\b(x\.com|twitter|x profile)\b/.test(haystack)) return 'x';
+  return 'web';
+}
+
+function SourceMark({ source, size = 26 }: { source: ApplicantSource; size?: number }) {
+  const kind = sourceKind(source);
+  return (
+    <span className={`source-mark source-mark-${kind}`} style={{ width: size, height: size }} aria-hidden="true">
+      <svg viewBox="0 0 24 24" width={Math.round(size * .58)} height={Math.round(size * .58)}>
+        {kind === 'linkedin' && <path d="M5.2 3.8A2.2 2.2 0 1 1 5.2 8a2.2 2.2 0 0 1 0-4.3ZM3.4 9.5H7V21H3.4Zm5.8 0h3.4v1.6h.1c.5-.9 1.7-2 3.5-2 3.7 0 4.4 2.4 4.4 5.6V21H17v-5.6c0-1.3 0-3-1.9-3s-2.2 1.4-2.2 2.9V21H9.2Z" />}
+        {kind === 'github' && <path d="M12 2.4a9.8 9.8 0 0 0-3.1 19.1c.5.1.7-.2.7-.5v-1.9c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 0 1.6 1 1.6 1 .9 1.5 2.4 1.1 3 .8.1-.6.4-1.1.7-1.4-2.2-.3-4.6-1.1-4.6-4.8 0-1.1.4-1.9 1-2.6-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.7 1a9.2 9.2 0 0 1 4.9 0c1.9-1.3 2.7-1 2.7-1 .5 1.3.2 2.3.1 2.6.6.7 1 1.5 1 2.6 0 3.8-2.3 4.6-4.6 4.8.4.3.7.9.7 1.8V21c0 .3.2.6.7.5A9.8 9.8 0 0 0 12 2.4Z" />}
+        {kind === 'youtube' && <path d="M21.2 7.2a2.8 2.8 0 0 0-2-2C17.5 4.7 12 4.7 12 4.7s-5.5 0-7.2.5a2.8 2.8 0 0 0-2 2A29 29 0 0 0 2.3 12a29 29 0 0 0 .5 4.8 2.8 2.8 0 0 0 2 2c1.7.5 7.2.5 7.2.5s5.5 0 7.2-.5a2.8 2.8 0 0 0 2-2 29 29 0 0 0 .5-4.8 29 29 0 0 0-.5-4.8ZM10 15.2V8.8l5.4 3.2Z" />}
+        {kind === 'x' && <path d="M4 3h4.7l4.2 5.6L17.8 3H20l-6.1 7.1L20.5 21h-4.7l-4.6-6.1L5.9 21H3.6l6.6-7.6Zm3.6 1.8 9.1 14.4h1.7L9.3 4.8Z" />}
+        {kind === 'web' && <><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M3.5 12h17M12 3c2.2 2.4 3.3 5.4 3.3 9S14.2 18.6 12 21M12 3C9.8 5.4 8.7 8.4 8.7 12s1.1 6.6 3.3 9" fill="none" stroke="currentColor" strokeWidth="1.5" /></>}
+      </svg>
+    </span>
+  );
+}
+
 function requestType(request: RequestEntity): string {
   if (request.kind === 'application') return 'Application';
   if (request.kind === 'invoice') return 'Invoice';
@@ -335,25 +370,46 @@ function ApplicationView({ request }: { request: RequestEntity }) {
   const email = text(applicant.email);
   const score = typeof payload.score === 'number' ? payload.score : 0;
   const scoreMax = typeof payload.score_max === 'number' ? payload.score_max : 100;
+  const payloadSources = Array.isArray(payload.sources)
+    ? payload.sources.flatMap((item) => {
+        const source = record(item);
+        const id = text(source.id);
+        const sourceName = text(source.name);
+        if (!id || !sourceName) return [];
+        return [{ id, name: sourceName, note: text(source.note) ?? '', url: text(source.url) }];
+      })
+    : [];
+  const sources: ApplicantSource[] = payloadSources.length > 0
+    ? payloadSources
+    : request.sources.map((source) => ({ ...source, url: null }));
   const criteria = Array.isArray(payload.criteria)
     ? payload.criteria.flatMap((item) => {
         const criterion = record(item);
         const label = text(criterion.label);
         if (!label) return [];
         return [{
-          label,
+          label: titleCaseLabel(label),
           points: typeof criterion.points === 'number' ? criterion.points : 0,
           maximum: typeof criterion.points_max === 'number' ? criterion.points_max : 0,
           evidence: text(criterion.evidence),
+          sourceIds: Array.isArray(criterion.source_ids)
+            ? criterion.source_ids.filter((id): id is string => typeof id === 'string')
+            : [],
         }];
       })
     : Array.isArray(payload.breakdown)
       ? payload.breakdown.flatMap((item) => Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'number' && typeof item[2] === 'number'
-        ? [{ label: item[0], points: item[1], maximum: item[2], evidence: null }]
+        ? [{ label: titleCaseLabel(item[0]), points: item[1], maximum: item[2], evidence: null, sourceIds: [] }]
         : [])
       : [];
   const benefits = Array.isArray(payload.benefits) ? payload.benefits.filter((item): item is string => typeof item === 'string') : [];
-  const [source, setSource] = useState<{ name: string; note: string } | null>(null);
+  const strongest = [...criteria]
+    .filter((criterion) => criterion.evidence)
+    .sort((a, b) => (b.maximum > 0 ? b.points / b.maximum : 0) - (a.maximum > 0 ? a.points / a.maximum : 0))[0];
+  const takeaway = strongest?.evidence ?? null;
+  const isDemo = /\b(demo|fictional|illustrative)\b/i.test(request.label)
+    || sources.some((source) => /\b(demo|fictional|illustrative)\b/i.test(source.note));
+  const [source, setSource] = useState<ApplicantSource | null>(null);
   const [report, setReport] = useState(false);
 
   return (
@@ -376,10 +432,14 @@ function ApplicationView({ request }: { request: RequestEntity }) {
               <Glass name="iris" size={30} />
               <div className="col grow" style={{ gap: 3 }}>
                 <span>Iris screened this application</span>
-                <span className="meta">Review the evidence, then decide.</span>
+                <span className="meta">{sources.length > 0 ? `${sources.length} sources used` : 'No linked sources'}</span>
               </div>
+              {sources.length > 0 && (
+                <span className="source-stack" aria-label={`${sources.length} sources used by Iris`}>
+                  {sources.slice(0, 4).map((item) => <SourceMark key={item.id} source={item} size={24} />)}
+                </span>
+              )}
               <Avatar person={{ name: state.user.name }} />
-              <span className="meta reviewer-name">{state.user.name}</span>
             </div>
 
             {criteria.length > 0 && (
@@ -402,6 +462,14 @@ function ApplicationView({ request }: { request: RequestEntity }) {
                           </div>
                           <span className="criterion-track" aria-hidden="true"><span style={{ width: `${fraction * 100}%` }} /></span>
                           {criterion.evidence && <span className="meta criterion-evidence">{criterion.evidence}</span>}
+                          {criterion.sourceIds.length > 0 && (
+                            <span className="criterion-sources" aria-label={`${criterion.sourceIds.length} cited source${criterion.sourceIds.length === 1 ? '' : 's'}`}>
+                              {criterion.sourceIds.flatMap((sourceId) => {
+                                const item = sources.find((candidate) => candidate.id === sourceId);
+                                return item ? [<SourceMark key={item.id} source={item} size={18} />] : [];
+                              })}
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
@@ -410,19 +478,42 @@ function ApplicationView({ request }: { request: RequestEntity }) {
               </section>
             )}
 
-            {request.sources.length > 0 && (
-              <section className="col" aria-labelledby="sources-heading">
-                <h2 className="section-title" id="sources-heading">Sources</h2>
-                {request.sources.map((item) => (
-                  <button type="button" className="source-row" key={item.id} onClick={() => setSource(item)}>
-                    <Glass name="context" size={22} />
-                    <span className="col grow">
-                      <span>{item.name}</span>
-                      <span className="meta truncate">{item.note}</span>
-                    </span>
-                    <Icon name="arrow" size={16} />
-                  </button>
-                ))}
+            {sources.length > 0 && (
+              <section className="source-section" aria-labelledby="sources-heading">
+                <div className="row">
+                  <h2 className="section-title" id="sources-heading">Sources used</h2>
+                  <span className="grow" />
+                  <span className="meta">{isDemo ? 'Illustrative' : 'Cited by Iris'}</span>
+                </div>
+                <div className="source-grid" role="list">
+                  {sources.map((item) => (
+                    <button type="button" className="source-card" role="listitem" key={item.id} onClick={() => setSource(item)}>
+                      <SourceMark source={item} size={30} />
+                      <span className="source-card-name">{item.name}</span>
+                      <Icon name="check" size={14} className="source-used-check" />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {takeaway && (
+              <section className="panel evidence-highlight" aria-labelledby="takeaway-heading">
+                <Glass name="context" size={32} />
+                <div className="col grow" style={{ gap: 5 }}>
+                  <span className="evidence-kicker" id="takeaway-heading">Main takeaway</span>
+                  <strong>{takeaway}</strong>
+                  <span className="meta">
+                    {sources.length > 0
+                      ? `${sources.length} ${isDemo ? 'illustrative sources' : 'sources cited by Iris'}`
+                      : 'No linked source supports this takeaway yet'}
+                  </span>
+                </div>
+                {sources.length > 0 && (
+                  <span className="source-stack evidence-source-stack" aria-hidden="true">
+                    {sources.slice(0, 4).map((item) => <SourceMark key={item.id} source={item} size={22} />)}
+                  </span>
+                )}
               </section>
             )}
 
@@ -452,7 +543,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
         />
       </div>
       <Dialog open={report} title={`${name} · screening report`} onClose={() => setReport(false)} actions={<Button onClick={() => setReport(false)}>Back to review</Button>}>
-        <p className="meta">Applicant-provided evidence. Gaps stay visible in the decision.</p>
+        <p className="meta">Iris mapped each cited signal to the review criteria. Gaps stay visible.</p>
         {criteria.map((criterion) => (
           <div key={criterion.label} className="col report-criterion">
             <div className="row"><span>{criterion.label}</span><span className="grow" /><span>{criterion.points}/{criterion.maximum}</span></div>
@@ -462,7 +553,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
       </Dialog>
       <Dialog open={!!source} title={source?.name ?? ''} onClose={() => setSource(null)} actions={<Button onClick={() => setSource(null)}>Close</Button>}>
         <p>{source?.note}</p>
-        <p className="meta">Applicant-supplied source. External links are not opened by the client.</p>
+        <p className="meta">{isDemo ? 'Illustrative source for this local demo.' : 'Source cited by Iris. Open-link verification is not available in this client yet.'}</p>
       </Dialog>
     </>
   );

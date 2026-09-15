@@ -8,14 +8,34 @@ import { InboxList, RequestReview } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
   const payload = kind === 'application'
-    ? { kind, applicant: { name: subject, email: `${subject.split(' ')[0]?.toLowerCase()}@example.test` }, proposed_role: 'Technical Partner', score: 82, score_max: 100, criteria: [{ id: 'fit', label: 'Program fit', points: 32, points_max: 40, evidence: 'Relevant integration work.', source_ids: [] }] }
+    ? {
+        kind,
+        applicant: { name: subject, email: `${subject.split(' ')[0]?.toLowerCase()}@example.test` },
+        proposed_role: 'Technical Partner',
+        score: 82,
+        score_max: 100,
+        criteria: [
+          { id: 'track-record', label: 'track-record', points: 28, points_max: 30, evidence: 'Created their own FDE bootcamp.', source_ids: ['linkedin', 'youtube'] },
+          { id: 'capacity', label: 'capacity', points: 22, points_max: 30, evidence: 'Published a six-week delivery curriculum.', source_ids: ['github'] },
+          { id: 'fit', label: 'fit', points: 32, points_max: 40, evidence: 'Shares practical implementation guidance.', source_ids: ['x'] },
+        ],
+        sources: [
+          { id: 'linkedin', name: 'LinkedIn', note: 'Illustrative role and program history.', url: 'https://www.linkedin.com/' },
+          { id: 'github', name: 'GitHub', note: 'Illustrative public repositories.', url: 'https://github.com/' },
+          { id: 'youtube', name: 'YouTube', note: 'Illustrative teaching material.', url: 'https://www.youtube.com/' },
+          { id: 'x', name: 'X profile', note: 'Illustrative public writing.', url: 'https://x.com/' },
+        ],
+      }
     : kind === 'invoice'
       ? { kind, number: 'INV-42', currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-15', due_date: '2026-09-30', lines: [{ id: 'line-1', label: 'Partner workshop', qty: 1, amount_minor: 120000, source_ids: [] }], total_minor: 120000 }
       : { kind, number: 'AGR-42', version_label: 'v3', parties: [{ name: 'Nous Research' }, { name: 'Robin Studio' }], sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop.', source_ids: [] }] };
+  const sources = kind === 'application' && Array.isArray(payload.sources)
+    ? payload.sources.map(({ id: sourceId, name, note }) => ({ id: sourceId, name, note }))
+    : [];
   return {
     id: mockUuid(id), kind, status, subject, label: subject, title: subject,
     session_id: null, run_id: null, created_at: '2026-09-15T12:00:00.000Z',
-    version: 1, payload, sources: [], missing: [],
+    version: 1, payload, sources, missing: [],
   };
 }
 
@@ -72,7 +92,17 @@ describe('the Inbox renders the focused view', () => {
     expect(html).toContain('aria-label="Back to Inbox"');
     expect(html).toContain('aria-current="true"');
     expect(html).toContain('Iris screened this application');
-    expect(html).toContain('Program fit');
+    expect(html).toContain('Track Record');
+    expect(html).toContain('Capacity');
+    expect(html).toContain('Fit');
+    expect(html).not.toContain('track-record');
+    expect(html).toContain('Sources used');
+    expect(html).toContain('LinkedIn');
+    expect(html).toContain('GitHub');
+    expect(html).toContain('YouTube');
+    expect(html).toContain('X profile');
+    expect(html).toContain('Main takeaway');
+    expect(html).toContain('Created their own FDE bootcamp.');
     expect(html).toContain('Admit Ada');
     expect(html).toContain('Leah pending');
   });

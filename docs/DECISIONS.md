@@ -4525,3 +4525,30 @@ the account and navigation rows.
 **Would change it if.** `SidebarNav` exposes a first-class account trigger ref
 or account-menu slot, at which point the marker bridge can be removed without
 changing the visible behavior.
+
+---
+
+## C51. Applicant scores stay attached to evidence and provenance
+
+**Decided September 15, 2026.** An application review leads with one plain-language
+takeaway, then shows the structured criteria and the source channels Iris used.
+Each criterion retains its own `source_ids`; LinkedIn, GitHub, YouTube and X use
+compact visual marks, and source details remain one click away. Labels are
+normalized for people (`Track Record`, `Capacity`, `Fit`) without changing the
+stored criterion ids.
+
+**Why.** Current screening tools make a recommendation easier to audit by tying
+competency judgments to supporting evidence. Metaview links scorecard entries to
+their underlying evidence, HireVue recommends defined competencies and scoring
+rubrics, and PeopleGPT combines public profile signals across sources. Hermes
+uses that shared pattern while keeping the Inbox denser than a recruiting ATS.
+
+**Truth boundary.** The UI says `Cited by Iris` or `Sources used`; it does not say
+`Verified` until the runtime records successful retrieval and identity matching.
+Local fictional records are visibly marked `Illustrative`. A source logo proves
+provenance only when the request payload carries that source id.
+
+**Evidence.**
+- https://www.metaview.ai/resources/blog/candidate-review
+- https://www.hirevue.com/resources/research-paper/hirevue-structured-interviews
+- https://juicebox.ai/blog/announcing-peoplegpt-2.0

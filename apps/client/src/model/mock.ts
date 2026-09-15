@@ -182,11 +182,37 @@ export function createMockBackend(options: MockOptions = {}) {
         ].join('\n')
       : 'Four requests are ready: Leah and Owen’s applications, Robin’s invoice, and the next workshop agreement. Noor’s feedback reply also needs a destination.';
 
+  const demoProfileSources = [
+    { id: 'linkedin', name: 'LinkedIn', note: 'Illustrative role history and program launch timeline.', url: 'https://www.linkedin.com/' },
+    { id: 'github', name: 'GitHub', note: 'Illustrative curriculum repository and public contributions.', url: 'https://github.com/' },
+    { id: 'youtube', name: 'YouTube', note: 'Illustrative bootcamp sessions and technical walkthroughs.', url: 'https://www.youtube.com/' },
+    { id: 'x', name: 'X profile', note: 'Illustrative public writing about field engineering.', url: 'https://x.com/' },
+  ];
   const requests: MockRequest[] = empty
     ? []
     : [
-        request(REQ_LEAH, 'application', 'pending', 'Leah Martinez', 'Leah Martinez', { score: 82, role: 'Delivery Partner', breakdown: [['Track record', 28, 30], ['Capacity', 22, 30], ['Fit', 32, 40]], benefits: ['Partner directory listing', 'Program Slack access', 'Quarterly review slot'] }),
-        request(REQ_OWEN, 'application', 'pending', 'Owen Reilly', 'Owen Reilly', { score: 78, role: 'Delivery Partner', breakdown: [['Track record', 26, 30], ['Capacity', 20, 30], ['Fit', 32, 40]], benefits: ['Partner directory listing', 'Program Slack access'] }),
+        request(REQ_LEAH, 'application', 'pending', 'Leah Martinez', 'Leah Martinez', {
+          kind: 'application', applicant: { name: 'Leah Martinez' }, proposed_role: 'Delivery Partner', score: 82, score_max: 100,
+          criteria: [
+            { id: 'track-record', label: 'track-record', points: 28, points_max: 30, evidence: 'Created and led an FDE bootcamp for implementation teams.', source_ids: ['linkedin', 'youtube'] },
+            { id: 'capacity', label: 'capacity', points: 22, points_max: 30, evidence: 'Published a six-week curriculum with recurring office hours.', source_ids: ['github', 'youtube'] },
+            { id: 'fit', label: 'fit', points: 32, points_max: 40, evidence: 'Shares practical field-engineering guidance across public channels.', source_ids: ['github', 'x'] },
+          ],
+          sources: demoProfileSources,
+          missing: ['Human review', 'Independent verification of demo claims'],
+          benefits: ['Partner directory listing', 'Program Slack access', 'Quarterly review slot'],
+        }),
+        request(REQ_OWEN, 'application', 'pending', 'Owen Reilly', 'Owen Reilly', {
+          kind: 'application', applicant: { name: 'Owen Reilly' }, proposed_role: 'Delivery Partner', score: 78, score_max: 100,
+          criteria: [
+            { id: 'track-record', label: 'track-record', points: 26, points_max: 30, evidence: 'Built a public integration guide used by partner engineers.', source_ids: ['linkedin', 'github'] },
+            { id: 'capacity', label: 'capacity', points: 20, points_max: 30, evidence: 'Runs a recurring technical workshop and publishes the recordings.', source_ids: ['youtube'] },
+            { id: 'fit', label: 'fit', points: 32, points_max: 40, evidence: 'Writes consistently about deployment and partner enablement.', source_ids: ['x', 'github'] },
+          ],
+          sources: demoProfileSources,
+          missing: ['Human review', 'Independent verification of demo claims'],
+          benefits: ['Partner directory listing', 'Program Slack access'],
+        }),
         request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
