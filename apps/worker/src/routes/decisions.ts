@@ -1,0 +1,81 @@
+// POST /w/:ws/requests/:id/decisions
+//
+// The only route in this system that changes a request's status, and the only
+// writer of `decisions`. Everything about it is deliberate, so it is worth
+// reading the five guards in the order they run and what each one is for:
+//
+//   1. **An allowlisted `Origin`, required.** Every other state-changing route
+//      allows a missing `Origin`, because `curl` and the tests are not browsers
+//      and the cookie rules already cover the browser case. This one does not:
+//      a decision is the highest-value write in the product, and "the request
+//      did not say where it came from" is not an answer we accept for it.
+//   2. **`X-Requested-From: inbox`.** Which surface of our own client issued
+//      it. A custom header also forces a CORS preflight, so a cross-site form
+//      post or a link cannot reach this route at all (src/domain/guards.ts).
+//   3. **Double-submit CSRF.** The cookie and the header must agree.
+//   4. **An Admin session.** Read inside the transaction, from `members`, keyed
+//      on the workspace in the path. A Member gets "Admin decision required".
+//   5. **Step-up.** The `sid` must have authenticated within five minutes
+//      (`auth_sessions.authenticated_at`, written by `/auth/callback`; the
+//      access token carries no `auth_time` and its `iat` moves on refresh, so
+//      the row is the only honest source). Otherwise 401 `reauth_required`, and
+//      the client sends the person through `/auth/login?step_up=1`.
+//
+// Then one transaction (src/domain/decisions.ts), then the jobs.
+//
+// ## Two tabs
+//
+// `decisions.request_id` is UNIQUE and the request row is locked FOR UPDATE, so
+// the second of two concurrent decisions on one request finds the first one
+// committed and returns it. The status is 200 rather than 201 and the response
+// carries `X-Hermes-Conflict: true`; the body is the decision that exists,
+// because what the person in the second tab needs is the outcome, not an error
+// about a race they did not know they were in.
+//
+// The header rather than a body field because `decisionResultSchema` is
+// `.strict()`: the contract names four fields and a fifth would fail to parse
+// in the client. The status code carries the same information and is the older
+// convention for it (docs/DECISIONS.md, D-3).
+import type { Context } from 'hono';
+import { decisionResultSchema, type Decision } from '@hermes/shared';
+import type { Env } from '../env.js';
+import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
+import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { requireRequestedFrom } from '../domain/guards.js';
+import { recordDecision } from '../domain/decisions.js';
+
+interface DecisionBody {
+  decision?: string;
+  note?: string;
+}
+
+export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireRequestedFrom(c);
+  requireCsrf(c);
+
+  const requestId = pathUuid(c, 'id');
+  const input = await jsonBody<DecisionBody>(c);
+  if (input.decision !== 'approve' && input.decision !== 'decline') {
+    throw new RouteError('decision must be "approve" or "decline"', 'bad_decision', 422);
+  }
+  const decision: Decision = input.decision;
+  const note = typeof input.note === 'string' && input.note.trim().length > 0 ? input.note.slice(0, 4000) : null;
+
+  const outcome = await inWorkspace(c, async (work) => {
+    work.requireAdmin('recording a decision');
+    requireStepUp(work.session);
+    return recordDecision(work, requestId, decision, note);
+  });
+
+  const body = decisionResultSchema.parse({
+    decision_id: outcome.decision_id,
+    request_id: outcome.request_id,
+    resulting_status: outcome.resulting_status,
+    effect_ids: outcome.effect_ids,
+  });
+
+  return c.json(body, outcome.conflict ? 200 : 201, {
+    'X-Hermes-Conflict': outcome.conflict ? 'true' : 'false',
+  });
+}

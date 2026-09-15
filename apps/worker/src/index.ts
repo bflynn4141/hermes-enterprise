@@ -7,8 +7,8 @@
 //
 // What is real in M1: /health, /w/:ws/bootstrap, /w/:ws/events, the tenant
 // transaction, the queue and cron handlers' plumbing. M3.5 filled in the
-// uploads routes and the `extract` consumer; the `renders` consumer is still a
-// scaffold that M4 completes.
+// uploads routes and the `extract` consumer; M4 filled in the decision route,
+// the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
@@ -60,6 +60,23 @@ import {
   retryRun,
   stopRun,
 } from './routes/turns.js';
+import { createDecision } from './routes/decisions.js';
+import {
+  createRequestNote,
+  getRequest,
+  listRequestDocuments,
+  listRequestEffects,
+  listRequests,
+} from './routes/requests.js';
+import { executeEffect, listEffects } from './routes/effects.js';
+import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
+import {
+  createDocumentVersion,
+  getDocument,
+  getDocumentRender,
+  listDocumentVersions,
+  listDocuments,
+} from './routes/documents.js';
 import { sweepRuns } from './runs/sweep.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
@@ -171,6 +188,40 @@ app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);
 app.get('/w/:ws/files/:id', getFile);
 app.delete('/w/:ws/files/:id', deleteFile);
+
+// The Inbox, the decision, the effects ledger, History and the Library.
+//
+// `POST /w/:ws/requests/:id/decisions` is the only route in this table that
+// moves a request out of `pending`, and it is the only writer of `decisions`.
+// Five guards in front of it (see src/routes/decisions.ts) and one transaction
+// behind it (src/domain/decisions.ts).
+app.get('/w/:ws/requests', listRequests);
+app.get('/w/:ws/requests/:id', getRequest);
+app.post('/w/:ws/requests/:id/decisions', createDecision);
+app.post('/w/:ws/requests/:id/notes', createRequestNote);
+app.get('/w/:ws/requests/:id/effects', listRequestEffects);
+app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
+
+// Effects are recorded by a decision and executed by nobody: every execution
+// answers `unavailable`, because this build sends, pays, grants and signs
+// nothing (CONVENTIONS, invariant 5).
+app.get('/w/:ws/effects', listEffects);
+app.post('/w/:ws/effects/:id/execute', executeEffect);
+
+// History is rendered at read time from ids, which is what lets an erasure
+// tombstone a subject and leave the audit trail standing.
+app.get('/w/:ws/history', listHistory);
+app.get('/w/:ws/history/counts', historyCounts);
+app.delete('/w/:ws/applicants/:subject_key', eraseApplicant);
+
+// The Library. A new version after a decision is a guarded human command: it
+// cancels the pending effects and re-renders, and a tool cannot reach it (the
+// trigger in migration 0005 refuses the agent role outright).
+app.get('/w/:ws/documents', listDocuments);
+app.get('/w/:ws/documents/:id', getDocument);
+app.get('/w/:ws/documents/:id/versions', listDocumentVersions);
+app.post('/w/:ws/documents/:id/versions', createDocumentVersion);
+app.get('/w/:ws/documents/:id/render', getDocumentRender);
 
 // Members and invitations. WorkOS sends the email; `members` decides access.
 app.get('/w/:ws/members', listMembers);

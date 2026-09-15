@@ -6,22 +6,24 @@ signature — is made by a human, and the product is built so that this is a
 property of the database and the routes rather than a promise in a document.
 
 This repository is milestone **M1: rails, contract and operations**, the server
-half of **M2: sign-in, workspaces, sessions, members, hubs and jobs**, and
+half of **M2: sign-in, workspaces, sessions, members, hubs and jobs**,
 **M3: the run engine** — turns, the tool loop, the four controls and the failure
-taxonomy. The decision route arrives in M4.
+taxonomy — and **M4: decisions, effects, receipts, History and documents**, which
+is where the guarded decision route lands.
 
 ## What is real, and what is not
 
 | Real today | Stubbed, with a landing milestone |
 |---|---|
-| The full Postgres schema: 37 tables, forced row-level security, three roles, the grant matrix, the append-only audit, the derived views | The decision route. `POST /w/:ws/requests/:id/decisions` is deliberately absent until M4 |
+| The full Postgres schema: 37 tables, forced row-level security, three roles, the grant matrix, the append-only audit, the derived views | Executing an effect. `POST /w/:ws/effects/:id/execute` answers `unavailable` in words, and always will here |
 | `GET /health`, `GET /w/:ws/bootstrap`, `GET /w/:ws/events?stream=&after=` | Attachments, documents and the Ask/Plan tool allowlists (M3.5) |
-| The run engine: `POST /w/:ws/sessions/:id/turns`, the `RunAttempt` Workflow with deterministic step names, the twelve tools, Stop, Guide, Queue, Retry, waiting on a human, the failure taxonomy, and the minute orphan sweep | The `receipt` job. It is typed, parsed and logs; M4 posts the template into the originating session |
-| WorkOS AuthKit behind the same `getSession(c) -> {userId, sid, authenticatedAt}` interface: `/auth/login` (with `max_age: 0` for step-up), `/auth/callback` (sealed cookie, user and membership mirror, `auth_sessions`), `/auth/session` (re-seal, stream heads, hub ticket), `/auth/logout`; local JWT verification against a JWKS cached ten minutes; refresh on expiry, 401 only on a terminal `invalid_grant`, 503 with `Retry-After` on a transient failure | The decision route. `POST /w/:ws/requests/:id/decisions` is deliberately absent until M4; nothing else may take its place |
+| The run engine: `POST /w/:ws/sessions/:id/turns`, the `RunAttempt` Workflow with deterministic step names, the twelve tools, Stop, Guide, Queue, Retry, waiting on a human, the failure taxonomy, and the minute orphan sweep | The PDF. Documents render to HTML; `@react-pdf/renderer` cannot run under workerd, and the row says `pdf_status = 'unavailable'` with the reason (DECISIONS, D7) |
+| WorkOS AuthKit behind the same `getSession(c) -> {userId, sid, authenticatedAt}` interface: `/auth/login` (with `max_age: 0` for step-up), `/auth/callback` (sealed cookie, user and membership mirror, `auth_sessions`), `/auth/session` (re-seal, stream heads, hub ticket), `/auth/logout`; local JWT verification against a JWKS cached ten minutes; refresh on expiry, 401 only on a terminal `invalid_grant`, 503 with `Retry-After` on a transient failure | Outreach, payment, access grants and signature. **No code for these exists or ever will in this repository** |
 | `POST /workspaces`, members and invitations (WorkOS `sendInvitation`, resend, withdraw, role change, removal) with the revocation transaction, the last-Admin rule, and the Events API poller that routes WorkOS-side changes through the same transaction | Outreach, payment and signature. **No code for these exists or ever will in this repository** |
 | Sessions: create from the workspace defaults, list (owner-private plus shares), rename, pin, archive, drafts, message pagination, shares with a hashed token and a cutoff, feedback | Turns, stop, retry and guidance (M3) |
-| Uploads end to end: presigned PUT, magic-byte sniff and sha256 on `complete`, the `extract` queue with a DLQ consumer that writes a reason, PDF text through `unpdf` under workerd, extracted text in R2 with a 6,000-token read cap, the daily orphan sweep and the erasure hooks | Rendered documents. The `renders` consumer is a scaffold with its dedupe and DLQ handling; `@react-pdf/renderer` under workerd is still unverified (M4) |
-| Both WebSocket upgrade routes with the `Origin` check, the socket attachment, HMAC hub tickets, evict fan-out and `requestStop`; `publish`, `evict` and `workos_sync` jobs run by the committing request and drained by the minute Cron | The orphan sweep's Workflow-status half, and the `receipt`, `render` and `reverify` job runners (M3 and M4) |
+| Uploads end to end: presigned PUT, magic-byte sniff and sha256 on `complete`, the `extract` queue with a DLQ consumer that writes a reason, PDF text through `unpdf` under workerd, extracted text in R2 with a 6,000-token read cap, the daily orphan sweep and the erasure hooks | Nothing here |
+| Decisions end to end: the five-guard route, the one transaction, the effects ledger, the receipt into the originating session, History rendered at read time, the Library, the `renders` consumer, and `DELETE /w/:ws/applicants/:subject_key` through `redact_subject` | Nothing here |
+| Both WebSocket upgrade routes with the `Origin` check, the socket attachment, HMAC hub tickets, evict fan-out and `requestStop`; `publish`, `evict`, `workos_sync`, `receipt` and `render` jobs run by the committing request and drained by the minute Cron | The orphan sweep's Workflow-status half, and the `reverify` job runner |
 | One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | Nothing here. `resolveKey` now runs inside every provider step, so plaintext exists only for that step |
 | Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
 | The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | The client. `apps/client/dist/index.html` is a placeholder shell; the demo's reducer is ported in M2 |
@@ -325,6 +327,202 @@ Three layers keep it that way, and all three have tests: the database grants
 `invite`, `role` or `job` method), and the block validator, which drops a
 model-authored button carrying a human-only command before anything renders it.
 
+## Decisions and effects
+
+This is the part the whole repository is arranged around. A decision is made by
+a person, in one transaction, through one route, and the things it implies are
+recorded rather than performed.
+
+### The route
+
+```
+POST /w/:ws/requests/:id/decisions
+```
+
+Five guards, in this order:
+
+| Guard | What it is for | Refused with |
+|---|---|---|
+| An allowlisted `Origin`, **required** | The request came from a page we serve. Every other state-changing route tolerates a missing `Origin`; this one does not | 403 `forbidden_origin` |
+| `X-Requested-From: inbox` | Which surface of our own client issued it. Not authentication — a custom header also forces a CORS preflight, and it catches *our* mistakes: a replayed POST, a route that copied this one | 403 `wrong_surface` |
+| Double-submit CSRF | The `hermes_csrf` cookie and the `X-CSRF-Token` header agree | 403 `csrf_failed` |
+| An Admin session | Read from `members` inside the transaction, keyed on the workspace in the path. A Member sees "Admin decision required" | 403 `admin_required` |
+| Step-up, five minutes | The caller's `sid` authenticated recently. The access token carries no `auth_time` and its `iat` moves on every refresh, so the answer comes from `auth_sessions.authenticated_at`, written by `/auth/callback` | 401 `reauth_required` |
+
+Then one transaction: lock the request; `INSERT decisions` (UNIQUE on
+`request_id`); `UPDATE requests SET status = <resulting> WHERE id = $1 AND status
+= 'pending'`, asserted on rowcount; `INSERT events` (ids and enum kinds only);
+`INSERT effects` in `pending`; `INSERT documents` for an approved invoice or
+agreement; `INSERT stream_events`; `INSERT jobs` for the receipt, the publish and
+the render. Commit. Then the jobs, run by this request and retried by the minute
+Cron if it dies.
+
+`kind × decision → status` is `RESULTING_STATUS` in `packages/shared`, ported
+verbatim from the demo's `decide()`: an approved application is `admitted`, an
+approved invoice `created`, an approved agreement `drafted`, and every decline is
+`declined`. A test decides four requests in all 24 orders and reads the counts
+from the views after every step; they go 4 → 0 in each of them, one decision
+event each, and nothing anywhere is sent, paid, granted or signed.
+
+**Two tabs.** The second one gets 200 with `X-Hermes-Conflict: true` and the
+decision that exists. Not an error: the person wants the outcome, not a report
+about a race they did not know they were in.
+
+### What a decision implies
+
+| Decided | Effects recorded, all `pending` | Document |
+|---|---|---|
+| Application approved | `access_grant` (role `access`) | none |
+| Invoice approved | `email_send` (admin), `payment` (role `finance`, two approvals) | invoice v1, render queued |
+| Agreement approved | `signature` (admin), `email_send` (admin) | agreement v1, render queued |
+| Anything declined | none | none |
+
+An admission is a status, not access: `v_pending_grants` counts the grants
+nobody has performed. "Created" is neither "sent" nor "paid", which is why an
+invoice records two rows rather than one.
+
+```
+GET  /w/:ws/effects
+POST /w/:ws/effects/:id/execute
+```
+
+Execute answers, every time:
+
+> Not executed. This build sends nothing, pays nothing, grants nothing and signs
+> nothing.
+
+That is not a stub waiting to be filled in. There is no SMTP client, no payment
+provider, no signature provider and no webhook that would reach one, and there
+will not be one here. The row records the requirement; a person acts, outside the
+product.
+
+**A new version after the decision** (`POST /w/:ws/documents/:id/versions`;
+Admin, step-up) cancels the request's pending effects and re-renders, because
+they were implied by content the approver has not read. A tool cannot reach it:
+the trigger in migration 0005 refuses a `documents` INSERT from the `agent` role
+once the request has left `pending`.
+
+### The receipt
+
+The `receipt` job posts two lines into the session the request came *from* —
+`requests.session_id`, not whichever session is open:
+
+```
+[human] Maya Chen admitted Leah in Inbox
+[iris ] Leah is admitted. Access is pending. Three requests remain.
+```
+
+The count is read from `v_inbox_count` when the receipt is written, not carried
+in the payload, so four quick decisions do not leave four confident wrong numbers
+in the transcript. The job is keyed on `decision_id` and the two messages carry
+`client_id = receipt:{decision_id}:{role}`, so a replay — the committing request
+died, the Cron picked it up — writes nothing the second time.
+
+### History and erasure
+
+```
+GET    /w/:ws/history?tab=all|decisions|blocked&before=&limit=
+GET    /w/:ws/history/counts
+DELETE /w/:ws/applicants/:subject_key
+```
+
+`events` holds ids and enum kinds only, so every sentence is composed at read
+time by joining to the rows the ids name. That is what makes erasure survivable:
+`redact_subject` rewrites the subject rows, the audit rows are untouched, and the
+same join then renders "Maya Chen admitted a deleted applicant". A test redacts a
+subject and asks for the page again.
+
+`blocked` is derived from the present — a request still `pending`, an effect
+still `pending` or `assigned` — never from a flag on the event.
+
+### Documents
+
+```
+GET  /w/:ws/documents?status=drafts|saved
+GET  /w/:ws/documents/:id
+GET  /w/:ws/documents/:id/versions
+GET  /w/:ws/documents/:id/render
+```
+
+The Library shows pending invoice and agreement *requests* as drafts (version 0,
+"Draft · Awaiting review") and `documents` rows as saved. The `renders` consumer
+builds a self-contained HTML file — number, parties, dates, line items, total,
+and the footer "Not sent · No money moved" printed on the document itself — and
+stores it at `w/{workspace}/documents/{document}/v{version}.html`.
+
+**There is no PDF, and the row says so.** `@react-pdf/renderer` lays text out
+with yoga-layout, which compiles WebAssembly from a base64 string at runtime;
+workerd refuses that (`Wasm code generation disallowed by embedder`). The spike
+is recorded in `docs/DECISIONS.md` (D7). So `render_status` is `ready` and
+`pdf_status` is `unavailable` with the reason attached, rather than one column
+that would have to say "failed" about a document that renders perfectly well.
+
+### Walking through it locally
+
+```sh
+cd apps/worker
+node scripts/seed-dev.mjs
+npx wrangler dev --local          # MODEL_SCRIPTED=1 is set for development
+```
+
+```sh
+WS=11111111-1111-4111-8111-111111111111
+AUTH='x-dev-user: maya@nous.example'
+ORIGIN='origin: http://localhost:8787'
+
+# A run that proposes a request (the scripted provider calls propose_request).
+S=$(curl -s -X POST -H "$AUTH" -H "$ORIGIN" -H 'content-type: application/json' \
+  -d '{"title":"M4 walkthrough"}' http://localhost:8787/w/$WS/sessions | jq -r .id)
+curl -s -X POST -H "$AUTH" -H "$ORIGIN" -H 'content-type: application/json' \
+  -d '{"text":"Screen this application","client_turn_id":"walkthrough-1"}' \
+  http://localhost:8787/w/$WS/sessions/$S/turns
+
+R=$(curl -s -H "$AUTH" "http://localhost:8787/w/$WS/requests?status=pending" | jq -r .items[0].id)
+
+# Each guard, refused on its own:
+curl -s -X POST -H "$AUTH" -H "$ORIGIN" -H 'content-type: application/json' \
+  -d '{"decision":"approve"}' http://localhost:8787/w/$WS/requests/$R/decisions
+# {"error":"this action must be made from the inbox","reason":"wrong_surface"}
+curl -s -X POST -H "$AUTH" -H 'origin: https://evil.example' -H 'x-requested-from: inbox' \
+  -H 'content-type: application/json' -d '{"decision":"approve"}' \
+  http://localhost:8787/w/$WS/requests/$R/decisions
+# {"error":"origin https://evil.example is not allowed","reason":"forbidden_origin"}
+
+# All five, passed:
+curl -s -i -X POST -H "$AUTH" -H "$ORIGIN" -H 'x-requested-from: inbox' \
+  -H 'content-type: application/json' -d '{"decision":"approve"}' \
+  http://localhost:8787/w/$WS/requests/$R/decisions
+# HTTP/1.1 201 Created ... X-Hermes-Conflict: false
+
+# The receipt, in the session the request came from:
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/sessions/$S/messages?limit=10"
+# [3] human receipt  Maya Chen admitted ada.ling@example.com in Inbox
+# [4] iris  receipt  ada.ling@example.com is admitted. Access is pending. Two requests remain.
+
+# The History row, and the counts from the views:
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/history?tab=decisions&limit=1"
+# "Maya Chen admitted ada.ling@example.com" — "Access pending · No message sent"
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/history/counts"
+
+# And what Execute answers:
+E=$(curl -s -H "$AUTH" "http://localhost:8787/w/$WS/requests/$R/effects" | jq -r .items[0].id)
+curl -s -X POST -H "$AUTH" -H "$ORIGIN" -H 'content-type: application/json' -d '{}' \
+  http://localhost:8787/w/$WS/effects/$E/execute
+# {"status":"unavailable","reason":"Not executed. This build sends nothing, ..."}
+```
+
+**How fake auth satisfies step-up and CSRF in development.** `AUTH_MODE=fake`
+authenticates with the `x-dev-user` header, so the double-submit token is not
+checked at all — a foreign page cannot set a request header, so there is nothing
+for a token to add, and the guard is tested in `workos` mode against a real
+sealed cookie instead. Step-up *is* checked: `fakeAuth` writes the same
+`auth_sessions` row the WorkOS adapter writes, keyed `dev-{user_id}`, with
+`authenticated_at = now()` the first time it sees that `sid`. So a fresh dev
+server decides successfully and a dev session older than five minutes is refused
+with `reauth_required`, exactly as production would refuse it. The development
+equivalent of `/auth/login?step_up=1` is
+`DELETE FROM auth_sessions WHERE sid = 'dev-22222222-2222-4222-8222-222222222222'`.
+
 ## Tools and modes
 
 ### The three modes
@@ -500,7 +698,10 @@ the same transaction our own removal route uses.
 packages/shared    the contract: events, refs, enums, document payloads,
                    the run-log validator, the command registries, the mock stream
 apps/worker        the Cloudflare Worker: Hono routes, Durable Object hubs,
-                   the Workflow stub, the Drizzle schema, the SQL migrations
+                   the run Workflow, the Drizzle schema, the SQL migrations
+  src/domain       the decision transaction, the effects plan, request and
+                   History shaping — the rules, with no HTTP in them
+  src/documents    the document template, the render pipeline and its keys
 apps/client        the client bundle (placeholder in M1)
 docs/              DECISIONS.md, CONVENTIONS.md
 ```
@@ -512,8 +713,9 @@ violated.
 ## The invariants, in one place
 
 1. **Decisions only through the guarded route.** `POST /w/:ws/requests/:id/decisions`
-   is the only path that changes a request's status. It is not built yet (M4);
-   nothing else may take its place.
+   is the only path that changes a request's status, and the only writer of
+   `decisions`. Five guards in front of it, one transaction behind it; nothing
+   else may take its place.
 2. **The agent role never decides.** The `agent` database role has no INSERT on
    `decisions`, `effects`, `members`, `invitations` or `jobs`, and no UPDATE on
    `requests` or `jobs`. A trigger limits what it may publish to the outbox to

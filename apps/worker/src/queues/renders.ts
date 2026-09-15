@@ -1,31 +1,32 @@
-// The `renders` consumer: the scaffold M4 fills in.
+// The `renders` consumer: a document version becomes a file in the store.
 //
-// M4 renders a `documents` row's payload to HTML and PDF and puts both in R2
-// next to the uploads. What exists now is everything around that: the message
-// shape, the dedupe rule, the per-message ack and retry, and the dead-letter
-// handling — because those are the parts that are wrong in production if they
-// are written in a hurry alongside the renderer.
+// The shape around the renderer was written in M1 and has not changed, because
+// it is the part that is wrong in production if it is written in a hurry
+// alongside the renderer: dedupe on `(document_id, version)`, per-message ack
+// and retry, and a dead-letter consumer that writes the failure onto the row so
+// that no document says "preparing" forever.
 //
-// Dedupe is on `(document_id, version)`, per the plan. A document version is
-// immutable once written, so a second message about the same pair is a
-// duplicate delivery (queues are at-least-once) and re-rendering it would burn
-// CPU to produce the same bytes. The check is "is `render_status` already
-// ready for this version" rather than a separate dedupe table.
+// What M4 filled in is the middle: the payload is rendered to a self-contained
+// HTML file and put in R2 beside the uploads (src/documents/render.ts). The PDF
+// is not, and the row says which of the two happened with two separate statuses
+// rather than one that would have to lie about one of them — see
+// docs/DECISIONS.md, D-7, for the workerd WebAssembly spike that settled it.
 //
-// `@react-pdf/renderer` under workerd is **unverified** in the plan and is not
-// a dependency of this Worker. When M4 lands it either works, or the fallback
-// is the same one extraction uses: a failed status with an honest reason,
-// never a blank document presented as a rendered one.
+// Failure handling, in three kinds:
+//
+//   * a message that does not parse is acked and logged. A malformed message is
+//     not going to parse on the fourth attempt either, and retrying it would
+//     ride it into the dead-letter queue where it would still not parse;
+//   * a payload that no longer validates against its schema is a *permanent*
+//     failure with a reason, written onto the row and acked — the reviewer sees
+//     "the document payload does not match the invoice schema" rather than a
+//     document that never arrives;
+//   * anything else — the database is unreachable, R2 refused the put — is
+//     retried, because those are exactly the failures a retry fixes.
 import type { Env } from '../env.js';
 import { withWorkspaceTransaction } from '../jobs.js';
+import { renderDocumentVersion } from '../documents/render.js';
 import { renderMessageSchema, type RenderMessage } from './messages.js';
-
-export class RenderUnavailable extends Error {
-  constructor(readonly reason = 'renderer_unavailable') {
-    super('document rendering lands in M4');
-    this.name = 'RenderUnavailable';
-  }
-}
 
 /** True when this version has already been rendered. Queues are at-least-once. */
 export async function alreadyRendered(env: Env, message: RenderMessage): Promise<boolean> {
@@ -55,14 +56,6 @@ export async function markRender(
   });
 }
 
-/**
- * One batch.
- *
- * Every message is acked with an honest `failed` status rather than retried:
- * there is no renderer, so three more attempts produce three more nothings, and
- * a message that rode the retries into the dead-letter queue would tell the
- * reviewer "failed" four minutes later than this does.
- */
 export async function rendersBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
   for (const message of batch.messages) {
     const parsed = renderMessageSchema.safeParse(message.body);
@@ -71,18 +64,20 @@ export async function rendersBatch(batch: MessageBatch<unknown>, env: Env): Prom
       message.ack();
       continue;
     }
+    const { workspace_id: workspaceId, document_id: documentId, version } = parsed.data;
     try {
-      if (await alreadyRendered(env, parsed.data)) {
-        message.ack();
-        continue;
-      }
-      await markRender(env, parsed.data, 'failed', 'document rendering lands in M4');
+      const outcome = await renderDocumentVersion(env, workspaceId, documentId, version);
       console.log(
-        JSON.stringify({ at: 'queue.renders', document_id: parsed.data.document_id, note: 'renderer lands in M4' }),
+        JSON.stringify({ at: 'queue.renders', document_id: documentId, version, outcome: outcome.status }),
       );
+      // Every outcome here is terminal, including `missing`: a document row
+      // that is not there has been erased or was never committed, and a message
+      // about it is not going to find it on the fourth attempt.
       message.ack();
     } catch (error) {
-      console.log(JSON.stringify({ at: 'queue.renders', ok: false, error: String(error) }));
+      // Transient by elimination: the schema parsed and the render is
+      // deterministic, so what is left is the database or the object store.
+      console.log(JSON.stringify({ at: 'queue.renders', ok: false, document_id: documentId, error: String(error) }));
       message.retry();
     }
   }

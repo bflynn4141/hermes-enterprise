@@ -332,6 +332,28 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
   await mark('done');
 }
 
+/**
+ * `render`: hand one `(document_id, version)` pair to the renders queue.
+ *
+ * Two mechanisms rather than one, and they do different jobs. The `jobs` row
+ * commits with the document, so the render cannot be forgotten; the queue gives
+ * the work retries, a dead-letter queue and a consumer that is not holding a
+ * request open. A direct render here would tie a 20-line HTML build to whatever
+ * request happened to commit the decision.
+ */
+async function runRender(env: Env, job: Job): Promise<void> {
+  const payload = (job.payload ?? {}) as { document_id?: string; version?: number };
+  if (!payload.document_id || typeof payload.version !== 'number') {
+    console.log(JSON.stringify({ at: 'job.render', key: job.key, ok: false, note: 'malformed render payload' }));
+    return;
+  }
+  await env.RENDERS_QUEUE.send({
+    workspace_id: job.workspace_id,
+    document_id: payload.document_id,
+    version: payload.version,
+  });
+}
+
 /** Dispatch. An unknown kind is done rather than retried forever. */
 export async function runJob(env: Env, job: Job): Promise<void> {
   switch (job.kind) {
@@ -350,14 +372,20 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       await runBackupUploads(env, job.workspace_id);
       return;
     case 'receipt':
-      // Typed, parsed and inert: M4 posts the template into the originating
-      // session, keyed on `decision_id`. See src/runs/receipt.ts.
-      await runReceiptJob(env, job.key, job.payload);
+      // The two lines a decision leaves in the originating session, keyed on
+      // `decision_id` so a replay writes nothing. See src/runs/receipt.ts.
+      await runReceiptJob(env, job);
       return;
     case 'render':
+      // The job row is the durable half and the queue message is the working
+      // half. Written in the decision's transaction, so a document cannot exist
+      // without a render queued for it; the send happens here, after that
+      // commit, and the Cron retries this row until the queue accepted it.
+      await runRender(env, job);
+      return;
     case 'reverify':
-      // Registered, inert, and honest about it: the work lands with the routes
-      // that write these rows (M4 and the keys module).
+      // Registered, inert, and honest about it: the work lands with the keys
+      // module.
       console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'registered placeholder' }));
       return;
     default:
