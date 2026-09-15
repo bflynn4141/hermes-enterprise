@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vitest/globals"],
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    // `erasableSyntaxOnly` is off: `packages/shared` uses constructor parameter
+    // properties, and esbuild transforms those correctly (docs/DECISIONS, Client).
+    "exactOptionalPropertyTypes": false,
+    "paths": {
+      "@hermes/shared": ["../../packages/shared/src/index.ts"]
+    }
+  },
+  "include": ["src", "e2e", "build.mjs", "playwright.config.ts", "vitest.config.ts"]
+}

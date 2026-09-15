@@ -4,8 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node -e \"process.stdout.write('the client bundle lands in M2; dist/index.html is the placeholder shell\\n')\"",
-    "typecheck": "node -e \"process.stdout.write('no TypeScript sources yet\\n')\"",
-    "test": "node -e \"process.stdout.write('no client tests yet\\n')\""
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch --serve",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@hermes/shared": "workspace:*",
+    "@hermes/motion-components": "file:../../../hermes-motion-components",
+    "motion": "13.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
   }
 }

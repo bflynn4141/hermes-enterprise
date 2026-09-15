@@ -630,3 +630,196 @@ recipient, so an error would be pedantry. But a silent 200 with nothing behind
 it leaves the Admin wondering whether it worked, and leaves no trace that anyone
 asked. The row is the honest middle: nothing was sent, something is recorded,
 and the Members screen shows a state the Admin can read.
+
+---
+
+# Client
+
+Choices made while porting the demo client into `apps/client` (M2), where the
+client-port specification was silent, and the places where the specification and
+this repository disagreed. Where they disagreed, the repository's
+`packages/shared` won; each of those is noted.
+
+---
+
+## C1. `provider-keys.ts` owns the provider-key contract, not the port
+
+**Repository wins.** The client-port spec sketches a `ProviderKey` row with
+`verified_models` as a count. `packages/shared/src/provider-keys.ts` — written
+for the M2 key routes — already defines `maskedProviderKeySchema`, where
+`verified_models` is the list of model ids and `last4` and
+`fingerprint_prefix` have exact lengths. The client consumes that shape;
+`entities.ts` keeps the name `ProviderKey` only as an alias, and the Settings
+tab shows `verified_models.length`.
+
+**Why.** Two shapes with one name in one package index is an ambiguous
+re-export, which is a compile error rather than a judgement call — and the
+stricter shape is the one a route already returns.
+
+The same rule renamed the client's cached step shape to `runStepEntitySchema`:
+`events.ts` already exports `runStepSchema` for the `run.step` *event*, and the
+two are different shapes.
+
+---
+
+## C2. The library exports three atoms, not twelve
+
+**Found while porting.** The spec's M2 table adopts
+`Button, Chip, EntityChip, StatusPill, ValuePill, Switch, SegmentedControl, ProgressRing, Shimmer, StreamText, TextRow`
+from `@hermes/motion-components`. The package's `index.ts` exports only
+`Button`, `StreamText` and `Shimmer`; the other atoms exist in `src` and have
+type declarations, but are not in the export map, and the library is not ours to
+edit.
+
+**Decided.** Adopt what is exported, keep the rest in `src/app/ui/primitives.tsx`
+(which the spec already keeps for `Popover, Dialog, Disclosure, Tip, Avatar,
+Panel, MenuItem`), and record it here rather than reaching into
+`node_modules/@hermes/motion-components/src`.
+
+**Would change it if.** The library adds them to its index; the swap is then one
+import line per atom.
+
+---
+
+## C3. `SidebarNav` renders the whole sidebar column, and the account menu stays local
+
+**Decided.** `SidebarNav` is adopted as the spec requires: the six sections are
+its `navItems`, the Inbox badge is `counts.inbox` (from `v_inbox_count`),
+`recents` is the sessions page, and `workspace`/`footerLabel` come from
+bootstrap. `onNavigate` and `onPick` dispatch the same `nav/app … manual: true`
+every other control uses, so the follow rule keeps one code path.
+
+What is *not* delegated is the account menu: the spec moves the reduce-motion
+toggle there, and the component's footer is a single click target. So a slim
+Nous-styled account row sits below it and carries the toggle, the settings
+shortcuts and the dev account switcher.
+
+---
+
+## C4. `HermesMotionProvider` wraps the app in `.hermes-ui`
+
+**Found while running.** The provider renders its own `div.hermes-ui`, so the
+whole shell is a descendant of the library's CSS scope. Two consequences:
+
+* the height chain from `#root` to the shell runs through that div, which has
+  no height of its own — the shell collapsed to its content height until
+  `#root > .hermes-ui { height: 100% }` was added;
+* the seven tokens the two stylesheets share (`--ink`, `--line`,
+  `--line-strong`, `--line-soft`, `--conversation`, `--panel`, `--ease-out`)
+  resolve to the library's values inside the wrapper rather than the product's.
+
+The library was authored for this product and its values match closely enough
+that the rendered result is coherent (see `apps/client/qa/`), so they are left
+as they are rather than re-declared on the wrapper — re-declaring them would
+change how the library's own components look, which is the opposite of adopting
+them. The build prints the overlapping names on every run.
+
+**The duplicate-token check** the plan asks for is therefore the honest form of
+the question: it fails the build if the library declares a custom property at
+`:root`, `html`, `body` or `*` — a scope that could reach the product's own
+elements — and otherwise lists the scoped overlap.
+
+---
+
+## C5. `erasableSyntaxOnly` is off, and `exactOptionalPropertyTypes` stays off
+
+**Found while typechecking.** The spec asks for both. `packages/shared` uses
+constructor parameter properties (`RestError`, the mock-stream `Builder`), which
+`erasableSyntaxOnly` refuses; the client typechecks the shared sources directly
+through `paths`, so the flag would fail on code that is not the client's. esbuild
+transforms parameter properties correctly, so the flag buys nothing here.
+
+`exactOptionalPropertyTypes` is off to match `tsconfig.base.json`, which the
+worker and the shared package are already written against. Turning it on is a
+repository-wide change, not a client one.
+
+---
+
+## C6. Mock server mode is a `fetch` and a socket factory, not a second server
+
+**Decided.** `MOCK=1` builds the client with `__MOCK__` true, and the adapter is
+handed `createMockBackend()`'s `fetch` and socket factory instead of the
+browser's. Everything still goes through the same REST client and the same zod
+parse, so a mock response that does not satisfy the contract fails in the
+client's own tests rather than drifting quietly. The run stream is
+`packages/shared`'s `mockRunStream`, so the difficult sequences are the
+contract's own scenarios rather than a second set invented for the mock.
+
+    MOCK=1 pnpm --filter client build     # bundle that needs no worker
+    MOCK=1 PORT=4180 node build.mjs --serve
+
+Query parameters pick the fixture: `?data=empty` for the first-run empty states,
+`?seat=member` for the Member seat, `?key=none|invalid` for the provider-key
+banners. `__MOCK__` is a build constant, so a production build eliminates the
+module; the build then deletes the orphan chunk esbuild still emits for the
+folded dynamic import, and greps `dist/app.js` for `x-dev-user` to prove the dev
+switcher is gone too.
+
+---
+
+## C7. Opening a session loads one message window; "Load earlier" pages backwards
+
+**Found while running.** Neither the bootstrap nor the event contract carries a
+session's existing transcript: bootstrap lists sessions, and the socket carries
+what happens next. So `openSession` fetches the most recent window once
+(`GET .../messages?limit=100`) and `loadEarlier` pages backwards from
+`oldestSeq`. Without it a reload showed an empty transcript for a session that
+had one.
+
+---
+
+## C8. A decision refetches its request row
+
+**Found while testing.** `decision.recorded` carries `resulting_status` and the
+effect ids — enough for the badge and the list, not enough for the review pane,
+which needs the whole row. The client therefore refetches the request after a
+decision commits (`ensure(kind, id, force)`), rather than patching a status into
+the cached row and hoping the rest still matches.
+
+---
+
+## C9. A `resync` event re-bootstraps; it is not only a cache drop
+
+**Found while testing.** The reducer's `cache/clear` empties the entity cache and
+the message windows, but the client then has no data at all. The adapter treats
+a `resync` event — and a replay page with `{resync: true}` — as: drop the
+caches, re-run `GET bootstrap`, re-attach both sockets. Drafts and UI state
+survive it, including across the re-bootstrap, because the server has never seen
+what someone typed.
+
+---
+
+## C10. The Playwright suite runs against mock mode; the system scenarios wait for the worker
+
+**Decided.** `pnpm --filter client e2e` runs P1 to P3 from the spec's §11 table
+against the mock bundle, plus a Member-seat check and a screenshot sweep. Those
+are the scenarios that are about the *client*: the empty states, the triage
+list, follow/pin, the review pane, the badge arithmetic.
+
+P4 to P14 assert what the *server* does — two browser contexts racing one
+decision, the guarded route refusing a Member, guidance mid-run, Stop, a
+provider 5xx, a dropped socket, the share viewer's polling, the injection
+fixture. They need `wrangler dev` with Docker Postgres, `AUTH_MODE=fake` and the
+scripted provider, and they land with the M2/M3 worker routes. `E2E_BASE_URL`
+points the same config at that server.
+
+---
+
+## C11. What the port deliberately left behind
+
+The presenter, the intro slides, the "one week later" interstitial, the scripted
+conversation engine (`conversation.mjs`), the fixtures and the seeded sessions.
+The demo's local event log (`eventTime`, `uid('evt')`, the fabricated `events`
+array) is gone with them: History reads `events` rows.
+
+Three demo behaviours changed because the port fixed a bug the demo had:
+
+1. `sameRef` compares `field`, so navigating from the blocker card to the
+   destination field pins the view instead of being mistaken for "already the
+   focus" (spec §4.6.1);
+2. a receipt is written into the session that produced the request, not into
+   whatever session happens to be active, and an inactive session shows an
+   unread marker instead (spec §4.6.2);
+3. an acknowledgement is a server message that exists only after the commit, so
+   the demo's third bug — acknowledging before the state settles — is
+   structurally gone.
