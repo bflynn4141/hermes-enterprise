@@ -13,6 +13,8 @@ import type { Context } from 'hono';
 import type { Env } from '../env.js';
 import { connect, type Role } from '../db/client.js';
 import type { Health } from '@hermes/shared';
+import { describeConnections, readConnectionMetric } from '../ops/connections.js';
+import { jwksKeyCount } from '../auth/jwks.js';
 
 const WORKER_VERSION = '0.1.0';
 
@@ -56,11 +58,46 @@ async function checkHub(env: Env): Promise<string> {
   return `workspace hub answered with ${result.sockets} sockets`;
 }
 
+/**
+ * The connection metric, reported as a check rather than as a failure.
+ *
+ * Two Hyperdrive configs of about 100 connections each against a 209-connection
+ * origin is arithmetic that only works because neither is near its ceiling, and
+ * this is the number that says whether that is still true. It reports `ok` at
+ * any count: crossing the alarm means someone should look, not that the service
+ * is down, and a health check that returned 503 at 151 connections would take
+ * the product down to avoid taking it down. `detail` carries the denominator.
+ */
+async function checkConnections(env: Env): Promise<string> {
+  const metric = await readConnectionMetric(env);
+  return describeConnections(metric) + (metric.alarming ? ' — ALARM' : '');
+}
+
+/**
+ * Can we still verify a WorkOS token?
+ *
+ * Only in `AUTH_MODE=workos`, because in fake mode there is no JWKS and a check
+ * that failed there would make every local `/health` red. This is the one
+ * upstream whose unavailability the product cannot work around: with no JWKS we
+ * can verify nothing, so every request is a 401 and the symptom — everybody
+ * signed out at once — is indistinguishable from us having broken auth.
+ *
+ * The fetcher caches for ten minutes, so this costs a subrequest at most once
+ * per cache window however often the health route is polled.
+ */
+async function checkJwks(env: Env): Promise<string> {
+  const keys = await jwksKeyCount(env);
+  if (keys === 0) throw new Error('the JWKS document carries no signing keys');
+  return `WorkOS JWKS reachable, ${keys} signing keys`;
+}
+
 export async function health(c: Context<{ Bindings: Env }>): Promise<Response> {
   const checks = await Promise.all([
     timed('postgres:app', () => checkPostgres(c.env, 'app')),
     timed('postgres:agent', () => checkPostgres(c.env, 'agent')),
     timed('hub:workspace', () => checkHub(c.env)),
+    timed('postgres:connections', () => checkConnections(c.env)),
+    ...(c.env.AUTH_MODE === 'workos' ? [timed('workos:jwks', () => checkJwks(c.env))] : []),
   ]);
 
   const body: Health = {

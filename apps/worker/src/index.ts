@@ -10,6 +10,7 @@
 // uploads routes and the `extract` consumer; M4 filled in the decision route,
 // the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
+import { withSentry } from '@sentry/cloudflare';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
@@ -19,6 +20,20 @@ import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './ro
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
+import { acceptInvitation } from './routes/invitations.js';
+import { getTrace, listTraces } from './routes/traces.js';
+import {
+  acceptInstruction,
+  adoptSkill,
+  discardInstruction,
+  listContextFields,
+  listInstructions,
+  listSkills,
+  patchContextField,
+} from './routes/agent-config.js';
+import { appShellOrUnknownRoute } from './routes/spa.js';
+import { KeyCryptoError } from './keys/envelope.js';
+import { KeyStoreError } from './keys/store.js';
 import {
   createInvitation,
   listInvitations,
@@ -77,16 +92,32 @@ import {
   listDocumentVersions,
   listDocuments,
 } from './routes/documents.js';
+import { getUsage } from './routes/usage.js';
+import {
+  deleteWorkspace,
+  getDataPrivacy,
+  getSettings,
+  patchAttestation,
+  patchSettings,
+  undeleteWorkspace,
+} from './routes/settings.js';
+import { sentryOptions } from './ops/sentry.js';
+import { sweepPlatformCounters } from './ops/instance-cap.js';
+import { runNightly } from './ops/nightly.js';
 import { sweepRuns } from './runs/sweep.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
-import { drainJobs } from './jobs.js';
+import { drainJobs, withWorkspaceTransaction } from './jobs.js';
+import { PLATFORM_WORKSPACE_ID } from './auth/rate-limit.js';
 import { handleQueue } from './queues/index.js';
 import { sweepOrphanedUploads } from './storage/lifecycle.js';
 import { pollWorkOSEvents } from './auth/events-poller.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
+// The three long-wait Workflows (M5a). Registered in wrangler.jsonc; the bodies
+// are plain functions in src/workflows-long/ so they can be tested in Node.
+export { KekRotation, NightlyValidator, WorkspaceDeletion } from './workflows-long/index.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -105,6 +136,54 @@ app.onError((error, c) => {
   }
   if (error instanceof RouteError) {
     return c.json({ error: error.message, reason: error.reason }, error.status);
+  }
+  // Envelope encryption. A missing or malformed `KEK_V{n}` is a *configuration*
+  // failure, not a bug in the request: the deployment cannot encrypt anything
+  // until someone sets the secret, and `.dev.vars.example` ships `KEK_V1=""`,
+  // so a fresh checkout hits it on the first provider key it adds. 503 with a
+  // reason the client can render beats 500 `internal`, which sent a person
+  // looking for a bug that is not there. A decrypt failure is different — the
+  // key material is there and did not authenticate — and stays a 500.
+  if (error instanceof KeyCryptoError) {
+    if (error.reason === 'kek_missing' || error.reason === 'kek_version_unknown' || error.reason === 'kek_malformed') {
+      return c.json({ error: error.message, reason: 'kek_unavailable' }, 503);
+    }
+    if (error.reason === 'plaintext_empty') {
+      return c.json({ error: error.message, reason: error.reason }, 422);
+    }
+  }
+  // The key store's own conditions. `already_revoked` is the one a person
+  // reaches by double-clicking Remove, and 409 is what says "that already
+  // happened" rather than "something broke".
+  if (error instanceof KeyStoreError) {
+    const status =
+      error.reason === 'already_revoked'
+        ? 409
+        : error.reason === 'duplicate_key'
+          ? 409
+          : error.reason === 'not_found'
+            ? 404
+            : error.reason === 'unknown_provider'
+              ? 422
+              : 409;
+    return c.json({ error: error.message, reason: error.reason }, status);
+  }
+  // Any other domain error that names its own status. A thrown error carrying
+  // `status` and `reason` has already decided how it should be answered, and
+  // mapping it to 500 here would lose that on the way out — which is the
+  // failure this whole block exists to stop: a known condition reported as an
+  // unknown one. See decision F5.
+  const carried = error as { status?: unknown; reason?: unknown; message?: string };
+  if (
+    typeof carried.status === 'number' &&
+    carried.status >= 400 &&
+    carried.status <= 599 &&
+    typeof carried.reason === 'string'
+  ) {
+    return c.json(
+      { error: carried.message ?? 'request failed', reason: carried.reason },
+      carried.status as 400,
+    );
   }
   console.error('unhandled error', error);
   return c.json({ error: 'internal error', reason: 'internal' }, 500);
@@ -133,6 +212,9 @@ app.get('/auth/logout', logout);
 // Creating a workspace is the one tenant-shaped route with no tenant in its
 // path, because the tenant does not exist until it succeeds.
 app.post('/workspaces', createWorkspace);
+// Accepting an invitation is the other one: the workspace is what the call is
+// trying to reach, so it cannot be the key the call is authorised under.
+app.post('/invitations/:token/accept', acceptInvitation);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 
@@ -223,6 +305,18 @@ app.get('/w/:ws/documents/:id/versions', listDocumentVersions);
 app.post('/w/:ws/documents/:id/versions', createDocumentVersion);
 app.get('/w/:ws/documents/:id/render', getDocumentRender);
 
+// Usage and settings. Usage is readable by any member — they can already see
+// every run that produced the numbers — and the caps that govern it are
+// Admin-only to change. `DELETE /w/:ws` revokes access now and schedules the
+// destruction for seven days from now (src/workflows-long/workspace-deletion.ts).
+app.get('/w/:ws/usage', getUsage);
+app.get('/w/:ws/settings', getSettings);
+app.patch('/w/:ws/settings', patchSettings);
+app.get('/w/:ws/settings/data-privacy', getDataPrivacy);
+app.post('/w/:ws/settings/undelete', undeleteWorkspace);
+app.patch('/w/:ws/provider-keys/:id/attestation', patchAttestation);
+app.delete('/w/:ws', deleteWorkspace);
+
 // Members and invitations. WorkOS sends the email; `members` decides access.
 app.get('/w/:ws/members', listMembers);
 app.get('/w/:ws/invitations', listInvitations);
@@ -232,17 +326,40 @@ app.post('/w/:ws/invitations', createInvitation);
 app.post('/w/:ws/invitations/:id/resend', resendInvitation);
 app.post('/w/:ws/invitations/:id/withdraw', withdrawInvitation);
 
+// The Agent tab's own surfaces: the runs a person can read back, the skills the
+// agent has adopted, its instruction versions, and the context fields a human
+// answers. Every one is `inWorkspace` like the rest; none of them is new
+// authority over anything (see src/routes/traces.ts).
+app.get('/w/:ws/traces', listTraces);
+app.get('/w/:ws/traces/:runId', getTrace);
+app.get('/w/:ws/skills', listSkills);
+app.post('/w/:ws/skills', adoptSkill);
+app.post('/w/:ws/skills/:id/adopt', adoptSkill);
+app.get('/w/:ws/instructions', listInstructions);
+app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
+app.post('/w/:ws/instructions/:id/save', acceptInstruction);
+app.post('/w/:ws/instructions/:id/discard', discardInstruction);
+app.delete('/w/:ws/instructions/:id', discardInstruction);
+app.get('/w/:ws/context-fields', listContextFields);
+app.patch('/w/:ws/context-fields/:field', patchContextField);
+
 // The two socket upgrades. Authorisation happens here; the hub only holds the
 // result and honours its expiry.
 app.get('/w/:ws/hub/workspace', workspaceSocket);
 app.get('/w/:ws/hub/session/:id', sessionSocket);
 
-// Anything else under /api or /w that did not match is a 404 as JSON, not the
-// SPA shell: a client that asked for data should not be handed HTML.
-app.all('/w/*', (c) => c.json({ error: 'not found', reason: 'unknown_route' }, 404));
-app.all('/api/*', (c) => c.json({ error: 'not found', reason: 'unknown_route' }, 404));
+// Anything that did not match is one of two things, and the request says which.
+//
+// A `fetch()` for data gets `{"reason":"unknown_route"}` as JSON, because a
+// client that asked for data should not be handed HTML. A *browser navigation*
+// gets the client bundle from the assets binding, because `/w/:ws/inbox` is a
+// deep link into the app and answering it with JSON is how the shell ended up
+// at `/workspace/:ws` (decision C12). `run_worker_first` puts every one of
+// those paths in front of the assets binding, so this is the only place that
+// can tell the two apart. See src/routes/spa.ts and decision F1.
+app.all('*', appShellOrUnknownRoute);
 
-export default {
+const handler = {
   fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
     return app.fetch(request, env, ctx);
   },
@@ -257,9 +374,45 @@ export default {
    */
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     if (event.cron !== '* * * * *') {
-      // The nightly validator is a Workflow (M5a): a Cron handler caps at 15
-      // minutes and a full run-log validation does not.
-      console.log(JSON.stringify({ at: 'scheduled', cron: event.cron, note: 'validator lands in M5a' }));
+      // The nightly validator is a Workflow: a Cron handler caps at 15 minutes
+      // and a full run-log validation does not. The instance id carries the
+      // date, so two Cron firings on the same night are one instance —
+      // `create()` throws on a duplicate id, which is treated as a no-op
+      // exactly as the turns route treats it.
+      const night = new Date(event.scheduledTime).toISOString().slice(0, 10);
+      ctx.waitUntil(
+        (async () => {
+          try {
+            await env.NIGHTLY_VALIDATOR?.create({ id: `validator-${night}`, params: {} });
+            console.log(JSON.stringify({ at: 'cron.validator', ok: true, night }));
+          } catch (error) {
+            const message = String(error);
+            const duplicate = /already exists|duplicate|instance.*id/i.test(message);
+            console.log(JSON.stringify({ at: 'cron.validator', ok: duplicate, night, error: message }));
+          }
+          // The instance-cap buckets, which would otherwise grow one row an
+          // hour forever: slow enough that nobody notices and permanent enough
+          // that somebody eventually does.
+          try {
+            const swept = await withWorkspaceTransaction(env, PLATFORM_WORKSPACE_ID, (tx) =>
+              sweepPlatformCounters(tx),
+            );
+            console.log(JSON.stringify({ at: 'cron.counters', swept }));
+          } catch (error) {
+            console.log(JSON.stringify({ at: 'cron.counters', ok: false, error: String(error) }));
+          }
+          // The night's per-workspace work: the uploads backup, the weekly
+          // audit CSV on a Monday, and yesterday's spend as a metric. All three
+          // become `jobs` rows rather than work done here, because this handler
+          // has 30 seconds of CPU (src/ops/nightly.ts).
+          try {
+            const queued = await runNightly(env, new Date(event.scheduledTime));
+            console.log(JSON.stringify({ at: 'cron.nightly.queued', ...queued }));
+          } catch (error) {
+            console.log(JSON.stringify({ at: 'cron.nightly.queued', ok: false, error: String(error) }));
+          }
+        })(),
+      );
       // The R2 lifecycle rule the plan names: objects with no completed
       // attachments row after 24 hours. Best-effort and bounded, because this
       // handler has 30 seconds of CPU and an orphan costing one more day of
@@ -317,3 +470,18 @@ export default {
     await handleQueue(batch, env);
   },
 } satisfies ExportedHandler<Env>;
+
+/**
+ * Sentry wraps the handler, always, and does nothing without a DSN.
+ *
+ * `sentryOptions` returns `undefined` when `SENTRY_DSN` is unset, which is the
+ * documented way to disable the SDK — so `wrangler dev --local`, every test and
+ * any environment that has not been handed a DSN run the same code path as
+ * production with the tracker switched off. There is no second export and no
+ * conditional import: a build where observability is a different bundle is a
+ * build whose production behaviour nobody exercised.
+ *
+ * What it reports is trimmed to ids: no cookies, no bodies, no headers, and the
+ * user id alone. See src/ops/sentry.ts for why each of those is a decision.
+ */
+export default withSentry(sentryOptions, handler);

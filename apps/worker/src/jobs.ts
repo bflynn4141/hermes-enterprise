@@ -16,6 +16,8 @@ import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
 import { runReceiptJob } from './runs/receipt.js';
 import { runBackupUploads } from './storage/backup.js';
+import { runCapWarningJob } from './ops/cap-warning.js';
+import { runEventsExport } from './ops/events-export.js';
 
 export interface Job {
   readonly id: string;
@@ -44,6 +46,9 @@ export const JOB_KINDS = [
   'receipt',
   'render',
   'reverify',
+  // M5a: the 80 percent cap warning, and the weekly audit-events export.
+  'cap_warning',
+  'events_export',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -383,6 +388,16 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       // commit, and the Cron retries this row until the queue accepted it.
       await runRender(env, job);
       return;
+    case 'cap_warning':
+      // Spend crossed 80 percent of the workspace's daily token cap. Re-reads
+      // the caps rather than trusting the payload: a cap raised in the minute
+      // since it was queued means the right answer is to do nothing.
+      await runCapWarningJob(env, job);
+      return;
+    case 'events_export':
+      // The weekly CSV of one workspace's audit trail into the backup bucket.
+      await runEventsExport(env, job);
+      return;
     case 'reverify':
       // Registered, inert, and honest about it: the work lands with the keys
       // module.
@@ -433,7 +448,10 @@ export async function runJobsAfterCommit(env: Env, workspaceId: string, jobIds: 
  * no connection in this system can read two workspaces' `jobs` rows (see
  * migration 0008). It holds ids and a due time and nothing else.
  */
-export async function drainJobs(env: Env, limit = 50): Promise<{ claimed: number; done: number }> {
+export async function drainJobs(
+  env: Env,
+  limit = 50,
+): Promise<{ claimed: number; done: number; failed: number }> {
   const client = await connect(env, 'app');
   let due: { job_id: string; workspace_id: string }[];
   try {
@@ -447,10 +465,16 @@ export async function drainJobs(env: Env, limit = 50): Promise<{ claimed: number
   }
 
   let done = 0;
+  let failed = 0;
+  // `failed` counts the rows this pass claimed and could not finish. It is
+  // reported rather than inferred from `claimed - done`, because a row that was
+  // already claimed by another drainer is neither: a test that drains to a
+  // quiet state needs to tell "nothing left" from "nothing I could do".
   for (const row of due) {
     if (await claimRunFinish(env, row.workspace_id, row.job_id)) done += 1;
+    else failed += 1;
   }
-  return { claimed: due.length, done };
+  return { claimed: due.length, done, failed };
 }
 
 // ---------------------------------------------------------------------------

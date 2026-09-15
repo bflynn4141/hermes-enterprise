@@ -17,6 +17,7 @@
     "db:down": "docker compose down -v",
     "db:migrate": "pnpm --filter @hermes/worker db:migrate",
     "db:test": "pnpm --filter @hermes/worker db:test",
+    "restore:check": "pnpm --filter @hermes/worker exec node scripts/restore-check.mjs",
     "e2e:live": "pnpm --filter @hermes/client e2e:live",
     "lint:secrets": "gitleaks detect --no-git --redact"
   },

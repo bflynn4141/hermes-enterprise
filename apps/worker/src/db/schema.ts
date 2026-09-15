@@ -107,6 +107,12 @@ export const workspaces = pgTable('workspaces', {
   slug: text('slug').notNull(),
   jurisdiction: text('jurisdiction').notNull().default('default'),
   deletionScheduledAt: ts('deletion_scheduled_at'),
+  // M5a. `DELETE /w/:ws` revokes access now and schedules the destruction for
+  // seven days later, so the three columns separate "who asked, and when" from
+  // "when it happens" from "which Workflow instance is holding the sleep".
+  deletionRequestedAt: ts('deletion_requested_at'),
+  deletionRequestedBy: uuid('deletion_requested_by'),
+  deletionInstanceId: text('deletion_instance_id'),
   createdBy: uuid('created_by'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
@@ -699,6 +705,67 @@ export const workspaceDirectory = pgTable('workspace_directory', {
   createdAt: now('created_at'),
 });
 
+/**
+ * Counts only: the platform-wide instance cap's hourly bucket, and any future
+ * platform counter. Outside row-level security, like the other platform tables
+ * and for the same reason (0012).
+ */
+export const platformCounters = pgTable(
+  'platform_counters',
+  {
+    bucket: text('bucket').notNull(),
+    windowStart: ts('window_start').notNull(),
+    count: integer('count').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.bucket, t.windowStart] })],
+);
+
+/** One row per nightly validation. Counts and ids only; see 0012. */
+export const validatorRuns = pgTable('validator_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  startedAt: now('started_at'),
+  finishedAt: ts('finished_at'),
+  workspaces: integer('workspaces').notNull().default(0),
+  runsChecked: integer('runs_checked').notNull().default(0),
+  violations: integer('violations').notNull().default(0),
+  decisionsChecked: integer('decisions_checked').notNull().default(0),
+  forgedDecisions: integer('forged_decisions').notNull().default(0),
+  ok: boolean('ok').notNull().default(true),
+  detail: jsonb('detail').notNull().default({}),
+});
+
+/**
+ * Ids, a role and a display name: which workspaces is this person in? Asked by
+ * `GET /auth/session` before any tenant key exists, and maintained by a trigger
+ * on `members` so no route can forget it. Outside row-level security, like the
+ * other platform tables (0013).
+ */
+export const memberDirectory = pgTable(
+  'member_directory',
+  {
+    userId: uuid('user_id').notNull(),
+    workspaceId: uuid('workspace_id').notNull(),
+    role: text('role').notNull(),
+    workspaceName: text('workspace_name').notNull().default(''),
+    joinedAt: now('joined_at'),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.workspaceId] })],
+);
+
+/**
+ * Which workspace is this invitation token for? Asked by
+ * `POST /invitations/:token/accept`, which cannot know its tenant until it has
+ * the answer. One row per token an invitation is reachable by; maintained by a
+ * trigger on `invitations`, and a row disappears the moment the invitation
+ * stops being `pending` (0013).
+ */
+export const invitationDirectory = pgTable('invitation_directory', {
+  token: text('token').primaryKey(),
+  invitationId: uuid('invitation_id').notNull(),
+  workspaceId: uuid('workspace_id').notNull(),
+  createdAt: now('created_at'),
+});
+
 /** Ids only: which workspaces have a job due? See 0008. */
 export const jobReady = pgTable('job_ready', {
   jobId: uuid('job_id').primaryKey(),
@@ -751,5 +818,9 @@ export const ALL_TABLES = {
   workspace_provider_keys: workspaceProviderKeys,
   session_drafts: sessionDrafts,
   workspace_directory: workspaceDirectory,
+  member_directory: memberDirectory,
+  invitation_directory: invitationDirectory,
   job_ready: jobReady,
+  platform_counters: platformCounters,
+  validator_runs: validatorRuns,
 } as const;

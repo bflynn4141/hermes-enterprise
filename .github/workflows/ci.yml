@@ -91,6 +91,30 @@ jobs:
         env:
           GITLEAKS_CONFIG: .gitleaks.toml
 
+  actions:
+    name: workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # A workflow file is code that only ever runs in production. actionlint
+      # catches the shell mistakes (`set -e` missing, an unquoted expansion) and
+      # the schema mistakes (a job referring to a `needs` that does not exist)
+      # that would otherwise be discovered by a failed deploy. It is installed
+      # rather than pinned to an action so the version is visible here.
+      #
+      # A unit test (`test/unit/workflows.test.ts`) asserts the same files parse
+      # and carry the properties this repository requires — a concurrency group
+      # on every deploy, an environment on the production one, no secret in a
+      # `run:` interpolation — because actionlint knows YAML and not us.
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
+      - name: Lint the workflows
+        run: ./actionlint -color
+
   wrangler:
     name: wrangler dry run
     runs-on: ubuntu-latest

@@ -1,0 +1,106 @@
+name: Deploy staging
+
+# On main, after CI. Staging is deployed automatically because a staging
+# environment nobody deploys to is a staging environment that does not test
+# anything; production needs a human (see deploy-production.yml).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The pipeline is part of the BYOK trust boundary: whoever can deploy can ship
+# code that decrypts every tenant's provider key. So this workflow gets the
+# minimum, the API token is scoped to this Worker, and the job runs in a named
+# GitHub Environment whose secrets are not readable from a pull request.
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancelled halfway: a cancelled `wrangler
+# deploy` can leave the Worker and the migrations disagreeing about the schema,
+# which is the one state expand/contract cannot save us from.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: migrate, build, deploy, smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The three checks that are cheap here and expensive in production. They
+      # duplicate CI on purpose: a deploy triggered by workflow_dispatch on a
+      # branch CI did not run has to prove the same things.
+      - name: Exports parity, migration filenames, secret hygiene
+        run: pnpm --filter @hermes/worker test:unit
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      # Migrations run as `owner` against the target Neon branch, from here
+      # rather than from the Worker: the Worker's two roles are deliberately
+      # unable to change the schema, and the connection string that can is a
+      # secret only this job holds.
+      #
+      # Expand/contract means this is safe to run before the deploy: the new
+      # schema is compatible with the code currently running, so the window
+      # between the two is not a broken window. It is also why a code rollback
+      # never needs a reverse migration.
+      - name: Apply migrations
+        run: pnpm --filter @hermes/worker exec node scripts/migrate.mjs
+        env:
+          DATABASE_URL_OWNER: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+
+      - name: Build the client
+        run: pnpm --filter @hermes/client build
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          packageManager: pnpm
+          workingDirectory: apps/worker
+          command: deploy --env staging
+
+      # The smoke test is `/health`, because `/health` is the route that knows
+      # which dependency is broken. A 200 means both Hyperdrive configs
+      # answered as the right role, a Durable Object round-tripped, the
+      # connection count is readable and (in workos mode) the JWKS is
+      # reachable; a 503 body names the one that is not.
+      - name: Smoke test /health
+        env:
+          URL: ${{ vars.STAGING_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' "$URL/health" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "health ok"
+              cat /tmp/health.json
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            cat /tmp/health.json || true
+            sleep 10
+          done
+          echo "staging did not become healthy"
+          exit 1

@@ -179,6 +179,11 @@ export class FakeWorkOS implements WorkOSPort {
     return Promise.resolve({ id: `org_${crypto.randomUUID().slice(0, 8)}` });
   }
 
+  deleteOrganization(organizationId: string): Promise<void> {
+    this.calls.push({ method: 'deleteOrganization', argument: organizationId });
+    return Promise.resolve();
+  }
+
   listOrganizationMemberships(options: {
     userId?: string;
     organizationId?: string;

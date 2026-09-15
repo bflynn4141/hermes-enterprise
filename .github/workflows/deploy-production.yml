@@ -1,0 +1,145 @@
+name: Deploy production
+
+# Manual only, and gated on a GitHub Environment with a required reviewer.
+#
+# Plan section 5: "The deploy pipeline is part of the BYOK trust boundary.
+# Whoever can deploy can ship code that decrypts every tenant's key, so the
+# `CLOUDFLARE_API_TOKEN` in GitHub is scoped to this Worker, production needs an
+# environment reviewer, the account has MFA and minimum roles, and packages are
+# pinned."
+#
+# The reviewer is the point. Everything else in this file is the same as
+# staging; what makes production different is that a second person looked at the
+# commit before the token that can decrypt every tenant's key was handed to it.
+#
+# **`environment: production` must have a required reviewer configured in the
+# repository settings.** This file cannot enforce that — it is a repository
+# setting — so the first deploy checklist in docs/RUNBOOK.md lists it, and the
+# preflight job below refuses to run against an environment whose URL variable
+# was never set, which is the closest a workflow can get to noticing.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type the word deploy to confirm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the confirmation word
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "deploy" ]; then
+            echo "type 'deploy' to confirm a production deploy"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The whole unit project: exports parity between staging and production,
+      # the migration filename test, the "wrangler.jsonc carries no secret"
+      # test, and the Workflow instance-id rule. None of them needs a database,
+      # so there is no excuse for skipping them on the path that matters most.
+      - name: Exports parity, migration filenames, secret hygiene
+        run: pnpm --filter @hermes/worker test:unit
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: Dry run against the production environment
+        run: pnpm --filter @hermes/worker exec wrangler deploy --dry-run --env production
+
+  deploy:
+    name: migrate, build, deploy, smoke
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # The approval gate. A reviewer approves this job before any secret in the
+    # production environment is readable by it.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Expand/contract: the new schema is compatible with the code currently
+      # running, so migrating before deploying is safe and a code rollback never
+      # needs a reverse migration. A destructive change is a later migration,
+      # after readers have moved.
+      - name: Apply migrations
+        run: pnpm --filter @hermes/worker exec node scripts/migrate.mjs
+        env:
+          DATABASE_URL_OWNER: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+
+      - name: Build the client
+        run: pnpm --filter @hermes/client build
+
+      # No gradual deployment: `exports` does not support it, and a Workflow or
+      # hub class changing under a split fleet is the failure mode the runbook's
+      # ENGINE_VERSION procedure exists to avoid having to debug.
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          packageManager: pnpm
+          workingDirectory: apps/worker
+          command: deploy --env production
+
+      - name: Smoke test /health
+        env:
+          URL: ${{ vars.PRODUCTION_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' "$URL/health" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "health ok"
+              cat /tmp/health.json
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            cat /tmp/health.json || true
+            sleep 10
+          done
+          echo "production did not become healthy; see docs/RUNBOOK.md, Rollback"
+          exit 1

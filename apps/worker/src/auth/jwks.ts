@@ -77,6 +77,21 @@ async function loadKeys(url: string): Promise<Map<string, CryptoKey>> {
   return keys;
 }
 
+/**
+ * Can we still verify a WorkOS token? Read by `/health` in `AUTH_MODE=workos`.
+ *
+ * It goes through the same cache and the same test seam as verification does,
+ * so a healthy answer means the path a real request takes is healthy — not that
+ * a second, differently-configured fetch succeeded. It costs a subrequest at
+ * most once per ten-minute cache window however often health is polled.
+ */
+export async function jwksKeyCount(env: Env): Promise<number> {
+  const url = jwksUrl(env);
+  const fresh = cache && cache.url === url && Date.now() - cache.fetchedAt < JWKS_TTL_MS;
+  if (!fresh) cache = { url, fetchedAt: Date.now(), keys: await loadKeys(url) };
+  return cache?.keys.size ?? 0;
+}
+
 async function keyFor(url: string, kid: string): Promise<CryptoKey | null> {
   const fresh = cache && cache.url === url && Date.now() - cache.fetchedAt < JWKS_TTL_MS;
   if (!fresh) {

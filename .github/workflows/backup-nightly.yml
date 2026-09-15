@@ -1,0 +1,148 @@
+name: Nightly backup
+
+# The nightly `pg_dump` to R2 (plan section 5, Backups and restore).
+#
+# Why GitHub Actions rather than a Cron in the Worker: `pg_dump` is a binary,
+# the dump is hundreds of megabytes, and a Worker has 30 seconds of CPU and no
+# filesystem. The trade is that the backup depends on GitHub being up — which is
+# why the job is loud when it fails and why Neon's own 7-day history window sits
+# behind it as the thing that does not depend on us at all.
+#
+# ## Secrets, and what each one is for
+#
+# | Secret | Scope | Used by |
+# |---|---|---|
+# | `BACKUP_DATABASE_URL` | a read-only Neon role on the production branch | `pg_dump` |
+# | `BACKUP_R2_ACCOUNT_ID` | the Cloudflare account | the S3 endpoint |
+# | `BACKUP_R2_ACCESS_KEY_ID` | write-only on the backups bucket | `aws s3 cp` |
+# | `BACKUP_R2_SECRET_ACCESS_KEY` | the same token's secret | `aws s3 cp` |
+#
+# and one variable, `BACKUP_R2_BUCKET`, which is the bucket name.
+#
+# The R2 token is **write-only on the backups bucket**, deliberately. A backup
+# credential that can read is a credential that exfiltrates every backup; a
+# backup credential that can delete is a credential that makes ransomware
+# trivial. Expiry is the bucket's 30-day lifecycle rule, which nothing in this
+# workflow can shorten.
+#
+# The database role is **read-only**. A dump needs SELECT and nothing else, and
+# a nightly job holding a writable production credential is a nightly job that
+# can destroy production on a bad day.
+
+on:
+  # The dry-run job below runs on a pull request that touches this file, with
+  # no secrets, so the commands are proven before 02:40 rather than at it.
+  pull_request:
+    paths:
+      - '.github/workflows/backup-nightly.yml'
+      - 'scripts/restore-drill.md'
+  schedule:
+    # 02:40 UTC: before the 03:17 validator, after the day's traffic, and not on
+    # the hour, where every scheduled job on the platform piles up.
+    - cron: '40 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-nightly
+  cancel-in-progress: false
+
+jobs:
+  # Runs on every pull request touching this file, with no secrets, and proves
+  # the thing that is otherwise only discovered at 02:40: that the commands
+  # parse, the tools exist and the key layout is what the restore drill expects.
+  dry-run:
+    name: dry run (no secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools are present
+        run: |
+          set -euo pipefail
+          pg_dump --version
+          aws --version
+
+      - name: The object key matches the restore drill
+        env:
+          BACKUP_R2_BUCKET: hermes-backups-dry-run
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y/%m/%d/%H%M)
+          KEY="pg/hermes-${STAMP}.dump"
+          echo "would write s3://${BACKUP_R2_BUCKET}/${KEY}"
+          # scripts/restore-drill.md documents this exact prefix. A change here
+          # that is not a change there is a restore nobody can find the file for.
+          grep -q 'pg/hermes-' scripts/restore-drill.md
+
+  dump:
+    name: pg_dump to R2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    # Never on a pull request, and never on a fork: the secrets below are the
+    # ones that read production.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dump
+        env:
+          PGSSLMODE: require
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y/%m/%d/%H%M)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          # Custom format (-Fc): compressed, and `pg_restore` can read one table
+          # out of it, which is what the post-restore reconciliation queries
+          # need. A plain SQL dump would mean restoring everything to read one
+          # row. `--no-owner` so a restore into a throwaway database does not
+          # need the three production roles to exist first.
+          pg_dump --format=custom --no-owner --compress=9 \
+            --file="hermes-${STAMP//\//-}.dump" "$DATABASE_URL"
+          ls -l hermes-*.dump
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ACCOUNT_ID: ${{ secrets.BACKUP_R2_ACCOUNT_ID }}
+          BUCKET: ${{ vars.BACKUP_R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          FILE=$(ls hermes-*.dump)
+          KEY="pg/hermes-${STAMP}.dump"
+          aws s3 cp "$FILE" "s3://${BUCKET}/${KEY}" \
+            --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --checksum-algorithm CRC32
+          echo "wrote s3://${BUCKET}/${KEY}"
+
+      # A backup nobody checks is a backup that does not exist. This does not
+      # restore it — the drill in scripts/restore-drill.md does that, quarterly
+      # and by a human — but it does prove the object arrived with a plausible
+      # size, which catches the common failure: a dump that succeeded against an
+      # empty database.
+      - name: Verify the object landed
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ACCOUNT_ID: ${{ secrets.BACKUP_R2_ACCOUNT_ID }}
+          BUCKET: ${{ vars.BACKUP_R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          KEY="pg/hermes-${STAMP}.dump"
+          SIZE=$(aws s3api head-object --bucket "$BUCKET" --key "$KEY" \
+            --endpoint-url "https://${ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --query ContentLength --output text)
+          echo "object size: $SIZE bytes"
+          if [ "$SIZE" -lt 4096 ]; then
+            echo "the dump is implausibly small; the database may be empty or the role may see nothing"
+            exit 1
+          fi

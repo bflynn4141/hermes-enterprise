@@ -24,7 +24,17 @@ describe('the Worker in workerd', () => {
       status: string;
       checks: { name: string; ok: boolean; detail: string }[];
     };
-    expect(body.checks.map((c) => c.name).sort()).toEqual(['hub:workspace', 'postgres:agent', 'postgres:app']);
+    // `postgres:connections` is the M5a addition: two Hyperdrive configs of
+    // about 100 connections each against a 209-connection origin is arithmetic
+    // that only works while neither is near its ceiling, and this is the number
+    // that says whether that is still true. `workos:jwks` appears only in
+    // AUTH_MODE=workos, which this environment is not.
+    expect(body.checks.map((c) => c.name).sort()).toEqual([
+      'hub:workspace',
+      'postgres:agent',
+      'postgres:app',
+      'postgres:connections',
+    ]);
     // The hub round trip must succeed even when Postgres is unreachable: it is
     // a different dependency, and /health exists to tell them apart.
     expect(body.checks.find((c) => c.name === 'hub:workspace')?.ok).toBe(true);

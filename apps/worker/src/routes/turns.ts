@@ -22,8 +22,10 @@ import { requireCsrf, requireOrigin } from '../auth.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
 import { publishEvents } from '../jobs.js';
 import { checkCaps } from '../model/usage.js';
+import { maybeQueueCapWarning } from '../ops/cap-warning.js';
+import { requireInstanceCapacity } from '../ops/instance-cap.js';
 import { loadModel } from '../model/catalog.js';
-import { runAttemptInstanceId } from '../runs/workflow.js';
+import { pickDevScript, runAttemptInstanceId } from '../runs/workflow.js';
 import { CONTEXT_ANSWERED_EVENT, DEFAULT_MAX_TURNS } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 
@@ -100,6 +102,7 @@ async function createInstance(
     attempt: number;
     engineVersion: number;
     traceId: string;
+    scriptedScript?: string;
   },
 ): Promise<{ created: boolean; instanceId: string }> {
   const instanceId = runAttemptInstanceId(params.runId, params.attempt);
@@ -122,6 +125,13 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
   const input = await jsonBody<{ client_turn_id?: string; text?: string }>(c);
+  // Development only, and gated twice: `MODEL_SCRIPTED=1` is itself refused
+  // outside `ENVIRONMENT=development`, so a deployed environment cannot be
+  // asked for a scripted failure by header. See decision F6.
+  const scriptedScript =
+    c.env.MODEL_SCRIPTED === '1'
+      ? pickDevScript(c.req.header('x-scripted-script'), input.text)
+      : undefined;
   const clientTurnId = (input.client_turn_id ?? '').trim();
   if (!clientTurnId || clientTurnId.length > 128) {
     // Required, not generated here: it is the client's idempotency key, and a
@@ -158,6 +168,16 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         429,
       );
     }
+    // Inside the tenant caps, and now the platform's: the most Workflow
+    // instances this deployment creates in an hour, across every tenant (plan
+    // section 5). Counted here rather than at `create()` because the count has
+    // to roll back with the transaction if this turn fails for another reason.
+    await requireInstanceCapacity(work.tx, c.env, work.workspaceId);
+    // Warn at 80 percent, once per workspace per tenant day. Queued in this
+    // transaction and delivered by the job runner, like every other post-commit
+    // effect; it costs no extra query when the workspace is nowhere near.
+    const warning = await maybeQueueCapWarning(work.tx, work.workspaceId, caps);
+    if (warning) work.jobs.push(warning);
 
     // No verified key for the session's model provider: refused at creation,
     // which is the only place where refusing is cheap. Mid-run it would mean a
@@ -277,7 +297,15 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
       status: 201 as const,
       run,
       duplicate: false,
-      create: { runId, workspaceId: work.workspaceId, sessionId, attempt: 1, engineVersion, traceId },
+      create: {
+        runId,
+        workspaceId: work.workspaceId,
+        sessionId,
+        attempt: 1,
+        engineVersion,
+        traceId,
+        ...(scriptedScript ? { scriptedScript } : {}),
+      },
     };
   });
 

@@ -21,11 +21,19 @@
   // The client bundle. `run_worker_first` on the API prefixes means a route
   // collision never serves index.html to a fetch(), and `single-page-application`
   // means a deep link like /w/:id/inbox still boots the app.
+  //
+  // Every prefix the Worker owns has to be in this list, including the two that
+  // are not under a prefix at all: `POST /workspaces` and
+  // `POST /invitations/:token/accept` were answered by the assets binding with
+  // 405 before they were added, so the create-workspace and accept-invitation
+  // routes were unreachable rather than broken. `/shared/*` is here so a share
+  // link reaches the Worker's own catch-all, which answers a navigation with
+  // the app and a fetch with JSON. See decision F1.
   "assets": {
     "directory": "../client/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+    "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
   },
 
   "vars": {
@@ -39,6 +47,9 @@
     // deployed environments never set it.
     "MODEL_SCRIPTED": "1",
     "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
+    // The platform cap on Workflow creations per hour, across every tenant.
+    // Empty means no cap, which is what local development wants.
+    "PLATFORM_MAX_INSTANCES_PER_HOUR": "",
     "R2_BUCKET": "hermes-uploads"
   },
 
@@ -71,13 +82,27 @@
     "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
   },
 
-  // One instance per run attempt, id `${run_id}-a${attempt}`.
+  // One instance per run attempt, id `${run_id}-a${attempt}`. The other three
+  // are the long waits (M5a): a workspace deletion sleeps seven days, a KEK
+  // rotation takes one step per workspace, and the nightly validator takes one
+  // step per 200 runs because a Cron handler caps at 15 minutes.
   "workflows": [
     {
       "name": "hermes-run-attempt",
       "binding": "RUN_ATTEMPT",
       "class_name": "RunAttempt"
-    }
+    },
+    { "name": "hermes-workspace-deletion", "binding": "WORKSPACE_DELETION", "class_name": "WorkspaceDeletion" },
+    { "name": "hermes-kek-rotation", "binding": "KEK_ROTATION", "class_name": "KekRotation" },
+    { "name": "hermes-nightly-validator", "binding": "NIGHTLY_VALIDATOR", "class_name": "NightlyValidator" }
+  ],
+
+  // The platform metrics dataset (plan section 5): run duration, tool error
+  // rate, provider p95, socket reconnects, Stop latency, subrequests per
+  // instance, daily spend. Bound in every environment so the code path is the
+  // same everywhere; `wrangler dev --local` simulates it.
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS", "dataset": "hermes_metrics" }
   ],
 
   // Both queues carry a dead-letter queue. Without one, a message that exhausts
@@ -135,7 +160,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",
@@ -144,6 +169,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://staging.hermes.example",
+        "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
@@ -166,7 +192,13 @@
         "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
       },
       "workflows": [
-        { "name": "hermes-run-attempt-staging", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" }
+        { "name": "hermes-run-attempt-staging", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" },
+        { "name": "hermes-workspace-deletion-staging", "binding": "WORKSPACE_DELETION", "class_name": "WorkspaceDeletion" },
+        { "name": "hermes-kek-rotation-staging", "binding": "KEK_ROTATION", "class_name": "KekRotation" },
+        { "name": "hermes-nightly-validator-staging", "binding": "NIGHTLY_VALIDATOR", "class_name": "NightlyValidator" }
+      ],
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "hermes_metrics_staging" }
       ],
       "queues": {
         "producers": [
@@ -207,7 +239,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*"]
+        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
       },
       "vars": {
         "ENVIRONMENT": "production",
@@ -216,6 +248,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://app.hermes.example",
+        "PLATFORM_MAX_INSTANCES_PER_HOUR": "2000",
         "R2_BUCKET": "hermes-uploads-production"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
@@ -235,7 +268,13 @@
         "WorkspaceHub": { "type": "durable-object", "storage": "sqlite" }
       },
       "workflows": [
-        { "name": "hermes-run-attempt-production", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" }
+        { "name": "hermes-run-attempt-production", "binding": "RUN_ATTEMPT", "class_name": "RunAttempt" },
+        { "name": "hermes-workspace-deletion-production", "binding": "WORKSPACE_DELETION", "class_name": "WorkspaceDeletion" },
+        { "name": "hermes-kek-rotation-production", "binding": "KEK_ROTATION", "class_name": "KekRotation" },
+        { "name": "hermes-nightly-validator-production", "binding": "NIGHTLY_VALIDATOR", "class_name": "NightlyValidator" }
+      ],
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "hermes_metrics_production" }
       ],
       "queues": {
         "producers": [

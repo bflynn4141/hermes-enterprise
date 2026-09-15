@@ -24,6 +24,13 @@ export interface Env {
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
+   * The platform instance cap: the most Workflow instances this deployment will
+   * create in an hour, across every tenant (plan section 5). Unset or
+   * unparseable means no cap, which is what local development wants; the value
+   * is a plain var rather than a secret because knowing it grants nothing.
+   */
+  PLATFORM_MAX_INSTANCES_PER_HOUR?: string;
+  /**
    * '1' makes the run engine answer from `ScriptedProvider` instead of a real
    * provider, so `wrangler dev --local` can create a run with no key in the
    * store. Refused outside `ENVIRONMENT=development`.
@@ -92,6 +99,16 @@ export interface Env {
   // --- Workflows ------------------------------------------------------------
   /** One instance per run attempt, id `${run_id}-a${attempt}`. */
   RUN_ATTEMPT: Workflow;
+  /**
+   * The three long-wait Workflows (M5a). Optional because the Node test project
+   * builds an `Env` by hand and because a deployment mid-rollout may not have
+   * them yet; every caller guards, and `DELETE /w/:ws` logs rather than throws
+   * when the binding is absent, because its immediate half has already
+   * committed by then.
+   */
+  WORKSPACE_DELETION?: Workflow;
+  KEK_ROTATION?: Workflow;
+  NIGHTLY_VALIDATOR?: Workflow;
 
   // --- Queues ---------------------------------------------------------------
   EXTRACT_QUEUE: Queue;
@@ -107,6 +124,15 @@ export interface Env {
    * in wrangler.jsonc only where the bucket actually exists.
    */
   BACKUP_UPLOADS?: R2Bucket;
+
+  // --- Analytics Engine -----------------------------------------------------
+  /**
+   * The metrics dataset (plan section 5). Optional and guarded at every call:
+   * `wrangler dev --local` and the Node test project have no dataset, and a
+   * metric helper that threw there would be observability tooling causing the
+   * outage it exists to explain.
+   */
+  ANALYTICS?: AnalyticsEngineDataset;
 
   // --- Static assets (the client bundle, with SPA fallback) -----------------
   ASSETS: Fetcher;

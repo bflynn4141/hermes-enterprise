@@ -81,6 +81,13 @@ export interface WorkOSPort {
   refresh(sealed: string): Promise<{ sealedSession: string; accessToken: string }>;
   logoutUrl(sealed: string, returnTo?: string): Promise<string>;
   createOrganization(name: string): Promise<{ id: string }>;
+  /**
+   * Delete the organization. Called only by `WorkspaceDeletion`, after its
+   * seven-day sleep: WorkOS is the store of record for who could sign in, so it
+   * goes first, and it is the one side we cannot retry against once our own
+   * rows are gone.
+   */
+  deleteOrganization(organizationId: string): Promise<void>;
   listOrganizationMemberships(options: {
     userId?: string;
     organizationId?: string;
@@ -238,6 +245,10 @@ class SdkWorkOS implements WorkOSPort {
   async createOrganization(name: string): Promise<{ id: string }> {
     const organization = await this.workos.organizations.createOrganization({ name });
     return { id: organization.id };
+  }
+
+  async deleteOrganization(organizationId: string): Promise<void> {
+    await this.workos.organizations.deleteOrganization(organizationId);
   }
 
   async listOrganizationMemberships(options: {

@@ -155,6 +155,16 @@ export const EVENT_KINDS = [
   'workspace.deletion_scheduled',
   'subject.redacted',
   'run.errored',
+  // M5a. The database's CHECK constraint (migration 0012) carries the same
+  // list, and a db test asserts the two agree: an audit kind a route can write
+  // and the contract does not know about is a row the History screen cannot
+  // render.
+  'usage.cap_warning',
+  'workspace.deletion_cancelled',
+  'workspace.deleted',
+  'provider_key.attested',
+  'provider_key.rewrapped',
+  'validator.failed',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
