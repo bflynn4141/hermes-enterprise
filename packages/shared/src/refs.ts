@@ -13,7 +13,8 @@ export type RefSection = (typeof REF_SECTIONS)[number];
 /** A view selection, not a database mutation or an arbitrary route. */
 export const inboxFiltersSchema = z.object({
   status: z.enum(['pending', 'resolved']).optional(),
-  kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement']).optional(),
+  kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement', 'approval']).optional(),
+  reviewer: z.enum(['for_me', 'waiting', 'all']).optional(),
   query: z.string().max(200).optional(),
 }).strict();
 export type InboxFilters = z.infer<typeof inboxFiltersSchema>;
@@ -64,7 +65,7 @@ export function viewFocusRef(target: z.infer<typeof viewFocusSchema>): Ref {
     case 'context': return CTX;
     case 'skills': return SKILLS_VIEW;
     case 'traces': return TRACES;
-    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', query: '', ...target.filters } };
+    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', query: '', ...target.filters } };
     case 'inbox_rules': return { section: 'inbox', view: 'rules' };
     case 'members': return MEMBERS;
     case 'history': return HISTORY();
@@ -90,5 +91,6 @@ export const sameRef = (a: Ref | null | undefined, b: Ref | null | undefined): b
   return REF_KEYS.every((key) => (a[key] ?? '') === (b[key] ?? ''))
     && (a.filters?.status ?? 'pending') === (b.filters?.status ?? 'pending')
     && (a.filters?.kind ?? 'all') === (b.filters?.kind ?? 'all')
+    && (a.filters?.reviewer ?? 'for_me') === (b.filters?.reviewer ?? 'for_me')
     && (a.filters?.query ?? '') === (b.filters?.query ?? '');
 };

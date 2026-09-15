@@ -4,6 +4,7 @@ export * from './enums.js';
 export * from './refs.js';
 export * from './commands.js';
 export * from './documents.js';
+export * from './approvals.js';
 export * from './events.js';
 export * from './run-log.js';
 export * from './mock-stream.js';

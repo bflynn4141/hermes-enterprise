@@ -142,6 +142,12 @@ export async function recordDecision(
     );
   }
 
+  // General approvals have their own revision-bound, multi-reviewer voting
+  // transaction. Never let the legacy single-admin route bypass that policy.
+  if (request.kind === 'approval') {
+    throw new RouteError('approval requests use the approval decision route', 'approval_route_required', 409);
+  }
+
   const resulting = RESULTING_STATUS[request.kind][decision];
 
   const inserted = await work.tx.query<{ id: string }>(

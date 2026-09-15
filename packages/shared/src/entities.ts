@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
 import { refSchema } from './refs.js';
+import { approvalListProjectionSchema } from './approvals.js';
 import { maskedProviderKeySchema, type MaskedProviderKey } from './provider-keys.js';
 import {
   decisionSchema,
@@ -178,6 +179,7 @@ export const requestEntitySchema = z
     decision_id: uuidSchema.nullable().optional(),
     decided_at: z.iso.datetime({ offset: true }).nullable().optional(),
     decided_by_name: z.string().max(120).nullable().optional(),
+    approval: approvalListProjectionSchema.nullable().optional(),
   })
   .strict();
 export type RequestEntity = z.infer<typeof requestEntitySchema>;

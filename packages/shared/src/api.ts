@@ -66,6 +66,8 @@ export const bootstrapSchema = z
         pending_grants: z.number().int().min(0),
         created_documents: z.number().int().min(0),
         decisions: z.number().int().min(0),
+        pending_for_me: z.number().int().min(0).optional(),
+        pending_for_others: z.number().int().min(0).optional(),
       })
       .strict(),
     sessions: z.array(
