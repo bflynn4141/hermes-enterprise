@@ -39,6 +39,25 @@ import { withWorkspaceTransaction } from '../jobs.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 
+/**
+ * Only same-origin paths may be used as a post-login destination. Anything
+ * else (absolute URLs, protocol-relative `//host`, backslash tricks, `javascript:`)
+ * collapses to `/`, so the login and callback routes cannot be used as an open
+ * redirect (`/auth/login?return_to=https://evil.example`).
+ */
+export function safeReturnPath(raw: string | undefined | null): string {
+  if (!raw) return '/';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/';
+  if (/[\u0000-\u001f]/.test(raw)) return '/';
+  try {
+    const url = new URL(raw, 'https://placeholder.invalid');
+    if (url.origin !== 'https://placeholder.invalid') return '/';
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return '/';
+  }
+}
+
 const redirectUri = (c: Context<{ Bindings: Env }>): string =>
   c.env.WORKOS_REDIRECT_URI ?? `${new URL(c.req.url).origin}/auth/callback`;
 
@@ -46,7 +65,7 @@ const redirectUri = (c: Context<{ Bindings: Env }>): string =>
 export function login(c: Context<{ Bindings: Env }>): Response {
   const port = workosPort(c.env);
   const stepUp = c.req.query('step_up') === '1';
-  const returnTo = c.req.query('return_to') ?? '/';
+  const returnTo = safeReturnPath(c.req.query('return_to'));
   const url = port.authorizationUrl({
     redirectUri: redirectUri(c),
     state: returnTo,
@@ -143,7 +162,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
   }
 
   const csrf = newCsrfToken();
-  const headers = new Headers({ Location: c.req.query('state') || '/' });
+  const headers = new Headers({ Location: safeReturnPath(c.req.query('state')) });
   headers.append('Set-Cookie', sessionCookie(c.env, authentication.sealedSession));
   headers.append('Set-Cookie', csrfCookie(c.env, csrf));
   return new Response(null, { status: 302, headers });
