@@ -33,7 +33,10 @@ const sql = `UPDATE auth_sessions SET authenticated_at = now() WHERE sid LIKE 'd
 
 const out = execFileSync(
   'docker',
-  ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'hermes', '-c', sql],
+  // The *dev* database by default: this is the hand-run tool for the stack on
+  // :8787, and the test stack re-stamps through the live fixture instead
+  // (decision C43). `PGDATABASE` aims it elsewhere when that is wanted.
+  ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', process.env.PGDATABASE ?? 'hermes', '-c', sql],
   { encoding: 'utf8', cwd: new URL('../../..', import.meta.url).pathname },
 );
 process.stdout.write(`step-up refreshed: ${out.trim()}\n`);

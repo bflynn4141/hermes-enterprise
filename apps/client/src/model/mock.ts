@@ -82,6 +82,18 @@ interface MockOptions {
   data?: 'seeded' | 'empty';
   /** No verified provider key: the composer greys and the banner shows. */
   providerKey?: 'verified' | 'none' | 'invalid';
+  /**
+   * `markdown` swaps the seeded reply for one that uses the whole safe subset
+   * (decision C39): headings, bold, a list, a table, inline and fenced code, a
+   * blockquote, a link and an `<img onerror>` that must render as text.
+   *
+   * It exists because the *scripted* provider writes one fixed sentence, so
+   * there is no way to see the renderer in the product without either a real
+   * provider call or this. It is a fixture, named as one, and it is also the
+   * fastest way to look at the thing by hand: `MOCK=1 pnpm --filter client dev`
+   * then `/?reply=markdown`.
+   */
+  reply?: 'seeded' | 'markdown';
 }
 
 interface MockRequest {
@@ -136,6 +148,38 @@ export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
   const empty = options.data === 'empty';
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
+  const replyText =
+    options.reply === 'markdown'
+      ? [
+          '### What is waiting on you',
+          '',
+          'Two applications, one invoice and an agreement. **Leah** and **Owen** both',
+          'attached integration examples; the invoice is missing a `delivery_date`.',
+          '',
+          '| Request | Kind | Waiting on |',
+          '| --- | --- | --- |',
+          '| Leah Martinez | application | your decision |',
+          '| Owen Reilly | application | your decision |',
+          '| INV-2026-014 | invoice | a delivery date |',
+          '',
+          'What I did, in order:',
+          '',
+          '1. Read the partner criteria',
+          '2. Checked each application against it',
+          '3. Wrote a review note for each, *unsent*',
+          '',
+          '> Admission and access still need a person. I have proposed, not decided.',
+          '',
+          'The criterion I matched on:',
+          '',
+          '```json',
+          '{ "criterion": "integration_example", "required": true }',
+          '```',
+          '',
+          'Source: [the partner criteria](https://example.com/partner-criteria) — and a',
+          'page that tried to be markup: <img src=x onerror="alert(1)">',
+        ].join('\n')
+      : 'Four requests are ready: Leah and Owen’s applications, Robin’s invoice, and the next workshop agreement. Noor’s feedback reply also needs a destination.';
 
   const requests: MockRequest[] = empty
     ? []
@@ -266,7 +310,7 @@ export function createMockBackend(options: MockOptions = {}) {
             role: 'iris',
             kind: null,
             heading: 'Four requests are ready',
-            text: 'Four requests are ready: Leah and Owen’s applications, Robin’s invoice, and the next workshop agreement. Noor’s feedback reply also needs a destination.',
+            text: replyText,
             blocks: [
               { type: 'card', title: 'Leah Martinez', subtitle: '82 / 100 · Awaiting your review', action: { label: 'Open request', command: { type: 'open_request', id: REQ_LEAH } } },
               { type: 'card', title: 'Unblock Noor’s reply', subtitle: 'Add the destination; I’ll prepare the draft. Not an approval.', action: { label: 'Open context', command: { type: 'nav', object: { section: 'agents', view: 'context', field: 'destination' } } } },

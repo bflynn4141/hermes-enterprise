@@ -3724,3 +3724,510 @@ written on every resize and read by nobody.
 
 **Would change it if.** The library grows a controlled `collapsed` prop, at
 which point the breakpoint can come back and mean something.
+
+---
+
+## C37. The end-to-end suite runs on a file it owns, because `.dev.vars` beats the environment
+
+**Context.** `apps/client/scripts/e2e-live.mjs` started `wrangler dev` with
+`env: { AUTH_MODE: 'fake', MODEL_SCRIPTED: '1', OPENROUTER_FIXTURE: '1' }` on
+the spawn, and both the README and `live.spec.ts`'s own header said the live
+suite ran scripted. It did not. Wrangler does not take bindings from the process
+environment: `getVarsForDev` reads `.dev.vars` and overwrites the config's vars
+with what it finds. So on a machine whose `.dev.vars` said
+
+```
+MODEL_SCRIPTED="0"
+OPENROUTER_FIXTURE="0"
+```
+
+— which is the *documented* way to run the product against a real OpenRouter
+key locally — `pnpm e2e:live` sent fifty scenarios' worth of turns to a real
+provider on somebody's real key, and said "MODEL_SCRIPTED=1" in three comments
+while it did it. The same file is read by `@cloudflare/vitest-pool-workers`, so
+`pnpm --filter @hermes/worker test` had the same hole.
+
+**Decision.** The suite runs on variables it generates and checks.
+
+1. `e2e-live.mjs` writes `apps/worker/.dev.vars.test` from `.dev.vars` with
+   `AUTH_MODE=fake`, `MODEL_SCRIPTED=1` and `OPENROUTER_FIXTURE=1` forced, reads
+   it back, and refuses to start if any of the three is not what it wrote.
+2. `wrangler dev` is given `--env-file .dev.vars.test`. That flag rather than
+   `--var`, and the reason is in wrangler's own code: `.dev.vars` is loaded only
+   `if (!envFiles?.length)`, so naming an env file excludes it outright, where a
+   `--var` is merged *underneath* the secrets `.dev.vars` loads and would lose
+   the same race again.
+3. The worker vitest project sets the same three as miniflare `bindings`, which
+   are applied after the pool has read `.dev.vars`.
+4. The file is generated, never committed: it carries the local Postgres strings
+   and the local KEK, and a committed copy would be a key in the repository and
+   a second place to keep in sync. `.gitignore` gained `.dev.vars.*`.
+
+**And then it is proved rather than asserted.** Two guards, because the file
+only proves what was *asked* for:
+
+* a Worker already answering on the port is no longer reused. It used to be, so
+  that a suite could be re-run against a stack you were watching in a browser —
+  but that stack is `pnpm --filter @hermes/worker dev`, which reads `.dev.vars`,
+  which is the file this script no longer trusts. `E2E_REUSE_WORKER=1` is the
+  way back, and it names what it is opting into.
+* before Playwright starts, the launcher sends **one turn** through the real
+  HTTP routes and waits for the scripted provider's own sentence to come back.
+  A Worker on a real provider either has no verified key for the seeded
+  workspace and fails the turn, or answers something else; either way the suite
+  stops after one turn instead of after fifty.
+
+The port comes from `E2E_BASE_URL` rather than a constant, and the base URL is
+added to `ALLOWED_ORIGINS` in the generated file, so the suite can run beside a
+"real local mode" Worker on 8787 without touching it. That is how this change
+was verified: the suite on 8799, the real Worker left alone on 8787.
+
+**What it cost.** `pnpm e2e:live` is about ten seconds slower, all of it the
+probe. That is the price of the sentence "the suite did not call a provider"
+being a measurement rather than a claim.
+
+**Would change it if.** Wrangler grows a documented precedence for process
+environment over `.dev.vars`, at which point step 2 becomes unnecessary — step 1
+and the probe would stay.
+
+---
+
+## C38. The transcript's scroll model: three positions, and a spacer that makes two of them one
+
+**Context.** On send, the transcript did not move. The demo's rule — "a user
+message or `nearBottom` scrolls to `scrollHeight`" — is correct in a transcript
+that is already taller than its viewport and wrong in the one case that matters:
+the moment a question is asked. `el.scrollTop = el.scrollHeight` on a short
+transcript is a no-op, so the new question and the first lines of the reply were
+drawn wherever there happened to be room, which at an 800 px pane is under the
+subheader. Brian's screenshot is a reply whose first line is cut off by the
+breadcrumb.
+
+**Decision.** Three positions, and nothing else moves the viewport.
+
+| When | Where |
+|---|---|
+| a user message arrives | its top edge goes to the top of the transcript's content inset, and the reply streams into the space beneath it |
+| a delta, while the reader is at the bottom (96 px) | the bottom |
+| a delta, while the reader is not | nowhere. The **Jump to latest** chip appears, outside the scroll region |
+| `message.final`, a step row, a receipt, a queue row | nowhere, unless the reader is pinned |
+| a session switch | the remembered `scrollTop`, as the demo did |
+
+**The spacer is the whole mechanism.** A `div` after `.transcript`, sized on
+every layout to `clientHeight − (everything after the anchor's top)`. That makes
+"the question at the top" and "scrolled to the bottom" the *same* scrollTop
+while the reply is shorter than the viewport, so the two rules cannot fight: a
+pinned reader is already reading from the top of their own question. When the
+reply grows past the viewport the shortfall is zero, the spacer disappears, and
+a pinned reader follows the text down exactly as before. This is how ChatGPT
+does it — a bottom spacer / `min-height` on the last turn, sized so the maximum
+scroll lands with the prompt at the top; it is not vendor-documented, and it is
+cited here as reverse-engineered rather than published
+(<https://jhakim.com/blog/handling-scroll-behavior-for-ai-chat-apps>).
+
+Two details the arithmetic needed:
+
+* **twice per layout.** The first pass measures `scrollHeight` while React is
+  still committing the rest of the turn, so its answer is one layout behind and
+  the first *painted* frame is short by exactly the transcript's top padding.
+  The second pass measures the layout the first produced. It is a fixed point.
+* **the inset.** "The top of the viewport" means the top of the transcript's
+  own content inset, not the container's border edge. The first message of a
+  session cannot reach the border — the padding is above it — so anchoring later
+  ones flush would put the same message in two places depending on where it was
+  in the conversation, and the flush one reads as clipped by the subheader,
+  which is the defect. The scroll target is `anchorTop − paddingTop`.
+
+**What was borrowed, and from where.**
+
+* *pinned only while already pinned, cancelled by a scroll up.* The convention
+  every client in this class has converged on; the canonical implementation is
+  `use-stick-to-bottom`, which "allows the user to cancel the stickiness at any
+  time by scrolling up" and discusses ~70 px as the re-engage threshold
+  (<https://github.com/stackblitz-labs/use-stick-to-bottom>). Vercel's AI SDK
+  ships it as the default primitive: `<Conversation>` "automatically scrolls to
+  the bottom", with a `<ConversationScrollButton />` that "appears when not at
+  the bottom" (<https://elements.ai-sdk.dev/components/conversation>). The demo
+  already used 96 px and it is kept: it has to be larger than one line, or a
+  reader sitting at the bottom is un-pinned by the line that arrives under them.
+* *a scroll-to-bottom chip, outside the scroll region.* Cursor 3.0: "Added a
+  'scroll to bottom' button in the agent panel that appears when content
+  overflows" (<https://cursor.com/changelog/3-0>). Cursor's own forum is also
+  the argument *for* the send-anchor: users ask it to "anchor the viewport at
+  the top of that message so I can read downward as content streams in"
+  (<https://forum.cursor.com/t/top-anchored-reading-for-chat-responses-or-opt-out-of-auto-scroll-to-bottom/162811>).
+* *reduced motion.* Only one scroll in the file is animated — the chip, which is
+  a deliberate human action and the only place orientation is worth an
+  animation for. `scroll-behavior: auto` "scrolls instantly", and
+  `prefers-reduced-motion: reduce` is the signal to use it
+  (<https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-behavior>). Every
+  other move is an assignment to `scrollTop`, which is instant for everyone:
+  animating the follow of a stream would mean the animation is always behind
+  the text.
+
+**What was considered and not used.** CSS `overflow-anchor` is the native
+version of half of this, and MDN marks it *Limited availability* — "not Baseline
+because it does not work in some of the most widely-used browsers" — which is
+why `use-stick-to-bottom` reimplements it in JS
+(<https://developer.mozilla.org/en-US/docs/Web/CSS/overflow-anchor>).
+`scroll-snap-align: start` pins a turn to the top declaratively, but MDN's own
+warning rules it out here: "Never use `mandatory` if the content inside one of
+your child elements will overflow the parent container", which is every reply
+longer than the pane
+(<https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_scroll_snap/Basic_concepts>).
+
+**Claude.ai is described from observation, not cited.** Anthropic publishes no
+changelog or doc for claude.ai's send and stream scrolling; the only public
+artifacts are third-party (a userscript that exists to add a scroll-to-bottom
+control, and Claude Code issues about auto-scroll overriding a reader's
+position). It matches the convention above, and that is recorded here as an
+observation rather than dressed up as a source.
+
+**How it is tested.** `e2e/live-transcript.spec.ts`, from the browser's own
+rectangles rather than from class names, because every one of these defects was
+invisible in the DOM and obvious on screen. T1 records the anchor's offset on
+every animation frame in the page — a round trip to the test process is too slow
+to catch the first frame — and asserts it within 8 px of the inset. T2 samples
+the gap thirteen times across a run and asserts it never exceeds 1 px. T3
+scrolls to the top mid-run and asserts the position is unchanged 2.5 s later
+with the chip up. T4 compares boxes against the composer at its tallest. T6
+proves the second question anchors like the first.
+
+**Would change it if.** `overflow-anchor` reaches Baseline, at which point the
+`nearBottom` half could be the browser's job and the spacer would stay.
+
+---
+
+## C39. Chat replies may use light Markdown; tool arguments still may not
+
+**Context.** The plan's prompt-injection section says every model-authored
+string "renders as plain text in review panes: no markdown links, no HTML", and
+`packages/shared/plain-text.ts` enforces it at the *writer*. That rule was
+written about the strings a tool call puts in a row — a review note, an
+instruction body, a proposal's evidence — and it was applied to chat prose as
+well, in both directions: the transcript rendered `message.text` in a
+`white-space: pre-wrap` span, and the system prompt told the agent to write
+plain text. So a reply containing `**bold**` or a `- ` list arrived as literal
+asterisks and hyphens, and the model — correctly following its instructions —
+sometimes said things like "I won't output raw markdown syntax per my
+constraints", which is the product apologising for a rule it did not need.
+
+**Decision.** Split the rule along the line it was always about.
+
+* **Tool arguments: unchanged.** `plainText()` and `findMarkup()` still refuse
+  HTML, markdown links, autolinks and control characters in every string a tool
+  writes. Nothing in this decision touches that file or any screen that renders
+  its rows.
+* **Chat prose: a safe subset.** Paragraphs, `**bold**`, `*italics*`,
+  `` `inline code` ``, fenced code (through the library's `CodeBlock`), ordered
+  and unordered lists, headings folded to h3, blockquotes and simple pipe
+  tables.
+* **Never, in either: HTML, and links as anchors.**
+
+**The parser is the allowlist.** `src/app/chat/markdown-subset.ts` produces a
+small node union with no HTML node and no anchor node; `Markdown.tsx` renders
+only those nodes, with no `dangerouslySetInnerHTML` and no element chosen from
+data. Every string reaches the DOM as a React child, which escapes it. That is
+why a library was not used: every Markdown library worth having ships raw-HTML
+passthrough and an anchor renderer, both on by default, and turning them off is
+a configuration line somebody removes the day they want a `<br>` in a table.
+Here there is nothing to turn off.
+
+**Links render as text plus their destination.** A `link` node carries its label
+and its href, and the renderer draws the label followed by a non-interactive
+chip holding the bare URL. Selectable, copyable, not a click target. A
+`javascript:` or `data:` target does not even get the ordinary chip — it is
+marked refused and shown as the text it is. `![image](…)` becomes a link node
+too, so nothing remote is ever fetched: a remote image in a reply is a beacon as
+well as a link. The reasoning is the plan's own: "a destination hidden behind
+words the human trusts" is the trick, and a reply is not a safer place for it
+than a review note.
+
+**Streaming.** `parseMarkdown` is a pure function of the accumulated text and is
+called on every delta. Partial input is the normal case: an unterminated fence
+is a code block that is still open, an unterminated `**` is two literal stars, a
+table with only its header row is a table with no body. Nothing waits for a
+terminator, so nothing pops into place when one arrives. The tree is re-parsed
+rather than appended to, which is what stops a `**` being drawn as two stars and
+then removed two characters later. A reply with nothing to mark up keeps the
+plain span it always had (`hasMarkup`), so the common case keeps its exact
+typography and no parser has any say over it.
+
+**The prompt changed with it** (`apps/worker/src/engine/prompt.ts`, additive):
+tool arguments are plain text, the reply may use light Markdown, and neither may
+carry HTML or a markdown link. The paragraph about writing a URL out is kept
+because it is still the instruction that matters.
+
+**Tested** in `markdown-subset.test.ts`: `<script>`, `<img onerror>`,
+`javascript:` targets, HTML entities, nested emphasis, an image, a reply that is
+nothing but links, and a loop over every prefix of a structured reply asserting
+no word is ever lost mid-stream.
+
+**Would change it if.** A reply needs a second list level or a real anchor. The
+first is a shape to add; the second is a product decision, not a renderer one.
+
+---
+
+## C40. Activity renders above the answer
+
+**Context.** `RunSurface` rendered `LoadingState`, `ThinkingState` and
+`ToolChips`, then `StreamingText`, then `TaskRows` — and the finished message
+renders *above* the whole surface, because `RunSurface` sits after
+`session.messages`. So a completed turn read: the answer, then the steps that
+produced it. Codex, Cursor and Claude all put the trace above the reply.
+
+**Decision.** Within a turn: `LoadingState`, `ThinkingState`, `ToolChips` and
+`TaskRows`, then the streamed text. Reading downwards is reading in order — what
+the agent did, then what it said. The queue and the waiting and failed states
+are activity too: they say what the run is about to do or is stuck on, which is
+a thing to read before the answer rather than after it.
+
+When the run settles, `ThinkingState` is given stage 4 — its own collapsed
+state — with `done` set to "Done · N steps", expandable, which is the shape
+Claude's collapsed activity row has. Stage 4 is only claimed when the run is
+actually over: a completed stage on an unfinished step list would draw a check
+beside a step that failed. Worked time and the response actions stay in the
+footer, where they were.
+
+**Would change it if.** A turn ever produces activity *after* its text — a
+follow-up tool call on the same turn — at which point the order is per-segment
+rather than per-turn.
+
+---
+
+## C41. `StreamingText` is the third component not adopted
+
+**Context.** A turn whose reply was the word "testing" rendered "3 sources" and
+offered "Show the application evidence" and "Draft a follow-up for missing
+details". Nothing had gone wrong: `StreamingText`'s `sources` and `followUps`
+default to the gallery's fixtures, and `RunSurface` passed neither.
+
+The prop fix is one line. The component was dropped anyway, for three reasons
+that are the same shape as `PromptBar`'s and `AgentScreen`'s (C23, C27):
+
+1. **It re-animates text the server already sent.** `loop={false}` stops the
+   restart, but the component still reveals its `content` word by word on its
+   own timer. The words were already delivered by `message.delta`. Every
+   animated state in this client is driven by a server event; this one is driven
+   by `WORD_MS`.
+2. **It cannot render structure.** `content` is `{ text }[]`, joined with
+   spaces. A reply with a list or a table has nowhere to go (C39).
+3. **It owns an action row and a sources row** — copy, replay, helpful, "Add to
+   Collective", a sources disclosure — that duplicate `ResponseFooter` and claim
+   things this run did not do. "Replay response" re-runs the component's
+   animation, which is a replay of nothing.
+
+**Decision.** The stream renders through `IrisText`, the same component the
+finished message uses, plus a CSS caret. `message.final` swapping one for the
+other therefore changes nothing on screen, which is the property that was
+missing before: the stream and the message had two different renderers and the
+text visibly re-flowed when the run ended.
+
+**Would change it if.** The library exposes a controlled `StreamingText` with no
+built-in timer and no action row.
+
+---
+
+## C42. A fixture default is a lie with a plausible sentence in it
+
+**Context.** C41's bug is not specific to `StreamingText`. Fifteen of the
+twenty-one library components default a content prop to a gallery fixture, and
+the fixtures are not lorem ipsum — they are "Maya Chen", "Leah's application",
+"partner-review.ts", "Partner criteria v2". In a product whose entire claim is
+that what it shows happened, a placeholder that reads like a real row is the
+most dangerous kind there is.
+
+**Decision.** Every call site passes every fixture-bearing prop explicitly, with
+an empty array, an empty object or a real value. Three were found beyond
+`StreamingText`: `ToolChips` was drawing the gallery's `review-notes.md`,
+`screening.json` and `follow-ups.md` diff chips under every run's tool calls;
+`CodeBlock` in the trace detail carried the gallery's diff; `ThinkingState` its
+`additionalSources`.
+
+**Tested in two halves, because either alone is insufficient.**
+`src/app/library-defaults.test.ts` scans every `.ts`/`.tsx` file under `src/`
+for each component's opening tags and asserts each required prop is present —
+that is what catches a *new* call site, which a render test cannot, because it
+does not know the call site exists. Then it renders each component to static
+markup with an empty payload and asserts none of nineteen fixture strings
+appears — that is what catches a prop that is passed but does not suppress the
+fixture.
+
+The tag scanner is written by hand rather than as a regex, and that is not
+fussiness: JSX props are full of `>`, so `items={list.map((s) => s.title)}` ends
+a lazy `<Tag …?>` match four props early and the audit then reports a prop that
+is right there. It tracks brace depth and quoting and stops at the `>` that
+closes the tag.
+
+**Would change it if.** The library's next version makes the content props
+required, which would move this from a test to a type error — the better place
+for it.
+
+---
+
+## C43. The suites get their own database and their own port
+
+**Context.** Every automated suite in this repository ran against `hermes` —
+the database the developer's own `wrangler dev` on :8787 is showing them. The
+symptoms were reported from the other side of the screen while this work was in
+flight: the Inbox filling with scripted "Ada Ling" requests, one set per run;
+about fifty sessions named "P4 race", "T1 send-scroll", "T3 scrolled away" in
+the session list; and the workspace default model, which had been set to
+`openrouter:anthropic/claude-sonnet-5` by hand, silently back at
+`deepseek-flash` because `db:seed` runs at the start of `pnpm e2e:live` and
+writes the seed's value.
+
+The only cure was `pnpm db:reset`, which tore the Docker volume down and took
+the verified provider key with it. (It did, in the course of this work. The key
+is not recoverable and has to be added again.)
+
+**Decision.** Two stacks that share the Docker container and nothing else.
+
+| | dev stack | test stack |
+|---|---|---|
+| database | `hermes` | `hermes_test` |
+| Worker | :8787, `pnpm --filter @hermes/worker dev` | :8788 by default, started and stopped by `pnpm e2e:live` |
+| variables | `apps/worker/.dev.vars` | `apps/worker/.dev.vars.test`, generated per run |
+| model | whatever `.dev.vars` says, possibly a real provider | always `MODEL_SCRIPTED=1` |
+
+It is one variable, because `apps/worker/scripts/db-config.mjs` already
+assembles every connection string from `PGDATABASE`. `scripts/test-db.mjs`
+creates `hermes_test` if it is absent, migrates and seeds it, and hands back the
+Hyperdrive strings; `pnpm e2e:live`, `pnpm db:test` and the worker vitest
+projects all go through it, and `apps/client/scripts/live-fixture.mjs` — which
+the live specs use to read rows back — defaults to it too.
+
+**Four guards, because a default is not a guarantee.**
+
+1. the launcher refuses to start if the port is 8787;
+2. it refuses if the database it resolved is not `hermes_test`;
+3. it refuses if any `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_*` in the
+   generated file does not end in `/hermes_test`;
+4. it will not reuse a Worker it did not start, and there is no flag for it any
+   more (C37 had one). A Worker somebody else started was configured from
+   `.dev.vars`: it is pointed at the dev database by definition.
+
+`/health` turned out to be a popular path — 8788 on the machine this was written
+on was an unrelated project answering `{"ok":true}` — so the probe checks the
+*shape* (`{ status, version, checks: [...] }`) and says "something that is not
+this Worker is listening" rather than mistaking it for a Hermes stack.
+
+**`pnpm db:reset` changed too**, in two ways that follow from the same idea.
+It recreates the `hermes` database rather than running `docker compose down -v`,
+because the volume is shared and a suite may be using `hermes_test`. And it
+**keeps the seed workspace's provider keys**: they are copied out with `\copy`
+before the drop and copied back after the seed, which works because the seed's
+workspace id is a constant and the seed writes no key rows of its own. A wrapped
+provider key is somebody's real credential; it is the one thing in that database
+that cannot be regenerated by running a script.
+
+**Would change it if.** The suites move to a throwaway container per run, at
+which point the database name stops mattering and the port guard is the only
+thing worth keeping.
+
+---
+
+## C44. The activity block is one line, and only when a tool ran
+
+**Context.** C40 put the trace above the answer, which was right, and left the
+trace as it was, which was not. What it rendered under every reply was a
+`ThinkingState` header ("✦ Done ▾") *and* a `TaskRows` list whose rows were
+"✓ Thinking · Done ▾" and "✓ propose_request · Done ▾". Two of those three
+things are noise:
+
+* **"Thinking" is not a step.** The engine emits a `provider` step labelled
+  "Thinking" for every model call — twice in the ordinary two-turn script. It is
+  true of every turn, it is the same words every time, and there is nothing a
+  reader can do with it.
+* **A per-step "Done" pill restates its own container.** The block says "Done";
+  the rows then each say "Done" again.
+* **`TaskRows` is not a step list.** It has a details chevron per row and a
+  Retry callback, which are affordances for a queued follow-up and a parked run
+  — the two things a person can actually act on.
+
+**Decision.** Three states, and the first one is nothing.
+
+| | what is drawn |
+|---|---|
+| no tool call in the turn | **nothing.** No block, no header, no disclosure |
+| working, a tool running | one line: `LoadingState`'s inline form, the tool's own label and the elapsed timer |
+| settled | one muted line, `Done · N steps ▾`, expandable to `ToolChips` |
+
+`TaskRows` stays, for the queue and for a run parked on a question, and nothing
+else. Worked time and the response actions stay in the footer where they were.
+
+The collapsed row is a plain `<details>` rather than `ThinkingState`, and the
+reason is the same shape as the other library decisions: `ThinkingState` insists
+on a step list with its own spinner and its own checks, and reserves 176 px for
+it, for a trace that is usually one row.
+
+**And a bug fell out of writing it.** `ToolChips` had never rendered a single
+chip in this product, because `store.ts`'s `run.step` handler read `tool_call_id`
+and `attempt` off the wire and then dropped both on the floor — so every step
+looked like a non-tool step and every step looked like it belonged to the
+current attempt. The README has claimed "`ToolChips` one per `tool_call_id`"
+since M3. It does now. The same fix restores "Earlier attempt", which could not
+have worked either.
+
+**Would change it if.** A turn's trace grows something a reader acts on
+mid-run — a permission prompt, a file being written — at which point the
+collapsed line needs a second state that is not "done".
+
+---
+
+## C45. A refused turn says what the server said
+
+**Context.** `POST /w/:ws/sessions/:id/turns` answered
+`400 {"error":"Add a deepseek key in Settings to start","reason":"no_key"}` for
+a new session still on the workspace default model. That is a good refusal: it
+names the provider, it names the screen, it is a sentence for a person.
+
+The composer threw it away. All three send paths ended in
+`.catch(() => undefined)`, so from the outside: the draft vanished, nothing
+appeared, no run started — and the session renamed itself to "testing" after a
+turn that never ran.
+
+**Decision.** Every refusal is rendered, and nothing is lost.
+
+* **The server's sentence, verbatim.** `refusalFor()` maps a reason to an
+  *action*, never to replacement copy: the Worker knows which provider, which
+  cap and which number, and a client that rewrote any of it would drift. What
+  the client adds is the route to the fix, which is the thing only the client
+  knows — "Settings → Provider keys" for `no_key`, `key_invalid` and
+  `key_revoked`.
+* **A reason the client has never seen is still shown**, with its own words and
+  no action, rather than being replaced by "Something went wrong" — which would
+  be strictly less useful than what the server already wrote.
+* **A request that never reached a Worker gets the one sentence the client
+  writes itself.** `TypeError: Failed to fetch` is a message for a developer.
+  The discriminator is whether there is a `reason` at all.
+* **The draft comes back and the caret goes with it**, so the next thing typed
+  is a correction rather than a retype.
+* **The session's name is put back.** `autoTitle` still runs before the POST —
+  the sidebar should stop saying "New session" the moment Enter is pressed — but
+  the previous title is kept and restored if the turn is refused, unless a
+  person has renamed it in between, because a manual rename wins permanently
+  (C34) even over the client undoing its own guess.
+
+`role="alert"` rather than `role="status"`: the person pressed Enter and nothing
+happened, so this is the answer to something they just did.
+
+**Tested** in `refusal.test.ts` (seven cases, including "never returns an empty
+string" and "never rewrites the provider name out of the server's copy") and as
+T7 in `live-transcript.spec.ts`. T7 injects the 400 with Playwright's route
+interception rather than provoking it, and says why in the test: `MODEL_SCRIPTED=1`
+skips the provider-key check, and turning the scripted provider off is the one
+thing the test stack must never do (C43). The body is the Worker's own, and
+everything after the interception — the draft, the title, the corrected send
+that succeeds — is the real client against the real stack.
+
+**Not done, and named rather than assumed.** A new session's model still comes
+from the workspace default even when that model has no verified key. Choosing a
+different one for them is a product decision — it changes which model their work
+runs on without being asked — and the honest version of it needs the banner to
+say what was changed and why. The refusal above makes the current behaviour
+legible, which is the part that was broken.
+
+**Would change it if.** The turns route grows a `retry_after` that the client
+should count down, which is the one refusal where a static sentence is not
+enough.

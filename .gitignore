@@ -14,3 +14,7 @@ coverage/
 !.env.example
 !.dev.vars.example
 *.env
+
+# The generated test-run variables (apps/client/scripts/e2e-live.mjs).
+.dev.vars.*
+!.dev.vars.example

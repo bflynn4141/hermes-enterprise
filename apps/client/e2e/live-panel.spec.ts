@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { freshWorkspace } from '../scripts/live-fixture.mjs';
 import { expectNoNavOverlap, type Panel } from './panel-helpers.js';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 
 const pane = (page: Page): Locator => page.getByRole('region', { name: 'Application' });
 const shell = (page: Page): Locator => page.locator('.shell');

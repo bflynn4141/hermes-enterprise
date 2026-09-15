@@ -6,8 +6,13 @@ fallback and `run_worker_first` on the API prefixes.
 
 It runs against the real Worker. `pnpm e2e:live` boots Docker Postgres, the
 migrations, `wrangler dev --local` with `AUTH_MODE=fake` and `MODEL_SCRIPTED=1`,
-and drives thirty-two scenarios through the live stack; `qa/live/` holds the
-twenty-nine screenshots that run produced.
+and drives the live scenarios; `qa/live/` holds the screenshots that run
+produced.
+
+**The suite has its own stack** (decision C43). It creates and migrates its own
+database, `hermes_test`, and starts its own Worker on :8788 — it never touches
+the `hermes` database or the :8787 Worker the developer is watching. See "Two
+stacks" below.
 
 Every tab is wired to a route now. Traces and the trace detail, Skills and
 instruction review, Context fields, Settings → Usage, Agents caps and Data and
@@ -51,6 +56,77 @@ open http://localhost:8787/workspace/11111111-1111-4111-8111-111111111111
 The seed creates two users, and the sidebar's dev account switcher moves between
 them: `maya@nous.example` (Admin) and `dana@nous.example` (Member). It is behind
 `__AUTH_MODE__ === 'fake'`, so a production build eliminates it.
+
+### Two stacks
+
+| | dev stack | test stack |
+|---|---|---|
+| database | `hermes` | `hermes_test` |
+| Worker | :8787, `pnpm --filter @hermes/worker dev` | :8788, started and stopped by `pnpm e2e:live` |
+| variables | `apps/worker/.dev.vars` | `apps/worker/.dev.vars.test`, generated per run |
+| model | whatever `.dev.vars` says, possibly a real provider | always scripted |
+| reset | `pnpm db:reset` | `pnpm db:test:up` (idempotent, not destructive) |
+
+They share the Docker container and nothing else. Every suite — `pnpm e2e:live`,
+`pnpm db:test`, and the worker vitest projects — goes through
+`scripts/test-db.mjs`, which creates `hermes_test` if it is absent and migrates
+and seeds it.
+
+The launcher refuses to start on 8787, refuses if the database it resolved is
+not `hermes_test`, refuses if any generated connection string does not end in
+`/hermes_test`, and refuses to reuse a Worker it did not start. Point it
+somewhere else with `E2E_BASE_URL`:
+
+```sh
+E2E_BASE_URL=http://localhost:8798 pnpm e2e:live   # when 8788 is taken
+```
+
+`pnpm db:reset` is the **dev** database only. It recreates `hermes` rather than
+tearing the Docker volume down — the volume is shared, and `hermes_test` is not
+its business — and it **keeps the seed workspace's provider keys**, which are
+the one thing in that database a script cannot regenerate.
+
+### Real local mode, and what it costs
+
+`wrangler.jsonc`'s development block ships `MODEL_SCRIPTED="1"` and
+`OPENROUTER_FIXTURE="1"`, so a local Worker answers turns from
+`ScriptedProvider` and verifies provider keys from a built-in fixture. Nothing
+reaches a network. To drive the product against the **real** OpenRouter API on a
+real key, change exactly two values in `apps/worker/.dev.vars`:
+
+```
+MODEL_SCRIPTED="0"
+OPENROUTER_FIXTURE="0"
+```
+
+then **restart the Worker** — wrangler reads `.dev.vars` once, at startup — and
+**re-verify the key in Settings -> Provider keys**, because the row in the
+database was verified by the fixture and its catalog rows came from the
+fixture's model list. Every turn after that costs money.
+
+Two things are deliberately unaffected by those two values, and the reason is
+decision C37: `.dev.vars` beats the process environment in wrangler, so
+`pnpm e2e:live` used to inherit "real local mode" and send fifty turns to a real
+provider while three comments said it was scripted.
+
+* `pnpm e2e:live` generates `apps/worker/.dev.vars.test` from `.dev.vars` with
+  `AUTH_MODE=fake`, `MODEL_SCRIPTED=1`, `OPENROUTER_FIXTURE=1` and the
+  `hermes_test` connection strings forced, starts wrangler with `--env-file`
+  pointing at it (which makes wrangler skip `.dev.vars` entirely), and then
+  **sends one turn** and waits for the scripted provider's own sentence before
+  it will run the suite. It will not reuse a Worker it did not start.
+* `pnpm --filter @hermes/worker test` forces the same three as miniflare
+  bindings in `vitest.config.ts`, which are applied after the pool reads
+  `.dev.vars`.
+
+The suite's port comes from `E2E_BASE_URL`, and the base URL is added to
+`ALLOWED_ORIGINS` in the generated file, so the scripted suite runs beside a
+real-mode Worker without disturbing it:
+
+```sh
+pnpm --filter @hermes/worker dev   # real mode, :8787, hermes
+pnpm e2e:live                      # scripted, :8788, hermes_test
+```
 
 `apps/worker/.dev.vars` needs a `KEK_V1` (base64, 32 bytes) before a provider
 key can be added — without one the route answers 503 `kek_unavailable`, which
@@ -102,6 +178,7 @@ Query parameters pick the fixture:
 | `/?seat=member` | The Member seat: the review pane reads "Admin decision required" |
 | `/?key=invalid` | A rejected key: "Your deepseek key was rejected. Re-verify or rotate it" |
 | `/onboarding/create`, `/onboarding/join?token=…` | The two onboarding routes |
+| `/?reply=markdown` | An Iris reply that uses the whole safe Markdown subset, including an `<img onerror>` that must render as text (decision C39) |
 | `/shared/mock-share-token` | The read-only share viewer |
 
 `__MOCK__` is a build constant, so a production build eliminates the module, the
@@ -120,7 +197,14 @@ src/model/    store.ts      the reducer, the entity cache, the two cursors
               routes.ts     parseRoute / toHref over refs.ts
               mock.ts       the mock backend (MOCK=1 only)
 src/app/      Shell, Sidebar, chat/, views/, onboarding/, shared/, ui/
+              chat/markdown-subset.ts   the safe Markdown parser: an allowlist
+              chat/Markdown.tsx         the only elements it can become
+              chat/IrisText.tsx         one renderer, stream and final alike
+              chat/refusal.ts           what the composer says when a turn is refused
+              library-defaults.test.ts  the fixture-default audit (C42)
 e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
+              live-transcript.spec.ts T1–T6: the scroll model and the run
+                                  surface's order, from the browser's boxes
               qa-screens.spec.ts  the mock screenshots
               live.spec.ts        P4–P14, against wrangler dev
               live-findings.spec.ts the scenarios the server fixes unblocked
@@ -137,6 +221,7 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
 scripts/      e2e-live.mjs      boots the stack and runs the live suite
               live-fixture.mjs  a fresh workspace, and the step-up re-stamp
               dev-step-up.mjs   the step-up re-stamp on its own
+qa/chat/      the scroll model, the activity row and the Markdown subset
 qa/           one screenshot per screen, from e2e/qa-screens.spec.ts
 qa/live/      the same screens against the real Worker
 qa/panel/     every page in open, rail and hidden at 1840 and 1440
@@ -193,6 +278,20 @@ are the same three clicks on either side of that change.
   `X-Requested-From: inbox` and step-up, and the result is observed as
   `decision.recorded`. After a step-up redirect the pane re-renders and waits
   for a second, deliberate click — it never auto-replays.
+* **A refusal is rendered, never swallowed.** Every send, guide and queue used
+  to end in `.catch(() => undefined)`, so a 400 with a sentence in it produced
+  nothing on screen. `chat/refusal.ts` maps the server's `reason` to an *action*
+  and never to replacement copy — the Worker's words are shown verbatim, the
+  client adds the route to the fix — the draft comes back with the caret, and a
+  session is not named after a turn that never ran (decision C45).
+* **A chat reply may use light Markdown; a tool argument may not.** The subset
+  is paragraphs, bold, italics, inline code, fenced code, lists, headings to h3,
+  blockquotes and simple tables, parsed by `chat/markdown-subset.ts` into a node
+  union with no HTML node and no anchor node — the parser is the allowlist, so a
+  `<script>` is nine characters of text and a link is its label beside a
+  non-interactive chip carrying the bare URL (decision C39). `plainText()` in
+  `packages/shared` is untouched and still refuses markup in every string a tool
+  writes.
 * **`MODEL_COMMANDS` is enforced client-side too**, as a second line after the
   server validator. The risk it closes is a person clicking a button the model
   labelled "Looks good" that carries `decide`.
@@ -204,8 +303,12 @@ are the same three clicks on either side of that change.
   M3 components meet the run: `LoadingState` between `run.started` and the first
   delta, showing the active step's own label; `ThinkingState` over the step rows
   with an explicit `stage` of `floor(done / total * 4)`; `ToolChips` one per
-  `tool_call_id`; `StreamingText` over the accumulator `message.delta` fills;
-  `TaskRows` for the queue and the waiting and failed states. `ApprovalCard`
+  `tool_call_id`, behind the collapsed "Done · N steps" line; `TaskRows` for the
+  queue and for a run parked on a question, and nothing else. A turn that called
+  no tool draws no activity at all (decision C44). Then, *below all of it*
+  (decision C40), the streamed text, through `IrisText`, the same component the
+  finished message uses, so `message.final` changes nothing on screen.
+  `StreamingText` is not adopted. `ApprovalCard`
   carries the `choice` and `confirm` blocks `ask_for_context` produces, and
   never decides. `PromptBar` and `AgentScreen` are deliberately not adopted
   (decisions C23 and C27); eleven other components are, and "The library,
@@ -318,6 +421,7 @@ all of this — seven and eleven scenarios on top of the fourteen in
 | `live-findings.spec.ts` | F1 `/w/:ws` boots the app · F2 create a workspace, accept an invitation · F3 `request.created` on the workspace stream · F8 Traces lists and opens a run · P8/P9 through the scripted scenarios |
 | `live-m5a.spec.ts` | M1 the trace detail after a run · M2 an instruction accepted by an Admin and refused to a Member · M3 the context write that unparks a waiting run · M4 usage after a run, with the server's disclaimer · M5 create-workspace and accept-invite through the stepper, plus the picker · M6 workspace delete and undelete · M7 every empty state on a fresh workspace, both seats · M8 "Signed out" with the draft kept, and "Reconnecting…" |
 | `live-screens.spec.ts` | the twenty-nine screenshots in `qa/live/` |
+| `live-transcript.spec.ts` | T1 the send-scroll, measured frame by frame inside the page · T2 thirteen gap samples across a run · T3 a scroll-up mid-run that holds, with the chip · T4 clearance against the composer at its tallest · T5 one collapsed "Done · N steps" line above the answer, expandable, and no "Thinking" row · T6 the second question anchors like the first · T7 a refused turn's sentence, its draft and its unchanged title |
 | `live-panel.spec.ts` | N1 ⌘L and where focus goes · N2 the drag handle, its clamp and its reload · N3 a run that completes behind the rail, and the badge · N4 every page in the rail state · N5 New session twice is one session · N6 the first turn names the session and the run renames it · N7 a manual rename wins · N8 the navigation keeps its column at 900 and 1100 |
 
 ### The library, adopted and not
@@ -327,7 +431,7 @@ real callbacks:
 
 | Component | Where | The care it needed |
 |---|---|---|
-| `LoadingState`, `ThinkingState`, `StreamingText`, `ToolChips`, `TaskRows`, `ApprovalCard` | `chat/RunSurface.tsx` | driven only by server events; demo, loop and autoplay off |
+| `LoadingState`, `ThinkingState`, `ToolChips`, `TaskRows`, `ApprovalCard` | `chat/RunSurface.tsx` | driven only by server events; demo, loop and autoplay off; and every content prop passed explicitly, because fifteen of the twenty-one default theirs to a gallery fixture (decision C42) |
 | `DiffTable` | Skills, over an instruction proposal | the server accepts or discards a whole version, so the only toggle offered is the addition and Save *is* Accept |
 | `Flowchart`, `CodeBlock` | the trace detail | read-only: no `onMove`, no `onSelect`, no `condition`. Node ids are the array index, because the engine reuses `provider` for every model call |
 | `ContextCards` | the URLs a run fetched | one chunk per URL, badged `untrusted`, which is what a fetched page is |
@@ -338,7 +442,13 @@ real callbacks:
 | `FineTuneCard` | Settings → Agents, the two integer caps | `onChange` fires per pointer move, so the write is debounced to one per gesture — which is also one `settings.changed` audit row per gesture |
 | `SelectionActions` | a selected invoice line | `onRequestEdit` is supplied and never reaches a model: without it the component streams its own demo rewrite, and a fabricated sentence on an invoice is the one thing this product must not do |
 
-Two are not adopted, and the reasons are the same shape:
+Three are not adopted, and the reasons are the same shape:
+
+* **`StreamingText`** re-animates on its own timer text the server already sent,
+  cannot render a list or a table, and owns an action row and a "3 sources"
+  disclosure that duplicate `ResponseFooter` and claim things the run did not do
+  — which is how a reply to "testing" came to offer "Show the application
+  evidence" (decision C41).
 
 * **`PromptBar`** owns its draft in its own `useState` and exposes no controlled
   `value`, so a composer built on it could not render a restored draft — and

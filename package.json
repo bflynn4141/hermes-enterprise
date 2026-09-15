@@ -19,6 +19,7 @@
     "db:seed": "pnpm --filter @hermes/worker db:seed",
     "db:reset": "node scripts/db-reset.mjs",
     "db:test": "pnpm --filter @hermes/worker db:test",
+    "db:test:up": "node scripts/test-db.mjs",
     "restore:check": "pnpm --filter @hermes/worker exec node scripts/restore-check.mjs",
     "e2e:live": "pnpm --filter @hermes/client e2e:live",
     "lint:secrets": "gitleaks detect --no-git --redact"

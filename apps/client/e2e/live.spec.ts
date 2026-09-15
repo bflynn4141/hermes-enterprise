@@ -8,7 +8,7 @@
 // Run it with `pnpm e2e:live` from the repository root, which boots all of
 // that. Against an already-running stack:
 //
-//   E2E_BASE_URL=http://localhost:8787 pnpm --filter client e2e live.spec
+//   E2E_BASE_URL=http://localhost:8788 pnpm --filter client e2e live.spec
 //
 // Two things the environment makes awkward, both recorded in the README's
 // server findings and both worked around here rather than skipped:
@@ -23,7 +23,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const SEED_WORKSPACE = '11111111-1111-4111-8111-111111111111';
 const SEED_ADMIN = 'maya@nous.example';
 const SEED_MEMBER = 'dana@nous.example';

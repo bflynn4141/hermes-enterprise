@@ -20,7 +20,7 @@ import { expect, test, type Browser, type BrowserContext, type Locator, type Pag
 import { randomUUID } from 'node:crypto';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const q = (value: string): string => `'${String(value).replace(/'/g, "''")}'`;
 const rows = (sql: string): string[] => psql(sql).split('\n').filter(Boolean);
 /**

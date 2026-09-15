@@ -599,6 +599,12 @@ export function createAdapter(options: AdapterOptions): Adapter {
     // PATCHed so a reload agrees; a failed PATCH leaves the local title, which
     // is a better answer than a placeholder. Both of these run *before* the
     // await below, while `sessionId` is still the id the store is keyed on.
+    //
+    // The title it replaces is kept, because a turn the server refuses never
+    // happened: a session called "testing" whose only turn was rejected for
+    // having no provider key is a name for something that does not exist
+    // (decision C45).
+    const titleBefore = session.title;
     autoTitle(sessionId, trimmed);
     // The route needs a real id. A person who types their first sentence faster
     // than the create POST answers used to lose the turn to a 400 `bad_id`.
@@ -616,7 +622,16 @@ export function createAdapter(options: AdapterOptions): Adapter {
     } catch (error) {
       // The draft comes back so the text is never lost — under whichever id the
       // store is keyed on now, which is the server's if the await reconciled.
-      dispatch({ type: 'session/draft', id: state().sessions[routeId] ? routeId : sessionId, text: trimmed });
+      const id = state().sessions[routeId] ? routeId : sessionId;
+      dispatch({ type: 'session/draft', id, text: trimmed });
+      // And the name goes back, unless a person has renamed it in between: a
+      // manual rename wins permanently (decision C34), and that is still true
+      // when the thing being undone is the client's own guess.
+      const now = state().sessions[id];
+      if (now && now.titleSource !== 'manual' && now.title !== titleBefore) {
+        dispatch({ type: 'session/rename', id, title: titleBefore });
+        persistTitle(id, titleBefore);
+      }
       throw error;
     }
   }

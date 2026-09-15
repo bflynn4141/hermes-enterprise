@@ -45,6 +45,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       seat: params.get('seat') === 'member' ? 'member' : 'admin',
       data: params.get('data') === 'empty' ? 'empty' : 'seeded',
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
+      reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }

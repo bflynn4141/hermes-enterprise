@@ -12,7 +12,7 @@ import { expect, test, type Browser, type BrowserContext } from '@playwright/tes
 import { randomUUID } from 'node:crypto';
 import { freshWorkspace, psql } from '../scripts/live-fixture.mjs';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const SEED_WORKSPACE = '11111111-1111-4111-8111-111111111111';
 const SEED_ADMIN = 'maya@nous.example';
 

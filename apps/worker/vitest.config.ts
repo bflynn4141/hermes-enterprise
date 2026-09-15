@@ -22,12 +22,18 @@ const nodeAlias = {
 //   worker  the Worker in workerd, through @cloudflare/vitest-pool-workers,
 //           reading the same wrangler.jsonc a deploy uses. It reaches the same
 //           Docker Postgres through the local Hyperdrive connection strings.
+//
+// `hermes_test`, never `hermes` (decision C43). The db and worker projects both
+// write rows — workspaces, runs, decisions — and `hermes` is the database the
+// developer's own `wrangler dev` on :8787 is showing them. `pnpm db:test` and
+// `pnpm e2e:live` create and migrate `hermes_test`; a bare `vitest run` here
+// picks it up from these defaults rather than falling back to the dev database.
 const localApp =
   process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP ??
-  'postgres://app:localdev@127.0.0.1:5433/hermes';
+  'postgres://app:localdev@127.0.0.1:5433/hermes_test';
 const localAgent =
   process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT ??
-  'postgres://agent:localdev@127.0.0.1:5433/hermes';
+  'postgres://agent:localdev@127.0.0.1:5433/hermes_test';
 
 // Wrangler resolves Hyperdrive's local connection strings from the environment
 // while it parses wrangler.jsonc, which happens before the pool applies its own
@@ -89,6 +95,19 @@ export default defineConfig({
               hyperdrives: {
                 HYPERDRIVE_APP: localApp,
                 HYPERDRIVE_AGENT: localAgent,
+              },
+              // `.dev.vars` is a developer's file, and the pool reads it: a
+              // machine set up for "real local mode" (README) has
+              // MODEL_SCRIPTED="0" and OPENROUTER_FIXTURE="0" in it, and every
+              // worker test that drives a run would then reach for a real
+              // provider on a real key. These three are forced here so the
+              // suite's behaviour does not depend on a file it does not own.
+              // Same reasoning as `pnpm e2e:live`'s `.dev.vars.test`
+              // (decision C37).
+              bindings: {
+                AUTH_MODE: 'fake',
+                MODEL_SCRIPTED: '1',
+                OPENROUTER_FIXTURE: '1',
               },
             },
           }),

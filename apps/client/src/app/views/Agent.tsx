@@ -683,7 +683,7 @@ export function TraceDetail({ id }: { id: string | null }) {
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">
-          <ThinkingState stage={stage} rows={trace.steps.map((step) => ({ primary: step.label, ...(step.detail ? { secondary: step.detail } : {}) }))} active={trace.status} done={`${done} of ${trace.steps.length} steps`} />
+          <ThinkingState stage={stage} rows={trace.steps.map((step) => ({ primary: step.label, ...(step.detail ? { secondary: step.detail } : {}) }))} active={trace.status} done={`${done} of ${trace.steps.length} steps`} additionalSources={0} />
         </div>
         <RunFlow steps={trace.steps} />
 
@@ -718,10 +718,10 @@ export function TraceDetail({ id }: { id: string | null }) {
                 {open === call.tool_call_id && (
                   <div className="col" style={{ gap: 14 }}>
                     <div className="hermes-ui">
-                      <CodeBlock filename={`${call.name}.arguments.json`} lines={prettyJson(call.arguments ?? 'null')} />
+                      <CodeBlock filename={`${call.name}.arguments.json`} lines={prettyJson(call.arguments ?? 'null')} diff={[]} />
                     </div>
                     <div className="hermes-ui">
-                      <CodeBlock filename={`${call.name}.result.json`} lines={prettyJson(call.result ?? 'null')} />
+                      <CodeBlock filename={`${call.name}.result.json`} lines={prettyJson(call.result ?? 'null')} diff={[]} />
                     </div>
                     {call.truncated && (
                       <p className="meta">

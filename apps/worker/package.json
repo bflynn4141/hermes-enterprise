@@ -12,7 +12,7 @@
     "db:roles": "node scripts/roles.mjs",
     "db:migrate": "node scripts/roles.mjs && node scripts/migrate.mjs",
     "db:seed": "node scripts/seed-dev.mjs",
-    "db:test": "node scripts/roles.mjs && vitest run --project db",
+    "db:test": "node scripts/db-test.mjs",
     "cf-typegen": "wrangler types",
     "spike": "vitest run --project spike"
   },

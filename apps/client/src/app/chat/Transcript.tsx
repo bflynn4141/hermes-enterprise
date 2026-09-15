@@ -1,26 +1,63 @@
-// The transcript. Scroll behaviour, the find-in-session highlighting and the
-// message shapes are the demo's; the streaming text is not.
+// The transcript. The find-in-session highlighting and the message shapes are
+// the demo's; the streaming text and the scroll model are not.
 //
 // The demo's `Reveal` animated text that was already complete. It is deleted:
-// `StreamingText` from `@hermes/motion-components` now renders the *actual*
-// accumulator that `message.delta` fills, with `loop={false}` so nothing
-// animates that the server did not send (plan §10b: every animated state is
-// driven by a server event). When a turn is between events, `LoadingState`
-// shows the active step's own label — no invented duration.
+// `RunSurface` now renders the *actual* accumulator that `message.delta` fills,
+// so nothing animates that the server did not send (plan §10b: every animated
+// state is driven by a server event). When a turn is between events,
+// `LoadingState` shows the active step's own label — no invented duration.
+//
+// ## The scroll model (decision C38)
+//
+// Three positions, and only three:
+//
+//   send      the new user message's top goes to the top of the viewport, and
+//             the reply streams into the space beneath it. This is ChatGPT's
+//             arrangement, reached the way ChatGPT reaches it: a spacer at the
+//             end of the transcript, sized so that "the anchor at the top" and
+//             "scrolled to the bottom" are the same scrollTop until the reply
+//             outgrows the viewport.
+//   streaming pinned to the bottom *only* if the reader was already at the
+//             bottom (96 px). A reader who scrolled up keeps their position and
+//             gets the Jump to latest chip, which is the convention every chat
+//             client in this class has converged on.
+//   switch    the remembered scrollTop for the session being opened.
+//
+// Nothing else moves the viewport. `message.final`, a step row, a receipt and a
+// queue row all land wherever they land: they are the tail of a reply the
+// reader is already reading, and a client that jumps on each one is a client
+// that cannot be read while it works.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
-import { StreamingText } from '@hermes/motion-components';
 import type { Message } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Block } from './Blocks.js';
+import { IrisText } from './IrisText.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
-import { RunSurface } from './RunSurface.js';
+import { RunActivity, RunStream } from './RunSurface.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
 import { EMPTY } from '../../model/constants.js';
 import type { SessionState } from '../../model/store.js';
+
+/**
+ * "At the bottom", in pixels.
+ *
+ * The demo's number, kept. It is the standard tolerance in this class of UI —
+ * `use-stick-to-bottom`, the implementation the AI SDK's `<Conversation>` is
+ * built on, discusses the same knob at about 70 px — and it has to be larger
+ * than one line so that a reader sitting at the bottom of a streaming reply is
+ * not un-pinned by the line that arrives underneath them.
+ */
+const NEAR_BOTTOM = 96;
+
+/** `CSS.escape`, with a fallback for the attribute-selector case. */
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  return value.replace(/["\\]/g, '\\$&');
+}
 
 interface FindSpec {
   query: string;
@@ -89,19 +126,84 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   const reduce = useReducedMotion() ?? false;
   const agent = agentName(state);
   const ref = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const spacerRef = useRef<HTMLDivElement>(null);
   const [away, setAway] = useState(false);
   const lastCount = useRef(session.messages.length);
   const nearBottom = useRef(true);
+  /** The user message the send-scroll parked at the top, while it is still the last one. */
+  const anchorId = useRef<string | null>(null);
 
   const measure = (): boolean => {
     const el = ref.current;
     if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
   };
 
+  /**
+   * Size the tail spacer so the anchor can reach the top of the viewport.
+   *
+   * The spacer is exactly the shortfall: the viewport height less everything
+   * that comes after the anchor's top edge. While a reply is short that makes
+   * the bottom of the scroll range the position where the anchor sits at the
+   * top — one position, not two — so "pinned to the bottom" and "the question
+   * at the top" are the same thing and neither fights the other. Once the reply
+   * is taller than the viewport the shortfall is zero, the spacer disappears,
+   * and a pinned reader follows the text down exactly as before.
+   *
+   * Written to the DOM rather than to state on purpose: this runs on every
+   * delta, and a state round trip would mean one frame rendered at the old
+   * height — a flicker on every token.
+   */
+  const sizeSpacer = useCallback((): void => {
+    const el = ref.current;
+    const spacer = spacerRef.current;
+    const content = contentRef.current;
+    if (!el || !spacer || !content) return;
+    const id = anchorId.current;
+    const anchor = id ? content.querySelector<HTMLElement>(`[data-message-id="${cssEscape(id)}"]`) : null;
+    if (!anchor) {
+      spacer.style.height = '0px';
+      return;
+    }
+    // Twice, and the second pass is not superstition. The first pass measures
+    // `scrollHeight` while React is still committing the rest of the turn — the
+    // run surface's own first frame lands in the same commit — so its answer is
+    // one layout behind, and the first *painted* frame is short by exactly the
+    // transcript's top padding. The second pass measures the layout the first
+    // one produced, which is the one that is about to be painted. It is a fixed
+    // point, so a third pass would change nothing.
+    // "The top of the viewport" is the top of the transcript's own content
+    // inset, not the scroll container's border edge. The first message of a
+    // session cannot reach the border — the padding is above it — so anchoring
+    // later ones flush against it would put the same message in two different
+    // places depending on where it was in the conversation, and the flush one
+    // reads as clipped by the subheader, which is the screenshot this began
+    // with. One inset, every time.
+    const inset = Number.parseFloat(getComputedStyle(content).paddingTop) || 0;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const current = spacer.offsetHeight;
+      const anchorTop = anchor.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+      const target = Math.max(0, anchorTop - inset);
+      const after = el.scrollHeight - current - target;
+      spacer.style.height = `${Math.max(0, Math.round(el.clientHeight - after))}px`;
+    }
+  }, []);
+
+  const toBottom = useCallback((): void => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    nearBottom.current = true;
+    setAway(false);
+  }, []);
+
+  // Session switch: the remembered position, exactly as the demo restored it.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
+    anchorId.current = null;
+    sizeSpacer();
     el.scrollTop = session.scrollTop ?? el.scrollHeight;
     nearBottom.current = measure();
     setAway(!nearBottom.current);
@@ -109,29 +211,86 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
+  // A new message. A *user* message is a send, and a send re-anchors; anything
+  // else only moves the viewport if the reader was already at the bottom.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (session.messages.length !== lastCount.current) {
-      const last = session.messages[session.messages.length - 1];
-      if (last?.role === 'user' || nearBottom.current) {
-        el.scrollTop = el.scrollHeight;
-        nearBottom.current = true;
-        setAway(false);
-      } else setAway(true);
-      lastCount.current = session.messages.length;
+    if (session.messages.length === lastCount.current) return;
+    const last = session.messages[session.messages.length - 1];
+    lastCount.current = session.messages.length;
+    if (last?.role === 'user') {
+      anchorId.current = last.id;
+      sizeSpacer();
+      toBottom();
+      return;
     }
-  }, [session.messages.length]);
+    if (nearBottom.current) {
+      sizeSpacer();
+      toBottom();
+    } else setAway(true);
+  }, [session.messages.length, sizeSpacer, toBottom]);
+
+  // Every delta, every step row, every queue row: re-size the spacer, and
+  // follow only if the reader is at the bottom. `run` and `stream` are named in
+  // the dependency list rather than the whole session, so a rename or a draft
+  // keystroke does not re-run it.
+  useLayoutEffect(() => {
+    sizeSpacer();
+    if (nearBottom.current) {
+      const el = ref.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [session.stream?.text, session.run?.steps, session.run?.status, session.run?.queue, sizeSpacer]);
+
+  // The composer autosizes to 208 px, the pane resizes, and a reply's own
+  // images and tables settle a frame late. Any of those changes what "the
+  // bottom" is, so the spacer is re-measured from the elements themselves
+  // rather than from a render.
+  useEffect(() => {
+    const el = ref.current;
+    const content = contentRef.current;
+    if (!el || !content || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      sizeSpacer();
+      if (nearBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [sizeSpacer]);
 
   const onScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
     nearBottom.current = measure();
     if (nearBottom.current) setAway(false);
+    else setAway(true);
     dispatch({ type: 'session/scroll', id: session.id, scrollTop: el.scrollTop });
   }, [dispatch, session.id]);
 
   useFind(ref, find, reduce, [session.messages.length, session.stream?.text]);
+
+  // The messages this run produced are rendered *after* the activity block and
+  // the rest before it, so a finished turn reads trace-then-answer exactly as a
+  // streaming one does. With no run in progress `during` is empty and the split
+  // costs a filter over a list that is already in memory.
+  //
+  // "This run's messages" means the *trailing* ones, not every message carrying
+  // the id. A completed run's replies stop being the tail the moment the next
+  // question is typed, and a filter over the whole list would then lift them
+  // below the new question — which is history reordering itself, and it carried
+  // the reader past their own question because everything it moved counted as
+  // "after the anchor".
+  const runId = session.run?.id ?? null;
+  const split = ((): number => {
+    if (!runId) return session.messages.length;
+    let index = session.messages.length;
+    while (index > 0 && session.messages[index - 1]!.run_id === runId && session.messages[index - 1]!.role === 'iris') index -= 1;
+    return index;
+  })();
+  const before = split === session.messages.length ? session.messages : session.messages.slice(0, split);
+  const during = split === session.messages.length ? [] : session.messages.slice(split);
 
   const lastIris = [...session.messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
@@ -144,7 +303,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   return (
     <div className="transcript-wrap">
       <div className="scroll" ref={ref} onScroll={onScroll} aria-live="polite" aria-relevant="additions">
-        <div className="transcript" role="log" aria-label={`Conversation with ${agent}`}>
+        <div className="transcript" role="log" aria-label={`Conversation with ${agent}`} ref={contentRef}>
           {session.hasEarlier && session.messages.length > 0 && (
             <div className="row" style={{ justifyContent: 'center', padding: '8px 0' }}>
               <Button small onClick={() => void adapter.loadEarlier(session.id)}>
@@ -169,7 +328,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             </div>
           )}
 
-          {session.messages.map((message) =>
+          {before.map((message) =>
             message.role === 'user' ? (
               <div key={message.id} className="msg-user" data-message-id={message.id}>
                 {message.text}
@@ -191,10 +350,20 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             ),
           )}
 
-          {/* Every live state of a run, in one place: LoadingState before the
+          {/* The activity for the run in progress: LoadingState before the
               first delta, ThinkingState over the step rows, ToolChips per tool
-              call, StreamingText for the deltas, TaskRows for the queue. */}
-          <RunSurface session={session} />
+              call, TaskRows for the queue. Above this run's own messages, not
+              below them (decision C40) — the trace is what produced the text,
+              so reading downwards is reading in order. */}
+          <RunActivity session={session} />
+
+          {/* The messages this run has already finalised. */}
+          {during.map((message) => (
+            <IrisMessage key={message.id} message={message} session={session} />
+          ))}
+
+          {/* And the text that has not finalised yet. */}
+          <RunStream session={session} />
 
           {/* The queue's own Edit and Remove. TaskRows renders the rows; it has
               no affordance for changing one, and a queued follow-up a person
@@ -211,7 +380,14 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             </div>
           )}
         </div>
+        {/* The tail spacer. Sized by `sizeSpacer`, never by a style prop, and
+            outside `.transcript` so the flex gap does not add 24 px to a
+            measurement the arithmetic above depends on. `aria-hidden` because
+            it is geometry, and `role="log"` above would otherwise announce it. */}
+        <div className="transcript-spacer" ref={spacerRef} aria-hidden="true" />
       </div>
+      {/* Outside the scroll region, as the demo had it: a chip inside it would
+          scroll away from the reader who needs it. */}
       {away && (
         <div className="jump-latest">
           <Button
@@ -219,7 +395,10 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             onClick={() => {
               const el = ref.current;
               if (!el) return;
-              el.scrollTop = el.scrollHeight;
+              // The one deliberate, human-initiated move in the whole file, so
+              // the one place a smooth scroll earns its keep — and the one
+              // place `prefers-reduced-motion` has anything to switch off.
+              el.scrollTo({ top: el.scrollHeight, behavior: reduce ? 'auto' : 'smooth' });
               nearBottom.current = true;
               setAway(false);
             }}
@@ -254,7 +433,7 @@ function IrisMessage({ message, session }: { message: Message; session: SessionS
         <Glass name="iris" size={26} className="mark" />
         <div className="grow col" style={{ gap: 8 }}>
           {message.heading && <div className="heading">{message.heading}</div>}
-          <span className={`lead-text ${small ? 'small' : ''}`}>{message.text}</span>
+          <IrisText text={message.text} className={`lead-text ${small ? 'small' : ''}`} />
         </div>
       </div>
       {message.blocks.length > 0 && (

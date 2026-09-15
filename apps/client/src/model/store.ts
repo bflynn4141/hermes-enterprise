@@ -425,7 +425,7 @@ export type Action =
   | { type: 'message/update'; sessionId: string; id: string; patch: Partial<Message> }
   | { type: 'message/prepend'; sessionId: string; messages: Message[]; hasEarlier: boolean }
   | { type: 'run/start'; sessionId: string; run: Run }
-  | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number }
+  | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number; toolCallId?: string | null }
   | { type: 'run/status'; sessionId: string; status: Run['status']; patch?: Partial<Run> }
   | { type: 'run/guide'; sessionId: string; text: string; id: string }
   | { type: 'run/guide-apply'; sessionId: string }
@@ -762,8 +762,27 @@ export function reduce(state: AppState, action: Action): AppState {
       return withRun(state, action.sessionId, (run) => {
         const found = run.steps.some((step) => step.id === action.stepId);
         const steps = found
-          ? run.steps.map((step) => (step.id === action.stepId ? { ...step, state: action.state, label: action.label, ...(action.stepAttempt ? { step_attempt: action.stepAttempt } : {}) } : step))
-          : [...run.steps, { id: action.stepId, label: action.label, state: action.state, ...(action.stepAttempt ? { step_attempt: action.stepAttempt } : {}) }];
+          ? run.steps.map((step) =>
+              step.id === action.stepId
+                ? {
+                    ...step,
+                    state: action.state,
+                    label: action.label,
+                    ...(action.stepAttempt ? { step_attempt: action.stepAttempt } : {}),
+                    ...(action.toolCallId ? { tool_call_id: action.toolCallId } : {}),
+                  }
+                : step,
+            )
+          : [
+              ...run.steps,
+              {
+                id: action.stepId,
+                label: action.label,
+                state: action.state,
+                ...(action.stepAttempt ? { step_attempt: action.stepAttempt } : {}),
+                ...(action.toolCallId ? { tool_call_id: action.toolCallId } : {}),
+              },
+            ];
         return { ...run, steps };
       });
     case 'run/status':
@@ -950,7 +969,20 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     }
     case 'run.step': {
       const p = event.payload;
-      if (sessionId) out.push({ type: 'run/step', sessionId, stepId: p.step_id, label: p.label, state: p.state });
+      // `tool_call_id` and `attempt` were being read off the wire and then
+      // dropped here, which is why `ToolChips` never rendered a single chip and
+      // why steps from a superseded attempt were never separated: both live on
+      // the step entity and neither was reaching it (decision C44).
+      if (sessionId)
+        out.push({
+          type: 'run/step',
+          sessionId,
+          stepId: p.step_id,
+          label: p.label,
+          state: p.state,
+          stepAttempt: p.attempt,
+          toolCallId: p.tool_call_id ?? null,
+        });
       break;
     }
     case 'run.status': {

@@ -21,8 +21,19 @@ import { randomUUID } from 'node:crypto';
 
 const repoRoot = new URL('../../..', import.meta.url).pathname;
 
+/**
+ * The database every fixture and every live assertion talks to.
+ *
+ * `hermes_test`, not `hermes` (decision C43). This module is imported by the
+ * live specs, which read rows back to assert on them and insert rows to set
+ * scenarios up; pointed at `hermes` it was writing into the database the
+ * developer's own Worker is showing them. `PGDATABASE` is honoured so that a
+ * one-off run can be aimed elsewhere deliberately.
+ */
+export const DATABASE = process.env.PGDATABASE ?? 'hermes_test';
+
 export function psql(sql) {
-  return execFileSync('docker', ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'hermes', '-t', '-A', '-c', sql], {
+  return execFileSync('docker', ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql], {
     encoding: 'utf8',
     cwd: repoRoot,
   }).trim();

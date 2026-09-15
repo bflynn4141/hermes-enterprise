@@ -8,13 +8,13 @@
 // Run with the rest of the live suite (`pnpm e2e:live`), or on its own against
 // a stack you already have up:
 //
-//   E2E_BASE_URL=http://localhost:8787 npx playwright test live-screens
+//   E2E_BASE_URL=http://localhost:8788 npx playwright test live-screens
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 const SEED_WORKSPACE = '11111111-1111-4111-8111-111111111111';
 const SEED_ADMIN = 'maya@nous.example';
 const SEED_MEMBER = 'dana@nous.example';

@@ -49,23 +49,46 @@ pnpm typecheck
 pnpm test          # shared unit tests, worker unit tests, workerd tests, database tests
 ```
 
-### Starting the database over
+### Two databases, one container
+
+| | database | who writes to it |
+|---|---|---|
+| dev | `hermes` | you, through `pnpm --filter @hermes/worker dev` on :8787 |
+| test | `hermes_test` | `pnpm e2e:live`, `pnpm db:test`, the worker vitest projects |
+
+They share the Docker container and nothing else (decision C43). The suites used
+to run against `hermes`, which meant a live end-to-end session filled the Inbox
+you were reading with scripted requests, put fifty test sessions in your session
+list, and reset the workspace's default model to the seed's. The separation is
+one variable — `apps/worker/scripts/db-config.mjs` builds every connection
+string from `PGDATABASE` — and `scripts/test-db.mjs` is the one place that
+creates, migrates and seeds the test database.
 
 ```sh
-pnpm db:reset      # db:down -v, db:up, db:migrate, db:seed — in that order
+pnpm db:test:up    # create/migrate/seed hermes_test. Idempotent, not destructive
 ```
 
-`db:reset` is the one command for "the demo data looks wrong". It is
-**destructive**: `db:down` is `docker compose down -v`, so every row in the
-local Postgres goes and comes back as the seed — one workspace, one Admin
-(`maya@nous.example`), one Member (`dana@nous.example`). It is also the way to
-get a database from nothing, because tearing down a stack that was never up is
-a no-op rather than an error.
+### Starting the dev database over
+
+```sh
+pnpm db:reset      # hermes only: recreate, migrate, seed — keeping the provider keys
+```
+
+`db:reset` is the one command for "the demo data looks wrong". Three things to
+know about it:
+
+* it is **destructive** for `hermes` — every row goes and comes back as the seed:
+  one workspace, one Admin (`maya@nous.example`), one Member
+  (`dana@nous.example`);
+* it **does not** touch `hermes_test`, and it no longer runs
+  `docker compose down -v`, which would have: it drops and recreates the one
+  database instead;
+* it **keeps the seed workspace's provider keys**. A wrapped provider key is a
+  real credential, and it is the only thing in that database no script can
+  regenerate.
 
 It refuses to run under `NODE_ENV=production`, or with a `DATABASE_URL` that
-does not point at localhost. Run it after a live end-to-end session: the live
-suite creates a workspace per scenario, and a demo opened on top of that is a
-demo with thirty workspaces in the picker.
+does not point at localhost.
 
 To serve it:
 

@@ -18,6 +18,7 @@ import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
 import { ModelMenu } from './ModelMenu.js';
+import { refusalFor, type Refusal } from './refusal.js';
 import type { SessionState } from '../../model/store.js';
 
 export function Composer({ session }: { session: SessionState }) {
@@ -28,6 +29,15 @@ export function Composer({ session }: { session: SessionState }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<'guide' | 'queue'>('guide');
+  /**
+   * The last refusal, shown above the field until the next keystroke.
+   *
+   * Local state rather than a store field because it is about this composer at
+   * this moment: it is not an entity, it does not survive a reload, and a
+   * refusal left over from a session you are no longer in would be a lie
+   * (decision C45).
+   */
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
   const modeBtn = useRef<HTMLButtonElement>(null);
   const modelBtn = useRef<HTMLButtonElement>(null);
   const runtimeBtn = useRef<HTMLButtonElement>(null);
@@ -49,6 +59,10 @@ export function Composer({ session }: { session: SessionState }) {
     el.style.height = 'auto';
     el.style.height = `${Math.min(208, el.scrollHeight)}px`;
   }, [text, session.id]);
+
+  // A refusal belongs to one attempt. The next keystroke is the start of the
+  // next one, and a session switch takes it away entirely.
+  useEffect(() => setRefusal(null), [session.id]);
 
   // Reopening the panel — or New session, which opens it and then creates one —
   // puts the cursor here. The shell asks by event rather than by ref, so nothing
@@ -75,12 +89,33 @@ export function Composer({ session }: { session: SessionState }) {
     if (takeComposerFocus()) el.focus();
   }, [session.id, blocked]);
 
+  /**
+   * Send, guide or queue — and say so when the server refuses.
+   *
+   * Every one of the three used to end in `.catch(() => undefined)`, so a 400
+   * with a sentence in it produced nothing at all on screen (decision C45).
+   * Now the refusal is rendered, the draft comes back, and the caret goes back
+   * where it was so the next thing typed is a correction rather than a retype.
+   */
   const send = (): void => {
-    if (!text.trim() || blocked) return;
-    if (working && sendMode === 'queue') void adapter.queue(session.id, text).catch(() => undefined);
-    else if (working) void adapter.guide(session.id, text).catch(() => undefined);
-    else void adapter.send(session.id, text).catch(() => undefined);
+    const draft = text;
+    if (!draft.trim() || blocked) return;
+    setRefusal(null);
+    const attempt =
+      working && sendMode === 'queue'
+        ? adapter.queue(session.id, draft)
+        : working
+          ? adapter.guide(session.id, draft)
+          : adapter.send(session.id, draft);
     if (working) dispatch({ type: 'session/draft-clear', id: session.id });
+    void attempt.catch((error: unknown) => {
+      setRefusal(refusalFor(error));
+      // `adapter.send` restores the draft itself, under whichever id the store
+      // is keyed on by then; the other two clear it here, so they put it back
+      // here. Setting it twice is harmless and losing it once is not.
+      dispatch({ type: 'session/draft', id: session.id, text: draft });
+      textarea.current?.focus();
+    });
   };
 
   const status = run && ['working', 'waiting', 'stopped', 'error'].includes(run.status) ? run : null;
@@ -114,6 +149,20 @@ export function Composer({ session }: { session: SessionState }) {
       )}
 
       <div className="composer" data-blocked={blocked}>
+        {refusal && (
+          <div className="composer-refusal" role="alert">
+            <Glass name="trace" size={18} />
+            <span className="grow">{refusal.text}</span>
+            {refusal.action && (
+              <Button small onClick={() => nav(SETTINGS('Provider keys'))}>
+                {refusal.action.label}
+              </Button>
+            )}
+            <button type="button" className="text-btn" aria-label="Dismiss" onClick={() => setRefusal(null)}>
+              <Icon name="close" />
+            </button>
+          </div>
+        )}
         {blocked && (
           <div className="composer-blocked" role="status">
             <span>{keys.rejected ? EMPTY.keyRejected(keys.rejected) : EMPTY.noKey}</span>

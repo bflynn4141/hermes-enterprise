@@ -19,7 +19,7 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
 
-const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
+const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8788';
 
 /** Not a key. Twenty characters of nothing, which is all the route requires. */
 const FAKE_KEY = ['sk', 'or', 'v1', '0'.repeat(24)].join('-');

@@ -6,57 +6,25 @@
 // built-in demonstration sequence is off, and `ThinkingState` is given an
 // explicit `stage` rather than being allowed to run its own.
 //
-//   LoadingState   between `run.started` and the first `message.delta`. Its
-//                  label is the active `run.step`'s own label; no duration is
-//                  invented, because the server does not send one.
-//   ThinkingState  the step rows. `stage` is `floor(done / total * 4)` (spec
-//                  §12.6): a proportional map, never a stage the run has not
-//                  reached. Steps kept from a superseded attempt are shown
-//                  under "Earlier attempt" rather than discarded — the failure
-//                  evidence is the reason a trace exists (spec §12.3).
-//   ToolChips      one chip per `tool_call_id` seen on `run.step`.
-//   StreamingText  the accumulator `message.delta` fills, then `message.final`.
-//   TaskRows       the queue from `run.queue.updated`, plus the waiting and
-//                  error states from `run.status`.
-import { LoadingState, StreamingText, TaskRows, ThinkingState, ToolChips } from '@hermes/motion-components';
-import type { Run, RunStep } from '@hermes/shared';
+//   LoadingState   one line while a tool is running: the tool's own label and
+//                  the elapsed timer. No duration is invented, because the
+//                  server does not send one.
+//   ToolChips      inside the collapsed "Done · N steps" disclosure, one chip
+//                  per `tool_call_id`.
+//   TaskRows       the queue from `run.queue.updated` and a run parked on a
+//                  question. Not a step list (decision C44).
+//   IrisText       the accumulator `message.delta` fills, rendered by the same
+//                  component the finished message uses (decision C41).
+//
+// The order on screen is activity first, answer last (decision C40); a turn
+// that called no tool has no activity block at all (decision C44); and every
+// library component here is handed its rows explicitly — none of them is
+// allowed to fall back to the gallery's fixtures (decision C42).
+import { LoadingState, TaskRows, ToolChips } from '@hermes/motion-components';
+import type { RunStep } from '@hermes/shared';
 import { useAdapter } from '../store-context.js';
+import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
-
-/** `run.step` states the contract defines, mapped onto the library's words. */
-function taskStatus(step: RunStep, run: Run): 'done' | 'running' | 'sequence' | 'failed' | 'blocked' {
-  if (step.state === 'done') return 'done';
-  if (step.state === 'failed') return 'failed';
-  if (step.state === 'active') return run.status === 'waiting' ? 'blocked' : 'running';
-  return 'sequence';
-}
-
-/** The library's `ThinkingRow`, which it does not re-export by name. */
-interface ThinkingRow {
-  primary: string;
-  secondary?: string;
-}
-
-function thinkingRows(steps: readonly RunStep[]): ThinkingRow[] {
-  return steps.map((step) => ({
-    primary: step.label,
-    // The step's own detail, never a summary of the model's reasoning: the
-    // Reasoning variant shows tool names and sources read, nothing else.
-    ...(step.detail ? { secondary: step.detail } : {}),
-  }));
-}
-
-/**
- * The stage a controlled `ThinkingState` should show.
- *
- * Proportional, and floored, so a five-step run and a two-step run both end at
- * the last stage and neither reports a stage it has not reached.
- */
-export function stageFor(steps: readonly RunStep[]): number {
-  if (steps.length === 0) return 0;
-  const done = steps.filter((step) => step.state === 'done').length;
-  return Math.min(4, Math.floor((done / steps.length) * 4));
-}
 
 /** Steps that named a tool call, in the order the run reported them. */
 function toolSteps(steps: readonly RunStep[]) {
@@ -74,21 +42,27 @@ function toolSteps(steps: readonly RunStep[]) {
     }));
 }
 
-export function RunSurface({ session }: { session: SessionState }) {
+export function RunActivity({ session }: { session: SessionState }) {
   const adapter = useAdapter();
   const run = session.run;
   if (!run) return null;
 
   const steps = run.steps;
-  const active = steps.find((step) => step.state === 'active');
   const working = run.status === 'working';
-  const streaming = Boolean(session.stream?.text);
-  const tools = toolSteps(steps);
+  const settled = run.status === 'completed' || run.status === 'stopped' || run.status === 'error';
 
-  // Steps carried over from an earlier attempt: kept, collapsed, read-only.
+  // Only the steps that called a tool. The engine also emits a `provider` step
+  // labelled "Thinking" for every model call, and a row that says the model
+  // thought is a row that says nothing: it is true of every turn, it is the
+  // same words every time, and it was appearing twice per turn.
   const current = steps.filter((step) => (step.step_attempt ?? run.attempt) === run.attempt);
   const earlier = steps.filter((step) => (step.step_attempt ?? run.attempt) !== run.attempt);
+  const tools = toolSteps(current);
+  const earlierTools = toolSteps(earlier);
+  const activeTool = current.find((step) => step.state === 'active' && step.tool_call_id);
 
+  // TaskRows is for the two things a person can act on: a queued follow-up, and
+  // a run parked on a question. It is not a step list.
   const queueRows = (run.queue ?? [])
     .filter((item) => item.status !== 'removed')
     .map((item) => ({
@@ -99,49 +73,59 @@ export function RunSurface({ session }: { session: SessionState }) {
       details: [{ label: 'Position', meta: String(item.position + 1) }],
     }));
 
-  const stepRows = current.map((step) => ({
-    key: step.id,
-    label: step.label,
-    amount: '',
-    status: taskStatus(step, run),
-    details: step.detail ? [{ label: 'Detail', meta: step.detail }] : [],
-  }));
+  const waitingRows =
+    run.status === 'waiting'
+      ? current
+          .filter((step) => step.state === 'active')
+          .map((step) => ({
+            key: step.id,
+            label: step.label,
+            amount: 'Waiting',
+            status: 'blocked' as const,
+            details: step.detail ? [{ label: 'Detail', meta: step.detail }] : [],
+          }))
+      : [];
 
-  const rows = [...stepRows, ...queueRows];
+  const rows = [...waitingRows, ...queueRows];
+  const plural = (n: number): string => `${n} ${n === 1 ? 'step' : 'steps'}`;
+
+  // A turn with no tool call has no activity at all. Nothing was done that the
+  // reply does not already say, and a block that exists only to be collapsed is
+  // furniture (decision C40).
+  const anything = (working && tools.length > 0) || (settled && tools.length > 0) || earlierTools.length > 0 || rows.length > 0;
+  if (!anything) return null;
 
   return (
     <div className="run-surface hermes-ui" style={{ paddingLeft: 40 }}>
-      {/* Between run.started and the first delta, and only then. */}
-      {working && !streaming && (
+      {/* Working, and a tool is running: one line, the tool's own label, the
+          library's inline loader. No grid of rows growing under the reader. */}
+      {working && tools.length > 0 && (
         <LoadingState
           active
-          label={active?.label ?? run.title ?? 'Working'}
-          // The Context variant is the one the spec names while the agent is
-          // reading a document rather than calling any other tool.
-          variant={active?.id.startsWith('get_document_text') ? 'context' : 'drive'}
+          label={activeTool ? `${activeTool.label}…` : `${plural(tools.length)}`}
+          variant={activeTool?.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
         />
       )}
 
-      {current.length > 0 && (
-        <ThinkingState
-          stage={stageFor(current)}
-          rows={thinkingRows(current)}
-          {...(active ? { active: active.label } : {})}
-          {...(run.status === 'completed' ? { done: run.title ?? 'Done' } : {})}
-        />
-      )}
-
-      {earlier.length > 0 && (
-        <details className="earlier-attempt">
-          <summary>Earlier attempt</summary>
-          <ThinkingState stage={4} rows={thinkingRows(earlier)} done="Superseded" />
+      {/* Finished: one muted line, expandable to the tool rows. This is the
+          shape Claude's collapsed activity has, and the reason it is a
+          `<details>` rather than the library's `ThinkingState` is that
+          `ThinkingState` insists on a step list with its own spinner, its own
+          checks and a 176 px floor — for a trace that is usually one row. */}
+      {settled && tools.length > 0 && (
+        <details className="activity-done">
+          <summary>
+            Done · {plural(tools.length)}
+          </summary>
+          <ToolChips steps={tools} diffs={[]} diffLines={{}} />
         </details>
       )}
 
-      {tools.length > 0 && <ToolChips steps={tools} />}
-
-      {session.stream && (
-        <StreamingText fill loop={false} content={[{ text: session.stream.text }]} />
+      {earlierTools.length > 0 && (
+        <details className="activity-done">
+          <summary>Earlier attempt · {plural(earlierTools.length)}</summary>
+          <ToolChips steps={earlierTools} diffs={[]} diffLines={{}} />
+        </details>
       )}
 
       {rows.length > 0 && (
@@ -158,6 +142,34 @@ export function RunSurface({ session }: { session: SessionState }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The answer: the accumulator `message.delta` fills.
+ *
+ * A separate component from the activity above, and rendered in a separate
+ * place, because the two belong on opposite sides of the turn's finished
+ * messages (decision C40). Activity goes above them; the stream is the text
+ * that has not become one yet, so it goes last.
+ *
+ * It renders through `IrisText`, the same component the finished message uses,
+ * so `message.final` swapping one for the other changes nothing on screen. The
+ * library's `StreamingText` used to draw this and no longer does (decision
+ * C41): it re-animates text the server already sent, it cannot render a list or
+ * a table, and its `sources`, `followUps` and action row default to the
+ * gallery's fixtures — which is how a reply to "testing" came to offer "Show
+ * the application evidence" and claim three sources.
+ */
+export function RunStream({ session }: { session: SessionState }) {
+  if (!session.stream || session.stream.text.length === 0) return null;
+  return (
+    <div className="run-surface hermes-ui" style={{ paddingLeft: 40 }}>
+      <div className="stream-text">
+        <IrisText text={session.stream.text} className="lead-text" />
+        {session.stream.status === 'streaming' && <span className="stream-caret" aria-hidden="true" />}
+      </div>
     </div>
   );
 }
