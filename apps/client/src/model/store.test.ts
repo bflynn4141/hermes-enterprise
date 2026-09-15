@@ -304,6 +304,14 @@ describe('the entity cache', () => {
     expect(state.entities.request[REQUEST]!.state).not.toBe('missing');
   });
 
+  it('counts a proposed request once when focus arrives before request.created', () => {
+    const initial = base({ counts: { inbox: 0, pendingGrants: 0, createdDocuments: 0, decisions: 0 } });
+    const focused = feed(initial, event('run.focus', { run_id: RUN, session_id: SESSION_A, ref: { section: 'inbox', view: 'request', id: REQUEST }, entity_type: 'request', entity_id: REQUEST }, 3n));
+    const created = feed(focused, event('request.created', { request_id: REQUEST, kind: 'application', status: 'pending', label: 'Leah', run_id: RUN, session_id: SESSION_A }, 4n, null));
+    expect(focused.counts.inbox).toBe(1);
+    expect(created.counts.inbox).toBe(1);
+  });
+
   it('a decision is applied from the event; there is no client decide case', () => {
     const decided = feed(base({ counts: { inbox: 4, pendingGrants: 0, createdDocuments: 0, decisions: 0 } }), event('decision.recorded', { request_id: REQUEST, decision_id: mockUuid(70), decision: 'approve', resulting_status: 'admitted', decided_by: mockUuid(100), decided_at: '2026-10-12T09:50:00.000Z', effect_ids: [] }, 4n, null));
     expect(decided.counts.inbox).toBe(3);

@@ -1113,6 +1113,9 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     }
     case 'request.created': {
       const p = event.payload;
+      const alreadyKnown = Boolean(state.entities.request[p.request_id])
+        || Boolean(state.entities.lists['inbox:needs-review']?.ids.includes(p.request_id))
+        || Boolean(state.entities.lists.requests?.ids.includes(p.request_id));
       // A `request.created` for an id already cached is a no-op: the fetch that
       // answered the cross-socket miss already has the authoritative row.
       if (!state.entities.request[p.request_id]) {
@@ -1125,7 +1128,10 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // reviews waiting" while the badge says 1.
       out.push({ type: 'list/prepend', key: 'inbox:needs-review', id: p.request_id });
       out.push({ type: 'list/prepend', key: 'requests', id: p.request_id });
-      out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+      // The proposing session also emits `run.focus`. If that stream arrived
+      // first, it already inserted the request and incremented the badge.
+      // Count the request once across the two streams.
+      if (!alreadyKnown) out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
       break;
     }
     case 'decision.recorded': {
