@@ -8,10 +8,12 @@ import { RunActivity } from './RunSurface.js';
 
 const sessionId = '22222222-2222-4222-8222-222222222222';
 const runId = '33333333-3333-4333-8333-333333333333';
+const agentId = '11111111-1111-4111-8111-111111111111';
 
 function session(run: Run, streamText = ''): SessionState {
   return {
     id: sessionId,
+    agentId,
     title: 'Session',
     subtitle: null,
     mode: 'work',
@@ -43,6 +45,7 @@ function run(): Run {
   return {
     id: runId,
     session_id: sessionId,
+    agent_id: agentId,
     status: 'working',
     attempt: 1,
     title: null,

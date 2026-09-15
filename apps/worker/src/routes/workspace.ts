@@ -35,6 +35,13 @@ interface WorkspaceRow {
   timezone: string;
 }
 
+interface AgentRow {
+  id: string;
+  name: string;
+  responsibility: string | null;
+  setup_step: string | null;
+}
+
 export async function loadBootstrap(
   tx: Tx,
   workspaceId: string,
@@ -64,6 +71,17 @@ export async function loadBootstrap(
     [workspaceId, userId],
   );
 
+  const agents = await tx.query<AgentRow>(
+    `SELECT id, name, responsibility, setup_step
+       FROM agents
+      WHERE workspace_id = $1
+      ORDER BY created_at
+      LIMIT 1`,
+    [workspaceId],
+  );
+  const agent = agents.rows[0];
+  if (!agent) throw new Error('workspace has no agent');
+
   // Counts come from the views, never from a stored counter: the demo's rule
   // that 4 -> 0 works in any order is a property of deriving them.
   const counts = await tx.query<{ inbox: number; grants: number; documents: number; decisions: number }>(
@@ -76,6 +94,7 @@ export async function loadBootstrap(
 
   const sessions = await tx.query<{
     id: string;
+    agent_id: string;
     title: string;
     mode: string;
     model_id: string;
@@ -86,14 +105,15 @@ export async function loadBootstrap(
     status: string;
     last_activity_at: Date | null;
   }>(
-    `SELECT s.id, s.title, s.mode, s.model_id, s.effort, s.pinned, s.archived, s.focus_ref,
+    `SELECT s.id, COALESCE(s.agent_id, $2::uuid) AS agent_id,
+            s.title, s.mode, s.model_id, s.effort, s.pinned, s.archived, s.focus_ref,
             v.status, s.last_activity_at
        FROM sessions s
        JOIN v_session_status v ON v.session_id = s.id
       WHERE s.owner_id = $1 AND NOT s.archived
       ORDER BY s.pinned DESC, s.last_activity_at DESC
       LIMIT 50`,
-    [userId],
+    [userId, agent.id],
   );
 
   const requests = await tx.query<{ id: string; kind: string; status: string; label: string }>(
@@ -170,6 +190,13 @@ export async function loadBootstrap(
       user_id: userId,
       role: viewer.rows[0]?.role ?? 'member',
       reviewer_roles: viewer.rows[0]?.reviewer_roles ?? [],
+    },
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      email: `${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '')}@hermesmail.example`,
+      responsibility: agent.responsibility,
+      setup_step: agent.setup_step,
     },
     heads: { session: head.session_head, workspace: head.workspace_head },
     counts: {

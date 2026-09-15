@@ -475,10 +475,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
           email: extra.user?.email ?? '',
           role: boot.viewer.role,
         },
-        // The agent's identity has no route of its own yet; the workspace name
-        // is the one true thing available, and 'Iris' is the product default
-        // the empty-state copy is written around.
-        agent: { id: null, name: 'Iris', email: '', summary: '', setupStep: null },
+        agent: {
+          id: boot.agent.id,
+          name: boot.agent.name,
+          email: boot.agent.email,
+          summary: boot.agent.responsibility ?? '',
+          setupStep: boot.agent.setup_step,
+        },
         sessions,
         sessionOrder: boot.sessions.map((row) => row.id),
         activeSessionId: boot.sessions[0]?.id ?? null,
@@ -678,7 +681,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const localId = `local-${uuid()}`;
     dispatch({ type: 'session/create', id: localId, ...opts, pending: true });
     const settled = (async () => {
-      const row = await rest.createSession(workspaceId, opts);
+      const agentId = state().agent.id;
+      const row = await rest.createSession(workspaceId, { ...opts, ...(agentId ? { agent_id: agentId } : {}) });
       dispatch({ type: 'session/reconcile', localId, serverId: row.id });
       dispatch({ type: 'session/upsert', session: row });
       openSession(row.id);
@@ -911,6 +915,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
 function sessionSeed(row: import('@hermes/shared').Bootstrap['sessions'][number]) {
   return {
     id: row.id,
+    agentId: row.agent_id,
     title: row.title,
     subtitle: null,
     mode: row.mode,

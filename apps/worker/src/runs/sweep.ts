@@ -286,8 +286,8 @@ async function drainRunQueues(env: Env, workspaceId: string): Promise<number> {
       if (seen.has(item.session_id)) continue;
       seen.add(item.session_id);
 
-      const session = await tx.query<{ owner_id: string; model_id: string; effort: string | null }>(
-        `SELECT owner_id, model_id, effort FROM sessions WHERE id = $1 AND workspace_id = $2 AND read_only = false`,
+      const session = await tx.query<{ owner_id: string; agent_id: string; model_id: string; effort: string | null }>(
+        `SELECT owner_id, agent_id, model_id, effort FROM sessions WHERE id = $1 AND workspace_id = $2 AND read_only = false`,
         [item.session_id, workspaceId],
       );
       const row = session.rows[0];
@@ -297,13 +297,14 @@ async function drainRunQueues(env: Env, workspaceId: string): Promise<number> {
       const traceId = crypto.randomUUID();
       const engineVersion = Number(env.ENGINE_VERSION ?? '1') || 1;
       await tx.query(
-        `INSERT INTO runs (id, workspace_id, session_id, status, model_id, effort, max_turns,
+        `INSERT INTO runs (id, workspace_id, session_id, agent_id, status, model_id, effort, max_turns,
                            trace_id, workflow_instance_id, attempt, engine_version, client_turn_id)
-         VALUES ($1, $2, $3, 'working', $4, $5, $6, $7, $8, 1, $9, $10)`,
+         VALUES ($1, $2, $3, $4, 'working', $5, $6, $7, $8, $9, 1, $10, $11)`,
         [
           runId,
           workspaceId,
           item.session_id,
+          row.agent_id,
           row.model_id,
           row.effort,
           DEFAULT_MAX_TURNS,

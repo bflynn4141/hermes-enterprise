@@ -20,6 +20,7 @@ import {
   paginatedSchema,
   sessionSchema,
   shareResponseSchema,
+  uuidSchema,
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
@@ -53,7 +54,7 @@ const MAX_PAGE = 100;
  */
 export const VISIBLE = `(s.owner_id = $2)`;
 
-const SESSION_COLUMNS = `s.id, s.owner_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
+const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
        s.pinned, s.archived, s.read_only, s.focus_ref, s.last_activity_at`;
 
 async function loadSession(
@@ -87,6 +88,7 @@ function requireOwner(work: TenantWork, session: { owner_id: string; read_only: 
 
 const toSession = (row: Record<string, unknown>): unknown => ({
   id: row.id,
+  agent_id: row.agent_id,
   title: row.title,
   mode: row.mode,
   model_id: row.model_id,
@@ -132,9 +134,13 @@ export async function listSessions(c: Context<{ Bindings: Env }>): Promise<Respo
 export async function createSession(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
-  const input: { title?: string; mode?: string } = await jsonBody<{ title?: string; mode?: string }>(c).catch(
+  const input: { title?: string; mode?: string; agent_id?: string } = await jsonBody<{ title?: string; mode?: string; agent_id?: string }>(c).catch(
     () => ({}),
   );
+  const requestedAgent = input.agent_id === undefined ? null : uuidSchema.safeParse(input.agent_id);
+  if (requestedAgent && !requestedAgent.success) {
+    throw new RouteError('agent_id must be a UUID', 'bad_agent_id', 422);
+  }
 
   const body = await inWorkspace(c, async (work) => {
     const settings = await work.tx.query<{
@@ -153,14 +159,27 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
     };
     const mode = input.mode === 'ask' || input.mode === 'plan' ? input.mode : 'work';
 
+    // A session belongs to an agent for its whole life. The optional input is
+    // for the multi-agent shape; omitting it keeps the current one-agent
+    // workspace flow working while still persisting the resolved identity.
+    const agentRows = await work.tx.query<{ id: string }>(
+      `SELECT id FROM agents
+        WHERE workspace_id = $1 AND ($2::uuid IS NULL OR id = $2)
+        ORDER BY created_at LIMIT 1`,
+      [work.workspaceId, requestedAgent?.success ? requestedAgent.data : null],
+    );
+    const agentId = agentRows.rows[0]?.id;
+    if (!agentId) throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+
     const { rows } = await work.tx.query(
-      `INSERT INTO sessions (workspace_id, owner_id, title, mode, model_id, effort, runtime)
-       VALUES ($1, $2, COALESCE(NULLIF($3, ''), 'New session'), $4, $5, $6, $7)
-       RETURNING id, owner_id, title, mode, model_id, effort, runtime, pinned, archived,
+      `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
+       VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'New session'), $5, $6, $7, $8)
+       RETURNING id, owner_id, agent_id, title, mode, model_id, effort, runtime, pinned, archived,
                  read_only, focus_ref, last_activity_at`,
       [
         work.workspaceId,
         work.userId,
+        agentId,
         (input.title ?? '').slice(0, 120),
         mode,
         defaults.default_model_id,
@@ -273,7 +292,7 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
 
     const { rows } = await work.tx.query(
       `UPDATE sessions SET ${sets.join(', ')} WHERE workspace_id = $1 AND id = $2
-       RETURNING id, owner_id, title, mode, model_id, effort, runtime, pinned, archived,
+       RETURNING id, owner_id, agent_id, title, mode, model_id, effort, runtime, pinned, archived,
                  read_only, focus_ref, last_activity_at`,
       values,
     );

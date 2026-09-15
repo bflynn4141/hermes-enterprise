@@ -60,6 +60,7 @@ describe('POST /w/:ws/sessions', () => {
 
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({
+      agent_id: fixture.agentId,
       title: 'Partner applications',
       // The workspace default, which is an OpenRouter id from the seed onwards
       // (decision R13). The row it names is the placeholder 0016 wrote.
@@ -68,6 +69,17 @@ describe('POST /w/:ws/sessions', () => {
       runtime: 'local',
       status: 'idle',
     });
+  });
+
+  it('refuses an agent from outside the workspace', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    const response = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/sessions`, {
+      method: 'POST',
+      body: { agent_id: randomUUID() },
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ reason: 'unknown_agent' });
   });
 });
 

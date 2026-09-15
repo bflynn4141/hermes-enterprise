@@ -49,6 +49,7 @@ export type Paginated<T> = { items: T[]; cursor: string | null; total: number | 
 export const sessionSchema = z
   .object({
     id: uuidSchema,
+    agent_id: uuidSchema,
     title: z.string().max(200),
     mode: sessionModeSchema,
     model_id: z.string().max(64),
@@ -132,6 +133,7 @@ export const runSchema = z
   .object({
     id: uuidSchema,
     session_id: uuidSchema,
+    agent_id: uuidSchema,
     status: runStatusSchema,
     attempt: z.number().int().min(1),
     title: z.string().max(200).nullable(),
@@ -360,6 +362,7 @@ export const traceEntitySchema = z
   .object({
     id: uuidSchema,
     run_id: uuidSchema,
+    agent_id: uuidSchema,
     name: z.string().max(200),
     type: z.string().max(120),
     status: z.string().max(64),

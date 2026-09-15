@@ -48,6 +48,8 @@ describe('GET /w/:ws/bootstrap', () => {
     const body = (await response.json()) as {
       workspace: { id: string; settings: { default_model_id: string } };
       viewer: { role: string; reviewer_roles: string[] };
+      agent: { id: string; name: string };
+      sessions: { id: string; agent_id: string }[];
       counts: Record<string, number>;
       heads: { session: string; workspace: string };
       requests: unknown[];
@@ -57,6 +59,8 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.workspace.id).toBe(fx.workspaceId);
     expect(body.viewer.role).toBe('admin');
     expect(body.viewer.reviewer_roles).toEqual(['access', 'finance']);
+    expect(body.agent).toMatchObject({ id: fx.agentId, name: 'Iris' });
+    expect(body.sessions).toContainEqual(expect.objectContaining({ id: fx.sessionId, agent_id: fx.agentId }));
     expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0 });
     expect(body.heads).toEqual({ session: '0', workspace: '0' });
     expect(body.requests).toEqual([]);

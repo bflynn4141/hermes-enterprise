@@ -31,6 +31,7 @@ const WS = mockUuid(1);
 const SESSION_A = mockUuid(2);
 const SESSION_B = mockUuid(21);
 const RUN = mockUuid(3);
+const AGENT = mockUuid(4);
 const MESSAGE = mockUuid(10);
 const REQUEST = mockUuid(11);
 
@@ -62,6 +63,7 @@ function session(id: string, patch: Partial<SessionState> = {}): SessionState {
     carried: null,
     titleSource: 'auto',
     ...patch,
+    agentId: patch.agentId ?? AGENT,
   };
 }
 
@@ -442,7 +444,7 @@ describe('session titles and blank sessions', () => {
     state = reduce(state, { type: 'session/auto-title', id: SESSION_A, title: 'Screen the applicant' });
     state = reduce(state, {
       type: 'session/upsert',
-      session: { id: SESSION_A, title: DEFAULT_SESSION_TITLE, mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: '2026-10-12T09:49:00.000Z', share: null, context: null, version: 2 },
+      session: { id: SESSION_A, agent_id: AGENT, title: DEFAULT_SESSION_TITLE, mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: '2026-10-12T09:49:00.000Z', share: null, context: null, version: 2 },
     });
     expect(state.sessions[SESSION_A]!.title).toBe('Screen the applicant');
   });

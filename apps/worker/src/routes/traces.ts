@@ -19,7 +19,7 @@
 //
 // See decision F8.
 import type { Context } from 'hono';
-import { paginatedSchema, refSchema, traceEntitySchema } from '@hermes/shared';
+import { paginatedSchema, refSchema, traceEntitySchema, uuidSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { TOOL_RESULT_TRUNCATION_MARKER } from '../engine/constants.js';
 import { inWorkspace, pathUuid } from './tenant.js';
@@ -33,6 +33,7 @@ const FIELD_MAX = 20_000;
 
 interface RunRow {
   id: string;
+  agent_id: string;
   session_id: string;
   title: string | null;
   status: string;
@@ -67,6 +68,7 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
   traceEntitySchema.parse({
     id: run.id,
     run_id: run.id,
+    agent_id: run.agent_id,
     name: run.title ?? 'Run',
     type: `${run.mode} · ${run.model_id}`,
     status: run.status,
@@ -99,7 +101,7 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
 // arguments and results — which is where the applicant payload and the fetched
 // documents are — for a session they were never shown.
 const RUN_SELECT = `
-  SELECT r.id, r.session_id, s.title, r.status, r.mode, r.model_id, r.active_ms, r.attempt,
+  SELECT r.id, COALESCE(r.agent_id, s.agent_id) AS agent_id, r.session_id, s.title, r.status, r.mode, r.model_id, r.active_ms, r.attempt,
          r.waiting_for, r.started_at,
          (SELECT count(*) FROM run_steps st WHERE st.run_id = r.id)::text AS step_count
     FROM runs r
@@ -108,6 +110,9 @@ const RUN_SELECT = `
 export async function listTraces(c: Context<{ Bindings: Env }>): Promise<Response> {
   const limit = Math.min(LIST_LIMIT, Math.max(1, Number(c.req.query('limit') ?? LIST_LIMIT) || LIST_LIMIT));
   const sessionId = c.req.query('session');
+  const agentIdRaw = c.req.query('agent_id');
+  const agentId = agentIdRaw === undefined ? null : uuidSchema.safeParse(agentIdRaw);
+  if (agentId && !agentId.success) throw new RouteError('agent_id must be a UUID', 'bad_agent_id', 422);
 
   const items = await inWorkspace(c, async (work) => {
     const values: unknown[] = [work.workspaceId, work.userId];
@@ -115,6 +120,10 @@ export async function listTraces(c: Context<{ Bindings: Env }>): Promise<Respons
     if (sessionId) {
       values.push(sessionId);
       where += ` AND r.session_id = $${values.length}`;
+    }
+    if (agentId?.success) {
+      values.push(agentId.data);
+      where += ` AND COALESCE(r.agent_id, s.agent_id) = $${values.length}`;
     }
     values.push(limit);
     const runs = await work.tx.query<RunRow>(
@@ -250,10 +259,9 @@ export async function getTrace(c: Context<{ Bindings: Env }>): Promise<Response>
     const allowed = await work.tx.query<{ name: string }>(
       `SELECT unnest(c.tool_names) AS name
          FROM agent_capabilities c
-         JOIN agents a ON a.id = c.agent_id
-        WHERE c.workspace_id = $1
+        WHERE c.workspace_id = $1 AND c.agent_id = $2
         ORDER BY name`,
-      [work.workspaceId],
+      [work.workspaceId, run.agent_id],
     );
 
     return toTraceEntity(run, steps.rows, {

@@ -15,6 +15,7 @@ const WS = mockUuid(1);
 const USER = mockUuid(100);
 const SESSION = mockUuid(2);
 const RUN = mockUuid(3);
+const AGENT = mockUuid(4);
 const REQUEST = mockUuid(11);
 
 // --- a localStorage and sessionStorage the node environment does not have ---
@@ -77,9 +78,10 @@ const bootstrapBody = {
     settings: { default_model_id: 'deepseek-flash', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: null, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
   },
   viewer: { user_id: USER, role: 'admin', reviewer_roles: [] },
+  agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
   heads: { session: '0', workspace: '0' },
   counts: { inbox: 1, pending_grants: 0, created_documents: 0, decisions: 0 },
-  sessions: [{ id: SESSION, title: 'Partner applications', mode: 'work', model_id: 'deepseek-flash', effort: 'high', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: iso }],
+  sessions: [{ id: SESSION, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'deepseek-flash', effort: 'high', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: iso }],
   requests: [],
   catalog: [],
 };

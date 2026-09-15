@@ -302,6 +302,7 @@ export const agentSkills = pgTable(
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id'),
   ownerId: uuid('owner_id').notNull(),
   title: text('title').notNull().default('New session'),
   subtitle: text('subtitle'),
@@ -379,6 +380,7 @@ export const runs = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     workspaceId: uuid('workspace_id').notNull(),
     sessionId: uuid('session_id').notNull(),
+    agentId: uuid('agent_id'),
     status: text('status').notNull().default('working'),
     waitingFor: text('waiting_for'),
     waitingLabel: text('waiting_label'),

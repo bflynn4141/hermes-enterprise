@@ -325,6 +325,13 @@ describe('SR-5 · a member cannot read another member’s run through Traces', (
     expect(((await mine.json()) as { items: { run_id: string }[] }).items.map((i) => i.run_id)).toContain(runId);
     expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/traces/${runId}`)).status).toBe(200);
 
+    const forAgent = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/traces?agent_id=${fx.agentId}`);
+    expect(((await forAgent.json()) as { items: { run_id: string; agent_id: string }[] }).items).toContainEqual(
+      expect.objectContaining({ run_id: runId, agent_id: fx.agentId }),
+    );
+    const forAnotherAgent = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/traces?agent_id=${randomUUID()}`);
+    expect(((await forAnotherAgent.json()) as { items: unknown[] }).items).toEqual([]);
+
     // The other member does not. The module's header claimed Traces was "not
     // new authority over anything" because every row was already readable
     // through `messages` — but `messages` is gated on ownership-or-share and

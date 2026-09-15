@@ -86,9 +86,9 @@ export async function seedWorkspace(): Promise<Fixture> {
       workspaceId,
     ]);
     await c.query(
-      `INSERT INTO sessions (id, workspace_id, owner_id, title, model_id)
-       VALUES ($1, $2, $3, 'Partner applications', 'deepseek-flash')`,
-      [sessionId, workspaceId, adminId],
+      `INSERT INTO sessions (id, workspace_id, owner_id, agent_id, title, model_id)
+       VALUES ($1, $2, $3, $4, 'Partner applications', 'deepseek-flash')`,
+      [sessionId, workspaceId, adminId, agentId],
     );
     await c.query('COMMIT');
   });

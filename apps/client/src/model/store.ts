@@ -94,6 +94,7 @@ export interface DraftState {
 
 export interface SessionState {
   id: string;
+  agentId: string | null;
   title: string;
   subtitle: string | null;
   mode: string;
@@ -288,6 +289,7 @@ export function initialState(): AppState {
 export function sessionFrom(row: Session): SessionState {
   return {
     id: row.id,
+    agentId: row.agent_id,
     title: row.title,
     subtitle: null,
     mode: row.mode,
@@ -587,6 +589,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'session/create': {
       const session: SessionState = {
         id: action.id,
+        agentId: state.agent.id,
         title: action.title ?? DEFAULT_SESSION_TITLE,
         subtitle: null,
         mode: action.mode ?? 'ask',
@@ -943,12 +946,18 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
   switch (event.kind) {
     case 'run.started': {
       const p = event.payload;
+      const agentId = state.sessions[p.session_id]?.agentId ?? state.agent.id;
+      // Bootstrap and the session row establish the identity before a run can
+      // arrive. If an out-of-order event breaks that contract, keep the cursor
+      // moving and wait for resync instead of attributing work to a guess.
+      if (!agentId) break;
       out.push({
         type: 'run/start',
         sessionId: p.session_id,
         run: {
           id: p.run_id,
           session_id: p.session_id,
+          agent_id: agentId,
           status: 'working',
           attempt: p.attempt,
           title: p.title,

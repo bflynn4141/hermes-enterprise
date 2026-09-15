@@ -49,6 +49,15 @@ export const bootstrapSchema = z
     viewer: z
       .object({ user_id: uuidSchema, role: memberRoleSchema, reviewer_roles: z.array(z.string()) })
       .strict(),
+    agent: z
+      .object({
+        id: uuidSchema,
+        name: z.string().max(80),
+        email: z.string().max(200),
+        responsibility: z.string().max(2000).nullable(),
+        setup_step: z.string().max(32).nullable(),
+      })
+      .strict(),
     /** Replay cursors: the client asks for events after these. */
     heads: z.object({ session: streamIdSchema, workspace: streamIdSchema }).strict(),
     counts: z
@@ -63,6 +72,7 @@ export const bootstrapSchema = z
       z
         .object({
           id: uuidSchema,
+          agent_id: uuidSchema,
           title: z.string(),
           mode: sessionModeSchema,
           model_id: z.string(),

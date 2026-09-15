@@ -120,7 +120,7 @@ export class PgAgentDb implements AgentDb {
         `SELECT r.id, r.workspace_id, r.session_id, r.status, r.stop_requested, r.attempt,
                 r.engine_version, r.max_turns, r.model_id, r.effort, r.trace_id, r.active_ms,
                 r.waiting_for, r.client_turn_id, coalesce(r.mode, s.mode) AS mode,
-                (SELECT a.id FROM agents a WHERE a.workspace_id = r.workspace_id ORDER BY a.created_at LIMIT 1) AS agent_id
+                COALESCE(r.agent_id, s.agent_id) AS agent_id
            FROM runs r JOIN sessions s ON s.id = r.session_id
           WHERE r.id = $1`,
         [runId],
@@ -269,10 +269,11 @@ export class PgAgentDb implements AgentDb {
       const { rows } = await q<{ body: string | null }>(
         `SELECT COALESCE(iv.body, a.instructions_active) AS body
            FROM runs r
-           JOIN agents a ON a.workspace_id = r.workspace_id
+           JOIN sessions s ON s.id = r.session_id
+           JOIN agents a ON a.id = COALESCE(r.agent_id, s.agent_id)
            LEFT JOIN instruction_versions iv ON iv.id = r.instruction_version_id
           WHERE r.id = $1
-          ORDER BY a.created_at LIMIT 1`,
+          LIMIT 1`,
         [runId],
       );
       return rows[0]?.body ?? '';
@@ -830,4 +831,3 @@ export class PgAgentDb implements AgentDb {
     });
   }
 }
-

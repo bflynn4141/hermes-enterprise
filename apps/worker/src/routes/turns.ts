@@ -41,6 +41,7 @@ const TURN_LIMIT: RateLimit = { action: 'run.turn', limit: 30, windowSeconds: 60
 
 interface SessionRow {
   id: string;
+  agent_id: string;
   owner_id: string;
   read_only: boolean;
   mode: string;
@@ -50,7 +51,7 @@ interface SessionRow {
 
 async function loadSessionForWrite(work: TenantWork, sessionId: string): Promise<SessionRow> {
   const { rows } = await work.tx.query<SessionRow>(
-    `SELECT s.id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort FROM sessions s
+    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort FROM sessions s
       WHERE s.workspace_id = $1 AND s.id = $3 AND ${VISIBLE}`,
     [work.workspaceId, work.userId, sessionId],
   );
@@ -63,6 +64,7 @@ async function loadSessionForWrite(work: TenantWork, sessionId: string): Promise
 
 interface RunRow {
   id: string;
+  agent_id: string;
   status: string;
   attempt: number;
   engine_version: number;
@@ -93,7 +95,7 @@ interface RunRow {
  */
 async function loadRun(work: TenantWork, sessionId: string, runId: string): Promise<RunRow> {
   const { rows } = await work.tx.query<RunRow>(
-    `SELECT id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
+    `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
        FROM runs WHERE workspace_id = $1 AND id = $2 AND session_id = $3
        FOR UPDATE`,
     [work.workspaceId, runId, sessionId],
@@ -215,7 +217,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     // The duplicate check comes before every refusal below: a re-POST of a turn
     // that already started must return that run, not "you are over your cap".
     const existing = await work.tx.query<RunRow>(
-      `SELECT id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
+      `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
          FROM runs WHERE workspace_id = $1 AND session_id = $2 AND client_turn_id = $3`,
       [work.workspaceId, sessionId, clientTurnId],
     );
@@ -295,14 +297,15 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         // `mode` is copied onto the row here, not joined from the session at
         // read time: a person switching the selector mid-run must change the
         // next run rather than what this one may already have started doing.
-        `INSERT INTO runs (id, workspace_id, session_id, status, model_id, effort, max_turns,
+        `INSERT INTO runs (id, workspace_id, session_id, agent_id, status, model_id, effort, max_turns,
                            trace_id, workflow_instance_id, attempt, engine_version, client_turn_id, mode)
-         VALUES ($1, $2, $3, 'working', $4, $5, $6, $7, $8, 1, $9, $10, $11)
-         RETURNING id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for`,
+         VALUES ($1, $2, $3, $4, 'working', $5, $6, $7, $8, $9, 1, $10, $11, $12)
+         RETURNING id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for`,
         [
           runId,
           work.workspaceId,
           sessionId,
+          session.agent_id,
           session.model_id,
           session.effort,
           DEFAULT_MAX_TURNS,
@@ -322,7 +325,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         // Either the same client_turn_id raced us, or this session already has
         // a live run. The two are different answers to the caller.
         const raced = await work.tx.query<RunRow>(
-          `SELECT id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
+          `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
              FROM runs WHERE workspace_id = $1 AND session_id = $2 AND client_turn_id = $3`,
           [work.workspaceId, sessionId, clientTurnId],
         );
@@ -709,17 +712,11 @@ export async function answerContext(c: Context<{ Bindings: Env }>): Promise<Resp
     if (run.waiting_for !== key) {
       throw new RouteError(`this run is waiting for ${run.waiting_for ?? 'nothing'}`, 'wrong_key', 409);
     }
-    const agent = await work.tx.query<{ id: string }>(
-      `SELECT id FROM agents WHERE workspace_id = $1 ORDER BY created_at LIMIT 1`,
-      [work.workspaceId],
-    );
-    const agentId = agent.rows[0]?.id;
-    if (!agentId) throw new RouteError('this workspace has no agent', 'no_agent', 409);
     await work.tx.query(
       `INSERT INTO agent_context_fields (workspace_id, agent_id, key, value, scope, set_by, run_id)
        VALUES ($1, $2, $3, $4, 'reply', $5, $6)
        ON CONFLICT (agent_id, key) DO UPDATE SET value = EXCLUDED.value, set_by = EXCLUDED.set_by, updated_at = now()`,
-      [work.workspaceId, agentId, key, value, work.userId, runId],
+      [work.workspaceId, run.agent_id, key, value, work.userId, runId],
     );
     await work.tx.query(
       `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, run_id, session_id)

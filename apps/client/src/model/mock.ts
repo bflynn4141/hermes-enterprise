@@ -58,6 +58,7 @@ const ERASURE_COPY =
 
 interface MockSession {
   id: string;
+  agent_id: string;
   title: string;
   mode: string;
   model_id: string;
@@ -278,10 +279,10 @@ export function createMockBackend(options: MockOptions = {}) {
   ];
 
   const sessions: MockSession[] = empty
-    ? [{ id: SESSION_A, title: 'New session', mode: 'ask', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
+    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, title: 'Partner applications', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, title: 'Provider documents', mode: 'plan', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
       ];
 
   const messages: Record<string, unknown[]> = {
@@ -355,6 +356,7 @@ export function createMockBackend(options: MockOptions = {}) {
         {
           id: TRACE_LEAH,
           run_id: RUN,
+          agent_id: AGENT,
           name: 'Leah Martinez',
           type: 'Application screening',
           status: 'Awaiting review',
@@ -524,9 +526,10 @@ export function createMockBackend(options: MockOptions = {}) {
           settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
         },
         viewer: { user_id: USER, role: seat, reviewer_roles: seat === 'admin' ? ['access'] : [] },
+        agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
         heads: { session: head.toString(), workspace: head.toString() },
         counts: { inbox: requests.filter((r) => r.status === 'pending').length, pending_grants: 0, created_documents: documents.length, decisions: 0 },
-        sessions: sessions.map((s) => ({ id: s.id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
+        sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
         requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
         catalog,
       });
@@ -553,7 +556,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/sessions') && method === 'GET') return page(sessions);
     if (p('/sessions') && method === 'POST') {
-      const created = { id: mockUuid(400 + sessions.length), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
+      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
       sessions.push(created);
       messages[created.id] = [];
       return json(created);
