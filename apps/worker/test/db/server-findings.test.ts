@@ -271,6 +271,24 @@ describe('F4 · GET /auth/login?step_up=1 in fake mode', () => {
     expect(age).toBeLessThan(60);
   });
 
+  it('accepts the development cookie when a navigation carries no header', async () => {
+    const fx = await seedWorkspace();
+    await call(`/w/${fx.workspaceId}/bootstrap`, { headers: asUser(fx.adminId) });
+    await withClient('owner', (c) =>
+      c.query(`UPDATE auth_sessions SET authenticated_at = now() - interval '2 hours' WHERE sid = $1`, [
+        `dev-${fx.adminId}`,
+      ]),
+    );
+    // A top-level navigation: no x-dev-user header, only the cookie the fake client writes.
+    const response = await call(`/auth/login?step_up=1&return_to=/workspace/${fx.workspaceId}`, {
+      headers: { cookie: `hermes_dev_user=${encodeURIComponent(fx.adminId)}` },
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(`/workspace/${fx.workspaceId}`);
+    const bare = await call(`/auth/login?step_up=1`, {});
+    expect(bare.status).toBe(401);
+  });
+
   it('collapses an off-site return_to to /', async () => {
     const fx = await seedWorkspace();
     const response = await call('/auth/login?step_up=1&return_to=https://evil.example/', {

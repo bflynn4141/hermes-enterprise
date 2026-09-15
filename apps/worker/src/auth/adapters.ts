@@ -68,10 +68,16 @@ async function touchAuthSession(client: Client, sid: string, userId: string): Pr
  * Development adapter. The header names a seeded user by email or id; the row
  * must already exist, so a typo is a 401 rather than an invented identity.
  */
+export const DEV_USER_COOKIE = 'hermes_dev_user';
+
 export const fakeAuth: AuthAdapter = {
   mode: 'fake',
   async getSession(c) {
-    const header = c.req.header('x-dev-user');
+    // A top-level navigation (the step-up redirect, a page reload) cannot carry
+    // a header, so in development the fake client also sets a `hermes_dev_user`
+    // cookie. The header still wins; the cookie is read only where the adapter
+    // could exist at all (development), so a deployed environment never sees it.
+    const header = c.req.header('x-dev-user') ?? (isDevelopment(c.env) ? readCookie(c, DEV_USER_COOKIE) : null);
     if (!header) throw new AuthError('x-dev-user is required in fake auth mode', 'no_session');
 
     const client = await connect(c.env, 'app');

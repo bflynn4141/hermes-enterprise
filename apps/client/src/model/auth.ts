@@ -54,6 +54,15 @@ export interface AuthAdapter {
 
 const DEV_USER_KEY = 'hermes:dev-user';
 
+// Fake mode only: a top-level navigation (the step-up redirect) carries no
+// header, so the Worker's fake adapter also accepts this cookie in development.
+// Folded out of production builds with the header itself.
+function writeDevUserCookie(id: string): void {
+  if (__AUTH_MODE__ !== 'fake' || typeof document === 'undefined') return;
+  document.cookie = `hermes_dev_user=${encodeURIComponent(id)}; Path=/; SameSite=Lax`;
+}
+
+
 /**
  * The seeded pair `apps/worker/scripts/seed-dev.mjs` writes: an Admin and a
  * Member, which is exactly what the two-context Playwright scenarios need.
@@ -85,6 +94,7 @@ export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
   if (mode === 'fake') {
     try {
       devUser = localStorage.getItem(DEV_USER_KEY) ?? DEFAULT_DEV_USER;
+      writeDevUserCookie(devUser);
     } catch {
       devUser = DEFAULT_DEV_USER;
     }
@@ -116,6 +126,7 @@ export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
     devUser: () => devUser,
     setDevUser(id) {
       devUser = id;
+      writeDevUserCookie(id);
       try {
         localStorage.setItem(DEV_USER_KEY, id);
       } catch {
