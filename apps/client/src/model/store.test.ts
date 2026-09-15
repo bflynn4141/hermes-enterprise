@@ -7,7 +7,23 @@
 import { describe, expect, it } from 'vitest';
 import { CTX, CTX_DEST, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type StreamEvent } from '@hermes/shared';
 import { parseRef, serialiseRef } from './routes.js';
-import { actionsFor, createStore, initialState, reduce, type Action, type AppState, type SessionState } from './store.js';
+import {
+  DEFAULT_SESSION_TITLE,
+  IRIS_MIN_WIDTH,
+  actionsFor,
+  autoTitleFrom,
+  createStore,
+  initialState,
+  irisMaxWidth,
+  isBlankSession,
+  reduce,
+  resolveIrisWidth,
+  visibleSessions,
+  workAreaFor,
+  type Action,
+  type AppState,
+  type SessionState,
+} from './store.js';
 
 const WS = mockUuid(1);
 const SESSION_A = mockUuid(2);
@@ -42,6 +58,7 @@ function session(id: string, patch: Partial<SessionState> = {}): SessionState {
     pending: false,
     lastActivity: 0,
     carried: null,
+    titleSource: 'auto',
     ...patch,
   };
 }
@@ -294,5 +311,127 @@ describe('the store wrapper', () => {
     store.dispatch({ type: 'session/rename', id: SESSION_A, title: 'Renamed' });
     store.dispatch({ type: 'session/rename', id: 'nope', title: 'Nothing' });
     expect(calls).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Iris panel (decision C33)
+// ---------------------------------------------------------------------------
+
+describe('the Iris panel', () => {
+  it('starts open and toggles open↔rail, not open↔nothing', () => {
+    let state = base();
+    expect(state.ui.irisPanel).toBe('open');
+    state = reduce(state, { type: 'iris/toggle' });
+    expect(state.ui.irisPanel).toBe('rail');
+    state = reduce(state, { type: 'iris/toggle' });
+    expect(state.ui.irisPanel).toBe('open');
+  });
+
+  it('keeps the old boolean callers working: open:false is the rail, open:true opens', () => {
+    let state = base();
+    state = reduce(state, { type: 'iris/toggle', open: false });
+    expect(state.ui.irisPanel).toBe('rail');
+    state = reduce(state, { type: 'iris/toggle', open: true });
+    expect(state.ui.irisPanel).toBe('open');
+  });
+
+  it('only opens from hidden — a toggle does not half-undo a deliberate hide', () => {
+    let state = reduce(base(), { type: 'iris/panel', panel: 'hidden' });
+    state = reduce(state, { type: 'iris/toggle' });
+    expect(state.ui.irisPanel).toBe('open');
+  });
+
+  it('clamps the width to the minimum and to 60 percent of the work area', () => {
+    const work = workAreaFor(1840); // 1600
+    let state = reduce(base(), { type: 'iris/width', width: 120, workArea: work });
+    expect(state.ui.irisWidth).toBe(IRIS_MIN_WIDTH);
+    state = reduce(state, { type: 'iris/width', width: 9000, workArea: work });
+    expect(state.ui.irisWidth).toBe(irisMaxWidth(work));
+    expect(state.ui.irisWidth).toBe(960);
+    state = reduce(state, { type: 'iris/width', width: 700, workArea: work });
+    expect(state.ui.irisWidth).toBe(700);
+    state = reduce(state, { type: 'iris/width', width: null });
+    expect(state.ui.irisWidth).toBeNull();
+  });
+
+  it('resolves a null width by the demo rule: 800 at 1840, an equal split below it', () => {
+    expect(resolveIrisWidth(null, 1840)).toBe(800);
+    expect(resolveIrisWidth(null, 1920)).toBe(800);
+    // 1440 − 240 nav = 1200 of work area, split evenly.
+    expect(resolveIrisWidth(null, 1440)).toBe(600);
+    // Below 1180 the navigation is 76 px wide, and the split follows it.
+    expect(resolveIrisWidth(null, 1100)).toBe(512);
+    // A remembered width still obeys the ceiling at a narrower window.
+    expect(resolveIrisWidth(900, 1440)).toBe(720);
+  });
+
+  it('counts Iris messages that arrive while collapsed, and clears on open', () => {
+    let state = reduce(base(), { type: 'iris/panel', panel: 'rail' });
+    state = feed(state, event('message.appended', { session_id: SESSION_A, message_id: MESSAGE, seq: 4, role: 'iris', kind: 'text', text: 'Done', blocks: [], status: 'complete', run_id: RUN }, 10n));
+    expect(state.ui.irisUnread).toBe(1);
+    // The person's own message is not something they missed.
+    state = feed(state, event('message.appended', { session_id: SESSION_A, message_id: mockUuid(12), seq: 5, role: 'user', kind: 'text', text: 'ok', blocks: [], status: 'complete', run_id: null }, 11n));
+    expect(state.ui.irisUnread).toBe(1);
+    // A replay of the same message must not count twice.
+    state = feed(state, event('message.appended', { session_id: SESSION_A, message_id: MESSAGE, seq: 4, role: 'iris', kind: 'text', text: 'Done', blocks: [], status: 'complete', run_id: RUN }, 12n));
+    expect(state.ui.irisUnread).toBe(1);
+    state = reduce(state, { type: 'iris/panel', panel: 'open' });
+    expect(state.ui.irisUnread).toBe(0);
+  });
+
+  it('does not count while the panel is open', () => {
+    const state = feed(base(), event('message.appended', { session_id: SESSION_A, message_id: MESSAGE, seq: 4, role: 'iris', kind: 'text', text: 'Done', blocks: [], status: 'complete', run_id: RUN }, 10n));
+    expect(state.ui.irisUnread).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sessions: no twins, and titles that name themselves (decision C34)
+// ---------------------------------------------------------------------------
+
+describe('session titles and blank sessions', () => {
+  const blank = (id: string) => session(id, { title: DEFAULT_SESSION_TITLE, messages: [], run: null });
+
+  it('lists a blank session only when it is the one you are in', () => {
+    const state = base({
+      sessions: { a: blank('a'), b: blank('b'), c: session('c', { title: 'Partner applications' }) },
+      sessionOrder: ['a', 'b', 'c'],
+      activeSessionId: 'a',
+    });
+    expect(visibleSessions(state).map((s) => s.id)).toEqual(['a', 'c']);
+  });
+
+  it('a session with a message is not blank, whatever it is called', () => {
+    const used = session('a', { title: DEFAULT_SESSION_TITLE, messages: [{ id: MESSAGE, session_id: 'a', seq: 1, role: 'user', kind: 'text', text: 'hi', blocks: [], status: 'complete', run_id: null, at: '2026-10-12T09:49:00.000Z' }] });
+    expect(isBlankSession(used)).toBe(false);
+    expect(isBlankSession(blank('b'))).toBe(true);
+  });
+
+  it('takes the first six words of the first turn, and trims what reads as truncation', () => {
+    expect(autoTitleFrom('Screen the applicant and tell me what is missing')).toBe('Screen the applicant and tell me');
+    expect(autoTitleFrom('  Review   the   invoice.  ')).toBe('Review the invoice');
+    expect(autoTitleFrom('   ')).toBeNull();
+    expect(autoTitleFrom('x'.repeat(200))).toHaveLength(58);
+  });
+
+  it('auto-titling is refused once somebody has renamed the session', () => {
+    let state = base();
+    state = reduce(state, { type: 'session/auto-title', id: SESSION_A, title: 'Screen the applicant' });
+    expect(state.sessions[SESSION_A]!.title).toBe('Screen the applicant');
+    state = reduce(state, { type: 'session/rename', id: SESSION_A, title: 'Q4 partners' });
+    expect(state.sessions[SESSION_A]!.titleSource).toBe('manual');
+    state = reduce(state, { type: 'session/auto-title', id: SESSION_A, title: 'Ada Ling · application' });
+    expect(state.sessions[SESSION_A]!.title).toBe('Q4 partners');
+  });
+
+  it('a server row that still says "New session" does not undo a local title', () => {
+    let state = base();
+    state = reduce(state, { type: 'session/auto-title', id: SESSION_A, title: 'Screen the applicant' });
+    state = reduce(state, {
+      type: 'session/upsert',
+      session: { id: SESSION_A, title: DEFAULT_SESSION_TITLE, mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: '2026-10-12T09:49:00.000Z', share: null, context: null, version: 2 },
+    });
+    expect(state.sessions[SESSION_A]!.title).toBe('Screen the applicant');
   });
 });
