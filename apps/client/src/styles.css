@@ -379,11 +379,13 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .jump-latest .btn { background: var(--menu); box-shadow: 0 8px 24px rgba(0,0,0,.35); }
 
 /* composer */
-.composer-wrap { display: flex; flex-direction: column; gap: 8px; padding: 16px 32px 28px; flex-shrink: 0; }
-.composer { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px; border-radius: 10px; border: 1px solid var(--line); background-color: var(--context); background-image: var(--panel); background-origin: border-box; }
-.composer:focus-within { border-color: rgba(223,223,255,.4); }
+.composer-wrap { display: flex; flex-direction: column; gap: 8px; padding: 12px 32px 20px; flex-shrink: 0; }
+.composer { position: relative; display: flex; flex: none; flex-direction: column; gap: 10px; height: auto; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background-color: var(--context); background-image: var(--panel); background-origin: border-box; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; }
+.composer:focus-within { border-color: rgba(178,168,255,.48); box-shadow: 0 0 0 1px rgba(116,99,255,.12); }
+.composer[data-dragging="true"] { border-color: rgba(178,168,255,.72); box-shadow: 0 0 0 2px rgba(116,99,255,.18), 0 12px 40px rgba(22,12,78,.3); }
 .composer .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
-.composer textarea { background: transparent; border: 0; outline: 0; resize: none; width: 100%; font-size: 17px; line-height: 26px; color: var(--body); min-height: 26px; max-height: 208px; padding: 0; overflow-y: auto; }
+.composer .attachments:empty { display: none; }
+.composer textarea { background: transparent; border: 0; outline: 0; resize: none; width: 100%; font-size: 17px; line-height: 26px; color: var(--body); min-height: 26px; max-height: 132px; padding: 0; overflow-y: auto; }
 .composer textarea::placeholder { color: var(--muted); }
 .composer .tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .composer .tools .spacer { flex: 1 1 0; }
@@ -392,6 +394,17 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .composer .send:disabled { opacity: .45; }
 .composer .send.stop { background: rgba(255,255,255,.12); }
 .composer .send svg { width: 18px; height: 18px; }
+.composer-drop-hint { position: absolute; z-index: 5; inset: 7px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px dashed rgba(198,190,255,.55); border-radius: 8px; background: linear-gradient(135deg, rgba(43,34,119,.96), rgba(18,10,62,.98)); backdrop-filter: blur(10px); animation: composer-drop-in 140ms ease-out both; pointer-events: none; }
+.composer-drop-hint > span:last-child { display: flex; flex-direction: column; gap: 1px; }
+.composer-drop-hint strong { font-size: 15px; line-height: 21px; font-weight: 500; }
+.composer-drop-hint small { color: var(--muted-2); font-size: 13px; line-height: 18px; }
+.composer-drop-icon { position: relative; width: 30px; height: 30px; display: grid; place-items: center; }
+.composer-drop-icon > svg:last-child { position: absolute; right: -2px; bottom: -2px; padding: 2px; border-radius: 50%; background: #6E61F6; color: white; }
+.composer-upload-status { display: flex; align-items: center; gap: 8px; color: var(--muted-2); font-size: 13px; line-height: 18px; }
+.composer-upload-status.error { color: #E7C27D; }
+.upload-pulse { width: 7px; height: 7px; border-radius: 50%; background: #A89FFF; box-shadow: 0 0 0 0 rgba(168,159,255,.35); animation: upload-pulse 1300ms ease-out infinite; }
+@keyframes composer-drop-in { from { opacity: 0; transform: translateY(3px) scale(.995); } to { opacity: 1; transform: none; } }
+@keyframes upload-pulse { 60%, 100% { box-shadow: 0 0 0 7px rgba(168,159,255,0); } }
 .send-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .send-mode button { padding: 4px 10px; font-size: 13px; color: var(--muted); }
 .send-mode button[aria-pressed="true"] { background: rgba(255,255,255,.12); color: var(--body); }

@@ -244,7 +244,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     }
   }, [session.stream?.text, session.run?.steps, session.run?.status, session.run?.queue, sizeSpacer]);
 
-  // The composer autosizes to 208 px, the pane resizes, and a reply's own
+  // The composer autosizes to 132 px, the pane resizes, and a reply's own
   // images and tables settle a frame late. Any of those changes what "the
   // bottom" is, so the spacer is re-measured from the elements themselves
   // rather than from a render.

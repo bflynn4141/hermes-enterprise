@@ -1,4 +1,4 @@
-// T1–T6: the transcript's scroll model and the run surface's order, against
+// T1–T8: the transcript, run surface and composer, against
 // the live stack and the scripted provider (decisions C38 and C40).
 //
 // Everything here is measured from the browser's own boxes rather than from a
@@ -201,7 +201,7 @@ test('T4 · no transcript content is hidden behind the composer, at any composer
   await send(page, 'Screen the applicant.');
   await expect(page.getByText(/pending your decision in the Inbox/)).toBeVisible({ timeout: 25_000 });
 
-  // The composer autosizes to 208 px; a tall draft is the worst case for the
+  // The composer autosizes to 132 px; a tall draft is the worst case for the
   // clearance, and it is a state a person reaches by typing.
   await page.getByRole('textbox', { name: /^Message/ }).fill('line\n'.repeat(14));
   await page.waitForTimeout(300);
@@ -337,4 +337,40 @@ test('T7 · a refused turn shows the server’s sentence, keeps the draft, and d
   await expect(page.locator('.pane-iris .msg-user')).toHaveCount(1);
   await expect(refusal).toHaveCount(0);
   await expect(page.getByText(/pending your decision in the Inbox/)).toBeVisible({ timeout: 25_000 });
+});
+
+// ---------------------------------------------------------------------------
+// T8 · the compact composer accepts dropped documents
+// ---------------------------------------------------------------------------
+
+test('T8 · the compact composer gives dropped documents to the real attachment pipeline', async ({ browser }) => {
+  const page = await openSession(browser, 'T8 document drop');
+  const composer = page.locator('.composer');
+
+  // One empty line and one tool row: a blank composer should not take over the
+  // conversation. The extra 40 px allowance is the provider-key warning shown
+  // in this seed; the ordinary ready state is 98 px tall.
+  const initialHeight = await composer.evaluate((element) => Math.round(element.getBoundingClientRect().height));
+  expect(initialHeight).toBeLessThanOrEqual(150);
+
+  const transfer = await page.evaluateHandle(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['Hermes document drop verification.'], 'drag-check.txt', { type: 'text/plain' }));
+    return data;
+  });
+
+  await composer.dispatchEvent('dragenter', { dataTransfer: transfer });
+  await expect(page.getByText('Drop documents', { exact: true })).toBeVisible();
+
+  const declaration = page.waitForResponse((response) => response.request().method() === 'POST' && /\/attachments$/.test(new URL(response.url()).pathname));
+  await composer.dispatchEvent('drop', { dataTransfer: transfer });
+  const declared = await declaration;
+  expect(declared.status(), await declared.text()).toBe(201);
+  const body = (await declared.json()) as { attachment: { id: string } };
+
+  await expect(page.getByText('drag-check.txt', { exact: true })).toBeVisible();
+  await expect(page.getByText('Drop documents', { exact: true })).toHaveCount(0);
+
+  const removed = await page.request.delete(`/w/${SEED_WORKSPACE}/attachments/${body.attachment.id}`, { headers: { origin: ORIGIN } });
+  expect(removed.status(), await removed.text()).toBe(204);
 });

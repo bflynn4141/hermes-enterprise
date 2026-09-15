@@ -9,7 +9,7 @@
 //
 // TODO(plan §10b, M4): the chip row becomes `PromptBar`, with Guide / After
 // this as its segmented control and `demo={false}`.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { SETTINGS } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
@@ -21,6 +21,18 @@ import { ModelMenu } from './ModelMenu.js';
 import { refusalFor, type Refusal } from './refusal.js';
 import type { SessionState } from '../../model/store.js';
 
+const COMPOSER_MAX_HEIGHT = 132;
+const DOCUMENT_ACCEPT = '.pdf,.md,.txt,application/pdf,text/markdown,text/plain';
+
+function isDocument(file: File): boolean {
+  if (['application/pdf', 'text/markdown', 'text/plain'].includes(file.type)) return true;
+  return /\.(pdf|md|txt)$/i.test(file.name);
+}
+
+function carriesFiles(event: DragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes('Files');
+}
+
 export function Composer({ session }: { session: SessionState }) {
   const state = useAppState();
   const adapter = useAdapter();
@@ -29,6 +41,10 @@ export function Composer({ session }: { session: SessionState }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<'guide' | 'queue'>('guide');
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const dragDepth = useRef(0);
   /**
    * The last refusal, shown above the field until the next keystroke.
    *
@@ -57,7 +73,7 @@ export function Composer({ session }: { session: SessionState }) {
     const el = textarea.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(208, el.scrollHeight)}px`;
+    el.style.height = `${Math.min(COMPOSER_MAX_HEIGHT, el.scrollHeight)}px`;
   }, [text, session.id]);
 
   // A refusal belongs to one attempt. The next keystroke is the start of the
@@ -118,6 +134,58 @@ export function Composer({ session }: { session: SessionState }) {
     });
   };
 
+  /**
+   * Context picker and drag-and-drop share one upload path. A dropped file is
+   * only attached after the Worker has verified the bytes, so a chip always
+   * means the document is ready for Iris to read.
+   */
+  const uploadFiles = async (list: FileList | readonly File[]): Promise<void> => {
+    const files = Array.from(list);
+    const documents = files.filter(isDocument);
+    const unsupported = files.length - documents.length;
+    if (!documents.length) {
+      setUploadError('Use PDF, Markdown, or text files.');
+      return;
+    }
+
+    setUploadError(null);
+    setUploading((count) => count + documents.length);
+    let failed = 0;
+    for (const file of documents) {
+      try {
+        const ready = await adapter.upload(file, { kind: 'attachment', sessionId: session.id });
+        dispatch({ type: 'session/attach', id: session.id, attachment: { id: ready.id, label: ready.name, icon: 'context' } });
+      } catch {
+        failed += 1;
+      }
+    }
+    setUploading((count) => Math.max(0, count - documents.length));
+    if (failed) setUploadError(`${failed === 1 ? 'One document' : `${failed} documents`} couldn’t be added. Try again.`);
+    else if (unsupported) setUploadError(`${unsupported === 1 ? 'One file was' : `${unsupported} files were`} skipped. Use PDF, Markdown, or text.`);
+  };
+
+  const enterDropZone = (event: DragEvent<HTMLDivElement>): void => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+
+  const leaveDropZone = (event: DragEvent<HTMLDivElement>): void => {
+    if (dragDepth.current === 0) return;
+    event.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  };
+
+  const dropDocuments = (event: DragEvent<HTMLDivElement>): void => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
+  };
+
   const status = run && ['working', 'waiting', 'stopped', 'error'].includes(run.status) ? run : null;
 
   return (
@@ -148,7 +216,32 @@ export function Composer({ session }: { session: SessionState }) {
         </div>
       )}
 
-      <div className="composer" data-blocked={blocked}>
+      <div
+        className="composer"
+        data-blocked={blocked}
+        data-dragging={dragging}
+        aria-busy={uploading > 0}
+        onDragEnter={enterDropZone}
+        onDragOver={(event) => {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }}
+        onDragLeave={leaveDropZone}
+        onDrop={dropDocuments}
+      >
+        {dragging && (
+          <div className="composer-drop-hint" role="status">
+            <span className="composer-drop-icon" aria-hidden="true">
+              <Glass name="context" size={24} />
+              <Icon name="plus" size={14} />
+            </span>
+            <span>
+              <strong>Drop documents</strong>
+              <small>PDF, Markdown, or text</small>
+            </span>
+          </div>
+        )}
         {refusal && (
           <div className="composer-refusal" role="alert">
             <Glass name="trace" size={18} />
@@ -179,6 +272,11 @@ export function Composer({ session }: { session: SessionState }) {
             </Chip>
           ))}
         </div>
+        {(uploading > 0 || uploadError) && (
+          <div className={`composer-upload-status${uploadError ? ' error' : ''}`} role={uploadError ? 'alert' : 'status'}>
+            {uploading > 0 ? <><span className="upload-pulse" aria-hidden="true" />Adding {uploading === 1 ? 'document' : `${uploading} documents`}…</> : uploadError}
+          </div>
+        )}
         <textarea
           id={`composer-${session.id}`}
           ref={textarea}
@@ -203,7 +301,7 @@ export function Composer({ session }: { session: SessionState }) {
               <Icon name="plus" />
               <span className="chip-label"> Context</span>
             </button>
-            <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} />
+            <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} onUpload={uploadFiles} />
           </span>
           <span className="spacer" />
           {working && (
@@ -284,9 +382,8 @@ export function Composer({ session }: { session: SessionState }) {
  * the presign flow. Extraction status comes back as `entity.updated`, so a file
  * that is still being read says so instead of looking ready.
  */
-function AttachPopover({ open, onClose, anchorRef, session }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState }) {
+function AttachPopover({ open, onClose, anchorRef, session, onUpload }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState; onUpload: (files: FileList | readonly File[]) => Promise<void> }) {
   const state = useAppState();
-  const adapter = useAdapter();
   const dispatch = useDispatch();
   const [tab, setTab] = useState('all');
   const [query, setQuery] = useState('');
@@ -298,21 +395,6 @@ function AttachPopover({ open, onClose, anchorRef, session }: { open: boolean; o
     ...files.map((file) => ({ id: `file:${file.id}`, kind: 'source', label: file.name, sub: file.extraction === 'ready' ? file.subtitle : file.extraction === 'failed' ? 'Extraction failed' : 'Being read…', icon: 'context' })),
     ...skills.map((skill) => ({ id: `skill:${skill.id}`, kind: 'skill', label: `${skill.name} · ${skill.version}`, sub: skill.adopted ? 'Skill · Already used' : 'Skill · Shared', icon: 'skill' })),
   ].filter((item) => (tab === 'all' || (tab === 'sources' ? item.kind === 'source' : item.kind === 'skill')) && item.label.toLowerCase().includes(query.toLowerCase()));
-
-  const upload = async (list: FileList): Promise<void> => {
-    for (const file of Array.from(list)) {
-      try {
-        // Declare, put the bytes, complete — the adapter owns all three, so
-        // the direct-upload fallback and the sha/mime verdict live in one
-        // place rather than in every call site that can attach a file.
-        const ready = await adapter.upload(file, { kind: 'attachment', sessionId: session.id });
-        dispatch({ type: 'session/attach', id: session.id, attachment: { id: ready.id, label: ready.name, icon: 'context' } });
-      } catch {
-        // An upload that fails leaves nothing behind; the chip never appears.
-      }
-    }
-    onClose();
-  };
 
   return (
     <Popover open={open} onClose={onClose} anchorRef={anchorRef} width={440} label="Attach context" above align="left">
@@ -376,11 +458,13 @@ function AttachPopover({ open, onClose, anchorRef, session }: { open: boolean; o
           ref={fileInput}
           type="file"
           multiple
+          accept={DOCUMENT_ACCEPT}
           hidden
           aria-label="Upload a file"
           onChange={(event) => {
-            if (event.target.files?.length) void upload(event.target.files);
+            const files = event.target.files ? Array.from(event.target.files) : [];
             event.target.value = '';
+            if (files.length) void onUpload(files).finally(onClose);
           }}
         />
       </div>
