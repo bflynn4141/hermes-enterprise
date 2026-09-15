@@ -20,6 +20,8 @@ export interface BridgeDb extends AgentDb {
   lockRun(runId: string): Promise<void>;
   runtimeCall(runId: string, callId: string): Promise<RuntimeCallRecord | null>;
   nextRuntimeSequence(runId: string): Promise<number>;
+  startRuntimeWait(runId: string, attempt: number): Promise<void>;
+  endRuntimeWait(runId: string, attempt: number): Promise<void>;
 }
 export interface RuntimeCall {
   readonly runtime_run_id: string;
@@ -104,12 +106,14 @@ export async function dispatchRuntimeCall(
       await db.ensureContextField({ runId: run.id, toolCallId: callId, agentId, key });
       const answer = await db.readContextField(agentId, key);
       if (!answer?.trim()) {
+        await db.startRuntimeWait(run.id, run.attempt);
         if (run.status !== 'waiting') {
           await db.setRunStatus(run.id, 'waiting', { waitingFor: key, waitingLabel: label });
           await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'waiting', waiting_for: key, waiting_label: label } }]);
         }
         return { run, events, reply: { status: 'pending' } };
       }
+      await db.endRuntimeWait(run.id, run.attempt);
       content = toolResultEnvelope(call.name, 'workspace.agent_context_fields', { key, value: answer }, now());
       if (run.status === 'waiting') {
         await db.setRunStatus(run.id, 'working', { waitingFor: null, waitingLabel: null });

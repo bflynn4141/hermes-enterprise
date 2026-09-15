@@ -47,7 +47,10 @@ export class RuntimeDb extends PgAgentDb {
       const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
         `UPDATE runs SET runtime_kind = 'hermes', runtime_profile = 'agent-' || agent_id::text,
                 runtime_request = CASE WHEN runtime_request_attempt = $2 AND runtime_request IS NOT NULL THEN runtime_request ELSE $3::jsonb END,
-                runtime_request_attempt = $2
+                runtime_request_attempt = $2,
+                runtime_started_at = CASE WHEN runtime_request_attempt = $2 THEN COALESCE(runtime_started_at, clock_timestamp()) ELSE clock_timestamp() END,
+                runtime_wait_started_at = CASE WHEN runtime_request_attempt = $2 THEN runtime_wait_started_at ELSE NULL END,
+                runtime_wait_ms = CASE WHEN runtime_request_attempt = $2 THEN runtime_wait_ms ELSE 0 END
           WHERE id = $1 AND attempt = $2 AND NOT stop_requested AND status = 'working'
           RETURNING runtime_request`, [runId, attempt, JSON.stringify(proposed)]);
       if (!rows[0]) throw new RouteError('The run is no longer active.', 'runtime_run_inactive', 409);
@@ -100,21 +103,35 @@ export class RuntimeDb extends PgAgentDb {
       `SELECT coalesce(max(seq + CASE WHEN role = 'assistant' AND provider_message ? 'runtime_run_id' THEN 1 ELSE 0 END), -1) + 1 AS seq FROM run_turns WHERE run_id = $1 AND turn = 0`, [runId]);
     return Number(rows[0]?.seq ?? 0);
   }
+  async startRuntimeWait(runId: string, attempt: number): Promise<void> {
+    await this.runtimeQuery(
+      `UPDATE runs SET runtime_wait_started_at = clock_timestamp()
+        WHERE id = $1 AND attempt = $2 AND runtime_wait_started_at IS NULL
+          AND (runtime_request_attempt = $2 OR runtime_attempt = $2)`, [runId, attempt]);
+  }
+  async endRuntimeWait(runId: string, attempt: number): Promise<void> {
+    await this.runtimeQuery(
+      `UPDATE runs SET runtime_wait_ms = runtime_wait_ms +
+          greatest(0, floor(extract(epoch FROM (clock_timestamp() - runtime_wait_started_at)) * 1000))::bigint,
+          runtime_wait_started_at = NULL
+        WHERE id = $1 AND attempt = $2 AND runtime_wait_started_at IS NOT NULL
+          AND (runtime_request_attempt = $2 OR runtime_attempt = $2)`, [runId, attempt]);
+  }
   async activeRuntimeMs(runId: string, attempt: number, start: number, end: number): Promise<number> {
-    const { rows } = await this.runtimeQuery<{ at: Date; status: string }>(
-      `SELECT at, payload->>'status' AS status FROM stream_events
-        WHERE kind='run.status' AND payload->>'run_id'=$1 AND payload->>'attempt'=$2
-          AND at >= $3 AND at <= $4 ORDER BY at, id`,
-      [runId, String(attempt), new Date(start), new Date(end)]);
-    let waitingSince: number | null = null;
-    let waitingMs = 0;
-    for (const event of rows) {
-      const at = new Date(event.at).getTime();
-      if (event.status === 'waiting' && waitingSince === null) waitingSince = at;
-      else if (event.status !== 'waiting' && waitingSince !== null) { waitingMs += at - waitingSince; waitingSince = null; }
-    }
-    if (waitingSince !== null) waitingMs += end - waitingSince;
-    return Math.max(0, end - start - waitingMs);
+    const { rows } = await this.runtimeQuery<{
+      runtime_started_at: Date | null;
+      runtime_wait_started_at: Date | null;
+      runtime_wait_ms: string;
+    }>(`SELECT runtime_started_at, runtime_wait_started_at, runtime_wait_ms FROM runs
+         WHERE id = $1 AND attempt = $2 AND (runtime_request_attempt = $2 OR runtime_attempt = $2)`, [runId, attempt]);
+    const clock = rows[0];
+    if (!clock) return 0;
+    // The persisted submit boundary survives Workflow execution retries. The
+    // caller's start is only for a mapped run that predates this migration.
+    const begun = clock.runtime_started_at?.getTime() ?? start;
+    const pendingWait = clock.runtime_wait_started_at === null ? 0 :
+      Math.max(0, end - Math.max(begun, clock.runtime_wait_started_at.getTime()));
+    return Math.max(0, end - begun - Number(clock.runtime_wait_ms) - pendingWait);
   }
   async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
     const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(

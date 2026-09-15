@@ -107,12 +107,16 @@ describe('official runtime on the restricted agent role', () => {
       const call = nativeCall(remote, 'ask_for_context', { key: 'deadline', question: 'When is the deadline?' });
       expect((await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call)).reply).toEqual({ status: 'pending' });
       expect((await store.loadRun(id))?.status).toBe('waiting');
+      const waitingClock = await store.runtimeQuery<{ runtime_wait_started_at: Date | null }>('SELECT runtime_wait_started_at FROM runs WHERE id=$1', [id]);
+      expect(waitingClock.rows[0]?.runtime_wait_started_at).not.toBeNull();
       expect((await store.loadWorkspaceContext(fx.agentId)).find((field) => field.key === 'deadline')?.value).toBeNull();
       await owner(fx, (q) => q('UPDATE agent_context_fields SET value=$2 WHERE agent_id=$1 AND key=$3', [fx.agentId, 'Friday', 'deadline']));
       const answer = await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call);
       expect(answer.reply).toMatchObject({ ok: true });
       expect((await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call)).reply).toEqual(answer.reply);
       expect((await store.loadRun(id))?.status).toBe('working');
+      const resumedClock = await store.runtimeQuery<{ runtime_wait_started_at: Date | null }>('SELECT runtime_wait_started_at FROM runs WHERE id=$1', [id]);
+      expect(resumedClock.rows[0]?.runtime_wait_started_at).toBeNull();
       expect((await store.loadHistory(id, 20)).recent).toHaveLength(3);
     } finally { await store.close(); }
   });
@@ -191,6 +195,37 @@ describe('official runtime on the restricted agent role', () => {
       const { rows } = await store.runtimeQuery<{ id: string; run_id: string | null }>('SELECT id,run_id FROM messages WHERE id=ANY($1::uuid[])', [ids]);
       expect(rows.find((row) => row.id === ids[0])?.run_id).toBeNull();
       expect(rows.find((row) => row.id === ids[1])?.run_id).toBe(id);
+    } finally { await store.close(); }
+  });
+
+  it('bootstraps NULL-kind history in sequence while excluding current-run and future messages', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const id = await seedRun(fx); const run = (await store.loadRun(id))!;
+      await owner(fx, (q) => q(
+        `INSERT INTO messages (workspace_id,session_id,seq,role,text,status,kind,run_id,created_at) VALUES
+          ($1,$2,2,'iris','Second in conversation','complete',NULL,NULL,now()-interval '2 minutes'),
+          ($1,$2,1,'user','First in conversation','complete',NULL,NULL,now()-interval '1 minute'),
+          ($1,$2,3,'user','Current run input','complete',NULL,$3,now()-interval '1 minute'),
+          ($1,$2,4,'user','Future message','complete',NULL,NULL,now()+interval '1 minute'),
+          ($1,$2,5,'system','Internal text','complete',NULL,NULL,now()-interval '1 minute'),
+          ($1,$2,6,'user','Tagged guidance','complete','guidance',NULL,now()-interval '1 minute')`, [fx.workspaceId,fx.sessionId,id]));
+      expect(await store.loadBootstrapHistory(run)).toEqual([
+        { role: 'user', content: 'First in conversation' }, { role: 'assistant', content: 'Second in conversation' },
+      ]);
+    } finally { await store.close(); }
+  });
+  it('still bootstraps enterprise history when an earlier Hermes attempt never obtained a native run', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const old = await seedRun(fx);
+      await owner(fx, async (q) => {
+        await q("UPDATE runs SET status='error',runtime_kind='hermes',created_at=now()-interval '2 minutes' WHERE id=$1", [old]);
+        await q(`INSERT INTO messages (workspace_id,session_id,seq,role,text,status,kind,run_id,created_at)
+          VALUES ($1,$2,1,'user','Earlier question','complete',NULL,$3,now()-interval '1 minute')`, [fx.workspaceId,fx.sessionId,old]);
+      });
+      const id = await seedRun(fx);
+      expect(await store.loadBootstrapHistory((await store.loadRun(id))!)).toEqual([{ role: 'user', content: 'Earlier question' }]);
     } finally { await store.close(); }
   });
 

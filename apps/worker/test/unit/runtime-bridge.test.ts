@@ -21,6 +21,8 @@ class FakeBridgeDb extends FakeAgentDb {
   async mappingPending() { return this.pending; }
   async withCallLock<T>(_agent: string, fn: () => Promise<T>): Promise<T> { return fn(); }
   async lockRun() {}
+  async startRuntimeWait() {}
+  async endRuntimeWait() {}
   async nextRuntimeSequence() { return Math.max(...this.turns.map((turn) => turn.seq)) + 1; }
   async runtimeCall(_run: string, id: string): Promise<RuntimeCallRecord | null> {
     const row = this.turns.find((turn) => turn.role === 'assistant' && turn.providerMessage.tool_calls?.some((call) => call.id === id));
