@@ -481,6 +481,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .composer textarea::placeholder { color: var(--muted); }
 .composer .tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .composer .tools .spacer { flex: 1 1 0; }
+.composer .text-btn .composer-selector-chevron { width: 14px; height: 14px; }
 .composer .send { width: 36px; height: 36px; border-radius: 7px; background: var(--action); display: inline-grid; place-items: center; flex-shrink: 0; transition: background-color 120ms ease-out, opacity 120ms ease-out; }
 .composer .send:hover { background: var(--action-hover); }
 .composer .send:disabled { opacity: .45; }

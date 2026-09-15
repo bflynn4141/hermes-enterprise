@@ -321,7 +321,7 @@ export function Composer({ session }: { session: SessionState }) {
           )}
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <button ref={modeBtn} type="button" className="text-btn" aria-haspopup="menu" aria-expanded={menu === 'mode'} onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>
-              {mode!.label} <span aria-hidden="true">⌄</span>
+              {mode!.label} <Icon name="chevron" size={14} className="composer-selector-chevron" />
             </button>
             <Popover open={menu === 'mode'} onClose={() => setMenu(null)} anchorRef={modeBtn} className="menu" width={270} label="Mode" above align="left">
               {MODES.map((item) => (
@@ -349,7 +349,7 @@ export function Composer({ session }: { session: SessionState }) {
                   current model, so "the control that changes the model" had no
                   stable name for a screen reader or a test to ask for. */}
               <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}`} aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
-                {model?.label ?? EMPTY.noProvider} <span aria-hidden="true">⌄</span>
+                {model?.label ?? EMPTY.noProvider} <Icon name="chevron" size={14} className="composer-selector-chevron" />
               </button>
               <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
             </span>
@@ -358,7 +358,7 @@ export function Composer({ session }: { session: SessionState }) {
             <span style={{ position: 'relative', display: 'inline-flex' }}>
               <button ref={runtimeBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'runtime'} onClick={() => setMenu(menu === 'runtime' ? null : 'runtime')}>
                 <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
-                <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <span aria-hidden="true">⌄</span>
+                <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <Icon name="chevron" size={14} className="composer-selector-chevron" />
               </button>
               <Popover open={menu === 'runtime'} onClose={() => setMenu(null)} anchorRef={runtimeBtn} width={420} label="Runs on" above>
                 <MenuItem icon="cloud" sub={session.runtime === 'cloud' ? state.workspace.name : 'Not configured for Iris'} checked={session.runtime === 'cloud'} disabled={session.runtime !== 'cloud'} onClick={() => setMenu(null)}>
