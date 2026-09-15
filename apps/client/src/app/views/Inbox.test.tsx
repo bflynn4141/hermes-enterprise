@@ -4,13 +4,18 @@ import { mockUuid, type Ref, type RequestEntity } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState, reduce } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { InboxList } from './Inbox.js';
+import { InboxList, RequestReview } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
+  const payload = kind === 'application'
+    ? { kind, applicant: { name: subject, email: `${subject.split(' ')[0]?.toLowerCase()}@example.test` }, proposed_role: 'Technical Partner', score: 82, score_max: 100, criteria: [{ id: 'fit', label: 'Program fit', points: 32, points_max: 40, evidence: 'Relevant integration work.', source_ids: [] }] }
+    : kind === 'invoice'
+      ? { kind, number: 'INV-42', currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-15', due_date: '2026-09-30', lines: [{ id: 'line-1', label: 'Partner workshop', qty: 1, amount_minor: 120000, source_ids: [] }], total_minor: 120000 }
+      : { kind, number: 'AGR-42', version_label: 'v3', parties: [{ name: 'Nous Research' }, { name: 'Robin Studio' }], sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop.', source_ids: [] }] };
   return {
     id: mockUuid(id), kind, status, subject, label: subject, title: subject,
     session_id: null, run_id: null, created_at: '2026-09-15T12:00:00.000Z',
-    version: 1, payload: {}, sources: [], missing: [],
+    version: 1, payload, sources: [], missing: [],
   };
 }
 
@@ -22,13 +27,14 @@ const requests = [
   request(105, 'Acme agreement', 'agreement', 'pending'),
 ];
 
-function render(ref: Ref): string {
+function render(ref: Ref, selectedId?: string): string {
   let state = reduce(initialState(), { type: 'nav/app', object: ref });
+  state = { ...state, user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role: 'admin' } };
   for (const row of requests) state = reduce(state, { type: 'entity/upsert', kind: 'request', id: row.id, version: 1, data: row });
   state = reduce(state, { type: 'list/set', key: 'requests', ids: requests.map((row) => row.id) });
   return renderToStaticMarkup(
     <StoreProvider store={createStore(state)} adapter={{} as Adapter}>
-      <InboxList />
+      {selectedId ? <RequestReview id={selectedId} /> : <InboxList />}
     </StoreProvider>,
   );
 }
@@ -59,6 +65,36 @@ describe('the Inbox renders the focused view', () => {
     const invoices = render({ section: 'inbox', view: 'list', filters: { kind: 'invoice' } });
     expect(invoices).toContain('Acme invoice');
     expect(invoices).not.toContain('Acme agreement');
+  });
+
+  it('keeps the request queue beside an applicant preview and provides a return path', () => {
+    const html = render({ section: 'inbox', view: 'request', id: requests[0]!.id }, requests[0]!.id);
+    expect(html).toContain('aria-label="Back to Inbox"');
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('Iris screened this application');
+    expect(html).toContain('Program fit');
+    expect(html).toContain('Admit Ada');
+    expect(html).toContain('Leah pending');
+  });
+
+  it('keeps a resolved request visible in its queue when opened from a deep link', () => {
+    const html = render({ section: 'inbox', view: 'request', id: requests[2]!.id }, requests[2]!.id);
+    expect(html).toContain('aria-label="Resolved requests"');
+    expect(html).toContain('Ada admitted');
+    expect(html).toContain('aria-current="true"');
+    expect(html).not.toContain('Ada pending');
+  });
+
+  it('renders distinct invoice and signature decisions with exact consequences', () => {
+    const invoice = render({ section: 'inbox', view: 'request', id: requests[3]!.id }, requests[3]!.id);
+    expect(invoice).toContain('Invoice approval');
+    expect(invoice).toContain('Approve invoice');
+    expect(invoice).toContain('No email is sent and no money moves.');
+
+    const agreement = render({ section: 'inbox', view: 'request', id: requests[4]!.id }, requests[4]!.id);
+    expect(agreement).toContain('Signature approval');
+    expect(agreement).toContain('Approve for signature');
+    expect(agreement).toContain('Nothing is signed or sent.');
   });
 
   it('distinguishes an empty filtered result from an empty Inbox', () => {

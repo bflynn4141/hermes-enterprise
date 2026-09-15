@@ -23,7 +23,57 @@ import { EMPTY } from '../../model/constants.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 
+type RequestPayload = Record<string, unknown>;
+
+const record = (value: unknown): RequestPayload =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as RequestPayload) : {};
+const text = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null);
+
+function requestType(request: RequestEntity): string {
+  if (request.kind === 'application') return 'Application';
+  if (request.kind === 'invoice') return 'Invoice';
+  return 'Signature';
+}
+
+function requestPreview(request: RequestEntity): string {
+  const payload = record(request.payload);
+  if (request.kind === 'application') {
+    const maximum = typeof payload.score_max === 'number' ? payload.score_max : 100;
+    const score = typeof payload.score === 'number' ? payload.score : 0;
+    return `${text(payload.proposed_role) ?? text(payload.role) ?? 'Partner applicant'} · ${score}/${maximum}`;
+  }
+  if (request.kind === 'invoice') {
+    const payee = text(record(payload.payee).name) ?? request.subject ?? 'Invoice';
+    const amount = typeof payload.total_minor === 'number' ? fmtMoney(payload.total_minor) : null;
+    return [payee, amount].filter(Boolean).join(' · ');
+  }
+  const parties = Array.isArray(payload.parties)
+    ? payload.parties.map((party) => text(record(party).name)).filter((party): party is string => !!party)
+    : [];
+  return `${parties.slice(0, 2).join(' ↔ ') || request.subject || 'Agreement'} · ${text(payload.version_label) ?? 'Unsigned'}`;
+}
+
+function requestAction(request: RequestEntity): string {
+  if (request.status !== 'pending') return requestStatusLabel(request);
+  if (request.kind === 'application') return 'Review applicant';
+  if (request.kind === 'invoice') return 'Review invoice';
+  return 'Review for signature';
+}
+
+function shortDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? '' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export function InboxList() {
+  return <InboxSurface selectedId={null} />;
+}
+
+export function RequestReview({ id }: { id: string | null }) {
+  return <InboxSurface selectedId={id} />;
+}
+
+function InboxSurface({ selectedId }: { selectedId: string | null }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const nav = useNav();
@@ -33,6 +83,10 @@ export function InboxList() {
   const query = filters?.query ?? '';
   const kind = filters?.kind ?? 'all';
   const filtered = query.length > 0 || kind !== 'all';
+  const selected = lists.requests.find((request) => request.id === selectedId) ?? null;
+  const activeTab = selected
+    ? selected.status === 'pending' ? 'needs-review' : 'resolved'
+    : tab;
   const setFilters = (patch: NonNullable<Ref['filters']>): void => {
     nav({ section: 'inbox', view: 'list', filters: { ...filters, ...patch } });
   };
@@ -40,17 +94,20 @@ export function InboxList() {
   const list = useMemo(
     () =>
       lists.requests
-        .filter((request) => (tab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
+        .filter((request) => (activeTab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
         .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind !== 'application' : request.kind === kind))
         .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase())),
-    [lists.requests, tab, kind, query],
+    [lists.requests, activeTab, kind, query],
   );
+  const listLabel = activeTab === 'resolved' ? 'Resolved requests' : 'Requests needing review';
+  const backRef: Ref = { section: 'inbox', view: 'list', filters };
 
   return (
-    <div className="scroll">
-      <div className="app-body">
-        <div className="row" style={{ height: 42 }}>
+    <div className="inbox-surface" data-detail={selectedId ? 'true' : 'false'}>
+      <div className="inbox-topbar">
+        <div className="inbox-title-row">
           <h1 className="display-32">Inbox</h1>
+          {activeTab !== 'rules' && <span className="inbox-count">{list.length}</span>}
         </div>
         <Tabs
           tabs={[
@@ -58,13 +115,30 @@ export function InboxList() {
             { id: 'resolved', label: 'Resolved' },
             { id: 'rules', label: 'Rules' },
           ]}
-          value={tab}
+          value={activeTab}
           onChange={(value) => dispatch({ type: 'nav/tab', key: 'inboxTab', value })}
           label="Inbox views"
         />
-        {tab === 'rules' ? (
-          <>
-            <Panel icon="admission" title="Manual review" subtitle="These requests always need a human decision. Automation follows approved rules; it cannot bypass them." />
+        {activeTab !== 'rules' && (
+          <div className="inbox-tools">
+            <label className="search grow">
+              <Icon name="search" />
+              <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
+            </label>
+            <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
+              <option value="all">All types</option>
+              <option value="application">Applications</option>
+              <option value="documents">Documents</option>
+              <option value="invoice">Invoices</option>
+              <option value="agreement">Signatures</option>
+            </select>
+          </div>
+        )}
+      </div>
+      {activeTab === 'rules' ? (
+        <div className="scroll">
+          <div className="app-body inbox-rules">
+            <Panel icon="admission" title="Manual review" subtitle="A person decides these requests. Approved rules can handle routine work, but cannot bypass named reviewers." />
             {[
               ['Program admission and benefits', 'Admin'],
               ['Document creation', 'Admin'],
@@ -76,97 +150,98 @@ export function InboxList() {
                 <span className="meta">{who}</span>
               </div>
             ))}
-          </>
-        ) : (
-          <>
-            <div className="row" style={{ gap: 16 }}>
-              <label className="search grow">
-                <Icon name="search" />
-                <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
-              </label>
-              <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })} style={{ background: 'var(--app)', appearance: 'none' }}>
-                <option value="all">All types</option>
-                <option value="application">Applications</option>
-                <option value="documents">Documents</option>
-                <option value="invoice">Invoices</option>
-                <option value="agreement">Agreements</option>
-              </select>
-            </div>
-            <div className="col" role="list" aria-label={tab === 'resolved' ? 'Resolved requests' : 'Requests needing review'}>
-              <AnimatePresence initial={false}>
-                {list.map((request) => (
-                  <motion.div key={request.id} role="listitem" layout initial={false} exit={{ opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }} transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}>
-                    <div className="list-row">
-                      <Glass name={KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
-                      <div className="row-id">
-                        <span className="t">{request.subject ?? request.label}</span>
-                        <span className="s">{request.kind === 'application' ? 'Application' : request.label}</span>
-                      </div>
-                      <div className="row-main">
-                        <span className="t">{request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : 'Create agreement'}</span>
-                        <span className="s">{requestStatusLabel(request)}</span>
-                      </div>
-                      <Button link={request.status !== 'pending'} onClick={() => nav(REQ(request.id))}>
-                        {request.status === 'pending' ? 'Review →' : 'Open →'}
-                      </Button>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              {list.length === 0 && !lists.loading && (
-                <EmptyState
-                  icon={tab === 'resolved' ? 'trace' : 'admission'}
-                  title={filtered ? 'No matching requests' : tab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                  detail={filtered ? 'Try a different search or request type.' : tab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
-                  action={filtered
-                    ? <Button onClick={() => setFilters({ query: '', kind: 'all' })}>Clear filters</Button>
-                    : <Button onClick={() => nav(tab === 'resolved' ? INBOX : HISTORY())}>{tab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
-                />
-              )}
-              {list.length === 0 && lists.loading && <Skeleton rows={3} label="Loading requests" />}
-            </div>
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      ) : (
+        <div className="inbox-columns">
+          <div className="inbox-master scroll" role="list" aria-label={listLabel}>
+            <AnimatePresence initial={false}>
+              {list.map((request) => {
+                const isSelected = request.id === selectedId;
+                return (
+                  <motion.button
+                    type="button"
+                    key={request.id}
+                    role="listitem"
+                    className="inbox-item"
+                    aria-current={isSelected ? 'true' : undefined}
+                    onClick={() => nav(REQ(request.id, { filters }))}
+                    layout
+                    initial={false}
+                    exit={{ opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }}
+                    transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  >
+                    <Glass name={KIND_ICON[request.kind] ?? 'context'} size={30} className="inbox-item-icon" />
+                    <span className="inbox-item-body">
+                      <span className="inbox-item-line">
+                        <span className="inbox-item-subject">{request.subject ?? request.label}</span>
+                        <span className="inbox-item-date">{shortDate(request.created_at)}</span>
+                      </span>
+                      <span className="inbox-item-preview">{requestPreview(request)}</span>
+                      <span className="inbox-item-meta">
+                        <span>{requestType(request)}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{requestAction(request)}</span>
+                      </span>
+                    </span>
+                  </motion.button>
+                );
+              })}
+            </AnimatePresence>
+            {list.length === 0 && !lists.loading && (
+              <EmptyState
+                icon={activeTab === 'resolved' ? 'trace' : 'admission'}
+                title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
+                detail={filtered ? 'Try a different search or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
+                action={filtered
+                  ? <Button onClick={() => setFilters({ query: '', kind: 'all' })}>Clear filters</Button>
+                  : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
+              />
+            )}
+            {list.length === 0 && lists.loading && <Skeleton rows={3} label="Loading requests" />}
+          </div>
+          {selectedId && (
+            <motion.div
+              className="inbox-detail"
+              key={selectedId}
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="inbox-detail-nav">
+                <Button link onClick={() => nav(backRef)} aria-label="Back to Inbox">
+                  <Icon name="arrow" size={16} className="back-arrow" /> Inbox
+                </Button>
+                <span className="grow" />
+                {selected && <span className="pill">{requestType(selected)}</span>}
+              </div>
+              <RequestDetail id={selectedId} />
+            </motion.div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-export function RequestReview({ id }: { id: string | null }) {
-  const record = useEntity<RequestEntity>('request', id);
-  if (record.state === 'loading') {
+function RequestDetail({ id }: { id: string | null }) {
+  const entity = useEntity<RequestEntity>('request', id);
+  if (entity.state === 'loading') {
     return (
-      <div className="scroll">
-        <div className="app-body">
-          <Skeleton rows={5} label="Loading the request" />
-        </div>
-      </div>
+      <div className="scroll"><div className="app-body"><Skeleton rows={5} label="Loading the request" /></div></div>
     );
   }
-  if (record.state === 'unavailable') {
-    // `unavailable` is the Worker answering `unknown_route`, which it no longer
-    // does for requests — the route has been there since M4. It is kept as the
-    // honest answer to a server that is older than this client, because
-    // "Request not found" would tell a reviewer the request was redacted, and
-    // that is a different and much more alarming sentence.
+  if (entity.state === 'unavailable') {
     return (
-      <div className="scroll">
-        <div className="app-body">
-          <EmptyState icon="admission" title="This server does not serve requests" detail="The client is newer than the Worker it is talking to. Nothing was deleted." />
-        </div>
-      </div>
+      <div className="scroll"><div className="app-body"><EmptyState icon="admission" title="This server does not serve requests" detail="The client is newer than the Worker it is talking to. Nothing was deleted." /></div></div>
     );
   }
-  if (record.state === 'missing' || !record.data) {
+  if (entity.state === 'missing' || !entity.data) {
     return (
-      <div className="scroll">
-        <div className="app-body">
-          <EmptyState icon="admission" title={EMPTY.requestMissing} detail="It may have been redacted, or it belongs to another workspace." />
-        </div>
-      </div>
+      <div className="scroll"><div className="app-body"><EmptyState icon="admission" title={EMPTY.requestMissing} detail="It may have been redacted, or it belongs to another workspace." /></div></div>
     );
   }
-  const request = record.data;
+  const request = entity.data;
   if (request.status !== 'pending') return <Receipt request={request} />;
   return request.kind === 'application' ? <ApplicationView request={request} /> : <DocumentView request={request} />;
 }
@@ -252,68 +327,105 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
 
 function ApplicationView({ request }: { request: RequestEntity }) {
   const state = useAppState();
-  const payload = request.payload as { score?: number; role?: string; breakdown?: [string, number, number][]; benefits?: string[] };
+  const payload = record(request.payload);
+  const applicant = record(payload.applicant);
+  const name = text(applicant.name) ?? request.subject ?? request.label;
+  const firstName = name.split(' ')[0] ?? 'applicant';
+  const role = text(payload.proposed_role) ?? text(payload.role) ?? request.title ?? 'Partner applicant';
+  const email = text(applicant.email);
+  const score = typeof payload.score === 'number' ? payload.score : 0;
+  const scoreMax = typeof payload.score_max === 'number' ? payload.score_max : 100;
+  const criteria = Array.isArray(payload.criteria)
+    ? payload.criteria.flatMap((item) => {
+        const criterion = record(item);
+        const label = text(criterion.label);
+        if (!label) return [];
+        return [{
+          label,
+          points: typeof criterion.points === 'number' ? criterion.points : 0,
+          maximum: typeof criterion.points_max === 'number' ? criterion.points_max : 0,
+          evidence: text(criterion.evidence),
+        }];
+      })
+    : Array.isArray(payload.breakdown)
+      ? payload.breakdown.flatMap((item) => Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'number' && typeof item[2] === 'number'
+        ? [{ label: item[0], points: item[1], maximum: item[2], evidence: null }]
+        : [])
+      : [];
+  const benefits = Array.isArray(payload.benefits) ? payload.benefits.filter((item): item is string => typeof item === 'string') : [];
   const [source, setSource] = useState<{ name: string; note: string } | null>(null);
   const [report, setReport] = useState(false);
 
   return (
     <>
-      <div className="app-pane-body" style={{ paddingBottom: 0, gap: 18, minHeight: 0 }}>
-        <div className="scroll">
-          <div className="col" style={{ gap: 18, paddingBottom: 18 }}>
-            <div className="row" style={{ gap: 14 }}>
-              <Glass name="admission" size={40} />
+      <div className="app-pane-body request-pane">
+        <div className="scroll request-scroll">
+          <div className="col request-content">
+            <div className="application-heading">
+              <Avatar person={{ name }} size={40} />
               <div className="col grow" style={{ gap: 3 }}>
-                <h1 className="display-32">{request.subject ?? request.label}</h1>
-                <span className="meta">{request.title}</span>
+                <h1 className="display-32">{name}</h1>
+                <span className="meta">{[role, email].filter(Boolean).join(' · ')}</span>
+              </div>
+              <div className="application-score" aria-label={`${score} out of ${scoreMax}`}>
+                <strong>{score}</strong><span>/ {scoreMax}</span>
+              </div>
+            </div>
+
+            <div className="panel application-summary">
+              <Glass name="iris" size={30} />
+              <div className="col grow" style={{ gap: 3 }}>
+                <span>Iris screened this application</span>
+                <span className="meta">Review the evidence, then decide.</span>
               </div>
               <Avatar person={{ name: state.user.name }} />
-              <span className="meta">{state.user.name} · Reviewer</span>
+              <span className="meta reviewer-name">{state.user.name}</span>
             </div>
-            <div className="panel score-panel">
-              <div className="col" style={{ gap: 3 }}>
-                <span className="score">{payload.score ?? 0} / 100</span>
-                <span className="meta">Proposed rubric</span>
-              </div>
-              <span className="grow" />
-              <div className="col" style={{ alignItems: 'flex-end', gap: 4 }}>
-                <span>{payload.role}</span>
-                <span className="meta">Awaiting review</span>
-              </div>
-            </div>
-            {payload.breakdown && (
-              <div className="stat-grid">
-                {payload.breakdown.map(([label, got, total]) => (
-                  <div className="stat" key={label}>
-                    <span className="k">{label}</span>
-                    <span className="v">
-                      {got} / {total}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="row">
-              <h2 className="section-title">Claims & sources</h2>
-              <span className="grow" />
-              <Button link onClick={() => setReport(true)}>
-                Full report →
-              </Button>
-            </div>
-            <div className="col">
-              {request.sources.map((item) => (
-                <div className="list-row compact" key={item.id}>
-                  <Glass name="context" size={22} className="row-icon" />
-                  <div className="row-main">
-                    <span className="t">{item.name}</span>
-                    <span className="s">{item.note}</span>
-                  </div>
-                  <Button link onClick={() => setSource(item)}>
-                    Open →
-                  </Button>
+
+            {criteria.length > 0 && (
+              <section className="application-criteria" aria-labelledby="criteria-heading">
+                <div className="row">
+                  <h2 className="section-title" id="criteria-heading">Screening</h2>
+                  <span className="grow" />
+                  <Button link onClick={() => setReport(true)}>Full report →</Button>
                 </div>
-              ))}
-            </div>
+                <div className="criteria-list">
+                  {criteria.map((criterion) => {
+                    const fraction = criterion.maximum > 0 ? Math.max(0, Math.min(1, criterion.points / criterion.maximum)) : 0;
+                    return (
+                      <div className="criterion-row" key={criterion.label}>
+                        <div className="col grow" style={{ gap: 5 }}>
+                          <div className="row">
+                            <span className="criterion-label">{criterion.label}</span>
+                            <span className="grow" />
+                            <span className="meta">{criterion.points}/{criterion.maximum}</span>
+                          </div>
+                          <span className="criterion-track" aria-hidden="true"><span style={{ width: `${fraction * 100}%` }} /></span>
+                          {criterion.evidence && <span className="meta criterion-evidence">{criterion.evidence}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {request.sources.length > 0 && (
+              <section className="col" aria-labelledby="sources-heading">
+                <h2 className="section-title" id="sources-heading">Sources</h2>
+                {request.sources.map((item) => (
+                  <button type="button" className="source-row" key={item.id} onClick={() => setSource(item)}>
+                    <Glass name="context" size={22} />
+                    <span className="col grow">
+                      <span>{item.name}</span>
+                      <span className="meta truncate">{item.note}</span>
+                    </span>
+                    <Icon name="arrow" size={16} />
+                  </button>
+                ))}
+              </section>
+            )}
+
             {request.missing.length > 0 && (
               <div className="panel missing-panel plain" style={{ backgroundImage: 'var(--panel)' }}>
                 <div className="col" style={{ gap: 6 }}>
@@ -322,12 +434,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
                 </div>
               </div>
             )}
-            {payload.benefits && (
-              <div className="col" style={{ gap: 6 }}>
-                <span>{payload.role}</span>
-                <span className="meta">{payload.benefits.join(' · ')}</span>
-              </div>
-            )}
+            {benefits.length > 0 && <p className="meta">Proposed benefits · {benefits.join(' · ')}</p>}
             {request.note && (
               <div className="note-block">
                 <span className="k">Review note · Saved · Not sent</span>
@@ -336,16 +443,20 @@ function ApplicationView({ request }: { request: RequestEntity }) {
             )}
           </div>
         </div>
-        <DecisionFooter request={request} title="Admit this role; queue access." detail="Active after grants are confirmed. No message sent." approveLabel="Admit" declineLabel="Decline" />
+        <DecisionFooter
+          request={request}
+          title={`Admit ${firstName} to the Partner Program.`}
+          detail="Role and access require separate approval. No message is sent."
+          approveLabel={`Admit ${firstName}`}
+          declineLabel="Decline"
+        />
       </div>
-      <Dialog open={report} title="Claims and evidence" onClose={() => setReport(false)} actions={<Button onClick={() => setReport(false)}>Back to review</Button>}>
-        <p className="meta">Proposed rubric · Applicant-provided sources. Customer outcomes are not independently verified.</p>
-        {(payload.breakdown ?? []).map(([label, got, total]) => (
-          <div key={label} className="col" style={{ gap: 4, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
-            <span>{label}</span>
-            <span className="meta">
-              {got} of {total}
-            </span>
+      <Dialog open={report} title={`${name} · screening report`} onClose={() => setReport(false)} actions={<Button onClick={() => setReport(false)}>Back to review</Button>}>
+        <p className="meta">Applicant-provided evidence. Gaps stay visible in the decision.</p>
+        {criteria.map((criterion) => (
+          <div key={criterion.label} className="col report-criterion">
+            <div className="row"><span>{criterion.label}</span><span className="grow" /><span>{criterion.points}/{criterion.maximum}</span></div>
+            {criterion.evidence && <span className="meta">{criterion.evidence}</span>}
           </div>
         ))}
       </Dialog>
@@ -371,30 +482,58 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
   const [zoom, setZoom] = useState(100);
   const [line, setLine] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
-  const payload = request.payload as {
-    number?: string;
-    total_minor?: number;
-    issued?: string;
-    due?: string;
-    lines?: { id: string; label: string; short: string; qty: number; amount_minor: number; date: string }[];
-    sections?: [string, string][];
-  };
-  const selected = payload.lines?.find((row) => row.id === line) ?? null;
+  const payload = record(request.payload);
+  const number = text(payload.number) ?? request.label;
+  const currency = text(payload.currency) ?? 'USD';
+  const payer = record(payload.payer);
+  const payee = record(payload.payee);
+  const payloadParties = Array.isArray(payload.parties) ? payload.parties.map(record) : [];
+  const parties = payloadParties.length > 0
+    ? payloadParties
+    : [{ name: state.workspace.name }, { name: request.subject ?? request.label }];
+  const payeeName = text(payee.name) ?? request.subject ?? request.label;
+  const payerName = text(payer.name) ?? state.workspace.name;
+  const issueDate = text(payload.issue_date) ?? text(payload.issued) ?? '—';
+  const dueDate = text(payload.due_date) ?? text(payload.due) ?? '—';
+  const versionLabel = text(payload.version_label) ?? 'v1';
+  const totalMinor = typeof payload.total_minor === 'number' ? payload.total_minor : 0;
+  const lines = Array.isArray(payload.lines)
+    ? payload.lines.flatMap((item) => {
+        const row = record(item);
+        const id = text(row.id);
+        const label = text(row.label);
+        if (!id || !label || typeof row.qty !== 'number' || typeof row.amount_minor !== 'number') return [];
+        return [{ id, label, qty: row.qty, amount_minor: row.amount_minor, date: text(row.date) ?? 'No service date' }];
+      })
+    : [];
+  const sections = Array.isArray(payload.sections)
+    ? payload.sections.flatMap((item) => {
+        if (Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'string') return [{ heading: item[0], body: item[1] }];
+        const section = record(item);
+        const heading = text(section.heading);
+        const body = text(section.body);
+        return heading && body ? [{ heading, body }] : [];
+      })
+    : [];
+  const selected = lines.find((row) => row.id === line) ?? null;
 
   return (
-    <div className="app-pane-body" style={{ paddingBottom: 0, gap: 18, minHeight: 0 }}>
+    <div className="app-pane-body request-pane">
       <div className="row" style={{ gap: 14 }}>
+        <Glass name={request.kind === 'invoice' ? 'invoice' : 'agreement'} size={38} />
         <div className="col grow" style={{ gap: 3 }}>
-          <h1 className="display-32">{request.title}</h1>
+          <h1 className="display-32">{request.kind === 'invoice' ? `Invoice ${number}` : 'Services agreement'}</h1>
           <span className="meta">
-            {request.subject} · {payload.number}
+            {request.kind === 'invoice'
+              ? [payeeName, fmtMoney(totalMinor), currency].filter(Boolean).join(' · ')
+              : [parties.map((party) => text(party.name)).filter(Boolean).join(' ↔ '), versionLabel].filter(Boolean).join(' · ')}
           </span>
         </div>
-        <span className="meta">{requestStatusLabel(request)}</span>
+        <span className="pill">{request.kind === 'invoice' ? 'Invoice approval' : 'Signature approval'}</span>
       </div>
       <div className="doc-frame">
         <div className="doc-toolbar">
-          <span>{payload.number}.pdf</span>
+          <span>{number}.pdf</span>
           <span className="seg" role="group" aria-label="Document view">
             <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>
               Preview
@@ -432,7 +571,7 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
         ) : mode === 'pdf' ? (
           <div className="col grow" style={{ minHeight: 0, gap: 8, padding: 24 }}>
             {doc?.pdf_status === 'ready' && doc.pdf_url ? (
-              <iframe className="pdf-embed" src={`${doc.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`${payload.number}.pdf`} />
+              <iframe className="pdf-embed" src={`${doc.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`${number}.pdf`} />
             ) : doc?.pdf_status === 'failed' ? (
               <EmptyState icon="invoice" title={EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')} action={<Button onClick={() => adapter.ensure('document', doc.id)}>Retry</Button>} />
             ) : doc?.pdf_status === 'none' && doc.pdf_error ? (
@@ -456,21 +595,26 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
                   <div className="row doc-rule" style={{ justifyContent: 'space-between', paddingBottom: 18, alignItems: 'center' }}>
                     <div className="col" style={{ gap: 6 }}>
                       <span className="doc-h">Invoice</span>
-                      <span className="doc-meta">{payload.number} · Draft preview</span>
+                      <span className="doc-meta">{number} · Review copy</span>
                     </div>
                   </div>
+                  <div className="doc-parties">
+                    <div className="col"><span className="doc-label">From</span><strong>{payeeName}</strong><span>{text(payee.email)}</span></div>
+                    <span className="doc-arrow">→</span>
+                    <div className="col"><span className="doc-label">Bill to</span><strong>{payerName}</strong><span>{text(payer.email)}</span></div>
+                  </div>
                   <div className="row doc-rule" style={{ gap: 24, padding: '12px 0', fontSize: 14, color: '#000' }}>
-                    <span style={{ width: 208 }}>Issued · {payload.issued}</span>
-                    <span style={{ width: 208 }}>Due · {payload.due}</span>
+                    <span style={{ width: 208 }}>Issued · {issueDate}</span>
+                    <span style={{ width: 208 }}>Due · {dueDate}</span>
                   </div>
                   <div className="doc-head-row">
                     <span className="c1" style={{ flex: 1 }}>
                       Services delivered
                     </span>
                     <span style={{ width: 80, textAlign: 'right' }}>Qty</span>
-                    <span style={{ width: 140, textAlign: 'right' }}>Amount · USD</span>
+                    <span style={{ width: 140, textAlign: 'right' }}>Amount · {currency}</span>
                   </div>
-                  {(payload.lines ?? []).map((row) => (
+                  {lines.map((row) => (
                     <button type="button" key={row.id} className="doc-line" aria-pressed={line === row.id} onClick={() => setLine(line === row.id ? null : row.id)}>
                       <span className="c1">{row.label}</span>
                       <span className="c2">{row.qty}</span>
@@ -479,11 +623,11 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
                   ))}
                   <div className="doc-total">
                     <span className="k">Total</span>
-                    <span className="v">{fmtMoney(payload.total_minor ?? 0)}</span>
+                    <span className="v">{fmtMoney(totalMinor)}</span>
                   </div>
                   <div className="doc-foot">
                     <span>Not sent · No money moved</span>
-                    <span>{payload.number} · 1 / 1</span>
+                    <span>{number} · 1 / 1</span>
                   </div>
                 </>
               ) : (
@@ -491,18 +635,33 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
                   <div className="row doc-rule" style={{ justifyContent: 'space-between', paddingBottom: 18, alignItems: 'center' }}>
                     <div className="col" style={{ gap: 6 }}>
                       <span className="doc-h">Services Agreement</span>
-                      <span className="doc-meta">{payload.number} · Draft v1</span>
+                      <span className="doc-meta">{number} · {versionLabel} · Unsigned</span>
                     </div>
                   </div>
-                  {(payload.sections ?? []).map(([heading, text]) => (
-                    <div className="col" key={heading} style={{ gap: 6 }}>
-                      <span className="doc-sec-h">{heading}</span>
-                      <p>{text}</p>
+                  {parties.length > 0 && (
+                    <div className="doc-parties">
+                      {parties.slice(0, 2).map((party, index) => (
+                        <div className="col" key={`${text(party.name) ?? 'party'}-${index}`}>
+                          <span className="doc-label">{index === 0 ? 'Prepared for' : 'Counterparty'}</span>
+                          <strong>{text(party.name) ?? '—'}</strong>
+                          <span>{text(party.email)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sections.map((section) => (
+                    <div className="col" key={section.heading} style={{ gap: 6 }}>
+                      <span className="doc-sec-h">{section.heading}</span>
+                      <p>{section.body}</p>
                     </div>
                   ))}
+                  <div className="signature-preview">
+                    <span className="doc-label">Signature status</span>
+                    <span>Unsigned · approval queues the signature step</span>
+                  </div>
                   <div className="doc-foot" style={{ borderTop: 0 }}>
-                    <span>Both parties unsigned · Nothing sent</span>
-                    <span>{payload.number} · v1 · 1 / 1</span>
+                    <span>Nothing signed · Nothing sent</span>
+                    <span>{number} · {versionLabel} · 1 / 1</span>
                   </div>
                 </>
               )}
@@ -522,9 +681,9 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
         <div className="hermes-ui selection-host">
           <SelectionActions
             text={{
-              lead: `Selected line on ${payload.number}:`,
+              lead: `Selected line on ${number}:`,
               original: `${selected.label} · ${selected.qty} × ${fmtMoney(selected.amount_minor)}`,
-              rewrite: `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${payload.number}: `,
+              rewrite: `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${number}: `,
             }}
             labels={{ keep: 'Add to the composer', discard: 'Clear', placeholder: 'Ask about this line' }}
             explanation={`This line is ${selected.label}, ${selected.qty} × ${fmtMoney(selected.amount_minor)}, dated ${selected.date}. It is read from the document payload; nothing here was generated.`}
@@ -538,7 +697,7 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
             onRequestEdit={async (action) =>
               action === 'Explain'
                 ? `${selected.label}: ${selected.qty} × ${fmtMoney(selected.amount_minor)} on ${selected.date}.`
-                : `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${payload.number}: `
+                : `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${number}: `
             }
             onKeep={(text) => {
               if (!state.activeSessionId) return;
@@ -564,9 +723,9 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
       ) : (
         <DecisionFooter
           request={request}
-          title={request.kind === 'invoice' ? 'Create this invoice in Library.' : 'Create this draft in Library.'}
-          detail={request.kind === 'invoice' ? 'No email sent. No money moved.' : 'Both parties unsigned. Nothing sent.'}
-          approveLabel={request.kind === 'invoice' ? 'Create invoice' : 'Create draft'}
+          title={request.kind === 'invoice' ? `Approve invoice ${number}.` : `Approve ${number} for signature.`}
+          detail={request.kind === 'invoice' ? 'Creates the invoice. No email is sent and no money moves.' : 'Saves this version and queues signature. Nothing is signed or sent.'}
+          approveLabel={request.kind === 'invoice' ? 'Approve invoice' : 'Approve for signature'}
           declineLabel="Decline"
         />
       )}
