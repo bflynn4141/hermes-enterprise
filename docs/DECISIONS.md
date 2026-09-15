@@ -4235,13 +4235,6 @@ Hyperdrive strings; `pnpm e2e:live`, `pnpm db:test` and the worker vitest
 projects all go through it, and `apps/client/scripts/live-fixture.mjs` — which
 the live specs use to read rows back — defaults to it too.
 
-The worker's aggregate `test` script runs its unit, database and workerd
-projects serially, and the database phase goes through `db-test.mjs` so its
-idempotent migrations restore grants before every run. Vitest otherwise
-overlaps projects that both update the platform-wide model catalog, while a
-second bare database run can inherit grant and catalog state deliberately
-exercised by the first.
-
 **Four guards, because a default is not a guarantee.**
 
 1. the launcher refuses to start if the port is 8787;
