@@ -165,7 +165,6 @@
   "env": {
     "staging": {
       "name": "hermes-enterprise-staging",
-      "routes": [{ "pattern": "staging.hermes.brianflynn.dev", "custom_domain": true }],
       "limits": { "cpu_ms": 30000 },
       "observability": { "enabled": true, "head_sampling_rate": 1 },
       "assets": {
