@@ -45,6 +45,8 @@ const requests = [
   request(103, 'Ada admitted', 'application', 'admitted'),
   request(104, 'Acme invoice', 'invoice', 'pending'),
   request(105, 'Acme agreement', 'agreement', 'pending'),
+  request(106, 'Saved invoice', 'invoice', 'created'),
+  request(107, 'Saved agreement', 'agreement', 'drafted'),
 ];
 
 function render(ref: Ref, selectedId?: string): string {
@@ -115,16 +117,41 @@ describe('the Inbox renders the focused view', () => {
     expect(html).not.toContain('Ada pending');
   });
 
-  it('renders distinct invoice and signature decisions with exact consequences', () => {
+  it('renders staged invoice and signature flows around the complete documents', () => {
     const invoice = render({ section: 'inbox', view: 'request', id: requests[3]!.id }, requests[3]!.id);
     expect(invoice).toContain('Invoice approval');
-    expect(invoice).toContain('Approve invoice');
-    expect(invoice).toContain('No email is sent and no money moves.');
+    expect(invoice).toContain('Invoice approval steps');
+    expect(invoice).toContain('Review invoice');
+    expect(invoice).toContain('Payment');
+    expect(invoice).toContain('Confirm');
+    expect(invoice).toContain('Full document');
+    expect(invoice).toContain('Review payment');
+    expect(invoice).toContain('Nothing is approved, signed, sent, or paid yet.');
 
     const agreement = render({ section: 'inbox', view: 'request', id: requests[4]!.id }, requests[4]!.id);
     expect(agreement).toContain('Signature approval');
-    expect(agreement).toContain('Approve for signature');
-    expect(agreement).toContain('Nothing is signed or sent.');
+    expect(agreement).toContain('Signature approval steps');
+    expect(agreement).toContain('Review agreement');
+    expect(agreement).toContain('Signature');
+    expect(agreement).toContain('Full document');
+    expect(agreement).toContain('Add signature');
+    expect(agreement).toContain('Nothing is approved, signed, sent, or paid yet.');
+  });
+
+  it('keeps complete documents and authorization controls in resolved receipts', () => {
+    const invoice = render({ section: 'inbox', view: 'request', id: requests[5]!.id }, requests[5]!.id);
+    expect(invoice).toContain('Complete document');
+    expect(invoice).toContain('Payment authorization');
+    expect(invoice).toContain('Connect a bank account');
+    expect(invoice).toContain('Save payment authorization');
+    expect(invoice).toContain('Provider actions');
+
+    const agreement = render({ section: 'inbox', view: 'request', id: requests[6]!.id }, requests[6]!.id);
+    expect(agreement).toContain('Complete document');
+    expect(agreement).toContain('Full legal name');
+    expect(agreement).toContain('I agree to use this as my electronic signature');
+    expect(agreement).toContain('Save signature authorization');
+    expect(agreement).toContain('Provider actions');
   });
 
   it('distinguishes an empty filtered result from an empty Inbox', () => {

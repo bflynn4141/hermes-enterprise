@@ -4579,3 +4579,27 @@ workspace is retained in `qa/panel/sidebar-after-shell.png`.
 **Would change it if.** User testing shows that the compact type is difficult
 to read at 100% system scaling. The next step would be a user-selectable density
 preference, not another browser-wide transform.
+
+---
+
+## C53. Payment and signature approval capture intent before provider execution
+
+**Decided September 15, 2026.** Invoice and agreement review use three visible
+steps: review the complete document, prepare the payment or signature, and
+confirm the exact authorization. The full document remains available throughout.
+Payment review names the source account, payee, amount, and timing; agreement
+review places the signer's entered name and consent directly in the signature
+block. The final decision stores an audit note describing that authorization.
+
+**Execution boundary.** Approval still creates the document and pending effects.
+It does not manufacture a bank transfer or applied signature. The local demo
+labels its bank connection as a prototype with no funds connected, and both
+flows say that provider execution remains separate. A production connector must
+turn the pending effect into an idempotent provider operation, persist the
+provider reference, reconcile webhooks, and expose failure or reversal without
+changing the human decision already on file.
+
+**Why.** The reviewer needs to see the entire legal or financial artifact and
+the concrete consequence before committing. Keeping the effect separate also
+preserves the existing two-person finance requirement and prevents a document
+approval from silently becoming external execution.

@@ -47,8 +47,11 @@ test('every main screen renders', async ({ page }) => {
   await page.screenshot(shot('06-document-viewer'));
 
   // 7. The receipt, after a decision.
-  await appPane.getByRole('button', { name: 'Approve invoice' }).click();
-  await expect(appPane.getByText('What this implies')).toBeVisible();
+  await appPane.getByRole('button', { name: 'Review payment' }).click();
+  await appPane.getByRole('checkbox', { name: /authorize this payment instruction/i }).check();
+  await appPane.getByRole('button', { name: 'Review authorization' }).click();
+  await appPane.getByRole('button', { name: 'Authorize payment' }).click();
+  await expect(appPane.getByText('Provider actions')).toBeVisible();
   await page.screenshot(shot('07-receipt'));
 
   // 8. Agent → Context.

@@ -213,7 +213,7 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
-        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
+        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', notes: 'Fictional demo invoice. No provider is connected.', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
 
@@ -656,6 +656,14 @@ export function createMockBackend(options: MockOptions = {}) {
           payload: { request_id: id, decision_id: decisionId, decision, resulting_status: resulting, decided_by: USER, decided_at: iso(1), effect_ids: [] },
         } as StreamEvent);
         return json({ decision_id: decisionId, request_id: id, resulting_status: resulting, effect_ids: [] });
+      }
+      if (rest === '/notes' && method === 'POST') {
+        if (!row) return fail(404, 'not_found');
+        const note = typeof body.body === 'string' ? body.body.trim() : '';
+        if (!note) return fail(422, 'empty_note', 'A note needs a body');
+        row.note = note.slice(0, 4000);
+        row.version += 1;
+        return json(row, 201);
       }
       if (rest === '/effects') return page([]);
       if (!rest) return row ? json(row) : fail(404, 'not_found');

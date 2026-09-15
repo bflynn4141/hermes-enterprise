@@ -285,6 +285,8 @@ export function createRest(options: RestOptions) {
 
     // --- entities ---
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
+    addRequestNote: (workspaceId: string, id: string, body: { body: string }) =>
+      request('POST', `${ws(workspaceId)}/requests/${id}/notes`, requestEntitySchema, body),
     listRequests: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
     listEffects: (workspaceId: string, requestId: string) =>
