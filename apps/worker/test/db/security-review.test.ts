@@ -347,7 +347,13 @@ describe('SR-5 · a member cannot read another member’s run through Traces', (
     expect(((await targeted.json()) as { items: unknown[] }).items).toEqual([]);
   });
 
-  it('shows the run once the session is shared', async () => {
+  it('still hides the run after the session is link-shared, because a share is not a workspace grant', async () => {
+    // This test used to assert the opposite, and pinned the bug: a link share
+    // widened the in-workspace visibility predicate, so creating one handed the
+    // session to every member while the person holding the link got nothing
+    // (security review O1). The token is redeemed at `GET /shared/:token` now
+    // and the predicate is `owner_id = me`, so the Member sees no more than
+    // before.
     const fx = await seedWorkspace();
     const { env } = makeEnv();
     const runId = await seedRun(fx);
@@ -364,7 +370,8 @@ describe('SR-5 · a member cannot read another member’s run through Traces', (
     });
 
     const theirs = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/traces`);
-    expect(((await theirs.json()) as { items: { run_id: string }[] }).items.map((i) => i.run_id)).toContain(runId);
+    expect(((await theirs.json()) as { items: { run_id: string }[] }).items.map((i) => i.run_id)).not.toContain(runId);
+    expect((await asUser(env, fx.memberId, `/w/${fx.workspaceId}/traces/${runId}`)).status).toBe(404);
   });
 });
 

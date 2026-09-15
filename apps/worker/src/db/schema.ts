@@ -766,6 +766,21 @@ export const invitationDirectory = pgTable('invitation_directory', {
   createdAt: now('created_at'),
 });
 
+/**
+ * Which workspace is this share token for?
+ *
+ * The share half of `invitation_directory`, and for the same reason:
+ * `GET /shared/:token` cannot know its tenant until it has the answer, and
+ * `session_shares` is FORCEd. One row per live share; the trigger on
+ * `session_shares` removes it the moment the share is revoked (0014).
+ */
+export const shareDirectory = pgTable('share_directory', {
+  tokenHash: text('token_hash').primaryKey(),
+  shareId: uuid('share_id').notNull(),
+  workspaceId: uuid('workspace_id').notNull(),
+  createdAt: now('created_at'),
+});
+
 /** Ids only: which workspaces have a job due? See 0008. */
 export const jobReady = pgTable('job_ready', {
   jobId: uuid('job_id').primaryKey(),
@@ -820,6 +835,7 @@ export const ALL_TABLES = {
   workspace_directory: workspaceDirectory,
   member_directory: memberDirectory,
   invitation_directory: invitationDirectory,
+  share_directory: shareDirectory,
   job_ready: jobReady,
   platform_counters: platformCounters,
   validator_runs: validatorRuns,

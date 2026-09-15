@@ -35,8 +35,8 @@ import {
   type RequestKind,
 } from '@hermes/shared';
 import {
+  CHARS_PER_TOKEN,
   DOCUMENT_TEXT_MAX_CHARS,
-  DOCUMENT_TEXT_MAX_TOKENS,
   TOOL_RESULT_MAX_BYTES,
   TOOL_RESULT_TRUNCATION_MARKER,
 } from './constants.js';
@@ -214,19 +214,44 @@ export function toolResultEnvelope(
   const body = JSON.stringify(envelope);
   const bytes = new TextEncoder().encode(body);
   if (bytes.byteLength <= TOOL_RESULT_MAX_BYTES) return body;
+
   // Truncate the encoded form, then repair it into a JSON string so the model
   // still receives valid JSON rather than a torn object.
-  const head = new TextDecoder().decode(bytes.slice(0, TOOL_RESULT_MAX_BYTES - TOOL_RESULT_TRUNCATION_MARKER.length));
-  return JSON.stringify({
-    tool: toolName,
-    source,
-    retrieved_at: at.toISOString(),
-    untrusted: true,
-    truncated: true,
-    suspicion: verdict && verdict.suspicion !== 'none' ? verdict.suspicion : undefined,
-    reminder: verdict?.reminder ?? undefined,
-    data_text: head + TOOL_RESULT_TRUNCATION_MARKER,
-  });
+  //
+  // The repair is why the old version was not a cap (security review O10):
+  // `JSON.stringify` re-escapes the head, and a run of quotes, backslashes or
+  // non-ASCII can nearly double it, so a result that was 9 KB could come back
+  // at 15 KB from the function whose whole job was to hold it under 8 KB. The
+  // answer is to measure the *encoded* envelope rather than the head, and to
+  // shrink until it fits: at most a handful of passes, because each one halves
+  // the overshoot, and the loop is bounded anyway.
+  const wrap = (head: string): string =>
+    JSON.stringify({
+      tool: toolName,
+      source,
+      retrieved_at: at.toISOString(),
+      untrusted: true,
+      truncated: true,
+      suspicion: verdict && verdict.suspicion !== 'none' ? verdict.suspicion : undefined,
+      reminder: verdict?.reminder ?? undefined,
+      data_text: head + TOOL_RESULT_TRUNCATION_MARKER,
+    });
+
+  let head = new TextDecoder().decode(bytes.slice(0, TOOL_RESULT_MAX_BYTES));
+  for (let pass = 0; pass < 24; pass += 1) {
+    const candidate = wrap(head);
+    const size = new TextEncoder().encode(candidate).byteLength;
+    if (size <= TOOL_RESULT_MAX_BYTES) return candidate;
+    if (head.length === 0) break;
+    // Drop at least one character, and proportionally more when the overshoot
+    // is large. `Math.floor` on the ratio would stall at 1.0.
+    const keep = Math.floor(head.length * (TOOL_RESULT_MAX_BYTES / size));
+    head = head.slice(0, Math.max(0, Math.min(keep, head.length - 1)));
+  }
+  // The envelope's own fields (the tool name, the reminder) are over budget
+  // with no payload at all. Say so rather than returning something larger than
+  // the cap the caller was promised.
+  return JSON.stringify({ tool: toolName, source, untrusted: true, truncated: true, data_text: TOOL_RESULT_TRUNCATION_MARKER });
 }
 
 /**
@@ -283,7 +308,11 @@ const getRequest: ToolDefinitionEntry = {
 const getDocumentText: ToolDefinitionEntry = {
   name: 'get_document_text',
   kind: 'read',
-  description: `Read the extracted text of a document, a window at a time (at most ${DOCUMENT_TEXT_MAX_TOKENS} tokens per call). Pass the returned next_offset to continue.`,
+  // The description names the window the tool actually returns rather than the
+  // plan's nominal 6,000 tokens: the two differ because a tool result is capped
+  // at 8 KB, and a model told it may read 6,000 tokens that then receives 1,750
+  // has been given a wrong number to plan with. See DOCUMENT_TEXT_MAX_CHARS.
+  description: `Read the extracted text of a document, a window at a time (at most ${DOCUMENT_TEXT_MAX_CHARS} characters per call, roughly ${Math.floor(DOCUMENT_TEXT_MAX_CHARS / CHARS_PER_TOKEN)} tokens). Pass the returned next_offset to continue.`,
   input_schema: OBJECT(
     { document_id: { type: 'string' }, offset: { type: 'integer', minimum: 0 } },
     ['document_id'],
@@ -765,7 +794,13 @@ export async function executeTool(
  * a reason to hand it everything.
  */
 export function allowedTools(mode: string, capabilityToolNames: readonly string[]): ToolDefinitionEntry[] {
-  const kinds = MODE_TOOL_KINDS[mode] ?? MODE_TOOL_KINDS.work ?? [];
+  // An unknown mode falls back to `ask` — read-only — rather than to `work`.
+  // It used to fall back to the *least* restrictive set, so a mode string this
+  // build does not know (a newer client, a hand-written row, a rollback over a
+  // migration that added one) handed the model every proposal tool
+  // (security review O26). Failing closed costs a run that can only read;
+  // failing open costs rows nobody asked for.
+  const kinds = MODE_TOOL_KINDS[mode] ?? MODE_TOOL_KINDS.ask ?? [];
   const configured = new Set(capabilityToolNames);
   return TOOLS.filter((tool) => kinds.includes(tool.kind) && configured.has(tool.name));
 }

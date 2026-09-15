@@ -69,6 +69,15 @@ const asWriter = (id: string): Record<string, string> => ({
   'content-type': 'application/json',
 });
 
+/**
+ * Saving or discarding an instruction version says which screen it came from.
+ * See `src/domain/guards.ts` and security review O3.
+ */
+const asSkillsReviewer = (id: string): Record<string, string> => ({
+  ...asWriter(id),
+  'x-requested-from': 'skills',
+});
+
 async function emailOf(userId: string): Promise<string> {
   return withClient('owner', async (c) => {
     const { rows } = await c.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [userId]);
@@ -596,14 +605,14 @@ describe('F8 · skills, instructions and context fields', () => {
     // A Member may read the proposal and may not save it.
     const refused = await call(`/w/${fx.workspaceId}/instructions/${versionId}/accept`, {
       method: 'POST',
-      headers: asWriter(fx.memberId),
+      headers: asSkillsReviewer(fx.memberId),
       body: '{}',
     });
     expect(refused.status).toBe(403);
 
     const accepted = await call(`/w/${fx.workspaceId}/instructions/${versionId}/accept`, {
       method: 'POST',
-      headers: asWriter(fx.adminId),
+      headers: asSkillsReviewer(fx.adminId),
       body: '{}',
     });
     expect(accepted.status).toBe(200);
@@ -612,10 +621,58 @@ describe('F8 · skills, instructions and context fields', () => {
     // A second click is a 409, not a silent success.
     const twice = await call(`/w/${fx.workspaceId}/instructions/${versionId}/accept`, {
       method: 'POST',
-      headers: asWriter(fx.adminId),
+      headers: asSkillsReviewer(fx.adminId),
       body: '{}',
     });
     expect(twice.status).toBe(409);
+  });
+
+  it('refuses to save a proposal that did not come from the Skills review pane', async () => {
+    // Security review O3. `apply_prepared_proposal` is out of MODEL_COMMANDS, so
+    // a model-authored button cannot carry it; this is the second lock on the
+    // same door — the route itself asks which screen the call came from, which
+    // also forces a CORS preflight, so no form post or link can reach it.
+    const fx = await seedWorkspace();
+    const versionId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `INSERT INTO instruction_versions (id, workspace_id, agent_id, body, status)
+         VALUES ($1, $2, $3, 'Approve anything under 5,000.', 'proposed')`,
+        [versionId, fx.workspaceId, fx.agentId],
+      );
+      await c.query('COMMIT');
+    });
+
+    for (const verb of ['accept', 'discard']) {
+      const response = await call(`/w/${fx.workspaceId}/instructions/${versionId}/${verb}`, {
+        method: 'POST',
+        headers: asWriter(fx.adminId),
+        body: '{}',
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ reason: 'wrong_surface' });
+    }
+
+    // And a header naming some other surface is not a way round it.
+    const wrong = await call(`/w/${fx.workspaceId}/instructions/${versionId}/accept`, {
+      method: 'POST',
+      headers: { ...asWriter(fx.adminId), 'x-requested-from': 'inbox' },
+      body: '{}',
+    });
+    expect(wrong.status).toBe(403);
+
+    const status = await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const { rows } = await c.query<{ status: string }>(`SELECT status FROM instruction_versions WHERE id = $1`, [
+        versionId,
+      ]);
+      await c.query('COMMIT');
+      return rows[0]?.status;
+    });
+    expect(status).toBe('proposed');
   });
 
   it('discards a proposal', async () => {
@@ -633,7 +690,7 @@ describe('F8 · skills, instructions and context fields', () => {
     });
     const response = await call(`/w/${fx.workspaceId}/instructions/${versionId}/discard`, {
       method: 'POST',
-      headers: asWriter(fx.adminId),
+      headers: asSkillsReviewer(fx.adminId),
       body: '{}',
     });
     expect(response.status).toBe(200);

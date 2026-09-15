@@ -59,7 +59,16 @@ export interface StepConfig {
 
 export interface EngineStep {
   do<T>(name: string, config: StepConfig, fn: () => Promise<T>): Promise<T>;
-  waitForEvent<T>(name: string, options: { timeout: string }): Promise<{ payload: T }>;
+  /**
+   * `options.type` is the event *kind* and `name` is only the step's
+   * checkpoint key. They are not interchangeable and the runtime uses the
+   * former to match a `sendEvent`: with `type` omitted the waiter is
+   * registered under `undefined`, `sendEvent` queues under the real kind, and
+   * the two never meet — so the run sits in `waiting` until the 30-day timeout
+   * whatever anybody answers. Passing both is the fix (decision G8); the
+   * signature requires `type` so it cannot be forgotten at the next call site.
+   */
+  waitForEvent<T>(name: string, options: { type: string; timeout: string }): Promise<{ payload: T }>;
 }
 
 export const stepNames = {
@@ -826,6 +835,19 @@ async function waitForAnswer(
   outcome: ToolStepResult,
 ): Promise<void> {
   const { db } = deps;
+  // The empty row the question needs, before the status moves. `runs.waiting_for`
+  // is the engine's own bookkeeping; the Context tab lists
+  // `agent_context_fields`, and a parked run that wrote no row there left the
+  // one screen built for this state with nothing to show (client finding 14).
+  // Existing answers are untouched — see `ensureContextField`.
+  if (outcome.waitingKey && run.agentId) {
+    await db.ensureContextField({
+      runId: run.id,
+      toolCallId: outcome.toolCallId,
+      agentId: run.agentId,
+      key: outcome.waitingKey,
+    });
+  }
   await db.setRunStatus(run.id, 'waiting', { waitingFor: outcome.waitingKey, waitingLabel: outcome.waitingLabel });
   await emitter.emit([
     {
@@ -843,7 +865,10 @@ async function waitForAnswer(
   // Ids only in the payload: Workflow instance state is retained 30 days and
   // the erasure inventory asserts it carries no free text. The answer itself
   // is read back from Postgres.
-  await step.waitForEvent<{ run_id: string; key: string }>(CONTEXT_ANSWERED_EVENT, { timeout: CONTEXT_WAIT_TIMEOUT });
+  await step.waitForEvent<{ run_id: string; key: string }>(CONTEXT_ANSWERED_EVENT, {
+    type: CONTEXT_ANSWERED_EVENT,
+    timeout: CONTEXT_WAIT_TIMEOUT,
+  });
 
   await step.do(stepNames.answer(turn, outcome.toolCallId), TOOL_STEP_CONFIG, async () => {
     const value = await db.readContextField(run.agentId, outcome.waitingKey ?? '');

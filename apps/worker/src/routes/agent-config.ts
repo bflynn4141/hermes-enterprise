@@ -5,7 +5,7 @@
 //   POST   /w/:ws/skills                    adopt one (body: { id })
 //   POST   /w/:ws/skills/:id/adopt          the same, the way the client spells it
 //   GET    /w/:ws/instructions              instruction_versions, newest first
-//   POST   /w/:ws/instructions/:id/accept   proposed -> saved (Admin)
+//   POST   /w/:ws/instructions/:id/accept   proposed -> saved (Admin, X-Requested-From: skills)
 //   POST   /w/:ws/instructions/:id/save     the same, the way the client spells it
 //   POST   /w/:ws/instructions/:id/discard  proposed -> discarded (Admin)
 //   DELETE /w/:ws/instructions/:id          the same
@@ -31,6 +31,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { requireRequestedFrom, SKILLS_SURFACE } from '../domain/guards.js';
 
 const skillPage = paginatedSchema(skillVersionSchema);
 const instructionPage = paginatedSchema(instructionVersionSchema);
@@ -206,7 +207,17 @@ async function decideInstruction(
   c: Context<{ Bindings: Env }>,
   verdict: 'saved' | 'discarded',
 ): Promise<Response> {
-  requireOrigin(c, { required: false });
+  requireOrigin(c, { required: true });
+  // Which surface issued it. Saving a proposal is the second-highest-value
+  // write in the product — it changes what every later run is told to do — and
+  // it was reachable from a model-authored button until `apply_prepared_proposal`
+  // left MODEL_COMMANDS (security review O3). The header is not a security
+  // boundary on its own; it is the check that says the *code path* was the
+  // Skills review pane, and a custom header also forces a preflight, so no form
+  // post or link can reach this route at all. Discard carries it too: a Member
+  // — or a stray helper — quietly dropping a proposal an Admin has not read is
+  // the same class of change in the other direction.
+  requireRequestedFrom(c, SKILLS_SURFACE);
   requireCsrf(c);
   const id = pathUuid(c, 'id');
 

@@ -5,6 +5,7 @@
 // inserted first, a duplicate POST returns the existing run, and only then is
 // the instance created, with a duplicate-id error a no-op. Whether the Workflow
 // then does anything is the engine tests' subject.
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { runAttemptInstanceId } from '../../src/runs/workflow.js';
@@ -409,5 +410,125 @@ describe('the context answer', () => {
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ reason: 'run_not_waiting' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// O17 - a refused turn still costs the caller their budget
+// ---------------------------------------------------------------------------
+
+describe('O17 - turn refusals are metered', () => {
+  const turnCount = async (userId: string): Promise<number> =>
+    withClient('owner', async (c) => {
+      const { rows } = await c.query<{ total: string }>(
+        `SELECT COALESCE(sum(count), 0)::text AS total FROM rate_counters
+          WHERE user_id = $1 AND action = 'run.turn'`,
+        [userId],
+      );
+      return Number(rows[0]?.total ?? '0');
+    });
+
+  it('charges the counter for a refusal the caller can repeat', async () => {
+    // `consumeRate` runs inside the tenant transaction so that a 500 of ours
+    // does not spend somebody's budget. The cost was a refund on every failing
+    // path, including the caller's own: a workspace with no key, or one over
+    // its cap, could POST turns as fast as it liked and every attempt rolled
+    // its own count back, while still costing a connection, a caps query and a
+    // catalog read each time.
+    const workspace = await seedWorkspace();
+    const { env } = envWithWorkflow({ ENGINE_PAUSED: '1' } as Partial<Env>);
+    const before = await turnCount(workspace.adminId);
+
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `paused-${randomUUID()}`, text: 'go' },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'engine_paused' });
+    expect(await turnCount(workspace.adminId)).toBe(before + 1);
+  });
+
+  it('does not charge for an authorization answer, which would be a way to lock someone out', async () => {
+    const workspace = await seedWorkspace();
+    const { env } = envWithWorkflow();
+    const before = await turnCount(workspace.memberId);
+
+    // The Admin's session: a 404, not a refusal the Member can act on.
+    const response = await asUser(env, workspace.memberId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `not-mine-${randomUUID()}`, text: 'go' },
+    });
+
+    expect(response.status).toBe(404);
+    expect(await turnCount(workspace.memberId)).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G7 · the Stop/Queue race
+// ---------------------------------------------------------------------------
+
+describe('G7 · Stop and Queue arriving together', () => {
+  /**
+   * Both orders, twenty times, and no item may be left `queued`.
+   *
+   * The race (client finding 15): `queueMessage` read `run.status` and inserted
+   * `queued` unless the run was already stopping; `stopRun` moved every `queued`
+   * row to `paused`. Nothing serialised the two, so an enqueue that read
+   * `working` before Stop committed inserted its row *after* Stop's sweep had
+   * run — and that row stayed `queued` forever: never sent, and not shown as
+   * paused either. It is what made P7 fail about one full-suite run in three.
+   *
+   * `SELECT ... FOR UPDATE` on the `runs` row in both handlers is the fix, and
+   * this is what makes it a regression test rather than a hope: without the
+   * lock a twenty-iteration loop finds a stranded row reliably; with it there is
+   * nothing to find, in either order, because the second transaction waits and
+   * then reads the status the first one committed.
+   */
+  const startRun = async (workspace: Fixture, env: Env, clientTurnId: string): Promise<string> => {
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: clientTurnId, text: 'go' },
+    });
+    return (await response.json() as { run_id: string }).run_id;
+  };
+
+  it('never leaves a queue item stranded as queued, in either order', async () => {
+    const workspace = await seedWorkspace();
+    const { env } = envWithWorkflow();
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const runId = await startRun(workspace, env, `race-${attempt}`);
+      const base = `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}`;
+      const stop = asUser(env, workspace.adminId, `${base}/stop`, { method: 'POST' });
+      const queue = asUser(env, workspace.adminId, `${base}/queue`, {
+        method: 'POST',
+        body: { text: `and then this (${attempt})` },
+      });
+      // Started in both orders across the loop, because the interleaving that
+      // loses is the one where Queue reads first and writes second.
+      await Promise.all(attempt % 2 === 0 ? [stop, queue] : [queue, stop]);
+
+      const rows = await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+        const result = await c.query<{ status: string }>(`SELECT status FROM run_queue WHERE run_id = $1`, [runId]);
+        return result.rows;
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.status, `attempt ${attempt} left the item ${rows[0]?.status}`).toBe('paused');
+
+      // And the run itself is stopping, whichever way round they arrived.
+      await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+        const { rows: runRows } = await c.query<{ status: string; stop_requested: boolean }>(
+          `SELECT status, stop_requested FROM runs WHERE id = $1`,
+          [runId],
+        );
+        expect(runRows[0]).toMatchObject({ status: 'stopping', stop_requested: true });
+      });
+
+      await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+        await c.query(`UPDATE runs SET status = 'stopped', ended_at = now() WHERE id = $1`, [runId]);
+      });
+    }
   });
 });

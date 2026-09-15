@@ -105,6 +105,40 @@ const rowOf = (id: string): Promise<Record<string, unknown> | undefined> =>
     return rows[0];
   });
 
+describe('O7 - the session an attachment names', () => {
+  it('must be one the caller owns, not any session in the workspace', async () => {
+    // `attachments.session_id` was client-supplied and written unchecked. Row-
+    // level security kept it inside the workspace, but inside a workspace it
+    // named *any* session — so a member could hang a file off somebody else's
+    // conversation, where it renders in their transcript and is read by their
+    // runs.
+    const response = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/attachments`, {
+      method: 'POST',
+      // `fx.sessionId` belongs to the Admin (see test/db/helpers.ts).
+      body: { name: 'policy.md', size: 120, mime: 'text/markdown', session_id: fx.sessionId },
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ reason: 'unknown_session' });
+  });
+
+  it('is accepted when it is the caller’s own', async () => {
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/attachments`, {
+      method: 'POST',
+      body: { name: 'policy.md', size: 120, mime: 'text/markdown', session_id: fx.sessionId },
+    });
+    expect(response.status).toBe(201);
+  });
+
+  it('is accepted when there is none, because a file need not belong to a conversation', async () => {
+    const response = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/attachments`, {
+      method: 'POST',
+      body: { name: 'policy.md', size: 120, mime: 'text/markdown' },
+    });
+    expect(response.status).toBe(201);
+  });
+});
+
 describe('declaring an upload', () => {
   it('writes an uploading row and a key inside this workspace', async () => {
     const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/attachments`, {

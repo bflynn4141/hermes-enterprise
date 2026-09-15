@@ -13,11 +13,14 @@ allowed to rely on.
 
 Everything in the **fixed** table has a test that fails against the previous
 code. Everything in the **open** table has a severity, a location, the exploit
-and a recommended fix, and is open because the fix needs a product decision, a
-migration, or a change in `apps/client`, which this review did not touch.
+and a recommended fix.
 
-Scope of the changes: `apps/worker/**` and `docs/**`. No client file was
-modified.
+**A later pass closed fourteen of the twenty-nine open findings** (docs/DECISIONS.md,
+series G), including all four of the ones the "worth reading in full" section
+below describes at length. The table now carries a status column; the entries
+themselves are left as they were written, because a finding rewritten after it
+was fixed stops being evidence of what was wrong. The ones still open say at the
+end of this file why, in four groups.
 
 ---
 
@@ -117,41 +120,46 @@ commented at the line.
 
 ## Summary — open
 
-Ordered by severity. None of these is a change this review could make safely on
-its own: each needs a product decision, a migration, or a change in
-`apps/client`, which another agent owns.
+Ordered by severity. None of these was a change *this* review could make safely
+on its own: each needed a product decision, a migration, or a change in
+`apps/client`, which another agent owned. Fourteen of them were made by the pass
+that had all three; the status column says which, and the last section of this
+file says why the other fifteen are still here.
 
-| # | Finding | Severity | Area | Where |
+| # | Finding | Severity | Area | Status |
 |---|---|---|---|---|
-| O1 | A "share" grants the whole workspace, and the share token is consumed by nothing | **High** | Tenancy | `routes/sessions.ts:30`, `:369-413` |
-| O2 | The run sweep marks a run `error` but never stops the live Workflow instance | **High** | Engine | `runs/sweep.ts:138-168` |
-| O3 | `apply_prepared_proposal` is a model-authored command that rewrites the agent's standing instructions on one unreviewed click | **High** | Engine | `packages/shared/src/commands.ts:21-34` |
-| O4 | Agent-written context fields are presented to the next run as "Context a human has set" | **Medium** | Engine | `engine/prompt.ts:83-90` |
-| O5 | The `/events` replay and the live hub ignore `message_cutoff_seq` | **Medium** | Tenancy | `routes/workspace.ts:213-230`, `hubs.ts:185-187` |
-| O6 | Revoking a share evicts no socket, and the hub ticket's session binding is inert | **Medium** | Tenancy | `routes/sessions.ts:416-438`, `hubs.ts:156-160` |
-| O7 | `attachments.session_id` is client-supplied and never validated | **Medium** | Tenancy | `attachments/service.ts:153` |
-| O8 | Model-authored block `title`/`subtitle`/`label` skip the plain-text validator | **Medium** | Engine | `packages/shared/src/commands.ts:154-165` |
-| O9 | `get_document_text` returns a 24,000-char window into an 8 KB envelope, so paging is unreachable and the model silently reads a third of a document | **Medium** | Engine | `engine/constants.ts:60-64` |
-| O10 | `TOOL_RESULT_MAX_BYTES` is not a cap: the truncation path re-escapes and can double | **Medium** | Engine | `engine/tools.ts:214-229` |
-| O11 | A model-chosen tool argument can raise a Postgres error that kills the run | **Medium** | Engine | `engine/pg-agent-db.ts:699`, `:719`, `tools.ts:505` |
-| O12 | Third-party CI actions are pinned to moving tags in the job that holds the deploy token and the DB owner URL | **Medium** | Ops | `.github/workflows/deploy-staging.yml:54`, `:76` |
-| O13 | The nightly backup job is gated on an environment the runbook requires to have a human reviewer | **Medium** | Ops | `.github/workflows/backup-nightly.yml:85` |
-| O14 | The "write-only" backup credential is used for `HeadObject`, which requires read | **Medium** | Ops | `.github/workflows/backup-nightly.yml:131-147` |
-| O15 | `runBackupUploads` has no cursor, so a workspace over ~330 objects is never backed up | **Medium** | Ops | `storage/backup.ts:38-58` |
-| O16 | The platform instance cap locks one global row inside every turn's tenant transaction | **Medium** | Ops | `ops/instance-cap.ts:72-84`, `routes/turns.ts:174` |
-| O17 | Rate counters are refunded on the refusal path, so a workspace with no key can flood turns unmetered | **Medium** | Ops | `auth/rate-limit.ts:43-64` |
-| O18 | Staging and production declare identical placeholder Hyperdrive ids | **Medium** | Ops | `wrangler.jsonc:229-230`, `:305-306` |
-| O19 | `/auth/callback`, the `/events` replay and hub upgrades have no limit of any kind | **Medium** | Ops | `index.ts:207`, `:219`, `:348-349` |
-| O20 | The envelope AAD does not bind `provider` | **Low** | BYOK | `keys/envelope.ts:132-139` |
-| O21 | `onError`'s catch-all matches structurally on `{status, reason}` rather than by type | **Low** | Ops | `index.ts:176-187` |
-| O22 | `index.ts:188` is the one un-redacted error sink, and it is the catch-all for the key routes | **Low** | BYOK | `index.ts:188` |
-| O23 | The subrequest budget is asserted in a unit test and measured nowhere | **Low** | Engine | `engine/constants.ts:34-35`, `ops/analytics.ts:148-156` |
-| O24 | `waitForAnswer` sets `waiting` before registering the wait, and cannot be woken by Stop | **Low** | Engine | `engine/engine.ts:823-840` |
-| O25 | Duplicate provider tool-call ids collide on `seq` and on the step name | **Low** | Engine | `engine/engine.ts:302`, `:668` |
-| O26 | `allowedTools` falls back to `work` — the least restrictive mode — for an unknown mode | **Low** | Engine | `engine/tools.ts:768` |
-| O27 | The `0011` backfill is a silent no-op under forced RLS | **Low** | Tenancy | `migrations/0011_run_mode.sql:16-19` |
-| O28 | `hermes_user_workspaces` is not `SECURITY DEFINER`, contrary to the comment that relies on it | **Low** | Tenancy | `migrations/0013:214-224`, `routes/auth.ts:290` |
-| O29 | Re-applying migrations briefly forces RLS onto the platform tables | **Low** | Tenancy | `migrations/0003_rls.sql:34` |
+| O1 | A "share" grants the whole workspace, and the share token is consumed by nothing | **High** | Tenancy | **Fixed** (G1) · `test/db/shares.test.ts`, `e2e/live-findings.spec.ts` G1 |
+| O2 | The run sweep marks a run `error` but never stops the live Workflow instance | **High** | Engine | **Fixed** (G2) · `test/db/sweep-orphans.test.ts` |
+| O3 | `apply_prepared_proposal` is a model-authored command that rewrites the agent's standing instructions on one unreviewed click | **High** | Engine | **Fixed** (G3) · `packages/shared/test/commands.test.ts`, `test/unit/engine-redteam.test.ts`, `test/db/server-findings.test.ts` |
+| O4 | Agent-written context fields are presented to the next run as "Context a human has set" | **Medium** | Engine | **Fixed** (G4) · `test/unit/security-review-open.test.ts` |
+| O5 | The `/events` replay and the live hub ignore `message_cutoff_seq` | **Medium** | Tenancy | **Fixed** (G1) · `test/db/shares.test.ts` — the replay carries no shared session at all |
+| O6 | Revoking a share evicts no socket, and the hub ticket's session binding is inert | **Medium** | Tenancy | **Fixed** (G1) · `test/db/shares.test.ts` — a share grants no socket to evict |
+| O7 | `attachments.session_id` is client-supplied and never validated | **Medium** | Tenancy | **Fixed** · `test/db/attachments.test.ts` |
+| O8 | Model-authored block `title`/`subtitle`/`label` skip the plain-text validator | **Medium** | Engine | **Fixed** (G3) · `packages/shared/test/commands.test.ts` |
+| O9 | `get_document_text` returns a 24,000-char window into an 8 KB envelope, so paging is unreachable and the model silently reads a third of a document | **Medium** | Engine | **Fixed** · `test/unit/security-review-open.test.ts` |
+| O10 | `TOOL_RESULT_MAX_BYTES` is not a cap: the truncation path re-escapes and can double | **Medium** | Engine | **Fixed** · `test/unit/security-review-open.test.ts` |
+| O11 | A model-chosen tool argument can raise a Postgres error that kills the run | **Medium** | Engine | Open — see "why the rest are open" |
+| O12 | Third-party CI actions are pinned to moving tags in the job that holds the deploy token and the DB owner URL | **Medium** | Ops | Open — needs the account |
+| O13 | The nightly backup job is gated on an environment the runbook requires to have a human reviewer | **Medium** | Ops | Open — needs the account |
+| O14 | The "write-only" backup credential is used for `HeadObject`, which requires read | **Medium** | Ops | Open — needs the account |
+| O15 | `runBackupUploads` has no cursor, so a workspace over ~330 objects is never backed up | **Medium** | Ops | Open — product decision (page size, budget) |
+| O16 | The platform instance cap locks one global row inside every turn's tenant transaction | **Medium** | Ops | Open — needs numbers |
+| O17 | Rate counters are refunded on the refusal path, so a workspace with no key can flood turns unmetered | **Medium** | Ops | **Fixed** · `test/db/turns.test.ts` |
+| O18 | Staging and production declare identical placeholder Hyperdrive ids | **Medium** | Ops | Open — needs the account |
+| O19 | `/auth/callback`, the `/events` replay and hub upgrades have no limit of any kind | **Medium** | Ops | Open — product decision (the limit) |
+| O20 | The envelope AAD does not bind `provider` | **Low** | BYOK | Open — needs a re-wrap migration |
+| O21 | `onError`'s catch-all matches structurally on `{status, reason}` rather than by type | **Low** | Ops | **Fixed** — narrowed to `Error` instances |
+| O22 | `index.ts:188` is the one un-redacted error sink, and it is the catch-all for the key routes | **Low** | BYOK | **Fixed** — `redactMessage`, and no stack |
+| O23 | The subrequest budget is asserted in a unit test and measured nowhere | **Low** | Engine | Open — needs instrumentation |
+| O24 | `waitForAnswer` sets `waiting` before registering the wait, and cannot be woken by Stop | **Low** | Engine | Open — narrowed by G8; "Stop wakes a waiting run" is unspecified |
+| O25 | Duplicate provider tool-call ids collide on `seq` and on the step name | **Low** | Engine | Open |
+| O26 | `allowedTools` falls back to `work` — the least restrictive mode — for an unknown mode | **Low** | Engine | **Fixed** · `test/unit/engine-modes.test.ts` |
+| O27 | The `0011` backfill is a silent no-op under forced RLS | **Low** | Tenancy | Open — needs a migration |
+| O28 | `hermes_user_workspaces` is not `SECURITY DEFINER`, contrary to the comment that relies on it | **Low** | Tenancy | Open — needs a migration |
+| O29 | Re-applying migrations briefly forces RLS onto the platform tables | **Low** | Tenancy | Open — needs a migration |
+
+The locations are in the original review above; they are unchanged for the open
+entries and are in `docs/DECISIONS.md` series G for the fixed ones.
 
 ### The ones worth reading in full
 
@@ -179,6 +187,14 @@ not the cutoff, so a non-owner reads everything written after the share point,
 which is exactly the property `routes/sessions.ts:295` says a share must not
 have ("a share is a snapshot of a conversation, not a subscription to one").
 
+> **Decided, and the first option was taken.** `GET /shared/:token` exists and
+> the in-workspace predicate is `owner_id = $me`. The reason is in decision G1:
+> the cutoff column, its comment, the client's `SharedViewer`, its polling with
+> `If-None-Match`, `sharedSessionSchema` and the `/shared/*` entry in
+> `run_worker_first` all already existed and all assumed a route. Deleting the
+> token would have meant deleting those too, and calling "visible to the whole
+> workspace" a share is the claim that would actually surprise somebody.
+
 **O2 · a reaped run keeps running.** For the `engine_version_changed` and
 `no_progress` verdicts the sweep writes `runs.status = 'error'` and publishes
 `run.status`, but it does not set `stop_requested`, and nothing calls
@@ -194,6 +210,11 @@ the commit, and guard terminal transitions in `setRunStatus`.
 This does not breach the approval invariant — a zombie run still cannot decide —
 but it breaks the weaker promise the operator is relying on, which is that
 stopping a run stops it.
+
+> **Fixed as recommended** (decision G2), with one honest caveat the
+> recommendation did not have: whether `terminate()` interrupts a step already
+> in flight is *unverified*, which is why the flag and the terminal guard —
+> neither of which depends on it — carry the correctness.
 
 **O3 and O4 · the two ways a prompt injection escalates without touching a
 decision.** The decision invariant itself held under every attempt (see below).
@@ -221,6 +242,11 @@ outranks the "everything from a tool is untrusted" framing around it. It is a
 persistent, self-attributed injection that survives the session. Fix: select
 `set_by`/`run_id` and render two labelled sections.
 
+> **Both fixed as recommended** (decisions G3 and G4). O3's second lock is a
+> surface header on the save route, `X-Requested-From: skills`, which is the
+> decision route's own pattern; O8 went with them, so a label carrying a
+> bidirectional override is a dropped block rather than a rendered button.
+
 **O14 · the backup credential contradicts itself.** The workflow documents
 `BACKUP_R2_ACCESS_KEY_ID` as write-only and then runs `aws s3api head-object`
 with it. R2 has no write-only object permission; the narrowest that allows
@@ -230,6 +256,11 @@ delete on every backup — the exact credential the file's comment says was
 avoided. Both are findings. `test/unit/workflows.test.ts:243` asserts the string
 "write-only" appears in the file, which certifies the comment rather than the
 scope.
+
+> **Still open, deliberately.** The YAML is two lines; the finding is about a
+> token somebody has to re-scope in the Cloudflare dashboard. Editing the file
+> without that would turn a visible contradiction into an invisible one, which
+> is a worse state than this one.
 
 ---
 
@@ -296,8 +327,74 @@ empty-allowlist-denies-all rule are all correct.
 ## Verification
 
 ```
-pnpm --filter @hermes/worker typecheck   tsc -p tsconfig.json — clean
-pnpm --filter @hermes/worker test        60 files, 643 tests passed
-pnpm db:test                             28 files, 293 tests passed
-pnpm --filter @hermes/shared test         5 files,  48 tests passed
+pnpm typecheck                           three projects — clean
+pnpm --filter @hermes/worker test        64 files, 680 tests passed
+pnpm db:test                             30 files, 317 tests passed
+pnpm --filter @hermes/shared test         5 files,  56 tests passed
+pnpm --filter client test                 2 files,  39 tests passed
+pnpm e2e:live                            34 scenarios, five consecutive runs
 ```
+
+
+---
+
+## What the later pass changed, in one line each
+
+Full arguments in `docs/DECISIONS.md`, series G. Every entry has a test that
+fails against the previous code.
+
+| # | Fix |
+|---|---|
+| O1, O5, O6 | `GET /shared/:token` exists (`routes/shares.ts`, migration `0014_share_directory.sql`): it resolves a hashed token to one workspace through a platform directory table and serves one session, read-only, capped at `message_cutoff_seq`, with `blocks` stripped. The in-workspace predicate is now `owner_id = $me` in all four places that had it, so a share grants no workspace read, no replay and no socket. Revoking deletes the directory row. |
+| O2 | Every non-`ok` sweep verdict sets `stop_requested` in the same statement as the status and calls `instance.terminate()` after the commit; `setRunStatus` refuses to move a run that is already terminal. Whether `terminate()` interrupts a step in flight is **unverified** and documented as such — the flag and the guard are what the correctness rests on. |
+| O3 | `apply_prepared_proposal` is in HUMAN_ONLY_COMMANDS, so the block validator drops it; `POST .../instructions/:id/{accept,discard}` requires a required `Origin` and `X-Requested-From: skills` on top of the Admin check. |
+| O4 | `loadWorkspaceContext` selects `run_id` and the prompt renders two labelled sections; an agent-written field is no longer presented as a human's. |
+| O7 | A declared `session_id` must name a session the caller owns, or 404. |
+| O8 | `title`, `subtitle` and every block `label` go through `plainText`, so a bidirectional override in a button is a dropped block. |
+| O9 | The document window is `min(6,000 tokens, the envelope's budget)`, so `next_offset` and the bytes the model saw are the same number again. |
+| O10 | The truncation path measures the *encoded envelope* and shrinks until it fits, instead of cutting the payload and re-escaping it. |
+| O17 | A turn refused with 409 or 429 — the caller's own refusals — is charged on a plain client after the rollback. A 403 or 404 is not: metering an authorization answer is a way to lock somebody out. |
+| O21 | The catch-all requires `error instanceof Error` before it lets a thrown object choose its own status and return its own message. |
+| O22 | The last error sink logs `redactMessage(error)` and no stack. |
+| O26 | An unknown session mode falls back to `ask` — read-only — rather than to `work`. |
+
+One finding was added by the same pass and is worth more than the rest of this
+table: **`step.waitForEvent` was called without `options.type`**, so a run parked
+on `ask_for_context` registered its waiter under `undefined` while `sendEvent`
+queued the answer under `context-answered`. No parked run could ever be woken, by
+either of the two routes built to answer it — it would have sat in `waiting` for
+the full 30-day timeout. Every engine test agreed with the broken call because
+the test double resolved on the step *name*. It was found by writing a live
+scenario that parked a real run against a real Workflow and answered it through
+the UI. See decision G8.
+
+## Why the rest are open
+
+Four reasons, and they are not the same reason.
+
+**A migration whose safety this pass cannot establish** — O20, O27, O28, O29.
+Binding `provider` into the envelope AAD invalidates every stored ciphertext, so
+it is a re-wrap through the rotation Workflow with a backfill and a window, not
+a one-line change. The three migration-history findings each need a numbered
+migration whose re-application is proved against a database state this pass would
+have to construct in order to prove it.
+
+**Ops changes that are somebody's credential** — O12, O13, O14, O18. Each is a
+two-line diff and each is only *true* once an operator re-scopes a token, creates
+an environment or provisions a binding. Editing the YAML without that turns a
+visible finding into an invisible one: a workflow that claims a write-only
+credential and uses a read-write one is worse than one that says what it does.
+
+**A change whose cost nobody has priced** — O15, O16, O19. The instance-cap row
+is contended by construction; the fix is an approximate counter or a shard, and
+which one depends on numbers that do not exist yet. A backup cursor and a limit
+on `/auth/callback` are small changes waiting on a product decision about the
+page size and the limit.
+
+**Small and genuinely uncertain** — O11, O23, O24, O25. O24 deserves a note
+because G8 changed the code around it: the ordering it describes is still there —
+the status moves, then the wait registers — but the window is one statement wide
+and the wake-up comes from a row that outlives the request, so the failure it
+predicts now needs a Stop rather than an answer. It stays open because "Stop
+wakes a waiting run" is a behaviour nobody has specified, and specifying it is
+the fix.

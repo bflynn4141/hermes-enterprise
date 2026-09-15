@@ -32,7 +32,9 @@ import {
   patchContextField,
 } from './routes/agent-config.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
+import { sharedSession } from './routes/shares.js';
 import { KeyCryptoError } from './keys/envelope.js';
+import { redactMessage } from './keys/redact.js';
 import { KeyStoreError } from './keys/store.js';
 import {
   createInvitation,
@@ -173,8 +175,16 @@ app.onError((error, c) => {
   // mapping it to 500 here would lose that on the way out — which is the
   // failure this whole block exists to stop: a known condition reported as an
   // unknown one. See decision F5.
+  //
+  // Narrowed to real `Error` instances (security review O21). Matching on shape
+  // alone meant anything thrown with a `status` and a `reason` chose its own
+  // status code and had its `message` returned to the caller — and the things
+  // most likely to have those two fields are objects that came *from* an
+  // upstream: a parsed provider error body, a decoded JSON payload. A thrown
+  // plain object is a bug, and a bug is a 500.
   const carried = error as { status?: unknown; reason?: unknown; message?: string };
   if (
+    error instanceof Error &&
     typeof carried.status === 'number' &&
     carried.status >= 400 &&
     carried.status <= 599 &&
@@ -185,7 +195,13 @@ app.onError((error, c) => {
       carried.status as 400,
     );
   }
-  console.error('unhandled error', error);
+  // Redacted, because this is the catch-all for every route including the four
+  // that carry provider key material, and it was the one error sink in the
+  // Worker that logged a raw message (security review O22). `redactMessage`
+  // knows the key shapes and the secret names; the stack is dropped entirely,
+  // since a stack from a key route is the one place a value can appear as an
+  // argument.
+  console.error(JSON.stringify({ at: 'unhandled', error: redactMessage(error) }));
   return c.json({ error: 'internal error', reason: 'internal' }, 500);
 });
 
@@ -215,6 +231,11 @@ app.post('/workspaces', createWorkspace);
 // Accepting an invitation is the other one: the workspace is what the call is
 // trying to reach, so it cannot be the key the call is authorised under.
 app.post('/invitations/:token/accept', acceptInvitation);
+// Redeeming a share link. Unauthenticated by design — the token *is* the
+// authorisation — and the only route in the system that answers without a
+// session. It grants one session, read-only, up to the share's cutoff. See
+// src/routes/shares.ts and decision G1.
+app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 

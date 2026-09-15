@@ -61,7 +61,31 @@ export const TOOL_EXECUTION_TIMEOUT_MS = 30_000;
 export const DOCUMENT_TEXT_MAX_TOKENS = 6_000;
 /** Four characters per token is the rule of thumb the offset window uses. */
 export const CHARS_PER_TOKEN = 4;
-export const DOCUMENT_TEXT_MAX_CHARS = DOCUMENT_TEXT_MAX_TOKENS * CHARS_PER_TOKEN;
+/** The plan's nominal window: 6,000 tokens at four characters each. */
+export const DOCUMENT_TEXT_NOMINAL_CHARS = DOCUMENT_TEXT_MAX_TOKENS * CHARS_PER_TOKEN;
+
+/**
+ * The window `get_document_text` actually asks for, and why it is not the
+ * number above.
+ *
+ * The plan names two limits that contradict each other: a 6,000-token window
+ * (24,000 characters) and an 8 KB cap on a tool result. The tool asked for the
+ * larger one and `toolResultEnvelope` then cut it to the smaller, so the model
+ * received about a third of what it requested, `next_offset` pointed past the
+ * end of what it had actually read, and paging through a long document silently
+ * skipped two characters in every three (security review O9). Asking for a
+ * window that fits is the fix: the offset arithmetic and the bytes the model
+ * sees are the same number again.
+ *
+ * The headroom is for the envelope itself — the tool name, the source, the
+ * timestamp, the injection verdict — plus JSON escaping, which can grow a
+ * character into six (`\u202e`).
+ */
+export const TOOL_RESULT_ENVELOPE_HEADROOM_BYTES = 1_024;
+export const DOCUMENT_TEXT_MAX_CHARS = Math.min(
+  DOCUMENT_TEXT_NOMINAL_CHARS,
+  TOOL_RESULT_MAX_BYTES - TOOL_RESULT_ENVELOPE_HEADROOM_BYTES,
+);
 
 /**
  * Plan section 5, Resume, orphans, jobs: a run with "no event for 10 minutes,

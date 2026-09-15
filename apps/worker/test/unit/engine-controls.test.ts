@@ -66,7 +66,7 @@ describe('the waiting gate', () => {
     const db = new FakeAgentDb();
     db.contextFields.set('reference_threshold', 'two references, one academic');
 
-    const { error } = await runHarness(
+    const { error, step } = await runHarness(
       [
         {
           events: [
@@ -89,6 +89,45 @@ describe('the waiting gate', () => {
     const answer = db.turns.find((t) => t.toolCallId === 'call_ask-answer');
     expect(String(answer?.providerMessage.content)).toContain('two references, one academic');
     assertValidLog(db);
+
+    // And the wait named the event *kind*, not only the checkpoint. The runtime
+    // matches a `sendEvent` on `options.type`; with it omitted the waiter was
+    // registered under `undefined`, so no answer ever woke the run and it sat in
+    // `waiting` for the whole 30-day timeout. The live suite found it; this is
+    // the assertion that keeps it found (decision G8).
+    expect(step.waits).toHaveLength(1);
+    expect(step.waits[0]?.options.type).toBe('context-answered');
+    expect(step.waits[0]?.options.timeout).toBeTruthy();
+  });
+
+  it('leaves the human a field to answer, so the parked question is visible', async () => {
+    // `ask_for_context` wrote `runs.waiting_for` and nothing else, and the
+    // Context tab lists `agent_context_fields` — so the state the tab exists for
+    // could only be produced with `psql` (client finding 14). The placeholder
+    // row is what makes the question reachable from the screen.
+    const db = new FakeAgentDb();
+    db.contextFields.set('reference_threshold', 'two references, one academic');
+
+    await runHarness(
+      [
+        {
+          events: [
+            toolCall('call_ask', 'ask_for_context', {
+              key: 'destination',
+              question: 'Where should this reply go?',
+            }),
+            usage(),
+            stop('tool_use'),
+          ],
+        },
+        { events: [textDelta('Noted.'), usage(), stop('end_turn')] },
+      ],
+      { db, armContextAnswer: true },
+    );
+
+    expect(db.contextFields.has('destination')).toBe(true);
+    // And a key somebody already answered keeps its answer.
+    expect(db.contextFields.get('reference_threshold')).toBe('two references, one academic');
   });
 });
 

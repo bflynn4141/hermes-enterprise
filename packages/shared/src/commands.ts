@@ -12,6 +12,7 @@
 // consent is not. So the block is rejected before it is ever rendered.
 import { z } from 'zod';
 import { refSchema } from './refs.js';
+import { plainText } from './plain-text.js';
 
 /**
  * Everything a model-authored block may ask the app to do. Every entry moves
@@ -24,7 +25,6 @@ export const MODEL_COMMANDS = [
   'open_request',
   'open_document',
   'open_source',
-  'apply_prepared_proposal',
   'chat/say',
   // Puts text in the composer as the human's next turn. Named `prompt`, not
   // `send`: nothing this registry contains may send anything outside the app,
@@ -41,6 +41,25 @@ export type ModelCommandName = (typeof MODEL_COMMANDS)[number];
  */
 export const HUMAN_ONLY_COMMANDS = [
   'decide',
+  /**
+   * Saving a prepared instruction version.
+   *
+   * It used to be in MODEL_COMMANDS, on the grounds that it only "applies
+   * something a human already prepared". It does not: the thing prepared is the
+   * *agent's* proposal, the id is model-chosen and names any `proposed` version
+   * in the workspace, and saving one rewrites the standing system prompt every
+   * later run is given. So the whole attack was one reply — `propose_instruction`
+   * with a body that relaxes a review rule, plus a block labelled "Continue"
+   * carrying `apply_prepared_proposal` for that version — and one Admin click
+   * on a button whose text the model wrote. That is precisely the click this
+   * registry's header says it exists to stop (security review O3).
+   *
+   * The human path is unchanged and was always there: Agent → Skills renders
+   * the proposal from server data, with the body visible, and its Accept posts
+   * `X-Requested-From: skills` to a route that is Admin-only. A model-authored
+   * block carrying this name is now dropped by the validator before it renders.
+   */
+  'apply_prepared_proposal',
   'request/decide',
   'execute_effect',
   'effect/execute',
@@ -121,9 +140,22 @@ export type BlockCommand = {
   [key: string]: unknown;
 };
 
+/**
+ * Every human-readable string in a block is model-authored, so every one of
+ * them goes through the plain-text rules.
+ *
+ * `title`, `subtitle` and `label` skipped the validator entirely (security
+ * review O8), including the bidirectional-override characters `plain-text.ts`
+ * exists to strip — so the label a person read need not have been the label
+ * that was stored, which is a way to manufacture consent without ever carrying
+ * a forbidden command. A field that fails is a schema error, which the block
+ * validator already reports as a rejection and a dropped block.
+ */
+const blockLabel = plainText({ min: 1, max: 120 });
+
 const blockActionSchema = z
   .object({
-    label: z.string().min(1).max(120),
+    label: blockLabel,
     command: blockCommandSchema,
     tone: z.enum(['default', 'primary', 'quiet']).optional(),
   })
@@ -153,13 +185,13 @@ export type BlockType = (typeof BLOCK_TYPES)[number];
 
 export const blockSchema = z.looseObject({
   type: z.enum(BLOCK_TYPES),
-  title: z.string().max(300).optional(),
-  subtitle: z.string().max(600).optional(),
+  title: plainText({ max: 300 }).optional(),
+  subtitle: plainText({ max: 600 }).optional(),
   action: blockActionSchema.optional(),
   actions: z.array(blockActionSchema).max(6).optional(),
   command: blockCommandSchema.optional(),
   options: z
-    .array(z.object({ label: z.string().min(1).max(120), command: blockCommandSchema }).strict())
+    .array(z.object({ label: blockLabel, command: blockCommandSchema }).strict())
     .max(6)
     .optional(),
 });

@@ -389,10 +389,43 @@ async function applyNotifications(work: TenantWork, input: PatchBody['notificati
   return true;
 }
 
+/**
+ * Every key this route understands. `notifications` is the personal half;
+ * WORKSPACE_FIELDS is the Admin half.
+ */
+const KNOWN_FIELDS: readonly string[] = [...WORKSPACE_FIELDS, 'notifications'];
+
+/**
+ * A key nothing stores is a typo, not a preference.
+ *
+ * The PATCH used to accept any object and quietly store the parts it
+ * recognised: `{ notify_approvals: true }` and `{ reduce_motion: true }` both
+ * matched no field, took no Admin check, wrote no audit row and answered 200
+ * with a settings view that did not contain them (client findings 12 and 13).
+ * Two real client bugs lived behind that for a milestone each, and the next one
+ * would have too. 422 with the offending names is the answer that makes a
+ * misspelled field a test failure on the day it is written rather than a
+ * support question a year later.
+ */
+function refuseUnknownFields(body: unknown): void {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new RouteError('the settings patch must be an object', 'bad_body', 422);
+  }
+  const unknown = Object.keys(body).filter((key) => !KNOWN_FIELDS.includes(key));
+  if (unknown.length > 0) {
+    throw new RouteError(
+      `this workspace has no setting called ${unknown.slice(0, 10).join(', ')}`,
+      'unknown_fields',
+      422,
+    );
+  }
+}
+
 export async function patchSettings(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const body = await jsonBody<PatchBody>(c);
+  refuseUnknownFields(body);
 
   const result = await inWorkspace(c, async (work) => {
     const touchesWorkspace = WORKSPACE_FIELDS.some((field) => field in body);

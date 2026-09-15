@@ -65,7 +65,15 @@ export class FakeStep implements EngineStep {
     throw lastError;
   }
 
-  waitForEvent<T>(name: string, _options: { timeout: string }): Promise<{ payload: T }> {
+  /** Every `waitForEvent` this run made, with the options it passed. */
+  readonly waits: { name: string; options: { type: string; timeout: string } }[] = [];
+
+  waitForEvent<T>(name: string, options: { type: string; timeout: string }): Promise<{ payload: T }> {
+    this.waits.push({ name, options });
+    // The runtime matches a `sendEvent` on `options.type`, never on `name`, so
+    // a fake that ignored `type` would pass for the code that omitted it — and
+    // omitting it is exactly what left a parked run unwakeable (decision G8).
+    if (!options.type) return Promise.reject(new Error(`waitForEvent(${name}) was given no event type`));
     if (!this.armed.has(name)) {
       return Promise.reject(new Error(`no ${name} event was armed; arm it before the run`));
     }

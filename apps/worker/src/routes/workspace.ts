@@ -184,8 +184,15 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
  * GET /w/:ws/events?stream=session|workspace&after=<id>
  *
  * Replay runs in the API under the caller's own authorization, not the hub's:
- * the session stream is filtered to sessions the caller owns or holds a share
- * on, which is the same rule the hub applies to live delivery.
+ * the session stream is filtered to the sessions the caller owns, which is the
+ * same rule the hub applies to live delivery.
+ *
+ * A share is deliberately not a subscription (security review O5): it used to
+ * widen this query to "an unrevoked share exists on this session", which both
+ * handed the session to every member and ignored `message_cutoff_seq`, so a
+ * non-owner replayed everything written after the share point. A share holder
+ * now reads the capped snapshot at `GET /shared/:token` and has no stream at
+ * all, which is the property the column was added for.
  */
 export async function events(c: Context<{ Bindings: Env }>): Promise<Response> {
   const session = await getSession(c);
@@ -217,13 +224,7 @@ export async function events(c: Context<{ Bindings: Env }>): Promise<Response> {
                  JOIN sessions s ON s.id = e.session_id
                 WHERE e.workspace_id = $1
                   AND e.id > $2::bigint
-                  AND (
-                    s.owner_id = $3
-                    OR EXISTS (
-                      SELECT 1 FROM session_shares sh
-                       WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
-                    )
-                  )
+                  AND s.owner_id = $3
                 ORDER BY e.id
                 LIMIT ${MAX_REPLAY_PAGE}`,
               [workspaceId, afterRaw, session.userId],

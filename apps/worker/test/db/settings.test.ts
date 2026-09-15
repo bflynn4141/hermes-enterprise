@@ -530,3 +530,81 @@ describe('DELETE /w/:ws', () => {
     expect(alive.rows).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// G5 · PATCH /w/:ws/settings refuses a key it does not store
+// ---------------------------------------------------------------------------
+
+describe('G5 · unknown settings keys', () => {
+  it('answers 422 and names them, instead of a 200 that stored nothing', async () => {
+    // Two real client bugs lived behind the old silent no-op for a milestone
+    // each: `{ notify_approvals }` (client finding 12) and `{ reduce_motion }`
+    // (finding 13). Both matched no field, took no Admin check, wrote no audit
+    // row, and answered 200 with a settings view that did not contain them.
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+
+    const response = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: { notify_approvals: true, reduce_motion: true },
+    });
+
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { reason: string; error: string };
+    expect(body.reason).toBe('unknown_fields');
+    expect(body.error).toContain('notify_approvals');
+    expect(body.error).toContain('reduce_motion');
+  });
+
+  it('refuses the whole patch when one key of several is unknown', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+
+    const response = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: { timezone: 'Europe/London', notify_digest: true },
+    });
+
+    expect(response.status).toBe(422);
+    const stored = await asTenant(local, (c) =>
+      c.query<{ timezone: string }>(`SELECT timezone FROM workspace_settings WHERE workspace_id = $1`, [
+        local.workspaceId,
+      ]),
+    );
+    expect(stored.rows[0]?.timezone).not.toBe('Europe/London');
+  });
+
+  it('still takes every key it does store', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+
+    const workspaceHalf = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: { timezone: 'Europe/London', daily_token_cap: 1_000, max_concurrent_runs: 2, flags: { beta: true } },
+    });
+    expect(workspaceHalf.status).toBe(200);
+    expect(await workspaceHalf.json()).toMatchObject({
+      timezone: 'Europe/London',
+      caps: { daily_token_cap: 1_000, max_concurrent_runs: 2 },
+    });
+
+    // The personal half, which a Member may change without an Admin.
+    const personalHalf = await asUser(env, local.memberId, `/w/${local.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: { notifications: { approvals: false, digest: true } },
+    });
+    expect(personalHalf.status).toBe(200);
+    expect(await personalHalf.json()).toMatchObject({ notifications: { approvals: false, digest: true } });
+  });
+
+  it('refuses a body that is not an object at all', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    const response = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: ['timezone'],
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ reason: 'bad_body' });
+  });
+});

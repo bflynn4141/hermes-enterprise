@@ -18,7 +18,8 @@ import type { Context } from 'hono';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
-import { requireCsrf, requireOrigin } from '../auth.js';
+import { getSession, requireCsrf, requireOrigin } from '../auth.js';
+import { connect } from '../db/client.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
 import { publishEvents } from '../jobs.js';
 import { checkCaps } from '../model/usage.js';
@@ -28,13 +29,14 @@ import { loadModel } from '../model/catalog.js';
 import { pickDevScript, runAttemptInstanceId } from '../runs/workflow.js';
 import { CONTEXT_ANSWERED_EVENT, DEFAULT_MAX_TURNS } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { VISIBLE } from './sessions.js';
 
 /** Plan section 5: "Per-user limits (30 turns/min ...)". */
 const TURN_LIMIT: RateLimit = { action: 'run.turn', limit: 30, windowSeconds: 60 };
 
-const VISIBLE = `(s.owner_id = $2 OR EXISTS (
-  SELECT 1 FROM session_shares sh WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
-))`;
+// `VISIBLE` is imported rather than copied. It used to be a third verbatim copy
+// of a predicate that has since changed meaning (security review O1): a share is
+// redeemed at `GET /shared/:token`, never here.
 
 interface SessionRow {
   id: string;
@@ -69,10 +71,30 @@ interface RunRow {
   waiting_for: string | null;
 }
 
+/**
+ * The run, locked for the length of this transaction.
+ *
+ * `FOR UPDATE` is the whole fix for the Stop/Queue race (client finding 15).
+ * Every control below is a read-then-write on one `runs` row: Stop reads the
+ * status and writes `stopping` plus a sweep of the queue; Queue reads the same
+ * status and decides whether the new item is `queued` or `paused`. With nothing
+ * serialising them, an enqueue that read `working` before Stop committed
+ * inserted a `queued` row *after* Stop's sweep had run, and that row stayed
+ * `queued` forever — never sent, and not shown as paused either. It is what
+ * made P7 fail about one full-suite run in three.
+ *
+ * Taking the lock here rather than at each call site means a control added next
+ * year gets it by construction. Every caller locks `runs` first and touches
+ * `run_queue` second, so the lock order is the same everywhere and there is no
+ * deadlock to find. Under READ COMMITTED the row this returns is the version
+ * that exists *after* whatever transaction we waited for, which is the point:
+ * Queue sees `stopping` and parks the item.
+ */
 async function loadRun(work: TenantWork, sessionId: string, runId: string): Promise<RunRow> {
   const { rows } = await work.tx.query<RunRow>(
     `SELECT id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
-       FROM runs WHERE workspace_id = $1 AND id = $2 AND session_id = $3`,
+       FROM runs WHERE workspace_id = $1 AND id = $2 AND session_id = $3
+       FOR UPDATE`,
     [work.workspaceId, runId, sessionId],
   );
   const run = rows[0];
@@ -120,6 +142,52 @@ async function createInstance(
 // POST /w/:ws/sessions/:id/turns
 // ---------------------------------------------------------------------------
 
+/**
+ * Turn refusals cost the caller their budget; our own failures do not.
+ *
+ * `consumeRate` is counted inside the tenant transaction so that a 500 of ours
+ * does not punish the person who hit it. The cost of that is a refund on *every*
+ * failing path, including the ones that are the caller's own: a workspace with
+ * no provider key, or one over its daily cap, could POST turns as fast as it
+ * liked and every attempt rolled its own count back (security review O17). Each
+ * attempt is still a connection, a caps query and a catalog read.
+ *
+ * So the refusals a caller can repeat are charged after the rollback, on a
+ * plain client, where nothing can take the count back. Only 409 and 429: a 404
+ * or a 403 is an authorization answer and metering those would be a way to lock
+ * somebody out of a workspace they are in. The charge is best-effort and never
+ * replaces the original error — being rate-limited while being told "add a key"
+ * should still say "add a key".
+ */
+const METERED_REFUSAL_STATUS: readonly number[] = [409, 429];
+
+async function withRefusalMetered<T>(c: Context<{ Bindings: Env }>, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    const carried = error as { status?: unknown; reason?: unknown };
+    if (
+      error instanceof RouteError &&
+      METERED_REFUSAL_STATUS.includes(Number(carried.status)) &&
+      carried.reason !== 'rate_limited'
+    ) {
+      try {
+        const session = await getSession(c);
+        const client = await connect(c.env, 'app');
+        try {
+          await consumeRate(client, session.userId, c.req.param('ws') ?? null, TURN_LIMIT);
+        } finally {
+          await client.end();
+        }
+      } catch {
+        // Over the limit, or the counter was unreachable. Either way the
+        // caller's own refusal is the answer they need.
+      }
+    }
+    throw error;
+  }
+}
+
 export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
@@ -140,7 +208,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   }
   const text = (input.text ?? '').slice(0, 20_000);
 
-  const outcome = await inWorkspace(c, async (work) => {
+  const outcome = await withRefusalMetered(c, async () => inWorkspace(c, async (work) => {
     const session = await loadSessionForWrite(work, sessionId);
 
     // The duplicate check comes before every refusal below: a re-POST of a turn
@@ -307,7 +375,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         ...(scriptedScript ? { scriptedScript } : {}),
       },
     };
-  });
+  }));
 
   if (!outcome.duplicate && 'create' in outcome && outcome.create) {
     await createInstance(c.env, outcome.create);

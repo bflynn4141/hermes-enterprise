@@ -110,6 +110,17 @@ export interface AgentWrites {
     input: SaveReviewNoteInput,
   ): Promise<{ noteId: string; created: boolean; events?: readonly EmittedEvent[] }>;
   setContextField(input: SetContextFieldInput): Promise<{ fieldId: string }>;
+  /**
+   * The empty row a parked run leaves behind, so a human can see the question.
+   *
+   * `ask_for_context` used to write nothing at all: the run went `waiting` with
+   * `waiting_for` on the `runs` row and no `agent_context_fields` row, and the
+   * Context tab — which lists that table — had nothing to render. The state the
+   * whole tab exists for could only be produced with `psql` (client finding 14).
+   * Existing values are never overwritten: a field somebody already answered is
+   * theirs, and the run reads it back rather than asking again.
+   */
+  ensureContextField(input: { runId: string; toolCallId: string; agentId: string; key: string }): Promise<void>;
   proposeInstruction(input: ProposeInstructionInput): Promise<{ versionId: string; created: boolean }>;
   appendTurn(input: AppendTurnInput): Promise<{ turnId: string; created: boolean }>;
   emit(events: readonly EmitInput[]): Promise<EmittedEvent[]>;
@@ -212,7 +223,19 @@ export interface AgentDb extends AgentWrites {
   /** The per-run tool allowlist: `agent_capabilities.tool_names`, filtered by mode. */
   loadToolNames(agentId: string | null): Promise<string[]>;
   loadSystemPrompt(runId: string): Promise<string>;
-  loadWorkspaceContext(agentId: string | null): Promise<{ key: string; value: string | null; scope: string }[]>;
+  /**
+   * The agent's context fields, each carrying who wrote it.
+   *
+   * `set_by` and `run_id` are on the table precisely to tell an agent write
+   * from a human one, and they were selected by nothing: every field was
+   * rendered into the system prompt under the header "Context a human has set",
+   * so an injected document in run N could write a sentence that run N+1 read
+   * as a human instruction (security review O4). A row with a `run_id` was
+   * written by `set_context_field` — the model's own tool — and says so now.
+   */
+  loadWorkspaceContext(
+    agentId: string | null,
+  ): Promise<{ key: string; value: string | null; scope: string; run_id: string | null }[]>;
   /** `resolveKey` runs inside the step, so plaintext exists only for that step. */
   resolveCredential(provider: string): Promise<Credential>;
   /**

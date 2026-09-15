@@ -172,12 +172,23 @@ test('M2 · an Admin accepts a proposed instruction; a Member cannot', async ({ 
   await expect(adminApp.getByText('No change proposed')).toBeVisible();
 
   // A second accept is a 409 the client explains rather than a silent move.
+  // `X-Requested-From: skills` is what the client sends now: saving a proposal
+  // rewrites the standing system prompt, and the route asks which screen issued
+  // it for the same reason the decision route does (security review O3).
   const again = await adminPage.request.post(`/w/${fixture.workspaceId}/instructions/${proposalId}/accept`, {
     data: {},
-    headers: { origin: ORIGIN },
+    headers: { origin: ORIGIN, 'x-requested-from': 'skills' },
   });
   expect(again.status()).toBe(409);
   expect((await again.json()).reason).toBe('already_saved');
+
+  // And without it the route refuses, whoever is asking.
+  const elsewhere = await adminPage.request.post(`/w/${fixture.workspaceId}/instructions/${proposalId}/accept`, {
+    data: {},
+    headers: { origin: ORIGIN },
+  });
+  expect(elsewhere.status()).toBe(403);
+  expect((await elsewhere.json()).reason).toBe('wrong_surface');
   await adminContext.close();
 });
 

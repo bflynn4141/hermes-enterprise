@@ -1310,27 +1310,57 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
   ];
 }
 
+/**
+ * Email notifications.
+ *
+ * The shape is the server's: `{ notifications: { approvals, blocked, digest } }`
+ * on the way in and `settingsView.notifications` on the way back. It used to
+ * send `{ notify_approvals: true }`, which matches no field the server stores —
+ * the route ignored it silently, and the toggles read `state.settings`, which
+ * nothing ever populates, so every switch rendered off however many times it
+ * had been pressed. The route answers 422 for an unknown key now, which is what
+ * makes the old spelling impossible to leave in place.
+ */
 function NotificationsTab() {
   const state = useAppState();
   const adapter = useAdapter();
   const [ack, setAck] = useState(false);
-  const settings = state.settings as Record<string, unknown>;
-  const set = (key: string, value: boolean): void => {
-    void adapter.rest.patchSettings(state.workspace.id, { [key]: value }).catch(() => undefined);
+  const [view, setView] = useState<SettingsView | null>(null);
+
+  useEffect(() => {
+    if (!state.workspace.id) return;
+    let live = true;
+    void adapter.rest
+      .settings(state.workspace.id)
+      .then((next) => {
+        if (live) setView(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [adapter, state.workspace.id]);
+
+  const notifications = view?.notifications ?? { approvals: false, blocked: false, digest: false };
+  const set = (key: 'approvals' | 'blocked' | 'digest', value: boolean): void => {
+    void adapter.rest
+      .patchSettings(state.workspace.id, { notifications: { [key]: value } })
+      .then((next) => setView(next as SettingsView))
+      .catch(() => undefined);
     setAck(true);
     setTimeout(() => setAck(false), 1400);
   };
   return (
     <>
       <h2 className="section-title">Email notifications</h2>
-      {[
-        ['notify_approvals', 'Approval requests'],
-        ['notify_blocked', 'Blocked work'],
-        ['notify_digest', 'Daily digest'],
-      ].map(([key, label]) => (
+      {([
+        ['approvals', 'Approval requests'],
+        ['blocked', 'Blocked work'],
+        ['digest', 'Daily digest'],
+      ] as const).map(([key, label]) => (
         <div className="settings-row" key={key}>
           <span className="grow">{label}</span>
-          <Toggle checked={settings[key!] === true} onChange={(value) => set(key!, value)} label={label!} />
+          <Toggle checked={notifications[key] === true} onChange={(value) => set(key, value)} label={label} />
         </div>
       ))}
       <div className="app-footer inline">

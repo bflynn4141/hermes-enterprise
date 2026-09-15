@@ -5,6 +5,12 @@
 // someone else's conversation, open their socket, or replay their events. The
 // same rule is written in three places — the list query, the replay route and
 // the socket upgrade — so it is asserted in all three.
+//
+// A link share is not visibility either, which is the half this file used to
+// assert backwards (security review O1). Creating one gave every member of the
+// workspace the session and gave the link holder nothing; the token is redeemed
+// at `GET /shared/:token` now, and the in-workspace predicate is `owner_id =
+// me` in all three places. The share tests below are the ones that changed.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
@@ -64,7 +70,7 @@ describe('POST /w/:ws/sessions', () => {
 });
 
 describe('GET /w/:ws/sessions', () => {
-  it('lists the caller’s own sessions and the ones shared with them, and nobody else’s', async () => {
+  it('lists the caller’s own sessions and nobody else’s, link-shared or not', async () => {
     const fixture = await seedWorkspace();
     const { env } = makeEnv();
     const mine = await seedSession(fixture, fixture.memberId);
@@ -87,7 +93,9 @@ describe('GET /w/:ws/sessions', () => {
     const ids = body.items.map((row) => row.id);
 
     expect(ids).toContain(mine);
-    expect(ids).toContain(shared);
+    // The share is a link, not a workspace grant: the Member who does not hold
+    // the link sees no more of the Admin's session than of any other.
+    expect(ids).not.toContain(shared);
     expect(ids).not.toContain(theirs);
   });
 
@@ -119,7 +127,9 @@ describe('drafts', () => {
 
     expect(mine.text).toBe('half a thought');
 
-    // A second person on the same session has their own box, not this one.
+    // Sharing the session does not put a second person's box on it: they
+    // cannot reach the session at all, because a share is redeemed at
+    // `/shared/:token` and grants a read-only snapshot with no draft in it.
     await withClient('owner', async (c) => {
       await c.query('BEGIN');
       await c.query('SELECT set_config($1, $2, true)', ['app.workspace_id', fixture.workspaceId]);
@@ -130,11 +140,10 @@ describe('drafts', () => {
       );
       await c.query('COMMIT');
     });
-    const theirs = (await (
-      await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions/${sessionId}/draft`)
-    ).json()) as { text: string };
+    const theirs = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions/${sessionId}/draft`);
 
-    expect(theirs.text).toBe('');
+    expect(theirs.status).toBe(404);
+    expect(await theirs.json()).toMatchObject({ reason: 'unknown_session' });
   });
 });
 
@@ -162,7 +171,11 @@ describe('GET /w/:ws/sessions/:id/messages', () => {
     expect(next.items.map((row) => row.seq)).toEqual([1, 2]);
   });
 
-  it('stops a share holder at the cutoff the share was created with', async () => {
+  it('is the owner’s route: a member with a share on the session is still 404 here', async () => {
+    // The cutoff assertion that used to live here moved to the route that now
+    // enforces it — `GET /shared/:token`, in shares.test.ts. This half is the
+    // other side of the same fix: the in-workspace transcript is not a share's
+    // to read at all, capped or otherwise.
     const fixture = await seedWorkspace();
     const { env } = makeEnv();
     const sessionId = await seedSession(fixture, fixture.adminId, 4);
@@ -177,11 +190,10 @@ describe('GET /w/:ws/sessions/:id/messages', () => {
       await c.query('COMMIT');
     });
 
-    const body = (await (
-      await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions/${sessionId}/messages`)
-    ).json()) as { items: { seq: number }[] };
+    const response = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions/${sessionId}/messages`);
 
-    expect(body.items.map((row) => row.seq)).toEqual([0, 1]);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ reason: 'unknown_session' });
   });
 });
 
@@ -211,7 +223,7 @@ describe('shares', () => {
     expect(stored).toHaveLength(64);
   });
 
-  it('lets only the owner share, not a share holder', async () => {
+  it('lets only the owner share: an existing share does not make a second person one', async () => {
     const fixture = await seedWorkspace();
     const { env } = makeEnv();
     const sessionId = await seedSession(fixture, fixture.adminId);
@@ -231,8 +243,11 @@ describe('shares', () => {
       body: {},
     });
 
-    expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ reason: 'not_owner' });
+    // 404 rather than 403 now: the session is not visible to them in the first
+    // place, and "whether it exists is theirs to know" is the same answer every
+    // other session route gives a non-owner.
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ reason: 'unknown_session' });
   });
 });
 

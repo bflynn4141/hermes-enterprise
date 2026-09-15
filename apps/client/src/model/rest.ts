@@ -105,8 +105,16 @@ export interface RestOptions {
 
 interface CallOptions {
   headers?: Record<string, string>;
-  /** Decisions carry `X-Requested-From: inbox`; nothing else may. */
-  requestedFrom?: 'inbox';
+  /**
+   * Which of our own screens issued this call.
+   *
+   * Two routes require it and no other may send it: the decision route takes
+   * `inbox`, and saving or discarding an instruction version takes `skills`.
+   * Both are writes whose danger is a click with manufactured consent, and the
+   * header is what says the code path was the review pane rather than a helper
+   * that replayed a POST (server: src/domain/guards.ts).
+   */
+  requestedFrom?: 'inbox' | 'skills';
   retries?: number;
   signal?: AbortSignal;
   /** Bytes sent as-is, with no JSON encoding: the dev direct-upload route. */
@@ -308,8 +316,10 @@ export function createRest(options: RestOptions) {
      * it could only ever have 404ed, so the button is gone (decision C26) and
      * the finding is in the README's table.
      */
-    acceptInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}),
-    discardInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}),
+    acceptInstruction: (workspaceId: string, id: string) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    discardInstruction: (workspaceId: string, id: string) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
     listSkills: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)), emptyPage()),
     adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),

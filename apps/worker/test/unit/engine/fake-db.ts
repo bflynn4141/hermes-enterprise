@@ -48,6 +48,8 @@ export class FakeAgentDb implements AgentDb {
   readonly notes: { id: string; runId: string; toolCallId: string; body: string }[] = [];
   readonly instructions: { id: string; runId: string; toolCallId: string; body: string }[] = [];
   readonly contextFields = new Map<string, string>();
+  /** Which context keys a *run* wrote, so the prompt can label them (O4). */
+  readonly contextRunIds = new Map<string, string | null>();
   readonly turns: HistoryTurn[] = [];
   readonly messages = new Map<number, { id: string; text: string; status: string; blocks: unknown[]; workedMs: number | null }>();
   readonly steps = new Map<string, { stepAttempt: number; state: string }>();
@@ -146,8 +148,15 @@ export class FakeAgentDb implements AgentDb {
   loadSystemPrompt(): Promise<string> {
     return Promise.resolve('Admit applicants who meet the published bar.');
   }
-  loadWorkspaceContext(): Promise<{ key: string; value: string | null; scope: string }[]> {
-    return Promise.resolve([...this.contextFields].map(([key, value]) => ({ key, value, scope: 'reply' })));
+  loadWorkspaceContext(): Promise<{ key: string; value: string | null; scope: string; run_id: string | null }[]> {
+    return Promise.resolve(
+      [...this.contextFields].map(([key, value]) => ({
+        key,
+        value,
+        scope: 'reply',
+        run_id: this.contextRunIds.get(key) ?? null,
+      })),
+    );
   }
   resolveCredential(): Promise<Credential> {
     if (this.credential instanceof Error) return Promise.reject(this.credential);
@@ -239,7 +248,15 @@ export class FakeAgentDb implements AgentDb {
   }
   setContextField(input: SetContextFieldInput): Promise<{ fieldId: string }> {
     this.contextFields.set(input.key, input.value);
+    this.contextRunIds.set(input.key, input.runId);
     return Promise.resolve({ fieldId: `field-${input.key}` });
+  }
+  ensureContextField(input: { runId: string; toolCallId: string; agentId: string; key: string }): Promise<void> {
+    if (!this.contextFields.has(input.key)) {
+      this.contextFields.set(input.key, '');
+      this.contextRunIds.set(input.key, input.runId);
+    }
+    return Promise.resolve();
   }
   proposeInstruction(input: ProposeInstructionInput): Promise<{ versionId: string; created: boolean }> {
     const existing = this.instructions.find((i) => i.runId === input.runId && i.toolCallId === input.toolCallId);

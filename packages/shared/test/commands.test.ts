@@ -98,3 +98,69 @@ describe('block validator', () => {
     expect(validateModelBlocks([{ type: 'not-a-block' }]).ok).toBe(false);
   });
 });
+
+describe('apply_prepared_proposal is a human-only command', () => {
+  it('is not in MODEL_COMMANDS, so no model-authored block can carry it', () => {
+    expect(MODEL_COMMANDS as readonly string[]).not.toContain('apply_prepared_proposal');
+    expect(HUMAN_ONLY_COMMANDS as readonly string[]).toContain('apply_prepared_proposal');
+    expect(isModelCommand('apply_prepared_proposal')).toBe(false);
+    expect(isHumanOnlyCommand('apply_prepared_proposal')).toBe(true);
+  });
+
+  it('is rejected with the human-only reason, not the unregistered one', () => {
+    // It matters which reason: "unregistered" would read as a typo in a log,
+    // and this is the button that rewrites the agent's standing instructions on
+    // one unreviewed click (security review O3).
+    const result = validateModelBlocks([
+      {
+        type: 'plan',
+        title: 'Ready to apply',
+        action: { label: 'Continue', command: { type: 'apply_prepared_proposal', id: 'v1' } },
+      },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.rejections[0]?.reason).toContain('human-only');
+  });
+
+  it('is rejected inside a nested batch too', () => {
+    const result = validateModelBlocks([
+      {
+        type: 'confirm',
+        action: {
+          label: 'Looks good',
+          command: {
+            type: 'batch',
+            commands: [{ type: 'batch', commands: [{ type: 'apply_prepared_proposal', id: 'v1' }] }],
+          },
+        },
+      },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('the strings inside a block are model-authored too', () => {
+  const markup = [
+    ['a bidirectional override in a label', { type: 'choice', options: [{ label: 'Open ‮document', command: { type: 'nav' } }] }],
+    ['a markdown link in a title', { type: 'note', title: 'See [the policy](http://evil.example)' }],
+    ['an HTML tag in a subtitle', { type: 'note', subtitle: 'Hello <img src=x onerror=alert(1)>' }],
+    ['an autolink in an action label', { type: 'draft', actions: [{ label: '<http://evil.example>', command: { type: 'nav' } }] }],
+  ] as const;
+
+  for (const [name, block] of markup) {
+    it(`rejects ${name}`, () => {
+      // These three fields skipped the plain-text validator entirely (security
+      // review O8), so the visible label need not have been the stored one.
+      expect(validateModelBlocks([block]).ok).toBe(false);
+    });
+  }
+
+  it('still accepts an ordinary label with a bare URL in it', () => {
+    const result = validateModelBlocks([
+      { type: 'sources', title: 'From https://example.com/programme', subtitle: 'Read at 10:04' },
+      { type: 'choice', options: [{ label: 'Open the document', command: { type: 'nav' } }] },
+    ]);
+    expect(result.ok).toBe(true);
+  });
+});

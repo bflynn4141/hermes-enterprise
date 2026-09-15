@@ -106,10 +106,12 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
             <Toggle
               checked={state.ui.reduceMotion}
               label="Reduce motion"
-              onChange={(value) => {
-                dispatch({ type: 'ui/set', patch: { reduceMotion: value } });
-                void adapter.rest.patchSettings(state.workspace.id, { reduce_motion: value }).catch(() => undefined);
-              }}
+              // Client-local, and only client-local. It used to PATCH
+              // `{ reduce_motion }` at the settings route as well, where it
+              // matched no workspace field and was silently discarded; the
+              // route answers 422 for an unknown key now, so the call would be
+              // an error for a preference the server has never stored.
+              onChange={(value) => dispatch({ type: 'ui/set', patch: { reduceMotion: value } })}
             />
           </div>
           {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}

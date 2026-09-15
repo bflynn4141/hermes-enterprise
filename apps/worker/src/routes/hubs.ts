@@ -2,8 +2,7 @@
 //
 // Everything expensive happens here, before the socket exists: the cookie is
 // unsealed, the `Origin` is checked, the membership is read under row-level
-// security, and — for a session socket — ownership or an unrevoked share is
-// confirmed. What crosses into the Durable Object is the *result*: a small
+// security, and — for a session socket — ownership is confirmed. What crosses into the Durable Object is the *result*: a small
 // attachment saying who this is, which workspace, which session, and until
 // when. The hub never repeats any of this and never could, because it has no
 // database connection.
@@ -58,15 +57,14 @@ export async function sessionSocket(c: Context<{ Bindings: Env }>): Promise<Resp
   const sessionId = pathUuid(c, 'id');
 
   const attachment = await inWorkspace(c, async (work) => {
-    // The same rule the replay route applies: the owner, or the holder of an
-    // unrevoked share. Membership alone is not enough to listen to someone
-    // else's conversation.
+    // The same rule the replay route applies: the owner, and only the owner.
+    // Membership alone is not enough to listen to someone else's conversation,
+    // and neither is a share — a share holder gets the capped snapshot at
+    // `GET /shared/:token` and no socket, which is also why revoking one has no
+    // socket to evict (security review O6).
     const { rows } = await work.tx.query<{ id: string }>(
       `SELECT s.id FROM sessions s
-        WHERE s.workspace_id = $1 AND s.id = $3
-          AND (s.owner_id = $2 OR EXISTS (
-            SELECT 1 FROM session_shares sh WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
-          ))`,
+        WHERE s.workspace_id = $1 AND s.id = $3 AND s.owner_id = $2`,
       [work.workspaceId, work.userId, sessionId],
     );
     if (!rows[0]) throw new RouteError('no such session', 'unknown_session', 404);

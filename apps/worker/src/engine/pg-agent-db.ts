@@ -279,11 +279,16 @@ export class PgAgentDb implements AgentDb {
     });
   }
 
-  async loadWorkspaceContext(agentId: string | null): Promise<{ key: string; value: string | null; scope: string }[]> {
+  async loadWorkspaceContext(
+    agentId: string | null,
+  ): Promise<{ key: string; value: string | null; scope: string; run_id: string | null }[]> {
     if (!agentId) return [];
     return this.tx(async (q) => {
-      const { rows } = await q<{ key: string; value: string | null; scope: string }>(
-        `SELECT key, value, scope FROM agent_context_fields WHERE agent_id = $1 ORDER BY key`,
+      // `run_id` is the provenance the prompt builder needs: a field written by
+      // `set_context_field` carries the run that wrote it, a field answered by
+      // a person does not. See the interface for why it was not read before.
+      const { rows } = await q<{ key: string; value: string | null; scope: string; run_id: string | null }>(
+        `SELECT key, value, scope, run_id FROM agent_context_fields WHERE agent_id = $1 ORDER BY key`,
         [agentId],
       );
       return rows;
@@ -363,7 +368,15 @@ export class PgAgentDb implements AgentDb {
                 waiting_label = CASE WHEN $3::boolean THEN $5 ELSE waiting_label END,
                 error = CASE WHEN $6::boolean THEN $7::jsonb ELSE error END,
                 ended_at = CASE WHEN $2 IN ('completed','stopped','error') THEN now() ELSE ended_at END
-          WHERE id = $1`,
+          WHERE id = $1
+            -- A terminal run stays terminal. Without this guard the sweep's
+            -- verdict was advisory: it marked an orphan as errored, the
+            -- instance it could not see kept going, and its final
+            -- setRunStatus(run.id, 'completed') resurrected a run a human had
+            -- already been told was dead (security review O2). The sweep now
+            -- terminates the instance as well, but the guard is the half that
+            -- does not depend on terminate() doing anything.
+            AND status NOT IN ('completed', 'stopped', 'error')`,
         [
           runId,
           status,
@@ -614,6 +627,24 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, input.agentId, input.key, input.value, input.scope, input.runId, input.toolCallId],
       );
       return { fieldId: rows[0]?.id ?? '' };
+    });
+  }
+
+  async ensureContextField(input: {
+    runId: string;
+    toolCallId: string;
+    agentId: string;
+    key: string;
+  }): Promise<void> {
+    await this.tx(async (q) => {
+      // `DO NOTHING`, not `DO UPDATE`: a field with an answer in it keeps the
+      // answer. The row is a placeholder for the question, not a write of it.
+      await q(
+        `INSERT INTO agent_context_fields (workspace_id, agent_id, key, value, scope, run_id, tool_call_id)
+         VALUES ($1, $2, $3, NULL, 'reply', $4, $5)
+         ON CONFLICT (agent_id, key) DO NOTHING`,
+        [this.workspaceId, input.agentId, input.key, input.runId, input.toolCallId],
+      );
     });
   }
 

@@ -154,6 +154,44 @@ const DEV_SCRIPT = [
 ] as const satisfies readonly Script[];
 
 /**
+ * A run that parks on a context question.
+ *
+ * The only scenario that produces `runs.status = 'waiting'`, which is the state
+ * the whole Context tab exists for: the model calls `ask_for_context`, the
+ * engine writes the waiting key and the label and suspends on
+ * `waitForEvent`, and the run resumes when a human answers — from the composer
+ * (`POST .../runs/:runId/context`) or from Agent → Context
+ * (`PATCH /w/:ws/context-fields/:field`). Before this, the only way to reach
+ * that state from a client was to insert the parked run with `psql`
+ * (client finding 14).
+ *
+ * `ask_for_context` is a `propose` tool, so it is in the Work-mode set the
+ * seeded development agent is given; the key is deliberately one a workspace
+ * would not already have answered.
+ */
+const ASK_FOR_CONTEXT = {
+  events: [
+    { type: 'text_delta', text: 'I have a draft reply ready, but nobody has told me where it should go. ' },
+    {
+      type: 'tool_call',
+      call: {
+        id: 'call_ctx_1',
+        name: 'ask_for_context',
+        // `destination` deliberately: it is the key the client's Context tab
+        // renders a form for, so this scenario drives the M3 screen end to end
+        // rather than a generic field nothing has a view of.
+        arguments: JSON.stringify({
+          key: 'destination',
+          question: 'Where should this reply go? Name a channel, an email address or a link.',
+        }),
+      },
+    },
+    { type: 'usage', usage: { input_tokens: 900, output_tokens: 60, cached_input_tokens: 0, reasoning_tokens: 0 } },
+    { type: 'stop', reason: 'tool_use' },
+  ],
+} as const satisfies Script;
+
+/**
  * The scripted scenarios a development turn can ask for.
  *
  * `MODEL_SCRIPTED=1` used to be one fixed two-turn script with no failure
@@ -172,6 +210,10 @@ export const DEV_SCRIPTS: Readonly<Record<string, readonly Script[]>> = {
   partial_stream: [SCRIPTS.partial_stream, ...DEV_SCRIPT],
   auth_401: [SCRIPTS.unauthorized, ...DEV_SCRIPT],
   malformed_tool: [SCRIPTS.malformed_tool_json, ...DEV_SCRIPT],
+  // The question, then — once a human has answered it — the ordinary two turns.
+  // A scenario that parked and never resumed would leave the suite with a run
+  // it could not finish.
+  waiting: [ASK_FOR_CONTEXT, ...DEV_SCRIPT],
 };
 
 /**
@@ -210,9 +252,9 @@ function engineStep(step: WorkflowStep): EngineStep {
       };
       return loose.do(name, config, fn);
     },
-    waitForEvent<T>(name: string, options: { timeout: string }): Promise<{ payload: T }> {
+    waitForEvent<T>(name: string, options: { type: string; timeout: string }): Promise<{ payload: T }> {
       const loose = step as unknown as {
-        waitForEvent(name: string, options: { timeout: string }): Promise<{ payload: T }>;
+        waitForEvent(name: string, options: { type: string; timeout: string }): Promise<{ payload: T }>;
       };
       return loose.waitForEvent(name, options);
     },

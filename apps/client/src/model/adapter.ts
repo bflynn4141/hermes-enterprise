@@ -700,13 +700,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
         // A model-authored `chat/say` is the model talking; it arrives as a
         // message from the server, so there is nothing for the client to do.
         return;
-      case 'apply_prepared_proposal':
-        if (command.id)
-          void rest
-            .acceptInstruction(workspaceId, command.id)
-            .then(() => dispatch({ type: 'list/invalidate', key: 'instructions' }))
-            .catch(() => undefined);
-        return;
+      // `apply_prepared_proposal` used to be dispatched here. It is a
+      // HUMAN_ONLY_COMMAND now (server: packages/shared/src/commands.ts), so the
+      // guard above drops it before this switch and the case would be dead
+      // code. Saving a proposal happens on Agent → Skills, which renders the
+      // body from server data and posts `X-Requested-From: skills`.
       default:
         return;
     }

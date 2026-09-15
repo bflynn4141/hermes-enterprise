@@ -44,8 +44,15 @@ describe('the mode allowlists', () => {
     for (const mode of Object.keys(MODE_TOOL_KINDS)) expect(allowedTools(mode, [])).toEqual([]);
   });
 
-  it('falls back to the Work kinds for a mode nobody has heard of', () => {
+  it('falls back to the Ask kinds — read-only — for a mode nobody has heard of', () => {
+    // It used to fall back to `work`, the *least* restrictive set, so a mode
+    // string this build does not know handed the model every proposal tool
+    // (security review O26). A newer client, a hand-written row or a rollback
+    // over the migration that added a mode are all ways to produce one.
     expect(allowedTools('arbitrary', everyTool).map((t) => t.name)).toEqual(
+      allowedTools('ask', everyTool).map((t) => t.name),
+    );
+    expect(allowedTools('arbitrary', everyTool).map((t) => t.name)).not.toEqual(
       allowedTools('work', everyTool).map((t) => t.name),
     );
   });

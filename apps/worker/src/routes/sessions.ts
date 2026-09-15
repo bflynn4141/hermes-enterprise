@@ -2,11 +2,13 @@
 //
 // Visibility is the part worth reading carefully. A session is private to its
 // owner — not to the workspace — and the only other way in is a share, which
-// is a hashed token with a cutoff sequence. Membership gets you the workspace
-// stream (requests, decisions, documents); it does not get you someone else's
-// conversation. Every query below therefore filters on `owner_id = $me OR an
-// unrevoked share exists`, and the socket upgrade applies the same rule, so
-// replay and live delivery cannot disagree about who may see what.
+// is a hashed token with a cutoff sequence redeemed at `GET /shared/:token`
+// (`routes/shares.ts`) by whoever holds the link. Membership gets you the
+// workspace stream (requests, decisions, documents); it does not get you
+// someone else's conversation, and it does not get you a session somebody has
+// link-shared either. Every query below therefore filters on `owner_id = $me`,
+// and the socket upgrade and the replay route apply the same rule, so replay
+// and live delivery cannot disagree about who may see what.
 //
 // The response shapes come from `@hermes/shared/entities`, which is also what
 // the client parses. One schema per payload: a second one on the server would
@@ -27,7 +29,16 @@ import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './
 const MAX_PAGE = 100;
 
 /**
- * `owner_id = me` or an unrevoked share. The one visibility rule.
+ * `owner_id = me`. The one visibility rule, and now the whole of it.
+ *
+ * It used to read `owner_id = me OR EXISTS (an unrevoked share on this
+ * session)`, which correlated the share with neither the caller nor any
+ * presented token: creating a link share silently handed the session to every
+ * member of the workspace, while the person actually holding the link got
+ * nothing, because no route consumed the token (security review O1). The token
+ * is consumed now — `routes/shares.ts` — so this predicate no longer has to
+ * stand in for it, and a share grants exactly one read-only session to exactly
+ * the link holder.
  *
  * Exported because it is the *one* rule and there were already two verbatim
  * copies of it (here and `routes/turns.ts`) while a third surface —
@@ -39,9 +50,7 @@ const MAX_PAGE = 100;
  * It binds `$2` to the caller's user id and expects the sessions table aliased
  * `s`.
  */
-export const VISIBLE = `(s.owner_id = $2 OR EXISTS (
-  SELECT 1 FROM session_shares sh WHERE sh.session_id = s.id AND sh.revoked_at IS NULL
-))`;
+export const VISIBLE = `(s.owner_id = $2)`;
 
 const SESSION_COLUMNS = `s.id, s.owner_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
        s.pinned, s.archived, s.read_only, s.focus_ref, s.last_activity_at`;
@@ -60,6 +69,12 @@ async function loadSession(
   return session;
 }
 
+/**
+ * The second half of the visibility rule, kept even though `VISIBLE` now makes
+ * the first branch unreachable: `loadSession` returning a row the caller does
+ * not own would be a bug, and a bug that silently allowed a write is worse than
+ * one that answers 403.
+ */
 function requireOwner(work: TenantWork, session: { owner_id: string; read_only: boolean }, action: string): void {
   if (session.owner_id !== work.userId) {
     throw new RouteError(`${action} is the owner's to do`, 'not_owner', 403);
@@ -305,8 +320,9 @@ export async function putDraft(c: Context<{ Bindings: Env }>): Promise<Response>
  * GET /w/:ws/sessions/:id/messages?before=&limit=
  *
  * Backwards from the newest, because that is the direction a transcript is
- * read. A share holder sees messages up to the share's cutoff and nothing
- * after it: a share is a snapshot of a conversation, not a subscription to one.
+ * read. Only the owner reaches this route at all: a share holder reads the
+ * snapshot at `GET /shared/:token`, capped at the share's cutoff, because a
+ * share is a snapshot of a conversation and not a subscription to one.
  */
 export async function listMessages(c: Context<{ Bindings: Env }>): Promise<Response> {
   const sessionId = pathUuid(c, 'id');
@@ -319,27 +335,16 @@ export async function listMessages(c: Context<{ Bindings: Env }>): Promise<Respo
   const before = beforeRaw === undefined || beforeRaw === '' ? null : Number(beforeRaw);
 
   const body = await inWorkspace(c, async (work) => {
-    const session = await loadSession(work, sessionId);
-    const cutoff =
-      session.owner_id === work.userId
-        ? null
-        : ((
-            await work.tx.query<{ message_cutoff_seq: number | null }>(
-              `SELECT max(message_cutoff_seq) AS message_cutoff_seq FROM session_shares
-                WHERE session_id = $1 AND revoked_at IS NULL`,
-              [sessionId],
-            )
-          ).rows[0]?.message_cutoff_seq ?? 0);
+    await loadSession(work, sessionId);
 
     const { rows } = await work.tx.query(
       `SELECT id, session_id, seq, role, kind, text, blocks, status, run_id, worked_ms, created_at
          FROM messages
         WHERE workspace_id = $1 AND session_id = $2
           AND ($3::int IS NULL OR seq < $3::int)
-          AND ($4::int IS NULL OR seq <= $4::int)
         ORDER BY seq DESC
-        LIMIT $5`,
-      [work.workspaceId, sessionId, before, cutoff, limit + 1],
+        LIMIT $4`,
+      [work.workspaceId, sessionId, before, limit + 1],
     );
     const page = rows.slice(0, limit).reverse();
     return paginatedSchema(messageSchema).parse({

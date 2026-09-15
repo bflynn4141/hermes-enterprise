@@ -137,6 +137,20 @@ export async function declareUpload(
 
   await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.upload);
 
+  // `session_id` is client-supplied and was written to the row unchecked
+  // (security review O7). Row-level security kept it inside the workspace, but
+  // inside a workspace it named *any* session, so a member could hang a file
+  // off somebody else's conversation — where it renders in that person's
+  // transcript and is read by their runs. The rule is the same one
+  // `routes/sessions.ts` applies everywhere else: your own session, or nothing.
+  if (kind === 'attachment' && declaration.session_id) {
+    const { rows } = await work.tx.query<{ id: string }>(
+      `SELECT id FROM sessions WHERE workspace_id = $1 AND id = $2 AND owner_id = $3`,
+      [work.workspaceId, declaration.session_id, work.userId],
+    );
+    if (!rows[0]) throw new RouteError('no such session', 'unknown_session', 404);
+  }
+
   const id = crypto.randomUUID();
   const storageKey = uploadKey(work.workspaceId, id);
 

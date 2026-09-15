@@ -24,6 +24,18 @@ import { RouteError } from '../routes/tenant.js';
 /** The only value the decision route accepts. */
 export const INBOX_SURFACE = 'inbox';
 
+/**
+ * The surface that saves an instruction version.
+ *
+ * Same idea, second route. Accepting a proposal rewrites the standing system
+ * prompt every later run is given, and until `apply_prepared_proposal` was
+ * moved to HUMAN_ONLY_COMMANDS a model-authored button could reach it through
+ * the ordinary client (security review O3). The header says the call came from
+ * the Skills review pane, which is the one screen that renders the proposal's
+ * body from server data before offering to save it.
+ */
+export const SKILLS_SURFACE = 'skills';
+
 export function requireRequestedFrom(c: Context<{ Bindings: Env }>, expected: string = INBOX_SURFACE): void {
   const header = c.req.header('x-requested-from');
   if (header !== expected) {

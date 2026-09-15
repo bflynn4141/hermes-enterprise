@@ -277,3 +277,156 @@ test('F8 · Traces lists the run and opens it', async ({ browser }) => {
   await other.close();
   await context.close();
 });
+
+// ---------------------------------------------------------------------------
+// G1 · a share link is a share with the link holder, and with nobody else
+// ---------------------------------------------------------------------------
+
+test('G1 · the /shared/:token viewer renders the snapshot, read-only, with no session', async ({ browser }) => {
+  // Before this, `createShare` minted a token, stored its hash and returned a
+  // `/shared/` URL that no route consumed — while the *predicate* it stood in
+  // for handed the session to every member of the workspace. Both halves are
+  // asserted here: what the link holder gets, and what the Member still does
+  // not (security review O1).
+  const fixture = freshWorkspace('Share link');
+  const admin = await asUser(browser, fixture.adminEmail);
+  const page = await admin.newPage();
+  await page.goto(`/workspace/${fixture.workspaceId}`);
+
+  const created = await page.request.post(`/w/${fixture.workspaceId}/sessions`, {
+    data: { title: 'G1 shared', mode: 'work' },
+    headers: { origin: ORIGIN },
+  });
+  const sessionId = (await created.json()).id as string;
+  const turn = await page.request.post(`/w/${fixture.workspaceId}/sessions/${sessionId}/turns`, {
+    data: { text: 'Screen the applicant.', client_turn_id: randomUUID() },
+    headers: { origin: ORIGIN },
+  });
+  expect(turn.status(), await turn.text()).toBeLessThan(300);
+  await expect
+    .poll(
+      () => rows(`SELECT count(*)::text FROM messages WHERE session_id = ${q(sessionId)};`)[0],
+      { timeout: 45_000, intervals: [500] },
+    )
+    .not.toBe('0');
+
+  const share = await page.request.post(`/w/${fixture.workspaceId}/sessions/${sessionId}/shares`, {
+    data: { audience: 'Finance' },
+    headers: { origin: ORIGIN },
+  });
+  expect(share.status(), await share.text()).toBe(201);
+  const { url, message_cutoff_seq: cutoff } = (await share.json()) as { url: string; message_cutoff_seq: number };
+  const token = url.split('/').pop() ?? '';
+  expect(token).toHaveLength(64);
+
+  // A browser with no identity of any kind: no `x-dev-user`, no cookie.
+  const anonymous = await browser.newContext();
+  const viewer = await anonymous.newPage();
+  await viewer.goto(`/shared/${token}`);
+  await expect(viewer.getByText('G1 shared')).toBeVisible({ timeout: 20_000 });
+  await expect(viewer.getByText(/Read only/)).toBeVisible();
+  await expect(viewer.getByText('This is a read-only view. Referenced objects open only for signed-in members.')).toBeVisible();
+  // Read-only means the controls are absent, not disabled.
+  await expect(viewer.getByRole('button', { name: 'Send' })).toHaveCount(0);
+  await expect(viewer.getByRole('button', { name: 'Stop' })).toHaveCount(0);
+
+  // The JSON behind it, so the cap is asserted on the wire rather than on a
+  // rendering.
+  const data = await viewer.request.get(`/shared/${token}`, { headers: { accept: 'application/json' } });
+  expect(data.status()).toBe(200);
+  const body = (await data.json()) as { messages: { seq: number; blocks: unknown[] }[]; message_cutoff_seq: number };
+  expect(body.message_cutoff_seq).toBe(cutoff);
+  expect(Math.max(...body.messages.map((m) => m.seq))).toBeLessThanOrEqual(cutoff);
+  for (const message of body.messages) expect(message.blocks).toEqual([]);
+
+  // And the Member of the same workspace, who does not hold the link, sees
+  // nothing of it. This is the half that used to be backwards.
+  const member = await asUser(browser, fixture.memberEmail);
+  const memberPage = await member.newPage();
+  await memberPage.goto(`/workspace/${fixture.workspaceId}`);
+  expect((await memberPage.request.get(`/w/${fixture.workspaceId}/sessions/${sessionId}`)).status()).toBe(404);
+  expect((await memberPage.request.get(`/w/${fixture.workspaceId}/sessions/${sessionId}/messages`)).status()).toBe(404);
+  const listed = await memberPage.request.get(`/w/${fixture.workspaceId}/sessions`);
+  expect(((await listed.json()).items as { id: string }[]).map((s) => s.id)).not.toContain(sessionId);
+
+  // Revoking it takes the link away.
+  const shareId = rows(`SELECT id FROM session_shares WHERE session_id = ${q(sessionId)};`)[0] ?? '';
+  const revoked = await page.request.delete(`/w/${fixture.workspaceId}/sessions/${sessionId}/shares/${shareId}`, {
+    headers: { origin: ORIGIN },
+  });
+  expect(revoked.status()).toBe(204);
+  // The isolate memo is five seconds; the directory row is already gone.
+  await expect
+    .poll(
+      async () => (await viewer.request.get(`/shared/${token}`, { headers: { accept: 'application/json' } })).status(),
+      { timeout: 20_000, intervals: [1000] },
+    )
+    .toBe(404);
+
+  await member.close();
+  await anonymous.close();
+  await admin.close();
+});
+
+// ---------------------------------------------------------------------------
+// G6 · the parked-run scenario, driven from a turn
+// ---------------------------------------------------------------------------
+
+test('G6 · the waiting script parks a run on a context field, and answering it resumes the run', async ({ browser }) => {
+  // M3 in `live-m5a.spec.ts` inserts the parked run and its empty field with
+  // `psql`, because no scripted scenario called `ask_for_context` (client
+  // finding 14). This is the same screen with nothing inserted: the run parks
+  // because the model asked, and the Context tab has a row to render because
+  // the engine now writes the placeholder the question needs.
+  const fixture = freshWorkspace('Waiting from a turn');
+  const context = await asUser(browser, fixture.adminEmail);
+  const page = await context.newPage();
+  await page.goto(`/workspace/${fixture.workspaceId}`);
+
+  const created = await page.request.post(`/w/${fixture.workspaceId}/sessions`, {
+    data: { title: 'G6 waiting', mode: 'work' },
+    headers: { origin: ORIGIN },
+  });
+  const sessionId = (await created.json()).id as string;
+  const turn = await page.request.post(`/w/${fixture.workspaceId}/sessions/${sessionId}/turns`, {
+    data: { text: 'Draft the reply.', client_turn_id: randomUUID() },
+    headers: { origin: ORIGIN, 'x-scripted-script': 'waiting' },
+  });
+  expect(turn.status(), await turn.text()).toBeLessThan(300);
+  const runId = (await turn.json()).run_id as string;
+
+  await expect
+    .poll(() => rows(`SELECT status FROM runs WHERE id = ${q(runId)};`)[0], { timeout: 45_000, intervals: [500] })
+    .toBe('waiting');
+  expect(rows(`SELECT waiting_for FROM runs WHERE id = ${q(runId)};`)[0]).toBe('destination');
+  // The placeholder row, with no value in it: this is what the Context tab
+  // lists, and what the run used to park without writing.
+  expect(
+    rows(`SELECT coalesce(value, '(null)') FROM agent_context_fields WHERE workspace_id = ${q(fixture.workspaceId)} AND key = 'destination';`)[0],
+  ).toBe('(null)');
+
+  // The same screen M3 drives, reached without a single inserted row.
+  await page.reload();
+  await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByText('Missing · A reply is paused').first()).toBeVisible({ timeout: 20_000 });
+  await app.getByRole('button', { name: 'Add context' }).first().click();
+  const field = app.getByPlaceholder('Add a channel, email or link…');
+  await field.fill('#partner-feedback');
+  await app.getByRole('button', { name: 'Save & resume' }).click();
+
+  // The answer is stored and the run is woken: the scripted scenario's second
+  // half then runs, so the run reaches a terminal state on its own.
+  await expect
+    .poll(
+      () => rows(`SELECT value FROM agent_context_fields WHERE workspace_id = ${q(fixture.workspaceId)} AND key = 'destination';`)[0],
+      { timeout: 20_000 },
+    )
+    .toBe('#partner-feedback');
+  await expect
+    .poll(() => rows(`SELECT status FROM runs WHERE id = ${q(runId)};`)[0], { timeout: 60_000, intervals: [1000] })
+    .toMatch(/completed|error/);
+  expect(rows(`SELECT status FROM runs WHERE id = ${q(runId)};`)[0]).toBe('completed');
+
+  await context.close();
+});

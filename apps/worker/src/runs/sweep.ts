@@ -8,6 +8,11 @@
 // nothing will ever move it. The sweep is what turns that into an error a human
 // can Retry, which is the difference between a stuck run and a broken product.
 //
+// A verdict is also an instruction, not just a label. Marking a run dead while
+// the instance behind it keeps calling tools is the failure the review named
+// O2, so every non-`ok` verdict now sets `stop_requested` in the same statement
+// as the status and calls `terminate()` after the commit.
+//
 // Two other jobs ride along because they are the `app`-role half of things the
 // engine cannot do itself: the `agent` role has no UPDATE on
 // `workspace_provider_keys` and only SELECT on `run_queue`, and widening either
@@ -109,7 +114,12 @@ export async function verdictFor(
   return { kind: 'ok' };
 }
 
-async function sweepWorkspace(env: Env, workspaceId: string, result: { checked: number; errored: number; stopped: number }): Promise<void> {
+/**
+ * One workspace's orphans. Exported so a test can drive it against a seeded
+ * workspace rather than against `everyWorkspace`, which is every row in the
+ * shared test database.
+ */
+export async function sweepWorkspace(env: Env, workspaceId: string, result: { checked: number; errored: number; stopped: number }): Promise<void> {
   const currentEngineVersion = Number(env.ENGINE_VERSION ?? '1') || 1;
 
   const runs = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
@@ -141,8 +151,17 @@ async function sweepWorkspace(env: Env, workspaceId: string, result: { checked: 
           ? { class: 'transient', retryable: true, reason: verdict.reason, message: verdict.message, step_id: null }
           : null;
       const status = verdict.kind === 'stopped' ? 'stopped' : 'error';
+      // `stop_requested` goes down in the same statement as the status, and it
+      // goes down for *every* non-`ok` verdict rather than only for the ones
+      // that were already stopping. It used to be written by nothing here, so a
+      // run the sweep declared dead for `engine_version_changed` or
+      // `no_progress` carried on: the live Workflow polls this flag and nothing
+      // else, so it called more tools, wrote more `requests` rows, and on
+      // completion moved itself back to `completed` (security review O2). The
+      // flag is the half that works at the next step boundary; `terminate()`
+      // below is the half that may not work at all.
       const { rowCount } = await tx.query(
-        `UPDATE runs SET status = $3, error = $4::jsonb, ended_at = now()
+        `UPDATE runs SET status = $3, error = $4::jsonb, ended_at = now(), stop_requested = true
           WHERE workspace_id = $1 AND id = $2 AND status IN ('working', 'waiting', 'stopping')`,
         [workspaceId, run.id, status, error ? JSON.stringify(error) : null],
       );
@@ -165,6 +184,38 @@ async function sweepWorkspace(env: Env, workspaceId: string, result: { checked: 
     if (verdict.kind === 'stopped') result.stopped += 1;
     else result.errored += 1;
     if (jobIds.length > 0) await runJobsAfterCommit(env, workspaceId, jobIds);
+    // After the commit, never before: a terminate that landed on a run whose
+    // UPDATE then rolled back would have killed a live run for nothing.
+    await terminateInstance(env, run);
+  }
+}
+
+/**
+ * Ask the Workflow instance behind a reaped run to stop.
+ *
+ * Best effort, and deliberately after the commit. Two honest caveats:
+ *
+ *   * **It is unverified whether `terminate()` interrupts a step already in
+ *     flight.** Cloudflare documents it as terminating the instance; whether a
+ *     `step.do` that is mid-`await` is cut short, or runs to completion and is
+ *     then discarded, is not something this repository has measured. That is
+ *     why `stop_requested` is set first and why `setRunStatus` refuses to move
+ *     a terminal run: the correctness of the sweep does not rest on this call.
+ *   * A `get()` on an id that no longer exists throws, and an instance that has
+ *     already finished refuses termination. Both are the normal case for a run
+ *     the sweep is reaping, so neither is an error worth failing the sweep for
+ *     — they are logged and the loop continues.
+ */
+async function terminateInstance(env: Env, run: LiveRun): Promise<void> {
+  const instanceId = run.workflow_instance_id ?? runAttemptInstanceId(run.id, run.attempt);
+  try {
+    const instance = await env.RUN_ATTEMPT.get(instanceId);
+    await instance.terminate();
+    console.log(JSON.stringify({ at: 'cron.orphans.terminate', ok: true, run_id: run.id, instance_id: instanceId }));
+  } catch (error) {
+    console.log(
+      JSON.stringify({ at: 'cron.orphans.terminate', ok: false, run_id: run.id, instance_id: instanceId, error: String(error) }),
+    );
   }
 }
 
