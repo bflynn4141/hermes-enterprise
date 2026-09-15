@@ -174,7 +174,11 @@ test('P6 · guidance sent during a run is accepted and recorded against that run
   expect([201, 409]).toContain(guided.status());
   if (guided.status() === 201) {
     const body = await guided.json();
-    expect(body.status).toBe('queued');
+    // `queued` while a turn is still in flight, `next_message` when the run
+    // reached a turn boundary first — decision E7's "late guidance is carried,
+    // not refused". Which of the two a race lands on is not the scenario; that
+    // the guidance is recorded against this run is.
+    expect(['queued', 'next_message']).toContain(body.status);
     expect(rows(`SELECT id::text FROM messages WHERE id = '${body.guidance_id}' AND kind = 'guidance';`)).toHaveLength(1);
   }
   await context.close();

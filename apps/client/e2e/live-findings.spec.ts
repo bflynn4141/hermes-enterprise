@@ -63,9 +63,14 @@ test('F1 · a navigation to /w/:ws boots the app instead of answering JSON', asy
 // ---------------------------------------------------------------------------
 
 test('F2 · POST /workspaces creates a workspace the creator can open', async ({ browser }) => {
-  const context = await asUser(browser, SEED_ADMIN);
+  // A fresh Admin, because creating a workspace is rate-limited to three a day
+  // per person (`LIMITS.createWorkspace`). Reusing the seeded Admin makes the
+  // suite fail on its fourth run of the day for a reason that has nothing to do
+  // with the code — the same trap P11 avoids for key verification.
+  const seed = freshWorkspace('Creator seat');
+  const context = await asUser(browser, seed.adminEmail);
   const page = await context.newPage();
-  await page.goto(`/w/${SEED_WORKSPACE}`);
+  await page.goto(`/w/${seed.workspaceId}`);
 
   const name = `Created ${new Date().toISOString().slice(11, 19)}`;
   const created = await page.request.post('/workspaces', {
