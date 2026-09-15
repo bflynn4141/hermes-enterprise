@@ -34,6 +34,7 @@ pnpm --filter client test       # vitest: the reducer and the adapter
 pnpm --filter client typecheck
 pnpm --filter client e2e        # Playwright, against the mock bundle
 pnpm e2e:live                   # the whole stack, then the live scenarios
+pnpm db:reset                   # (root) demo database back to the seed — destructive
 pnpm --filter client dev:step-up  # re-stamp the fake-auth step-up window
 ```
 
@@ -130,6 +131,9 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
                                   sessions list, against the live stack
               panel-screens.spec.ts every page × three panel states × two widths
               panel-sidebar.spec.ts the sidebar's list, before and after C34
+              panel-narrow.spec.ts  900 and 1100 in all three states: the
+                                  navigation keeps its own column
+              panel-helpers.ts    the assertions the panel suites share
 scripts/      e2e-live.mjs      boots the stack and runs the live suite
               live-fixture.mjs  a fresh workspace, and the step-up re-stamp
               dev-step-up.mjs   the step-up re-stamp on its own
@@ -142,6 +146,12 @@ qa/panel/     every page in open, rail and hidden at 1840 and 1440
 
 The Iris pane has three states, not two (decision C33). Collapsing it never
 interrupts a run: the rail keeps reporting one.
+
+The navigation column is 240 px at every width (decision C36). The demo
+collapsed it to icons below 1180 px; that breakpoint was kept through the port
+and became a bug, because `SidebarNav` renders at its own 224 px and collapses
+on its own control, so all the breakpoint did was draw the navigation across
+whatever was beside it. The way to buy horizontal room is to collapse Iris.
 
 | State | What it is |
 |---|---|
@@ -308,7 +318,7 @@ all of this — seven and eleven scenarios on top of the fourteen in
 | `live-findings.spec.ts` | F1 `/w/:ws` boots the app · F2 create a workspace, accept an invitation · F3 `request.created` on the workspace stream · F8 Traces lists and opens a run · P8/P9 through the scripted scenarios |
 | `live-m5a.spec.ts` | M1 the trace detail after a run · M2 an instruction accepted by an Admin and refused to a Member · M3 the context write that unparks a waiting run · M4 usage after a run, with the server's disclaimer · M5 create-workspace and accept-invite through the stepper, plus the picker · M6 workspace delete and undelete · M7 every empty state on a fresh workspace, both seats · M8 "Signed out" with the draft kept, and "Reconnecting…" |
 | `live-screens.spec.ts` | the twenty-nine screenshots in `qa/live/` |
-| `live-panel.spec.ts` | N1 ⌘L and where focus goes · N2 the drag handle, its clamp and its reload · N3 a run that completes behind the rail, and the badge · N4 every page in the rail state · N5 New session twice is one session · N6 the first turn names the session and the run renames it · N7 a manual rename wins |
+| `live-panel.spec.ts` | N1 ⌘L and where focus goes · N2 the drag handle, its clamp and its reload · N3 a run that completes behind the rail, and the badge · N4 every page in the rail state · N5 New session twice is one session · N6 the first turn names the session and the run renames it · N7 a manual rename wins · N8 the navigation keeps its column at 900 and 1100 |
 
 ### The library, adopted and not
 

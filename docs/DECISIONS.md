@@ -3669,3 +3669,58 @@ A label that reads well is the cheaper honest answer.
 
 **Would change it if.** The library grows a `sub` or a right slot on a recent,
 which is a two-line change here and deletes this decision.
+
+---
+
+## C36. The navigation column is one width, because the breakpoint was collapsing a component that had been replaced
+
+**Decided.** `.shell.nav-collapsed { --nav-w: 76px }` is gone, and with it the
+`navCollapsed` flag, the `collapsed` prop on `Sidebar`, and the four rules that
+styled the collapse. The navigation column is 240 px at every width. The
+`.sidebar` grid cell is padded 8 px and clips.
+
+**What was actually wrong.** The demo collapsed its hand-rolled navigation to
+icons below 1180 px, and the rules that did it named `.brand-name`,
+`.nav-label`, `.nav-item` and `.workspace`. M2 replaced all of that markup with
+`SidebarNav` from the component library and kept the breakpoint. `SidebarNav`
+sets its own width from its own state — 224 px expanded, 52 px collapsed, by its
+own control — and none of those four selectors matches anything it renders. So
+below 1180 px the *column* became 76 px while the *component* stayed 224 px, the
+cell did not clip, and the navigation drew itself across the pane beside it,
+starting at x=0. Three panel states and six page walks later, nothing had caught
+it.
+
+Two numbers also never added up: the cell's 20 px padding around a 224 px
+component is 264 px in a 240 px column, so even at full width the component
+overhung by 24 px — invisible only because the chat pane's own background
+painted over it in the one state anybody looked at.
+
+**Why not force the library narrow instead.** Its collapsed styling keys off a
+`data-sidebar-collapsed` attribute it sets on its own `<aside>`, and the width
+is an inline style from internal state. Driving that from outside means
+`!important` over another component's inline style plus a duplicate of its state
+contract, and an expand control that would then be visible and broken. The
+library is not ours to edit, and reaching past its API is the same decision with
+extra steps. The honest version is that a breakpoint-driven icon rail is not a
+thing this client has any more — and it does not need one, because the way to
+buy horizontal room is now to collapse Iris (C33), which is a control rather
+than a width nobody asked for.
+
+**What the test had to change to see it.** Every assertion the panel suites
+already made was about the grid, and the grid was always right: a grid item's
+box *is* its column, whatever its contents do. `getBoundingClientRect()` was no
+better — it reports an element's full box even where an ancestor clips it, so it
+both missed the real overlap and invented false ones once the cell started
+clipping. `expectNoNavOverlap` hit-tests instead: sample a vertical line of
+pixels three px to the right of the column and ask `elementFromPoint` what is
+there. If the answer is ever inside the navigation, a person can see it. That
+assertion fails on the old code and passes on the new, which is the only
+evidence worth having.
+
+Two smaller things went with it. `.shell-outer` now clips: a focus or a
+`scrollIntoView` inside a pane was able to scroll the whole shell 48 px off the
+top, which is never something the shell should do. And `ui.navCollapsed` was
+written on every resize and read by nobody.
+
+**Would change it if.** The library grows a controlled `collapsed` prop, at
+which point the breakpoint can come back and mean something.

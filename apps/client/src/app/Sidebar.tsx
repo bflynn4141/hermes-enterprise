@@ -31,7 +31,7 @@ const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'settings', label: 'Settings', icon: 'settings', ref: SETTINGS() },
 ];
 
-export function Sidebar({ collapsed }: { collapsed: boolean }) {
+export function Sidebar() {
   const state = useAppState();
   const adapter = useAdapter();
   const nav = useNav();
@@ -66,7 +66,10 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
   const active = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
 
   return (
-    <aside className="sidebar hermes-ui" aria-label="Workspace navigation" data-collapsed={collapsed}>
+    // `SidebarNav` renders its own <aside> with its own collapse control; this
+    // wrapper is the grid cell. It clips, because a component that decides its
+    // own width must not be able to decide the column's (decision C36).
+    <aside className="sidebar hermes-ui" aria-label="Workspace navigation">
       <SidebarNav
         fill
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}

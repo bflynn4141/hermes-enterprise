@@ -49,6 +49,24 @@ pnpm typecheck
 pnpm test          # shared unit tests, worker unit tests, workerd tests, database tests
 ```
 
+### Starting the database over
+
+```sh
+pnpm db:reset      # db:down -v, db:up, db:migrate, db:seed — in that order
+```
+
+`db:reset` is the one command for "the demo data looks wrong". It is
+**destructive**: `db:down` is `docker compose down -v`, so every row in the
+local Postgres goes and comes back as the seed — one workspace, one Admin
+(`maya@nous.example`), one Member (`dana@nous.example`). It is also the way to
+get a database from nothing, because tearing down a stack that was never up is
+a no-op rather than an error.
+
+It refuses to run under `NODE_ENV=production`, or with a `DATABASE_URL` that
+does not point at localhost. Run it after a live end-to-end session: the live
+suite creates a workspace per scenario, and a demo opened on top of that is a
+demo with thirty workspaces in the picker.
+
 To serve it:
 
 ```sh

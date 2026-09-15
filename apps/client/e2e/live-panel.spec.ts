@@ -13,9 +13,11 @@
 //   N5  New session twice is one session, not two identical rows
 //   N6  the first turn names the session, and the run renames it to its object
 //   N7  a manual rename wins, and stops auto-titling for good
+//   N8  the navigation keeps its own column at 900 and 1100, in all three states
 import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { freshWorkspace } from '../scripts/live-fixture.mjs';
+import { expectNoNavOverlap, type Panel } from './panel-helpers.js';
 
 const ORIGIN = process.env.E2E_BASE_URL ?? 'http://localhost:8787';
 
@@ -379,5 +381,55 @@ test('N7 · a manual rename wins, and later runs never overwrite it', async ({ b
   // And it is still theirs after a reload, not re-derived as "auto".
   await page.reload();
   await expect(sidebar(page).getByRole('button', { name: /Q4 partners/ })).toBeVisible();
+  await context.close();
+});
+
+// ---------------------------------------------------------------------------
+// N8 · the navigation's column at narrow widths
+// ---------------------------------------------------------------------------
+
+test('N8 · the navigation keeps its own column at 900 and 1100, in all three states', async ({ browser }) => {
+  const fixture = freshWorkspace('Panel narrow');
+  const context = await asUser(browser, fixture.adminEmail);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1840, height: 1000 });
+  await openShell(page, fixture.workspaceId);
+  await newSession(page, fixture.workspaceId, 'N8 narrow');
+  await page.reload();
+
+  for (const [width, height] of [
+    [900, 700],
+    [1100, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const panel of ['open', 'rail', 'hidden'] as Panel[]) {
+      // Driven through the controls rather than the helper's, because at 900 a
+      // collapsed panel leaves no rail and the helper's route through "Hide
+      // completely" needs the chat header, which is only there when open.
+      if (panel === 'open') {
+        if ((await shell(page).getAttribute('data-iris')) !== 'open') await reopen(page).click();
+      } else {
+        if ((await shell(page).getAttribute('data-iris')) !== 'open') await reopen(page).click();
+        await hide(page).click();
+        if (panel === 'hidden') {
+          await reopen(page).click();
+          await page.getByRole('button', { name: 'Session options' }).click();
+          await page.getByRole('menuitem', { name: 'Hide completely' }).click();
+        }
+      }
+      await expect(shell(page)).toHaveAttribute('data-iris', panel);
+      await expectNoNavOverlap(page, `live ${width} ${panel}`);
+
+      // The rail needs room beside a usable app pane, so it is only shown at
+      // or above the pane-switch breakpoint.
+      await expect(page.locator('.iris-rail')).toHaveCount(width >= 1000 && panel === 'rail' ? 1 : 0);
+      // And the shell never scrolls, in either direction.
+      const scrolled = await page.evaluate(() => {
+        const outer = document.querySelector('.shell-outer');
+        return { top: outer?.scrollTop ?? 0, left: outer?.scrollLeft ?? 0 };
+      });
+      expect(scrolled, `${width} ${panel}: the shell scrolled`).toEqual({ top: 0, left: 0 });
+    }
+  }
   await context.close();
 });

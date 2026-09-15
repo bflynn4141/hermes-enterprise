@@ -16,6 +16,8 @@ import {
   initialState,
   irisMaxWidth,
   isBlankSession,
+  navWidthFor,
+  NAV_WIDTH,
   reduce,
   resolveIrisWidth,
   visibleSessions,
@@ -360,10 +362,20 @@ describe('the Iris panel', () => {
     expect(resolveIrisWidth(null, 1920)).toBe(800);
     // 1440 − 240 nav = 1200 of work area, split evenly.
     expect(resolveIrisWidth(null, 1440)).toBe(600);
-    // Below 1180 the navigation is 76 px wide, and the split follows it.
-    expect(resolveIrisWidth(null, 1100)).toBe(512);
+    // The navigation is 240 px at every width (decision C36), so the split
+    // below the wide breakpoint is always of `windowWidth - 240`.
+    expect(resolveIrisWidth(null, 1100)).toBe(430);
     // A remembered width still obeys the ceiling at a narrower window.
     expect(resolveIrisWidth(900, 1440)).toBe(720);
+  });
+
+  it('gives the navigation one width, whatever the window is', () => {
+    // The regression guard for C36: a second nav width is what let the column
+    // and the component disagree.
+    expect(navWidthFor(1840)).toBe(NAV_WIDTH);
+    expect(navWidthFor(1100)).toBe(NAV_WIDTH);
+    expect(navWidthFor(900)).toBe(NAV_WIDTH);
+    expect(workAreaFor(900)).toBe(660);
   });
 
   it('counts Iris messages that arrive while collapsed, and clears on open', () => {

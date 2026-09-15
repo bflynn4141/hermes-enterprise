@@ -94,7 +94,13 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .shell.is-narrow .pane-iris[data-active="true"] { border-right: 0; }
 
 /* sidebar */
-.sidebar { display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 0 20px 28px; border-right: 1px solid var(--line); background: var(--app); min-width: 0; }
+/* The grid cell `SidebarNav` lives in. Its padding is 8 px because the library's
+   own <aside> is 224 px wide and the column is 240: the two numbers have to add
+   up, and they did not — the demo's 20 px was sized for markup this client no
+   longer renders. `overflow: hidden` is the guard rather than the mechanism, so
+   the library's 224→52 collapse animation can never paint over the pane beside
+   it (decision C36). */
+.sidebar { display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 0 8px; border-right: 1px solid var(--line); background: var(--app); min-width: 0; overflow: hidden; }
 .sidebar .brand { display: flex; align-items: center; gap: 12px; height: 64px; flex-shrink: 0; }
 .sidebar .brand img { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; }
 .sidebar .brand-name { font-size: 20px; line-height: 24px; }
@@ -109,12 +115,11 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .sidebar .profile { display: flex; align-items: center; gap: 12px; margin-top: auto; font-size: 14px; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: #242454; display: inline-grid; place-items: center; font-size: 12px; color: var(--muted); }
 .avatar.lg { width: 40px; height: 40px; font-size: 14px; }
-.shell.nav-collapsed { --nav-w: 76px; }
-.shell.nav-collapsed .sidebar { padding-inline: 14px; }
-.shell.nav-collapsed .sidebar .brand-name, .shell.nav-collapsed .sidebar .workspace, .shell.nav-collapsed .nav-label, .shell.nav-collapsed .profile-name { display: none; }
-.shell.nav-collapsed .nav-item { justify-content: center; padding: 12px; }
-.shell.nav-collapsed .badge { position: absolute; top: 4px; right: 4px; min-width: 20px; height: 20px; font-size: 12px; }
-.shell.nav-collapsed .nav-item { position: relative; }
+/* The demo's icon collapse below 1180 px is gone (decision C36). It narrowed
+   `--nav-w` to 76px while `SidebarNav` — which replaced the markup these rules
+   named — went on rendering at 224px, so the navigation drew across the pane
+   beside it at every width under 1180. The column is one width now, and the
+   library's own control is what collapses it. */
 .demo-pill { margin-left: auto; font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
 
 /* panes */
@@ -584,14 +589,13 @@ html[data-reduce-motion="true"] *, html[data-reduce-motion="true"] *::before, ht
 .ws-btn:hover, .ws-btn[aria-expanded="true"] { background: rgba(255,255,255,.05); }
 .profile-btn { display: flex; align-items: center; gap: 12px; width: 100%; border-radius: 8px; padding: 6px; margin-left: -6px; text-align: left; font-size: 14px; color: inherit; transition: background-color 120ms ease-out; }
 .profile-btn:hover, .profile-btn[aria-expanded="true"] { background: rgba(255,255,255,.05); }
-.shell.nav-collapsed .profile-btn, .shell.nav-collapsed .ws-btn { width: auto; margin-left: 0; }
 .follow-btn[aria-pressed] { cursor: pointer; transition: border-color 120ms ease-out; }
 .follow-btn[aria-pressed]:hover { border-color: #4a4a80; }
 .dialog-actions .grow { flex: 1; }
 
 /* ---------- added by the M2 client port ---------- */
 /* The shell gains a banner row above the grid; the grid keeps its own height. */
-.shell-outer { display: flex; flex-direction: column; height: 100%; }
+.shell-outer { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .shell-outer > .shell { flex: 1 1 auto; min-height: 0; }
 
 .banner { display: flex; align-items: center; gap: 12px; padding: 10px 20px; font-size: 14px; line-height: 20px; background: var(--context); border-bottom: 1px solid var(--line); color: var(--body); flex-shrink: 0; }

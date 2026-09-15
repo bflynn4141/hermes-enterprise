@@ -7,41 +7,9 @@
 //
 //     npx playwright test e2e/panel-screens.spec.ts
 import { expect, test, type Page } from '@playwright/test';
-
-type Panel = 'open' | 'rail' | 'hidden';
+import { expectNoNavOverlap, setPanel, type Panel } from './panel-helpers.js';
 
 const shot = (name: string) => ({ path: `qa/panel/${name}.png`, fullPage: false });
-
-/**
- * Put the panel in a state without going through the UI for it.
- *
- * The UI paths are covered by `live-panel.spec.ts`; here the state is a
- * precondition for a screenshot, and driving it through three different
- * controls on every one of twenty screens would make this file about the
- * controls rather than about the layouts.
- */
-async function setPanel(page: Page, panel: Panel): Promise<void> {
-  const shell = page.locator('.shell');
-  const current = await shell.getAttribute('data-iris');
-  if (current === panel) return;
-  // The app header's button, specifically: the rail's mark carries the same
-  // accessible name, which is the point of it.
-  const reopen = page.locator('.pane-app').getByRole('button', { name: /^Open Iris/ });
-  if (panel === 'open') {
-    await reopen.click();
-  } else {
-    if (current !== 'open') await reopen.click();
-    // Two controls carry this label — the chat header's and the app header's.
-    // The chat header's is the one this walk uses.
-    await page.locator('.pane-iris').getByRole('button', { name: /^Hide Iris/ }).click();
-    if (panel === 'hidden') {
-      await reopen.click();
-      await page.getByRole('button', { name: 'Session options' }).click();
-      await page.getByRole('menuitem', { name: 'Hide completely' }).click();
-    }
-  }
-  await expect(shell).toHaveAttribute('data-iris', panel);
-}
 
 /** Every page in the shell, and how to get there and know it arrived. */
 const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Page) => Promise<void> }[] = [
@@ -218,6 +186,8 @@ for (const width of [1840, 1440]) {
           return pane ? pane.scrollWidth - pane.clientWidth : 0;
         });
         expect(overflow, `${entry.key} overflows its pane horizontally`).toBeLessThanOrEqual(1);
+        // And the navigation keeps its own column, on every page (decision C36).
+        await expectNoNavOverlap(page, `${width} ${panel} ${entry.key}`);
         await page.screenshot(shot(`${width}-${panel}-${entry.key}`));
       }
     });
@@ -244,6 +214,7 @@ test('the rail is not shown below the pane-switch breakpoint', async ({ page }) 
   await expect(page.locator('.iris-rail')).toBeVisible();
   await page.setViewportSize({ width: 900, height: 1000 });
   await expect(page.locator('.iris-rail')).toHaveCount(0);
+  await expectNoNavOverlap(page, '900 rail');
   // And the way back is still there.
   await expect(page.locator('.pane-app').getByRole('button', { name: /^Open Iris/ })).toBeVisible();
   await page.screenshot(shot('900-rail-narrow'));

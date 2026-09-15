@@ -215,13 +215,22 @@ export const OVERVIEW: Ref = { section: 'agents', view: 'overview' };
 export const IRIS_DEFAULT_WIDTH = 800;
 export const IRIS_MIN_WIDTH = 420;
 export const IRIS_RAIL_WIDTH = 56;
-export const NAV_WIDTH = 240;
-export const NAV_WIDTH_COLLAPSED = 76;
 export const WIDE_BREAKPOINT = 1840;
-export const NAV_COLLAPSE_BREAKPOINT = 1180;
 export const PANE_SWITCH_BREAKPOINT = 1000;
 
-export const navWidthFor = (windowWidth: number): number => (windowWidth < NAV_COLLAPSE_BREAKPOINT ? NAV_WIDTH_COLLAPSED : NAV_WIDTH);
+/**
+ * The navigation column, which is one number at every width (decision C36).
+ *
+ * The demo collapsed its hand-rolled navigation to icons below 1180 px, and the
+ * port kept the breakpoint after adopting `SidebarNav` — which renders at its
+ * own width and collapses on its own control, so all the breakpoint did was
+ * narrow the *column* to 76 px around a 224 px component and let it draw across
+ * whatever was beside it. The way to buy horizontal room is now to collapse
+ * Iris, which is what the panel's three states are for.
+ */
+export const NAV_WIDTH = 240;
+
+export const navWidthFor = (_windowWidth?: number): number => NAV_WIDTH;
 
 /** The work area is everything the navigation does not take. */
 export const workAreaFor = (windowWidth: number): number => Math.max(0, windowWidth - navWidthFor(windowWidth));

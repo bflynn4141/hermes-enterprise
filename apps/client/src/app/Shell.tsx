@@ -1,8 +1,10 @@
-// The shell. Width rules are unchanged from the demo — 1840 is 240 + 800 + 800;
-// below 1180 the navigation collapses to icons; below 1000 the two panes switch
-// explicitly with their state preserved — and two rows are new: the connection
-// banner (client-port spec §2, §5.4) and the Iris panel's three states
-// (decision C33).
+// The shell. 1840 is 240 + 800 + 800 and below 1000 the two panes switch
+// explicitly with their state preserved, both from the demo. Three things are
+// not the demo's: the connection banner (client-port spec §2, §5.4), the Iris
+// panel's three states (decision C33), and the navigation column, which is 240
+// at every width now — the demo's icon collapse was a property of markup this
+// client replaced, and keeping the breakpoint only drew the navigation across
+// its own column (decision C36).
 //
 // The grid is written here rather than in CSS because the middle column is now
 // a number a person can drag. The `--iris-w` token stays as the fallback the
@@ -19,7 +21,6 @@ import { IS_MAC, TOGGLE_SHORTCUT, irisShortcut, readIrisPrefs, requestComposerFo
 import { agentName } from './selectors.js';
 import {
   IRIS_RAIL_WIDTH,
-  NAV_COLLAPSE_BREAKPOINT,
   PANE_SWITCH_BREAKPOINT,
   navWidthFor,
   resolveIrisWidth,
@@ -40,13 +41,8 @@ export function Shell() {
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
-  useEffect(() => {
-    dispatch({ type: 'ui/set', patch: { navCollapsed: width < NAV_COLLAPSE_BREAKPOINT } });
-  }, [dispatch, width]);
-
   const panel = state.ui.irisPanel;
   const narrow = width < PANE_SWITCH_BREAKPOINT && panel === 'open';
-  const collapsed = width < NAV_COLLAPSE_BREAKPOINT;
   const pane = state.ui.pane;
   const navWidth = navWidthFor(width);
   const workArea = workAreaFor(width);
@@ -129,7 +125,7 @@ export function Shell() {
       <ConnectionBanner />
       <div
         ref={gridRef}
-        className={`shell ${narrow ? 'is-narrow' : ''} ${collapsed ? 'nav-collapsed' : ''} ${compact ? 'is-compact' : ''}`}
+        className={`shell ${narrow ? 'is-narrow' : ''} ${compact ? 'is-compact' : ''}`}
         data-iris={panel}
         style={{
           gridTemplateColumns: columns,
@@ -138,7 +134,7 @@ export function Shell() {
           transition: dragging ? 'none' : 'grid-template-columns var(--dur-layout) var(--ease-out)',
         }}
       >
-        <Sidebar collapsed={collapsed} />
+        <Sidebar />
         {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} />}
         {railShown && <IrisRail shortcut={TOGGLE_SHORTCUT} />}
         <AppPane narrow={narrow} active={!narrow || pane === 'app'} paneRef={appRef} />
