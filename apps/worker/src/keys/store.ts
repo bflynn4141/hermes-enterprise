@@ -57,10 +57,13 @@ interface KeyRow {
   rotated_at: Date | null;
   revoked_at: Date | null;
   replaces_key_id: string | null;
+  synced_model_count: number | null;
+  models_synced_at: Date | null;
 }
 
 const MASKED_COLUMNS = `id, provider, label, last4, fingerprint, status, verified_models,
-                        added_by, created_at, verified_at, rotated_at, revoked_at, replaces_key_id`;
+                        added_by, created_at, verified_at, rotated_at, revoked_at, replaces_key_id,
+                        synced_model_count, models_synced_at`;
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
@@ -80,6 +83,10 @@ function mask(row: KeyRow): MaskedProviderKey {
     rotated_at: iso(row.rotated_at),
     revoked_at: iso(row.revoked_at),
     replaces_key_id: row.replaces_key_id,
+    // OpenRouter only: hundreds of ids do not fit in `verified_models`, so the
+    // row carries how many were synced and when (decision R7).
+    synced_model_count: row.synced_model_count,
+    models_synced_at: iso(row.models_synced_at),
   };
 }
 
@@ -289,6 +296,28 @@ export async function readEnvelope(
     wrapIv: bytes(row.wrap_iv),
     kekVersion: row.kek_version,
   };
+}
+
+/**
+ * Record that a provider's model list was synced for this key.
+ *
+ * Separate from `setKeyStatus` because it is a different fact with a different
+ * lifetime: a key can verify without a sync (the sync failed, or the provider
+ * has no list), and a sync count that survived a later failed verification
+ * would claim models the workspace can no longer reach.
+ */
+export async function recordModelSync(
+  tx: Tx,
+  workspaceId: string,
+  keyId: string,
+  count: number,
+): Promise<void> {
+  await tx.query(
+    `UPDATE workspace_provider_keys
+        SET synced_model_count = $3, models_synced_at = now()
+      WHERE workspace_id = $1 AND id = $2`,
+    [workspaceId, keyId, count],
+  );
 }
 
 /** Record what a verification probe learned. */

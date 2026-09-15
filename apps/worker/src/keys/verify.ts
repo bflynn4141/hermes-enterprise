@@ -29,8 +29,12 @@ export interface VerifyInput {
   readonly provider: string;
   /** Plaintext, for this call only. Never stored by anything downstream. */
   readonly apiKey: string;
-  /** The model the scoped probe uses. A catalog row for this provider. */
-  readonly probeModel: string;
+  /**
+   * The model the scoped probe uses. A catalog row for this provider, or null
+   * when there is no row to probe with — which is the ordinary case for
+   * OpenRouter, whose catalog rows only exist after the first successful sync.
+   */
+  readonly probeModel: string | null;
   /** How many 403s this key has already collected. */
   readonly forbiddenCount: number;
   readonly traceId?: string | undefined;
@@ -73,7 +77,7 @@ export async function probeKey(provider: ModelProvider, input: VerifyInput): Pro
 
     if (error.status === 403) {
       const forbiddenCount = input.forbiddenCount + 1;
-      if (forbiddenCount >= SCOPED_PROBE_AFTER_FORBIDDEN) {
+      if (forbiddenCount >= SCOPED_PROBE_AFTER_FORBIDDEN && input.probeModel !== null) {
         // The key may be scoped rather than broken. One token decides it.
         const works = await provider.probe(credential, input.probeModel);
         return works
@@ -89,6 +93,9 @@ export async function probeKey(provider: ModelProvider, input: VerifyInput): Pro
             }
           : { status: 'invalid', models: [], retry: false, reason: 'rejected', forbiddenCount };
       }
+      // Either the first 403, or a provider we have no model to probe with. In
+      // both cases we learned nothing, and saying `invalid` would mark a good
+      // key bad on the strength of a moderation rule or an empty catalog.
       return { status: 'unverified', models: [], retry: true, reason: 'forbidden', forbiddenCount };
     }
 

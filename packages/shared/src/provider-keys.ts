@@ -40,7 +40,14 @@ export const maskedProviderKeySchema = z
     last4: z.string().length(4),
     fingerprint_prefix: z.string().length(12),
     status: z.enum(KEY_STATUSES),
-    verified_models: z.array(z.string().max(64)),
+    verified_models: z.array(z.string().max(128)),
+    /**
+     * OpenRouter lists hundreds of models, so the key row carries a count and a
+     * timestamp instead of the list (decision R7). Null for every provider
+     * whose `verified_models` is the whole answer.
+     */
+    synced_model_count: z.number().int().nonnegative().nullable().default(null),
+    models_synced_at: z.iso.datetime().nullable().default(null),
     added_by: z.uuid().nullable(),
     created_at: z.iso.datetime(),
     verified_at: z.iso.datetime().nullable(),
@@ -66,9 +73,27 @@ export type DisabledCode = (typeof DISABLED_CODES)[number];
  * a row is offered iff the catalog does not disable it *and* the workspace
  * holds a usable key for the row's provider.
  */
+export const CATALOG_SOURCES = ['seed', 'provider_list'] as const;
+export type CatalogSource = (typeof CATALOG_SOURCES)[number];
+
 export const catalogEntrySchema = catalogRowSchema
   .extend({
     enabled: z.boolean(),
+    /**
+     * Where the row came from. `seed` rows are the four a migration wrote and
+     * only a migration changes; `provider_list` rows were synced from a
+     * provider's own list endpoint and are rewritten on every sync.
+     */
+    source: z.enum(CATALOG_SOURCES),
+    /** The provider's advertised context window, when it publishes one. */
+    context_length: z.number().int().positive().nullable(),
+    /**
+     * The run engine requires tool calling: a model without it is listed and
+     * greyed rather than hidden, so "why is that model missing" has an answer.
+     */
+    supports_tools: z.boolean(),
+    /** Whether the effort control means anything for this row. */
+    supports_reasoning: z.boolean(),
     disabled_code: z.enum(DISABLED_CODES).nullable(),
     /** Prose. Either the catalog's own reason or the key-state reason. */
     disabled_reason: z.string().max(200).nullable(),
@@ -76,5 +101,18 @@ export const catalogEntrySchema = catalogRowSchema
   .strict();
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
-export const catalogPageSchema = z.object({ models: z.array(catalogEntrySchema) }).strict();
+/**
+ * One page of the catalog. Paged from the moment OpenRouter is a provider: the
+ * list is in the hundreds, and a model menu that downloads all of it on open is
+ * the failure the paging exists to prevent.
+ */
+export const catalogPageSchema = z
+  .object({
+    models: z.array(catalogEntrySchema),
+    /** How many rows matched, before the limit. */
+    total: z.number().int().nonnegative().default(0),
+    /** The `model_id` to pass as `?after=` for the next page, or null. */
+    next_cursor: z.string().max(128).nullable().default(null),
+  })
+  .strict();
 export type CatalogPage = z.infer<typeof catalogPageSchema>;

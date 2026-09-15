@@ -30,8 +30,14 @@ export async function errorFromResponse(response: Response, provider: string): P
   let code = '';
   try {
     const text = await response.text();
-    const parsed = JSON.parse(text) as { error?: { type?: string; code?: string } };
-    const candidate = parsed.error?.type ?? parsed.error?.code ?? '';
+    const parsed = JSON.parse(text) as { error?: { type?: unknown; code?: unknown } };
+    const raw = parsed.error?.type ?? parsed.error?.code ?? '';
+    // A string, and only a string. OpenRouter's `error.code` is the HTTP status
+    // as a *number*, and the regular expression below happily coerced it — so
+    // `redactString` was handed a number and threw a TypeError from inside the
+    // error path, turning every non-2xx from that provider into a crash rather
+    // than a classified ProviderError.
+    const candidate = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : '';
     // Enum-shaped only: anything else is prose we do not want to carry.
     if (/^[a-z0-9_.-]{1,64}$/i.test(candidate)) code = candidate;
   } catch {

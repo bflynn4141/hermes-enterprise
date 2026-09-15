@@ -32,6 +32,25 @@ export interface Credential {
  * union is the three shapes rather than one normalised one, and an adapter
  * refuses a carry it did not produce.
  */
+/**
+ * One element of OpenRouter's `reasoning_details` array.
+ *
+ * Deliberately open: `type` is a documented enum today (`reasoning.text`,
+ * `reasoning.summary`, `reasoning.encrypted`) and will not stay one, and the
+ * contract with the provider is that we send back what we were given. A shape
+ * that could not carry an unknown field would quietly drop it.
+ */
+export interface ReasoningDetail {
+  readonly type?: string;
+  readonly id?: string;
+  readonly format?: string;
+  index?: number;
+  text?: string;
+  summary?: string;
+  readonly data?: string;
+  readonly [key: string]: unknown;
+}
+
 export type ReasoningCarry =
   | {
       readonly kind: 'anthropic_thinking';
@@ -44,6 +63,15 @@ export type ReasoningCarry =
       }[];
     }
   | { readonly kind: 'deepseek_reasoning_content'; readonly content: string }
+  | {
+      /**
+       * OpenRouter: the ordered `reasoning_details` array, replayed unchanged.
+       * The docs are explicit that the whole consecutive sequence must match
+       * what the model produced, so this is a list and not a string.
+       */
+      readonly kind: 'openrouter_reasoning_details';
+      readonly details: readonly ReasoningDetail[];
+    }
   | {
       readonly kind: 'openai_encrypted';
       readonly items: readonly { readonly id?: string; readonly encrypted_content: string }[];

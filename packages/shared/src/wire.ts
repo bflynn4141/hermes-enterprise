@@ -54,7 +54,20 @@ export type ProviderKeyMutation = z.infer<typeof providerKeyMutationSchema>;
 
 /** `POST /w/:ws/provider-keys/:id/verify`. */
 export const providerKeyVerifySchema = z
-  .object({ key_id: uuidSchema, status: z.string().max(32), reason: z.string().max(64) })
+  .object({
+    key_id: uuidSchema,
+    status: z.string().max(32),
+    reason: z.string().max(64),
+    /**
+     * Present only for a provider whose verification also syncs a model list
+     * (OpenRouter today). `count` is how many catalog rows the sync wrote.
+     */
+    synced: z
+      .object({ count: z.number().int().nonnegative(), at: z.iso.datetime() })
+      .strict()
+      .nullable()
+      .default(null),
+  })
   .strict();
 
 /** `DELETE /w/:ws/provider-keys/:id`. */

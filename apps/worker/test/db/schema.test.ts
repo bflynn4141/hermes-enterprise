@@ -93,14 +93,20 @@ describe('enum parity between the shared contract and the database', () => {
 });
 
 describe('the catalog seed', () => {
-  it('matches the shared constant, row for row', async () => {
+  it('still carries the four seeded rows, unchanged', async () => {
+    // Deliberately not "the table has exactly four rows": since 0015 an
+    // OpenRouter sync writes hundreds of `source = 'provider_list'` rows into
+    // the same table, and a count assertion would fail for a workspace that had
+    // used the product. What must stay true is that a sync cannot touch a
+    // seeded row, which is what `sync_openrouter_catalog` enforces and what
+    // this filter asserts.
     const live = await withClient('owner', async (c) => {
       const { rows } = await c.query<{
         model_id: string;
         provider: string;
         transport: string;
         disabled_reason: string | null;
-      }>('SELECT model_id, provider, transport, disabled_reason FROM catalog ORDER BY model_id');
+      }>("SELECT model_id, provider, transport, disabled_reason FROM catalog WHERE source = 'seed' ORDER BY model_id");
       return rows;
     });
     const expected = [...CATALOG_SEED]
@@ -112,6 +118,23 @@ describe('the catalog seed', () => {
       }))
       .sort((a, b) => a.model_id.localeCompare(b.model_id));
     expect(live).toEqual(expected);
+  });
+
+  it('gives every seeded row the defaults 0015 added', async () => {
+    const rows = await withClient('owner', async (c) => {
+      const { rows } = await c.query<{ source: string; supports_tools: boolean; supports_reasoning: boolean }>(
+        "SELECT source, supports_tools, supports_reasoning FROM catalog WHERE source = 'seed'",
+      );
+      return rows;
+    });
+    expect(rows).toHaveLength(CATALOG_SEED.length);
+    for (const row of rows) {
+      expect(row.source).toBe('seed');
+      // Every seeded model calls tools; none of them is offered with an
+      // OpenRouter-style reasoning control.
+      expect(row.supports_tools).toBe(true);
+      expect(row.supports_reasoning).toBe(false);
+    }
   });
 });
 

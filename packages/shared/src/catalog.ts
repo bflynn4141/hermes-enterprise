@@ -10,16 +10,19 @@
 // them; a later price change is a new migration, so the change is reviewable.
 import { z } from 'zod';
 
-export const PROVIDERS = ['deepseek', 'anthropic', 'openai', 'nous_portal'] as const;
+export const PROVIDERS = ['deepseek', 'anthropic', 'openai', 'nous_portal', 'openrouter'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 /** How the harness talks to the model, which decides the replay rules. */
-export const TRANSPORTS = ['deepseek_chat', 'anthropic_messages', 'openai_responses'] as const;
+export const TRANSPORTS = ['deepseek_chat', 'anthropic_messages', 'openai_responses', 'openrouter_chat'] as const;
 export type Transport = (typeof TRANSPORTS)[number];
 
 export const catalogRowSchema = z
   .object({
-    model_id: z.string().min(1).max(64),
+    // 128 rather than 64: an OpenRouter row is `openrouter:<vendor>/<model>`
+    // (decision R1) and the longest ids on the provider list are already past
+    // 64 characters with the prefix.
+    model_id: z.string().min(1).max(128),
     provider: z.enum(PROVIDERS),
     label: z.string().min(1).max(80),
     transport: z.enum(TRANSPORTS),
@@ -108,3 +111,53 @@ export const CATALOG_BY_ID: ReadonlyMap<string, CatalogRow> = new Map(CATALOG_SE
 /** The pilot default. Cheapest transport, and the first replay rule we prove. */
 export const DEFAULT_MODEL_ID = 'deepseek-flash';
 export const DEFAULT_EFFORT = 'high';
+
+// ---------------------------------------------------------------------------
+// OpenRouter (decision R1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Catalog ids for OpenRouter rows are the provider's own id behind one prefix:
+ * `openrouter:anthropic/claude-sonnet-4.6`.
+ *
+ * The prefix is not decoration. `catalog.model_id` is a single global primary
+ * key across every provider, OpenRouter re-exports ids that other providers
+ * also publish (`anthropic/claude-*` today, a bare `gpt-5-5` tomorrow), and
+ * `model_calls.model_id` is read months later by someone asking who was billed.
+ * A row whose id says which account paid for it answers that without a join.
+ *
+ * The adapter strips the prefix before it reaches the wire, so nothing outside
+ * these two functions has to know the convention.
+ */
+export const OPENROUTER_PREFIX = 'openrouter:';
+
+export const openRouterCatalogId = (providerModelId: string): string => `${OPENROUTER_PREFIX}${providerModelId}`;
+
+/** The id OpenRouter itself expects, or null when this is not an OpenRouter row. */
+export function openRouterModelId(catalogModelId: string): string | null {
+  return catalogModelId.startsWith(OPENROUTER_PREFIX) ? catalogModelId.slice(OPENROUTER_PREFIX.length) : null;
+}
+
+/**
+ * The vendor a row is grouped under in the model menu: the segment before the
+ * first slash of the OpenRouter id (`anthropic`, `openai`, `meta-llama`, …).
+ * A row with no slash groups under `other`, which is a real case on OpenRouter.
+ */
+export function vendorPrefix(catalogModelId: string): string {
+  const id = openRouterModelId(catalogModelId);
+  if (id === null) return 'native';
+  const slash = id.indexOf('/');
+  return slash === -1 ? 'other' : id.slice(0, slash);
+}
+
+/**
+ * Our effort names, mapped to the `reasoning.effort` values OpenRouter accepts.
+ * Written once here so the adapter, the sync and a test all agree.
+ * https://openrouter.ai/docs/use-cases/reasoning-tokens
+ */
+export const OPENROUTER_EFFORT_MAP: Readonly<Record<string, string>> = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+};
+export const OPENROUTER_DEFAULT_EFFORT = 'medium';

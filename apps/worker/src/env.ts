@@ -37,6 +37,13 @@ export interface Env {
    */
   MODEL_SCRIPTED?: string;
   /**
+   * '1' serves OpenRouter's `/key` and `/models` from a built-in fixture rather
+   * than the network, so the live scenario can verify a fake key and sync a
+   * catalog offline. Refused outside `ENVIRONMENT=development`; see
+   * `model/openrouter-dev.ts` and the README's OpenRouter section.
+   */
+  OPENROUTER_FIXTURE?: string;
+  /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
    * out in its path. Not a secret, so it is a plain var per environment.

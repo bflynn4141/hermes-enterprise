@@ -40,10 +40,13 @@ import {
   rotateProviderKey,
 } from '../keys/store.js';
 import { logEvent } from '../keys/redact.js';
-import { defaultProbeModel } from '../keys/reverify.js';
+import { defaultProbeModel, needsProbeModel } from '../keys/reverify.js';
+import { syncOpenRouterForKey } from '../keys/catalog-sync.js';
 import { forbiddenCountFor, probeKey, recordVerification, type VerifyInput } from '../keys/verify.js';
-import { loadCatalog } from '../model/catalog.js';
+import { CATALOG_PAGE_DEFAULT, CATALOG_PAGE_MAX, loadCatalogPage } from '../model/catalog.js';
 import { adapterOptions, providerForName } from '../model/index.js';
+import { openRouterFixtureEnabled, openRouterFixtureFetch } from '../model/openrouter-dev.js';
+import type { AdapterOptions } from '../model/types.js';
 import { RouteError, inWorkspace, jsonBody, pathUuid } from './tenant.js';
 
 /**
@@ -112,6 +115,22 @@ function readKey(value: unknown): string {
 const readLabel = (value: unknown): string =>
   typeof value === 'string' ? value.trim().slice(0, MAX_LABEL_LENGTH) : '';
 
+/**
+ * Adapter options for one provider.
+ *
+ * Identical to `adapterOptions(env)` except for the development fixture seam,
+ * which is refused unless `ENVIRONMENT=development` *and* `OPENROUTER_FIXTURE=1`
+ * (see `model/openrouter-dev.ts`). A production build takes the first branch
+ * and the second is unreachable.
+ */
+function providerAdapterOptions(c: Context<{ Bindings: Env }>, provider: string): AdapterOptions {
+  const base = adapterOptions(c.env);
+  if (provider === 'openrouter' && openRouterFixtureEnabled(c.env)) {
+    return { ...base, fetch: openRouterFixtureFetch };
+  }
+  return base;
+}
+
 /** An audit row. Ids and an enum kind; never a key, never a fingerprint. */
 async function auditKeyEvent(
   tx: Tx,
@@ -153,8 +172,9 @@ async function probeAndRecord(
   c: Context<{ Bindings: Env }>,
   plan: ProbePlan,
   userId: string,
-): Promise<{ status: string; models: readonly string[]; reason: string }> {
-  const outcome = await probeKey(providerForName(plan.provider, adapterOptions(c.env)), plan.input);
+): Promise<{ status: string; models: readonly string[]; reason: string; synced: { count: number; at: string } | null }> {
+  const options = providerAdapterOptions(c, plan.provider);
+  const outcome = await probeKey(providerForName(plan.provider, options), plan.input);
 
   await withTenantTransaction(c.env, 'app', { workspaceId: plan.input.workspaceId, userId }, async (tx) => {
     await recordVerification(tx, plan.input, outcome);
@@ -163,7 +183,22 @@ async function probeAndRecord(
     }
   });
 
-  return { status: outcome.status, models: outcome.models, reason: outcome.reason };
+  // OpenRouter's list is the workspace's model menu, so verification is also
+  // the moment to fetch it. Outside the transaction above, and allowed to fail
+  // without taking the verification down with it.
+  let synced: { count: number; at: string } | null = null;
+  if (plan.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
+    const result = await syncOpenRouterForKey(
+      (fn) => withTenantTransaction(c.env, 'app', { workspaceId: plan.input.workspaceId, userId }, fn),
+      options,
+      plan.input.workspaceId,
+      plan.input.keyId,
+      { provider: plan.provider, apiKey: plan.input.apiKey, keyId: plan.input.keyId },
+    );
+    if (result) synced = { count: result.written, at: result.at };
+  }
+
+  return { status: outcome.status, models: outcome.models, reason: outcome.reason, synced };
 }
 
 /**
@@ -225,8 +260,8 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
   });
 
   const verification =
-    prepared.probeModel === null
-      ? { status: 'unverified', models: [] as readonly string[], reason: 'unavailable' }
+    prepared.probeModel === null && needsProbeModel(provider)
+      ? { status: 'unverified', models: [] as readonly string[], reason: 'unavailable', synced: null }
       : await probeAndRecord(
           c,
           {
@@ -268,7 +303,9 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     if (row.revoked_at !== null) throw new RouteError('this key is revoked', 'key_revoked', 409);
 
     const probeModel = await defaultProbeModel(work.tx, row.provider);
-    if (probeModel === null) throw new RouteError('no catalog model for that provider', 'no_model', 409);
+    if (probeModel === null && needsProbeModel(row.provider)) {
+      throw new RouteError('no catalog model for that provider', 'no_model', 409);
+    }
 
     // Decrypted here, inside the transaction, because that is the only place
     // the tenant key and the AAD are both in force. The plaintext lives from
@@ -299,7 +336,7 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     prepared.userId,
   );
 
-  return c.json({ key_id: keyId, status: verification.status, reason: verification.reason });
+  return c.json({ key_id: keyId, status: verification.status, reason: verification.reason, synced: verification.synced });
 }
 
 /**
@@ -346,8 +383,8 @@ export async function rotateKey(c: Context<{ Bindings: Env }>): Promise<Response
   });
 
   const verification =
-    prepared.probeModel === null
-      ? { status: 'unverified', models: [] as readonly string[], reason: 'unavailable' }
+    prepared.probeModel === null && needsProbeModel(prepared.provider)
+      ? { status: 'unverified', models: [] as readonly string[], reason: 'unavailable', synced: null }
       : await probeAndRecord(
           c,
           {
@@ -402,13 +439,33 @@ export async function deleteKey(c: Context<{ Bindings: Env }>): Promise<Response
 }
 
 /**
- * GET /w/:ws/catalog — every model, with this workspace's answer attached.
+ * GET /w/:ws/catalog?q=&provider=&limit=&after= — one page of models, with this
+ * workspace's answer attached.
  *
  * Any member, no step-up: choosing a model is not a decision-grade action, and
  * the response carries no credential — only whether one exists and, if not,
  * what to do about it.
+ *
+ * Paged since OpenRouter (decision R8). It used to return the whole table,
+ * which was four rows; a workspace with a synced OpenRouter key has several
+ * hundred, and the model menu asks for the page it is showing.
  */
 export async function catalog(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const models = await inWorkspace(c, (work) => loadCatalog(work.tx, work.workspaceId));
-  return c.json(catalogPageSchema.parse({ models }));
+  const url = new URL(c.req.url);
+  const limitRaw = Number(url.searchParams.get('limit') ?? CATALOG_PAGE_DEFAULT);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), CATALOG_PAGE_MAX) : CATALOG_PAGE_DEFAULT;
+  const providerParam = url.searchParams.get('provider') ?? undefined;
+  if (providerParam !== undefined && !(PROVIDERS as readonly string[]).includes(providerParam)) {
+    throw new RouteError('provider must be one of the supported providers', 'unknown_provider', 400);
+  }
+
+  const page = await inWorkspace(c, (work) =>
+    loadCatalogPage(work.tx, work.workspaceId, {
+      q: url.searchParams.get('q') ?? undefined,
+      provider: providerParam,
+      after: url.searchParams.get('after') ?? undefined,
+      limit,
+    }),
+  );
+  return c.json(catalogPageSchema.parse(page));
 }

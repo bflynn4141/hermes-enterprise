@@ -20,6 +20,16 @@ import type { KekEnv } from './envelope.js';
 import { logError, logEvent } from './redact.js';
 import { resolveKey } from './store.js';
 import { probeKey, recordVerification } from './verify.js';
+import { syncOpenRouterForKey } from './catalog-sync.js';
+
+/**
+ * Whether this provider's verification probe needs a model to name.
+ *
+ * OpenRouter's is `GET /api/v1/key`, which authenticates without one — and it
+ * has to be, because its catalog rows do not exist until the first sync has
+ * run, so requiring a row would make the first key unverifiable forever.
+ */
+export const needsProbeModel = (provider: string): boolean => provider !== 'openrouter';
 
 /** How often the weekly sweep re-probes a key that is already verified. */
 export const REVERIFY_INTERVAL_DAYS = 7;
@@ -51,9 +61,9 @@ export async function runReverifyJob(
   payload: ReverifyPayload,
   options: AdapterOptions = {},
 ): Promise<ReverifyResult> {
-  const prepared = await run(async (tx): Promise<{ apiKey: string; keyId: string; probeModel: string } | null> => {
+  const prepared = await run(async (tx): Promise<{ apiKey: string; keyId: string; probeModel: string | null } | null> => {
     const probeModel = await defaultProbeModel(tx, payload.provider);
-    if (probeModel === null) return null;
+    if (probeModel === null && needsProbeModel(payload.provider)) return null;
     try {
       const resolved = await resolveKey(tx, env, workspaceId, payload.provider);
       // Rotated away between the enqueue and now: this job is about a row that
@@ -84,6 +94,16 @@ export async function runReverifyJob(
   try {
     const outcome = await probeKey(providerForName(payload.provider, options), input);
     await run((tx) => recordVerification(tx, input, outcome));
+    // The weekly sweep is also the weekly catalog refresh: OpenRouter adds and
+    // retires models continuously, and a price that is a fortnight stale is the
+    // thing `pricing_verified_on` exists to make visible rather than tolerable.
+    if (payload.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
+      await syncOpenRouterForKey(run, options, workspaceId, prepared.keyId, {
+        provider: payload.provider,
+        apiKey: prepared.apiKey,
+        keyId: prepared.keyId,
+      });
+    }
     return { status: outcome.status };
   } catch (error) {
     logError({ at: 'reverify.failed', workspace_id: workspaceId, key_id: payload.key_id, error });

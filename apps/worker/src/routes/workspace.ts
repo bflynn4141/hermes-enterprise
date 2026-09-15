@@ -110,13 +110,21 @@ export async function loadBootstrap(tx: Tx, workspaceId: string, userId: string)
             CASE WHEN c.effort_map IS NULL THEN NULL
                  ELSE ARRAY(SELECT jsonb_object_keys(c.effort_map)) END AS effort,
             c.default_effort,
-            (c.disabled_reason IS NULL AND EXISTS (
+            (c.disabled_reason IS NULL AND c.supports_tools AND EXISTS (
                SELECT 1 FROM workspace_provider_keys k
                 WHERE k.workspace_id = $1 AND k.provider = c.provider
                   AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
              )) AS enabled,
             c.disabled_reason
        FROM catalog c
+      -- Not every row: a workspace with a synced OpenRouter key has hundreds,
+      -- and bootstrap is the payload every page load pays for. The seeded four
+      -- plus whatever this workspace's sessions actually name is enough to
+      -- render every model *label* on screen; the model menu pages the rest
+      -- from GET /w/:ws/catalog when it opens (decision R8).
+      WHERE c.source = 'seed'
+         OR c.model_id = (SELECT default_model_id FROM workspace_settings WHERE workspace_id = $1)
+         OR c.model_id IN (SELECT model_id FROM sessions WHERE workspace_id = $1 AND archived = false)
       ORDER BY c.model_id`,
     [workspaceId],
   );

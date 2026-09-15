@@ -9,6 +9,7 @@ import type { Env } from '../env.js';
 import { AnthropicProvider } from './anthropic.js';
 import { DeepSeekProvider } from './deepseek.js';
 import { OpenAiProvider } from './openai.js';
+import { OpenRouterProvider } from './openrouter.js';
 import { gatewayRouting, type GatewayConfig } from './gateway.js';
 import type { AdapterOptions, ModelProvider } from './types.js';
 
@@ -19,6 +20,8 @@ export * from './gateway.js';
 export { AnthropicProvider } from './anthropic.js';
 export { DeepSeekProvider } from './deepseek.js';
 export { OpenAiProvider } from './openai.js';
+export { OpenRouterProvider, OPENROUTER_BASE, OpenRouterCreditsError } from './openrouter.js';
+export * from './openrouter-catalog.js';
 export { SCRIPTS, ScriptedProvider, type Script, type ScriptName } from './scripted.js';
 export { readSse } from './sse.js';
 
@@ -30,6 +33,8 @@ export function providerForTransport(transport: Transport, options: AdapterOptio
       return new DeepSeekProvider(options);
     case 'openai_responses':
       return new OpenAiProvider(options);
+    case 'openrouter_chat':
+      return new OpenRouterProvider(options);
   }
 }
 
@@ -38,6 +43,7 @@ const VERIFY_TRANSPORT: Readonly<Record<string, Transport>> = {
   anthropic: 'anthropic_messages',
   deepseek: 'deepseek_chat',
   openai: 'openai_responses',
+  openrouter: 'openrouter_chat',
 };
 
 export function providerForName(provider: string, options: AdapterOptions = {}): ModelProvider {

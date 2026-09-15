@@ -92,6 +92,12 @@ export const catalog = pgTable('catalog', {
   pricingPerMillion: jsonb('pricing_per_million').notNull(),
   pricingVerifiedOn: date('pricing_verified_on').notNull(),
   disabledReason: text('disabled_reason'),
+  // 0015. `seed` rows are the four a migration wrote; `provider_list` rows were
+  // synced from a provider's own list endpoint (OpenRouter).
+  source: text('source').notNull().default('seed'),
+  contextLength: integer('context_length'),
+  supportsTools: boolean('supports_tools').notNull().default(true),
+  supportsReasoning: boolean('supports_reasoning').notNull().default(false),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
@@ -682,6 +688,10 @@ export const workspaceProviderKeys = pgTable('workspace_provider_keys', {
   rotatedAt: ts('rotated_at'),
   revokedAt: ts('revoked_at'),
   replacesKeyId: uuid('replaces_key_id'),
+  // 0015. OpenRouter verifies against hundreds of ids; the row carries how many
+  // were synced and when, not the list.
+  syncedModelCount: integer('synced_model_count'),
+  modelsSyncedAt: ts('models_synced_at'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
