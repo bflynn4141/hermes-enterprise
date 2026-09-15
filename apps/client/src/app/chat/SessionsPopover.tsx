@@ -11,7 +11,7 @@ import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { MenuItem, Popover, Tabs } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
-import { visibleSessions } from '../../model/store.js';
+import { sessionRowTitle, visibleSessions } from '../../model/store.js';
 
 function ago(ts: number): string {
   const d = Date.now() - ts;
@@ -114,7 +114,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                 >
                   <span className="sr-title truncate">
                     {session.pinned && <Icon name="pin" size={14} style={{ marginRight: 6, verticalAlign: -2 }} />}
-                    {session.title}
+                    {sessionRowTitle(session)}
                     {session.unread && <span className="unread-dot" aria-label="Unread" />}
                   </span>
                   <span className="sr-status">{session.status}</span>
@@ -129,7 +129,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                     ref={(el) => {
                       anchorFor(session.id).current = el;
                     }}
-                    aria-label={`Session actions for ${session.title}`}
+                    aria-label={`Session actions for ${sessionRowTitle(session)}`}
                     aria-expanded={menuFor === session.id}
                     onClick={() => setMenuFor(menuFor === session.id ? null : session.id)}
                   >

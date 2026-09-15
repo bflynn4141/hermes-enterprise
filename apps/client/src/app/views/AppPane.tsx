@@ -5,7 +5,7 @@
 // entity has not arrived yet renders the 300 ms skeleton and then either the
 // object or its empty copy — never "Request not found" as a first impression.
 // Follow/pin behaviour is unchanged from the demo.
-import { useMemo } from 'react';
+import { useMemo, type RefObject } from 'react';
 import { motion } from 'motion/react';
 import type { RequestEntity } from '@hermes/shared';
 import { useAppState, useDispatch } from '../store-context.js';
@@ -15,6 +15,7 @@ import { AgentOverview, AgentContext, AgentSkills, AgentTraces, TraceDetail, Set
 import { InboxList, RequestReview } from './Inbox.js';
 import { History, Members, Library, Settings } from './Workspace.js';
 import { agentName } from '../selectors.js';
+import { TOGGLE_SHORTCUT } from '../panel.js';
 import { entityData } from '../../model/store.js';
 import type { AppState } from '../../model/store.js';
 
@@ -50,7 +51,7 @@ function describe(state: AppState): [string, string] {
   return ['', ''];
 }
 
-export function AppPane({ narrow, active }: { narrow: boolean; active: boolean }) {
+export function AppPane({ narrow, active, paneRef }: { narrow: boolean; active: boolean; paneRef?: RefObject<HTMLElement | null> }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const app = state.ui.app;
@@ -79,7 +80,10 @@ export function AppPane({ narrow, active }: { narrow: boolean; active: boolean }
   }, [key]);
 
   return (
-    <section className="pane pane-app" data-active={active} aria-label="Application">
+    // `tabIndex={-1}` is not decoration: collapsing the panel with the composer
+    // focused has to put focus somewhere, and "the thing that now owns the
+    // screen" is the only defensible answer.
+    <section ref={paneRef} tabIndex={-1} className="pane pane-app" data-active={active} aria-label="Application">
       <header className="pane-header">
         <span className="breadcrumb">
           <span>{SECTION_LABEL[app.section] ?? 'Agents'}</span>
@@ -97,10 +101,10 @@ export function AppPane({ narrow, active }: { narrow: boolean; active: boolean }
             </button>
           </span>
         )}
-        {state.ui.irisOpen ? (
-          <IconButton name="expand" label={`Hide ${agent}`} onClick={() => dispatch({ type: 'iris/toggle', open: false })} />
+        {state.ui.irisPanel === 'open' ? (
+          <IconButton name="expand" label={`Hide ${agent} ${TOGGLE_SHORTCUT}`} onClick={() => dispatch({ type: 'iris/panel', panel: 'rail' })} />
         ) : (
-          <Button small onClick={() => dispatch({ type: 'iris/toggle', open: true })}>
+          <Button small onClick={() => dispatch({ type: 'iris/panel', panel: 'open' })}>
             <Icon name="open" size={16} /> Open {agent}
           </Button>
         )}

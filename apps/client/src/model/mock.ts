@@ -166,6 +166,10 @@ export function createMockBackend(options: MockOptions = {}) {
             fingerprint_prefix: 'a41b93cd77e0',
             status: keyMode === 'invalid' ? 'invalid' : 'verified',
             verified_models: keyMode === 'invalid' ? [] : ['deepseek-flash'],
+            // Null for every provider whose `verified_models` is the whole
+            // answer; only OpenRouter fills these (shared decision R7).
+            synced_model_count: null,
+            models_synced_at: null,
             added_by: USER,
             created_at: iso(-6000),
             verified_at: keyMode === 'invalid' ? null : iso(-6000),
@@ -628,7 +632,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/skills')) return page(skills);
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
-      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'deepseek', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'deepseek', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
       providerKeys.push(added);
       return json({ key: added, verification: { status: 'unverified', reason: 'unavailable' } }, 201);
     }

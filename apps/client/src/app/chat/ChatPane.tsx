@@ -14,6 +14,7 @@ import { SessionsPopover } from './SessionsPopover.js';
 import { Transcript } from './Transcript.js';
 import { Composer } from './Composer.js';
 import { agentName } from '../selectors.js';
+import { TOGGLE_SHORTCUT } from '../panel.js';
 import type { SessionState } from '../../model/store.js';
 
 export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean }) {
@@ -44,6 +45,16 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
   useEffect(() => {
     closeFind();
   }, [session?.id, closeFind]);
+  // The rail's Sessions icon opens the panel and then asks the header — which
+  // did not exist when it was clicked — to open the popover it owns.
+  useEffect(() => {
+    const open = (): void => {
+      setFocusSearch(false);
+      setSessionsOpen(true);
+    };
+    window.addEventListener('hermes:open-sessions', open);
+    return () => window.removeEventListener('hermes:open-sessions', open);
+  }, []);
 
   if (!session) {
     return (
@@ -130,7 +141,7 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
             </button>
           </span>
         )}
-        <IconButton name="hide" label={`Hide ${agent}`} onClick={() => dispatch({ type: 'iris/toggle', open: false })} />
+        <IconButton name="hide" label={`Hide ${agent} ${TOGGLE_SHORTCUT}`} onClick={() => dispatch({ type: 'iris/panel', panel: 'rail' })} />
       </header>
 
       <div className="pane-subheader">
@@ -161,6 +172,21 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
             </MenuItem>
             <MenuItem small icon="search" onClick={openFind}>
               Find in session
+            </MenuItem>
+            {/* The rail is the ordinary collapse; this is the one that takes
+                the affordance away too, so it lives where the rarely-wanted
+                things live rather than beside Hide. Cursor put the same choice
+                in a "More Actions" ellipsis (cursor.com/changelog/2-3). */}
+            <MenuItem
+              small
+              icon="expand"
+              sub="No rail. Reopen from the app header."
+              onClick={() => {
+                setOverflow(false);
+                dispatch({ type: 'iris/panel', panel: 'hidden' });
+              }}
+            >
+              Hide completely
             </MenuItem>
             <MenuItem
               small

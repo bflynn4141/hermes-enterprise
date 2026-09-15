@@ -19,7 +19,8 @@ import { Glass, Icon } from './ui/icons.js';
 import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
 import { memberCounts } from './selectors.js';
 import { DEV_USERS } from '../model/auth.js';
-import { visibleSessions } from '../model/store.js';
+import { sessionRowTitle, sessionStatusLabel, visibleSessions, type SessionState } from '../model/store.js';
+import { requestComposerFocus } from './panel.js';
 
 const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'agents', label: 'Agents', icon: 'iris', ref: OV },
@@ -50,7 +51,19 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
     ...(section.key === 'inbox' && state.counts.inbox ? { count: String(state.counts.inbox) } : {}),
   }));
 
-  const recents = visibleSessions(state).map((session) => ({ id: session.id, label: session.title }));
+  // The status label belongs on the row — the demo showed it and people steer by
+  // it — and `SidebarNav` renders `label` and nothing else: `prompt` reaches
+  // `onPick` and is never drawn, and there is no slot for a second span. So the
+  // status is part of the label, and `activeTitle` is decorated the same way,
+  // because the library decides which row is current by comparing those two
+  // strings. The library is not ours to edit (decision C35).
+  const rowLabel = (session: SessionState): string => {
+    const status = sessionStatusLabel(session);
+    return status ? `${sessionRowTitle(session)} · ${status}` : sessionRowTitle(session);
+  };
+  const sessions = visibleSessions(state);
+  const recents = sessions.map((session) => ({ id: session.id, label: rowLabel(session) }));
+  const active = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
 
   return (
     <aside className="sidebar hermes-ui" aria-label="Workspace navigation" data-collapsed={collapsed}>
@@ -59,7 +72,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}
         navItems={navItems}
         activeNav={state.ui.app.section}
-        activeTitle={state.activeSessionId ? state.sessions[state.activeSessionId]?.title ?? null : null}
+        activeTitle={active ? rowLabel(active) : null}
         recents={recents}
         footerLabel={`${state.user.name || 'You'} · ${counts.joined} joined`}
         onNavigate={(key) => {
@@ -69,7 +82,15 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
           if (key === 'inbox') dispatch({ type: 'nav/tab', key: 'inboxTab', value: 'needs-review' });
         }}
         onPick={(id) => dispatch({ type: 'session/select', id })}
-        onNewChat={() => void adapter.createSession()}
+        onNewChat={() => {
+          // One control, three effects: reuse-or-create (the adapter's rule),
+          // open the panel, and put the cursor in the composer. A New session
+          // that leaves you looking at a collapsed rail is a New session you
+          // have to click twice.
+          dispatch({ type: 'iris/panel', panel: 'open' });
+          requestComposerFocus();
+          void adapter.createSession();
+        }}
         onWorkspaceAction={(action) => {
           if (action === 'settings') go(SETTINGS('Organization'));
           if (action === 'members') go(MEMBERS);

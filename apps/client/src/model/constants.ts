@@ -80,3 +80,12 @@ export const AGENT_TABS = [
 export const draftsKey = (workspaceId: string, userId: string) => `hermes:drafts:${workspaceId}:${userId}`;
 export const activeSessionKey = (workspaceId: string) => `hermes:active-session:${workspaceId}`;
 export const STEPUP_KEY = 'hermes:stepup';
+/**
+ * The Iris panel's state and its remembered width, per workspace and user —
+ * the same scoping as drafts, for the same reason: two people on one machine
+ * are two people, and a width is a preference, not workspace data.
+ */
+export const irisPanelKey = (workspaceId: string, userId: string) => `hermes:iris-panel:${workspaceId}:${userId}`;
+export const irisWidthKey = (workspaceId: string, userId: string) => `hermes:iris-width:${workspaceId}:${userId}`;
+/** What the boolean used to be written under. Read once, then removed (decision C33). */
+export const legacyIrisOpenKey = (workspaceId: string, userId: string) => `hermes:iris-open:${workspaceId}:${userId}`;

@@ -126,12 +126,51 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
               live-m5a.spec.ts    M1–M8: the tabs that got routes, and the
                                   flows that got them second
               live-screens.spec.ts the live screenshots
+              live-panel.spec.ts  N1–N7: the panel's three states and the
+                                  sessions list, against the live stack
+              panel-screens.spec.ts every page × three panel states × two widths
+              panel-sidebar.spec.ts the sidebar's list, before and after C34
 scripts/      e2e-live.mjs      boots the stack and runs the live suite
               live-fixture.mjs  a fresh workspace, and the step-up re-stamp
               dev-step-up.mjs   the step-up re-stamp on its own
 qa/           one screenshot per screen, from e2e/qa-screens.spec.ts
 qa/live/      the same screens against the real Worker
+qa/panel/     every page in open, rail and hidden at 1840 and 1440
 ```
+
+## Panel
+
+The Iris pane has three states, not two (decision C33). Collapsing it never
+interrupts a run: the rail keeps reporting one.
+
+| State | What it is |
+|---|---|
+| `open` | The chat pane at the remembered width. Default 800 px at ≥ 1840 — the demo's 240 + 800 + 800 — and an equal split of the work area below it. Min 420 px, max 60 % of the work area. |
+| `rail` | 56 px between the navigation and the app: the Iris mark in its live run state, an unread badge for what arrived while it was collapsed, New session and Sessions. Not shown below 1000 px, where the Chat/App switch takes over. |
+| `hidden` | No rail. The app header's "Open Iris" is the way back. |
+
+| Keys and controls | What happens |
+|---|---|
+| **⌘L** / **Ctrl+L** | Toggles `open` ↔ `rail` from anywhere in the shell. Ignored while typing in any input *except* the composer, where it still collapses and hands focus to the app pane. Reopening puts the cursor back in the composer. |
+| Hide, in the chat header | → `rail` |
+| **Hide completely**, in the session options menu (•••) | → `hidden` |
+| Open Iris, in the app header · the rail's mark | → `open`, cursor in the composer |
+| Drag the 6 px boundary | Resizes; the width is remembered per workspace and user in `localStorage`. |
+| **←** / **→** on the boundary | ± 24 px. It is a focusable `role="separator"`. |
+| **Home** / **End** | Minimum / maximum. |
+| **Enter** or double-click | Back to the default for this window width — "nothing remembered", not "800". |
+
+Follow and pin are unchanged by any of it: while collapsed, `run.focus` still
+moves the app pane when following, and a decision receipt still counts on the
+rail's badge.
+
+Sessions behave differently too (decision C34). **New session** reuses a blank
+session rather than creating a second one, opens the panel and focuses the
+composer; a blank session is listed only while it is the one you are in; the
+first turn names the session from its first six words and the finished run
+renames it to the object it produced ("Ada Ling · application"); and a manual
+rename wins permanently. `qa/panel/sidebar-before.png` and `sidebar-after.png`
+are the same three clicks on either side of that change.
 
 ## The rules this package keeps
 
@@ -269,6 +308,7 @@ all of this — seven and eleven scenarios on top of the fourteen in
 | `live-findings.spec.ts` | F1 `/w/:ws` boots the app · F2 create a workspace, accept an invitation · F3 `request.created` on the workspace stream · F8 Traces lists and opens a run · P8/P9 through the scripted scenarios |
 | `live-m5a.spec.ts` | M1 the trace detail after a run · M2 an instruction accepted by an Admin and refused to a Member · M3 the context write that unparks a waiting run · M4 usage after a run, with the server's disclaimer · M5 create-workspace and accept-invite through the stepper, plus the picker · M6 workspace delete and undelete · M7 every empty state on a fresh workspace, both seats · M8 "Signed out" with the draft kept, and "Reconnecting…" |
 | `live-screens.spec.ts` | the twenty-nine screenshots in `qa/live/` |
+| `live-panel.spec.ts` | N1 ⌘L and where focus goes · N2 the drag handle, its clamp and its reload · N3 a run that completes behind the rail, and the badge · N4 every page in the rail state · N5 New session twice is one session · N6 the first turn names the session and the run renames it · N7 a manual rename wins |
 
 ### The library, adopted and not
 

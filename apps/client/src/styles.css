@@ -36,10 +36,59 @@ h1, h2, h3, h4, p { margin: 0; }
 .col { display: flex; flex-direction: column; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- shell ---------- */
-.shell { display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr) minmax(0, 1fr); height: 100%; width: 100%; overflow: hidden; }
-.shell[data-iris="closed"] { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
+/* ---------- shell ----------
+   The grid columns are written by `Shell.tsx` now, because the middle one is a
+   number a person can drag (decision C33). What is left here is the fallback
+   for a first paint before React runs, and everything the columns do not say. */
+.shell { position: relative; display: grid; grid-template-columns: var(--nav-w) var(--iris-w) minmax(0, 1fr); height: 100%; width: 100%; overflow: hidden; }
+.shell[data-iris="hidden"] { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
+.shell[data-iris="rail"] { grid-template-columns: var(--nav-w) 56px minmax(0, 1fr); }
 .shell.is-narrow { grid-template-columns: var(--nav-w) minmax(0, 1fr); }
+.pane-app:focus-visible { outline-offset: -3px; }
+
+/* ---------- the Iris rail ---------- */
+.iris-rail { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; background: var(--conversation); border-right: 1px solid var(--line); min-width: 0; overflow: hidden; }
+.rail-mark { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; }
+.rail-mark:hover { background: rgba(255,255,255,.07); }
+.rail-badge { position: absolute; top: -1px; right: -1px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--action); color: #fff; font-size: 11px; line-height: 18px; font-weight: 500; text-align: center; box-shadow: 0 0 0 2px var(--ink); }
+.rail-rule { width: 22px; height: 1px; background: var(--line); margin: 2px 0; }
+.rail-btn { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: var(--muted); }
+.rail-btn:hover { background: rgba(255,255,255,.07); color: var(--body); }
+
+/* ---------- the chat/app boundary ----------
+   6 px of hit area centred on the grid line, and 1 px of it visible on hover or
+   focus. `touch-action: none` is what makes `setPointerCapture` work on a
+   trackpad without the browser claiming the gesture as a scroll. */
+.panel-resizer { position: absolute; top: 0; bottom: 0; width: 6px; z-index: 6; cursor: col-resize; touch-action: none; background: transparent; }
+.panel-resizer::after { content: ""; position: absolute; inset: 0 2px; background: transparent; transition: background var(--dur-reveal) var(--ease-out); }
+.panel-resizer:hover::after, .panel-resizer:focus-visible::after { background: var(--action-hover); }
+.panel-resizer:focus-visible { outline: 2px solid #c6c6ff; outline-offset: 0; border-radius: 3px; }
+body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* ---------- sidebar session rows ----------
+   The row is one text node — `SidebarNav` renders `label` and nothing else — so
+   the status rides in the label, and the row is allowed two lines rather than
+   truncating the half that changes. A person scanning this list is scanning for
+   "Working", and a row that ellipsises exactly that word is a row that answers
+   the wrong question (decision C35). */
+.sidebar .sidebar-row { height: auto; min-height: 32px; align-items: flex-start; padding-block: 5px; }
+.sidebar .sidebar-row > span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: clip; font-size: 13.5px; line-height: 17px; }
+
+/* ---------- the app pane at full width ----------
+   Collapsing Iris hands the app 1544 px at 1840, and a dashboard at 1544 px is
+   not a better dashboard — it is the same rows with a person's name at one edge
+   and the button that acts on it at the other. So the pane keeps a measure and
+   grows its gutters instead, on the header, the subheader and the body together
+   so nothing drifts out of line with anything else (decision C33).
+
+   `max()` is what makes this cost nothing in the open layout: at an 800 px pane
+   the second term is negative and the ordinary 28 px padding wins, so this rule
+   only ever fires where there is spare width. */
+.pane-app { --app-measure: 1180px; }
+.pane-app .pane-header,
+.pane-app .pane-subheader,
+.pane-app .app-pane-body,
+.pane-app .app-body { padding-inline: max(28px, calc((100% - var(--app-measure)) / 2)); }
 .shell.is-narrow .pane { display: none; }
 .shell.is-narrow .pane[data-active="true"] { display: flex; }
 .shell.is-narrow .pane-iris[data-active="true"] { border-right: 0; }

@@ -16,6 +16,7 @@ import { Glass, Icon } from '../ui/icons.js';
 import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
+import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
 import { ModelMenu } from './ModelMenu.js';
 import type { SessionState } from '../../model/store.js';
 
@@ -48,6 +49,31 @@ export function Composer({ session }: { session: SessionState }) {
     el.style.height = 'auto';
     el.style.height = `${Math.min(208, el.scrollHeight)}px`;
   }, [text, session.id]);
+
+  // Reopening the panel — or New session, which opens it and then creates one —
+  // puts the cursor here. The shell asks by event rather than by ref, so nothing
+  // above the composer has to know it exists; and the request is re-checked when
+  // the session changes, because a New session's composer is not on screen at
+  // the moment the request is made.
+  //
+  // The request is only *consumed* when it can be honoured: with no verified
+  // provider key the textarea is disabled and cannot take focus, and burning
+  // the request on an element that refuses it would mean the cursor never
+  // arrives once the key rows land a moment later.
+  useEffect(() => {
+    const focus = (): void => {
+      const el = textarea.current;
+      if (!el || el.disabled) return;
+      if (takeComposerFocus()) el.focus();
+    };
+    window.addEventListener(FOCUS_COMPOSER, focus);
+    return () => window.removeEventListener(FOCUS_COMPOSER, focus);
+  }, []);
+  useEffect(() => {
+    const el = textarea.current;
+    if (!el || el.disabled) return;
+    if (takeComposerFocus()) el.focus();
+  }, [session.id, blocked]);
 
   const send = (): void => {
     if (!text.trim() || blocked) return;
@@ -108,6 +134,8 @@ export function Composer({ session }: { session: SessionState }) {
           id={`composer-${session.id}`}
           ref={textarea}
           rows={1}
+          // The one input ⌘L is allowed to fire inside; `panel.ts` reads it.
+          data-composer="true"
           value={text}
           disabled={blocked}
           placeholder={blocked ? EMPTY.noKey : working ? 'Guide this run or queue a follow-up…' : `Message ${agent}…`}

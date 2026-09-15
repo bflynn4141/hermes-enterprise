@@ -118,6 +118,16 @@ export interface SessionState {
   pending: boolean;
   lastActivity: number;
   carried: { from: string; context: string } | null;
+  /**
+   * Whether this title is the client's guess or the person's word (C34).
+   *
+   * A session starts `auto`: the first turn names it, and the run that follows
+   * may rename it again once it knows what it was about. A manual rename moves
+   * it to `manual` and nothing ever overwrites it again — a title somebody
+   * typed is a decision, and a product that quietly undoes it is a product
+   * people stop trusting with names.
+   */
+  titleSource: 'auto' | 'manual';
 }
 
 export type LinkStatus = 'idle' | 'connecting' | 'open' | 'replaying' | 'reconnecting' | 'signed-out' | 'evicted';
@@ -127,8 +137,27 @@ export interface LinkState {
   sinceMs: number;
 }
 
+/**
+ * The Iris panel has three states, not two (decision C33).
+ *
+ * `open` is the chat pane at `irisWidth`; `rail` is the 56 px strip that keeps
+ * the mark, its live run state and the unread count on screen; `hidden` gives
+ * the app the whole work area and leaves only the app header's "Open Iris".
+ * Nothing about a run depends on any of them — collapsing is a layout change.
+ */
+export type IrisPanel = 'open' | 'rail' | 'hidden';
+
 export interface UiState {
-  irisOpen: boolean;
+  irisPanel: IrisPanel;
+  /**
+   * The remembered chat width in px, or `null` for "nobody has dragged it" —
+   * which is not the same as 800. A null width follows the demo's rule (800 at
+   * ≥1840, an equal split of the work area below it); a number overrides it and
+   * is persisted per workspace and user.
+   */
+  irisWidth: number | null;
+  /** Iris messages and decision receipts that arrived while not `open`. */
+  irisUnread: number;
   follow: boolean;
   app: Ref;
   inboxTab: string;
@@ -174,6 +203,46 @@ export function emptyEntities(): EntityCache {
 
 export const OVERVIEW: Ref = { section: 'agents', view: 'overview' };
 
+// ---------------------------------------------------------------------------
+// Panel geometry
+//
+// One place, because four callers need the same numbers and a resize handle
+// that clamps differently from the reducer is a handle that can be dragged into
+// a state the reducer then silently corrects.
+// ---------------------------------------------------------------------------
+
+/** The demo's 1840 layout: 240 nav + 800 Iris + 800 app. */
+export const IRIS_DEFAULT_WIDTH = 800;
+export const IRIS_MIN_WIDTH = 420;
+export const IRIS_RAIL_WIDTH = 56;
+export const NAV_WIDTH = 240;
+export const NAV_WIDTH_COLLAPSED = 76;
+export const WIDE_BREAKPOINT = 1840;
+export const NAV_COLLAPSE_BREAKPOINT = 1180;
+export const PANE_SWITCH_BREAKPOINT = 1000;
+
+export const navWidthFor = (windowWidth: number): number => (windowWidth < NAV_COLLAPSE_BREAKPOINT ? NAV_WIDTH_COLLAPSED : NAV_WIDTH);
+
+/** The work area is everything the navigation does not take. */
+export const workAreaFor = (windowWidth: number): number => Math.max(0, windowWidth - navWidthFor(windowWidth));
+
+/** 60 percent of the work area, but never below the minimum: a 700 px window has no valid range otherwise. */
+export const irisMaxWidth = (workArea: number): number => Math.max(IRIS_MIN_WIDTH, Math.round(workArea * 0.6));
+
+export const clampIrisWidth = (width: number, workArea: number): number => Math.min(Math.max(Math.round(width), IRIS_MIN_WIDTH), irisMaxWidth(workArea));
+
+/**
+ * The width with nothing remembered: 800 at 1840 and wider, an equal split of
+ * the work area below it — the demo's rule, and the reason `irisWidth` is
+ * nullable rather than seeded with 800.
+ */
+export const defaultIrisWidth = (windowWidth: number): number =>
+  clampIrisWidth(windowWidth >= WIDE_BREAKPOINT ? IRIS_DEFAULT_WIDTH : Math.round(workAreaFor(windowWidth) / 2), workAreaFor(windowWidth));
+
+/** What the chat pane is actually given, remembered or not. */
+export const resolveIrisWidth = (width: number | null, windowWidth: number): number =>
+  width === null ? defaultIrisWidth(windowWidth) : clampIrisWidth(width, workAreaFor(windowWidth));
+
 export function initialState(): AppState {
   return {
     workspace: { id: '', name: '', role: 'member', jurisdiction: null },
@@ -188,7 +257,9 @@ export function initialState(): AppState {
     cursors: { session: {}, workspace: 0n },
     connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0 },
     ui: {
-      irisOpen: true,
+      irisPanel: 'open',
+      irisWidth: null,
+      irisUnread: 0,
       follow: true,
       app: OVERVIEW,
       inboxTab: 'needs-review',
@@ -231,7 +302,81 @@ export function sessionFrom(row: Session): SessionState {
     pending: false,
     lastActivity: row.last_activity_at ? Date.parse(row.last_activity_at) : Date.now(),
     carried: null,
+    // A row from the server carries no provenance, so anything that is not
+    // still the placeholder is treated as somebody's: refining a title a person
+    // may have set two weeks ago is the failure mode worth avoiding.
+    titleSource: row.title === DEFAULT_SESSION_TITLE ? 'auto' : 'manual',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session titles (decision C34)
+// ---------------------------------------------------------------------------
+
+/** What `POST /w/:ws/sessions` names a session with nothing to go on. */
+export const DEFAULT_SESSION_TITLE = 'New session';
+
+/**
+ * A session nobody has used: no messages, no run, and still the placeholder
+ * title. These are not listed — one blank session is the one you are in, and
+ * three of them are a bug that looks like a list of identical rows.
+ */
+export const isBlankSession = (s: SessionState): boolean =>
+  s.messages.length === 0 && s.run === null && (s.title === DEFAULT_SESSION_TITLE || s.title.trim() === '');
+
+/**
+ * The word a session row shows beside its title.
+ *
+ * `v_session_status` is the *run's* status — `COALESCE(r.status, 'idle')` — so
+ * what reaches the client is `idle`/`working`/`waiting`/`stopped`/`completed`,
+ * not the demo's vocabulary. These are the demo's words for the same five
+ * facts. Anything else the server sends is passed through: a server that writes
+ * a better sentence than this table should win, and a screen renders the
+ * server's sentence rather than its own.
+ *
+ * A session nobody has used gets no word at all — "Ready" on a blank session is
+ * a status about nothing.
+ */
+const RUN_WORDS: Record<string, string> = {
+  idle: 'Ready',
+  completed: 'Ready',
+  working: 'Working',
+  waiting: 'Waiting',
+  stopping: 'Stopping',
+  stopped: 'Stopped',
+  error: 'Stopped',
+  Empty: '',
+};
+
+/**
+ * What a *list* calls a session that has no name yet.
+ *
+ * Not "New session": that is the name of the control that creates one, and two
+ * buttons a keystroke apart with the same accessible name is a sidebar where
+ * "New session" means two different things — which is how the three identical
+ * rows read in the first place (decision C34). The stored title is untouched;
+ * this is what the row says until the first turn names it.
+ */
+export const UNTITLED_SESSION = 'Untitled session';
+
+export const sessionRowTitle = (session: SessionState): string => (isBlankSession(session) ? UNTITLED_SESSION : session.title);
+
+export function sessionStatusLabel(session: SessionState): string {
+  if (isBlankSession(session)) return '';
+  const status = session.status?.trim() ?? '';
+  if (!status) return '';
+  return RUN_WORDS[status] ?? status;
+}
+
+/** The first six words of the first turn, which is what the session was about. */
+export function autoTitleFrom(text: string): string | null {
+  const words = text.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+  if (words.length === 0) return null;
+  let title = words.slice(0, 6).join(' ');
+  // A six-word title can still be 200 characters if somebody pastes a URL.
+  if (title.length > 60) title = `${title.slice(0, 57).trimEnd()}\u2026`;
+  // Trailing punctuation reads as a truncation that is not there.
+  return title.replace(/[\s.,;:!?\u2014-]+$/u, '') || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +390,9 @@ export type Action =
   | { type: 'follow/resume' }
   | { type: 'iris/focus'; sessionId: string; object: Ref }
   | { type: 'iris/toggle'; open?: boolean }
+  | { type: 'iris/panel'; panel: IrisPanel }
+  | { type: 'iris/width'; width: number | null; workArea?: number }
+  | { type: 'iris/unread'; delta?: number; clear?: boolean }
   | { type: 'ui/set'; patch: Partial<UiState> }
   | { type: 'session/create'; id: string; title?: string; mode?: string; runtime?: 'cloud' | 'local'; context?: { label: string; ref: Ref | null }; carried?: { from: string; context: string }; model?: string; effort?: string | null; pending?: boolean }
   | { type: 'session/reconcile'; localId: string; serverId: string }
@@ -252,6 +400,7 @@ export type Action =
   | { type: 'session/upsert'; session: Session }
   | { type: 'session/select'; id: string }
   | { type: 'session/rename'; id: string; title: string }
+  | { type: 'session/auto-title'; id: string; title: string }
   | { type: 'session/pin'; id: string; pinned?: boolean }
   | { type: 'session/archive'; id: string; archived?: boolean }
   | { type: 'session/share'; id: string; share: { id: string; url: string | null; audience: string } | null }
@@ -324,12 +473,26 @@ export const visibleSessions = (s: AppState, archived = false): SessionState[] =
   s.sessionOrder
     .map((id, order) => ({ session: s.sessions[id], order }))
     .filter((row): row is { session: SessionState; order: number } => !!row.session && row.session.archived === archived)
+    // The one blank session that is listed is the one you are looking at.
+    .filter((row) => !isBlankSession(row.session) || row.session.id === s.activeSessionId)
     .sort((a, b) => Number(b.session.pinned) - Number(a.session.pinned) || a.order - b.order)
     .map((row) => row.session);
 
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
+
+/**
+ * The rail's badge counts what a person would have read had the panel been open
+ * (decision C33): Iris's own messages, in the session they are looking at, while
+ * they could not see them. `before` is the state the decision is made against,
+ * so a replay or a re-delivery — which the caller has already detected — never
+ * counts twice.
+ */
+function countUnread(before: AppState, next: AppState, sessionId: string, role: string): AppState {
+  if (before.ui.irisPanel === 'open' || role !== 'iris' || sessionId !== before.activeSessionId) return next;
+  return { ...next, ui: { ...next.ui, irisUnread: next.ui.irisUnread + 1 } };
+}
 
 function withSession(state: AppState, id: string, fn: (s: SessionState) => SessionState): AppState {
   const session = state.sessions[id];
@@ -389,8 +552,25 @@ export function reduce(state: AppState, action: Action): AppState {
       if (state.ui.follow && action.sessionId === state.activeSessionId) return { ...next, ui: { ...next.ui, app: action.object } };
       return next;
     }
-    case 'iris/toggle':
-      return { ...state, ui: { ...state.ui, irisOpen: action.open ?? !state.ui.irisOpen } };
+    // `iris/toggle` predates the three states and every existing caller still
+    // dispatches it, so it keeps its meaning: `open: true` opens, `open: false`
+    // is the *rail* rather than nothing (the affordance to come back is the
+    // point), and no argument is open↔rail. From `hidden` it can only open —
+    // hiding completely is a deliberate choice and a toggle does not undo it
+    // halfway.
+    case 'iris/toggle': {
+      const next: IrisPanel = action.open === true ? 'open' : action.open === false ? 'rail' : state.ui.irisPanel === 'open' ? 'rail' : 'open';
+      return { ...state, ui: { ...state.ui, irisPanel: next, irisUnread: next === 'open' ? 0 : state.ui.irisUnread } };
+    }
+    case 'iris/panel':
+      return { ...state, ui: { ...state.ui, irisPanel: action.panel, irisUnread: action.panel === 'open' ? 0 : state.ui.irisUnread } };
+    case 'iris/width':
+      return {
+        ...state,
+        ui: { ...state.ui, irisWidth: action.width === null ? null : clampIrisWidth(action.width, action.workArea ?? workAreaFor(WIDE_BREAKPOINT)) },
+      };
+    case 'iris/unread':
+      return { ...state, ui: { ...state.ui, irisUnread: action.clear ? 0 : state.ui.irisUnread + (action.delta ?? 1) } };
     case 'ui/set':
       return { ...state, ui: { ...state.ui, ...action.patch } };
 
@@ -398,13 +578,14 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'session/create': {
       const session: SessionState = {
         id: action.id,
-        title: action.title ?? 'New session',
+        title: action.title ?? DEFAULT_SESSION_TITLE,
         subtitle: null,
         mode: action.mode ?? 'ask',
         model: action.model ?? String(state.settings.default_model_id ?? ''),
         effort: action.effort ?? (state.settings.default_effort as string | null) ?? null,
         runtime: action.runtime ?? ((state.settings.default_runtime as 'cloud' | 'local') ?? 'cloud'),
         pinned: false,
+        titleSource: 'auto',
         archived: false,
         status: 'Empty',
         messages: [],
@@ -458,7 +639,24 @@ export function reduce(state: AppState, action: Action): AppState {
       const existing = state.sessions[action.session.id];
       const fresh = sessionFrom(action.session);
       const merged: SessionState = existing
-        ? { ...existing, ...fresh, messages: existing.messages, oldestSeq: existing.oldestSeq, hasEarlier: existing.hasEarlier, draft: existing.draft, run: existing.run, stream: existing.stream, scrollTop: existing.scrollTop, unread: existing.unread }
+        ? {
+            ...existing,
+            ...fresh,
+            messages: existing.messages,
+            oldestSeq: existing.oldestSeq,
+            hasEarlier: existing.hasEarlier,
+            draft: existing.draft,
+            run: existing.run,
+            stream: existing.stream,
+            scrollTop: existing.scrollTop,
+            unread: existing.unread,
+            // Two title races, both lost without this (decision C34). A manual
+            // rename is sticky: the row that re-delivers the old title must not
+            // undo it. And a local auto-title beats the server's placeholder,
+            // because the PATCH that carries it may not have landed yet.
+            titleSource: existing.titleSource === 'manual' ? 'manual' : fresh.titleSource,
+            title: existing.titleSource === 'manual' || fresh.title === DEFAULT_SESSION_TITLE ? existing.title : fresh.title,
+          }
         : fresh;
       return {
         ...state,
@@ -477,7 +675,10 @@ export function reduce(state: AppState, action: Action): AppState {
       };
     }
     case 'session/rename':
-      return withSession(state, action.id, (s) => ({ ...s, title: action.title.trim() || s.title }));
+      return withSession(state, action.id, (s) => ({ ...s, title: action.title.trim() || s.title, titleSource: 'manual' }));
+    // A rename is a person's word: it lands, and it turns auto-titling off.
+    case 'session/auto-title':
+      return withSession(state, action.id, (s) => (s.titleSource === 'manual' ? s : { ...s, title: action.title }));
     case 'session/pin':
       return withSession(state, action.id, (s) => ({ ...s, pinned: action.pinned ?? !s.pinned }));
     case 'session/archive': {
@@ -520,9 +721,10 @@ export function reduce(state: AppState, action: Action): AppState {
       return withSession(state, action.id, (s) => ({ ...s, scrollTop: action.scrollTop }));
 
     // --- messages ---
-    case 'message/add':
-      return withSession(state, action.sessionId, (s) =>
-        s.messages.some((m) => m.id === action.message.id)
+    case 'message/add': {
+      const duplicate = state.sessions[action.sessionId]?.messages.some((m) => m.id === action.message.id) ?? false;
+      const next = withSession(state, action.sessionId, (s) =>
+        duplicate
           ? s
           : {
               ...s,
@@ -532,6 +734,8 @@ export function reduce(state: AppState, action: Action): AppState {
               messages: [...s.messages, action.message],
             },
       );
+      return duplicate ? next : countUnread(state, next, action.sessionId, action.message.role);
+    }
     case 'message/update':
       return withSession(state, action.sessionId, (s) => ({ ...s, messages: s.messages.map((m) => (m.id === action.id ? { ...m, ...action.patch } : m)) }));
     case 'message/prepend':
@@ -590,15 +794,19 @@ export function reduce(state: AppState, action: Action): AppState {
         if (action.stepAttempt < current.stepAttempt) return s;
         return { ...s, stream: { ...current, text: current.text + action.delta } };
       });
-    case 'stream/final':
-      return withSession(state, action.sessionId, (s) => ({
+    // A streamed reply ends here rather than at `message/add`, and this is the
+    // path almost every Iris message actually takes — so the rail's badge has to
+    // count it, or a collapsed panel would sit at zero through a whole run.
+    case 'stream/final': {
+      const seen = state.sessions[action.sessionId]?.messages.some((m) => m.id === action.message.id) ?? false;
+      const next = withSession(state, action.sessionId, (s) => ({
         ...s,
         stream: null,
         lastActivity: Date.now(),
-        messages: s.messages.some((m) => m.id === action.message.id)
-          ? s.messages.map((m) => (m.id === action.message.id ? action.message : m))
-          : [...s.messages, action.message],
+        messages: seen ? s.messages.map((m) => (m.id === action.message.id ? action.message : m)) : [...s.messages, action.message],
       }));
+      return seen ? next : countUnread(state, next, action.sessionId, action.message.role);
+    }
 
     // --- entity cache ---
     case 'entity/upsert':
@@ -857,6 +1065,9 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // and refetched the next time the screen asks for it.
       out.push({ type: 'list/invalidate', key: 'history' });
       out.push({ type: 'counts/set', patch: { inbox: Math.max(0, state.counts.inbox - 1), decisions: state.counts.decisions + 1 } });
+      // A receipt is the one thing in this product a person is asked to check,
+      // so it counts on the rail like a message does (decision C33).
+      if (state.ui.irisPanel !== 'open') out.push({ type: 'iris/unread', delta: 1 });
       break;
     }
     case 'entity.updated': {
