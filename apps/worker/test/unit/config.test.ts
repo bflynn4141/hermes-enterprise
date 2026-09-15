@@ -138,6 +138,21 @@ describe('wrangler.jsonc', () => {
     }
   });
 
+  it('offers OpenRouter and nothing else, in all three environments', () => {
+    // Development is `config.vars`; staging and production are the two in
+    // `env`. The variable is what `model/allowed.ts` reads, and an environment
+    // that lost it would be the one place the other three adapters became
+    // reachable from a route (decision R12). A missing value fails closed in
+    // code, but an environment that disagrees with the other two is a
+    // deployment nobody meant to make.
+    expect((config.vars as { ALLOWED_PROVIDERS: string }).ALLOWED_PROVIDERS).toBe('openrouter');
+    for (const [name, scope] of Object.entries(envs)) {
+      expect((scope.vars as { ALLOWED_PROVIDERS: string }).ALLOWED_PROVIDERS, `${name} offers other providers`).toBe(
+        'openrouter',
+      );
+    }
+  });
+
   it('uses fake auth only in local development', () => {
     expect((config.vars as { AUTH_MODE: string }).AUTH_MODE).toBe('fake');
     for (const [name, scope] of Object.entries(envs)) {

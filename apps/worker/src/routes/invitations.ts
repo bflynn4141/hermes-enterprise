@@ -23,6 +23,7 @@ import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
+import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
 
 export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -119,7 +120,7 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
     // The whole workspace, from inside the transaction that admitted them, so
     // the shell renders without a second round trip and without a window in
     // which they are a member of a workspace that reads as missing.
-    return bootstrapSchema.parse(await loadBootstrap(tx, workspaceId, session.userId));
+    return bootstrapSchema.parse(await loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)));
   });
 
   return c.json(result, 200);

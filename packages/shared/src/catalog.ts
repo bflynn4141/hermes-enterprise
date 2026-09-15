@@ -108,8 +108,24 @@ export const CATALOG_SEED: readonly CatalogRow[] = [
 
 export const CATALOG_BY_ID: ReadonlyMap<string, CatalogRow> = new Map(CATALOG_SEED.map((row) => [row.model_id, row]));
 
-/** The pilot default. Cheapest transport, and the first replay rule we prove. */
-export const DEFAULT_MODEL_ID = 'deepseek-flash';
+/**
+ * The seeded row a pilot workspace used to start on, kept because three tests
+ * and one migration still name it and because the DeepSeek adapter is still in
+ * the codebase (decision R12). It is no longer any workspace's default.
+ */
+export const SEED_PILOT_MODEL_ID = 'deepseek-flash';
+
+/**
+ * The workspace default, from the seed and from `POST /workspaces` onwards.
+ *
+ * An OpenRouter id, because OpenRouter is the only provider this product
+ * offers (decision R12). The row it names does not exist until a key has been
+ * verified and the catalog synced — migration 0016 writes a placeholder so the
+ * foreign key holds — so a fresh workspace shows it disabled with "Add your
+ * OpenRouter key in Settings", which is the honest state rather than a default
+ * pointing at a provider nobody can reach.
+ */
+export const DEFAULT_MODEL_ID = 'openrouter:anthropic/claude-sonnet-5';
 export const DEFAULT_EFFORT = 'high';
 
 // ---------------------------------------------------------------------------
@@ -161,3 +177,35 @@ export const OPENROUTER_EFFORT_MAP: Readonly<Record<string, string>> = {
   high: 'high',
 };
 export const OPENROUTER_DEFAULT_EFFORT = 'medium';
+
+
+// ---------------------------------------------------------------------------
+// Which providers a deployment offers at all (decision R12)
+// ---------------------------------------------------------------------------
+
+/**
+ * The value `ALLOWED_PROVIDERS` holds when nothing sets it.
+ *
+ * Fail closed, and closed means OpenRouter: a deployment that forgot the
+ * variable offers the one provider the product is documented around rather
+ * than every adapter that happens to be compiled in.
+ */
+export const DEFAULT_ALLOWED_PROVIDERS: readonly Provider[] = ['openrouter'];
+
+/**
+ * The refusal, in one string.
+ *
+ * Shared rather than written at each call site because five routes and one
+ * catalog row all say it, and five copies of a sentence is five sentences that
+ * drift. The client never composes it: the server sends it.
+ */
+export const PROVIDER_NOT_ALLOWED_COPY = 'Only OpenRouter keys can be used in this workspace';
+
+/** Parse an `ALLOWED_PROVIDERS` value. Unset, empty or all-unknown falls back. */
+export function parseAllowedProviders(raw: string | undefined | null): Provider[] {
+  const named = (raw ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name): name is Provider => (PROVIDERS as readonly string[]).includes(name));
+  return named.length === 0 ? [...DEFAULT_ALLOWED_PROVIDERS] : named;
+}

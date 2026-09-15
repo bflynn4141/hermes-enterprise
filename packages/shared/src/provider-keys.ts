@@ -65,7 +65,20 @@ export const providerKeyListSchema = z.object({ keys: z.array(maskedProviderKeyS
  * The prose in `disabled_reason` is for a human; a string comparison on prose
  * is not a contract.
  */
-export const DISABLED_CODES = ['catalog', 'no_key', 'key_unverified', 'key_invalid'] as const;
+export const DISABLED_CODES = [
+  'catalog',
+  'no_key',
+  'key_unverified',
+  'key_invalid',
+  /**
+   * The row's provider is not in this deployment's `ALLOWED_PROVIDERS`
+   * (decision R12). Different from `catalog`: the row is fine and the key would
+   * work, the platform does not offer the provider. The catalog route drops
+   * these rows rather than listing them, so the code is what the *server* keys
+   * its own refusals off — the settings and session routes both read it.
+   */
+  'provider_not_allowed',
+] as const;
 export type DisabledCode = (typeof DISABLED_CODES)[number];
 
 /**

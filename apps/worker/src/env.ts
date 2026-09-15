@@ -24,6 +24,14 @@ export interface Env {
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
+   * Comma-separated provider names this deployment offers: `openrouter` in
+   * every environment (decision R12). A key, a catalog row, a session model or
+   * a run naming anything else is refused with `provider_not_allowed`. Unset
+   * means `openrouter` rather than everything, so a missing variable fails
+   * closed; `model/allowed.ts` is the only reader.
+   */
+  ALLOWED_PROVIDERS?: string;
+  /**
    * The platform instance cap: the most Workflow instances this deployment will
    * create in an hour, across every tenant (plan section 5). Unset or
    * unparseable means no cap, which is what local development wants; the value

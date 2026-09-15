@@ -16,6 +16,7 @@ import {
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { withTenantTransaction, type Tx } from '../db/client.js';
+import { allowedProviders } from '../model/allowed.js';
 import { getSession } from '../auth.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
@@ -34,7 +35,13 @@ interface WorkspaceRow {
   timezone: string;
 }
 
-export async function loadBootstrap(tx: Tx, workspaceId: string, userId: string): Promise<Bootstrap> {
+export async function loadBootstrap(
+  tx: Tx,
+  workspaceId: string,
+  userId: string,
+  /** This deployment's providers; rows of any other are not sent (R12). */
+  allowed: readonly string[],
+): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
             COALESCE(s.default_model_id, 'deepseek-flash') AS default_model_id,
@@ -118,15 +125,21 @@ export async function loadBootstrap(tx: Tx, workspaceId: string, userId: string)
             c.disabled_reason
        FROM catalog c
       -- Not every row: a workspace with a synced OpenRouter key has hundreds,
-      -- and bootstrap is the payload every page load pays for. The seeded four
-      -- plus whatever this workspace's sessions actually name is enough to
-      -- render every model *label* on screen; the model menu pages the rest
+      -- and bootstrap is the payload every page load pays for. The workspace's
+      -- default plus whatever this workspace's sessions actually name is enough
+      -- to render every model *label* on screen; the model menu pages the rest
       -- from GET /w/:ws/catalog when it opens (decision R8).
-      WHERE c.source = 'seed'
+      --
+      -- The seeded rows used to be here unconditionally. They are now behind
+      -- the provider filter, which is what keeps the Settings > Agents picker
+      -- and the model menu showing the same list: a DeepSeek row nobody can
+      -- select is a row that makes the screen look broken (decision R12).
+      WHERE c.provider = ANY($2::text[])
+        AND (c.source = 'seed'
          OR c.model_id = (SELECT default_model_id FROM workspace_settings WHERE workspace_id = $1)
-         OR c.model_id IN (SELECT model_id FROM sessions WHERE workspace_id = $1 AND archived = false)
+         OR c.model_id IN (SELECT model_id FROM sessions WHERE workspace_id = $1 AND archived = false))
       ORDER BY c.model_id`,
-    [workspaceId],
+    [workspaceId, [...allowed]],
   );
 
   const heads = await tx.query<{ session_head: string; workspace_head: string }>(
@@ -183,7 +196,7 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
     c.env,
     'app',
     { workspaceId, userId: session.userId },
-    (tx) => loadBootstrap(tx, workspaceId, session.userId),
+    (tx) => loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)),
   );
   return c.json(body);
 }

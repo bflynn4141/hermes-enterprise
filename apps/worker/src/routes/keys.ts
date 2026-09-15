@@ -45,6 +45,7 @@ import { syncOpenRouterForKey } from '../keys/catalog-sync.js';
 import { forbiddenCountFor, probeKey, recordVerification, type VerifyInput } from '../keys/verify.js';
 import { CATALOG_PAGE_DEFAULT, CATALOG_PAGE_MAX, loadCatalogPage } from '../model/catalog.js';
 import { adapterOptions, providerForName } from '../model/index.js';
+import { allowedProviders, requireAllowedProvider } from '../model/allowed.js';
 import { openRouterFixtureEnabled, openRouterFixtureFetch } from '../model/openrouter-dev.js';
 import type { AdapterOptions } from '../model/types.js';
 import { RouteError, inWorkspace, jsonBody, pathUuid } from './tenant.js';
@@ -81,7 +82,7 @@ interface AddKeyBody {
   label?: unknown;
 }
 
-function readProvider(value: unknown): string {
+function readProvider(env: Env, value: unknown): string {
   if (typeof value !== 'string' || !(PROVIDERS as readonly string[]).includes(value)) {
     throw new RouteError('provider must be one of the supported providers', 'unknown_provider', 400);
   }
@@ -90,6 +91,9 @@ function readProvider(value: unknown): string {
     // value for it, so accepting one would store something unusable.
     throw new RouteError('that provider does not accept a workspace key', 'unknown_provider', 400);
   }
+  // Refused before anything is stored, rate-limited or probed: an OpenRouter-only
+  // deployment must not hold a credential it will never spend (decision R12).
+  requireAllowedProvider(env, value);
   return value;
 }
 
@@ -194,6 +198,7 @@ async function probeAndRecord(
       plan.input.workspaceId,
       plan.input.keyId,
       { provider: plan.provider, apiKey: plan.input.apiKey, keyId: plan.input.keyId },
+      allowedProviders(c.env),
     );
     if (result) synced = { count: result.written, at: result.at };
   }
@@ -213,7 +218,7 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const body = await jsonBody<AddKeyBody>(c);
-  const provider = readProvider(body.provider);
+  const provider = readProvider(c.env, body.provider);
   const plaintext = readKey(body.key);
   const label = readLabel(body.label);
 
@@ -301,6 +306,11 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     const row = await getProviderKey(work.tx, work.workspaceId, keyId);
     if (!row) throw new RouteError('no such key', 'not_found', 404);
     if (row.revoked_at !== null) throw new RouteError('this key is revoked', 'key_revoked', 409);
+    // A key installed before this deployment narrowed to OpenRouter. It stays
+    // in the list, marked "no longer usable", and Remove is the only thing that
+    // works on it: re-verifying would spend a probe on a credential no run can
+    // use (decision R12).
+    requireAllowedProvider(c.env, row.provider);
 
     const probeModel = await defaultProbeModel(work.tx, row.provider);
     if (probeModel === null && needsProbeModel(row.provider)) {
@@ -362,6 +372,8 @@ export async function rotateKey(c: Context<{ Bindings: Env }>): Promise<Response
     const previous = await getProviderKey(work.tx, work.workspaceId, previousKeyId);
     if (!previous) throw new RouteError('no such key', 'not_found', 404);
     if (previous.revoked_at !== null) throw new RouteError('this key is revoked', 'key_revoked', 409);
+    // Same rule as verify: a rotation installs a *new* key for that provider.
+    requireAllowedProvider(c.env, previous.provider);
 
     const { key } = await rotateProviderKey(work.tx, c.env, {
       workspaceId: work.workspaceId,
@@ -465,6 +477,12 @@ export async function catalog(c: Context<{ Bindings: Env }>): Promise<Response> 
       provider: providerParam,
       after: url.searchParams.get('after') ?? undefined,
       limit,
+      // Dropped rather than listed-and-greyed: a row for a provider this
+      // deployment does not offer has no action behind it, and a menu full of
+      // models nobody can pick is what teaches people to stop reading it
+      // (decision R12). The four seeded rows are what this removes today.
+      allowed: allowedProviders(c.env),
+      onlyAllowed: true,
     }),
   );
   return c.json(catalogPageSchema.parse(page));

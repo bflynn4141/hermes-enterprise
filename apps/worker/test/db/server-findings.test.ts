@@ -308,7 +308,10 @@ describe('F5 · app.onError', () => {
     const response = await call(`/w/${fx.workspaceId}/provider-keys`, {
       method: 'POST',
       headers: asWriter(fx.adminId),
-      body: JSON.stringify({ provider: 'deepseek', label: 'test', key: 'fake-provider-key' }),
+      // OpenRouter, because it is the only provider a key may name (decision
+      // R12) and a refusal on *that* rule would hide the one this test is
+      // about: the KEK check happens after the provider check.
+      body: JSON.stringify({ provider: 'openrouter', label: 'test', key: 'fake-provider-key' }),
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'kek_unavailable' });

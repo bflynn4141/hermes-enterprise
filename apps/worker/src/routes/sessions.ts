@@ -24,6 +24,7 @@ import {
 import type { Env } from '../env.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
+import { requireAllowedProvider } from '../model/allowed.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 
 const MAX_PAGE = 100;
@@ -237,8 +238,9 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     // tool calling, or has no verified key would be a session that cannot take
     // a turn, and the turns route would refuse it later with a worse message.
     if (typeof input.model_id === 'string') {
-      const { rows: candidates } = await work.tx.query<{ offered: boolean }>(
-        `SELECT (c.disabled_reason IS NULL AND c.supports_tools AND EXISTS (
+      const { rows: candidates } = await work.tx.query<{ offered: boolean; provider: string }>(
+        `SELECT c.provider,
+                (c.disabled_reason IS NULL AND c.supports_tools AND EXISTS (
                    SELECT 1 FROM workspace_provider_keys k
                     WHERE k.workspace_id = $1 AND k.provider = c.provider
                       AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
@@ -250,6 +252,11 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
       // A model the catalog does not have is a 422 in every environment: the
       // column is a foreign key, and a 23503 would surface as a 500.
       if (!candidate) throw new RouteError('the catalog does not have that model', 'unknown_model', 422);
+      // A provider this deployment does not offer is its own answer, and it is
+      // given even under `MODEL_SCRIPTED`: the catalog route never listed the
+      // row, so a client that asked for it by id is asking for something the
+      // product does not have (decision R12).
+      requireAllowedProvider(c.env, candidate.provider);
       // Scripted development has no provider key at all, and refusing there
       // would make a working local stack look broken — the same exception
       // `selectors.ts` makes on the client.

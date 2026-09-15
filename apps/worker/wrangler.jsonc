@@ -52,6 +52,12 @@
     // A unit test asserts the deployed environments never set it.
     "OPENROUTER_FIXTURE": "1",
     "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
+    // The only provider this product offers (decision R12). Read by
+    // `model/allowed.ts`; a key, a catalog row, a session model or a run naming
+    // anything else is refused with `provider_not_allowed`. A unit test asserts
+    // this value in all three environments, because an environment that lost it
+    // would be the one place the other adapters became reachable.
+    "ALLOWED_PROVIDERS": "openrouter",
     // The platform cap on Workflow creations per hour, across every tenant.
     // Empty means no cap, which is what local development wants.
     "PLATFORM_MAX_INSTANCES_PER_HOUR": "",
@@ -174,6 +180,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
+        "ALLOWED_PROVIDERS": "openrouter",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
       },
@@ -253,6 +260,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://app.hermes.brianflynn.dev",
+        "ALLOWED_PROVIDERS": "openrouter",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "2000",
         "R2_BUCKET": "hermes-uploads-production"
       },

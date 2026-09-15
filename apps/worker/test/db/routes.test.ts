@@ -61,14 +61,14 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.heads).toEqual({ session: '0', workspace: '0' });
     expect(body.requests).toEqual([]);
 
-    // Four catalog rows, none of them offered: no provider key exists yet, so
-    // the shell shows "Add a provider key in Settings to start".
-    expect(body.catalog).toHaveLength(4);
+    // Only OpenRouter rows, and none of them offered: no provider key exists
+    // yet, so the shell shows "Add your OpenRouter key in Settings to start".
+    // The four seeded DeepSeek/Anthropic/OpenAI rows are still in the table and
+    // are no longer in any payload a client sees (decision R12).
+    expect(body.catalog.length).toBeGreaterThanOrEqual(1);
     expect(body.catalog.every((row) => row.enabled === false)).toBe(true);
-    expect(body.catalog.filter((row) => row.disabled_reason !== null).map((r) => r.model_id)).toEqual([
-      'claude-opus-4-7',
-      'gpt-5-5',
-    ]);
+    expect(body.catalog.map((row) => row.model_id)).toContain('openrouter:anthropic/claude-sonnet-5');
+    for (const row of body.catalog) expect(row.model_id.startsWith('openrouter:')).toBe(true);
   });
 
   it('refuses a caller who is not a member, without confirming the workspace exists', async () => {

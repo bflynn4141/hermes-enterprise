@@ -53,7 +53,8 @@ async function newSession(page: Page, workspaceId: string, title = 'Panel'): Pro
 
 async function turn(page: Page, workspaceId: string, sessionId: string, text: string): Promise<void> {
   const response = await page.request.post(`/w/${workspaceId}/sessions/${sessionId}/turns`, {
-    data: { text, client_turn_id: randomUUID(), attachments: [], mode: 'work', model_id: 'deepseek-flash', effort: null },
+    // No `model_id`: the session carries the workspace default (decision R13).
+    data: { text, client_turn_id: randomUUID(), attachments: [], mode: 'work', effort: null },
     headers: { origin: ORIGIN },
   });
   expect(response.status(), await response.text()).toBeLessThan(300);
@@ -77,7 +78,7 @@ const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
  * The composer, once it is usable.
  *
  * A fresh workspace's provider-key rows arrive a beat after the shell does, and
- * until they do the composer is greyed with "Add a provider key in Settings to
+ * until they do the composer is greyed with "Add your OpenRouter key in Settings to
  * start" — which is correct behaviour and a race for anything that wants to
  * type. Every test that types waits here first.
  */

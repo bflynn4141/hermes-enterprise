@@ -22,8 +22,13 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** Copy strings from the spec's §7 table. Exact, and asserted by the e2e suite. */
 export const EMPTY = {
-  chatReady: (agent: string) => `${agent} is ready. Describe what you need or attach a document.`,
-  noKey: 'Add a provider key in Settings to start',
+  chatReady: (_agent: string) => 'What do you need help with?',
+  /**
+   * Names OpenRouter, because OpenRouter is the only key this product takes
+   * (decision R12). The generic "a provider key" was honest when there were
+   * four; with one it is a riddle whose answer is one screen away.
+   */
+  noKey: 'Add your OpenRouter key in Settings to start',
   keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or rotate it`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
@@ -41,7 +46,9 @@ export const EMPTY = {
   libraryUnavailable: 'Not available yet',
   invitations: 'No open invitations',
   noProvider: 'No provider configured',
-  providerKeys: 'No provider keys yet. Add a DeepSeek, Anthropic or OpenAI key to enable models',
+  /** A key installed before this deployment narrowed to OpenRouter. */
+  keyNotAllowed: 'No longer usable — only OpenRouter keys can be used',
+  providerKeys: 'Add your OpenRouter key to enable models',
   attach: 'No documents yet',
   adminOnly: 'Admin decision required',
   shareGone: 'This link is no longer available.',
@@ -89,3 +96,24 @@ export const irisPanelKey = (workspaceId: string, userId: string) => `hermes:iri
 export const irisWidthKey = (workspaceId: string, userId: string) => `hermes:iris-width:${workspaceId}:${userId}`;
 /** What the boolean used to be written under. Read once, then removed (decision C33). */
 export const legacyIrisOpenKey = (workspaceId: string, userId: string) => `hermes:iris-open:${workspaceId}:${userId}`;
+
+
+/**
+ * The providers the Add-a-key dialog offers (decision R12).
+ *
+ * One entry, and the list rather than a hard-coded paragraph because the shape
+ * is what a second allowed provider would need and because a unit test can
+ * assert the list without rendering Settings. It is described the way it works:
+ * an Admin who does not know that one key syncs several hundred models will not
+ * understand why the menu suddenly got long.
+ */
+export const PROVIDER_CHOICES: readonly { id: string; label: string; note: string }[] = [
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    note: 'One key, every model OpenRouter brokers. Verifying also syncs its model list into the chat model menu.',
+  },
+];
+
+/** What the dialog starts on. There is only one, so there is no dropdown. */
+export const DEFAULT_PROVIDER = PROVIDER_CHOICES[0]!.id;

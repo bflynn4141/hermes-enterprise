@@ -173,7 +173,9 @@ export const userNotificationSettings = pgTable(
 
 export const workspaceSettings = pgTable('workspace_settings', {
   workspaceId: uuid('workspace_id').primaryKey(),
-  defaultModelId: text('default_model_id').notNull().default('deepseek-flash'),
+  // 0016: OpenRouter is the only provider this product offers, and the row the
+  // id names is a placeholder until the first catalog sync (decision R12).
+  defaultModelId: text('default_model_id').notNull().default('openrouter:anthropic/claude-sonnet-5'),
   defaultEffort: text('default_effort').default('high'),
   defaultRuntime: text('default_runtime').notNull().default('cloud'),
   dailyTokenCap: bigint('daily_token_cap', { mode: 'number' }),

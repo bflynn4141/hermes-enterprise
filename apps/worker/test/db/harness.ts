@@ -6,6 +6,7 @@
 // carry the same connection strings, so the SQL, the transaction and every
 // authorization check are the real ones.
 import worker from '../../src/index.js';
+import { PROVIDERS } from '@hermes/shared';
 import type { Env } from '../../src/env.js';
 import { APP_URL, AGENT_URL } from '../../scripts/db-config.mjs';
 import type { WorkOSPort } from '../../src/auth/workos.js';
@@ -57,6 +58,14 @@ export function makeEnv(overrides: Partial<Env> = {}): { env: Env; hubCalls: Hub
     MODEL_GATEWAY_MODE: 'off',
     ENGINE_PAUSED: '0',
     ALLOWED_ORIGINS: ALLOWED_ORIGIN,
+    // Every provider, on purpose. A deployment offers OpenRouter alone
+    // (decision R12) and `wrangler.jsonc` says so in all three environments,
+    // but most tests in this project are about key state, catalog policy or
+    // the turns route rather than about that rule — and narrowing the default
+    // here would make them all assert the new rule by accident instead of the
+    // thing they were written for. The tests that *are* about it pass
+    // `ALLOWED_PROVIDERS: 'openrouter'` explicitly.
+    ALLOWED_PROVIDERS: PROVIDERS.filter((provider) => provider !== 'nous_portal').join(','),
     HUB_TICKET_SECRET: 'db-test-secret',
     HYPERDRIVE_APP: { connectionString: APP_URL },
     HYPERDRIVE_AGENT: { connectionString: AGENT_URL },

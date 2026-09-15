@@ -25,6 +25,7 @@ import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { optionalWorkosPort } from '../auth/workos.js';
 import { jsonBody, RouteError } from './tenant.js';
+import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
 
 const slugify = (name: string): string =>
@@ -105,7 +106,7 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // The whole workspace state, from inside the transaction that created
       // it, so the client can render the shell without a second round trip and
       // without a window where the workspace exists but reads as empty.
-      const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId));
+      const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId, allowedProviders(c.env)));
       await client.query('COMMIT');
       return c.json(body, 201);
     } catch (error) {

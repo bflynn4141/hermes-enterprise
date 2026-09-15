@@ -106,10 +106,10 @@ describe('syncing the OpenRouter model list', () => {
     ).rejects.toThrow();
 
     const result = await asApp(fx, (tx) => syncOpenRouterCatalog(tx, OPENROUTER_FIXTURE_MODELS));
-    // Four of the six fixture entries are usable. The image-only endpoint and
+    // Five of the seven fixture entries are usable. The image-only endpoint and
     // the one with no prompt price are skipped; the tool-less one is written,
     // because a model you can see and cannot pick is better than an absence.
-    expect(result.written).toBe(4);
+    expect(result.written).toBe(5);
     expect(result.skipped).toBe(2);
   });
 

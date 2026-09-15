@@ -17,6 +17,7 @@ import type { Tx } from '../db/client.js';
 import { providerForName } from '../model/index.js';
 import type { AdapterOptions } from '../model/types.js';
 import type { KekEnv } from './envelope.js';
+import { allowedProviders, type AllowedProvidersEnv } from '../model/allowed.js';
 import { logError, logEvent } from './redact.js';
 import { resolveKey } from './store.js';
 import { probeKey, recordVerification } from './verify.js';
@@ -56,7 +57,10 @@ export type ReverifyResult = { readonly status: string } | { readonly skipped: s
  */
 export async function runReverifyJob(
   run: TxRunner,
-  env: KekEnv,
+  // `AllowedProvidersEnv` as well as the KEK: the weekly sweep is also the
+  // weekly catalog refresh, and a refresh is where a workspace still on a
+  // provider this deployment no longer offers is moved (decision R13).
+  env: KekEnv & AllowedProvidersEnv,
   workspaceId: string,
   payload: ReverifyPayload,
   options: AdapterOptions = {},
@@ -98,11 +102,15 @@ export async function runReverifyJob(
     // retires models continuously, and a price that is a fortnight stale is the
     // thing `pricing_verified_on` exists to make visible rather than tolerable.
     if (payload.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
-      await syncOpenRouterForKey(run, options, workspaceId, prepared.keyId, {
-        provider: payload.provider,
-        apiKey: prepared.apiKey,
-        keyId: prepared.keyId,
-      });
+      const allowed = allowedProviders(env);
+      await syncOpenRouterForKey(
+        run,
+        options,
+        workspaceId,
+        prepared.keyId,
+        { provider: payload.provider, apiKey: prepared.apiKey, keyId: prepared.keyId },
+        allowed,
+      );
     }
     return { status: outcome.status };
   } catch (error) {

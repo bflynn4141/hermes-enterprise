@@ -31,6 +31,7 @@ import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
 import { loadCatalog } from '../model/catalog.js';
+import { allowedProviders, requireAllowedProvider } from '../model/allowed.js';
 import { checkCaps } from '../model/usage.js';
 import { DELETION_SLEEP_DAYS } from '../workflows-long/workspace-deletion.js';
 import { workspaceDeletionInstanceId } from '../workflows-long/index.js';
@@ -269,15 +270,21 @@ function readHosts(value: unknown): string[] {
   return hosts;
 }
 
-async function applyWorkspaceFields(work: TenantWork, body: PatchBody): Promise<string[]> {
+async function applyWorkspaceFields(env: Env, work: TenantWork, body: PatchBody): Promise<string[]> {
   const changed: string[] = [];
   const settings = await readSettings(work.tx, work.workspaceId);
   const next: SettingsRow = { ...settings };
 
   if ('default_model_id' in body) {
     const modelId = String(body.default_model_id ?? '');
-    const catalog = await loadCatalog(work.tx, work.workspaceId);
-    if (!catalog.some((row) => row.model_id === modelId && row.disabled_reason === null)) {
+    // Marked rather than filtered, so that a model of a provider this
+    // deployment does not offer can be refused with *that* reason rather than
+    // with "the catalog does not offer that model", which would send an Admin
+    // looking for a row that is right there (decision R12).
+    const catalog = await loadCatalog(work.tx, work.workspaceId, allowedProviders(env));
+    const row = catalog.find((entry) => entry.model_id === modelId);
+    if (row) requireAllowedProvider(env, row.provider);
+    if (!row || row.disabled_reason !== null) {
       throw new RouteError('the catalog does not offer that model', 'unknown_model', 422);
     }
     next.default_model_id = modelId;
@@ -434,7 +441,7 @@ export async function patchSettings(c: Context<{ Bindings: Env }>): Promise<Resp
     // it. See the header.
     if (touchesWorkspace) work.requireAdmin('changing workspace settings');
 
-    const changed = touchesWorkspace ? await applyWorkspaceFields(work, body) : [];
+    const changed = touchesWorkspace ? await applyWorkspaceFields(c.env, work, body) : [];
     const notificationsChanged = await applyNotifications(work, body.notifications);
 
     if (changed.length > 0) {

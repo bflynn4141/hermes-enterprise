@@ -204,7 +204,7 @@ test('live · onboarding and the workspace picker', async ({ browser }) => {
   await context.close();
 });
 
-test('live · settings, with a rejected provider key', async ({ browser }) => {
+test('live · settings, with a verified provider key', async ({ browser }) => {
   const fixture = freshWorkspace('Provider keys');
   const context = await asUser(browser, fixture.adminEmail);
   const page = await context.newPage();
@@ -217,17 +217,23 @@ test('live · settings, with a rejected provider key', async ({ browser }) => {
   await settle(page);
   await shot(page, '14-provider-keys-empty');
 
+  // OpenRouter, because it is the only provider the route accepts (decision
+  // R12), and `OPENROUTER_FIXTURE=1` verifies it and syncs its models — so the
+  // screenshot is of a working key rather than of a rejected one.
   await page.request.post(`/w/${fixture.workspaceId}/provider-keys`, {
-    data: { provider: 'deepseek', label: 'Program key', key: 'sk-fake-key-for-live-screenshots-0001' },
+    data: { provider: 'openrouter', label: 'Program key', key: 'sk-or-v1-fake-key-for-live-screenshots-0001' },
     headers: { origin: ORIGIN },
   });
   await page.reload();
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
   await page.getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(page.getByText('Invalid').first()).toBeVisible({ timeout: 15_000 });
+  // `visible=true` before `.first()`: the shell keeps a second copy of the pane
+  // in the DOM for the narrow layout, so the first match in document order is a
+  // hidden one and a plain `.first()` waits on it forever.
+  await expect(page.getByText('Verified', { exact: true }).locator('visible=true').first()).toBeVisible({ timeout: 15_000 });
   await settle(page);
-  // The masked row, the status pill, and the rejection copy in the banner.
-  await shot(page, '15-provider-keys-invalid');
+  // The masked row, the status pill, and the synced-model count.
+  await shot(page, '15-provider-keys-verified');
 
   await page.getByRole('tab', { name: 'Data and privacy' }).click();
   await settle(page);

@@ -24,7 +24,7 @@ test('every main screen renders', async ({ page }) => {
   await page.keyboard.press('Escape');
 
   // 3. Composer model menu, with the disabled rows and their reasons.
-  await page.getByRole('button', { name: /DeepSeek Flash/ }).click();
+  await page.getByRole('button', { name: /Claude Sonnet 5/ }).click();
   await expect(page.getByRole('dialog', { name: 'Model' })).toBeVisible();
   await page.screenshot(shot('03-composer-model-menu'));
   await page.keyboard.press('Escape');
@@ -127,7 +127,7 @@ test('the first-run empty states render', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await appPane.getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(appPane.getByText(/No provider keys yet/)).toBeVisible();
+  await expect(appPane.getByText(/Add your OpenRouter key to enable models/)).toBeVisible();
   await page.screenshot(shot('22-empty-provider-keys'));
 });
 

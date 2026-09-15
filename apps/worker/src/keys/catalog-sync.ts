@@ -20,6 +20,7 @@ import type { AdapterOptions, Credential } from '../model/types.js';
 import type { Tx } from '../db/client.js';
 import { logError, logEvent } from './redact.js';
 import { recordModelSync } from './store.js';
+import { promoteDefaultModel } from './default-model.js';
 
 export type TxRunner = <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>;
 
@@ -35,12 +36,28 @@ export async function syncOpenRouterForKey(
   workspaceId: string,
   keyId: string,
   credential: Credential,
+  /** This deployment's providers, for the default-model promotion below. */
+  allowed: readonly string[],
 ): Promise<SyncResult | null> {
   try {
     const body = await new OpenRouterProvider(options).listCatalog(credential);
     const result = await run(async (tx) => {
       const synced = await syncOpenRouterCatalog(tx, body);
       await recordModelSync(tx, workspaceId, keyId, synced.written);
+      // In the same transaction as the rows it depends on: the workspace's
+      // default is only movable onto a model that exists, and a promotion that
+      // committed against a sync that rolled back would name a row that is not
+      // there (decision R13).
+      const promoted = await promoteDefaultModel(tx, workspaceId, allowed);
+      if (promoted) {
+        logEvent({
+          at: 'workspace.default_model_promoted',
+          workspace_id: workspaceId,
+          from: promoted.from,
+          to: promoted.to,
+          sessions: promoted.sessions,
+        });
+      }
       return synced;
     });
     // Counts and ids. Never a model name the provider chose, never the body.

@@ -16,6 +16,7 @@
 //   4. Picking one sets the session's model, and a run still goes through the
 //      scripted provider — `MODEL_SCRIPTED=1` means no OpenRouter call is made
 //      by a turn either.
+import { randomUUID } from 'node:crypto';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { freshWorkspace, psql, refreshStepUp } from '../scripts/live-fixture.mjs';
 
@@ -114,6 +115,75 @@ test.describe('OpenRouter, added through Settings and picked in the composer', (
     await expect
       .poll(() => psql(`SELECT model_id FROM sessions WHERE id = '${sessionId}'`), { timeout: 10_000 })
       .toContain('openrouter:');
+
+    await context.close();
+  });
+
+  test('R3 a fresh workspace lands on Sonnet 5 and can take a turn without picking a model', async ({ browser }) => {
+    // The scenario this milestone is about (decisions R12, R13). A workspace
+    // that has never been used starts on `openrouter:anthropic/claude-sonnet-5`
+    // — a placeholder row migration 0016 wrote, disabled until a key exists —
+    // and the person's first action is to paste their OpenRouter key. What must
+    // not then happen is a composer refusing the first message with advice
+    // about a provider Settings no longer offers.
+    const fixture = freshWorkspace('OpenRouter default');
+    refreshStepUp();
+    const context = await asUser(browser, fixture.adminId);
+    const page = await context.newPage();
+    await page.goto(`/workspace/${fixture.workspaceId}`);
+    await expect(page.getByRole('button', { name: 'Agents', exact: true }).first()).toBeVisible({ timeout: 20_000 });
+
+    // Before the key: the default is already the OpenRouter id, and the model
+    // menu says what to do rather than showing a DeepSeek row nobody can pick.
+    expect(psql(`SELECT default_model_id FROM workspace_settings WHERE workspace_id = '${fixture.workspaceId}'`)).toBe(
+      'openrouter:anthropic/claude-sonnet-5',
+    );
+    // And now the harder half: a workspace created *before* this deployment
+    // narrowed to OpenRouter, whose default is a DeepSeek row the product no
+    // longer offers. Verifying the key is what moves it (decision R13).
+    psql(`UPDATE workspace_settings SET default_model_id = 'deepseek-flash' WHERE workspace_id = '${fixture.workspaceId}'`);
+
+    const before = await page.request.get(`/w/${fixture.workspaceId}/catalog?limit=200`);
+    const beforeRows = ((await before.json()) as { models: { provider: string; enabled: boolean }[] }).models;
+    expect(beforeRows.length).toBeGreaterThan(0);
+    expect(beforeRows.every((row) => row.provider === 'openrouter')).toBe(true);
+    expect(beforeRows.every((row) => row.enabled === false)).toBe(true);
+
+    refreshStepUp();
+    const added = await page.request.post(`/w/${fixture.workspaceId}/provider-keys`, {
+      data: { provider: 'openrouter', label: 'OpenRouter', key: FAKE_KEY },
+      headers: { origin: ORIGIN },
+    });
+    expect(added.status(), await added.text()).toBe(201);
+
+    // The default has moved off DeepSeek and onto Sonnet 5, which is now a real
+    // row with a real price.
+    expect(psql(`SELECT default_model_id FROM workspace_settings WHERE workspace_id = '${fixture.workspaceId}'`)).toBe(
+      'openrouter:anthropic/claude-sonnet-5',
+    );
+    const sonnet = await page.request.get(`/w/${fixture.workspaceId}/catalog?q=sonnet-5&limit=10`);
+    const row = ((await sonnet.json()) as { models: { model_id: string; enabled: boolean; source: string }[] }).models.find(
+      (model) => model.model_id === 'openrouter:anthropic/claude-sonnet-5',
+    )!;
+    expect(row.enabled).toBe(true);
+    expect(row.source).toBe('provider_list');
+
+    // A session inherits it, and a turn runs without anybody opening the menu.
+    const created = await page.request.post(`/w/${fixture.workspaceId}/sessions`, {
+      data: { title: 'First message', mode: 'work' },
+      headers: { origin: ORIGIN },
+    });
+    expect(created.status(), await created.text()).toBeLessThan(300);
+    const session = (await created.json()) as { id: string; model_id: string };
+    expect(session.model_id).toBe('openrouter:anthropic/claude-sonnet-5');
+
+    const turn = await page.request.post(`/w/${fixture.workspaceId}/sessions/${session.id}/turns`, {
+      data: { text: 'Screen the applicant.', client_turn_id: randomUUID(), attachments: [], mode: 'work' },
+      headers: { origin: ORIGIN },
+    });
+    // Not 409 "Add a deepseek key in Settings to start", which is the failure
+    // this whole scenario exists to prove is gone.
+    expect(turn.status(), await turn.text()).toBeLessThan(300);
 
     await context.close();
   });

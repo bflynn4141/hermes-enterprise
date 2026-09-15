@@ -151,8 +151,29 @@ own key, the workspace is billed by its own provider, and the product's job is
 to store that key so that nobody — including whoever runs this service — can
 read it by accident.
 
-**How Brian adds his Anthropic key.** In the client (M5) it is
-Settings > Provider keys > Add: choose the provider, paste the key, Verify. The
+**OpenRouter is the only provider a workspace can use** (decision R12). One key
+reaches every model OpenRouter brokers, so the product asks for one credential
+rather than four, and `ALLOWED_PROVIDERS=openrouter` — a variable, set in all
+three environments in `wrangler.jsonc` and read in exactly one module,
+`src/model/allowed.ts` — is what enforces it. Installing, verifying or rotating
+a key for any other provider answers `422 provider_not_allowed`, "Only
+OpenRouter keys can be used in this workspace"; the catalog route returns
+OpenRouter rows only, so the four seeded DeepSeek, Anthropic and OpenAI rows are
+in the table and in no payload a client sees; and a session or workspace default
+naming one of them is refused with the same reason. The other three adapters
+stay in the codebase — they are how the per-transport replay rules are tested,
+and `ScriptedProvider` still exercises them — and nothing on the product path
+can reach them.
+
+A workspace starts on `openrouter:anthropic/claude-sonnet-5`. Its catalog row is
+a placeholder migration 0016 writes, disabled with "Add your OpenRouter key in
+Settings" until a key is verified; verification syncs OpenRouter's list, which
+replaces the placeholder with the real row, and a workspace whose default is a
+model it can no longer run is moved onto Sonnet 5 at the same moment — its
+unarchived sessions with it (decision R13).
+
+**How Brian adds his key.** In the client (M5) it is
+Settings > Provider keys > Add: paste the OpenRouter key, Verify. The
 route requires an Admin session and a sign-in from the last five minutes (the
 same step-up the decision route uses), computes a SHA-256 fingerprint and the
 last four characters, encrypts the key, and probes the provider's free
@@ -183,7 +204,11 @@ AUTH='x-dev-user: maya@nous.example'
 # Add and verify in one call. The response carries the masked row only.
 curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
   -H "$AUTH" -H 'content-type: application/json' \
-  -d '{"provider":"anthropic","label":"Ops key","key":"<paste the key>"}'
+  -d '{"provider":"openrouter","label":"Ops key","key":"<paste the key>"}'
+
+# Any other provider is refused before the key is stored:
+#   422 {"reason":"provider_not_allowed",
+#        "error":"Only OpenRouter keys can be used in this workspace"}
 
 # What Settings shows: provider, label, last4, fingerprint prefix, status,
 # verified models, who added it, and the dates. Never the key.
@@ -273,7 +298,7 @@ seeded rows: `sync_openrouter_catalog` is a `SECURITY DEFINER` function whose
 body cannot name a provider other than `openrouter` or update a row whose
 `source` is `seed`, so the Worker keeps its SELECT-only grant on `catalog`.
 
-**Model ids.** An OpenRouter row is `openrouter:anthropic/claude-sonnet-4.6` —
+**Model ids.** An OpenRouter row is `openrouter:anthropic/claude-sonnet-5` —
 the provider's own id behind one prefix. The prefix is what makes
 `model_calls.model_id` say which account was billed months later, and the
 adapter strips it before anything reaches the wire.
@@ -282,7 +307,7 @@ adapter strips it before anything reaches the wire.
 (`apps/client/e2e/live-openrouter.spec.ts`) adds a key, verifies it, syncs a
 catalog and picks a model out of the menu, with no network call and no real key.
 It can do that because `OPENROUTER_FIXTURE=1` makes the Worker answer
-OpenRouter's `/key` and `/models` from a built-in six-model fixture
+OpenRouter's `/key` and `/models` from a built-in seven-model fixture
 (`apps/worker/src/model/openrouter-dev.ts`). Three guards: it is refused unless
 `ENVIRONMENT=development`, it is opt-in per deployment through that var, and it
 serves a fixed fixture that no caller can influence. `wrangler.jsonc` sets it in

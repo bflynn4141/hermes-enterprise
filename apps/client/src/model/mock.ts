@@ -204,16 +204,17 @@ export function createMockBackend(options: MockOptions = {}) {
       : [
           {
             id: KEY_ID,
-            provider: 'deepseek',
+            provider: 'openrouter',
             label: 'Program key',
             last4: '9f2c',
             fingerprint_prefix: 'a41b93cd77e0',
             status: keyMode === 'invalid' ? 'invalid' : 'verified',
-            verified_models: keyMode === 'invalid' ? [] : ['deepseek-flash'],
-            // Null for every provider whose `verified_models` is the whole
-            // answer; only OpenRouter fills these (shared decision R7).
-            synced_model_count: null,
-            models_synced_at: null,
+            // An OpenRouter key's `verified_models` stays empty: the list is
+            // several hundred ids and lives in the catalog, so the row carries
+            // a count and a date instead (decision R7).
+            verified_models: [],
+            synced_model_count: keyMode === 'invalid' ? null : 3,
+            models_synced_at: keyMode === 'invalid' ? null : iso(-600),
             added_by: USER,
             created_at: iso(-6000),
             verified_at: keyMode === 'invalid' ? null : iso(-6000),
@@ -225,16 +226,18 @@ export function createMockBackend(options: MockOptions = {}) {
 
   const hasVerifiedKey = providerKeys.some((k) => k.status === 'verified' || k.status === 'verified_scoped');
 
+  // OpenRouter rows only, because that is the only provider the Worker offers
+  // and the only one `GET /w/:ws/catalog` returns (decision R12). A mock that
+  // still listed DeepSeek and GPT rows would be a fixture teaching the client's
+  // own scenarios about a screen the product no longer has.
   const catalog = [
-    { model_id: 'deepseek-flash', label: 'DeepSeek Flash', provider: 'deepseek', effort: ['low', 'high', 'max'], default_effort: 'high', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'No verified DeepSeek key' },
-    { model_id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic', effort: ['low', 'medium', 'high', 'max'], default_effort: 'high', enabled: false, disabled_reason: 'No verified Anthropic key' },
-    { model_id: 'claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'anthropic', effort: null, default_effort: null, enabled: false, disabled_reason: 'Not enabled for the pilot: cost per run exceeds the pilot spend budget.' },
-    { model_id: 'gpt-5-5', label: 'GPT-5.5', provider: 'openai', effort: null, default_effort: null, enabled: false, disabled_reason: 'Awaiting the M3 reasoning-replay engine test for the Responses transport.' },
+    { model_id: 'openrouter:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'openrouter', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
+    { model_id: 'openrouter:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'openrouter', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
   ];
 
   /**
    * The same rows as `catalog`, in the shape `GET /w/:ws/catalog` answers, plus
-   * two OpenRouter rows so the model menu's vendor grouping and its
+   * one tool-less OpenRouter row so the model menu's vendor grouping and its
    * tools-required note have something to render in a mock build.
    */
   const catalogEntries = [
@@ -242,36 +245,19 @@ export function createMockBackend(options: MockOptions = {}) {
       model_id: row.model_id,
       provider: row.provider,
       label: row.label,
-      transport: 'deepseek_chat',
+      transport: 'openrouter_chat',
       effort_map: row.effort === null ? null : Object.fromEntries(row.effort.map((value) => [value, value])),
       default_effort: row.default_effort,
-      pricing_per_million: { input: 0.28, output: 0.42, input_off_peak: null, output_off_peak: null, cached_input: null },
-      pricing_verified_on: '2026-09-14',
+      pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
+      pricing_verified_on: '2026-09-15',
       enabled: row.enabled,
       disabled_code: row.enabled ? null : 'no_key',
       disabled_reason: row.disabled_reason,
-      source: 'seed',
-      context_length: 128_000,
-      supports_tools: true,
-      supports_reasoning: row.effort !== null,
-    })),
-    {
-      model_id: 'openrouter:anthropic/claude-sonnet-4.6',
-      provider: 'openrouter',
-      label: 'Anthropic: Claude Sonnet 4.6',
-      transport: 'openrouter_chat',
-      effort_map: { low: 'low', medium: 'medium', high: 'high' },
-      default_effort: 'medium',
-      pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
-      pricing_verified_on: '2026-09-15',
-      enabled: hasVerifiedKey,
-      disabled_code: hasVerifiedKey ? null : 'no_key',
-      disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.',
       source: 'provider_list',
       context_length: 200_000,
       supports_tools: true,
-      supports_reasoning: true,
-    },
+      supports_reasoning: row.effort !== null,
+    })),
     {
       model_id: 'openrouter:meta-llama/llama-4-70b-instruct',
       provider: 'openrouter',
@@ -292,10 +278,10 @@ export function createMockBackend(options: MockOptions = {}) {
   ];
 
   const sessions: MockSession[] = empty
-    ? [{ id: SESSION_A, title: 'New session', mode: 'ask', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
+    ? [{ id: SESSION_A, title: 'New session', mode: 'ask', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, title: 'Partner applications', mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, title: 'Provider documents', mode: 'plan', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, title: 'Partner applications', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, title: 'Provider documents', mode: 'plan', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
       ];
 
   const messages: Record<string, unknown[]> = {
@@ -429,7 +415,7 @@ export function createMockBackend(options: MockOptions = {}) {
       : [{ session_id: mockUuid(20), title: 'Partner applications', runs: 3, total_tokens: 351_800, cost_usd_estimate: 0.104, last_call_at: '2026-10-12T16:04:00.000Z' }],
     by_key: empty
       ? []
-      : [{ key_id: mockUuid(21), provider: 'deepseek', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
+      : [{ key_id: mockUuid(21), provider: 'openrouter', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
     caps: {
       daily_token_cap: 500_000,
       tokens_today: empty ? 0 : 351_800,
@@ -444,7 +430,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const settingsView = {
     workspace_id: WS,
     role: seat === 'admin' ? 'admin' : 'member',
-    defaults: { model_id: 'deepseek-flash', effort: 'high' as string | null, runtime: 'cloud' },
+    defaults: { model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high' as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
     flags: {} as Record<string, unknown>,
@@ -535,7 +521,7 @@ export function createMockBackend(options: MockOptions = {}) {
           id: WS,
           name: 'Nous',
           jurisdiction: 'default',
-          settings: { default_model_id: 'deepseek-flash', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
+          settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
         },
         viewer: { user_id: USER, role: seat, reviewer_roles: seat === 'admin' ? ['access'] : [] },
         heads: { session: head.toString(), workspace: head.toString() },
@@ -567,7 +553,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/sessions') && method === 'GET') return page(sessions);
     if (p('/sessions') && method === 'POST') {
-      const created = { id: mockUuid(400 + sessions.length), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
+      const created = { id: mockUuid(400 + sessions.length), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
       sessions.push(created);
       messages[created.id] = [];
       return json(created);
@@ -580,7 +566,7 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = sessions.find((s) => s.id === sessionId);
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
-        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Add a provider key in Settings to start');
+        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Add your OpenRouter key in Settings to start');
         runScenario('completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
@@ -676,7 +662,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/skills')) return page(skills);
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
-      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'deepseek', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'openrouter', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
       providerKeys.push(added);
       return json({ key: added, verification: { status: 'unverified', reason: 'unavailable' } }, 201);
     }
@@ -689,7 +675,9 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       if (row && path.endsWith('/verify')) {
         row.status = 'verified';
-        row.verified_models = ['deepseek-flash'];
+        row.verified_models = [];
+        row.synced_model_count = 3;
+        row.models_synced_at = iso(0);
         row.verified_at = iso(0);
         return json({ key_id: row.id, status: row.status, reason: 'ok' });
       }

@@ -3486,6 +3486,112 @@ this.
 
 ---
 
+## R12. OpenRouter is the only provider, and the rule is one variable in one module
+
+**Decided.** `ALLOWED_PROVIDERS` is a Worker variable, `openrouter` in all three
+environments in `wrangler.jsonc`, unset means `openrouter` rather than
+everything, and `apps/worker/src/model/allowed.ts` is the only module that reads
+it. Five places ask it the same question:
+
+* installing, verifying or rotating a key (`routes/keys.ts`) → 422
+  `provider_not_allowed`, "Only OpenRouter keys can be used in this workspace";
+* `GET /w/:ws/catalog` and `bootstrap` → rows of other providers are not in the
+  payload at all;
+* `PATCH /w/:ws/sessions/:id` and `PATCH /w/:ws/settings` → the same 422 when a
+  client names a model by id;
+* `POST …/turns` → the same 422, and unlike the key check it is asked under
+  `MODEL_SCRIPTED` too.
+
+The four seeded rows stay in the `catalog` table and the other three adapters
+stay in `src/model/`. `loadCatalog` *marks* them `provider_not_allowed`;
+`loadCatalogPage` with `onlyAllowed` *drops* them.
+
+**Why a variable and not a constant, a CHECK or a deleted adapter.** Three
+alternatives, and each loses something that is still needed.
+
+Deleting the adapters loses the tests. `deepseek_chat`, `anthropic_messages` and
+`openai_responses` are where the per-transport reasoning-replay rules of
+decision 26 are actually exercised, and those rules are the reason the transport
+enum exists at all. `ScriptedProvider` drives them still.
+
+A database CHECK loses the history and the future. `model_calls` rows from last
+month reference `deepseek-flash`, `sessions.model_id` and `runs.model_id` are
+foreign keys into `catalog`, and a row that cannot exist is a row those cannot
+point at. And relaxing a CHECK for a customer who brings an Anthropic account is
+a migration and a deploy, where this is a `wrangler deploy --var`.
+
+A constant in code loses the ability to say so per environment, which is the
+form the next request for this will take — a pilot that is OpenRouter-only and a
+customer deployment that is not.
+
+**Why unset means OpenRouter rather than everything.** A variable that widens
+when it goes missing is a variable that widens during exactly the incident where
+nobody is reading configuration. The fallback is the documented product, and a
+unit test asserts the value in all three environments, because an environment
+disagreeing with the other two is the deployment nobody meant to make.
+
+**Why the catalog route drops the rows and `loadCatalog` keeps them.** They
+answer different questions. A menu of models nobody can pick is what teaches
+people to stop reading a menu, so the list has none. But the settings route is
+handed a `model_id` by a client and has to say *why* it will not take it, and
+"the catalog does not offer that model" sends an Admin looking for a row that is
+right there. So the marking exists for the refusals and the filter for the list.
+
+**Would change it if.** A customer brings their own vendor account, at which
+point the variable grows a second name and the four seeded rows come back into
+the menu on their own.
+
+---
+
+## R13. A fresh workspace starts on Sonnet 5, and a stale default is moved on verification
+
+**Decided.** `DEFAULT_MODEL_ID` is `openrouter:anthropic/claude-sonnet-5`.
+Migration 0016 writes a placeholder `catalog` row for it with
+`source = 'provider_list'` and makes it the `workspace_settings.default_model_id`
+column default. `promoteDefaultModel`, called inside the same transaction as
+every OpenRouter catalog sync, moves a workspace whose default is not allowed,
+not enabled or tool-less onto Sonnet 5 — or onto the first tool-capable row if
+that account cannot reach it — carrying its unarchived sessions with it and
+writing one `settings.changed` events row.
+
+**Why a placeholder row rather than "no default".** `default_model_id` is a
+foreign key into `catalog`, and the row it has to name does not exist until a
+key has been verified and a list synced. The alternatives were a nullable column
+— which every reader would then have to handle, for a state that lasts minutes —
+or leaving the default on `deepseek-flash`, which is the bug: the composer would
+refuse the first message of a new workspace with "Add a deepseek key in Settings
+to start", about a provider the Settings screen no longer offers.
+
+`source = 'provider_list'` and not `'seed'`, deliberately: a seeded row is one a
+sync may never overwrite (decision R6), and this one *must* be overwritten. Its
+price is Anthropic's published Sonnet figure rather than zero, because a row
+that says free and is not is the error nobody notices until the invoice — and
+the first sync replaces every column of it anyway.
+
+**Why the promotion is on sync and not on read.** Bootstrap is a GET, and a GET
+that writes makes "has this workspace ever changed a setting" unanswerable. The
+sync is the only moment that is both a write and the moment the rows the new
+default names come into existence. It also means the weekly reverify job fixes a
+workspace nobody has touched.
+
+**Why it carries the sessions.** A session's model is copied from the default
+when it is created, not joined at read time (that is deliberate — a person
+switching mid-run must change the next run, not this one). So moving only the
+default would leave a workspace full of sessions naming a model every turn is
+refused for, and the person would have to re-pick a model in each one. Archived
+sessions are left: nobody is going to run one, and rewriting them would edit
+history to no purpose.
+
+**What it will not do.** It never overrules a default that is already runnable.
+An Admin who chose Gemini keeps Gemini through every later sync; a sync is not a
+reason to overrule somebody's choice.
+
+**Would change it if.** OpenRouter ever stops listing a Sonnet, at which point
+the preference is a list rather than one id — the fallback already handles it,
+but silently, and a list would say so.
+
+---
+
 ## C33. The Iris panel has three states, and a rail is the middle one
 
 **Decided.** `ui.irisOpen: boolean` is gone. `ui.irisPanel` is `open | rail |

@@ -25,7 +25,8 @@ import { publishEvents } from '../jobs.js';
 import { checkCaps } from '../model/usage.js';
 import { maybeQueueCapWarning } from '../ops/cap-warning.js';
 import { requireInstanceCapacity } from '../ops/instance-cap.js';
-import { loadModel } from '../model/catalog.js';
+import { loadModel, providerLabel } from '../model/catalog.js';
+import { requireAllowedProvider } from '../model/allowed.js';
 import { pickDevScript, runAttemptInstanceId } from '../runs/workflow.js';
 import { CONTEXT_ANSWERED_EVENT, DEFAULT_MAX_TURNS } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
@@ -247,22 +248,35 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     const warning = await maybeQueueCapWarning(work.tx, work.workspaceId, caps);
     if (warning) work.jobs.push(warning);
 
-    // No verified key for the session's model provider: refused at creation,
-    // which is the only place where refusing is cheap. Mid-run it would mean a
-    // half-written transcript (plan section 4, key failures).
+    // Two questions about this session's model, and they are asked in this
+    // order because the first one is true of the *deployment* and the second
+    // only of the workspace.
+    //
+    //   1. Does this deployment offer that provider at all? Asked even under
+    //      `MODEL_SCRIPTED`, because a run against a model nobody can reach in
+    //      production is not a run worth rehearsing (decision R12).
+    //   2. Is there a verified key for it? Refused at creation, which is the
+    //      only place refusing is cheap: mid-run it would mean a half-written
+    //      transcript (plan section 4, key failures).
+    const model = await loadModel(work.tx, session.model_id);
+    if (!model) throw new RouteError('this session names a model the catalog does not have', 'unknown_model', 409);
+    requireAllowedProvider(c.env, model.provider);
+
     if (c.env.MODEL_SCRIPTED !== '1') {
-      const model = await loadModel(work.tx, session.model_id);
-      if (!model) throw new RouteError('this session names a model the catalog does not have', 'unknown_model', 409);
       const key = await work.tx.query<{ status: string }>(
         `SELECT status FROM workspace_provider_keys
           WHERE workspace_id = $1 AND provider = $2 AND revoked_at IS NULL LIMIT 1`,
         [work.workspaceId, model.provider],
       );
       const status = key.rows[0]?.status ?? null;
-      if (status === null) throw new RouteError(`Add a ${model.provider} key in Settings to start`, 'no_key', 409);
-      if (status === 'invalid') throw new RouteError(`Your ${model.provider} key was rejected`, 'key_invalid', 409);
+      // The provider's *label*, because this sentence is rendered verbatim in
+      // the composer (decision C45) and "Add a openrouter key" is not a
+      // sentence anybody wrote on purpose.
+      const label = providerLabel(model.provider);
+      if (status === null) throw new RouteError(`Add your ${label} key in Settings to start`, 'no_key', 409);
+      if (status === 'invalid') throw new RouteError(`Your ${label} key was rejected`, 'key_invalid', 409);
       if (status !== 'verified' && status !== 'verified_scoped') {
-        throw new RouteError(`Your ${model.provider} key has not been verified`, 'key_unverified', 409);
+        throw new RouteError(`Your ${label} key has not been verified`, 'key_unverified', 409);
       }
     }
 

@@ -6,7 +6,11 @@ import {
   openRouterCatalogId,
   openRouterModelId,
   vendorPrefix,
+  DEFAULT_ALLOWED_PROVIDERS,
   DEFAULT_MODEL_ID,
+  PROVIDER_NOT_ALLOWED_COPY,
+  SEED_PILOT_MODEL_ID,
+  parseAllowedProviders,
   EFFECT_REQUIREMENTS,
   RESULTING_STATUS,
   agreementPayloadSchema,
@@ -94,7 +98,28 @@ describe('catalog seed', () => {
     ]);
     const disabled = CATALOG_SEED.filter((r) => r.disabled_reason !== null).map((r) => r.model_id);
     expect(disabled).toEqual(['claude-opus-4-7', 'gpt-5-5']);
-    expect(CATALOG_SEED.find((r) => r.model_id === DEFAULT_MODEL_ID)?.disabled_reason).toBeNull();
+    expect(CATALOG_SEED.find((r) => r.model_id === SEED_PILOT_MODEL_ID)?.disabled_reason).toBeNull();
+  });
+
+  it('points the workspace default at OpenRouter, which no seeded row can be', () => {
+    // Decision R12: the default is an id the catalog only holds because
+    // migration 0016 wrote a placeholder, and the first sync replaces it. It is
+    // deliberately *not* in `CATALOG_SEED`, because a seeded row is one a sync
+    // may never overwrite and this one has to be overwritten.
+    expect(DEFAULT_MODEL_ID).toBe('openrouter:anthropic/claude-sonnet-5');
+    expect(CATALOG_SEED.some((r) => r.model_id === DEFAULT_MODEL_ID)).toBe(false);
+    expect(openRouterModelId(DEFAULT_MODEL_ID)).toBe('anthropic/claude-sonnet-5');
+  });
+
+  it('falls back to OpenRouter when ALLOWED_PROVIDERS is missing or nonsense', () => {
+    expect(parseAllowedProviders('openrouter')).toEqual(['openrouter']);
+    expect(parseAllowedProviders(undefined)).toEqual(['openrouter']);
+    expect(parseAllowedProviders('')).toEqual(['openrouter']);
+    // A typo is not a widening: an unset variable must not mean "everything".
+    expect(parseAllowedProviders('open-router, nonsense')).toEqual(['openrouter']);
+    expect(parseAllowedProviders('openrouter, anthropic')).toEqual(['openrouter', 'anthropic']);
+    expect(DEFAULT_ALLOWED_PROVIDERS).toEqual(['openrouter']);
+    expect(PROVIDER_NOT_ALLOWED_COPY).toBe('Only OpenRouter keys can be used in this workspace');
   });
 
   it('records when each price was last verified', () => {

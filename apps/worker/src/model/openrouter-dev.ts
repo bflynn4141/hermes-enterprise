@@ -13,7 +13,7 @@
 //      Worker has no branch that can reach it.
 //   2. It is opt-in per deployment through `OPENROUTER_FIXTURE=1`, which is a
 //      var and not a secret, and which `wrangler.jsonc` sets nowhere.
-//   3. It serves a fixed six-model fixture and nothing else. It cannot be made
+//   3. It serves a fixed seven-model fixture and nothing else. It cannot be made
 //      to return a caller-supplied body, so it is not a way to write arbitrary
 //      catalog rows.
 //
@@ -22,12 +22,24 @@ import type { Env } from '../env.js';
 import type { FetchLike } from './types.js';
 
 /**
- * Six models, chosen to exercise every branch of `normaliseModels`: with and
+ * Seven models, chosen to exercise every branch of `normaliseModels`: with and
  * without tools, with and without reasoning, an image-only endpoint that must
  * be skipped, and one whose price does not parse.
+ *
+ * The first one is the product's default (`DEFAULT_MODEL_ID`, decision R13):
+ * the live scenario proves that a fresh workspace's unusable default becomes
+ * *this* row once a key verifies, which needs the fixture to list it.
  */
 export const OPENROUTER_FIXTURE_MODELS = {
   data: [
+    {
+      id: 'anthropic/claude-sonnet-5',
+      name: 'Anthropic: Claude Sonnet 5',
+      context_length: 200_000,
+      architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+      pricing: { prompt: '0.000003', completion: '0.000015', input_cache_read: '0.0000003' },
+      supported_parameters: ['tools', 'tool_choice', 'reasoning', 'max_tokens'],
+    },
     {
       id: 'anthropic/claude-sonnet-4.6',
       name: 'Anthropic: Claude Sonnet 4.6',

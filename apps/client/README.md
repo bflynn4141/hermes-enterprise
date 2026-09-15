@@ -174,7 +174,7 @@ Query parameters pick the fixture:
 | URL | What it shows |
 |---|---|
 | `/` | The seeded October 12 workspace: four requests, a blocked reply, a run |
-| `/?data=empty&key=none` | Every first-run empty state, and the composer greyed with "Add a provider key in Settings to start" |
+| `/?data=empty&key=none` | Every first-run empty state, and the composer greyed with "Add your OpenRouter key in Settings to start" |
 | `/?seat=member` | The Member seat: the review pane reads "Admin decision required" |
 | `/?key=invalid` | A rejected key: "Your deepseek key was rejected. Re-verify or rotate it" |
 | `/onboarding/create`, `/onboarding/join?token=…` | The two onboarding routes |
@@ -315,7 +315,7 @@ are the same three clicks on either side of that change.
   (decisions C23 and C27); eleven other components are, and "The library,
   adopted and not" below says what each one needed.
 * **A screen renders the server's sentence, not its own.** The usage
-  disclaimer, the DeepSeek jurisdiction warning, the erasure timing copy and an
+  disclaimer, the provider jurisdiction warnings, the erasure timing copy and an
   effect's `reason` are all strings the Worker writes, rendered verbatim. Each
   is a claim somebody could be held to, and a claim with two authors is a claim
   that drifts. Where the client writes copy it is about the client — "this

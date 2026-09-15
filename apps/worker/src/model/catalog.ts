@@ -13,7 +13,13 @@
 // showing both as an unexplained absence. `disabled_code` is the machine-
 // readable half, because the client keys its copy off a code and never off
 // prose.
-import { USABLE_KEY_STATUSES, catalogEntrySchema, type CatalogEntry, type DisabledCode } from '@hermes/shared';
+import {
+  PROVIDER_NOT_ALLOWED_COPY,
+  USABLE_KEY_STATUSES,
+  catalogEntrySchema,
+  type CatalogEntry,
+  type DisabledCode,
+} from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 
 interface CatalogQueryRow {
@@ -41,7 +47,8 @@ const PROVIDER_LABEL: Readonly<Record<string, string>> = {
   openrouter: 'OpenRouter',
 };
 
-const providerLabel = (provider: string): string => PROVIDER_LABEL[provider] ?? provider;
+/** "OpenRouter", not "openrouter": this string is read by a person. */
+export const providerLabel = (provider: string): string => PROVIDER_LABEL[provider] ?? provider;
 
 /** Postgres `date` comes back as a Date in UTC; the contract wants `YYYY-MM-DD`. */
 function isoDate(value: Date | string): string {
@@ -58,7 +65,16 @@ function isoDate(value: Date | string): string {
  */
 function disabledBecause(
   row: CatalogQueryRow,
+  allowed: readonly string[] | undefined,
 ): { code: DisabledCode; reason: string } | null {
+  // First, because it outranks both of the others: a provider this deployment
+  // does not offer cannot be reached by adding a key or by changing the row
+  // (decision R12). The catalog *route* drops these rows rather than listing
+  // them; the code exists because the settings and session routes read it to
+  // refuse a model a client asked for by id.
+  if (allowed !== undefined && !allowed.includes(row.provider)) {
+    return { code: 'provider_not_allowed', reason: PROVIDER_NOT_ALLOWED_COPY };
+  }
   if (row.disabled_reason !== null) return { code: 'catalog', reason: row.disabled_reason };
 
   // Tool calling is not a preference: every run in this product calls a tool,
@@ -105,6 +121,18 @@ export interface CatalogQuery {
   /** Only the four seeded rows plus anything in `include`. */
   readonly seedOnly?: boolean | undefined;
   readonly include?: readonly string[] | undefined;
+  /**
+   * The providers this deployment offers (decision R12). Rows of any other
+   * provider are marked `provider_not_allowed`; omit it and nothing is marked,
+   * which is what a test asking about key state alone wants.
+   */
+  readonly allowed?: readonly string[] | undefined;
+  /**
+   * Drop the rows `allowed` would have marked, rather than listing them. The
+   * catalog route sets it: a menu of models nobody can pick is a menu that
+   * teaches people to distrust it. Needs `allowed`.
+   */
+  readonly onlyAllowed?: boolean | undefined;
 }
 
 export const CATALOG_PAGE_DEFAULT = 50;
@@ -156,6 +184,9 @@ export async function loadCatalogPage(
   if (query.provider !== undefined && query.provider !== '') {
     where.push(`c.provider = ${push(query.provider)}`);
   }
+  if (query.onlyAllowed === true && query.allowed !== undefined) {
+    where.push(`c.provider = ANY(${push([...query.allowed])}::text[])`);
+  }
   if (query.seedOnly === true) {
     const include = push(query.include ?? []);
     where.push(`(c.source = 'seed' OR c.model_id = ANY(${include}::text[]))`);
@@ -192,7 +223,7 @@ export async function loadCatalogPage(
 
   const page = rows.slice(0, limit);
   return {
-    models: page.map(toEntry),
+    models: page.map((row) => toEntry(row, query.allowed)),
     total: Number(totals[0]?.total ?? page.length),
     next_cursor: rows.length > limit ? (page[page.length - 1]?.model_id ?? null) : null,
   };
@@ -202,8 +233,8 @@ const CATALOG_COLUMNS = `c.model_id, c.provider, c.label, c.transport, c.effort_
             c.pricing_per_million, c.pricing_verified_on, c.disabled_reason,
             c.source, c.context_length, c.supports_tools, c.supports_reasoning`;
 
-function toEntry(row: CatalogQueryRow): CatalogEntry {
-  const disabled = disabledBecause(row);
+function toEntry(row: CatalogQueryRow, allowed: readonly string[] | undefined): CatalogEntry {
+  const disabled = disabledBecause(row, allowed);
   return catalogEntrySchema.parse({
     model_id: row.model_id,
     provider: row.provider,
@@ -230,7 +261,11 @@ function toEntry(row: CatalogQueryRow): CatalogEntry {
 }
 
 /** Every row. Still used where the count is known to be small (settings). */
-export async function loadCatalog(tx: Tx, workspaceId: string): Promise<CatalogEntry[]> {
+export async function loadCatalog(
+  tx: Tx,
+  workspaceId: string,
+  allowed?: readonly string[],
+): Promise<CatalogEntry[]> {
   const { rows } = await tx.query<CatalogQueryRow>(
     `SELECT ${CATALOG_COLUMNS},
             (SELECT k.status FROM workspace_provider_keys k
@@ -240,7 +275,10 @@ export async function loadCatalog(tx: Tx, workspaceId: string): Promise<CatalogE
       ORDER BY c.model_id`,
     [workspaceId],
   );
-  return rows.map(toEntry);
+  // Marked, never filtered: this is the function the settings route validates a
+  // default model against, and it has to be able to say *why* a model it was
+  // handed cannot be the default (decision R12).
+  return rows.map((row) => toEntry(row, allowed));
 }
 
 /** One row, for the engine: the transport, the effort map and the price. */
