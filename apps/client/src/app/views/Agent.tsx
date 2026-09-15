@@ -6,7 +6,7 @@
 // or their copy.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CodeBlock, ContextCards, DiffTable, Flowchart, RecommendationCard, ThinkingState } from '@hermes/motion-components';
+import { CodeBlock, ContextCards, DiffTable, Flowchart, ThinkingState } from '@hermes/motion-components';
 import { CTX, CTX_DEST, HISTORY, INBOX, OV, REQ, SKILLS_VIEW, TRACES, type AgentFile, type ContextField, type InstructionVersion, type RequestEntity, type SkillVersion, type TraceEntity, type Ref } from '@hermes/shared';
 import { useAdapter, useAppState, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, KIND_ICON } from '../ui/icons.js';
@@ -62,29 +62,6 @@ export function AgentOverview() {
   const pending = lists.requests.filter((r) => r.status === 'pending');
   const destination = rows<ContextField>(state, LIST_KEYS.contextFields, 'context_field').find((field) => field.field === 'destination');
   const blocked = destination ? !destination.value : false;
-  const next = useMemo(
-    () =>
-      pending.slice(0, 3).map((request) => {
-        const complete = request.missing.length === 0;
-        return {
-          key: request.id,
-          body: (
-            <>
-              Review {request.subject ?? request.label} · {request.sources.length} source{request.sources.length === 1 ? '' : 's'} cited
-              {complete ? '' : `, ${request.missing.length} gap${request.missing.length === 1 ? '' : 's'} named`}
-            </>
-          ),
-          short: `${request.subject ?? request.label} · ${requestStatusLabel(request)}`,
-          signal: complete ? 3 : 2,
-          tone: complete ? 'var(--green)' : 'var(--orange)',
-          label: complete ? `${request.sources.length} sources cited` : `Missing: ${request.missing.join(', ')}`,
-          cta: admin ? 'Open review' : 'Open request',
-          ctaVariant: (complete ? 'accent' : 'primary') as 'accent' | 'primary',
-        };
-      }),
-    [pending, admin],
-  );
-
   if (lists.loading) return <div className="scroll"><div className="app-body"><Skeleton rows={4} /></div></div>;
 
   return (
@@ -105,22 +82,6 @@ export function AgentOverview() {
             </div>
           }
         />
-        {next.length > 0 && (
-          // `RecommendationCard` over what is actually waiting (plan 10b).
-          //
-          // The meter is a count, not a confidence: three bars is a request
-          // whose evidence is complete, two is one with gaps the agent named,
-          // and the copy says which. `onConfirm` navigates and nothing else —
-          // the card never decides, and there is no path from it to a decision
-          // that does not go through the review pane and its own footer.
-          <div className="hermes-ui">
-            <RecommendationCard
-              labels={{ title: admin ? 'What needs you next' : 'What is assigned to you' }}
-              options={next}
-              onConfirm={(option) => nav(REQ(option.key))}
-            />
-          </div>
-        )}
         <div className="row" style={{ height: 32 }}>
           <h2 className="section-title">{admin ? 'Needs you' : 'Assigned to you'}</h2>
           <span className="grow" />

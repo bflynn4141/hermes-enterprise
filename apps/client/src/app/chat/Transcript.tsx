@@ -29,9 +29,9 @@
 // that cannot be read while it works.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
-import type { Message } from '@hermes/shared';
+import type { Message, RequestEntity } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
-import { Block } from './Blocks.js';
+import { Block, ReceiptBlock } from './Blocks.js';
 import { IrisText } from './IrisText.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
@@ -419,6 +419,10 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 function IrisMessage({ message, session }: { message: Message; session: SessionState }) {
   const adapter = useAdapter();
   const state = useAppState();
+  const requests = Object.values(state.entities.request)
+    .map((record) => record.data as RequestEntity | null)
+    .filter((request): request is RequestEntity => request !== null);
+  const receipts = receiptIdsForMessage(message, requests);
   const small = message.kind === 'ack' || message.kind === 'progress' || (!message.worked_ms && !message.heading && message.blocks.length === 0);
   const statusOnly = message.kind === 'guidance' || (message.kind === 'steps' && !message.text);
   if (statusOnly) {
@@ -448,6 +452,11 @@ function IrisMessage({ message, session }: { message: Message; session: SessionS
           ))}
         </div>
       )}
+      {receipts.length > 0 && (
+        <div className="blocks" style={{ paddingLeft: 40 }} aria-label="Requests prepared by this response">
+          {receipts.map((requestId) => <ReceiptBlock key={requestId} requestId={requestId} />)}
+        </div>
+      )}
       {message.incomplete && (
         <div className="incomplete-footer" role="status" style={{ paddingLeft: 40 }}>
           <span>{EMPTY.incomplete}</span>
@@ -464,4 +473,18 @@ function IrisMessage({ message, session }: { message: Message; session: SessionS
       {message.worked_ms != null && <ResponseFooter message={message} session={session} workspaceId={state.workspace.id} />}
     </div>
   );
+}
+
+/** A created request belongs beside the answer that prepared it. */
+export function receiptIdsForMessage(message: Message, requests: readonly RequestEntity[]): string[] {
+  if (!message.run_id) return [];
+  const explicit = new Set(
+    message.blocks
+      .filter((block) => block.type === 'receipt')
+      .map((block) => String((block as { requestId?: string; request_id?: string }).requestId ?? (block as { request_id?: string }).request_id ?? block.command?.id ?? '')),
+  );
+  return requests
+    .filter((request) => request.run_id === message.run_id && !explicit.has(request.id))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map((request) => request.id);
 }
