@@ -8,7 +8,7 @@ Updated September 15, 2026. Scope: [implementation plan](APPROVAL-EXPANSION-PLAN
 - Checkout: `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/hermes-enterprise`, branch `main`.
 - Working app baseline: `9a46b7d`. Plan commit: `19d70b4`.
 - Existing app: `http://localhost:8787`. Workers must not reset its data or restart its services.
-- Delivery state: plan committed; three isolated implementation tasks started. No expansion implementation integrated yet.
+- Delivery state: all three implementation tasks active. Shared contract checkpoint `12920a6` reviewed and integrated as `82b5042`; server, runtime and UI implementation remain in progress.
 
 ## Owners
 
@@ -26,4 +26,6 @@ All three tasks were created using `gpt-5.6-sol` with `thinking: xhigh` as Brian
 - Integration order: shared contract → server → runtime → client → combined verification.
 - Worker database tests require isolated databases or a coordinated exclusive slot. No live workspace seeds, external sends, payments, signatures, paid model verification or production deploys.
 - The lead will inspect exact diffs and exercise existing four-item paths plus all ten new approval families, reviewer routing, stale versions, duplicate decisions, continuation admission and budget refusal.
+- Integrated contract verification: shared tests 86/86 passed; repository typechecks passed. The shell used Node 22.22.0 and emitted the existing declared Node >=26 engine warning; no test/typecheck failure occurred. Later runtime checks must use a supported runtime where required.
+- Lead review feedback sent to server: reject weaker-policy selection, validate recipient-owner bindings, bind supported mutable resource contents to versions/digests, and keep revision-history superseded state separate from the compatible request lifecycle.
 - No new execution capability is verified yet. Any fixtures or unavailable provider/runtime capabilities must remain visible in the delivery report.
