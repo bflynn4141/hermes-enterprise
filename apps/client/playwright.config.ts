@@ -5,16 +5,21 @@ import { defineConfig, devices } from '@playwright/test';
 // behind them. That is enough for the scenarios that are about the *client's*
 // behaviour (empty states, the triage list, the review pane, the badge).
 //
-// The scenarios that are about the system — two browser contexts deciding the
-// same request, a socket dropped mid-run, a provider 5xx — belong against
-// `wrangler dev` with Docker Postgres and `AUTH_MODE=fake`, which lands with
-// the M2 worker routes. Point `E2E_BASE_URL` at that server to run them there.
+// The scenarios that are about the *system* — two contexts deciding the same
+// request, a connection dropped mid-run, the provider-key lifecycle, a fresh
+// workspace's empty states — live in `e2e/live.spec.ts` and run against
+// `wrangler dev` with Docker Postgres, `AUTH_MODE=fake` and `MODEL_SCRIPTED=1`.
+// `pnpm e2e:live` boots all of that; `E2E_BASE_URL` points this config at it.
+//
+// The split is by file, not by tag, because the two suites cannot share a
+// server: one wants the mock bundle on its own static server, the other wants
+// the real bundle served by the Worker.
 const port = Number(process.env.E2E_PORT ?? 4180);
 const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
+  timeout: process.env.E2E_BASE_URL ? 90_000 : 30_000,
   expect: { timeout: 7_000 },
   fullyParallel: false,
   workers: 1,
@@ -24,6 +29,9 @@ export default defineConfig({
     viewport: { width: 1680, height: 1000 },
     trace: 'retain-on-failure',
   },
+  // The mock suite never runs against the live server and the live suite never
+  // runs against the mock bundle: each asserts things only true of its own.
+  testIgnore: process.env.E2E_BASE_URL ? ['**/scenarios.spec.ts', '**/qa-screens.spec.ts'] : ['**/live.spec.ts', '**/live-screens.spec.ts'],
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   ...(process.env.E2E_BASE_URL
     ? {}

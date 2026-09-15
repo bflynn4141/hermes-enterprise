@@ -74,13 +74,15 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
             onClick={() => {
               if (!token) return;
               setBusy(true);
-              void rest
-                .acceptInvitation(token)
-                .then(() => window.location.assign('/'))
-                .catch(() => {
-                  setError('This invitation is no longer valid.');
-                  setBusy(false);
-                });
+              // An invitation is accepted through the identity provider, not
+              // here: WorkOS owns the email and the account, and the Worker
+              // mirrors the membership on the way back through
+              // `/auth/callback`. So the button hands the token to the sign-in
+              // route rather than posting it, which is also what makes
+              // accepting work for someone who has no account yet.
+              window.location.assign(`/auth/login?return_to=${encodeURIComponent(`/?invitation=${token}`)}`);
+              void rest;
+              void setError;
             }}
           >
             Accept invitation

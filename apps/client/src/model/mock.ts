@@ -333,15 +333,10 @@ export function createMockBackend(options: MockOptions = {}) {
         catalog,
       });
 
-    if (p('/bootstrap/client'))
-      return json({
-        members,
-        invitations: empty ? [] : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }],
-        provider_keys: providerKeys,
-        agent: { id: AGENT, name: 'Iris', email: 'iris@nous.example', summary: 'Iris screens partner applications, prepares documents and routes feedback. Every admission, document, send, payment and signature waits for a human.', setup_step: null },
-        hub_ticket: 'mock-ticket',
-        csrf_token: 'mock-csrf',
-      });
+    // There is no `/bootstrap/client` any more: the Worker has no such route,
+    // so the client composes the same object out of `/auth/session`,
+    // `/members`, `/invitations` and `/provider-keys`, and so does this.
+    if (p('/catalog')) return json({ models: catalog });
 
     if (p('/events')) {
       const after = BigInt(url.searchParams.get('after') ?? '0');
@@ -365,13 +360,20 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Add a provider key in Settings to start');
         runScenario('completed', sessionId);
-        return json({ run_id: RUN, client_turn_id: String(body.client_turn_id ?? ''), duplicate: false });
+        return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
-      if (rest === '/stop') {
-        runScenario('stopped', sessionId);
-        return new Response(null, { status: 204 });
+      // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.
+      if (rest.startsWith('/runs/')) {
+        const control = rest.split('/')[3] ?? '';
+        if (control === 'stop') {
+          runScenario('stopped', sessionId);
+          return json({ run_id: RUN, status: 'stopping', attempt: 1 });
+        }
+        if (control === 'retry') return json({ run_id: RUN, status: 'working', attempt: 2 }, 201);
+        if (control === 'guide') return json({ guidance_id: mockUuid(700), status: 'queued' }, 201);
+        if (control === 'queue') return json({ items: [] }, method === 'POST' ? 201 : 200);
+        if (control === 'context') return json({ ok: true, key: String(body.key ?? '') });
       }
-      if (rest === '/guide' || rest === '/queue') return new Response(null, { status: 204 });
       if (rest === '/shares' && method === 'POST') {
         const share = { id: mockUuid(500), url: `${url.origin}/shared/mock-share-token`, audience: String(body.audience ?? 'Nous team'), message_cutoff_seq: 2, created_at: iso(0) };
         if (row) row.share = { id: share.id, url: share.url, audience: share.audience, created_at: share.created_at, messages: 2 };
@@ -438,7 +440,7 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = traces.find((t) => t.id === traceMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/agent-files')) return page(agentFiles);
+    if (p('/files')) return page(agentFiles);
     if (p('/context-fields')) return page(contextFields);
     const contextMatch = match(new RegExp(`^/w/${WS}/context-fields/([^/]+)$`));
     if (contextMatch && method === 'PATCH') {
@@ -452,20 +454,43 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/skills')) return page(skills);
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
-      providerKeys.push({ id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'deepseek', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null });
-      return json({ keys: providerKeys });
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'deepseek', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
+      providerKeys.push(added);
+      return json({ key: added, verification: { status: 'unverified', reason: 'unavailable' } }, 201);
     }
     if (path.startsWith(`/w/${WS}/provider-keys/`)) {
-      if (method === 'DELETE') return new Response(null, { status: 204 });
       const id = path.split('/')[4];
       const row = providerKeys.find((k) => k.id === id);
+      if (method === 'DELETE') {
+        if (row) row.revoked_at = iso(0);
+        return json({ key: row ?? providerKeys[0], stopped_runs: [] });
+      }
       if (row && path.endsWith('/verify')) {
         row.status = 'verified';
         row.verified_models = ['deepseek-flash'];
         row.verified_at = iso(0);
+        return json({ key_id: row.id, status: row.status, reason: 'ok' });
       }
-      return json({ keys: providerKeys });
+      if (row && path.endsWith('/rotate')) {
+        row.rotated_at = iso(0);
+        return json({ key: row, replaces_key_id: row.id, verification: { status: row.status, reason: 'ok' } });
+      }
+      return json({ key: row ?? providerKeys[0], verification: { status: 'unverified', reason: 'unavailable' } });
     }
+    // Uploads: declare, PUT the bytes at the dev-direct URL, complete.
+    if ((p('/attachments') || p('/files')) && method === 'POST') {
+      const attachment = { id: mockUuid(800), name: String(body.name ?? 'file.pdf'), size: Number(body.size ?? 1), mime: String(body.mime ?? 'application/pdf'), sha256: null, status: 'uploading' };
+      return json(
+        { attachment, upload: { method: 'PUT', url: `/w/${WS}/attachments/${attachment.id}/upload`, expires_at: iso(900), headers: {}, direct: true } },
+        201,
+      );
+    }
+    if (path.endsWith('/upload') && method === 'PUT') return json({ ok: true, size: 1 });
+    if (path.endsWith('/complete') && method === 'POST') {
+      const id = path.split('/')[4] ?? mockUuid(800);
+      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: 'a'.repeat(64), status: 'ready' });
+    }
+
     if (p('/usage')) return json(usage);
     if (p('/settings') || path.startsWith(`/w/${WS}/agents/`)) return new Response(null, { status: 204 });
     if (path.startsWith('/shared/')) {
@@ -484,7 +509,8 @@ export function createMockBackend(options: MockOptions = {}) {
       const forSession = url.includes('/hub/session/');
       const sessionScoped = event.session_id !== null;
       if (forSession !== sessionScoped) return;
-      socket.onmessage?.({ data: JSON.stringify(event) });
+      // The hub's own frame shape: a batch, even when it holds one event.
+      socket.onmessage?.({ data: JSON.stringify({ type: 'events', events: [event] }) });
     };
     listeners.add(listener);
     socket.close = () => listeners.delete(listener);

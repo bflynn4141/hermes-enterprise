@@ -14,7 +14,17 @@
 //     without applying them, GET the replay from the cursor, apply the replay,
 //     then apply the buffer minus anything at or below the cursor. Applying the
 //     live buffer first would leave a hole no reader could notice.
-import { safeParseStreamEvent, type StreamEvent } from '@hermes/shared';
+//   * a frame carries a *batch*: the hubs fan one committed transaction out as
+//     `{"type":"events","events":[…]}`, because sending N frames for N events
+//     in one commit costs N wakeups of a hibernating Durable Object. The
+//     reducer still sees one event at a time, in id order.
+//   * when the socket cannot be opened at all, the hub falls back to polling
+//     the same replay endpoint. That is not a nicety: in `AUTH_MODE=fake` the
+//     Worker authenticates from an `x-dev-user` header and a browser cannot
+//     set a header on a WebSocket handshake, so a socket is refused with 401
+//     before it exists. Polling goes through `onEvent` with the same cursor and
+//     the same ordering, so the only thing that changes is latency.
+import { hubFrameSchema, safeParseStreamEvent, type StreamEvent } from '@hermes/shared';
 import type { LinkState, LinkStatus } from './store.js';
 
 export type HubKind = 'session' | 'workspace';
@@ -38,11 +48,34 @@ export interface HubOptions {
   onEvent(event: StreamEvent, id: bigint): void;
   onState(state: LinkState): void;
   onResync(): void;
-  /** Replays `after` → head over HTTP. Resolves `resync` when the cursor is gone. */
-  replay(after: bigint): Promise<{ events: StreamEvent[]; resync: boolean }>;
+  /**
+   * Replays `after` → head over HTTP. Resolves `resync` when the cursor is
+   * gone. `head` is the stream's newest id at the time of the call: the
+   * replay route answers at most 500 rows, so a client far behind needs more
+   * than one page and `head` is how it knows.
+   */
+  replay(after: bigint): Promise<{ events: StreamEvent[]; resync: boolean; head?: string }>;
   onSignedOut(): void;
   onEvicted(): void;
   socketFactory?: SocketFactory;
+  /**
+   * Which of the replayed events this hub should apply.
+   *
+   * `GET /w/:ws/events?stream=session` takes no session id — it answers with
+   * every session the caller may see — so a session hub advances its cursor
+   * past the other sessions' rows and applies only its own. Without this a
+   * second session's replay would re-apply the first session's transcript.
+   */
+  accept?(event: StreamEvent): boolean;
+  /**
+   * Poll interval once the socket has been given up on. A function, because
+   * the right interval depends on whether a run is streaming: ~700 ms while
+   * the transcript is moving, several seconds when nothing is happening. A
+   * fixed fast interval would make an idle tab as expensive as a working one.
+   */
+  pollMs?: number | (() => number);
+  /** How many refused handshakes before polling takes over. 0 disables it. */
+  pollAfterFailures?: number;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
@@ -52,6 +85,9 @@ export interface HubOptions {
 export const PING_MS = 20_000;
 export const SILENCE_MS = 60_000;
 const BACKOFF = [500, 1000, 2000, 5000, 10_000];
+export const POLL_MS = 700;
+/** Two refused handshakes is a policy, not a blip. */
+const POLL_AFTER_FAILURES = 2;
 
 export interface Hub {
   close(): void;
@@ -78,6 +114,10 @@ export function createHub(options: HubOptions): Hub {
   let pingHandle: unknown = null;
   let silenceHandle: unknown = null;
   let reconnectHandle: unknown = null;
+  let pollHandle: unknown = null;
+  let polling = false;
+  let handshakeFailures = 0;
+  let everOpened = false;
   let state: LinkState = { status: 'connecting', lastMessageAt: 0, sinceMs: 0 };
 
   function setStatus(status: LinkStatus): void {
@@ -139,33 +179,56 @@ export function createHub(options: HubOptions): Hub {
     }, Math.max(0, Math.round(base + jitter)));
   }
 
+  /** One event, wherever it came from: a live frame, a replay page, a poll. */
+  function intake(streamEvent: StreamEvent): void {
+    const id = BigInt(streamEvent.id);
+    if (buffering) {
+      buffer.push({ event: streamEvent, id });
+      return;
+    }
+    if (id <= cursor) return;
+    cursor = id;
+    if (options.accept && !options.accept(streamEvent)) return;
+    options.onEvent(streamEvent, id);
+  }
+
   function applyBuffered(): void {
     const pending = buffer;
     buffer = [];
     buffering = false;
-    for (const item of pending) {
-      if (item.id <= cursor) continue;
-      cursor = item.id;
-      options.onEvent(item.event, item.id);
-    }
+    for (const item of pending) intake(item.event);
   }
+
+  /** At most this many pages per catch-up, so a very stale cursor cannot spin. */
+  const MAX_REPLAY_PAGES = 20;
 
   async function catchUp(): Promise<void> {
     setStatus('replaying');
     try {
-      const page = await options.replay(cursor);
-      if (page.resync) {
-        buffer = [];
+      // Keep paging while the stream's head is ahead of the cursor. One page
+      // is 500 rows; a client that was away for a long run needs several, and
+      // stopping after the first would leave a hole that looks like a dropped
+      // message rather than an unfinished replay.
+      for (let pageCount = 0; pageCount < MAX_REPLAY_PAGES; pageCount += 1) {
+        const page = await options.replay(cursor);
+        if (page.resync) {
+          buffer = [];
+          buffering = false;
+          options.onResync();
+          setStatus('open');
+          return;
+        }
+        // The replay is applied with `buffering` still true for the *buffer*,
+        // but these are not buffered: `intake` is called with buffering off for
+        // the duration, so replay lands first and the buffer second.
         buffering = false;
-        options.onResync();
-        setStatus('open');
-        return;
-      }
-      for (const event of page.events) {
-        const id = BigInt(event.id);
-        if (id <= cursor) continue;
-        cursor = id;
-        options.onEvent(event, id);
+        for (const event of page.events) intake(event);
+        buffering = true;
+        // Stop unless the page itself says there is more. A replay with no
+        // `head` is one page by definition: guessing "there might be more"
+        // would mean an extra round trip after every ordinary catch-up.
+        if (page.events.length === 0) break;
+        if (page.head === undefined || BigInt(page.head) <= cursor) break;
       }
       applyBuffered();
       setStatus('open');
@@ -174,8 +237,49 @@ export function createHub(options: HubOptions): Hub {
     }
   }
 
+  /**
+   * The fallback. Same cursor, same `onEvent`, same drop-anything-at-or-below
+   * rule; only the transport differs, so replay ordering is still the only
+   * ordering there is.
+   */
+  function poll(): void {
+    if (closed || !polling) return;
+    void options
+      .replay(cursor)
+      .then((page) => {
+        if (closed) return;
+        if (page.resync) {
+          options.onResync();
+          return;
+        }
+        state = { ...state, lastMessageAt: now() };
+        for (const streamEvent of page.events) intake(streamEvent);
+        if (state.status !== 'open') setStatus('open');
+      })
+      .catch(() => {
+        if (!closed) setStatus('reconnecting');
+      })
+      .finally(() => {
+        if (closed || !polling) return;
+        const interval = typeof options.pollMs === 'function' ? options.pollMs() : (options.pollMs ?? POLL_MS);
+        pollHandle = setTimer(poll, interval);
+      });
+  }
+
+  function startPolling(): void {
+    if (polling || closed) return;
+    polling = true;
+    buffering = false;
+    buffer = [];
+    stopTimers();
+    if (reconnectHandle) clearTimer(reconnectHandle);
+    reconnectHandle = null;
+    setStatus('replaying');
+    poll();
+  }
+
   function connect(): void {
-    if (closed) return;
+    if (closed || polling) return;
     setStatus(attempts === 0 ? 'connecting' : 'reconnecting');
     buffering = true;
     buffer = [];
@@ -191,6 +295,8 @@ export function createHub(options: HubOptions): Hub {
 
     ws.onopen = () => {
       attempts = 0;
+      everOpened = true;
+      handshakeFailures = 0;
       armPing();
       armSilence();
       void catchUp();
@@ -200,6 +306,9 @@ export function createHub(options: HubOptions): Hub {
       state = { ...state, lastMessageAt: now() };
       armSilence();
       const data = typeof event.data === 'string' ? event.data : '';
+      // `pong` is the Durable Object's auto-response and never reaches
+      // application code there; here it only has to reset the silence timer,
+      // which the lines above already did.
       if (!data || data === 'pong') return;
       let json: unknown;
       try {
@@ -207,6 +316,13 @@ export function createHub(options: HubOptions): Hub {
       } catch {
         return;
       }
+      const frame = hubFrameSchema.safeParse(json);
+      if (frame.success) {
+        if (frame.data.type === 'ticket.accepted') return;
+        for (const streamEvent of frame.data.events) intake(streamEvent);
+        return;
+      }
+      // Older shape, and the one the mock backend sends: a bare event.
       const parsed = safeParseStreamEvent(json);
       if (!parsed.success) {
         // A frame that does not parse is a contract break, not a transcript
@@ -214,22 +330,25 @@ export function createHub(options: HubOptions): Hub {
         options.onResync();
         return;
       }
-      const streamEvent = parsed.data;
-      const id = BigInt(streamEvent.id);
-      if (buffering) {
-        buffer.push({ event: streamEvent, id });
-        return;
-      }
-      if (id <= cursor) return;
-      cursor = id;
-      options.onEvent(streamEvent, id);
+      intake(parsed.data);
     };
 
     ws.onclose = (event) => {
       stopTimers();
       socket = null;
       if (closed) return;
-      if (event.code === 4401) {
+      // A handshake that never became an open socket is a refusal, not a drop.
+      // Retrying it forever would be a tight loop against a policy that is not
+      // going to change; after a couple of tries the hub polls instead.
+      if (!everOpened) {
+        handshakeFailures += 1;
+        const threshold = options.pollAfterFailures ?? POLL_AFTER_FAILURES;
+        if (threshold > 0 && handshakeFailures >= threshold) {
+          startPolling();
+          return;
+        }
+      }
+      if (event.code === 4401 && everOpened) {
         setStatus('signed-out');
         options.onSignedOut();
         return;
@@ -257,14 +376,16 @@ export function createHub(options: HubOptions): Hub {
     extend(next) {
       ticket = next;
       try {
-        socket?.send(JSON.stringify({ type: 'ticket', value: next }));
+        socket?.send(JSON.stringify({ type: 'ticket', ticket: next }));
       } catch {
         /* the hub closes the socket if the ticket never arrives */
       }
     },
     close() {
       closed = true;
+      polling = false;
       stopTimers();
+      if (pollHandle) clearTimer(pollHandle);
       if (reconnectHandle) clearTimer(reconnectHandle);
       try {
         socket?.close(1000, 'client_close');

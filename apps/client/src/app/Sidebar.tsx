@@ -18,6 +18,7 @@ import { useAppState, useAdapter, useDispatch, useNav } from './store-context.js
 import { Glass, Icon } from './ui/icons.js';
 import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
 import { memberCounts } from './selectors.js';
+import { DEV_USERS } from '../model/auth.js';
 import { visibleSessions } from '../model/store.js';
 
 const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
@@ -135,21 +136,18 @@ function DevAccountSwitcher() {
     <div className="dev-switcher" aria-label="Development account">
       <span className="p-meta">Dev account</span>
       <div className="row" style={{ gap: 6 }}>
-        {[
-          ['maya@nous.example', 'Admin'],
-          ['alex@nous.example', 'Member'],
-        ].map(([id, label]) => (
+        {DEV_USERS.map((user) => (
           <button
-            key={id}
+            key={user.id}
             type="button"
             className="text-btn light"
-            aria-pressed={current === id}
+            aria-pressed={current === user.id}
             onClick={() => {
-              adapter.auth.setDevUser(id!);
+              adapter.auth.setDevUser(user.id);
               window.location.reload();
             }}
           >
-            {label}
+            {user.label}
           </button>
         ))}
       </div>

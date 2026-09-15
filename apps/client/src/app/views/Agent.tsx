@@ -428,11 +428,11 @@ export function TraceDetail({ id }: { id: string | null }) {
       </div>
     );
   }
-  if (record.state === 'missing' || !record.data) {
+  if (record.state === 'missing' || record.state === 'unavailable' || !record.data) {
     return (
       <div className="scroll">
         <div className="app-body">
-          <EmptyState icon="trace" title={EMPTY.traceMissing} />
+          <EmptyState icon="trace" title={record.state === 'unavailable' ? EMPTY.libraryUnavailable : EMPTY.traceMissing} />
         </div>
       </div>
     );

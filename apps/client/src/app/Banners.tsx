@@ -50,7 +50,7 @@ export function ConnectionBanner() {
       </div>
     );
   }
-  if (state.ready && !keys.any) {
+  if (state.ready && keys.banner && !keys.rejected) {
     return (
       <div className="banner banner-quiet" role="status">
         {EMPTY.noKey}

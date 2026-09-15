@@ -101,14 +101,18 @@ function makeFetch(overrides: Record<string, () => Response> = {}) {
     if (override) return override();
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     if (url.pathname.endsWith('/bootstrap')) return json(bootstrapBody);
-    if (url.pathname.endsWith('/bootstrap/client')) return json({ hub_ticket: 'ticket-1' });
+    // The four routes `loadExtra` composes the client bootstrap out of; the
+    // Worker has no `/bootstrap/client`, so neither does the mock.
+    if (url.pathname.endsWith('/members')) return json({ items: [], cursor: null, total: 0 });
+    if (url.pathname.endsWith('/invitations')) return json({ items: [], cursor: null, total: 0 });
+    if (url.pathname.endsWith('/provider-keys')) return json({ keys: [] });
     if (url.pathname.endsWith('/messages')) return json({ items: [], cursor: null, total: 0 });
     if (url.pathname.endsWith('/events')) return json({ stream: 'workspace', after: '0', head: '0', resync: false, events: [] });
     if (url.pathname === '/auth/session')
       return json({
         user: { id: USER, name: 'Maya', email: 'maya@nous.example', role: 'admin' },
         workspace: { id: WS, name: 'Nous' },
-        stream_heads: { workspace: '0' },
+        stream_heads: { workspace: '0', session: '0' },
         hub_ticket: 'ticket-2',
         expires_at: iso,
         authenticated_at: iso,
@@ -205,7 +209,7 @@ describe('the hub keepalive', () => {
 
   it('buffers live events during a replay, then applies them, dropping duplicates', async () => {
     const applied: string[] = [];
-    let replayResolve: ((value: { events: unknown[]; resync: boolean }) => void) | null = null;
+    let replayResolve: ((value: { events: unknown[]; resync: boolean; head?: string }) => void) | null = null;
     const hub = createHub({
       kind: 'session',
       url: 'ws://test.local/hub',
@@ -217,7 +221,7 @@ describe('the hub keepalive', () => {
       replay: () =>
         new Promise((resolve) => {
           replayResolve = resolve as typeof replayResolve;
-        }) as Promise<{ events: never[]; resync: boolean }>,
+        }) as Promise<{ events: never[]; resync: boolean; head?: string }>,
       onSignedOut: () => undefined,
       onEvicted: () => undefined,
       socketFactory: (url) => new FakeSocket(url),
@@ -228,10 +232,42 @@ describe('the hub keepalive', () => {
     socket.deliver(streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'Read', state: 'done' }, 2n));
     socket.deliver(streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'b', label: 'Score', state: 'active' }, 3n));
     expect(applied).toEqual([]);
-    replayResolve!({ events: [streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'Read', state: 'active' }, 1n), streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'Read', state: 'done' }, 2n)] as never[], resync: false });
+    replayResolve!({ events: [streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'Read', state: 'active' }, 1n), streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'Read', state: 'done' }, 2n)] as never[], resync: false, head: '2' });
     await vi.advanceTimersByTimeAsync(0);
     // Replay first, in id order; then the buffer, minus the id the replay covered.
     expect(applied).toEqual(['1', '2', '3']);
+    hub.close();
+  });
+
+  it('keeps paging the replay until it reaches the head', async () => {
+    // The replay route answers at most 500 rows. A client that was away for a
+    // long run is further behind than that, and a catch-up that stopped after
+    // one page would leave a hole that looks exactly like a lost message.
+    const applied: string[] = [];
+    const pages = [
+      { events: [streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'a', label: 'One', state: 'done' }, 1n)], resync: false, head: '3' },
+      { events: [streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'b', label: 'Two', state: 'done' }, 2n)], resync: false, head: '3' },
+      { events: [streamEvent('run.step', { run_id: RUN, attempt: 1, turn: 0, step_id: 'c', label: 'Three', state: 'done' }, 3n)], resync: false, head: '3' },
+    ];
+    let call = 0;
+    const hub = createHub({
+      kind: 'session',
+      url: 'ws://test.local/hub',
+      ticket: 't',
+      after: 0n,
+      onEvent: (event) => applied.push(event.id),
+      onState: () => undefined,
+      onResync: () => undefined,
+      replay: () => Promise.resolve(pages[call++] ?? { events: [], resync: false, head: '3' }) as never,
+      onSignedOut: () => undefined,
+      onEvicted: () => undefined,
+      socketFactory: (url) => new FakeSocket(url),
+    });
+    FakeSocket.instances[0]!.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(applied).toEqual(['1', '2', '3']);
+    // And it stops at the head rather than asking forever.
+    expect(call).toBe(3);
     hub.close();
   });
 });
@@ -259,9 +295,12 @@ describe('the adapter', () => {
     await vi.advanceTimersByTimeAsync(10);
     for (const socket of FakeSocket.instances) socket.open();
     await vi.advanceTimersByTimeAsync(10);
-    const before = calls.filter((call) => call.path === '/auth/session').length;
+    // The route is called with `?ws=`: without it it walks the WorkOS mirror's
+    // directory and a workspace that mirror has never seen is a 404.
+    const authCalls = (): number => calls.filter((call) => call.path.startsWith('/auth/session')).length;
+    const before = authCalls();
     await vi.advanceTimersByTimeAsync(4 * 60 * 1000 + 100);
-    expect(calls.filter((call) => call.path === '/auth/session').length).toBe(before + 1);
+    expect(authCalls()).toBe(before + 1);
     const tickets = FakeSocket.instances.flatMap((socket) => socket.sent.filter((frame) => frame.includes('"ticket"')));
     expect(tickets.length).toBeGreaterThanOrEqual(2);
     expect(tickets[0]).toContain('ticket-2');
@@ -311,7 +350,9 @@ describe('the adapter', () => {
     const { adapter, store, state } = makeAdapter({
       [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => {
         // The first call never resolves in the store; the id is what matters.
-        return new Response(JSON.stringify({ run_id: RUN, client_turn_id: seen[seen.length - 1] ?? '', duplicate: seen.length > 1 }), { status: 200, headers: { 'content-type': 'application/json' } });
+        // `runView`: what the Worker answers, a 200 for the duplicate and a
+        // 201 for the new run. The body is the same either way.
+        return new Response(JSON.stringify({ run_id: RUN, status: 'working', attempt: 1 }), { status: seen.length > 1 ? 200 : 201, headers: { 'content-type': 'application/json' } });
       },
     });
     await adapter.start();
@@ -329,19 +370,47 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  const reauthOverride = {
+    [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () =>
+      new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),
+  };
+
   it('a decision that needs step-up stores the intent and never replays it', async () => {
-    const { adapter } = makeAdapter({
-      [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () => new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),
-    });
+    // Fake auth: the Worker has no step-up route, so there is nowhere to send
+    // the browser. The intent is still stored and the decision still is not
+    // re-posted — which is the part that matters.
+    const { adapter, calls } = makeAdapter(reauthOverride);
     await adapter.start();
     const assign = vi.fn();
     (globalThis as { window?: unknown }).window = { location: { href: 'http://test.local/w/x', assign } };
     const result = await adapter.decide(REQUEST, 'approve');
     expect(result).toBe('reauth_required');
-    const intent = adapter.pendingStepUp();
-    expect(intent).toMatchObject({ kind: 'decision', requestId: REQUEST, decision: 'approve' });
+    expect(adapter.pendingStepUp()).toMatchObject({ kind: 'decision', requestId: REQUEST, decision: 'approve' });
+    expect(assign).not.toHaveBeenCalled();
+    expect(calls.filter((call) => call.path.endsWith('/decisions')).length).toBe(1);
+    delete (globalThis as { window?: unknown }).window;
+    adapter.dispose();
+  });
+
+  it('in workos mode the step-up sends the browser to /auth/login?step_up=1 with a same-origin path', async () => {
+    const store = createStore(initialState());
+    const { impl, calls } = makeFetch(reauthOverride);
+    const adapter = createAdapter({
+      store,
+      workspaceId: WS,
+      auth: createAuth('workos'),
+      fetchImpl: impl,
+      socketFactory: (url) => new FakeSocket(url),
+      wsBase: 'ws://test.local',
+    });
+    await adapter.start();
+    const assign = vi.fn();
+    (globalThis as { window?: unknown }).window = { location: { href: 'http://test.local/w/x?a=1', origin: 'http://test.local', assign } };
+    await adapter.decide(REQUEST, 'approve');
     expect(assign).toHaveBeenCalledOnce();
-    // Nothing re-posted the decision: the redirect is the whole effect.
+    // A full URL would be collapsed to `/` by the Worker's open-redirect fix.
+    expect(String(assign.mock.calls[0]?.[0])).toBe('/auth/login?step_up=1&return_to=%2Fw%2Fx%3Fa%3D1');
+    expect(calls.filter((call) => call.path.endsWith('/decisions')).length).toBe(1);
     delete (globalThis as { window?: unknown }).window;
     adapter.dispose();
   });

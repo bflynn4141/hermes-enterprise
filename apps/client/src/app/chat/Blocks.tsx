@@ -10,6 +10,7 @@
 //      that carries `decide`: the click is real, the consent is not.
 //   3. A block renders the *current* state of the object it points at, read
 //      from the entity cache — the message text stays historical.
+import { ApprovalCard } from '@hermes/motion-components';
 import type { Block as BlockType, RequestEntity } from '@hermes/shared';
 import { isModelCommand } from '@hermes/shared';
 import { useAdapter, useAppState, useEntity, useNav } from '../store-context.js';
@@ -118,33 +119,26 @@ export function Block({ block, sessionId, message }: BlockProps) {
       );
 
     case 'receipt':
-      return <ReceiptBlock requestId={String(block.command?.id ?? (block as { request_id?: string }).request_id ?? '')} />;
-
-    case 'choice':
+      // The engine writes `requestId`; the planned shape was `request_id` or a
+      // command carrying the id. All three are read, because the block is the
+      // server's to name and the client's to render.
       return (
-        <div className="choice-row">
-          {(block.options ?? []).map((option, index) => (
-            <Button key={index} onClick={() => run(option.command)}>
-              {option.label}
-            </Button>
-          ))}
-        </div>
+        <ReceiptBlock
+          requestId={String(
+            (block as { requestId?: string }).requestId ?? (block as { request_id?: string }).request_id ?? block.command?.id ?? '',
+          )}
+        />
       );
+
+    // The two blocks `ask_for_context` produces. `ApprovalCard` carries the
+    // clarifying question and nothing else: it never decides, and every command
+    // it can run has already passed `commandSafe` above — a block carrying
+    // `decide`, `execute`, an invitation or a role never reaches this line.
+    case 'choice':
+      return <ChoiceBlock block={block} run={run} />;
 
     case 'confirm':
-      return (
-        <div className="draft-block">
-          <div className="k">{block.title}</div>
-          <div className="v">{block.subtitle}</div>
-          <div className="draft-actions">
-            {(block.actions ?? []).map((action, index) => (
-              <Button key={index} primary={action.tone === 'primary'} onClick={() => run(action.command)}>
-                {action.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-      );
+      return <ConfirmBlock block={block} run={run} />;
 
     case 'draft':
       return (
@@ -198,6 +192,7 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
   const record = useEntity<RequestEntity>('request', requestId || null);
   if (!requestId) return <BrokenBlock reason="The receipt named no request." />;
   if (record.state === 'loading') return <Skeleton rows={2} label="Loading the request" />;
+  if (record.state === 'unavailable') return <BrokenBlock reason="Not available yet" />;
   if (record.state === 'missing' || !record.data) return <BrokenBlock reason="Request not found" />;
   const request = record.data;
   void state;
@@ -212,6 +207,52 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
         {request.status === 'pending' ? 'Review' : 'Open receipt'}
         <Icon name="arrow" size={14} />
       </Button>
+    </div>
+  );
+}
+
+
+/**
+ * A `choice` block: one question, the model's own option labels, and the
+ * command that belongs to whichever one the person picks.
+ *
+ * `ApprovalCard` collects the answer and hands it back on submit, which is the
+ * shape this needs: the person chooses, then confirms. Nothing runs on the
+ * first click.
+ */
+function ChoiceBlock({ block, run }: { block: BlockType; run: (command: unknown) => void }) {
+  const options = block.options ?? [];
+  if (options.length === 0) return <BrokenBlock reason="This choice offered nothing to choose." />;
+  return (
+    <div className="hermes-ui">
+      <ApprovalCard
+        questions={[{ q: block.title ?? 'Which would you like?', type: 'radio', options: options.map((option) => option.label) }]}
+        labels={{ continue: 'Continue', send: 'Send', sentMessage: 'Sent' }}
+        onSubmitted={(answers) => {
+          const picked = answers[0]?.[0];
+          if (picked === undefined) return;
+          run(options[picked]?.command);
+        }}
+      />
+    </div>
+  );
+}
+
+/** A `confirm` block: the same card, with the model's actions as the options. */
+function ConfirmBlock({ block, run }: { block: BlockType; run: (command: unknown) => void }) {
+  const actions = block.actions ?? [];
+  if (actions.length === 0) return <BrokenBlock reason="This confirmation offered nothing to confirm." />;
+  return (
+    <div className="hermes-ui">
+      <ApprovalCard
+        questions={[{ q: [block.title, block.subtitle].filter(Boolean).join(' — ') || 'Confirm', type: 'radio', options: actions.map((action) => action.label) }]}
+        labels={{ continue: 'Continue', send: 'Confirm', sentMessage: 'Confirmed' }}
+        onSubmitted={(answers) => {
+          const picked = answers[0]?.[0];
+          if (picked === undefined) return;
+          run(actions[picked]?.command);
+        }}
+      />
     </div>
   );
 }

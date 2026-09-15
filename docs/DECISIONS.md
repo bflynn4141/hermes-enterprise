@@ -1678,3 +1678,255 @@ approved to be version 1 of.
 **Versions and the render are sibling routes** (`/documents/:id/versions`,
 `/documents/:id/render`) rather than keys in the entity, for the same reason as
 D1: `documentEntitySchema` is `.strict()`.
+
+---
+
+# C12–C24: the client against the real Worker
+
+Written while wiring `apps/client` to `wrangler dev --local` with `AUTH_MODE=fake`
+and `MODEL_SCRIPTED=1`. Everything here is a place where the built server and the
+client-port spec disagreed. The rule followed throughout was the brief's: the
+server as built wins, the client adapts, and where the server looks wrong it is
+recorded rather than changed.
+
+---
+
+## C12. The shell lives at `/workspace/:ws`, not `/w/:ws`
+
+**Found while building.** `wrangler.jsonc` lists `/w/*` in `run_worker_first`,
+and `index.ts` ends the table with `app.all('/w/*')` answering
+`{"reason":"unknown_route"}` as JSON — deliberately, so that a `fetch` for data
+is never handed `index.html`. The side effect is that `/w/:ws`, the URL the spec
+gives the shell, never reaches the Static Assets binding's
+single-page-application fallback either. Opening the app at its own URL returned
+a 404 body.
+
+**Decided.** The API keeps `/w/:ws/...`. The *shell* moves to
+`/workspace/:ws[/s/:sessionId]`, which is not worker-first and so falls through
+to the SPA handler. `parseRoute` still accepts `/w/:ws`, so the moment the
+Worker answers a navigation request there with the shell, old links work again
+with no change in the client.
+
+**What would change it.** Three lines in `apps/worker/src/index.ts`: answer the
+`/w/*` catch-all with `env.ASSETS.fetch(request)` when the request is a
+navigation (`Sec-Fetch-Mode: navigate`, or `Accept` contains `text/html`) and
+with JSON otherwise. Then `SHELL_PREFIX` goes back to `w` and this decision is
+deleted.
+
+---
+
+## C13. A hub frame is a batch, and the ticket key is `ticket`
+
+**Found while building.** Two shapes differed from the spec. The hubs send
+`{"type":"events","events":[…]}` — one frame per committed batch, because
+`publish` fans a whole transaction out at once and N frames would be N wakeups
+of a hibernating Durable Object — and they reply to a re-ticket with
+`{"type":"ticket.accepted"}`. `Hub.webSocketMessage` reads `parsed.ticket`,
+where the spec said `{"type":"ticket","value":…}`.
+
+**Decided.** The client reads the batch envelope (`hubFrameSchema` in
+`packages/shared/src/wire.ts`), ignores `ticket.accepted`, still accepts a bare
+event for the mock backend, and sends `{"type":"ticket","ticket":…}`. The server
+is right on both counts; the spec was guessing.
+
+---
+
+## C14. The replay stream takes no session id, so a session hub filters
+
+**Found while building.** The spec's replay call was
+`?stream=session:<id>`. `GET /w/:ws/events` reads `stream=session|workspace` and
+filters the session stream server-side to the sessions the caller owns or holds
+a share on. A session hub therefore receives its siblings' rows.
+
+**Decided.** `HubOptions.accept` — a session hub advances its cursor past every
+row and applies only its own. The cursor still advances, so nothing is fetched
+twice.
+
+**And a second thing this forced.** A new session hub starts at
+`bootstrap.heads.session`, not at zero. At zero it replays the entire
+workspace's session history, 500 rows at a time, before it can deliver anything
+live — which on a workspace with a few thousand events is several seconds of
+nothing. The transcript comes from `GET .../messages`; the socket only ever
+needs what happens from now on.
+
+---
+
+## C15. The catch-up pages until it reaches the head
+
+**Found while building.** `MAX_REPLAY_PAGE` is 500 and the client applied one
+page. A client that was away for a long run came back missing the middle of it,
+which looks exactly like a dropped message. `eventsPageSchema` already carries
+`head`; the client was throwing it away.
+
+**Decided.** `catchUp` loops while `head > cursor`, up to 20 pages, and stops on
+an empty page or a response with no head. The unit test that covers it asserts
+both halves: the pages are applied in id order, and the loop stops at the head
+rather than asking forever.
+
+---
+
+## C16. Fake auth cannot open a browser WebSocket, so the hub falls back to polling
+
+**Found while building.** `AUTH_MODE=fake` authenticates from an `x-dev-user`
+header. A browser cannot put a header on a WebSocket handshake, so both hub
+upgrades are refused with 401 before a socket exists. Verified directly: the
+same upgrade succeeds from Node with the header and fails without it.
+
+**Decided.** After two refused handshakes the hub polls the replay route
+instead — same cursor, same `onEvent`, same "drop anything at or below the
+cursor" rule, so replay ordering is still the only ordering there is. The
+cadence is adaptive: ~600 ms while any session has a live run, 4 s when nothing
+is happening, because an idle tab polling three times a second is a bill and a
+battery.
+
+This is not only a development affordance. A socket that is refused for any
+reason — a proxy that strips upgrades, a corporate middlebox — now degrades to a
+slower product rather than a broken one.
+
+Playwright *can* set the header on the context, and it reaches the handshake, so
+the live suite exercises the socket path and a hand-driven browser exercises the
+polling path. Both are covered.
+
+---
+
+## C17. Every run control names its run
+
+**Found while building.** The spec had `POST .../sessions/:id/stop`. The Worker
+has `POST .../sessions/:id/runs/:runId/{stop,guide,queue,retry,context}`.
+
+**Decided.** The adapter resolves the run id from the reducer — the session
+holds exactly one, set by `run.started` and cleared by `run/clear` — and a
+control pressed when there is none is a no-op rather than an error. The server
+is right: "the session's current run" is a race the client would have to win,
+and the server already knows the answer.
+
+---
+
+## C18. There is no `/bootstrap/client`; four routes answer instead
+
+**Found while building.** The spec asked for one route carrying members,
+invitations, provider keys, the agent and a hub ticket. The Worker has no such
+route, and adding one is the server's to do.
+
+**Decided.** `loadExtra()` composes the same object from `/auth/session?ws=`,
+`/w/:ws/members`, `/w/:ws/invitations` and `/w/:ws/provider-keys`, in parallel,
+each independently optional. They are the four the shell would call on its first
+render anyway. Two details fell out of it:
+
+* `/auth/session` **must** carry `?ws=`. Without it the route walks
+  `workspace_directory`, which only the WorkOS mirror writes, so a seeded
+  development workspace is not in it and the answer is 404 `no_workspace`.
+* reading provider keys is itself a step-up action, so a 401 there is
+  `reauth_required`, not "signed out". `ui.providerKeysLocked` keeps "no keys"
+  and "not allowed to look right now" as different screens.
+
+---
+
+## C19. `unknown_route` is not `not_found`
+
+**Found while building.** Several routes the client wants did not exist when it
+was wired up, and some still do not. A 404 for all of them rendered "Request not
+found" — which tells a reviewer a request was *redacted* when in fact this build
+of the server cannot look.
+
+**Decided.** A fourth entity state, `unavailable`, set only for a 404 whose
+`reason` is `unknown_route`, rendering "Not available yet". `rest.optional()`
+does the same for lists: an absent route yields the screen's empty state, and
+any other failure still throws, because a 500 on a route that exists is a bug
+and silence would hide it.
+
+The decisions route is the one exception: it is never wrapped in `optional`. A
+decision that silently did nothing is the one failure this product cannot have.
+
+---
+
+## C20. The composer is not greyed in scripted development
+
+**Found while building.** `wrangler dev` runs `MODEL_SCRIPTED=1`, so a run needs
+no provider key at all — but no catalog row is `enabled` without one, so the
+spec's rule greyed the composer on a stack where sending works perfectly.
+
+**Decided.** `hasVerifiedKey` returns `any` (may the composer send) and `banner`
+(should the advice show) separately. They differ only when
+`__AUTH_MODE__ === 'fake' && !__MOCK__` — real fake-auth development. The mock
+bundle is excluded on purpose: `?key=none` and `?key=invalid` are the fixtures
+the empty-state scenarios assert the greyed composer against. A production build
+folds the constant to `false` and drops the branch.
+
+---
+
+## C21. `run.focus` on an unseen request is treated as its creation
+
+**Found while building.** The engine writes the `requests` row and publishes
+`run.focus`; it does not publish `request.created`. Confirmed against
+`stream_events`: the seeded workspace has 24 `run.focus` rows and zero
+`request.created` rows. The Inbox therefore said "No reviews waiting" while the
+session that had just proposed the request was showing it in the app pane.
+
+**Decided.** A `run.focus` naming a request the cache has never seen prepends
+that id to `inbox:needs-review` and to `requests`, and bumps the inbox count —
+exactly what `request.created` would have done. A later `request.created`, if
+one is ever published, is a no-op because the id is already in both lists.
+
+**What this does not fix.** Another member, in another session, still learns
+nothing until they reload: `run.focus` is session-scoped and they are not on
+that socket. Only the server can fix that, by publishing `request.created` to
+the workspace stream when `propose_request` commits. Recorded as a server
+finding in `apps/client/README.md`.
+
+---
+
+## C22. A list the shell loaded before the row existed is invalidated, not left stale
+
+**Found while building.** `useWorkspaceLists` fetched each list once per mount.
+On a fresh workspace that is before the first request exists, and nothing ever
+refetched: the badge said 1 and the pane said "No reviews waiting".
+
+**Decided.** `list/invalidate` drops a list record — `decision.recorded` drops
+`history`, because a decision writes a row whose id the event does not carry —
+and the effect's dependencies include which lists the cache currently holds, so
+a dropped list is fetched again. `ensureList` is already idempotent, so a list
+that is ready or in flight costs nothing.
+
+---
+
+## C23. `PromptBar` is not adopted in the product composer
+
+**Decided.** The other five M3 components are adopted (`LoadingState`,
+`ThinkingState`, `ToolChips`, `StreamingText`, `TaskRows`, plus `ApprovalCard`
+for the `ask_for_context` blocks), composed in `src/app/chat/RunSurface.tsx` and
+driven only by server events. `PromptBar` is not.
+
+**Why.** It owns its draft in its own `useState` and exposes no controlled
+`value` and no initial text. Adopting it would mean a composer that cannot
+render a restored draft — and "Signed out. Sign in again to continue — your
+draft is saved" would become a sentence the product does not keep (spec §4.7,
+§12.4). The same reasoning the spec itself applies to `ChatComposer`, which it
+also declines to adopt in the shell.
+
+**What would change it.** A `value`/`onChange` pair on `PromptBar`, upstream.
+The composer's chrome is otherwise ready for it: model rows already come from
+the catalog with `disabled_reason`, runtime is already a segmented control, and
+Attach already goes through the presign flow.
+
+---
+
+## C24. Fake mode has no step-up, so the client challenges in place
+
+**Found while building.** The spec's `/auth/dev/step-up` does not exist, and
+`/auth/login` is a 503 without WorkOS credentials. Worse, fake auth writes
+`auth_sessions.authenticated_at` once, on the INSERT for `sid = dev-<user id>`;
+nothing ever moves it. Five minutes after a dev workspace is first opened, every
+decision and every provider-key route answers `reauth_required` for ever.
+
+**Decided.** `stepUpUrl` returns `null` in fake mode. The intent is still stored
+and the pane still renders its "Re-authenticated — confirm to continue" state
+and still waits for a second, deliberate click — the client never auto-replays a
+decision, which is the part that matters — but the browser is not sent into a
+503. In `workos` mode it goes to `/auth/login?step_up=1&return_to=<path>`, and
+`return_to` is a *path*: the Worker collapses anything else to `/`, so sending a
+full URL would silently lose the destination.
+
+For local work, `apps/client/scripts/dev-step-up.mjs` re-stamps the row — which
+is exactly what `/auth/callback` does in the real flow — and `pnpm e2e:live`
+runs it before the scenarios that need it.

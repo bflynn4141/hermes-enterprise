@@ -42,15 +42,33 @@ export const catalogRows = (state: AppState): Bootstrap['catalog'] =>
 export const providerKeys = (state: AppState): MaskedProviderKey[] => rows<MaskedProviderKey>(state, LIST_KEYS.providerKeys, 'provider_key');
 
 /**
+ * `wrangler dev` answers from `ScriptedProvider` (`MODEL_SCRIPTED=1`), so a run
+ * there needs no provider key at all and greying the composer would make a
+ * working development stack look broken. The mock bundle is excluded on
+ * purpose: `?key=none` and `?key=invalid` are the fixtures the empty-state
+ * scenarios assert the greyed composer against, and both are mock builds. A
+ * production build folds this to `false` and drops the branch.
+ */
+const SCRIPTED_DEV = __AUTH_MODE__ === 'fake' && !__MOCK__;
+
+/**
  * Whether the composer may send at all, and whose key was rejected. A workspace
  * with no verified key is an empty state ("Add a provider key in Settings to
  * start"), not an error: in M1 that is every workspace.
+ *
+ * `any` is what the composer disables itself on; `banner` is what the shell
+ * shows. They differ only in scripted development, where the advice is still
+ * true and the refusal it predicts would not happen.
  */
-export function hasVerifiedKey(state: AppState): { any: boolean; rejected: string | null } {
+export function hasVerifiedKey(state: AppState): { any: boolean; rejected: string | null; banner: boolean } {
   const keys = providerKeys(state);
-  const any = keys.some((key) => key.status === 'verified' || key.status === 'verified_scoped');
+  const verified = keys.some((key) => key.status === 'verified' || key.status === 'verified_scoped');
   const invalid = keys.find((key) => key.status === 'invalid');
-  return { any, rejected: any ? null : invalid ? invalid.provider : null };
+  return {
+    any: verified || SCRIPTED_DEV,
+    rejected: verified ? null : invalid ? invalid.provider : null,
+    banner: !verified,
+  };
 }
 
 /** The status line under a request row, derived from the row, never stored. */

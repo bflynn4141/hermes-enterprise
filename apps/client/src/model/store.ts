@@ -54,7 +54,14 @@ export const ENTITY_KINDS: readonly EntityKind[] = [
   'catalog', 'provider_key', 'attachment', 'share', 'session',
 ];
 
-export type EntityState = 'ready' | 'loading' | 'missing';
+/**
+ * `unavailable` is not `missing`.
+ *
+ * A row the server says does not exist is "Request not found"; a *route* the
+ * server has not built yet is "Not available yet". Collapsing the two would
+ * tell a reviewer a request was redacted when in fact this build cannot look.
+ */
+export type EntityState = 'ready' | 'loading' | 'missing' | 'unavailable';
 export interface EntityRecord<T = unknown> {
   data: T | null;
   version: number;
@@ -133,6 +140,12 @@ export interface UiState {
   navCollapsed: boolean;
   /** Set by a 401 or a 4401 socket close; the shell blocks on it. */
   banner: 'none' | 'reconnecting' | 'redeploying' | 'signed-out' | 'evicted';
+  /**
+   * True when `GET /w/:ws/provider-keys` answered `reauth_required`. Reading
+   * the key rows is itself a step-up action, so "no keys" and "not allowed to
+   * look right now" are different screens and the tab has to tell them apart.
+   */
+  providerKeysLocked: boolean;
 }
 
 export interface AppState {
@@ -186,6 +199,7 @@ export function initialState(): AppState {
       pane: 'chat',
       navCollapsed: false,
       banner: 'none',
+      providerKeysLocked: false,
     },
     ready: false,
   };
@@ -269,8 +283,10 @@ export type Action =
   | { type: 'entity/upsert'; kind: EntityKind; id: string; version?: number | null; data?: unknown; state?: EntityState }
   | { type: 'entity/loading'; kind: EntityKind; id: string }
   | { type: 'entity/missing'; kind: EntityKind; id: string }
+  | { type: 'entity/unavailable'; kind: EntityKind; id: string }
   | { type: 'list/set'; key: string; ids: string[]; cursor?: string | null; total?: number | null; append?: boolean }
   | { type: 'list/prepend'; key: string; id: string }
+  | { type: 'list/invalidate'; key: string }
   | { type: 'cursor/advance'; stream: 'workspace' | 'session'; sessionId?: string; id: bigint }
   | { type: 'link/state'; kind: 'session' | 'workspace'; patch: Partial<LinkState> }
   | { type: 'auth/refreshed'; at: number }
@@ -592,6 +608,11 @@ export function reduce(state: AppState, action: Action): AppState {
       if (existing && existing.state === 'ready') return state;
       return upsertEntity(state, action.kind, action.id, existing?.version ?? 0, existing?.data, 'loading');
     }
+    case 'entity/unavailable':
+      return {
+        ...state,
+        entities: { ...state.entities, [action.kind]: { ...state.entities[action.kind], [action.id]: { data: null, version: 0, fetchedAt: Date.now(), state: 'unavailable' } } },
+      };
     case 'entity/missing':
       return {
         ...state,
@@ -604,6 +625,14 @@ export function reduce(state: AppState, action: Action): AppState {
         ...state,
         entities: { ...state.entities, lists: { ...state.entities.lists, [action.key]: { ids, cursor: action.cursor ?? null, total: action.total ?? null, state: 'ready' } } },
       };
+    }
+    case 'list/invalidate': {
+      // Drop the record entirely rather than marking it stale: `ensureList`
+      // refetches a list it does not have, and leaves a `ready` one alone.
+      if (!state.entities.lists[action.key]) return state;
+      const lists = { ...state.entities.lists };
+      delete lists[action.key];
+      return { ...state, entities: { ...state.entities, lists } };
     }
     case 'list/prepend': {
       const existing = state.entities.lists[action.key];
@@ -724,7 +753,21 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // so a miss shows a skeleton and a fetch rather than "Request not found".
       if (p.entity_type && p.entity_id && p.entity_type !== 'session' && p.entity_type !== 'agent') {
         const kind = p.entity_type === 'file' ? 'agent_file' : (p.entity_type as EntityKind);
-        if (!state.entities[kind]?.[p.entity_id]) out.push({ type: 'entity/loading', kind, id: p.entity_id });
+        const unseen = !state.entities[kind]?.[p.entity_id];
+        if (unseen) out.push({ type: 'entity/loading', kind, id: p.entity_id });
+        // A focus on a request the client has never seen is also the *first*
+        // it hears of that request: the engine writes the `requests` row and
+        // publishes `run.focus`, but it does not publish `request.created`, so
+        // the workspace stream carries nothing about it. (Server finding; see
+        // the README.) Treating the focus as the creation keeps the Inbox and
+        // its badge honest for the person whose session proposed it — and a
+        // later `request.created`, if one is ever published, is a no-op
+        // because the id is already in both lists.
+        if (unseen && kind === 'request') {
+          out.push({ type: 'list/prepend', key: 'inbox:needs-review', id: p.entity_id });
+          out.push({ type: 'list/prepend', key: 'requests', id: p.entity_id });
+          out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+        }
       }
       break;
     }
@@ -782,7 +825,13 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       if (!state.entities.request[p.request_id]) {
         out.push({ type: 'entity/loading', kind: 'request', id: p.request_id });
       }
+      // Both lists the Inbox reads from. `inbox:needs-review` is the badge's
+      // list; `requests` is the one the Inbox pane renders, and it is loaded
+      // once when the shell mounts — which on a fresh workspace is *before*
+      // the first request exists. Without this the pane keeps saying "No
+      // reviews waiting" while the badge says 1.
       out.push({ type: 'list/prepend', key: 'inbox:needs-review', id: p.request_id });
+      out.push({ type: 'list/prepend', key: 'requests', id: p.request_id });
       out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
       break;
     }
@@ -792,6 +841,10 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // The request row itself is refetched: `resulting_status` is all the event
       // carries, and the review pane needs the whole row.
       out.push({ type: 'entity/loading', kind: 'request', id: p.request_id });
+      // A decision writes a `history` row too, and History is loaded once for
+      // the same reason; the id is not known here, so the list is invalidated
+      // and refetched the next time the screen asks for it.
+      out.push({ type: 'list/invalidate', key: 'history' });
       out.push({ type: 'counts/set', patch: { inbox: Math.max(0, state.counts.inbox - 1), decisions: state.counts.decisions + 1 } });
       break;
     }

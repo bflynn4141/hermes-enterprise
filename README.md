@@ -26,7 +26,8 @@ is where the guarded decision route lands.
 | Both WebSocket upgrade routes with the `Origin` check, the socket attachment, HMAC hub tickets, evict fan-out and `requestStop`; `publish`, `evict`, `workos_sync`, `receipt` and `render` jobs run by the committing request and drained by the minute Cron | The orphan sweep's Workflow-status half, and the `reverify` job runner |
 | One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | Nothing here. `resolveKey` now runs inside every provider step, so plaintext exists only for that step |
 | Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
-| The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | The client. `apps/client/dist/index.html` is a placeholder shell; the demo's reducer is ported in M2 |
+| The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | Nothing here |
+| The client, against this Worker: bootstrap, the two hubs with replay-then-buffer and a polling fallback, turns, Stop, Guide, Queue, Retry, Follow, decisions with step-up, provider keys, uploads, and the M3 run surface. `pnpm e2e:live` drives fourteen scenarios through the live stack | `PromptBar` in the composer (it cannot render a restored draft — DECISIONS, C23), and the Usage, Traces, Skills and Instructions screens, whose routes the Worker does not serve yet |
 | `SessionHub` and `WorkspaceHub` Durable Objects: hibernating sockets, auto-response heartbeat, fan-out, eviction, and the `forward` RPC that carries deltas out and Stop back | The nightly validator Workflow (M5a) |
 | Both wrangler environments, the queues with dead-letter queues, two cron triggers, two Hyperdrive bindings, the CPU limit | Outreach, payment and signature. **No code for these exists or ever will in this repository**; they are `effects` rows a human executes |
 
@@ -56,6 +57,27 @@ cp .env.example .env              # the two Hyperdrive local connection strings
 cp .dev.vars.example .dev.vars    # secret names; empty is fine in fake mode
 node scripts/seed-dev.mjs         # one workspace, one Admin, one Member
 npx wrangler dev --local
+```
+
+That serves the API *and* the client, from `apps/client/dist`, which the assets
+binding points at. Build it first, with fake auth so the dev account switcher
+survives, and open the workspace:
+
+```sh
+AUTH_MODE=fake pnpm --filter client build
+open http://localhost:8787/workspace/11111111-1111-4111-8111-111111111111
+```
+
+`/workspace/:ws`, not `/w/:ws`: `/w/*` is in the Worker's `run_worker_first`
+list and its catch-all answers JSON, so the SPA fallback never sees a navigation
+there (DECISIONS, C12). `apps/client/README.md` has the rest, including the
+server findings this integration turned up and what each one costs.
+
+To run the whole thing end to end — Postgres, migrations, seed, bundle, Worker,
+and fourteen Playwright scenarios against all of it:
+
+```sh
+pnpm e2e:live
 ```
 
 Then:
@@ -99,7 +121,10 @@ a job to try again — because a throttled probe taught us nothing about the key
 Two 403s in a row means the key is probably scoped rather than broken, so the
 probe becomes a one-token call and the key is marked "verified (scoped)".
 
-Until that client exists, the same routes answer over the fake-auth dev server:
+The client's Provider keys tab does exactly this (`pnpm e2e:live` exercises add,
+verify, rotate and remove against the real routes). The same routes also answer
+over the fake-auth dev server, which is how the flow is checked without a
+browser:
 
 ```sh
 cd apps/worker
@@ -702,7 +727,9 @@ apps/worker        the Cloudflare Worker: Hono routes, Durable Object hubs,
   src/domain       the decision transaction, the effects plan, request and
                    History shaping — the rules, with no HTTP in them
   src/documents    the document template, the render pipeline and its keys
-apps/client        the client bundle (placeholder in M1)
+apps/client        the workspace client: React 19, esbuild, no router. Built
+                   into dist/, which the Worker's assets binding serves. Its
+                   README lists the server findings the integration turned up
 docs/              DECISIONS.md, CONVENTIONS.md
 ```
 

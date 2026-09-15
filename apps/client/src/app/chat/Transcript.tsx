@@ -9,12 +9,13 @@
 // shows the active step's own label — no invented duration.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
-import { LoadingState, StreamingText } from '@hermes/motion-components';
+import { StreamingText } from '@hermes/motion-components';
 import type { Message } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Block } from './Blocks.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
+import { RunSurface } from './RunSurface.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
@@ -139,7 +140,6 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     dispatch({ type: 'session/draft', id: session.id, text });
     document.getElementById(`composer-${session.id}`)?.focus();
   };
-  const activeStep = session.run?.steps.find((step) => step.state === 'active');
 
   return (
     <div className="transcript-wrap">
@@ -191,23 +191,14 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             ),
           )}
 
-          {session.stream && (
-            <div className="msg-iris" data-message-id="streaming">
-              <div className="lead">
-                <Glass name="iris" size={26} className="mark" />
-                <div className="grow hermes-ui">
-                  <StreamingText fill loop={false} content={[{ text: session.stream.text }]} />
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Every live state of a run, in one place: LoadingState before the
+              first delta, ThinkingState over the step rows, ToolChips per tool
+              call, StreamingText for the deltas, TaskRows for the queue. */}
+          <RunSurface session={session} />
 
-          {session.run?.status === 'working' && !session.stream && (
-            <div className="hermes-ui" style={{ paddingLeft: 40 }}>
-              <LoadingState active label={activeStep?.label ?? session.run.title ?? 'Working'} />
-            </div>
-          )}
-
+          {/* The queue's own Edit and Remove. TaskRows renders the rows; it has
+              no affordance for changing one, and a queued follow-up a person
+              cannot correct is a queued follow-up they will not use. */}
           <ActivityArea session={session} />
 
           {showChips && followUps.length > 0 && (

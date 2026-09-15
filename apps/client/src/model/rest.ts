@@ -13,23 +13,35 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  catalogPageSchema,
   errorBodySchema,
   eventsPageSchema,
   healthSchema,
   providerKeyListSchema,
+  providerKeyMutationSchema,
+  providerKeyRemovedSchema,
+  providerKeyVerifySchema,
+  runViewSchema,
+  guidanceAcceptedSchema,
+  queueStateSchema,
+  attachmentSchema,
+  attachmentDetailSchema,
+  attachmentUploadSchema,
+  directUploadResultSchema,
+  type AttachmentUpload,
   type Bootstrap,
+  type CatalogPage,
   type EventsPage,
   type Health,
   type Ref,
+  type ReplayStream,
+  type RunView,
 } from '@hermes/shared';
 import {
-  attachmentPresignSchema,
   authSessionSchema,
-  clientBootstrapSchema,
   decisionResultSchema,
   documentEntitySchema,
   eventRowSchema,
-  agentFileSchema,
   contextFieldSchema,
   instructionVersionSchema,
   invitationEntitySchema,
@@ -43,17 +55,13 @@ import {
   sharedSessionSchema,
   skillVersionSchema,
   traceEntitySchema,
-  turnResponseSchema,
   usageResponseSchema,
-  type AttachmentPresign,
   type AttachmentRef,
   type AuthSessionResponse,
-  type ClientBootstrapExtra,
   type DecisionResult,
   type Paginated,
   type ShareResponse,
   type SharedSession,
-  type TurnResponse,
 } from '@hermes/shared';
 import type { z } from 'zod';
 import type { AuthAdapter } from './auth.js';
@@ -93,6 +101,8 @@ interface CallOptions {
   requestedFrom?: 'inbox';
   retries?: number;
   signal?: AbortSignal;
+  /** Bytes sent as-is, with no JSON encoding: the dev direct-upload route. */
+  rawBody?: BodyInit;
 }
 
 function csrfToken(): string {
@@ -117,7 +127,8 @@ export function createRest(options: RestOptions) {
       if (call.requestedFrom) headers['X-Requested-From'] = call.requestedFrom;
 
       const init: RequestInit = { method, headers, credentials: 'include' };
-      if (body !== undefined) init.body = JSON.stringify(body);
+      if (call.rawBody !== undefined) init.body = call.rawBody;
+      else if (body !== undefined) init.body = JSON.stringify(body);
       if (call.signal) init.signal = call.signal;
       const response = await fetchImpl(`${base}${path}`, init);
 
@@ -163,29 +174,76 @@ export function createRest(options: RestOptions) {
     await perform(method, path, null, body, call);
   };
 
+
   const ws = (workspaceId: string) => `/w/${workspaceId}`;
+
+  /**
+   * A route this build of the Worker does not serve yet.
+   *
+   * Three routes the client wants — History, Traces, Usage and the rest of the
+   * §5.1 table — are owned by milestones that had not landed when the client
+   * was wired up. A 404 whose `reason` is `unknown_route` is the Worker's own
+   * "I do not have this", and the honest answer to it is the screen's empty
+   * state, not an error banner: the person has no activity to see *and* no way
+   * to tell the difference. Any other failure still throws, because a 500 on a
+   * route that exists is a bug and silence would hide it.
+   */
+  const optional = async <T>(call: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      if (error instanceof RestError && error.status === 404 && error.reason === 'unknown_route') return fallback;
+      throw error;
+    }
+  };
+
+  const emptyPage = <T>(): Paginated<T> => ({ items: [], cursor: null, total: 0 });
 
   return {
     request,
     send,
+    optional,
 
     // --- bootstrap, auth, health ---
     bootstrap: (workspaceId: string) => request(`GET`, `${ws(workspaceId)}/bootstrap`, bootstrapSchema) as Promise<Bootstrap>,
-    bootstrapExtra: (workspaceId: string) => request('GET', `${ws(workspaceId)}/bootstrap/client`, clientBootstrapSchema) as Promise<ClientBootstrapExtra>,
-    authSession: () => request('GET', '/auth/session', authSessionSchema) as Promise<AuthSessionResponse>,
+    /**
+     * `?ws=` is not optional in practice. Without it the route walks
+     * `workspace_directory` — which only the WorkOS mirror writes — and a
+     * seeded development workspace is not in it, so the answer is 404
+     * `no_workspace`. The client always knows which workspace it is in.
+     */
+    authSession: (workspaceId?: string) =>
+      request('GET', `/auth/session${workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : ''}`, authSessionSchema) as Promise<AuthSessionResponse>,
     health: () => request('GET', '/health', healthSchema) as Promise<Health>,
-    events: (workspaceId: string, stream: string, after: bigint) =>
-      request('GET', `${ws(workspaceId)}/events?stream=${encodeURIComponent(stream)}&after=${after.toString()}`, eventsPageSchema) as Promise<EventsPage>,
+    /**
+     * Replay. The Worker takes `stream=session|workspace` and no session id:
+     * the session stream is filtered server-side to what the caller may see, so
+     * a client watching one session receives its own other sessions' rows too
+     * and drops them by `session_id`.
+     */
+    events: (workspaceId: string, stream: ReplayStream, after: bigint) =>
+      request('GET', `${ws(workspaceId)}/events?stream=${stream}&after=${after.toString()}`, eventsPageSchema) as Promise<EventsPage>,
 
     // --- turns and runs ---
+    // Every control is scoped to a run, not to a session: the Worker's routes
+    // are `/sessions/:id/runs/:runId/...`, because "the session's current run"
+    // is a race the client would have to win and the server already knows.
     sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, turnResponseSchema, body) as Promise<TurnResponse>,
-    stop: (workspaceId: string, sessionId: string) => send('POST', `${ws(workspaceId)}/sessions/${sessionId}/stop`, {}),
-    retry: (workspaceId: string, sessionId: string, runId: string) => send('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, {}),
-    guide: (workspaceId: string, sessionId: string, text: string) => send('POST', `${ws(workspaceId)}/sessions/${sessionId}/guide`, { text }),
-    enqueue: (workspaceId: string, sessionId: string, text: string) => send('POST', `${ws(workspaceId)}/sessions/${sessionId}/queue`, { text }),
-    editQueued: (workspaceId: string, sessionId: string, itemId: string, text: string) => send('PATCH', `${ws(workspaceId)}/sessions/${sessionId}/queue/${itemId}`, { text }),
-    removeQueued: (workspaceId: string, sessionId: string, itemId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}/queue/${itemId}`),
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
+    stop: (workspaceId: string, sessionId: string, runId: string) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
+    retry: (workspaceId: string, sessionId: string, runId: string) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, {}) as Promise<RunView>,
+    guide: (workspaceId: string, sessionId: string, runId: string, text: string) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/guide`, guidanceAcceptedSchema, { text }),
+    enqueue: (workspaceId: string, sessionId: string, runId: string, text: string) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/queue`, queueStateSchema, { text }),
+    editQueued: (workspaceId: string, sessionId: string, runId: string, itemId: string, text: string) =>
+      request('PATCH', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/queue/${itemId}`, queueStateSchema, { text }),
+    removeQueued: (workspaceId: string, sessionId: string, runId: string, itemId: string) =>
+      request('DELETE', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/queue/${itemId}`, queueStateSchema),
+    answerContext: (workspaceId: string, sessionId: string, runId: string, key: string, value: string) =>
+      send('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/context`, { key, value }),
 
     // --- sessions ---
     sessions: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/sessions${query}`, paginatedSchema(sessionSchema)) as Promise<Paginated<z.infer<typeof sessionSchema>>>,
@@ -196,64 +254,109 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/messages?${before == null ? '' : `before=${before}&`}limit=${limit}`, paginatedSchema(messageSchema)) as Promise<Paginated<z.infer<typeof messageSchema>>>,
 
     // --- decisions and effects: the guarded paths ---
+    // The decisions route is M4's and may not exist yet; `optional` is not used
+    // here on purpose. A decision that silently did nothing is the one failure
+    // this product cannot have, so a missing route surfaces as an error.
     decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
 
     // --- entities ---
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
-    listRequests: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)),
-    listEffects: (workspaceId: string, requestId: string) => request('GET', `${ws(workspaceId)}/requests/${requestId}/effects`, paginatedSchema(effectEntitySchema)),
+    listRequests: (workspaceId: string, query = '') =>
+      optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
+    listEffects: (workspaceId: string, requestId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/requests/${requestId}/effects`, paginatedSchema(effectEntitySchema)), emptyPage()),
     getDocument: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/documents/${id}`, documentEntitySchema),
-    listDocuments: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)),
+    listDocuments: (workspaceId: string, query = '') =>
+      optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
-    listEvents: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/history${query}`, paginatedSchema(eventRowSchema)),
-    listTraces: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/traces${query}`, paginatedSchema(traceEntitySchema)),
+    listEvents: (workspaceId: string, query = '') =>
+      optional(() => request('GET', `${ws(workspaceId)}/history${query}`, paginatedSchema(eventRowSchema)), emptyPage()),
+    listTraces: (workspaceId: string, query = '') =>
+      optional(() => request('GET', `${ws(workspaceId)}/traces${query}`, paginatedSchema(traceEntitySchema)), emptyPage()),
     getTrace: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/traces/${id}`, traceEntitySchema),
-    listAgentFiles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/agent-files`, paginatedSchema(agentFileSchema)),
-    listContextFields: (workspaceId: string) => request('GET', `${ws(workspaceId)}/context-fields`, paginatedSchema(contextFieldSchema)),
+    listContextFields: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/context-fields`, paginatedSchema(contextFieldSchema)), emptyPage()),
     setContextField: (workspaceId: string, field: string, body: { value: string; scope: 'reply' | 'future' }) =>
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
-    listInstructions: (workspaceId: string) => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)),
+    listInstructions: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)), emptyPage()),
     proposeInstruction: (workspaceId: string, text: string) => request('POST', `${ws(workspaceId)}/instructions`, instructionVersionSchema, { text }),
     saveInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/save`, instructionVersionSchema, {}),
     discardInstruction: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/instructions/${id}`),
-    listSkills: (workspaceId: string) => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)),
+    listSkills: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)), emptyPage()),
     adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
 
     // --- members and invitations ---
     invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
-    acceptInvitation: (token: string) => request('POST', `/invitations/${token}/accept`, memberEntitySchema, {}),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
 
-    // --- shares, feedback, attachments ---
+    // --- shares, feedback ---
     share: (workspaceId: string, sessionId: string, audience: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema, { audience }) as Promise<ShareResponse>,
     unshare: (workspaceId: string, sessionId: string, shareId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}/shares/${shareId}`),
     sharedSession: (token: string, etag: string | null) =>
       request('GET', `/shared/${token}`, sharedSessionSchema, undefined, etag ? { headers: { 'If-None-Match': etag } } : {}) as Promise<SharedSession>,
     setFeedback: (workspaceId: string, messageId: string, value: 'helpful' | 'not-helpful') => send('PUT', `${ws(workspaceId)}/messages/${messageId}/feedback`, { value }),
     clearFeedback: (workspaceId: string, messageId: string) => send('DELETE', `${ws(workspaceId)}/messages/${messageId}/feedback`),
-    presignAttachment: (workspaceId: string, body: { filename: string; mime: string; size: number }) =>
-      request('POST', `${ws(workspaceId)}/attachments`, attachmentPresignSchema, body) as Promise<AttachmentPresign>,
-    completeAttachment: (workspaceId: string, id: string, body: { sha256: string; mime: string; size: number }) => send('POST', `${ws(workspaceId)}/attachments/${id}/complete`, body),
+
+    // --- uploads ---
+    // Two tables behind one flow. `attachments` are a turn's files; `files` are
+    // the agent's Context sources. The routes are identical apart from the
+    // prefix, so one pair of helpers takes the kind.
+    declareUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', body: { name: string; size: number; mime: string; session_id?: string; agent_id?: string }) =>
+      request('POST', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}`, attachmentUploadSchema, body) as Promise<AttachmentUpload>,
+    completeUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
+      request('POST', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}/complete`, attachmentSchema, {}),
+    getUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
+      request('GET', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`, attachmentDetailSchema),
+    deleteUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
+      send('DELETE', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`),
+    /** The agent's Context sources, with their extraction status. */
+    listAgentFiles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/files`, paginatedSchema(attachmentDetailSchema)),
+    /**
+     * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
+     * and this goes straight to R2 with no cookie; in `wrangler dev --local`
+     * there are no S3 credentials, so the Worker answers its own dev-only
+     * direct route and the request needs the session. `upload.direct` says
+     * which, so the client never has to guess from the URL.
+     */
+    putBytes: async (upload: AttachmentUpload['upload'], body: Blob | ArrayBuffer) => {
+      if (!upload.direct) {
+        const response = await fetchImpl(upload.url, { method: 'PUT', headers: upload.headers, body: body as BodyInit });
+        if (!response.ok) throw new RestError(response.status, 'upload_failed', `PUT to storage failed with ${response.status}`);
+        return;
+      }
+      await request('PUT', new URL(upload.url, 'http://placeholder.invalid').pathname, directUploadResultSchema, undefined, {
+        headers: upload.headers,
+        rawBody: body as BodyInit,
+      });
+    },
 
     // --- provider keys (every mutation needs step-up) ---
     providerKeys: (workspaceId: string) => request('GET', `${ws(workspaceId)}/provider-keys`, providerKeyListSchema),
-    addProviderKey: (workspaceId: string, body: { provider: string; label: string; key: string }) => request('POST', `${ws(workspaceId)}/provider-keys`, providerKeyListSchema, body),
-    verifyProviderKey: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-keys/${id}/verify`, providerKeyListSchema, {}),
-    rotateProviderKey: (workspaceId: string, id: string, key: string) => request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyListSchema, { key }),
-    removeProviderKey: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/provider-keys/${id}`),
+    addProviderKey: (workspaceId: string, body: { provider: string; label: string; key: string }) =>
+      request('POST', `${ws(workspaceId)}/provider-keys`, providerKeyMutationSchema, body),
+    verifyProviderKey: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-keys/${id}/verify`, providerKeyVerifySchema, {}),
+    rotateProviderKey: (workspaceId: string, id: string, key: string) =>
+      request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
+    removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
+    /** The model menu. Any member may read it; only the key rows need step-up. */
+    catalog: (workspaceId: string) => request('GET', `${ws(workspaceId)}/catalog`, catalogPageSchema) as Promise<CatalogPage>,
 
     // --- settings, usage, onboarding ---
-    patchSettings: (workspaceId: string, patch: Record<string, unknown>) => send('PATCH', `${ws(workspaceId)}/settings`, patch),
-    patchAgent: (workspaceId: string, agentId: string, patch: Record<string, unknown>) => send('PATCH', `${ws(workspaceId)}/agents/${agentId}`, patch),
+    patchSettings: (workspaceId: string, patch: Record<string, unknown>) => optional(() => send('PATCH', `${ws(workspaceId)}/settings`, patch), undefined),
+    patchAgent: (workspaceId: string, agentId: string, patch: Record<string, unknown>) => optional(() => send('PATCH', `${ws(workspaceId)}/agents/${agentId}`, patch), undefined),
     usage: (workspaceId: string, from: string, to: string, group: 'day' | 'session' | 'key') =>
-      request('GET', `${ws(workspaceId)}/usage?from=${from}&to=${to}&group=${group}`, usageResponseSchema),
+      optional(
+        () => request('GET', `${ws(workspaceId)}/usage?from=${from}&to=${to}&group=${group}`, usageResponseSchema),
+        { rows: [], total_tokens: 0, total_cost: 0, cap: null } as unknown as z.infer<typeof usageResponseSchema>,
+      ),
     createWorkspace: (body: { name: string }) => request('POST', '/workspaces', bootstrapSchema, body),
 
-    /** Used only by the Redeploying banner poll, and only while it is showing. */
     setFocusRef: (workspaceId: string, sessionId: string, ref: Ref | null) => request('PATCH', `${ws(workspaceId)}/sessions/${sessionId}`, sessionSchema, { focus_ref: ref }),
   };
 }

@@ -132,6 +132,17 @@ export function RequestReview({ id }: { id: string | null }) {
       </div>
     );
   }
+  if (record.state === 'unavailable') {
+    // The Worker has no requests route in this build. Saying "not found" would
+    // tell the reviewer the request was redacted, which is not what happened.
+    return (
+      <div className="scroll">
+        <div className="app-body">
+          <EmptyState icon="admission" title={EMPTY.libraryUnavailable} detail="This build of the server does not serve requests yet." />
+        </div>
+      </div>
+    );
+  }
   if (record.state === 'missing' || !record.data) {
     return (
       <div className="scroll">

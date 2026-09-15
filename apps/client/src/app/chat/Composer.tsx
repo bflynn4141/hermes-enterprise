@@ -279,10 +279,11 @@ function AttachPopover({ open, onClose, anchorRef, session }: { open: boolean; o
   const upload = async (list: FileList): Promise<void> => {
     for (const file of Array.from(list)) {
       try {
-        const presign = await adapter.rest.presignAttachment(state.workspace.id, { filename: file.name, mime: file.type || 'application/octet-stream', size: file.size });
-        await fetch(presign.url, { method: 'PUT', body: file });
-        await adapter.rest.completeAttachment(state.workspace.id, presign.attachment_id, { sha256: '', mime: file.type || 'application/octet-stream', size: file.size });
-        dispatch({ type: 'session/attach', id: session.id, attachment: { id: presign.attachment_id, label: file.name, icon: 'context' } });
+        // Declare, put the bytes, complete — the adapter owns all three, so
+        // the direct-upload fallback and the sha/mime verdict live in one
+        // place rather than in every call site that can attach a file.
+        const ready = await adapter.upload(file, { kind: 'attachment', sessionId: session.id });
+        dispatch({ type: 'session/attach', id: session.id, attachment: { id: ready.id, label: ready.name, icon: 'context' } });
       } catch {
         // An upload that fails leaves nothing behind; the chip never appears.
       }

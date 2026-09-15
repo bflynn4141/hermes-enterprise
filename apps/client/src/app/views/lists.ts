@@ -41,6 +41,15 @@ export function useWorkspaceLists(): Loaded {
   const adapter = useAdapter();
   const workspaceId = state.workspace.id;
 
+  // Which lists the cache currently holds. It is part of the effect's
+  // dependencies so that a list dropped by `list/invalidate` — a decision
+  // rewrites History, for instance — is fetched again rather than staying
+  // whatever it was when the shell mounted. `ensureList` is idempotent: a list
+  // that is `ready` or already in flight costs nothing.
+  const loadedKeys = Object.values(LIST_KEYS)
+    .filter((key) => state.entities.lists[key])
+    .join(',');
+
   useEffect(() => {
     if (!workspaceId) return;
     const rest = adapter.rest;
@@ -55,7 +64,7 @@ export function useWorkspaceLists(): Loaded {
     adapter.ensureList(LIST_KEYS.instructions, async () => page('instruction_version', (await rest.listInstructions(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.skills, async () => page('skill_version', (await rest.listSkills(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.providerKeys, async () => page('provider_key', (await rest.providerKeys(workspaceId)).keys));
-  }, [adapter, workspaceId]);
+  }, [adapter, workspaceId, loadedKeys]);
 
   const ready = (state_: AppState, key: string): boolean => state_.entities.lists[key]?.state === 'ready';
 

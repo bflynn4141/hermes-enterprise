@@ -3,11 +3,19 @@
 // Cookies, the CSRF double-submit token and `X-Requested-From` behave the same
 // in both modes, so the guarded paths are exercised locally exactly as they are
 // in production. What differs is only how a session is established:
-//   workos  the cookie is everything; step-up is a WorkOS authorization URL
-//           with `max_age: 0`
+//   workos  the cookie is everything; step-up is `/auth/login?step_up=1`,
+//           which asks WorkOS for `max_age: 0`
 //   fake    an `x-dev-user` header the Worker trusts *only* when its own
-//           AUTH_MODE is `fake`, and a dev route that stamps a fresh
-//           `authenticated_at` and bounces straight back
+//           AUTH_MODE is `fake`
+//
+// The spec asked for a dev step-up route that stamps a fresh
+// `authenticated_at` and bounces straight back. The Worker does not have one:
+// in fake mode `auth_sessions` records `authenticated_at` when the dev session
+// is first seen and nothing ever moves it, and `/auth/login` is a 503 with no
+// WorkOS credentials. So `stepUpUrl` returns null in fake mode and the callers
+// render the challenge inline instead of redirecting into a 503. The
+// second-click rule is unchanged: nothing is ever replayed automatically.
+// `apps/client/scripts/dev-step-up.mjs` re-stamps the row for local QA.
 //
 // The dev account switcher lives behind `mode === 'fake'`, which esbuild folds
 // to `false` in a production build, so the switcher and the header name are
@@ -29,20 +37,47 @@ export interface AuthAdapter {
   readonly mode: AuthMode;
   headers(): Record<string, string>;
   signInUrl(returnTo: string): string;
-  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key'): string;
+  /** Null when this mode has nowhere to send the browser (see the header). */
+  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key'): string | null;
   devUser(): string | null;
   setDevUser(id: string): void;
 }
 
 const DEV_USER_KEY = 'hermes:dev-user';
 
+/**
+ * The seeded pair `apps/worker/scripts/seed-dev.mjs` writes: an Admin and a
+ * Member, which is exactly what the two-context Playwright scenarios need.
+ * The Admin is the default, because a fake-mode client with no header gets a
+ * 401 on bootstrap and a sign-in screen that has nothing to sign in to.
+ */
+export const DEV_USERS = [
+  { id: 'maya@nous.example', label: 'Admin', name: 'Maya Chen' },
+  { id: 'dana@nous.example', label: 'Member', name: 'Dana Kim' },
+] as const;
+export const DEFAULT_DEV_USER = DEV_USERS[0].id;
+
+/**
+ * The Worker collapses any `return_to` that is not a same-origin *path* to
+ * `/` (the open-redirect fix). Sending it a full URL therefore silently loses
+ * the destination, so the path is extracted here.
+ */
+export function sameOriginPath(returnTo: string): string {
+  try {
+    const url = new URL(returnTo, typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return '/';
+  }
+}
+
 export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
   let devUser: string | null = null;
   if (mode === 'fake') {
     try {
-      devUser = localStorage.getItem(DEV_USER_KEY);
+      devUser = localStorage.getItem(DEV_USER_KEY) ?? DEFAULT_DEV_USER;
     } catch {
-      devUser = null;
+      devUser = DEFAULT_DEV_USER;
     }
   }
   return {
@@ -57,11 +92,14 @@ export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
       return { 'x-dev-user': devUser };
     },
     signInUrl(returnTo) {
-      return `/auth/signin?return_to=${encodeURIComponent(returnTo)}`;
+      // `/auth/login`, not `/auth/signin`: the Worker names it after what it
+      // does, and there is no second route to shim through.
+      return `/auth/login?return_to=${encodeURIComponent(sameOriginPath(returnTo))}`;
     },
     stepUpUrl(returnTo, reason) {
-      const path = mode === 'fake' ? '/auth/dev/step-up' : '/auth/step-up';
-      return `${path}?return_to=${encodeURIComponent(returnTo)}&reason=${reason}`;
+      if (mode === 'fake') return null;
+      void reason;
+      return `/auth/login?step_up=1&return_to=${encodeURIComponent(sameOriginPath(returnTo))}`;
     },
     devUser: () => devUser,
     setDevUser(id) {

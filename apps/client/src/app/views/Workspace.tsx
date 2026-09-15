@@ -549,7 +549,14 @@ function ProviderKeysTab() {
       const status = (error as { status?: number }).status;
       const code = (error as { reason?: string }).reason;
       if (status === 401 && code === 'reauth_required') {
-        window.location.assign(adapter.auth.stepUpUrl(window.location.href, reason));
+        const url = adapter.auth.stepUpUrl(window.location.href, reason);
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+        // Fake auth has no step-up route (see model/auth.ts): say so, rather
+        // than looking like the key itself was refused.
+        setNotice('This needs a recent sign-in. Sign in again to continue.');
         return;
       }
       setNotice(code === 'provider_rejected' ? `Your ${provider} key was rejected. Re-verify or rotate it` : `Could not reach ${provider}. We'll re-check shortly.`);

@@ -8,7 +8,9 @@
     "dev": "node build.mjs --watch --serve",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:live": "node scripts/e2e-live.mjs",
+    "dev:step-up": "node scripts/dev-step-up.mjs"
   },
   "dependencies": {
     "@hermes/shared": "workspace:*",
