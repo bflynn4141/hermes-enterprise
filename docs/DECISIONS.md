@@ -2770,6 +2770,35 @@ says what is true and offers the HTML render, which exists and is served.
 
 ---
 
+## C34. Focus belongs to the field, not to a bright ring inside it
+
+**Decided.** Focus is drawn on the container — `.field`, `.search`, `.composer`,
+`.find-bar`, `.portal-input`, `.portal-editor` — as a 50% `--accent-ink`
+(`#BBB8FF`) border with a soft `--accent-tint` halo (`0 0 0 3px
+rgba(130,123,222,.14)`), transitioned over 150ms on `border-color` and
+`box-shadow`. The control inside such a container draws nothing of its own. A
+control with no focus-carrying container keeps a real ring, in the same accent
+rather than the near-white `#c6c6ff` default.
+
+**Why.** This is the treatment the component library already settled on for
+`.prompt-surface` (hermes-motion-components `src/theme.css`, QA "Feedback
+polish"); the product client had not adopted it, so every focused input showed
+the library's `.hermes-ui input:focus-visible` stroke — a near-white 2px line
+inside a dark field. The rules are appended additively and only restate the
+focus half of the existing field rules. One detail is load-bearing: the bare-
+control rule is written `:root :is(input, textarea, select,
+[contenteditable]):focus-visible`, because the library's own
+`.hermes-ui input:focus-visible` outweighs an unprefixed element selector and
+would otherwise keep painting the white stroke. Buttons and links are untouched
+and keep their `:focus-visible` rings. Reduced motion needs no new rule: the
+file's global `prefers-reduced-motion` block already kills every transition,
+which makes the focus change instant.
+
+**Would change it if.** The library exports these field shells as components, at
+which point the app should adopt them instead of restating their focus rules.
+
+---
+
 # Series G — the final server pass
 
 The last of the security review's open findings and the six the client's

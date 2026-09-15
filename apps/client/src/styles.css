@@ -597,3 +597,40 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .usage-alloc .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-alloc .bar { display: block; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .usage-alloc .bar > span { display: block; height: 100%; background: var(--action); }
+
+/* ---------- field focus ----------
+   Ported from hermes-motion-components (.prompt-surface, src/theme.css): focus
+   belongs to the whole field container, not to a bright stroke drawn inside the
+   text control. Border goes to 50% --accent-ink (#BBB8FF) with a soft
+   --accent-tint halo over 150ms. The global reduced-motion rule above already
+   makes that instant. Additive: it only restates the focus half of the existing
+   .field / .search / .composer / .find-bar / .portal-input rules. */
+:root { --accent-ink: #BBB8FF; --accent-tint: #302888; --focus-line: rgba(187,184,255,.5); --focus-halo: 0 0 0 3px rgba(130,123,222,.14); }
+
+.field, .search, .composer, .find-bar, .portal-input, .portal-editor {
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field:focus-within, .search:focus-within, .composer:focus-within,
+.find-bar:focus-within, .portal-input:focus-within, .portal-editor:focus-within {
+  border-color: var(--focus-line);
+  box-shadow: var(--focus-halo);
+}
+
+/* Bare controls — no focus-carrying wrapper — keep a visible keyboard ring, in
+   the same accent rather than the near-white default. The `:root` prefix is
+   deliberate: it outweighs the library's `.hermes-ui input:focus-visible`,
+   which is what painted the near-white stroke. */
+:root :is(input, textarea, select, [contenteditable]):focus-visible {
+  outline: 2px solid var(--focus-line);
+  outline-offset: 1px;
+  border-color: var(--focus-line);
+  box-shadow: var(--focus-halo);
+  border-radius: 6px;
+}
+
+/* …and inside a wrapper that carries the focus style, the control draws nothing. */
+:is(.field, .search, .composer, .find-bar, .portal-input, .portal-editor):focus-within
+  :is(input, textarea, select, [contenteditable]) {
+  outline: none;
+  box-shadow: none;
+}
