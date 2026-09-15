@@ -17,7 +17,6 @@ import { HISTORY, INBOX, LIB, MEMBERS, OV, SETTINGS, type Ref } from '@hermes/sh
 import { useAppState, useAdapter, useDispatch, useNav } from './store-context.js';
 import { Glass, Icon } from './ui/icons.js';
 import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
-import { memberCounts } from './selectors.js';
 import { DEV_USERS } from '../model/auth.js';
 import { sessionRowTitle, sessionStatusLabel, visibleSessions, type SessionState } from '../model/store.js';
 import { requestComposerFocus } from './panel.js';
@@ -38,7 +37,6 @@ export function Sidebar() {
   const dispatch = useDispatch();
   const [menu, setMenu] = useState(false);
   const meBtn = useRef<HTMLButtonElement>(null);
-  const counts = memberCounts(state);
   const go = (ref: Ref): void => {
     setMenu(false);
     nav(ref);
@@ -77,7 +75,11 @@ export function Sidebar() {
         activeNav={state.ui.app.section}
         activeTitle={active ? rowLabel(active) : null}
         recents={recents}
-        footerLabel={`${state.user.name || 'You'} · ${counts.joined} joined`}
+        // Name only. The member counts live in the Members header and in the
+        // workspace menu; a headcount pinned under your own avatar is a number
+        // about other people in the one place that is about you (decision C47).
+        footerLabel={state.user.name || 'You'}
+        footerIcon={<Avatar person={{ name: state.user.name || 'You' }} size={20} />}
         onNavigate={(key) => {
           const section = SECTIONS.find((item) => item.key === key);
           if (!section) return;

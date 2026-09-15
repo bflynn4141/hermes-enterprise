@@ -5,17 +5,19 @@
 // Settings carries Provider keys, Usage and the data-and-privacy page, and the
 // one control in the product with no undo behind a confirmation and a step-up.
 //
-// Four library components are adopted here (plan 10b): `FilterTable` over
-// History, `RecordsTable` over Members, `InsightCards` over the usage report
-// and `FineTuneCard` over the two integer caps. Each is given real rows and
-// real callbacks; none of them is given a demo fixture.
+// Three library components are adopted here (plan 10b): `FilterTable` over
+// History, `InsightCards` over the usage report and `FineTuneCard` over the
+// two integer caps. Each is given real rows and real callbacks; none of them
+// is given a demo fixture. Members went back to the product's own inline rows
+// (decision C46) — `RecordsTable` is a database surface and a membership list
+// is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { FilterTable, FineTuneCard, InsightCards, RecordsTable } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type MaskedProviderKey, type MemberEntity, type SettingsView, type UsageRange, type UsageReport } from '@hermes/shared';
+import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
-import { EMPTY, LIBRARY_TABS, SETTINGS_TABS } from '../../model/constants.js';
+import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
 import { catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
@@ -113,21 +115,34 @@ export function History() {
 }
 
 /**
- * Members, with `RecordsTable` over the rows (plan 10b).
+ * Members, over the product's own inline rows (decision C46).
  *
- * The table's columns are the library's and the values in them are this
- * workspace's: the strength column ("Evidence coverage") reads the membership
- * status, the links column reads the address WorkOS holds, and the optional
- * calculation column — which a person adds by hand and which the library fills
- * from `reviewGap` when no model is wired — is given each member's recorded
- * reviewer roles. Nothing on this screen is generated; there is no
- * `onCalculate`, because there is no route that would answer one, and a column
- * that invented an answer would be worse than a column that has none.
+ * This screen was briefly `RecordsTable`, the library's database surface, and
+ * it brought a database's furniture with it: a selection checkbox column, an
+ * "Add calculation" affordance, a horizontal scroller and — from the library's
+ * fixture columns — an "Evidence" header that means nothing about a colleague.
+ * A membership list is a list of people, so it is a list: avatar, name, the
+ * two pills that say what they are and where they stand, when they joined, and
+ * the one action that row affords.
  *
- * Opening a row opens the same Manage dialog the old list opened.
+ * The two tabs are two different tables, because they are two different rows.
+ * "All members" reads the WorkOS membership mirror; "Invitations" reads the
+ * invitations list, which is where an unaccepted invitation actually lives —
+ * the mirror only ever holds people who have accepted, so the old tab (members
+ * filtered to a non-active status) was filtering a set the server never fills.
  */
-const memberStrength = (member: MemberEntity): 'strong' | 'weak' | 'veryweak' | 'none' =>
-  member.status === 'active' ? 'strong' : member.status === 'invited' ? 'weak' : member.status === 'expired' ? 'veryweak' : 'none';
+const memberStatusLabel = (status: MemberEntity['status']): string =>
+  status === 'active' ? 'Joined' : status === 'invited' ? 'Invited' : status === 'expired' ? 'Expired' : 'Removed';
+
+const invitationStatusLabel = (status: InvitationEntity['status']): string =>
+  status === 'pending' ? 'Invited' : status === 'expired' ? 'Expired' : status === 'withdrawn' ? 'Withdrawn' : status === 'bounced' ? 'Bounced' : status === 'resent' ? 'Resent' : 'Accepted';
+
+/** The pill's tone, and the only thing about a person this screen colours. */
+const statusTone = (label: string): string => (label === 'Joined' ? 'ok' : label === 'Expired' || label === 'Bounced' ? 'warn' : 'muted');
+
+function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: string }) {
+  return <span className={`pill pill-${tone}`}>{children}</span>;
+}
 
 export function Members() {
   const state = useAppState();
@@ -142,23 +157,15 @@ export function Members() {
   const [ack, setAck] = useState<string | null>(null);
   const counts = memberCounts(state);
   const all = lists.members;
-  const list = tab === 'all' ? all : all.filter((member) => member.status !== 'active');
+  // Withdrawn and accepted invitations are history, and History is where they
+  // are read; this tab is the ones an Admin can still do something about.
+  const invitations = lists.invitations.filter((row) => row.status === 'pending' || row.status === 'expired');
   const person = manage ? all.find((member) => member.id === manage) ?? null : null;
   const isYou = person?.user_id === state.user.id;
-
-  const records = useMemo(
-    () =>
-      list.map((member) => ({
-        id: member.id,
-        name: member.user_id === state.user.id ? `${member.name} · You` : member.name,
-        tags: [member.role === 'admin' ? 'Admin' : 'Member', member.status],
-        last: member.joined_at ? new Date(member.joined_at).toLocaleDateString() : 'No contact',
-        strength: memberStrength(member),
-        website: member.email,
-        reviewGap: member.reviewer_roles.length ? `${member.reviewer_roles.join(', ')} reviewer` : 'No reviewer role',
-      })),
-    [list, state.user.id],
-  );
+  const invitationsChanged = () => {
+    adapter.invalidateList('invitations');
+    adapter.invalidateList('members');
+  };
 
   return (
     <div className="scroll">
@@ -180,11 +187,78 @@ export function Members() {
           onChange={setTab}
           label="Member views"
         />
-        {list.length === 0 ? (
-          <EmptyState icon="people" title={tab === 'all' ? 'No members yet' : EMPTY.invitations} />
+        {tab === 'all' ? (
+          all.length === 0 ? (
+            <EmptyState icon="people" title="No members yet" />
+          ) : (
+            <div className="col" role="list">
+              {all.map((member) => {
+                const status = memberStatusLabel(member.status);
+                return (
+                  <div className="list-row members-row" role="listitem" key={member.id} style={{ minHeight: 84 }}>
+                    <Avatar person={{ name: member.name }} size={40} />
+                    {/* The name column flexes and truncates: the row has to fit
+                        the app pane with the Iris panel open, and the action is
+                        the part that must never be pushed off the edge. */}
+                    <div className="row-main">
+                      <span className="t truncate" style={{ fontSize: 18 }}>
+                        {member.name}
+                        {member.user_id === state.user.id && <span className="meta"> · You</span>}
+                      </span>
+                      <span className="s truncate">{member.email}</span>
+                    </div>
+                    <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
+                    <Pill tone={statusTone(status)}>{status}</Pill>
+                    <span className="meta joined">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
+                    {admin && <Button onClick={() => setManage(member.id)}>Manage</Button>}
+                  </div>
+                );
+              })}
+            </div>
+          )
+        ) : invitations.length === 0 ? (
+          <EmptyState icon="people" title={EMPTY.invitations} />
         ) : (
-          <div className="hermes-ui table-host">
-            <RecordsTable rows={records} {...(admin ? { onOpenRow: (row: { id: string }) => setManage(row.id) } : {})} />
+          <div className="col" role="list">
+            {invitations.map((row) => {
+              const status = invitationStatusLabel(row.status);
+              return (
+                <div className="list-row members-row" role="listitem" key={row.id} style={{ minHeight: 84 }}>
+                  <Avatar person={{ name: row.email }} size={40} />
+                  <div className="row-main">
+                    <span className="t truncate" style={{ fontSize: 18 }}>
+                      {row.email}
+                    </span>
+                    <span className="s">Invited {new Date(row.invited_at).toLocaleDateString()}</span>
+                  </div>
+                  <Pill>{row.role === 'admin' ? 'Admin' : 'Member'}</Pill>
+                  <Pill tone={statusTone(status)}>{status}</Pill>
+                  {admin && (
+                    <>
+                      {/* One route behind two words: the server resends a
+                          pending invitation and an expired one alike. */}
+                      <Button
+                        onClick={() => {
+                          void adapter.rest.resendInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
+                          setAck(row.id);
+                          setTimeout(() => setAck(null), 1600);
+                        }}
+                      >
+                        {row.status === 'expired' ? 'Reinvite' : 'Resend'}
+                      </Button>
+                      <Button
+                        link
+                        onClick={() => {
+                          void adapter.rest.withdrawInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
+                        }}
+                      >
+                        Withdraw
+                      </Button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
@@ -860,24 +934,14 @@ function scheduleCapWrite(write: () => void): void {
 const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verified: 'Verified', verified_scoped: 'Verified (scoped)', invalid: 'Invalid', revoked: 'Revoked' };
 
 /**
- * The providers a workspace can install a key for.
+ * Can this key still be used at all?
  *
- * OpenRouter is described differently on purpose: the other three bill a
- * vendor account and offer a fixed handful of models, and this one is a broker
- * whose verification also syncs several hundred rows into the model menu. An
- * Admin who does not know that will not understand why one key made the menu
- * long.
+ * OpenRouter is the only provider this product offers (decision R12), so a row
+ * for anything else is a key that was installed before that and can no longer
+ * pay for a run. It is shown rather than hidden, because a credential that
+ * still exists somewhere is a thing its owner should be told about.
  */
-const PROVIDER_CHOICES: readonly { id: string; label: string; note: string }[] = [
-  { id: 'deepseek', label: 'DeepSeek', note: 'DeepSeek Flash. Keys are stored in the PRC — see Data and privacy.' },
-  { id: 'anthropic', label: 'Anthropic', note: 'Claude models, billed to your Anthropic account.' },
-  { id: 'openai', label: 'OpenAI', note: 'GPT models, billed to your OpenAI account.' },
-  {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    note: 'One key, every model OpenRouter brokers. Verifying also syncs its model list into the chat model menu.',
-  },
-];
+const usable = (key: MaskedProviderKey): boolean => PROVIDER_CHOICES.some((choice) => choice.id === key.provider);
 
 /** "342 models synced · 2 Mar" — or nothing, for a provider that has no list. */
 function syncLabel(key: MaskedProviderKey): string | null {
@@ -893,7 +957,7 @@ function ProviderKeysTab() {
   const lists = useWorkspaceLists();
   const [dialog, setDialog] = useState<'add' | 'rotate' | 'remove' | null>(null);
   const [target, setTarget] = useState<MaskedProviderKey | null>(null);
-  const [provider, setProvider] = useState('deepseek');
+  const [provider, setProvider] = useState(DEFAULT_PROVIDER);
   const [label, setLabel] = useState('');
   const [secret, setSecret] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
@@ -964,7 +1028,7 @@ function ProviderKeysTab() {
                 </span>
               </div>
               <div className="row-main">
-                <span className="t">{STATUS_LABEL[key.status] ?? key.status}</span>
+                <span className="t">{usable(key) ? STATUS_LABEL[key.status] ?? key.status : EMPTY.keyNotAllowed}</span>
                 <span className="s">
                   {/* An OpenRouter key verifies against hundreds of models, so
                       the row says how many were synced and when, rather than
@@ -973,15 +1037,25 @@ function ProviderKeysTab() {
                   {key.rotated_at ? ` · rotated ${new Date(key.rotated_at).toLocaleDateString()}` : ''}
                 </span>
               </div>
-              {key.provider === 'openrouter' && (
-                <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
+              {/* A key for a provider this deployment no longer offers keeps
+                  its row and loses its buttons: the server answers 422
+                  `provider_not_allowed` to verify and rotate (decision R12), so
+                  offering them would be offering a refusal. Remove still works,
+                  which is the only thing left worth doing to it. */}
+              {usable(key) && (
+                <>
+                  {key.provider === 'openrouter' && (
+                    <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
+                  )}
+                  <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
+                </>
               )}
-              <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
               <Button
                 onClick={() => {
                   setTarget(key);
                   setDialog('rotate');
                 }}
+                disabled={!usable(key)}
               >
                 Rotate
               </Button>
@@ -1000,12 +1074,12 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        Plaintext is never echoed; only the last four characters are ever shown. DeepSeek keys carry the PRC-storage warning on Data and privacy; Anthropic and OpenAI rows show the recorded attestation there. An OpenRouter key is verified against its own key endpoint, and verifying it syncs that account's model list into the chat model menu.
+        OpenRouter is the only provider this workspace can use. Plaintext is never echoed; only the last four characters are ever shown. The key is verified against OpenRouter&apos;s own key endpoint, and verifying it syncs that account&apos;s model list into the chat model menu.
       </p>
 
       <Dialog
         open={dialog === 'add'}
-        title="Add a provider key"
+        title="Add your OpenRouter key"
         onClose={() => setDialog(null)}
         actions={
           <>
@@ -1016,12 +1090,23 @@ function ProviderKeysTab() {
           </>
         }
       >
-        <div className="col" role="radiogroup" aria-label="Provider" style={{ gap: 4 }}>
-          {PROVIDER_CHOICES.map((item) => (
-            <MenuItem key={item.id} checked={provider === item.id} sub={item.note} onClick={() => setProvider(item.id)}>
-              {item.label}
-            </MenuItem>
-          ))}
+        {/* One provider, so no chooser: a radio group of one is a control that
+            asks a question with a single answer (decision R12). The list is
+            still mapped rather than hard-coded, because that is what a second
+            allowed provider would need and it costs one line. */}
+        <div className="col" role={PROVIDER_CHOICES.length > 1 ? 'radiogroup' : undefined} aria-label="Provider" style={{ gap: 4 }}>
+          {PROVIDER_CHOICES.map((item) =>
+            PROVIDER_CHOICES.length > 1 ? (
+              <MenuItem key={item.id} checked={provider === item.id} sub={item.note} onClick={() => setProvider(item.id)}>
+                {item.label}
+              </MenuItem>
+            ) : (
+              <div className="row-main" key={item.id}>
+                <span className="t">{item.label}</span>
+                <span className="s">{item.note}</span>
+              </div>
+            ),
+          )}
         </div>
         <label className="field">
           <span className="sr-only">Label</span>

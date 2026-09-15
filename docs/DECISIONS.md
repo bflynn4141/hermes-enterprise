@@ -2611,7 +2611,8 @@ skipped:
   absent. It is supplied, and it never reaches a model: both actions compose
   their text locally from the line the person clicked. Keeping the draft puts it
   in the composer, where a person still presses send.
-* **`RecordsTable`**'s optional calculation column fabricates
+* **`RecordsTable`** — *superseded by C46: it is out of the product.* Its
+  optional calculation column fabricates
   `row.reviewGap ?? "Not assessed"` when `onCalculate` is absent. `onCalculate`
   is *not* supplied — there is no route that would answer one — and `reviewGap`
   is filled with a real fact the workspace holds: the member's recorded reviewer
@@ -4231,3 +4232,66 @@ legible, which is the part that was broken.
 **Would change it if.** The turns route grows a `retry_after` that the client
 should count down, which is the one refusal where a static sentence is not
 enough.
+
+---
+
+## C46. Members is inline rows, not the library's database table
+
+**Decided.** `RecordsTable` is out of the product. Members renders the shell's
+own `.list-row`/`.members-row`: avatar, name (with "· You" on your own row),
+the email under it, a role pill, a status pill, the joined date, and one action
+on the right — Manage on a member, Resend or Reinvite plus Withdraw on an
+invitation. The import is gone from `Workspace.tsx` and nothing else in the
+client uses the component.
+
+**Why.** `RecordsTable` is a *database* surface, and it brought a database's
+furniture onto a screen about colleagues: a selection checkbox column, an "Add
+calculation" affordance, a horizontal scroller, a "2 count" footer, and — from
+the library's own fixture columns — a header called **Evidence** over a column
+describing people. C27 argued the calculation column could be made honest by
+filling `reviewGap` with real reviewer roles, and that much was true; it was
+answering the wrong question. Nobody sorts, pins, multi-selects or computes
+over a membership list, so every control on it was cost with no use, and
+"Evidence" over a colleague's name is a sentence the product does not mean.
+The word must never appear on this screen again.
+
+The other three list screens named in the same review — the Inbox list, Library
+→ Documents and the Traces list — were never adopted onto `RecordsTable`; they
+have always been `.list-row`, and they stay that way. `FilterTable` keeps
+History, where the state filter is a question an operator actually asks, and
+session pinning stays where it always was, in the sessions popover. Sorting and
+pinning are added where the product needs them and nowhere else.
+
+The tabs changed with the rows. "All members" reads the WorkOS membership
+mirror; "Invitations" now reads the **invitations list**, which is where an
+unaccepted invitation lives. The mirror only ever holds people who have
+accepted — `listMembers` joins `users` and the server writes no `invited` row on
+that path — so the old tab (members filtered to a non-active status) was
+filtering a set the server never fills, and always rendered empty. The row
+actions are the routes that already existed: `POST …/invitations/:id/resend`
+(one route behind two words, because the server accepts `pending` and `expired`
+alike) and `POST …/invitations/:id/withdraw`. `memberCounts` counts the same
+list, so the header's "N invited" and the tab agree.
+
+**Would change it if.** A membership list grows a reason to sort or to act on
+many rows at once — a workspace with hundreds of seats — at which point the
+right answer is still probably a sort control on these rows, not a table with a
+calculation column.
+
+---
+
+## C47. The sidebar's footer is a name, not a headcount
+
+**Decided.** `SidebarNav`'s `footerLabel` is `state.user.name` and nothing else,
+with the user's avatar as `footerIcon`. It is still the button that opens the
+account menu. `memberCounts` is no longer read in `Sidebar.tsx`.
+
+**Why.** It said "Maya Chen · 2 joined": a number about other people in the one
+place on the screen that is about you, next to your own face. The count is not
+lost — the Members header carries "N joined · M invited", and so does the
+workspace menu's Members row in Settings → Organization — so the footer was a
+third copy of a fact nobody goes there to read, and it made the identity row
+read like a statistic.
+
+**Would change it if.** The footer becomes a workspace switcher rather than an
+identity, where a seat count would be about the thing being switched.

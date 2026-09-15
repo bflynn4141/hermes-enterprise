@@ -328,6 +328,15 @@ export function createRest(options: RestOptions) {
     invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
+    /**
+     * A resend writes a *new* invitation and supersedes the old one, so the
+     * server answers with the successor row; "Reinvite" on an expired row is
+     * the same route, because the server accepts `pending` and `expired` alike
+     * and the only thing that differs is the word on the button.
+     */
+    resendInvitation: (workspaceId: string, id: string) =>
+      request('POST', `${ws(workspaceId)}/invitations/${id}/resend`, invitationEntitySchema, {}),
+    withdrawInvitation: (workspaceId: string, id: string) => send('POST', `${ws(workspaceId)}/invitations/${id}/withdraw`, {}),
 
     // --- shares, feedback ---
     share: (workspaceId: string, sessionId: string, audience: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema, { audience }) as Promise<ShareResponse>,

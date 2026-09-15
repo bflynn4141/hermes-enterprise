@@ -255,6 +255,13 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .line-select-bar { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--muted); }
 .history-summary .avatar { margin-left: auto; }
 .members-row .avatar { width: 40px; height: 40px; font-size: 14px; }
+/* The row's two facts about a person, in the same shape on both member tabs.
+   `muted` is the default because a role is not a state; only a status earns a
+   colour, and only two statuses earn a warning one. */
+.pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--line); font-size: 13px; line-height: 22px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+.pill-ok { color: var(--body); border-color: var(--line-strong); }
+.pill-warn { color: #E7C27D; border-color: #6A5A39; }
+.members-row .joined { white-space: nowrap; flex-shrink: 0; }
 .settings-row { display: flex; align-items: center; gap: 12px; height: 78px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 16px; }
 .kv { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--line); font-size: 16px; }
 .kv .k { color: var(--muted); font-size: 14px; }
@@ -648,10 +655,11 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
    collapses to its content height and the panes stop scrolling. */
 #root > .hermes-ui { height: 100%; }
 
-/* M5a: the four library components adopted into full-width screens.
-   `RecordsTable` and `FilterTable` size themselves to their content and are
-   wider than the app pane on a narrow window, so each gets its own horizontal
-   scroller rather than making the whole pane scroll sideways. */
+/* M5a: the library components adopted into full-width screens. `FilterTable`
+   sizes itself to its content and is wider than the app pane on a narrow
+   window, so it gets its own horizontal scroller rather than making the whole
+   pane scroll sideways. (`RecordsTable` used to be the other one; Members is
+   inline rows again — decision C46.) */
 .table-host { width: 100%; max-width: 100%; overflow-x: auto; }
 .table-host > * { max-width: none; }
 .selection-host { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }

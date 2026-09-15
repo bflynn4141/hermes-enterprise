@@ -1,7 +1,7 @@
 // Selectors over the entity cache. They replace the demo's fixture selectors
 // (`pendingRequests`, `workspaceMembers`, `historyEvents`, …) one for one, so
 // the views that consume them did not change shape when the data source did.
-import type { Bootstrap, MaskedProviderKey, RequestEntity, MemberEntity } from '@hermes/shared';
+import type { Bootstrap, InvitationEntity, MaskedProviderKey, RequestEntity, MemberEntity } from '@hermes/shared';
 import { listData, type AppState, type EntityKind } from '../model/store.js';
 
 export const LIST_KEYS = {
@@ -29,9 +29,20 @@ export const resolvedRequests = (state: AppState): RequestEntity[] => requestsIn
 
 export const members = (state: AppState): MemberEntity[] => rows<MemberEntity>(state, LIST_KEYS.members, 'member');
 
+/** The invitations a person can still act on: sent, not yet accepted or withdrawn. */
+export const openInvitations = (state: AppState): InvitationEntity[] =>
+  rows<InvitationEntity>(state, LIST_KEYS.invitations, 'invitation').filter((row) => row.status === 'pending' || row.status === 'expired');
+
+/**
+ * "invited" counts the invitations list, not the membership mirror: a row in
+ * `members` is a person who has accepted, so the mirror's `invited` status is
+ * one the server never writes on this path. The mirror is still counted, so
+ * that a status arriving from WorkOS is not silently dropped.
+ */
 export function memberCounts(state: AppState): { joined: number; invited: number } {
   const all = members(state);
-  return { joined: all.filter((m) => m.status === 'active').length, invited: all.filter((m) => m.status === 'invited' || m.status === 'expired').length };
+  const pendingMembers = all.filter((m) => m.status === 'invited' || m.status === 'expired').length;
+  return { joined: all.filter((m) => m.status === 'active').length, invited: openInvitations(state).length + pendingMembers };
 }
 
 export const catalogRows = (state: AppState): Bootstrap['catalog'] =>

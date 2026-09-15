@@ -224,6 +224,7 @@ scripts/      e2e-live.mjs      boots the stack and runs the live suite
 qa/chat/      the scroll model, the activity row and the Markdown subset
 qa/           one screenshot per screen, from e2e/qa-screens.spec.ts
 qa/live/      the same screens against the real Worker
+qa/tables/    the four list screens, from e2e/live-tables.spec.ts
 qa/panel/     every page in open, rail and hidden at 1840 and 1440
 ```
 
@@ -421,12 +422,13 @@ all of this — seven and eleven scenarios on top of the fourteen in
 | `live-findings.spec.ts` | F1 `/w/:ws` boots the app · F2 create a workspace, accept an invitation · F3 `request.created` on the workspace stream · F8 Traces lists and opens a run · P8/P9 through the scripted scenarios |
 | `live-m5a.spec.ts` | M1 the trace detail after a run · M2 an instruction accepted by an Admin and refused to a Member · M3 the context write that unparks a waiting run · M4 usage after a run, with the server's disclaimer · M5 create-workspace and accept-invite through the stepper, plus the picker · M6 workspace delete and undelete · M7 every empty state on a fresh workspace, both seats · M8 "Signed out" with the draft kept, and "Reconnecting…" |
 | `live-screens.spec.ts` | the twenty-nine screenshots in `qa/live/` |
+| `live-tables.spec.ts` | the four list screens in `qa/tables/` — Members and its Invitations tab, the Inbox list, Library → Documents, Traces — and the assertions that no column header, no "Evidence" and no sidebar headcount survive (decisions C46, C47) |
 | `live-transcript.spec.ts` | T1 the send-scroll, measured frame by frame inside the page · T2 thirteen gap samples across a run · T3 a scroll-up mid-run that holds, with the chip · T4 clearance against the composer at its tallest · T5 one collapsed "Done · N steps" line above the answer, expandable, and no "Thinking" row · T6 the second question anchors like the first · T7 a refused turn's sentence, its draft and its unchanged title |
 | `live-panel.spec.ts` | N1 ⌘L and where focus goes · N2 the drag handle, its clamp and its reload · N3 a run that completes behind the rail, and the badge · N4 every page in the rail state · N5 New session twice is one session · N6 the first turn names the session and the run renames it · N7 a manual rename wins · N8 the navigation keeps its column at 900 and 1100 |
 
 ### The library, adopted and not
 
-Eleven of the twenty-one components are in the product, each given real rows and
+Ten of the twenty-one components are in the product, each given real rows and
 real callbacks:
 
 | Component | Where | The care it needed |
@@ -437,12 +439,21 @@ real callbacks:
 | `ContextCards` | the URLs a run fetched | one chunk per URL, badged `untrusted`, which is what a fetched page is |
 | `RecommendationCard` | the Agent Overview | the meter is a count, not a confidence: three bars is complete evidence, two is evidence with named gaps. `onConfirm` navigates and nothing else |
 | `FilterTable` | History | two axes, deliberately: the tabs pick the kind of activity, the table's filter picks the state |
-| `RecordsTable` | Members | no `onCalculate` — there is no route that would answer one — and `reviewGap` is filled with the member's recorded reviewer roles, so the optional column shows a real fact |
 | `InsightCards` | Settings → Usage | the carousel only: the library exports it and not the three cards it ships with, and the package publishes no subpath. The charts are drawn from `by_day` and `by_key` |
 | `FineTuneCard` | Settings → Agents, the two integer caps | `onChange` fires per pointer move, so the write is debounced to one per gesture — which is also one `settings.changed` audit row per gesture |
 | `SelectionActions` | a selected invoice line | `onRequestEdit` is supplied and never reaches a model: without it the component streams its own demo rewrite, and a fabricated sentence on an invoice is the one thing this product must not do |
 
-Three are not adopted, and the reasons are the same shape:
+Four are not adopted, and the reasons are the same shape:
+
+* **`RecordsTable`** was adopted over Members and has been taken back out
+  (decision C46). It is a database surface: a selection checkbox column, "Add
+  calculation", a horizontal scroller, a count footer, and an **Evidence**
+  header — from its own fixture columns — standing over a column about
+  colleagues. Nobody sorts, pins or computes over a membership list, so every
+  control on it was cost with no use. Members is the shell's own `.list-row`
+  again, like the Inbox list, Library → Documents and Traces, which were never
+  anything else.
+
 
 * **`StreamingText`** re-animates on its own timer text the server already sent,
   cannot render a list or a table, and owns an action row and a "3 sources"
