@@ -5,7 +5,15 @@
 // effect. The committing request tries the job immediately; the minute Cron
 // retries whatever is still undone. That is what makes a dropped post-commit
 // RPC cost a minute of lag rather than a lost receipt.
-import type { Tx } from './db/client.js';
+//
+// M2 adds the other half: the runners. `publish` fans committed outbox rows to
+// the hubs and is marked done only when a hub acknowledges; `evict` closes the
+// sockets of someone whose access was removed; `workos_sync` performs the
+// WorkOS-side write after our transaction has already committed ours, so a
+// WorkOS outage can never leave a member active here and deactivated there.
+import type { Env } from './env.js';
+import { connect, type Role, type Tx } from './db/client.js';
+import { optionalWorkosPort } from './auth/workos.js';
 
 export interface Job {
   readonly id: string;
@@ -18,6 +26,16 @@ export interface Job {
 
 /** How long a claimer holds a job before another may take it. */
 export const CLAIM_SECONDS = 120;
+
+/**
+ * The kinds this milestone knows about. `receipt`, `render` and `reverify` are
+ * registered and inert: the rows they would be written by (a decision, a
+ * document version, a key re-verification) belong to M4 and to the keys module,
+ * and a runner that pretended to do their work would be a lie the Cron tells
+ * once a minute.
+ */
+export const JOB_KINDS = ['publish', 'evict', 'workos_sync', 'receipt', 'render', 'reverify'] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
 
 /**
  * Claim one job.
@@ -65,6 +83,8 @@ export async function claimNextJob(tx: Tx): Promise<Job | null> {
 
 export async function finishJob(tx: Tx, jobId: string): Promise<void> {
   await tx.query('UPDATE jobs SET done_at = now(), locked_until = NULL WHERE id = $1', [jobId]);
+  // The pointer the Cron reads exists only while there is work to point at.
+  await tx.query('DELETE FROM job_ready WHERE job_id = $1', [jobId]);
 }
 
 /** Release a failed job for a later attempt, with backoff. */
@@ -78,6 +98,10 @@ export async function failJob(tx: Tx, jobId: string, error: string, attempts: nu
       WHERE id = $1`,
     [jobId, error.slice(0, 1000), String(backoffSeconds)],
   );
+  await tx.query(
+    `UPDATE job_ready SET next_at = now() + ($2 || ' seconds')::interval WHERE job_id = $1`,
+    [jobId, String(backoffSeconds)],
+  );
 }
 
 /**
@@ -90,6 +114,10 @@ export async function failJob(tx: Tx, jobId: string, error: string, attempts: nu
  * `receipt:latest` would let one workspace's enqueue silently suppress
  * another's, and the suppressed tenant could not even see the row that blocked
  * it, because row-level security hides it. A test pins this down.
+ *
+ * Returns the id of the row this call created, or null when an identical key
+ * was already queued — which is how a caller knows whether it has a job to run
+ * after its own commit.
  */
 export async function enqueueJob(
   tx: Tx,
@@ -97,11 +125,338 @@ export async function enqueueJob(
   kind: string,
   key: string,
   payload: unknown = {},
-): Promise<void> {
-  await tx.query(
+): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO jobs (workspace_id, kind, key, payload)
      VALUES ($1, $2, $3, $4::jsonb)
-     ON CONFLICT (kind, key) DO NOTHING`,
+     ON CONFLICT (kind, key) DO NOTHING
+     RETURNING id`,
     [workspaceId, kind, key, JSON.stringify(payload)],
   );
+  const id = rows[0]?.id ?? null;
+  if (id) {
+    // Written in the same transaction as the job, because the Cron's only way
+    // to find work across tenants is this table, and a pointer that commits
+    // separately is a job nobody runs.
+    await tx.query(
+      `INSERT INTO job_ready (job_id, workspace_id) VALUES ($1, $2) ON CONFLICT (job_id) DO NOTHING`,
+      [id, workspaceId],
+    );
+  }
+  return id;
+}
+
+// ---------------------------------------------------------------------------
+// Running jobs
+// ---------------------------------------------------------------------------
+
+/** The system actor for rows written by the Cron rather than by a person. */
+export const SYSTEM_USER_ID = '00000000-0000-4000-8000-000000000000';
+
+/**
+ * A tenant transaction with no membership check.
+ *
+ * `withTenantTransaction` proves that the *caller* belongs to the workspace,
+ * which is exactly right for a request and exactly wrong for the Cron: there is
+ * no caller, and requiring one would mean inventing a service member with a
+ * seat in every workspace. The tenant key is still set, so row-level security
+ * still applies to every statement inside; what is missing is only the "and
+ * this person may be here" half, and the caller is the Cron.
+ */
+export async function withWorkspaceTransaction<T>(
+  env: Env,
+  workspaceId: string,
+  fn: (tx: Tx) => Promise<T>,
+  role: Role = 'app',
+): Promise<T> {
+  const client = await connect(env, role);
+  try {
+    await client.query('BEGIN');
+    try {
+      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', workspaceId]);
+      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', SYSTEM_USER_ID]);
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+interface OutboxRow {
+  id: string;
+  session_id: string | null;
+  kind: string;
+  payload: unknown;
+  schema_version: number;
+  trace_id: string | null;
+  created_at: Date;
+}
+
+/**
+ * `publish`: hand a committed range of outbox rows to the hub that fans them
+ * out. The job is marked done only once the hub has acknowledged, so a Worker
+ * that died between the commit and the RPC costs a minute of lag, not an event.
+ */
+async function runPublish(env: Env, job: Job): Promise<void> {
+  const payload = (job.payload ?? {}) as { session_id?: string | null; first_id?: string; last_id?: string };
+  const rows = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const result = await tx.query<OutboxRow>(
+      `SELECT id::text AS id, session_id, kind, payload, schema_version, trace_id, created_at
+         FROM stream_events
+        WHERE workspace_id = $1
+          AND id >= $2::bigint AND id <= $3::bigint
+          AND session_id IS NOT DISTINCT FROM $4::uuid
+        ORDER BY id`,
+      [job.workspace_id, payload.first_id ?? '0', payload.last_id ?? '0', payload.session_id ?? null],
+    );
+    return result.rows;
+  });
+  if (rows.length === 0) return;
+
+  const events = rows.map((row) => ({
+    id: row.id,
+    workspace_id: job.workspace_id,
+    session_id: row.session_id,
+    kind: row.kind,
+    payload: row.payload,
+    schema_version: row.schema_version,
+    trace_id: row.trace_id ?? 'unknown',
+    at: row.created_at.toISOString(),
+  }));
+
+  if (payload.session_id) {
+    const stub = env.SESSION_HUB.get(env.SESSION_HUB.idFromName(payload.session_id));
+    await stub.publish(events);
+  } else {
+    const stub = env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(job.workspace_id));
+    await stub.publish(events);
+  }
+}
+
+/**
+ * `evict`: close every socket belonging to someone whose access just changed.
+ *
+ * The fan-out reaches the workspace hub and each session hub the person could
+ * see. It is best-effort by design — the ticket window is ten minutes, so an
+ * eviction that never arrived still takes effect on its own — but retrying it
+ * until a hub acknowledges turns "within ten minutes" into "immediately".
+ */
+async function runEvict(env: Env, job: Job): Promise<void> {
+  const payload = (job.payload ?? {}) as { user_id?: string };
+  const userId = payload.user_id;
+  if (!userId) return;
+
+  const sessionIds = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const result = await tx.query<{ id: string }>(
+      `SELECT id FROM sessions WHERE workspace_id = $1 AND owner_id = $2`,
+      [job.workspace_id, userId],
+    );
+    return result.rows.map((row) => row.id);
+  });
+
+  const workspaceHub = env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(job.workspace_id));
+  await workspaceHub.evict(userId);
+  for (const sessionId of sessionIds) {
+    const stub = env.SESSION_HUB.get(env.SESSION_HUB.idFromName(sessionId));
+    await stub.evict(userId);
+  }
+}
+
+/**
+ * `workos_sync`: the WorkOS-side write, after ours committed.
+ *
+ * Order matters and is the plan's: our transaction first, WorkOS second. If
+ * WorkOS is down, the member is already inactive here — which is the half that
+ * governs what they can do in this product — and the job retries until the
+ * other half catches up. The reverse order would leave a window where WorkOS
+ * says no and we still say yes.
+ */
+async function runWorkosSync(env: Env, job: Job): Promise<void> {
+  const payload = (job.payload ?? {}) as {
+    action?: string;
+    workos_membership_id?: string | null;
+    workos_invitation_id?: string | null;
+    role?: string;
+  };
+  const port = optionalWorkosPort(env);
+  const mark = async (status: 'done' | 'failed', error?: string): Promise<void> => {
+    await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+      await tx.query(
+        `UPDATE workos_sync SET status = $2, last_error = $3, attempts = attempts + 1, updated_at = now()
+          WHERE workspace_id = $1 AND payload->>'job_key' = $4`,
+        [job.workspace_id, status, error ?? null, job.key],
+      );
+    });
+  };
+
+  if (!port) {
+    // Nothing to mirror to: `AUTH_MODE=fake`, or a deployment with no WorkOS
+    // credentials. The row still records that we tried, so a workspace that
+    // later gains credentials has a visible backlog rather than a silence.
+    await mark('done', 'workos not configured');
+    return;
+  }
+
+  switch (payload.action) {
+    case 'deactivate_membership':
+      if (payload.workos_membership_id) {
+        await port.deactivateOrganizationMembership(payload.workos_membership_id);
+      }
+      break;
+    case 'update_membership_role':
+      if (payload.workos_membership_id && payload.role) {
+        await port.updateOrganizationMembership(payload.workos_membership_id, payload.role);
+      }
+      break;
+    case 'revoke_invitation':
+      if (payload.workos_invitation_id) await port.revokeInvitation(payload.workos_invitation_id);
+      break;
+    default:
+      break;
+  }
+  await mark('done');
+}
+
+/** Dispatch. An unknown kind is done rather than retried forever. */
+export async function runJob(env: Env, job: Job): Promise<void> {
+  switch (job.kind) {
+    case 'publish':
+      await runPublish(env, job);
+      return;
+    case 'evict':
+      await runEvict(env, job);
+      return;
+    case 'workos_sync':
+      await runWorkosSync(env, job);
+      return;
+    case 'receipt':
+    case 'render':
+    case 'reverify':
+      // Registered, inert, and honest about it: the work lands with the routes
+      // that write these rows (M4 and the keys module).
+      console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'registered placeholder' }));
+      return;
+    default:
+      console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'unknown kind' }));
+      return;
+  }
+}
+
+/** Claim, run, finish or fail. Returns true when the job was run to done. */
+async function claimRunFinish(env: Env, workspaceId: string, jobId: string): Promise<boolean> {
+  const job = await withWorkspaceTransaction(env, workspaceId, (tx) => claimJob(tx, jobId));
+  if (!job) return false;
+  try {
+    await runJob(env, job);
+    await withWorkspaceTransaction(env, workspaceId, (tx) => finishJob(tx, job.id));
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts));
+    return false;
+  }
+}
+
+/**
+ * The committing request's own jobs, run after its transaction committed.
+ *
+ * Failures are swallowed on purpose: the change is already durable and the Cron
+ * will retry the job. A route that returned 500 because a fan-out was slow
+ * would be telling the caller their change did not happen when it did.
+ */
+export async function runJobsAfterCommit(env: Env, workspaceId: string, jobIds: readonly string[]): Promise<void> {
+  for (const jobId of jobIds) {
+    try {
+      await claimRunFinish(env, workspaceId, jobId);
+    } catch (error) {
+      console.log(JSON.stringify({ at: 'job', phase: 'after_commit', ok: false, id: jobId, error: String(error) }));
+    }
+  }
+}
+
+/**
+ * The minute Cron's drain.
+ *
+ * `job_ready` is the only place a cross-tenant question can be asked, because
+ * no connection in this system can read two workspaces' `jobs` rows (see
+ * migration 0008). It holds ids and a due time and nothing else.
+ */
+export async function drainJobs(env: Env, limit = 50): Promise<{ claimed: number; done: number }> {
+  const client = await connect(env, 'app');
+  let due: { job_id: string; workspace_id: string }[];
+  try {
+    const { rows } = await client.query<{ job_id: string; workspace_id: string }>(
+      `SELECT job_id, workspace_id FROM job_ready WHERE next_at <= now() ORDER BY next_at LIMIT $1`,
+      [limit],
+    );
+    due = rows;
+  } finally {
+    await client.end();
+  }
+
+  let done = 0;
+  for (const row of due) {
+    if (await claimRunFinish(env, row.workspace_id, row.job_id)) done += 1;
+  }
+  return { claimed: due.length, done };
+}
+
+// ---------------------------------------------------------------------------
+// The outbox
+// ---------------------------------------------------------------------------
+
+export interface OutboxEvent {
+  readonly kind: string;
+  readonly payload: unknown;
+  readonly sessionId?: string | null;
+  readonly traceId?: string | null;
+}
+
+/**
+ * Append to the outbox and queue its delivery, in the caller's transaction.
+ *
+ * Both halves commit together, which is the property the whole push design
+ * rests on: a client cannot miss a committed event, because the row that says
+ * "deliver this" is written by the same commit as the event itself.
+ */
+export async function publishEvents(
+  tx: Tx,
+  workspaceId: string,
+  events: readonly OutboxEvent[],
+): Promise<string[]> {
+  const jobIds: string[] = [];
+  // One job per stream: the hub for a session and the hub for the workspace are
+  // different objects, and a single job could only acknowledge one of them.
+  const byStream = new Map<string | null, string[]>();
+
+  for (const event of events) {
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       RETURNING id::text AS id`,
+      [workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), event.traceId ?? null],
+    );
+    const id = rows[0]?.id;
+    if (!id) continue;
+    const key = event.sessionId ?? null;
+    byStream.set(key, [...(byStream.get(key) ?? []), id]);
+  }
+
+  for (const [sessionId, ids] of byStream) {
+    const first = ids[0];
+    const last = ids[ids.length - 1];
+    if (!first || !last) continue;
+    const jobId = await enqueueJob(tx, workspaceId, 'publish', `publish:${sessionId ?? 'workspace'}:${first}-${last}`, {
+      session_id: sessionId,
+      first_id: first,
+      last_id: last,
+    });
+    if (jobId) jobIds.push(jobId);
+  }
+  return jobIds;
 }

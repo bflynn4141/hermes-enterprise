@@ -16,6 +16,35 @@ import { health } from './routes/health.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { RouteError } from './routes/tenant.js';
+import { authSession, callback, login, logout } from './routes/auth.js';
+import { createWorkspace } from './routes/workspaces.js';
+import {
+  createInvitation,
+  listInvitations,
+  listMembers,
+  patchMember,
+  removeMember,
+  resendInvitation,
+  withdrawInvitation,
+} from './routes/members.js';
+import {
+  archiveSession,
+  clearMessageFeedback,
+  createSession,
+  createShare,
+  getDraft,
+  getSessionRoute,
+  listMessages,
+  listSessions,
+  patchSession,
+  putDraft,
+  revokeShare,
+  setMessageFeedback,
+} from './routes/sessions.js';
+import { sessionSocket, workspaceSocket } from './routes/hubs.js';
+import { takeRefreshedCookie } from './auth/adapters.js';
+import { drainJobs } from './jobs.js';
+import { pollWorkOSEvents } from './auth/events-poller.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -42,7 +71,29 @@ app.onError((error, c) => {
   return c.json({ error: 'internal error', reason: 'internal' }, 500);
 });
 
+// A request whose session was refreshed mid-flight carries a re-sealed cookie
+// back. It is attached here rather than in each route, because a route that
+// forgot would leave the browser holding a session that expires again in five
+// minutes, and the symptom — a refresh on every single request — is invisible
+// until someone reads a log.
+app.use('*', async (c, next) => {
+  await next();
+  const refreshed = takeRefreshedCookie(c.req.raw);
+  if (refreshed) c.res.headers.append('Set-Cookie', refreshed);
+});
+
 app.get('/health', health);
+
+// Identity. These four are the only routes that talk to AuthKit.
+app.get('/auth/login', login);
+app.get('/auth/callback', callback);
+app.get('/auth/session', authSession);
+app.post('/auth/logout', logout);
+app.get('/auth/logout', logout);
+
+// Creating a workspace is the one tenant-shaped route with no tenant in its
+// path, because the tenant does not exist until it succeeds.
+app.post('/workspaces', createWorkspace);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 
@@ -54,6 +105,34 @@ app.post('/w/:ws/provider-keys', addKey);
 app.post('/w/:ws/provider-keys/:id/verify', verifyKey);
 app.post('/w/:ws/provider-keys/:id/rotate', rotateKey);
 app.delete('/w/:ws/provider-keys/:id', deleteKey);
+
+// Sessions, and everything hanging off one.
+app.get('/w/:ws/sessions', listSessions);
+app.post('/w/:ws/sessions', createSession);
+app.get('/w/:ws/sessions/:id', getSessionRoute);
+app.patch('/w/:ws/sessions/:id', patchSession);
+app.get('/w/:ws/sessions/:id/draft', getDraft);
+app.put('/w/:ws/sessions/:id/draft', putDraft);
+app.get('/w/:ws/sessions/:id/messages', listMessages);
+app.post('/w/:ws/sessions/:id/shares', createShare);
+app.delete('/w/:ws/sessions/:id/shares/:shareId', revokeShare);
+app.delete('/w/:ws/sessions/:id', archiveSession);
+app.put('/w/:ws/messages/:id/feedback', setMessageFeedback);
+app.delete('/w/:ws/messages/:id/feedback', clearMessageFeedback);
+
+// Members and invitations. WorkOS sends the email; `members` decides access.
+app.get('/w/:ws/members', listMembers);
+app.get('/w/:ws/invitations', listInvitations);
+app.patch('/w/:ws/members/:id', patchMember);
+app.delete('/w/:ws/members/:id', removeMember);
+app.post('/w/:ws/invitations', createInvitation);
+app.post('/w/:ws/invitations/:id/resend', resendInvitation);
+app.post('/w/:ws/invitations/:id/withdraw', withdrawInvitation);
+
+// The two socket upgrades. Authorisation happens here; the hub only holds the
+// result and honours its expiry.
+app.get('/w/:ws/hub/workspace', workspaceSocket);
+app.get('/w/:ws/hub/session/:id', sessionSocket);
 
 // Anything else under /api or /w that did not match is a 404 as JSON, not the
 // SPA shell: a client that asked for data should not be handed HTML.
@@ -74,9 +153,36 @@ export default {
    *                 and the validator does not.
    */
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    void env;
-    void ctx;
-    console.log(JSON.stringify({ at: 'scheduled', cron: event.cron, note: 'handlers land in M2 and M4' }));
+    if (event.cron !== '* * * * *') {
+      // The nightly validator is a Workflow (M5a): a Cron handler caps at 15
+      // minutes and a full run-log validation does not.
+      console.log(JSON.stringify({ at: 'scheduled', cron: event.cron, note: 'validator lands in M5a' }));
+      return;
+    }
+    // Both halves are best-effort and independent: a WorkOS outage must not
+    // stop the jobs drain, and a slow job must not stop the poller, because the
+    // next minute runs both again from where they stopped.
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const drained = await drainJobs(env);
+          console.log(JSON.stringify({ at: 'cron.jobs', ...drained }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.jobs', ok: false, error: String(error) }));
+        }
+        try {
+          const polled = await pollWorkOSEvents(env);
+          console.log(JSON.stringify({ at: 'cron.workos', ...polled }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.workos', ok: false, error: String(error) }));
+        }
+        // The orphan sweep: runs that claim to be working with no event for ten
+        // minutes. M2 can only see the row; comparing it with the Workflow
+        // instance's own status is M3, so nothing is marked errored yet and the
+        // count is logged instead of acted on.
+        console.log(JSON.stringify({ at: 'cron.orphans', note: 'instance status check lands in M3' }));
+      })(),
+    );
   },
 
   /**

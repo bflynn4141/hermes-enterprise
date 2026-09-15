@@ -1,0 +1,111 @@
+// The jobs the Cron has to be able to find, and the publish that must not be
+// lost.
+//
+// The claim itself is covered by `jobs.test.ts`. What is new in M2 is that the
+// Cron drains *across* workspaces, which nothing in this system can do with an
+// ordinary query: no connection can read two tenants' `jobs` rows, by design.
+// The pointer table is how that circle is squared, so it is what these tests
+// exercise.
+import { describe, expect, it } from 'vitest';
+import { seedWorkspace } from './helpers.js';
+import { makeEnv, readTenant } from './harness.js';
+import { drainJobs, publishEvents, withWorkspaceTransaction } from '../../src/jobs.js';
+
+describe('the outbox', () => {
+  it('writes the event and the job that delivers it in one transaction', async () => {
+    const fixture = await seedWorkspace();
+    const { env, hubCalls } = makeEnv();
+
+    const jobIds = await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      publishEvents(tx, fixture.workspaceId, [
+        { kind: 'request.created', payload: { request_id: fixture.sessionId } },
+      ]),
+    );
+    expect(jobIds).toHaveLength(1);
+
+    const drained = await drainJobs(env);
+    expect(drained.done).toBeGreaterThan(0);
+
+    const published = hubCalls.find((call) => call.method === 'publish');
+    expect(published?.namespace).toBe('workspace');
+    expect(published?.name).toBe(fixture.workspaceId);
+    expect((published?.argument as { kind: string }[])[0]?.kind).toBe('request.created');
+  });
+
+  it('sends a session event to that session’s hub, not to the workspace’s', async () => {
+    const fixture = await seedWorkspace();
+    const { env, hubCalls } = makeEnv();
+
+    await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      publishEvents(tx, fixture.workspaceId, [
+        { kind: 'message.delta', payload: { message_id: fixture.sessionId }, sessionId: fixture.sessionId },
+      ]),
+    );
+    await drainJobs(env);
+
+    const published = hubCalls.filter((call) => call.method === 'publish');
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ namespace: 'session', name: fixture.sessionId });
+  });
+
+  it('marks a publish job done only once the hub has taken it', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      publishEvents(tx, fixture.workspaceId, [{ kind: 'request.created', payload: {} }]),
+    );
+
+    await drainJobs(env);
+
+    const remaining = await readTenant(fixture.workspaceId, fixture.adminId, async (c) => {
+      const { rows } = await c.query<{ count: string }>(
+        `SELECT count(*) AS count FROM jobs WHERE workspace_id = $1 AND done_at IS NULL`,
+        [fixture.workspaceId],
+      );
+      return Number(rows[0]?.count ?? '0');
+    });
+    expect(remaining).toBe(0);
+  });
+});
+
+describe('the Cron drain', () => {
+  it('finds work in two different workspaces, which no tenant query could', async () => {
+    const one = await seedWorkspace();
+    const two = await seedWorkspace();
+    const { env, hubCalls } = makeEnv();
+
+    for (const fixture of [one, two]) {
+      await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+        publishEvents(tx, fixture.workspaceId, [{ kind: 'request.created', payload: {} }]),
+      );
+    }
+
+    const drained = await drainJobs(env);
+
+    expect(drained.done).toBeGreaterThanOrEqual(2);
+    const names = hubCalls.filter((call) => call.method === 'publish').map((call) => call.name);
+    expect(names).toContain(one.workspaceId);
+    expect(names).toContain(two.workspaceId);
+  });
+
+  it('leaves no pointer behind once the job it points at is done', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      publishEvents(tx, fixture.workspaceId, [{ kind: 'request.created', payload: {} }]),
+    );
+
+    await drainJobs(env);
+
+    // `job_ready` is a platform table: no tenant key needed, and none exists
+    // for a Cron.
+    const pointers = await withWorkspaceTransaction(env, fixture.workspaceId, async (tx) => {
+      const { rows } = await tx.query<{ count: string }>(
+        `SELECT count(*) AS count FROM job_ready WHERE workspace_id = $1`,
+        [fixture.workspaceId],
+      );
+      return Number(rows[0]?.count ?? '0');
+    });
+    expect(pointers).toBe(0);
+  });
+});

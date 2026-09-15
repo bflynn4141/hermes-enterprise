@@ -458,3 +458,175 @@ discards the rest.
 at runtime from harmless parts, because a test for "a key must never appear in a
 log" that ships a key-shaped string is a test that trips gitleaks and teaches
 the next person to add an allowlist entry.
+
+---
+
+## 29. Two platform tables exist because no role may read two tenants
+
+**Decided.** Migration `0008` adds `workspace_directory` (workspace id ↔ WorkOS
+organization id) and `job_ready` (job id, workspace id, due time), both outside
+row-level security, both holding ids and nothing else, and names them in the
+`hermes_tenant_tables()` exclusion list beside `rate_counters`.
+
+**Why.** Every tenant table is `FORCE ROW LEVEL SECURITY` and all three roles
+are `NOBYPASSRLS`, including `owner`, so there is no connection in this system
+that can see two workspaces at once. That is the property the product rests on,
+and it makes two ordinary questions unanswerable: the minute Cron's "which
+workspaces have a job due?" and the auth callback's "which workspace is
+organization `org_123`?" — the second asked before any tenant key exists at all.
+
+The alternatives were worse. A fourth role with `BYPASSRLS` would be a
+connection that can read every tenant, which is the thing we refuse to create. A
+`SECURITY DEFINER` function does not help: it runs as `owner`, and `FORCE` binds
+the owner too. Spreading the Cron over every workspace by guessing ids is not a
+design.
+
+So each cross-tenant question gets a narrow table holding only what the question
+needs. The cost is honest: a leak of either table reveals that a workspace
+exists and that it has work pending. The `job_ready` row is written and deleted
+in the same transactions as the job it points at, so the pointer cannot outlive
+its job.
+
+**Would change it if.** Postgres gained a way to grant "read this table across
+policies" for one query, or the jobs table itself moved to a store outside the
+tenant boundary.
+
+---
+
+## 30. The Cron runs a tenant transaction with no membership check
+
+**Decided.** `withWorkspaceTransaction(env, workspaceId, fn)` sets
+`app.workspace_id` and `app.user_id` (to a fixed system uuid) and skips the
+members lookup that `withTenantTransaction` performs.
+
+**Why.** The membership lookup answers "may this caller be here?", and for a
+Cron there is no caller. The alternative — a service member seated in every
+workspace — would be a row that could decide, be assigned an effect, or show up
+in the Members list, which is a much larger surface than a second function. The
+tenant key is still set, so row-level security still constrains every statement
+inside; what is absent is only the authorisation half, and the authorisation is
+that the Cron is not a person.
+
+---
+
+## 31. Step-up guards the member routes, since the decision route is M4
+
+**Decided.** `requireStepUp` refuses a role change or a removal whose session
+authenticated more than five minutes ago, with 401 `reauth_required`. The
+freshness comes from `auth_sessions(sid, authenticated_at)`, written by
+`/auth/callback` and by the fake adapter.
+
+**Why.** The plan attaches step-up to the decision route, which does not exist
+yet. Building the mechanism without a route that uses it would leave it
+untested until M4, and the member routes are the other place where an
+unattended laptop is the threat: promoting yourself an accomplice to Admin is
+as consequential as approving one admission. `/auth/login?step_up=1` is the way
+back, asking AuthKit for `max_age: 0`, which yields a new `sid` whose
+`authenticated_at` is now.
+
+**Note.** Whether `max_age: 0` also re-challenges MFA is still **unverified**;
+it needs a live WorkOS environment, and it is listed in the final report as
+something to check in the dashboard.
+
+---
+
+## 32. A demotion runs the removal transaction, minus the two steps about the past
+
+**Decided.** `revokeAccess` is one function with an `action` of `remove` or
+`demote`. Both unassign effects, request a stop on the person's working runs,
+write the audit row, and enqueue `workos_sync` and `evict`. Only a removal also
+revokes the shares they created and marks their sessions read-only.
+
+**Why.** The plan lists one transaction for both, and one function is what keeps
+the route and the events poller from drifting. But a demoted Admin is still a
+member: freezing their sessions would take away work they are still entitled to
+do, and revoking links they handed out would be a punishment for a role change.
+What a demotion must do is invalidate what they could do *as an Admin* — hold an
+effect assignment, hold an open socket authorised under the old role — and both
+of those it does.
+
+---
+
+## 33. `FakeWorkOS` implements the port; there is no local emulator in this build
+
+**Decided.** `src/auth/workos.ts` defines a `WorkOSPort` interface, the SDK
+implementation is the only thing that imports `@workos-inc/node`, and the tests
+inject a double through `setWorkOSPortForTests`. `AUTH_MODE` has two values,
+`fake` and `workos`; there is no `emulate`.
+
+**Why.** WorkOS documents a testing story, but it needs a live environment and
+credentials, which makes it a network dependency in the test suite and an
+onboarding step for anyone running `pnpm test` offline. The port is smaller than
+the SDK and is also the document that answers "what does WorkOS know about us?".
+
+The double is real where it matters: the access token it issues is a genuine
+RS256 JWT signed by a key it publishes as a JWKS, so the production verifier
+checks a real signature, handles an unknown `kid` and honours `exp`. What it
+fakes is the seal (base64 JSON) and the network.
+
+**Would change it if.** WorkOS ships an emulator that runs from a container with
+no account, at which point `AUTH_MODE=emulate` becomes a third adapter and these
+tests keep working unchanged.
+
+**On the SDK under workerd.** `@workos-inc/node` 10.13.0 publishes a `workerd`
+export condition resolving to a fetch-based build, so importing the package by
+name is correct and the `/worker` subpath is not needed. `wrangler dev --local`
+serves `/auth/session` with the SDK in the bundle, and the workerd test project
+boots the Worker with it in the module graph.
+
+---
+
+## 34. The server serves the client's schemas, not a second set of its own
+
+**Found while building.** The client work and the server work reached
+`packages/shared` from two directions and both defined an auth-session shape, a
+message shape and a run-step shape. Two schemas for one payload is two
+contracts, and the one that drifts is the one nobody is reading.
+
+**Decided.** The routes parse their responses with the schemas in
+`entities.ts` — `sessionSchema`, `messageSchema`, `paginatedSchema`,
+`memberEntitySchema`, `invitationEntitySchema`, `shareResponseSchema`,
+`authSessionSchema` — and `api-m2.ts` carries only the one shape that was
+genuinely new, the per-session draft. The entity `runStepSchema` was renamed
+`runStepEntitySchema`, because `events.ts` already exports a `runStepSchema` for
+the `run.step` event and an ambiguous re-export from the package index is a
+compile error rather than a judgement call.
+
+---
+
+## 35. Hub tickets are receipts for an authorisation the Worker already made
+
+**Decided.** `GET /auth/session` returns an HMAC-signed ticket carrying
+`{user_id, workspace_id, session_id, exp}`, valid ten minutes. The client sends
+it on the socket every four minutes; the hub verifies the signature, extends
+`authorized_until`, and closes the socket when a ticket stops arriving or fails
+to verify.
+
+**Why not have the hub ask the database.** Because then a hub would hold a
+Postgres connection, and the whole design of the hubs is that they hold nothing
+and query nothing — that is what makes a hub eviction cost one reconnect rather
+than a page of errors. The Worker has just done the membership lookup under
+row-level security; the ticket is that answer, signed, with an expiry short
+enough that a removal takes effect within one window even if the `evict`
+fan-out is lost entirely.
+
+**Note.** In development, with no `HUB_TICKET_SECRET` and no
+`WORKOS_COOKIE_PASSWORD`, the key is a constant so that `wrangler dev` works
+from a fresh checkout. In `staging` and `production` a missing secret throws
+rather than falling back, because a predictable ticket key would let anyone mint
+an authorisation receipt.
+
+---
+
+## 36. Inviting someone who is already a member writes an accepted row
+
+**Decided.** `POST /w/:ws/invitations` for an address that already belongs to an
+active member does not send anything and does not error. It writes an
+`invitations` row with status `accepted`, pointing at that member, and returns
+it.
+
+**Why.** The intent is obvious and a second email would only confuse the
+recipient, so an error would be pedantry. But a silent 200 with nothing behind
+it leaves the Admin wondering whether it worked, and leaves no trace that anyone
+asked. The row is the honest middle: nothing was sent, something is recorded,
+and the Members screen shows a state the Admin can read.

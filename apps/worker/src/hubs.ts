@@ -7,11 +7,14 @@
 // property of the outbox rather than a property of a Durable Object staying
 // alive.
 //
-// Authorisation happens in the Worker before the upgrade: it checks the sealed
+// Authorisation happens in the Worker before the upgrade: it checks the session
 // cookie, the Origin, and membership or share, then puts the result in the
-// socket attachment. The hub only enforces the expiry it was handed.
+// socket attachment. The hub only enforces the expiry it was handed, and it
+// extends that expiry only against a ticket it can verify itself — which is an
+// HMAC check, not a query.
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env.js';
+import { verifyHubTicket } from './auth/tickets.js';
 
 /** What the Worker stamps on a socket at upgrade time (16 KB cap). */
 export interface SocketAttachment {
@@ -22,9 +25,19 @@ export interface SocketAttachment {
   readonly authorizedUntil: number;
 }
 
+/** The header the Worker hands the attachment across on the upgrade request. */
+export const ATTACHMENT_HEADER = 'x-hermes-attachment';
+
 export interface PublishResult {
   readonly delivered: number;
   readonly lastId: string | null;
+}
+
+export interface HubEvent {
+  readonly id: string;
+  readonly session_id: string | null;
+  readonly kind: string;
+  readonly [extra: string]: unknown;
 }
 
 abstract class Hub<T extends Env = Env> extends DurableObject<T> {
@@ -36,10 +49,31 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
-  /** Accept an already-authorised socket. Called only by the Worker. */
-  accept(server: WebSocket, attachment: SocketAttachment): void {
+  /**
+   * The upgrade itself. The Worker has already decided that this person may
+   * listen here; the attachment is that decision, and the hub's only job is to
+   * hold it and honour its expiry.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('expected a websocket upgrade', { status: 426 });
+    }
+    const raw = request.headers.get(ATTACHMENT_HEADER);
+    if (!raw) return new Response('no attachment', { status: 400 });
+
+    let attachment: SocketAttachment;
+    try {
+      attachment = JSON.parse(raw) as SocketAttachment;
+    } catch {
+      return new Response('bad attachment', { status: 400 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(attachment);
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   /**
@@ -47,7 +81,7 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
    * that just committed them; it acknowledges by returning the last delivered
    * id, and a `publish` job re-runs this if the acknowledgement never arrived.
    */
-  publish(events: readonly { id: string; session_id: string | null; kind: string }[]): PublishResult {
+  publish(events: readonly HubEvent[]): PublishResult {
     const now = Date.now();
     let delivered = 0;
     for (const socket of this.ctx.getWebSockets()) {
@@ -94,6 +128,45 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
     return { ok: true, sockets: this.ctx.getWebSockets().length };
   }
 
+  /**
+   * A client's own message. There is exactly one it may send — a ticket — and
+   * anything else closes the socket.
+   *
+   * The reason a hub accepts a ticket at all is that it cannot ask a database
+   * whether the person is still a member, and a socket that lived as long as
+   * the browser tab would outlive a removal by hours. So authorisation is a
+   * window the Worker keeps renewing, and silence closes it.
+   */
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== 'string') return;
+    let parsed: { type?: string; ticket?: string };
+    try {
+      parsed = JSON.parse(message) as { type?: string; ticket?: string };
+    } catch {
+      return;
+    }
+    if (parsed.type !== 'ticket' || !parsed.ticket) return;
+
+    const attachment = ws.deserializeAttachment() as SocketAttachment | null;
+    if (!attachment) {
+      ws.close(4401, 'no attachment');
+      return;
+    }
+    const ticket = await verifyHubTicket(this.env, parsed.ticket);
+    const matches =
+      ticket !== null &&
+      ticket.user_id === attachment.userId &&
+      ticket.workspace_id === attachment.workspaceId &&
+      (attachment.sessionId === null || ticket.session_id === null || ticket.session_id === attachment.sessionId);
+    if (!matches) {
+      ws.close(4401, 'ticket rejected');
+      return;
+    }
+    const authorizedUntil = ticket.exp * 1000;
+    ws.serializeAttachment({ ...attachment, authorizedUntil });
+    ws.send(JSON.stringify({ type: 'ticket.accepted', authorized_until: authorizedUntil }));
+  }
+
   protected abstract maySee(attachment: SocketAttachment, event: { session_id: string | null }): boolean;
 
   override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): void {
@@ -111,6 +184,22 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
 export class SessionHub extends Hub {
   protected override maySee(attachment: SocketAttachment, event: { session_id: string | null }): boolean {
     return attachment.sessionId !== null && attachment.sessionId === event.session_id;
+  }
+
+  /**
+   * Stop, recorded where the engine will look for it.
+   *
+   * The run engine (M3) polls this between steps: the request that asked for a
+   * Stop has already written `runs.stop_requested`, and this is the copy the
+   * Workflow can read without a database round trip inside a step. The hub is
+   * still not truth — the row is — this is a cache with one reader.
+   */
+  async requestStop(runId: string): Promise<void> {
+    await this.ctx.storage.put(`stop:${runId}`, Date.now());
+  }
+
+  async stopRequested(runId: string): Promise<boolean> {
+    return (await this.ctx.storage.get<number>(`stop:${runId}`)) !== undefined;
   }
 }
 

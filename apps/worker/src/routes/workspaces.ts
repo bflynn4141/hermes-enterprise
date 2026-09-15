@@ -1,0 +1,118 @@
+// `POST /workspaces`: the only place a workspace is created.
+//
+// This is the one route that cannot use `withTenantTransaction`, because the
+// tenant it would key on does not exist yet. It sets the key itself, to the id
+// it is about to insert, and every statement after that runs under the same
+// forced row-level security as everywhere else — which is why the INSERT is
+// accepted at all: the policy's WITH CHECK compares the new row's id to the key
+// we just set.
+//
+// Three guards, in this order and for these reasons:
+//
+//   * a verified email, because a workspace is an organization in WorkOS and an
+//     invitation sent from an unverified address is a phishing primitive;
+//   * three per day per person, counted in `rate_counters`, because creating a
+//     workspace creates a WorkOS organization, and a script that makes ten
+//     thousand of them is our bill and WorkOS's problem;
+//   * the creator is the first Admin, because a workspace with no Admin could
+//     never decide anything, and the last-Admin trigger would then have nothing
+//     to protect.
+import type { Context } from 'hono';
+import { bootstrapSchema } from '@hermes/shared';
+import type { Env } from '../env.js';
+import { getSession, requireCsrf, requireOrigin } from '../auth.js';
+import { connect } from '../db/client.js';
+import { consumeRate, LIMITS } from '../auth/rate-limit.js';
+import { optionalWorkosPort } from '../auth/workos.js';
+import { jsonBody, RouteError } from './tenant.js';
+import { loadBootstrap } from './workspace.js';
+
+const slugify = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'workspace';
+
+export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
+  const session = await getSession(c);
+  const input = await jsonBody<{ name?: string; jurisdiction?: string }>(c);
+  const name = (input.name ?? '').trim();
+  if (name.length < 2 || name.length > 80) {
+    throw new RouteError('a workspace needs a name of 2 to 80 characters', 'bad_name', 422);
+  }
+  const jurisdiction = input.jurisdiction === 'eu' ? 'eu' : 'default';
+
+  const client = await connect(c.env, 'app');
+  try {
+    const { rows } = await client.query<{ email: string; email_verified: boolean }>(
+      `SELECT email, email_verified FROM users WHERE id = $1`,
+      [session.userId],
+    );
+    const user = rows[0];
+    if (!user) throw new RouteError('no such user', 'unknown_user', 404);
+    if (!user.email_verified) {
+      throw new RouteError('verify your email address before creating a workspace', 'email_unverified', 403);
+    }
+
+    // The WorkOS organization is created before our transaction opens, because
+    // it is a network call and a transaction that waits on a third party holds
+    // a Postgres connection open for as long as that party is slow. If the
+    // transaction below then fails, an empty organization is left behind in
+    // WorkOS: the cheaper of the two orphans, and the reconciliation query in
+    // the runbook finds it.
+    const port = optionalWorkosPort(c.env);
+    const organization = port ? await port.createOrganization(name) : null;
+
+    const workspaceId = crypto.randomUUID();
+    await client.query('BEGIN');
+    try {
+      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', workspaceId]);
+      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', session.userId]);
+      await consumeRate(client, session.userId, null, LIMITS.createWorkspace);
+
+      const slug = `${slugify(name)}-${workspaceId.slice(0, 8)}`;
+      await client.query(
+        `INSERT INTO workspaces (id, workos_organization_id, name, slug, jurisdiction, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [workspaceId, organization?.id ?? null, name, slug, jurisdiction, session.userId],
+      );
+      // The platform-side pointer, so that `/auth/callback` and the events
+      // poller can find this workspace from a WorkOS organization id without a
+      // connection that can read every tenant.
+      await client.query(
+        `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1, $2)`,
+        [workspaceId, organization?.id ?? null],
+      );
+      await client.query(`INSERT INTO workspace_settings (workspace_id) VALUES ($1)`, [workspaceId]);
+      await client.query(
+        `INSERT INTO members (workspace_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
+        [workspaceId, session.userId],
+      );
+      // The agent starts in `draft`: the Setup flow is what moves it to
+      // `started`, and an agent that could run before anyone described its
+      // responsibility is an agent with no instructions.
+      await client.query(
+        `INSERT INTO agents (workspace_id, name, status) VALUES ($1, 'Iris', 'draft')`,
+        [workspaceId],
+      );
+      await client.query(
+        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind) VALUES ($1, 'user', $2, 'workspace.created')`,
+        [workspaceId, session.userId],
+      );
+      // The whole workspace state, from inside the transaction that created
+      // it, so the client can render the shell without a second round trip and
+      // without a window where the workspace exists but reads as empty.
+      const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId));
+      await client.query('COMMIT');
+      return c.json(body, 201);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    await client.end();
+  }
+}

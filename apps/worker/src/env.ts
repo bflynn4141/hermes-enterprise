@@ -28,6 +28,19 @@ export interface Env {
   WORKOS_API_KEY?: string;
   WORKOS_CLIENT_ID?: string;
   WORKOS_COOKIE_PASSWORD?: string;
+  /**
+   * Overrides the redirect URI sent to AuthKit. Normally the callback is this
+   * Worker's own origin plus `/auth/callback`, which is what a single-origin
+   * deployment wants; the variable exists for the case where the browser
+   * reaches us through a different host than the Worker sees.
+   */
+  WORKOS_REDIRECT_URI?: string;
+  /**
+   * Signs hub tickets. Falls back to WORKOS_COOKIE_PASSWORD, and in
+   * development only, to a constant; a deployed environment with neither
+   * refuses to mint a ticket rather than signing with a guessable key.
+   */
+  HUB_TICKET_SECRET?: string;
   /** The current key-encryption key, version 1. Rotations add KEK_V2, etc. */
   KEK_V1?: string;
   /**

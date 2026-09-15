@@ -15,6 +15,17 @@ CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT="postgres://agent
 WORKOS_API_KEY=""
 WORKOS_CLIENT_ID=""
 WORKOS_COOKIE_PASSWORD=""
+# Optional. The callback is normally this Worker's own origin plus
+# /auth/callback; set this only when the browser reaches us through a different
+# host than the Worker sees. Whatever it resolves to must be registered as a
+# redirect URI in the WorkOS dashboard, exactly.
+WORKOS_REDIRECT_URI=""
+
+# Signs the hub tickets a WebSocket presents to extend its authorisation.
+# Falls back to WORKOS_COOKIE_PASSWORD; in development only, to a constant.
+# A deployed environment with neither refuses to mint a ticket rather than
+# signing one with a guessable key.
+HUB_TICKET_SECRET=""
 
 # --- Bring your own key (M2) --------------------------------------------------
 # The key-encryption key. Base64, 32 bytes. A rotation adds KEK_V2 and keeps

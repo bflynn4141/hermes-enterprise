@@ -77,6 +77,12 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'session_shares', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'workos_sync', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'workos_events_cursor', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  // M2. A draft is a person's unsent text; the two platform tables are the only
+  // cross-tenant surface in the system, and the run engine has business in
+  // neither.
+  { table: 'session_drafts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'workspace_directory', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'job_ready', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

@@ -34,7 +34,7 @@ interface WorkspaceRow {
   timezone: string;
 }
 
-async function loadBootstrap(tx: Tx, workspaceId: string, userId: string): Promise<Bootstrap> {
+export async function loadBootstrap(tx: Tx, workspaceId: string, userId: string): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
             COALESCE(s.default_model_id, 'deepseek-flash') AS default_model_id,

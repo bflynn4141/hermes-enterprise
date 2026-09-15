@@ -631,6 +631,32 @@ export const workspaceProviderKeys = pgTable('workspace_provider_keys', {
   updatedAt: now('updated_at'),
 });
 
+// ---------------------------------------------------------------------------
+// M2: drafts, and the two platform tables the Cron and the auth callback need
+// ---------------------------------------------------------------------------
+
+export const sessionDrafts = pgTable('session_drafts', {
+  workspaceId: uuid('workspace_id').notNull(),
+  sessionId: uuid('session_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  text: text('text').notNull().default(''),
+  updatedAt: now('updated_at'),
+}, (t) => [primaryKey({ columns: [t.sessionId, t.userId] })]);
+
+/** Ids only: which workspace is this WorkOS organization? See 0008. */
+export const workspaceDirectory = pgTable('workspace_directory', {
+  workspaceId: uuid('workspace_id').primaryKey(),
+  workosOrganizationId: text('workos_organization_id'),
+  createdAt: now('created_at'),
+});
+
+/** Ids only: which workspaces have a job due? See 0008. */
+export const jobReady = pgTable('job_ready', {
+  jobId: uuid('job_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  nextAt: now('next_at'),
+});
+
 /**
  * Every table in the schema, for the drift test. A table added to the SQL and
  * forgotten here (or the other way round) fails that test.
@@ -673,4 +699,7 @@ export const ALL_TABLES = {
   jobs,
   workos_sync: workosSync,
   workspace_provider_keys: workspaceProviderKeys,
+  session_drafts: sessionDrafts,
+  workspace_directory: workspaceDirectory,
+  job_ready: jobReady,
 } as const;

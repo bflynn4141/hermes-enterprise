@@ -10,3 +10,5 @@ export * from './mock-stream.js';
 export * from './catalog.js';
 export * from './provider-keys.js';
 export * from './api.js';
+export * from './entities.js';
+export * from './api-m2.js';
