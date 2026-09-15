@@ -30,6 +30,11 @@ function readWranglerConfig(): Record<string, unknown> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+function readWorkerPackage(): { scripts?: Record<string, string> } {
+  const path = join(dirname(fileURLToPath(import.meta.url)), '../../package.json');
+  return JSON.parse(readFileSync(path, 'utf8')) as { scripts?: Record<string, string> };
+}
+
 const config = readWranglerConfig();
 const envs = config.env as Record<string, Record<string, unknown>>;
 
@@ -50,6 +55,14 @@ describe('the scripted-provider switch', () => {
       // The environment name is what the code checks, so it has to be right.
       expect(vars?.ENVIRONMENT).toBe(name);
     }
+  });
+});
+
+describe('the local database test boundary', () => {
+  it('routes the aggregate suite through the isolated database launcher', () => {
+    const command = readWorkerPackage().scripts?.['test'] ?? '';
+    expect(command).toContain('node scripts/db-test.mjs');
+    expect(command).not.toBe('vitest run');
   });
 });
 

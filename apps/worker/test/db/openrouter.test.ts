@@ -122,6 +122,48 @@ describe('syncing the OpenRouter model list', () => {
     expect(second.models).toEqual(first.models);
   });
 
+  it('refuses a fixture-sized response instead of retiring a live catalog', async () => {
+    const fx = await seedWorkspace();
+    const liveSized = {
+      data: Array.from({ length: 30 }, (_, index) => ({
+        id: `safety/model-${index}`,
+        name: `Safety model ${index}`,
+        context_length: 16_000,
+        architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+        pricing: { prompt: '0.000001', completion: '0.000002' },
+        supported_parameters: ['tools'],
+      })),
+    };
+
+    await withClient('app', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      try {
+        await syncOpenRouterCatalog(client as unknown as Tx, liveSized);
+        await expect(syncOpenRouterCatalog(client as unknown as Tx, OPENROUTER_FIXTURE_MODELS)).rejects.toThrow(
+          'refusing suspicious OpenRouter catalog shrink from 30 to 5 models',
+        );
+        const result = await client.query<{ active: string }>(
+          `SELECT count(*)::text AS active
+             FROM catalog
+            WHERE provider = 'openrouter'
+              AND model_id LIKE 'openrouter:safety/%'
+              AND disabled_reason IS NULL`,
+        );
+        expect(result.rows[0]?.active).toBe('30');
+      } finally {
+        await client.query('ROLLBACK');
+      }
+    });
+  });
+
+  it('refuses an empty response instead of retiring any catalog row', async () => {
+    const fx = await seedWorkspace();
+    await expect(asApp(fx, (tx) => syncOpenRouterCatalog(tx, { data: [] }))).rejects.toThrow(
+      'refusing to replace the OpenRouter catalog with an empty response',
+    );
+  });
+
   it('computes the price per million from the per-token strings', async () => {
     const fx = await seedWorkspace();
     await asApp(fx, (tx) => syncOpenRouterCatalog(tx, OPENROUTER_FIXTURE_MODELS));

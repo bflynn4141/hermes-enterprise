@@ -28,12 +28,29 @@ const nodeAlias = {
 // developer's own `wrangler dev` on :8787 is showing them. `pnpm db:test` and
 // `pnpm e2e:live` create and migrate `hermes_test`; a bare `vitest run` here
 // picks it up from these defaults rather than falling back to the dev database.
-const localApp =
-  process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP ??
-  'postgres://app:localdev@127.0.0.1:5433/hermes_test';
-const localAgent =
-  process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT ??
-  'postgres://agent:localdev@127.0.0.1:5433/hermes_test';
+const ci = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const database = ci ? (process.env.PGDATABASE ?? 'hermes') : 'hermes_test';
+const host = process.env.PGHOST ?? '127.0.0.1';
+const port = process.env.PGPORT ?? '5433';
+const password = process.env.PGLOCALPASSWORD ?? 'localdev';
+const connection = (role: 'app' | 'agent'): string =>
+  `postgres://${role}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
+
+// `db-config.mjs` is imported later by the database test modules. Set this
+// before those imports so a bare local `vitest run` cannot fall back to its
+// developer-database default. CI's database is disposable and explicitly
+// named by the workflow, so it keeps that name.
+process.env.PGDATABASE = database;
+
+// Ignore inherited local-Hyperdrive URLs outside CI. A terminal used to start
+// the developer Worker may carry URLs for `hermes`; tests must not inherit
+// those into their workerd pool.
+const localApp = ci
+  ? (process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP ?? connection('app'))
+  : connection('app');
+const localAgent = ci
+  ? (process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT ?? connection('agent'))
+  : connection('agent');
 
 // Wrangler resolves Hyperdrive's local connection strings from the environment
 // while it parses wrangler.jsonc, which happens before the pool applies its own

@@ -12,14 +12,21 @@ import { fileURLToPath } from 'node:url';
 import { TEST_DATABASE, ensureTestDatabase, hyperdriveStrings } from '../../../scripts/test-db.mjs';
 
 const workerDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const ci = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+const database = ci ? (process.env.PGDATABASE ?? 'hermes') : TEST_DATABASE;
 
 // Seeded too: `test/db/harness.ts` builds its own rows, but the catalog the
 // health check counts comes from the migrations and the seed.
-ensureTestDatabase();
+// GitHub Actions already owns its disposable Postgres service and has migrated
+// it in the preceding workflow step. Starting Docker Compose there would fight
+// that service for port 5433. A developer machine is different: its `hermes`
+// database is durable product state, so local tests always create and use the
+// separate `hermes_test` database.
+if (!ci) ensureTestDatabase();
 
 const result = spawnSync('npx', ['vitest', 'run', '--project', 'db', ...process.argv.slice(2)], {
   cwd: workerDir,
   stdio: 'inherit',
-  env: { ...process.env, PGDATABASE: TEST_DATABASE, ...hyperdriveStrings(TEST_DATABASE) },
+  env: { ...process.env, PGDATABASE: database, ...hyperdriveStrings(database) },
 });
 process.exit(result.status ?? 1);

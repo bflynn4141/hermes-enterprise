@@ -4460,3 +4460,32 @@ trusted correlation; model arguments and static MCP headers do not.
 **Evidence and limits.** See [Official Hermes Agent runtime](HERMES-AGENT-RUNTIME.md)
 for the pinned source, actual conversation checks, configuration, and hosted
 rollout requirements. Verified locally; no hosted runtime deployed by this work.
+
+---
+
+## C49. A model sync may add hundreds of rows; one response may not retire hundreds
+
+**Context.** A real OpenRouter key synced 441 models into the local `hermes`
+database. The aggregate Worker test command then ran its database project
+directly. `db-config.mjs` defaulted that project back to `hermes`, four fixture
+workspaces each synced the five usable rows in the seven-row OpenRouter fixture,
+and `sync_openrouter_catalog` truthfully but disastrously marked the other 439
+rows “No longer listed by OpenRouter.” OpenRouter still listed them.
+
+**Decision.** Local aggregate tests again run the database project through
+`scripts/db-test.mjs`, which owns `hermes_test`; a bare Vitest run also forces
+both `PGDATABASE` and local Hyperdrive bindings to `hermes_test`. CI is the only
+exception because its `hermes` service is disposable and already occupies port
+5433. Independently, catalog sync refuses an empty response or a refresh below
+half of an active catalog of at least twenty rows. A failed completeness check
+preserves the last catalog and leaves the verified key available for retry.
+
+**Why both.** Test isolation fixes the observed cause. The completeness guard
+protects staging and future local work from the same outcome if a CDN truncates
+a response, OpenRouter changes its schema, or another caller accidentally uses
+a fixture. Retiring models is reversible; silently retiring hundreds from one
+small response is still the wrong default.
+
+**Would change it if.** OpenRouter publishes a versioned snapshot or explicit
+deletion feed, at which point retirement should follow that signal instead of a
+ratio guard.

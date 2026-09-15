@@ -130,6 +130,15 @@ export interface SyncResult {
 }
 
 /**
+ * A provider catalog can shrink, but a 400-row catalog cannot honestly become
+ * a five-row catalog in one refresh without stronger evidence than one HTTP
+ * response. This catches truncated responses, provider schema drift, and a
+ * development fixture accidentally pointed at durable product data.
+ */
+export const RETIREMENT_BASELINE = 20;
+export const RETIREMENT_MINIMUM_RATIO = 0.5;
+
+/**
  * Write the rows.
  *
  * One statement, through the SECURITY DEFINER function 0015 installs: `app` has
@@ -142,6 +151,22 @@ export async function syncOpenRouterCatalog(tx: Tx, body: unknown, today: Date =
     ? ((body as { data: unknown[] }).data.length)
     : 0;
   const verifiedOn = today.toISOString().slice(0, 10);
+
+  if (rows.length === 0) {
+    throw new Error('refusing to replace the OpenRouter catalog with an empty response');
+  }
+
+  const { rows: baselines } = await tx.query<{ active: string }>(
+    `SELECT count(*)::text AS active
+       FROM catalog
+      WHERE provider = 'openrouter'
+        AND source = 'provider_list'
+        AND disabled_reason IS NULL`,
+  );
+  const active = Number(baselines[0]?.active ?? 0);
+  if (active >= RETIREMENT_BASELINE && rows.length < active * RETIREMENT_MINIMUM_RATIO) {
+    throw new Error(`refusing suspicious OpenRouter catalog shrink from ${active} to ${rows.length} models`);
+  }
 
   const { rows: result } = await tx.query<{ written: number }>(
     'SELECT sync_openrouter_catalog($1::jsonb, $2::date) AS written',
