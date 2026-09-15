@@ -23,7 +23,7 @@ describe('official Hermes Runs transport', () => {
     const [url, init] = send.mock.calls[0]!;
     expect(url).toBe('https://runtime.example/v1/runs');
     expect(init?.method).toBe('POST');
-    expect(init?.redirect).toBe('error');
+    expect(init?.redirect).toBe('manual');
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
     expect(new Headers(init?.headers).get('Idempotency-Key')).toBe('enterprise-local-a1');
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
@@ -103,6 +103,16 @@ describe('official Hermes Runs transport', () => {
     const failure = client.status(RUN_ID);
     await expect(failure).rejects.toEqual(new HermesApiError(503, 'request'));
     await expect(failure).rejects.not.toThrow(SECRET);
+  });
+
+  it.each([301, 302, 307, 308])('rejects a %s redirect without forwarding the bearer token', async (status) => {
+    const { client, send } = transport(() => new Response('upstream redirect', {
+      status, headers: { Location: 'https://another-host.example/capture' },
+    }));
+    await expect(client.status(RUN_ID)).rejects.toEqual(new HermesApiError(status, 'request'));
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toBe(`https://runtime.example/v1/runs/${RUN_ID}`);
+    expect(send.mock.calls[0]?.[1]?.redirect).toBe('manual');
   });
 
   it.each(['completed', 'failed', 'cancelled', 'interrupted'])('recognizes %s as terminal', (status) => {

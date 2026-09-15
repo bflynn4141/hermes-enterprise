@@ -92,6 +92,15 @@ export default defineConfig({
           cloudflareTest({
             wrangler: { configPath: './wrangler.jsonc' },
             miniflare: {
+              // Exercise native workerd fetch against an offline Runs API.
+              // Other hosts keep their existing network behavior.
+              outboundService: 'runtime-transport-fixture',
+              workers: [{
+                name: 'runtime-transport-fixture',
+                modules: true,
+                scriptPath: join(here, 'test/stubs/runtime-upstream.mjs'),
+                compatibilityDate: '2026-08-15',
+              }],
               hyperdrives: {
                 HYPERDRIVE_APP: localApp,
                 HYPERDRIVE_AGENT: localAgent,
