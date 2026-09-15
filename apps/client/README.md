@@ -214,7 +214,8 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
               live-panel.spec.ts  N1–N7: the panel's three states and the
                                   sessions list, against the live stack
               panel-screens.spec.ts every page × three panel states × two widths
-              panel-sidebar.spec.ts the sidebar's list, before and after C34
+              panel-sidebar.spec.ts the sidebar's list plus every navigation,
+                                  workspace and account-menu route (C34, C50)
               panel-narrow.spec.ts  900 and 1100 in all three states: the
                                   navigation keeps its own column
               panel-helpers.ts    the assertions the panel suites share

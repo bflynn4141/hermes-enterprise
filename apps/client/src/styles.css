@@ -65,14 +65,15 @@ h1, h2, h3, h4, p { margin: 0; }
 .panel-resizer:focus-visible { outline: 2px solid #c6c6ff; outline-offset: 0; border-radius: 3px; }
 body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-select: none !important; }
 
-/* ---------- sidebar session rows ----------
-   The row is one text node — `SidebarNav` renders `label` and nothing else — so
-   the status rides in the label, and the row is allowed two lines rather than
-   truncating the half that changes. A person scanning this list is scanning for
-   "Working", and a row that ellipsises exactly that word is a row that answers
-   the wrong question (decision C35). */
-.sidebar .sidebar-row { height: auto; min-height: 32px; align-items: flex-start; padding-block: 5px; }
-.sidebar .sidebar-row > span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: clip; font-size: 13.5px; line-height: 17px; }
+/* ---------- sidebar rows ----------
+   Primary navigation is a comfortable, centered 40 px target with consistent
+   space between buttons. Session rows retain two lines for their changing
+   status, but the rule is scoped to their copy so it cannot distort the icon
+   span used by primary navigation (decision C35). */
+.sidebar .sidebar-row { margin-block: 2px; }
+.sidebar .sidebar-row[aria-label] { height: 40px; min-height: 40px; align-items: center; padding-block: 0; }
+.sidebar .sidebar-row:not([aria-label]) { height: auto; min-height: 36px; align-items: flex-start; padding-block: 6px; }
+.sidebar .sidebar-row:not([aria-label]) > .sidebar-copy { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: clip; font-size: 13.5px; line-height: 17px; }
 
 /* ---------- the app pane at full width ----------
    Collapsing Iris hands the app 1544 px at 1840, and a dashboard at 1544 px is
@@ -691,8 +692,6 @@ html[data-reduce-motion="true"] *, html[data-reduce-motion="true"] *::before, ht
 .share-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; margin-left: 4px; }
 .ws-btn { display: flex; align-items: center; gap: 12px; width: 100%; height: 40px; text-align: left; border-radius: 8px; padding: 0 6px; margin-left: -6px; color: inherit; transition: background-color 120ms ease-out; }
 .ws-btn:hover, .ws-btn[aria-expanded="true"] { background: rgba(255,255,255,.05); }
-.profile-btn { display: flex; align-items: center; gap: 12px; width: 100%; border-radius: 8px; padding: 6px; margin-left: -6px; text-align: left; font-size: 14px; color: inherit; transition: background-color 120ms ease-out; }
-.profile-btn:hover, .profile-btn[aria-expanded="true"] { background: rgba(255,255,255,.05); }
 .follow-btn[aria-pressed] { cursor: pointer; transition: border-color 120ms ease-out; }
 .follow-btn[aria-pressed]:hover { border-color: #4a4a80; }
 .dialog-actions .grow { flex: 1; }
@@ -732,7 +731,14 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 /* The library's components live inside `.hermes-ui`, which carries its own
    token scope; nothing here may leak into it. */
 .hermes-ui { color-scheme: dark; }
-.sidebar.hermes-ui { padding: 0; }
+.sidebar.hermes-ui { padding-inline: 8px; transition: padding-inline var(--dur-layout) var(--ease-out); }
+.sidebar.hermes-ui:has([data-sidebar-collapsed="true"]) { padding-inline: 0; }
+
+/* SidebarNav exposes one footer slot. Make that real trigger the account row:
+   left-aligned like the rest of the navigation, with a full-size target and a
+   predictable inset for the portaled menu anchor. */
+.sidebar button:has(> .account-trigger-marker) { height: 40px; justify-content: flex-start; gap: 10px; padding-inline: 10px; text-align: left; }
+.account-trigger-marker { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 20px; }
 
 /* `HermesMotionProvider` renders its own `.hermes-ui` wrapper, so the height
    chain from `#root` to the shell runs through it. Without this the shell

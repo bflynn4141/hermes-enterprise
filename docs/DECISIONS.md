@@ -4489,3 +4489,39 @@ small response is still the wrong default.
 **Would change it if.** OpenRouter publishes a versioned snapshot or explicit
 deletion feed, at which point retirement should follow that signal instead of a
 ratio guard.
+
+---
+
+## C50. The visible navigation control owns its action and its menu
+
+**Decided September 15, 2026.** Every left-rail control must produce a visible
+result: primary items open their page, New session and recent sessions open
+Iris, session search opens and closes, and the collapse control can restore the
+expanded rail. Workspace actions use the exact labels emitted by `SidebarNav`:
+Switch workspace opens the root picker, Workspace settings opens Organization,
+and Invite team members opens Members.
+
+The library's visible footer button is the one account-menu trigger. The app
+recovers that button through the public `footerIcon` slot and anchors the
+popover to it; it does not render a second hidden trigger below a full-height
+sidebar. The footer is a left-aligned 40 px row with the same inset and vertical
+rhythm as primary navigation. Expanded rails keep 8 px side gutters, while the
+52 px collapsed rail gives that space back so icons stay centered.
+
+**Why.** The workspace callback previously compared `settings` and `members`
+against full labels, so two menu items silently did nothing. The account menu
+was anchored to a second button clipped below the rail, not the button a person
+clicked. A broad session-row CSS selector also styled primary-navigation icon
+spans as multiline copy. These looked like isolated polish problems but shared
+one cause: behavior and layout were attached to elements other than the visible
+control.
+
+**Evidence.** `panel-sidebar.spec.ts` exercises every page destination,
+workspace action, account shortcut, search, recent selection, New session,
+collapse/expand, reduced-motion toggle and focus restoration. It also measures
+40 px primary targets, at least 4 px between them, and the shared left edge of
+the account and navigation rows.
+
+**Would change it if.** `SidebarNav` exposes a first-class account trigger ref
+or account-menu slot, at which point the marker bridge can be removed without
+changing the visible behavior.

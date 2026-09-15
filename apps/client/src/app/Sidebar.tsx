@@ -36,7 +36,8 @@ export function Sidebar() {
   const nav = useNav();
   const dispatch = useDispatch();
   const [menu, setMenu] = useState(false);
-  const meBtn = useRef<HTMLButtonElement>(null);
+  const accountBtn = useRef<HTMLElement>(null);
+  const accountMarker = useRef<HTMLSpanElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const go = (ref: Ref): void => {
     setMenu(false);
@@ -80,12 +81,26 @@ export function Sidebar() {
     return () => observer.disconnect();
   }, [dispatch, state.ui.navCollapsed]);
 
+  // SidebarNav owns the visible footer button, while this client owns the
+  // account menu. Use a marker inside the public footerIcon slot to recover
+  // that exact button as the popover anchor instead of rendering a second,
+  // hidden account button after a full-height sidebar.
+  useEffect(() => {
+    const button = accountMarker.current?.closest<HTMLButtonElement>('button') ?? null;
+    accountBtn.current = button;
+    if (!button) return;
+    button.setAttribute('aria-label', 'Your account');
+    button.setAttribute('aria-haspopup', 'dialog');
+    button.setAttribute('aria-expanded', String(menu));
+  }, [menu]);
+
   return (
     // `SidebarNav` renders its own <aside> with its own collapse control; this
     // wrapper is the grid cell. It clips during the shared width transition so
     // neither state can paint over the neighboring pane (decision C36).
     <aside ref={sidebarRef} className="sidebar hermes-ui" aria-label="Workspace navigation">
       <SidebarNav
+        className="workspace-sidebar-nav"
         fill
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}
         navItems={navItems}
@@ -96,14 +111,22 @@ export function Sidebar() {
         // workspace menu; a headcount pinned under your own avatar is a number
         // about other people in the one place that is about you (decision C47).
         footerLabel={state.user.name || 'You'}
-        footerIcon={<Avatar person={{ name: state.user.name || 'You' }} size={20} />}
+        footerIcon={
+          <span ref={accountMarker} className="account-trigger-marker" aria-hidden="true">
+            <Avatar person={{ name: state.user.name || 'You' }} size={20} />
+          </span>
+        }
         onNavigate={(key) => {
           const section = SECTIONS.find((item) => item.key === key);
           if (!section) return;
           nav(section.ref);
           if (key === 'inbox') dispatch({ type: 'nav/tab', key: 'inboxTab', value: 'needs-review' });
         }}
-        onPick={(id) => dispatch({ type: 'session/select', id })}
+        onPick={(id) => {
+          dispatch({ type: 'session/select', id });
+          dispatch({ type: 'iris/panel', panel: 'open' });
+          requestComposerFocus();
+        }}
         onNewChat={() => {
           // One control, three effects: reuse-or-create (the adapter's rule),
           // open the panel, and put the cursor in the composer. A New session
@@ -114,59 +137,57 @@ export function Sidebar() {
           void adapter.createSession();
         }}
         onWorkspaceAction={(action) => {
-          if (action === 'settings') go(SETTINGS('Organization'));
-          if (action === 'members') go(MEMBERS);
+          if (action === 'Switch workspace') window.location.assign('/');
+          if (action === 'Workspace settings') go(SETTINGS('Organization'));
+          if (action === 'Invite team members') go(MEMBERS);
         }}
-        onFooterClick={() => setMenu((open) => !open)}
+        onFooterClick={() => {
+          accountBtn.current = accountMarker.current?.closest<HTMLButtonElement>('button') ?? null;
+          setMenu((open) => !open);
+        }}
       />
-      <div className="profile" style={{ position: 'relative' }}>
-        <button ref={meBtn} type="button" className="profile-btn" aria-haspopup="dialog" aria-expanded={menu} aria-label="Your account" onClick={() => setMenu((open) => !open)}>
-          <Avatar person={{ name: state.user.name || 'You' }} />
-          <span className="profile-name">{state.user.name || 'You'}</span>
-        </button>
-        <Popover open={menu} onClose={() => setMenu(false)} anchorRef={meBtn} align="left" above width={280} label="Your account" portal className="menu account-menu">
-          <div className="row account-head">
-            <Avatar person={{ name: state.user.name }} size={36} />
-            <div className="col" style={{ gap: 2, minWidth: 0 }}>
-              <span className="p-title">{state.user.name || 'You'}</span>
-              <span className="p-meta">
-                {state.user.email || state.workspace.name} · {state.user.role === 'admin' ? 'Admin' : 'Member'}
-              </span>
-            </div>
-          </div>
-          <div className="divider" />
-          <MenuItem small icon="mail" onClick={() => go(SETTINGS('Notifications'))}>
-            Notification settings
-          </MenuItem>
-          <MenuItem small icon="key" onClick={() => go(SETTINGS('Provider keys'))}>
-            Provider keys
-          </MenuItem>
-          <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
-            Data and privacy
-          </MenuItem>
-          <div className="row account-toggle">
-            <span className="grow">Reduce motion</span>
-            <Toggle
-              checked={state.ui.reduceMotion}
-              label="Reduce motion"
-              // Client-local, and only client-local. It used to PATCH
-              // `{ reduce_motion }` at the settings route as well, where it
-              // matched no workspace field and was silently discarded; the
-              // route answers 422 for an unknown key now, so the call would be
-              // an error for a preference the server has never stored.
-              onChange={(value) => dispatch({ type: 'ui/set', patch: { reduceMotion: value } })}
-            />
-          </div>
-          {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
-          <div className="divider" />
-          <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signInUrl(window.location.href))}>
-            <Icon name="external" />
-            <span className="mi-body">
-              <span>Sign out</span>
+      <Popover open={menu} onClose={() => setMenu(false)} anchorRef={accountBtn} align="left" above width={280} label="Your account" portal className="menu account-menu">
+        <div className="row account-head">
+          <Avatar person={{ name: state.user.name }} size={36} />
+          <div className="col" style={{ gap: 2, minWidth: 0 }}>
+            <span className="p-title">{state.user.name || 'You'}</span>
+            <span className="p-meta">
+              {state.user.email || state.workspace.name} · {state.user.role === 'admin' ? 'Admin' : 'Member'}
             </span>
-          </button>
-        </Popover>
-      </div>
+          </div>
+        </div>
+        <div className="divider" />
+        <MenuItem small icon="mail" onClick={() => go(SETTINGS('Notifications'))}>
+          Notification settings
+        </MenuItem>
+        <MenuItem small icon="key" onClick={() => go(SETTINGS('Provider keys'))}>
+          Provider keys
+        </MenuItem>
+        <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
+          Data and privacy
+        </MenuItem>
+        <div className="row account-toggle">
+          <span className="grow">Reduce motion</span>
+          <Toggle
+            checked={state.ui.reduceMotion}
+            label="Reduce motion"
+            // Client-local, and only client-local. It used to PATCH
+            // `{ reduce_motion }` at the settings route as well, where it
+            // matched no workspace field and was silently discarded; the
+            // route answers 422 for an unknown key now, so the call would be
+            // an error for a preference the server has never stored.
+            onChange={(value) => dispatch({ type: 'ui/set', patch: { reduceMotion: value } })}
+          />
+        </div>
+        {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
+        <div className="divider" />
+        <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signInUrl(window.location.href))}>
+          <Icon name="external" />
+          <span className="mi-body">
+            <span>Sign out</span>
+          </span>
+        </button>
+      </Popover>
     </aside>
   );
 }
