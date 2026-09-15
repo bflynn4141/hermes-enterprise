@@ -112,6 +112,7 @@ These checks are separate from the native probe’s fixture model.
 | Human-review proposal | Run `55dd1ac9-c4d3-4774-93c4-16edb2b5a1ca` created one fictional QA-only application, left pending, and focused it on the right. No decision, invitation or external message. |
 | Stop while waiting | Run `34434547-50e1-45b9-bd76-67c505425600` reached Stopped after native termination; further tools were blocked. |
 | Native state move/restart | Session and idempotency databases retained; watchdog healthy; durable native admission confirmed. |
+| Original localhost:8787 | Run `f6ad2eb0-2a3f-4955-bb42-eef06aca83b5` read the pending Inbox and focused Traces; the next turn recalled “silver lantern” after restart. |
 
 The QA session is **Official Hermes runtime verification**. Its deliberately
 labeled test request is `9ed1133e-aa40-4b71-b279-4dc006663838`. Initial failed
@@ -122,3 +123,8 @@ Automated verification includes shared/client/Worker unit checks, the full
 Worker database suite under the restricted roles, native workerd transport,
 eight isolated browser regressions for context/Stop/key disclosure, Python
 launcher/plugin checks and the real official-gateway fixture probe.
+
+Local delivery is active at `http://localhost:8787`, with Iris’s official runtime
+on port `8642`. The temporary app on `8790` has been stopped. Worker database
+checks passed 368 tests, workerd 29, and the affected Stop routes 19 additional
+checks. All workspace typechecks passed after integration.
