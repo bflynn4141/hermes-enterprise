@@ -64,6 +64,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Build the client assets
+        run: pnpm --filter @hermes/client build
+
       - name: Migrate, then re-apply to prove idempotence
         run: pnpm db:migrate
 
@@ -133,6 +136,9 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Build the client assets
+        run: pnpm --filter @hermes/client build
 
       # No credential is needed for a dry run, and none is provided. What this
       # proves is that both environments parse, that every binding resolves, and
