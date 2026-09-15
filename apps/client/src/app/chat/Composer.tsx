@@ -356,10 +356,10 @@ export function Composer({ session }: { session: SessionState }) {
                 <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <span aria-hidden="true">⌄</span>
               </button>
               <Popover open={menu === 'runtime'} onClose={() => setMenu(null)} anchorRef={runtimeBtn} width={420} label="Runs on" above>
-                <MenuItem icon="cloud" sub={state.workspace.name} checked={session.runtime === 'cloud'} onClick={() => setMenu(null)}>
+                <MenuItem icon="cloud" sub={session.runtime === 'cloud' ? state.workspace.name : 'Not configured for Iris'} checked={session.runtime === 'cloud'} disabled={session.runtime !== 'cloud'} onClick={() => setMenu(null)}>
                   Cloud
                 </MenuItem>
-                <MenuItem icon="device" sub="Not configured for this workspace" checked={session.runtime === 'local'} disabled title="Local execution is not configured" onClick={() => undefined}>
+                <MenuItem icon="device" sub={session.runtime === 'local' ? 'Hermes Agent on this computer' : 'Not configured for this workspace'} checked={session.runtime === 'local'} disabled={session.runtime !== 'local'} onClick={() => setMenu(null)}>
                   Local
                 </MenuItem>
                 <div className="p-meta" style={{ padding: '0 12px' }}>

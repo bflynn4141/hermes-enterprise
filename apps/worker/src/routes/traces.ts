@@ -44,6 +44,11 @@ interface RunRow {
   waiting_for: string | null;
   started_at: Date;
   step_count: string;
+  runtime_kind: 'legacy' | 'hermes';
+  runtime_tools: string[] | null;
+  runtime_profile: string | null;
+  runtime_run_id: string | null;
+  runtime_session_id: string | null;
 }
 
 interface StepRow {
@@ -69,8 +74,12 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
     id: run.id,
     run_id: run.id,
     agent_id: run.agent_id,
+    runtime_kind: run.runtime_kind,
+    runtime_profile: run.runtime_profile,
+    runtime_run_id: run.runtime_run_id,
+    runtime_session_id: run.runtime_session_id,
     name: run.title ?? 'Run',
-    type: `${run.mode} · ${run.model_id}`,
+    type: `${run.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${run.mode}`,
     status: run.status,
     sub: subtitle(run),
     needs_you: needsYou(run),
@@ -88,6 +97,7 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
     step_count: Number(run.step_count),
     version: run.attempt,
     ...extra,
+    ...(run.runtime_tools ? { allowed_tools: run.runtime_tools } : {}),
   });
 
 // `$1` is the workspace and `$2` is the caller, because `VISIBLE` needs the
@@ -102,7 +112,7 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
 // documents are — for a session they were never shown.
 const RUN_SELECT = `
   SELECT r.id, COALESCE(r.agent_id, s.agent_id) AS agent_id, r.session_id, s.title, r.status, r.mode, r.model_id, r.active_ms, r.attempt,
-         r.waiting_for, r.started_at,
+         r.waiting_for, r.started_at, r.runtime_kind, r.runtime_profile, r.runtime_run_id, r.runtime_session_id, r.runtime_request->'_enterprise_tool_names' AS runtime_tools,
          (SELECT count(*) FROM run_steps st WHERE st.run_id = r.id)::text AS step_count
     FROM runs r
     JOIN sessions s ON s.id = r.session_id`;

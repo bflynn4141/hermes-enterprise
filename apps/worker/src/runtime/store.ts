@@ -100,6 +100,22 @@ export class RuntimeDb extends PgAgentDb {
       `SELECT coalesce(max(seq + CASE WHEN role = 'assistant' AND provider_message ? 'runtime_run_id' THEN 1 ELSE 0 END), -1) + 1 AS seq FROM run_turns WHERE run_id = $1 AND turn = 0`, [runId]);
     return Number(rows[0]?.seq ?? 0);
   }
+  async activeRuntimeMs(runId: string, attempt: number, start: number, end: number): Promise<number> {
+    const { rows } = await this.runtimeQuery<{ at: Date; status: string }>(
+      `SELECT at, payload->>'status' AS status FROM stream_events
+        WHERE kind='run.status' AND payload->>'run_id'=$1 AND payload->>'attempt'=$2
+          AND at >= $3 AND at <= $4 ORDER BY at, id`,
+      [runId, String(attempt), new Date(start), new Date(end)]);
+    let waitingSince: number | null = null;
+    let waitingMs = 0;
+    for (const event of rows) {
+      const at = new Date(event.at).getTime();
+      if (event.status === 'waiting' && waitingSince === null) waitingSince = at;
+      else if (event.status !== 'waiting' && waitingSince !== null) { waitingMs += at - waitingSince; waitingSince = null; }
+    }
+    if (waitingSince !== null) waitingMs += end - waitingSince;
+    return Math.max(0, end - start - waitingMs);
+  }
   async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
     const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
       `SELECT model_id, provider FROM catalog WHERE provider = 'openrouter' AND transport = 'openrouter_chat'

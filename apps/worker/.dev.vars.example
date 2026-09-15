@@ -62,3 +62,8 @@ AUTH_MODE="fake"
 MODEL_GATEWAY_MODE="off"
 # 1 refuses to create new Workflow instances; part of the engine-version runbook.
 ENGINE_PAUSED="0"
+
+# Official Hermes runtime. Map each agent to its own running profile.
+# AGENT_RUNTIME="hermes"
+# HERMES_RUNTIME_AGENTS='{"AGENT_UUID":{"workspace_id":"WORKSPACE_UUID","base_url":"http://127.0.0.1:8642","api_key":""}}'
+HERMES_BRIDGE_SECRET=""

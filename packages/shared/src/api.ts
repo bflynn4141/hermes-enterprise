@@ -77,6 +77,7 @@ export const bootstrapSchema = z
           mode: sessionModeSchema,
           model_id: z.string(),
           effort: z.string().nullable(),
+          runtime: z.enum(['local', 'cloud']).optional(),
           pinned: z.boolean(),
           archived: z.boolean(),
           focus_ref: refSchema.nullable(),

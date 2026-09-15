@@ -25,7 +25,10 @@ import type { Env } from '../env.js';
 import { adapterOptions, providerForTransport, SCRIPTS, ScriptedProvider, type Script } from '../model/index.js';
 import type { ModelProvider } from '../model/types.js';
 import type { Transport } from '@hermes/shared';
-import { PgAgentDb } from '../engine/pg-agent-db.js';
+import { RuntimeDb } from '../runtime/store.js';
+import { runtimeBinding } from '../runtime/config.js';
+import { runHermesAttempt } from '../runtime/adapter.js';
+import { HermesClient } from '../runtime/client.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -285,10 +288,9 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
       throw new NonRetryableError('RunAttempt was created without a run id');
     }
 
-    const db = new PgAgentDb(this.env, params.workspaceId, params.traceId);
+    const db = new RuntimeDb(this.env, params.workspaceId, params.traceId);
     try {
-      await runAttempt(
-        {
+      const deps = {
           db,
           // The scenario, honoured on the first attempt only: a Retry is the
           // scenario's second half and has to be allowed to succeed.
@@ -343,10 +345,15 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           // the Workflow tells it, which is the only place that knows.
           fetchUrl: (url, method, allowlist) =>
             fetchUrl(url, method, { allowlist, denyHosts: denyHostsFor(this.env) }),
-        },
-        engineStep(step),
-        { runId: params.runId, attempt: params.attempt, traceId: params.traceId },
-      );
+        } satisfies import('../engine/engine.js').EngineDeps;
+      const runInput = { runId: params.runId, attempt: params.attempt, traceId: params.traceId };
+      if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
+        const run = await db.loadRun(params.runId);
+        const binding = runtimeBinding(this.env, params.workspaceId, run?.agentId ?? '');
+        await runHermesAttempt({ db, client: new HermesClient(binding.baseUrl, binding.apiKey), profile: binding.profile, forward: deps.forward }, engineStep(step), runInput);
+      } else {
+        await runAttempt(deps, engineStep(step), runInput);
+      }
     } finally {
       await db.close();
     }

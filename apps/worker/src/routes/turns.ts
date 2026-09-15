@@ -18,6 +18,7 @@ import type { Context } from 'hono';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
+import { runtimeBinding } from '../runtime/config.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
@@ -223,6 +224,8 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     );
     const already = existing.rows[0];
     if (already) return { status: 200 as const, run: already, duplicate: true };
+
+    if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') runtimeBinding(c.env, work.workspaceId, session.agent_id);
 
     if (isEnginePaused(c.env)) {
       throw new RouteError('the engine is paused for a deploy', 'engine_paused', 409);

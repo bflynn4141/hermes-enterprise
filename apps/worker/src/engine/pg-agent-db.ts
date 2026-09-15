@@ -56,6 +56,7 @@ interface QueryResultLike<T> {
 
 export class PgAgentDb implements AgentDb {
   private client: Client | null = null;
+  private runtimeTransactionQuery: (<R>(text: string, values?: readonly unknown[]) => Promise<QueryResultLike<R>>) | null = null;
 
   constructor(
     private readonly env: Env,
@@ -76,6 +77,7 @@ export class PgAgentDb implements AgentDb {
   }
 
   private async tx<T>(fn: (q: <R>(text: string, values?: readonly unknown[]) => Promise<QueryResultLike<R>>) => Promise<T>): Promise<T> {
+    if (this.runtimeTransactionQuery) return fn(this.runtimeTransactionQuery);
     const client = await this.connection();
     await client.query('BEGIN');
     try {
@@ -91,6 +93,22 @@ export class PgAgentDb implements AgentDb {
       await client.query('ROLLBACK');
       throw error;
     }
+  }
+
+  /** One bridge call holds its replay lock and tool writes in one transaction.
+   * Instances are request-local; callers must not run concurrent operations on one.
+   */
+  async runtimeTx<T>(fn: (q: <R>(text: string, values?: readonly unknown[]) => Promise<{ rows: R[] }>) => Promise<T>): Promise<T> {
+    return this.tx(async (query) => {
+      this.runtimeTransactionQuery = query;
+      try { return await fn(query); }
+      finally { this.runtimeTransactionQuery = null; }
+    });
+  }
+
+  /** Runtime bookkeeping uses the same restricted role and tenant transaction. */
+  async runtimeQuery<T>(text: string, values: readonly unknown[] = []): Promise<{ rows: T[] }> {
+    return this.tx((query) => query<T>(text, values));
   }
 
   // -------------------------------------------------------------------------

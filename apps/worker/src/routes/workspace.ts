@@ -95,6 +95,7 @@ export async function loadBootstrap(
   const sessions = await tx.query<{
     id: string;
     agent_id: string;
+    runtime: 'local' | 'cloud';
     title: string;
     mode: string;
     model_id: string;
@@ -106,7 +107,7 @@ export async function loadBootstrap(
     last_activity_at: Date | null;
   }>(
     `SELECT s.id, COALESCE(s.agent_id, $2::uuid) AS agent_id,
-            s.title, s.mode, s.model_id, s.effort, s.pinned, s.archived, s.focus_ref,
+            s.title, s.mode, s.model_id, s.effort, s.runtime, s.pinned, s.archived, s.focus_ref,
             v.status, s.last_activity_at
        FROM sessions s
        JOIN v_session_status v ON v.session_id = s.id

@@ -921,7 +921,7 @@ function sessionSeed(row: import('@hermes/shared').Bootstrap['sessions'][number]
     mode: row.mode,
     model: row.model_id,
     effort: row.effort,
-    runtime: 'cloud' as const,
+    runtime: row.runtime ?? 'cloud' as const,
     pinned: row.pinned,
     archived: row.archived,
     status: row.status,

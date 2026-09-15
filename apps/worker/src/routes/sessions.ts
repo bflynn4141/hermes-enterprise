@@ -13,6 +13,7 @@
 // The response shapes come from `@hermes/shared/entities`, which is also what
 // the client parses. One schema per payload: a second one on the server would
 // drift, and the drift would show up as an empty pane rather than an error.
+import { runtimeBinding } from '../runtime/config.js';
 import type { Context } from 'hono';
 import {
   draftSchema,
@@ -184,7 +185,7 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
         mode,
         defaults.default_model_id,
         defaults.default_effort,
-        defaults.default_runtime,
+        c.env.AGENT_RUNTIME === 'hermes' ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(runtimeBinding(c.env, work.workspaceId, agentId).baseUrl) ? 'local' : 'cloud') : defaults.default_runtime,
       ],
     );
     const row = rows[0];

@@ -33,7 +33,7 @@
     "directory": "../client/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+    "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
   },
 
   "vars": {
@@ -171,7 +171,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",
@@ -251,7 +251,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
       },
       "vars": {
         "ENVIRONMENT": "production",

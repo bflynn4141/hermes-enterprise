@@ -11,6 +11,12 @@ export interface Env {
   ENVIRONMENT: string;
   /** Bumped when a deploy changes existing Workflow step names. */
   ENGINE_VERSION: string;
+  /** Official execution plane; unset preserves legacy runs during rollout. */
+  AGENT_RUNTIME?: 'hermes' | 'legacy';
+  /** Server-only agent -> isolated profile endpoint/credential mapping. */
+  HERMES_RUNTIME_AGENTS?: string;
+  /** Signs a bridge credential scoped to one workspace and agent. */
+  HERMES_BRIDGE_SECRET?: string;
   /**
    * 'fake' reads a seeded user from `x-dev-user`; 'workos' verifies a sealed
    * cookie. M1 ships 'fake' only, behind the same `getSession` interface the

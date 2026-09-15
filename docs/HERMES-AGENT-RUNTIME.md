@@ -1,63 +1,88 @@
 # Official Hermes Agent runtime
 
-The enterprise app should use the official Hermes Agent as its execution plane. The Worker remains the control plane and system of record.
+Hermes Enterprise now has an execution adapter for the official Nous runtime,
+pinned to `5d59366010640c1d6b8f170d8a4ee109db2bbdef` (package 0.21.3).
+The Worker remains the enterprise control plane and system of record.
 
-## Identity
+## Identity and state
 
-- One enterprise `agents.id` maps to one isolated Hermes profile.
-- Every enterprise session and run stores `agent_id`.
-- Store the official Hermes `profile`, `session_id`, and `run_id` as correlation metadata; none replaces the enterprise ids.
-- Keep **Agent**, **Model**, and **Location** separate in the UI. Example: `Iris · DeepSeek · Cloud`.
+One `agents.id` maps to one profile: `agent-<uuid>`. Each runs in a separate
+process with a separate `HERMES_HOME`, OS home, session database and working
+directory. The launcher refuses a second process on the same profile. Profiles
+isolate application state; they are not an OS sandbox or a substitute for RBAC.
 
-Hermes profiles have independent homes, configuration, memory, sessions, skills, cron state, and credentials. The official guidance says two processes must not share one profile. An enterprise deployment should therefore isolate each agent profile in its own OpenShell sandbox or container.
+Sessions and runs retain enterprise `agent_id`. A run also records its runtime
+kind, profile, native run/session IDs and attempt. Existing traces retain their
+previous-runtime label; new official runs display `Hermes Agent`. Trace reads
+remain restricted to the agent and sessions the viewer can access.
 
-## Request path
+## Execution
 
-1. The browser sends a turn to the enterprise Worker.
-2. The Worker authorizes the human, workspace, session, and `agent_id`.
-3. The Worker starts an official Hermes run through `POST /v1/runs` and records both run ids.
-4. Hermes streams lifecycle and tool events from `/v1/runs/{id}/events`.
-5. The Worker translates those events into the existing message, step, status, and trace contracts.
-6. The browser continues to receive the same session stream it uses today.
+1. The browser sends a turn through the existing authenticated Worker route.
+2. The Worker validates membership, session ownership, model, limits and agent
+   binding. It snapshots the native submission in Postgres, never in Workflow
+   checkpoint payloads.
+3. A Workflow submits `POST /v1/runs` with an attempt-specific idempotency key.
+   The native session ID is the enterprise session ID. Hermes owns its continued
+   transcript. Existing conversation messages seed the first native run.
+4. Native text deltas feed one enterprise assistant message. Tool callbacks
+   persist the real tool IDs, arguments and results in the existing trace rows.
+5. Final message, usage, duration and events commit atomically. Hub delivery
+   happens afterward; delivery failure does not turn completed work into failure.
+6. Stop reaches the native run and waits for native cancellation. Human guidance
+   uses native steer; unconsumed guidance carries into the next message.
 
-This keeps the browser away from the runtime bearer token and prevents a profile API from becoming a bypass around enterprise authorization.
+The native SSE queue has **no replay**. Reconnection uses native run status and
+final output; browser replay comes from durable enterprise events. No raw model
+reasoning is required for the activity indicator.
 
-## Tool boundary
+## Tools and credentials
 
-Expose enterprise capabilities to Hermes through an MCP server with a narrow allowlist:
+The official runtime loads a narrow enterprise plugin. It gets runtime run and
+call IDs from native ContextVars, not model arguments. The Worker maps those IDs
+to the current agent/run/attempt, then rechecks mode and tool permissions. A
+repeated call returns its stored result; changed arguments under the same ID are
+refused. Old attempts and stopped runs cannot execute tools.
 
-- read workspace context, documents, members, and requests;
-- propose requests, instruction changes, and navigation focus;
-- never directly approve, sign, pay, grant access, invite, or change roles.
+The bridge uses the existing restricted Postgres `agent` role. It can read
+workspace context/documents, prepare Inbox requests, write review notes and
+propose context/instruction changes. Human approval, payments, signatures, role
+changes and invitation authority remain in the enterprise routes.
 
-Those guarded actions stay in the enterprise Worker and Inbox. Hermes may prepare a proposal; a named human records the decision.
+OpenRouter remains the model provider. The native runtime calls an authenticated,
+agent-scoped model proxy; the Worker resolves the workspace's current encrypted
+key for each call. Provider keys are never copied into profile configuration.
+Only the selected catalog model can be called. Each profile executes one run at
+a time, enforced in the Worker and native API.
 
-## What the official runtime replaces
+## Running locally
 
-- the custom provider loop;
-- manual tool-call iteration and retry handling;
-- runtime session state;
-- agent memory, skills, delegation, and scheduled work;
-- direct OpenRouter calls from the Worker.
+See [the runtime launcher](../runtime/hermes/README.md) for install, start,
+configuration and source-contract checks. Enable `AGENT_RUNTIME=hermes` and
+provide `HERMES_RUNTIME_AGENTS` and `HERMES_BRIDGE_SECRET` as server secrets.
+Missing bindings fail explicitly; there is no silent fallback to a chat loop.
+The legacy/scripted path remains available for existing deployments and offline
+contract tests during rollout.
 
-OpenRouter or another provider becomes model configuration inside Hermes. `Cloud` or `Local` remains where the Hermes profile runs, not which model it uses.
+The first connected profile is Iris in the local workspace. The UI reports
+Local execution, separately from the remotely served model.
 
-## What remains in Hermes Enterprise
+## Deployment limits
 
-- WorkOS identity, membership, and RBAC;
-- agent-to-human binding and mandates;
-- documents and private/shared context boundaries;
-- approvals, money movement, signatures, and effects;
-- audit history, retention, residency, usage caps, and notifications;
-- durable enterprise ids and trace access control.
+This change does not deploy a runtime host to staging or production. The staging
+Worker cannot reach a loopback profile on this computer. A hosted deployment
+needs a private authenticated runtime endpoint for each configured profile and
+process/container supervision.
 
-## Migration sequence
+Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
+not enabled. Automatic memory extraction, background review and learning nudges
+are disabled while enterprise ownership and retention integration is completed.
+The official runtime still persists its session transcript. Production erasure,
+backup and retention must cover that profile store as well as Postgres/R2 before
+opening this execution path to hosted customer data. Shared skills stay governed
+by the enterprise app; this change does not claim full native skill lifecycle
+integration. Hermesmail remains a concept address, not a provisioned mailbox.
 
-1. Persist and filter by `agent_id` on sessions, runs, and traces. **Implemented in this change.**
-2. Add an `AgentRuntime` adapter and deploy one sandboxed Iris profile.
-3. Route one test session through the official Runs API behind a feature flag.
-4. Add the enterprise MCP tool server and map Hermes events to the current stream contract.
-5. Compare complete conversations, approval proposals, stop/retry behavior, latency, and cost.
-6. Move remaining sessions, then retire the custom engine.
-
-Official references: [API server and Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server), [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md), [security and OpenShell](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md), and [MCP tool filtering](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp).
+Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server),
+[profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),
+and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md).

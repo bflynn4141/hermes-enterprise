@@ -679,7 +679,7 @@ export function TraceDetail({ id }: { id: string | null }) {
           <span className="grow" />
           <span className="meta">{trace.status}</span>
         </div>
-        <Panel icon="trace" title={trace.sub} subtitle={`${trace.mode ?? 'work'} · ${trace.model_id ?? 'unknown model'} · run ${trace.run_id.slice(0, 8)}`} />
+        <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${trace.model_id ?? 'unknown model'}`} />
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">
