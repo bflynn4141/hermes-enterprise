@@ -2,8 +2,8 @@
 //
 // Rewired: the model and effort lists come from `catalog` rows, and a disabled
 // row shows its `disabled_reason` rather than vanishing — a model you cannot
-// pick and cannot see why is worse than one you can see is unavailable. With no
-// verified provider key the whole composer greys and says so. Attach opens the
+// pick and cannot see why is worse than one you can see is unavailable. When a
+// verified provider key is known to be missing, the composer greys and says so. Attach opens the
 // presign flow (POST /attachments → PUT to R2 → POST /complete) and the file
 // arrives as a chip whose extraction status is updated by `entity.updated`.
 //
@@ -61,6 +61,9 @@ export function Composer({ session }: { session: SessionState }) {
 
   const run = session.run;
   const working = run?.status === 'working';
+  const waiting = run?.status === 'waiting';
+  const active = working || waiting;
+  const contextKey = waiting ? run.waiting_for : null;
   const text = session.draft.text;
   const keys = hasVerifiedKey(state);
   const blocked = !keys.any;
@@ -106,7 +109,7 @@ export function Composer({ session }: { session: SessionState }) {
   }, [session.id, blocked]);
 
   /**
-   * Send, guide or queue — and say so when the server refuses.
+   * Send, guide, queue or answer context — and say so when the server refuses.
    *
    * Every one of the three used to end in `.catch(() => undefined)`, so a 400
    * with a sentence in it produced nothing at all on screen (decision C45).
@@ -118,16 +121,18 @@ export function Composer({ session }: { session: SessionState }) {
     if (!draft.trim() || blocked) return;
     setRefusal(null);
     const attempt =
-      working && sendMode === 'queue'
-        ? adapter.queue(session.id, draft)
-        : working
-          ? adapter.guide(session.id, draft)
-          : adapter.send(session.id, draft);
-    if (working) dispatch({ type: 'session/draft-clear', id: session.id });
+      contextKey
+        ? adapter.answerContext(session.id, contextKey, draft)
+        : active && sendMode === 'queue'
+          ? adapter.queue(session.id, draft)
+          : active
+            ? adapter.guide(session.id, draft)
+            : adapter.send(session.id, draft);
+    if (active) dispatch({ type: 'session/draft-clear', id: session.id });
     void attempt.catch((error: unknown) => {
       setRefusal(refusalFor(error));
       // `adapter.send` restores the draft itself, under whichever id the store
-      // is keyed on by then; the other two clear it here, so they put it back
+      // is keyed on by then; the other actions clear it here, so they put it back
       // here. Setting it twice is harmless and losing it once is not.
       dispatch({ type: 'session/draft', id: session.id, text: draft });
       textarea.current?.focus();
@@ -203,7 +208,7 @@ export function Composer({ session }: { session: SessionState }) {
                   : `${status.error?.message ?? 'Error'} · Completed work kept`}
           </span>
           <span className="grow" />
-          {status.status === 'working' && (
+          {(status.status === 'working' || status.status === 'waiting') && (
             <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
               Stop work
             </Button>
@@ -285,7 +290,7 @@ export function Composer({ session }: { session: SessionState }) {
           data-composer="true"
           value={text}
           disabled={blocked}
-          placeholder={blocked ? EMPTY.noKey : working ? 'Guide this run or queue a follow-up…' : `Message ${agent}…`}
+          placeholder={blocked ? EMPTY.noKey : contextKey ? run?.waiting_label ?? 'Answer to continue…' : active ? 'Guide this run or queue a follow-up…' : `Message ${agent}…`}
           aria-label={`Message ${agent}`}
           onChange={(event) => dispatch({ type: 'session/draft', id: session.id, text: event.target.value })}
           onKeyDown={(event) => {
@@ -304,7 +309,7 @@ export function Composer({ session }: { session: SessionState }) {
             <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} onUpload={uploadFiles} />
           </span>
           <span className="spacer" />
-          {working && (
+          {active && !contextKey && (
             <span className="send-mode" role="radiogroup" aria-label={`How to send while ${agent} is working`}>
               <button type="button" aria-pressed={sendMode === 'guide'} onClick={() => setSendMode('guide')} title="Steer the current run">
                 Guide this run
@@ -338,7 +343,7 @@ export function Composer({ session }: { session: SessionState }) {
               </div>
             </Popover>
           </span>
-          {!working && (
+          {!active && (
             <span style={{ position: 'relative', display: 'inline-flex' }}>
               {/* Named, not just labelled by its own text: the text is the
                   current model, so "the control that changes the model" had no
@@ -349,7 +354,7 @@ export function Composer({ session }: { session: SessionState }) {
               <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
             </span>
           )}
-          {!working && (
+          {!active && (
             <span style={{ position: 'relative', display: 'inline-flex' }}>
               <button ref={runtimeBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'runtime'} onClick={() => setMenu(menu === 'runtime' ? null : 'runtime')}>
                 <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
@@ -368,7 +373,7 @@ export function Composer({ session }: { session: SessionState }) {
               </Popover>
             </span>
           )}
-          <button type="button" className="send" aria-label={working ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked} onClick={send}>
+          <button type="button" className="send" aria-label={contextKey ? 'Send context answer' : active ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked} onClick={send}>
             <Icon name="up" />
           </button>
         </div>

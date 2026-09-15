@@ -68,10 +68,13 @@ const SCRIPTED_DEV = __AUTH_MODE__ === 'fake' && !__MOCK__;
  * start"), not an error: in M1 that is every workspace.
  *
  * `any` is what the composer disables itself on; `banner` is what the shell
- * shows. They differ only in scripted development, where the advice is still
- * true and the refusal it predicts would not happen.
+ * shows. Scripted development can send without a key; hidden key details leave
+ * availability unknown and let the run route enforce the actual requirement.
  */
 export function hasVerifiedKey(state: AppState): { any: boolean; rejected: string | null; banner: boolean } {
+  // Step-up protects key details, not conversation access. An unreadable list
+  // cannot prove a key is missing; the run route still validates the real key.
+  if (state.ui.providerKeysLocked) return { any: true, rejected: null, banner: false };
   const keys = providerKeys(state);
   const verified = keys.some((key) => key.status === 'verified' || key.status === 'verified_scoped');
   const invalid = keys.find((key) => key.status === 'invalid');
