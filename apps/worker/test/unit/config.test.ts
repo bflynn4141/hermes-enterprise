@@ -112,8 +112,29 @@ describe('wrangler.jsonc', () => {
 
   it('never carries a secret, only variable names', () => {
     const text = JSON.stringify(config);
-    for (const secret of ['WORKOS_API_KEY', 'WORKOS_COOKIE_PASSWORD', 'KEK_V1', 'SENTRY_DSN', 'localConnectionString']) {
+    for (const secret of [
+      'WORKOS_API_KEY',
+      'WORKOS_COOKIE_PASSWORD',
+      'KEK_V1',
+      'SENTRY_DSN',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'localConnectionString',
+    ]) {
       expect(text, `${secret} appears in wrangler.jsonc`).not.toContain(secret);
+    }
+  });
+
+  it('binds an uploads bucket everywhere, and a backup bucket only where one exists', () => {
+    const bindingsOf = (scope: Record<string, unknown>): string[] =>
+      ((scope.r2_buckets ?? []) as { binding: string }[]).map((b) => b.binding).sort();
+    // Local development has no second bucket, and `backup_uploads` logs that it
+    // did nothing rather than failing forever.
+    expect(bindingsOf(config)).toEqual(['UPLOADS']);
+    for (const [name, scope] of Object.entries(envs)) {
+      expect(bindingsOf(scope), `${name} binds different buckets`).toEqual(['BACKUP_UPLOADS', 'UPLOADS']);
+      // A presigned URL has to spell the bucket out; a binding cannot.
+      expect((scope.vars as { R2_BUCKET?: string }).R2_BUCKET, `${name} has no bucket name`).toBeTruthy();
     }
   });
 

@@ -6,8 +6,9 @@
 // catch-all route here.
 //
 // What is real in M1: /health, /w/:ws/bootstrap, /w/:ws/events, the tenant
-// transaction, the queue and cron handlers' plumbing. What is stubbed: the run
-// engine (M3), WorkOS auth (M2), and every consumer body.
+// transaction, the queue and cron handlers' plumbing. M3.5 filled in the
+// uploads routes and the `extract` consumer; the `renders` consumer is still a
+// scaffold that M4 completes.
 import { Hono } from 'hono';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
@@ -41,9 +42,19 @@ import {
   revokeShare,
   setMessageFeedback,
 } from './routes/sessions.js';
+import {
+  completeAttachment,
+  createAttachment,
+  deleteAttachment,
+  getAttachment,
+  uploadAttachment,
+} from './routes/attachments.js';
+import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
 import { drainJobs } from './jobs.js';
+import { handleQueue } from './queues/index.js';
+import { sweepOrphanedUploads } from './storage/lifecycle.js';
 import { pollWorkOSEvents } from './auth/events-poller.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
@@ -120,6 +131,23 @@ app.delete('/w/:ws/sessions/:id', archiveSession);
 app.put('/w/:ws/messages/:id/feedback', setMessageFeedback);
 app.delete('/w/:ws/messages/:id/feedback', clearMessageFeedback);
 
+// Uploads. The bytes go from the browser to R2 through a presigned PUT, so
+// `complete` is where the file is checked: sniffed against its declared type,
+// hashed, and only then enqueued for extraction. `files` is the same path for
+// the agent's Context sources (`agent_files`).
+app.post('/w/:ws/attachments', createAttachment);
+app.put('/w/:ws/attachments/:id/upload', uploadAttachment);
+app.post('/w/:ws/attachments/:id/complete', completeAttachment);
+app.get('/w/:ws/attachments/:id', getAttachment);
+app.delete('/w/:ws/attachments/:id', deleteAttachment);
+
+app.get('/w/:ws/files', listFiles);
+app.post('/w/:ws/files', createFile);
+app.put('/w/:ws/files/:id/upload', uploadFile);
+app.post('/w/:ws/files/:id/complete', completeFile);
+app.get('/w/:ws/files/:id', getFile);
+app.delete('/w/:ws/files/:id', deleteFile);
+
 // Members and invitations. WorkOS sends the email; `members` decides access.
 app.get('/w/:ws/members', listMembers);
 app.get('/w/:ws/invitations', listInvitations);
@@ -157,6 +185,15 @@ export default {
       // The nightly validator is a Workflow (M5a): a Cron handler caps at 15
       // minutes and a full run-log validation does not.
       console.log(JSON.stringify({ at: 'scheduled', cron: event.cron, note: 'validator lands in M5a' }));
+      // The R2 lifecycle rule the plan names: objects with no completed
+      // attachments row after 24 hours. Best-effort and bounded, because this
+      // handler has 30 seconds of CPU and an orphan costing one more day of
+      // storage is not an incident.
+      ctx.waitUntil(
+        sweepOrphanedUploads(env).catch((error) =>
+          console.log(JSON.stringify({ at: 'cron.uploads', ok: false, error: String(error) })),
+        ),
+      );
       return;
     }
     // Both halves are best-effort and independent: a WorkOS outage must not
@@ -192,11 +229,12 @@ export default {
    * shown. The DLQ consumer writes the failure onto the row instead.
    */
   async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext): Promise<void> {
-    void env;
     void ctx;
     console.log(JSON.stringify({ at: 'queue', queue: batch.queue, messages: batch.messages.length }));
-    // Nothing is acknowledged yet: retrying a message the consumer never
-    // handled is correct, and a silent ack would lose it.
-    batch.retryAll();
+    // Routed by queue name, because one handler serves all four (see
+    // src/queues/index.ts). A queue this build does not know about is retried,
+    // never acked: an unknown queue means a deploy is behind, and acking would
+    // delete the messages it is behind on.
+    await handleQueue(batch, env);
   },
 } satisfies ExportedHandler<Env>;

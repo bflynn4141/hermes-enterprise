@@ -16,6 +16,9 @@ describe('.dev.vars.example', () => {
       'WORKOS_COOKIE_PASSWORD',
       'KEK_V1',
       'SENTRY_DSN',
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
       'MODEL_GATEWAY_MODE',
       'ENGINE_PAUSED',
       'AUTH_MODE',
@@ -27,7 +30,15 @@ describe('.dev.vars.example', () => {
   });
 
   it('holds no value for any real secret', () => {
-    const secrets = ['WORKOS_API_KEY', 'WORKOS_CLIENT_ID', 'WORKOS_COOKIE_PASSWORD', 'KEK_V1', 'SENTRY_DSN'];
+    const secrets = [
+      'WORKOS_API_KEY',
+      'WORKOS_CLIENT_ID',
+      'WORKOS_COOKIE_PASSWORD',
+      'KEK_V1',
+      'SENTRY_DSN',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+    ];
     for (const name of secrets) {
       const line = example.split('\n').find((l) => l.startsWith(`${name}=`));
       expect(line, `${name} has no line`).toBeDefined();

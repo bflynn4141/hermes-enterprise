@@ -34,8 +34,19 @@
     "AUTH_MODE": "fake",
     "MODEL_GATEWAY_MODE": "off",
     "ENGINE_PAUSED": "0",
-    "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787"
+    "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
+    "R2_BUCKET": "hermes-uploads"
   },
+
+  // Uploads, the `.txt` next to each one, and from M4 the rendered documents.
+  // The binding is how the Worker reads and writes; the presigned PUT the
+  // browser uses is signed with the S3 credentials in .dev.vars, and needs the
+  // bucket *name* above because a URL cannot resolve a binding. `wrangler dev
+  // --local` simulates this bucket on disk, with no account and no credentials,
+  // which is why the attachments route has a direct-upload fallback.
+  "r2_buckets": [
+    { "binding": "UPLOADS", "bucket_name": "hermes-uploads" }
+  ],
 
   // Durable Object classes are declared in `exports`, which the docs allow at
   // the top level and overridden per environment. A rename is a `renamed`
@@ -128,8 +139,15 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
-        "ALLOWED_ORIGINS": "https://staging.hermes.example"
+        "ALLOWED_ORIGINS": "https://staging.hermes.example",
+        "R2_BUCKET": "hermes-uploads-staging"
       },
+      // The backup bucket is bound only where it exists; `backup_uploads` logs
+      // that it did nothing when the binding is absent rather than failing.
+      "r2_buckets": [
+        { "binding": "UPLOADS", "bucket_name": "hermes-uploads-staging" },
+        { "binding": "BACKUP_UPLOADS", "bucket_name": "hermes-uploads-backup-staging" }
+      ],
       // CI asserts that staging and production declare the same classes: a
       // mismatch is a namespace that exists in one environment and not the
       // other, which is discovered at the worst possible moment.
@@ -193,8 +211,15 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
-        "ALLOWED_ORIGINS": "https://app.hermes.example"
+        "ALLOWED_ORIGINS": "https://app.hermes.example",
+        "R2_BUCKET": "hermes-uploads-production"
       },
+      // The backup bucket is bound only where it exists; `backup_uploads` logs
+      // that it did nothing when the binding is absent rather than failing.
+      "r2_buckets": [
+        { "binding": "UPLOADS", "bucket_name": "hermes-uploads-production" },
+        { "binding": "BACKUP_UPLOADS", "bucket_name": "hermes-uploads-backup-production" }
+      ],
       "durable_objects": {
         "bindings": [
           { "name": "SESSION_HUB", "class_name": "SessionHub" },

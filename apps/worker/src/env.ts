@@ -23,6 +23,12 @@ export interface Env {
   ENGINE_PAUSED: string;
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
+  /**
+   * The uploads bucket's *name*, which a presigned URL needs and a binding does
+   * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
+   * out in its path. Not a secret, so it is a plain var per environment.
+   */
+  R2_BUCKET: string;
 
   // --- Secrets (never in the repository; see .dev.vars.example) -------------
   WORKOS_API_KEY?: string;
@@ -52,6 +58,20 @@ export interface Env {
    */
   KEK_CURRENT?: string;
   SENTRY_DSN?: string;
+  /**
+   * The S3-compatible credentials that let this Worker mint a presigned URL.
+   *
+   * The R2 *binding* below is how the Worker reads and writes objects itself;
+   * these three are only for handing the browser a URL it can PUT to directly,
+   * so that 20 MB of bytes never pass through a Worker request. When they are
+   * absent — `wrangler dev --local` with no R2 account — the attachments route
+   * falls back to a direct-upload route through the binding and says so in the
+   * response (`upload.direct`), which is a development convenience and is
+   * refused outside development.
+   */
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
 
   // --- Postgres through Hyperdrive -----------------------------------------
   /** The `app` role: every tenant request runs on this one. */
@@ -71,6 +91,17 @@ export interface Env {
   EXTRACT_QUEUE: Queue;
   RENDERS_QUEUE: Queue;
 
+  // --- R2 -------------------------------------------------------------------
+  /** Uploads, extracted text (`{key}.txt`) and, from M4, rendered documents. */
+  UPLOADS: R2Bucket;
+  /**
+   * The nightly copy's destination. Optional, and deliberately: a development
+   * machine has no second bucket, and a `backup_uploads` job that found one
+   * missing should log that it did nothing rather than fail forever. Declared
+   * in wrangler.jsonc only where the bucket actually exists.
+   */
+  BACKUP_UPLOADS?: R2Bucket;
+
   // --- Static assets (the client bundle, with SPA fallback) -----------------
   ASSETS: Fetcher;
 }
@@ -84,3 +115,17 @@ export function allowedOrigins(env: Env): string[] {
 }
 
 export const isEnginePaused = (env: Env): boolean => env.ENGINE_PAUSED === '1';
+
+/**
+ * Can this environment mint a presigned URL?
+ *
+ * All three or none: a half-configured environment would sign with a missing
+ * secret and hand the browser a URL R2 answers 403 to, which looks like a
+ * broken upload rather than a missing secret.
+ */
+export const canPresign = (env: Env): boolean =>
+  Boolean(env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY && env.R2_BUCKET);
+
+/** Local development, where the dev-only direct-upload route is allowed. */
+export const isDevelopment = (env: Env): boolean =>
+  env.ENVIRONMENT === 'development' || env.ENVIRONMENT === 'test';

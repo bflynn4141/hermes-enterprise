@@ -26,6 +26,10 @@ export const LIMITS = {
   createWorkspace: { action: 'workspace.create', limit: 3, windowSeconds: 86_400 },
   invite: { action: 'member.invite', limit: 20, windowSeconds: 3_600 },
   share: { action: 'session.share', limit: 10, windowSeconds: 60 },
+  // 10 uploads a minute, per the plan. Counted at declaration rather than at
+  // completion: a script that mints a thousand presigned URLs and never uses
+  // one has still asked us to sign a thousand URLs.
+  upload: { action: 'attachment.create', limit: 10, windowSeconds: 60 },
 } as const satisfies Record<string, RateLimit>;
 
 /**

@@ -17,7 +17,8 @@ The run engine arrives in M3 and the decision route in M4.
 | `GET /health`, `GET /w/:ws/bootstrap`, `GET /w/:ws/events?stream=&after=` | The run engine. `RunAttempt` is registered as a Workflow and throws `NonRetryableError` (M3) |
 | WorkOS AuthKit behind the same `getSession(c) -> {userId, sid, authenticatedAt}` interface: `/auth/login` (with `max_age: 0` for step-up), `/auth/callback` (sealed cookie, user and membership mirror, `auth_sessions`), `/auth/session` (re-seal, stream heads, hub ticket), `/auth/logout`; local JWT verification against a JWKS cached ten minutes; refresh on expiry, 401 only on a terminal `invalid_grant`, 503 with `Retry-After` on a transient failure | The decision route. `POST /w/:ws/requests/:id/decisions` is deliberately absent until M4; nothing else may take its place |
 | `POST /workspaces`, members and invitations (WorkOS `sendInvitation`, resend, withdraw, role change, removal) with the revocation transaction, the last-Admin rule, and the Events API poller that routes WorkOS-side changes through the same transaction | Outreach, payment and signature. **No code for these exists or ever will in this repository** |
-| Sessions: create from the workspace defaults, list (owner-private plus shares), rename, pin, archive, drafts, message pagination, shares with a hashed token and a cutoff, feedback | Turns, stop, retry and guidance (M3); attachments and documents (M3.5) |
+| Sessions: create from the workspace defaults, list (owner-private plus shares), rename, pin, archive, drafts, message pagination, shares with a hashed token and a cutoff, feedback | Turns, stop, retry and guidance (M3) |
+| Uploads end to end: presigned PUT, magic-byte sniff and sha256 on `complete`, the `extract` queue with a DLQ consumer that writes a reason, PDF text through `unpdf` under workerd, extracted text in R2 with a 6,000-token read cap, the daily orphan sweep and the erasure hooks | Rendered documents. The `renders` consumer is a scaffold with its dedupe and DLQ handling; `@react-pdf/renderer` under workerd is still unverified (M4) |
 | Both WebSocket upgrade routes with the `Origin` check, the socket attachment, HMAC hub tickets, evict fan-out and `requestStop`; `publish`, `evict` and `workos_sync` jobs run by the committing request and drained by the minute Cron | The orphan sweep's Workflow-status half, and the `receipt`, `render` and `reverify` job runners (M3 and M4) |
 | One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | The run engine's use of the keys: `resolveKey` is called by a provider step that lands in M3 |
 | Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
@@ -165,6 +166,85 @@ sits behind `MODEL_GATEWAY_MODE=passthrough`, is off in every environment, and
 sends `cf-aig-collect-log-payload: false` on every request so that turning it on
 does not create a second copy of every applicant's text. A test asserts there is
 no configuration in which payload logging is on.
+
+
+## Uploads
+
+A file goes from the browser to R2 directly, and is checked when it arrives.
+
+```
+POST   /w/:ws/attachments              declare {name, size, mime} -> row + a presigned PUT
+PUT    <the URL that came back>        the bytes, straight to R2 (the browser does this)
+POST   /w/:ws/attachments/:id/complete sniff, hash, mark ready, enqueue `extract`
+GET    /w/:ws/attachments/:id          metadata, plus a 5-minute presigned GET for the viewer
+DELETE /w/:ws/attachments/:id          soft-delete the row, remove the object and its text
+```
+
+`/w/:ws/files` is the same five for `agent_files` — the agent's Context sources
+— over the same bucket, the same sniff and the same extraction. Adding or
+removing one is an Admin's act, because Context governs every future run.
+
+**Limits.** 20 MB, one of `application/pdf`, `text/markdown`, `text/plain`, and
+10 uploads per user per minute (a `rate_counters` upsert, counted at declaration
+rather than completion: a script that mints a thousand URLs it never uses has
+still asked us to sign a thousand URLs). The presigned PUT lasts 15 minutes; the
+viewer's GET lasts 5.
+
+**Why `complete` exists.** The name, the size and the type are all the client's
+opinion. `complete` streams the object back through the binding, compares the
+first bytes with the declared type, and computes the sha256 the row records. A
+renamed executable declared as `text/plain` is refused, the row is marked
+`failed` with the reason, and the object is deleted rather than left for the
+daily sweep. Two tests cover exactly that, plus a size that disagrees with the
+declaration.
+
+**Extraction.** `complete` enqueues `extract`, whose consumer writes the text to
+R2 next to the object as `{key}.txt` and puts `text_length` and `token_estimate`
+on the row. The queue has `max_retries: 3` and a dead-letter queue, and the DLQ
+has a consumer whose whole job is to write `extraction_status = 'failed'` with a
+reason — without it an exhausted message is deleted and the row says "preparing"
+forever. The engine reads the text through
+`getDocumentText(env, workspaceId, fileId, offset)`, which returns at most 6,000
+estimated tokens per call and the offset to ask for next.
+
+PDF parsing uses `unpdf` (a serverless build of pdfjs). The plan marked pdfjs
+under workerd **unverified** and left it as a spike; the spike was run and it
+works, and `test/worker/uploads.test.ts` keeps it that way by parsing a real PDF
+in the Workers runtime on every CI run. It costs about 570 KB gzipped. A PDF
+that cannot be parsed, or a scan with no text layer, becomes a `failed` row with
+an honest reason rather than an empty document presented as extracted.
+
+**Secrets.** The bucket itself is a binding (`UPLOADS`) and needs no credential.
+Three secrets exist only so the Worker can *sign* a presigned URL, so that 20 MB
+of bytes never pass through a Worker request:
+
+| Name | What it is |
+|---|---|
+| `R2_ACCOUNT_ID` | the Cloudflare account id; the S3 endpoint is `https://<account>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | an R2 API token scoped to the uploads bucket, Object Read & Write |
+| `R2_SECRET_ACCESS_KEY` | its secret |
+
+`R2_BUCKET` is a plain var per environment, not a secret: a presigned URL has to
+spell the bucket out in its path, and a binding cannot supply a name.
+
+**Local versus production.** `wrangler dev --local` simulates R2 on disk, with no
+account and therefore nothing to sign with. With the three secrets absent, the
+declare route answers `upload.direct: true` and a URL on this Worker —
+`PUT /w/:ws/attachments/:id/upload` — which stores the bytes through the
+binding. The client is unchanged either way: it PUTs to whatever URL it was
+given. **That route is development-only**: outside `ENVIRONMENT=development` it
+answers 404, as though it did not exist, and it still runs inside the tenant
+transaction, so the caller must be a member and the row must already exist.
+
+**Lifecycle, erasure and backup.** The nightly Cron deletes objects with no
+completed `attachments` row after 24 hours — a presigned PUT is a promise the
+browser may not keep, and an object nobody accounts for is otherwise permanent.
+The workspace is the first segment of every key (`w/{workspace}/uploads/{id}`),
+which is what makes erasure a prefix delete (`deleteWorkspacePrefix`) and what
+lets the sweep ask the right tenant about an orphan without a database role that
+can read across tenants. `backup_uploads` is a `jobs` row that copies a
+workspace's uploads prefix to the backup bucket; it logs that it did nothing
+where no `BACKUP_UPLOADS` binding exists, which is every development machine.
 
 
 ## Signing in

@@ -37,6 +37,10 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   agents: ['SELECT'],
   agent_capabilities: ['SELECT'],
   agent_files: ['SELECT'],
+  // M3.5. The run engine may quote an uploaded document and may not mark one
+  // ready, rename one or make one disappear: a tool that could mark its own
+  // source ready would be a tool that could hide a failed extraction.
+  attachments: ['SELECT'],
   agent_skills: ['SELECT'],
   skill_versions: ['SELECT'],
   run_queue: ['SELECT'],
@@ -83,6 +87,8 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'session_drafts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'workspace_directory', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'job_ready', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  // M3.5.
+  { table: 'attachments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

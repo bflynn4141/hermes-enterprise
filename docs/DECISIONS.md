@@ -642,6 +642,214 @@ this repository disagreed. Where they disagreed, the repository's
 
 ---
 
+<!-- The U series is uploads and extraction (M3.5); C is the client. Numbered
+     separately so two people can add decisions at once without colliding over
+     where the numeric series ends. -->
+
+## U1. The bytes are checked on `complete`, not on declare
+
+**Decided.** `POST /attachments` records what the client *says* — a name, a size
+and a MIME type — and mints a presigned PUT. `POST /attachments/:id/complete`
+streams the object back through the binding, compares the first bytes with the
+declared type, computes the sha256 the row keeps, and refuses a mismatch.
+
+**Why.** Nothing at declaration time has seen a byte. The upload goes browser to
+R2 so that 20 MB never passes through a Worker request, which means the only
+moment we can check the content is after it exists. A renamed executable is the
+named case in the plan; the general form is that the name, the size and the type
+are three separate claims and all three are the client's.
+
+A refusal deletes the object. Leaving it for the daily sweep would mean a file
+we have just decided is lying about what it is sits in a workspace's store for a
+day, and the sweep is a cleanup for things nobody decided about.
+
+**Would change it if.** R2 gained a server-side content check on PUT, which is
+not a thing S3-compatible storage does.
+
+---
+
+## U2. Verification runs with no transaction open, and the verdict commits either way
+
+**Found while testing.** The first version marked the row `failed` inside the
+tenant transaction and then threw, which rolled the mark back. The row sat at
+`uploading` about bytes that had already been deleted, and nothing would ever
+say why. A test caught it; the test is `refuses a renamed executable and deletes
+the object`.
+
+**Decided.** `complete` is three steps: one transaction to load the row (which
+is also the membership check), verification with nothing open, and one
+transaction to record the verdict — which commits whether the verdict is ready
+or failed. The object is deleted after that commit.
+
+**Why the middle step holds no transaction.** It streams up to 20 MB. A Postgres
+connection held for the length of a download is a connection out of a budget the
+plan alarms on at 150, and the work needs no database at all.
+
+---
+
+## U3. A presigned URL is signed by hand, not by a dependency
+
+**Decided.** `src/storage/sigv4.ts` implements SigV4 query signing on Web
+Crypto, about eighty lines. `aws4fetch` is not installed.
+
+**Why.** The signature is HMAC and string concatenation in a documented order.
+Every dependency here is pinned exactly and asks for a reason in this file
+before it is added, and "concatenates strings in the right order" is not one.
+The test is the interesting half: it asserts that the signature changes when the
+method changes and when the key changes, which is what stops a PUT URL being
+replayable as a DELETE and a URL for one object being pointed at another.
+
+**Would change it if.** We needed multipart uploads, whose signing is genuinely
+involved, or chunked payload signing.
+
+---
+
+## U4. Local development uploads through the Worker, and the route is development-only
+
+**Decided.** `wrangler dev --local` simulates R2 on disk. There is no account
+behind it and therefore no S3 credentials, so there is nothing to sign with.
+With the three `R2_*` secrets absent the declare route answers
+`upload.direct: true` and a URL on this Worker — `PUT /w/:ws/attachments/:id/upload`
+— which writes through the binding. Outside `ENVIRONMENT=development` that route
+answers 404.
+
+**Why 404 rather than 403.** Saying "you may not" advertises that the route
+exists. Outside development it does not.
+
+**Why at all.** The alternative is that local uploads are impossible and the
+whole path is untestable without an R2 account, or that the client grows a
+second code path for development. This way the client PUTs to whatever URL it
+was handed, in both places.
+
+---
+
+## U5. Extracted text lives in R2, next to its object
+
+**Decided.** `{storage_key}.txt`. Postgres keeps two numbers, `text_length` and
+`token_estimate`.
+
+**Why.** Extracted text is derived, re-derivable and can be megabytes. A column
+holding it turns every `SELECT *` on the table into a transfer of the whole
+corpus, and makes the erasure inventory's answer for "where is the applicant's
+text" two places instead of one. The two numbers are in the row because a list
+needs to say "about 12,000 tokens" without reading a byte.
+
+---
+
+## U6. `get_document_text` returns 6,000 tokens and an offset, never a document
+
+**Decided.** `getDocumentText(env, workspaceId, fileId, offset)` returns at most
+6,000 estimated tokens and the offset to ask for next. Four characters to a
+token, deliberately crude.
+
+**Why.** A tool result is model input. A 20 MB extracted PDF returned in one
+call is a context-window error at best and a large bill at worst. Paging also
+makes the read interruptible: a stopped run stops between pages.
+
+The page ends on a line break where one is available inside the window, because
+cutting mid-line is how a model comes to quote half a clause as though it were
+the whole one. A document with no line breaks is cut where the cap falls, since
+the alternative is no progress.
+
+---
+
+## U7. Queue routing matches on the queue name's stem, not on a list of names
+
+**Decided.** One `queue()` handler serves four queues whose names are suffixed
+per environment (`hermes-extract`, `-staging`, `-production`, and a `-dlq` for
+each). The router matches the stem and the suffix.
+
+**Why.** A router listing exact names silently stops handling a queue the day
+someone adds an environment, and the symptom is extractions that never happen
+with no error anywhere. A queue this build does not recognise is retried, never
+acked: an unknown queue means a deploy is behind, and acking deletes the
+messages it is behind on.
+
+Messages are acked and retried one at a time rather than per batch, so one
+unreadable PDF does not send four healthy documents round the retry loop with
+it.
+
+---
+
+## U8. A failure with a reason beats a retry that cannot succeed
+
+**Decided.** The `extract` consumer distinguishes two kinds of failure. An
+`ExtractionFailure` — no text layer, an unparseable PDF, an object over the
+cutoff — is written onto the row as `failed` with its reason immediately.
+Anything else is retried up to `max_retries: 3`, and the dead-letter consumer
+writes `failed` with a reason when the retries run out.
+
+**Why.** Retrying a PDF that has no text layer three times produces the same
+nothing three times and tells the reviewer four minutes later than we could
+have. The DLQ consumer exists for the other case, and for the general rule: a
+message that exhausts its retries with no dead-letter queue is deleted, and the
+row it was about says "preparing" forever. DLQ messages themselves expire after
+four days, so reading a dashboard is not a plan either.
+
+---
+
+## U9. `unpdf` under workerd: the spike was run, and it works
+
+**Decided.** `unpdf@1.8.1` is a dependency of the Worker. It is a serverless
+build of pdfjs with the Node-only paths removed; it loads in workerd and
+extracts text from a real PDF. About 570 KB gzipped of the bundle, which takes
+the Worker from roughly 335 KB to 909 KB gzipped against a 10 MB limit.
+
+**Why this is recorded rather than assumed.** Section 4 of the plan marked pdfjs
+under workerd **unverified** and left it as an M1 spike. The spike is
+`test/worker/uploads.test.ts`, which parses a hand-written one-page PDF in the
+Workers runtime on every CI run, so a runtime or library upgrade that breaks it
+fails CI rather than quietly producing empty documents.
+
+**Why the import is still dynamic and guarded.** A static import of a module
+that fails to initialise under workerd makes the *whole Worker* fail to start —
+every route, for a PDF parser. The guarded dynamic import makes that one
+extraction fail with a reason instead.
+
+**A scan with no text layer is a failure, not an empty success.** The file is
+fine; there is simply no text in it. An empty document presented as extracted
+would be a lie the reviewer cannot see, so it is `failed` with a reason they can
+act on.
+
+---
+
+## U10. An attachment is soft-deleted; a Context source is not
+
+**Decided.** `DELETE /w/:ws/attachments/:id` sets `status = 'deleted'` and
+`deleted_at`, and removes the objects. `DELETE /w/:ws/files/:id` removes the
+row.
+
+**Why the difference.** A message may reference an attachment, and History has
+to keep rendering: the viewer shows "no longer available" rather than a hole. A
+Context source is a setting rather than history — it governs future runs, and a
+tombstone in a settings list is noise.
+
+Both delete the object *and* its `.txt`. Leaving the text behind would leave the
+document's contents in the store under a key derived from the one just deleted,
+which reads as done and is not.
+
+---
+
+## U11. No audit event kind for an upload, yet
+
+**Decided.** Uploading, completing and deleting a file writes no `events` row.
+
+**Why.** `events.kind` is a CHECK constraint whose values are the shared
+`EVENT_KINDS` list, asserted equal by a test. Adding `attachment.*` means a
+migration that alters the constraint, a change to the shared contract, a rule in
+the run-log validator and a decision about whether the `agent` role may publish
+it — none of which belongs in the same change as the storage layer, and the
+`agent` role cannot publish anything outside `message.*` and `run.*` anyway.
+
+**What it costs.** History does not show "Maya added policy.pdf". The row
+carries `uploaded_by` and `created_at`, so the fact is not lost, only unindexed
+by the audit.
+
+**Would change it if.** The pilot's attestation needs uploads in History, which
+is an M5a question.
+
+---
+
 ## C1. `provider-keys.ts` owns the provider-key contract, not the port
 
 **Repository wins.** The client-port spec sketches a `ProviderKey` row with

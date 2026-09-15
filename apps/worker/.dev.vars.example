@@ -36,6 +36,22 @@ KEK_V1=""
 # secret itself has landed everywhere.
 KEK_CURRENT=""
 
+# --- R2 uploads (M3.5) --------------------------------------------------------
+# The bucket itself is a binding (wrangler.jsonc, UPLOADS) and needs no secret.
+# These three exist only so the Worker can sign a presigned PUT, so that 20 MB
+# of bytes go from the browser to R2 and never through a Worker request.
+#
+# Create an R2 API token scoped to the uploads bucket with Object Read & Write.
+# R2_ACCOUNT_ID is the Cloudflare account id; the S3 endpoint is derived from it
+# as https://<account>.r2.cloudflarestorage.com.
+#
+# Leave all three empty for `wrangler dev --local`: with no credentials the
+# attachments route answers a dev-only direct-upload URL on this Worker instead
+# (`upload.direct: true`), which is refused outside development.
+R2_ACCOUNT_ID=""
+R2_ACCESS_KEY_ID=""
+R2_SECRET_ACCESS_KEY=""
+
 # --- Observability ------------------------------------------------------------
 SENTRY_DSN=""
 

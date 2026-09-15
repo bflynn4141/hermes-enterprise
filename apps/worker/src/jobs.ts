@@ -14,6 +14,7 @@
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
+import { runBackupUploads } from './storage/backup.js';
 
 export interface Job {
   readonly id: string;
@@ -34,7 +35,15 @@ export const CLAIM_SECONDS = 120;
  * and a runner that pretended to do their work would be a lie the Cron tells
  * once a minute.
  */
-export const JOB_KINDS = ['publish', 'evict', 'workos_sync', 'receipt', 'render', 'reverify'] as const;
+export const JOB_KINDS = [
+  'publish',
+  'evict',
+  'workos_sync',
+  'backup_uploads',
+  'receipt',
+  'render',
+  'reverify',
+] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 /**
@@ -333,6 +342,11 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       return;
     case 'workos_sync':
       await runWorkosSync(env, job);
+      return;
+    case 'backup_uploads':
+      // The nightly copy of one workspace's uploads prefix into the backup
+      // bucket. A no-op where no backup bucket is bound (storage/backup.ts).
+      await runBackupUploads(env, job.workspace_id);
       return;
     case 'receipt':
     case 'render':

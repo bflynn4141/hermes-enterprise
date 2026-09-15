@@ -211,6 +211,10 @@ export const agentFiles = pgTable('agent_files', {
   mime: text('mime'),
   extractionStatus: text('extraction_status').notNull().default('pending'),
   extractionError: text('extraction_error'),
+  // Added by 0009, so one extraction consumer can write to this table and to
+  // `attachments` without knowing which it is holding.
+  textLength: integer('text_length'),
+  tokenEstimate: integer('token_estimate'),
   uploadedBy: uuid('uploaded_by'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
@@ -516,6 +520,41 @@ export const requestNotes = pgTable('request_notes', {
   createdAt: now('created_at'),
 });
 
+/**
+ * An uploaded file, and the account of the object behind it (0009).
+ *
+ * `status` is about the bytes and `extraction_status` is about the text, and
+ * they are separate because a perfectly good PDF can still refuse to yield
+ * text, and the reviewer has to be told which of the two happened.
+ */
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    sessionId: uuid('session_id'),
+    turnId: uuid('turn_id'),
+    name: text('name').notNull(),
+    /** `w/{workspace}/uploads/{id}`; the workspace is in the key for erasure. */
+    storageKey: text('storage_key').notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    mime: text('mime').notNull(),
+    sha256: text('sha256'),
+    status: text('status').notNull().default('uploading'),
+    statusReason: text('status_reason'),
+    extractionStatus: text('extraction_status').notNull().default('pending'),
+    extractionError: text('extraction_error'),
+    textLength: integer('text_length'),
+    tokenEstimate: integer('token_estimate'),
+    uploadedBy: uuid('uploaded_by'),
+    createdAt: now('created_at'),
+    completedAt: ts('completed_at'),
+    deletedAt: ts('deleted_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('attachments_storage_key').on(t.storageKey)],
+);
+
 export const documents = pgTable(
   'documents',
   {
@@ -693,6 +732,7 @@ export const ALL_TABLES = {
   decisions,
   effects,
   request_notes: requestNotes,
+  attachments,
   documents,
   stream_events: streamEvents,
   events,
