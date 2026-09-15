@@ -100,7 +100,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                     patch(session.id, { title });
                     setRenaming(null);
                   }}
-                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 10px', color: 'inherit', fontSize: 16 }}
+                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 6, padding: '6px 10px', color: 'inherit', fontSize: 12.8 }}
                 />
               ) : (
                 <button

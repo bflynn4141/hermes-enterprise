@@ -497,7 +497,7 @@ export function EmptyState({ icon = 'context', title, detail, action }: { icon?:
   return (
     <div className="empty-state">
       <Glass name={icon} size={48} className="icon" />
-      <div style={{ color: 'var(--body)', fontSize: 18 }}>{title}</div>
+      <div style={{ color: 'var(--body)', fontSize: 14.4 }}>{title}</div>
       {detail && <div className="meta">{detail}</div>}
       {action}
     </div>

@@ -58,7 +58,7 @@ test.describe('P1 · onboarding', () => {
     await page.goto(EMPTY_WORKSPACE);
     // The Inbox badge is derived from `v_inbox_count`; zero renders no badge.
     await expect(page.getByRole('button', { name: /^Inbox/ })).not.toContainText('4');
-    await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible();
+    await expect(page.getByText('What do you need help with?')).toBeVisible();
     // No verified provider key: the composer is greyed and says what to do.
     await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
     await expect(page.getByRole('textbox', { name: /^Message Iris/ })).toBeDisabled();
@@ -112,15 +112,15 @@ test.describe('P3 · review and admit', () => {
 
     // The evidence, including what is missing — which is the point of the pane.
     await expect(appPane.getByRole('heading', { name: 'Leah Martinez' })).toBeVisible();
-    await expect(appPane.getByText('82 / 100')).toBeVisible();
+    await expect(appPane.getByLabel('82 out of 100')).toBeVisible();
     await expect(appPane.getByText('Missing evidence')).toBeVisible();
     await expect(appPane.getByText(/Customer impact/)).toBeVisible();
 
     // The footer says exactly what admitting does and does not do.
-    await expect(appPane.getByText('Admit this role; queue access.')).toBeVisible();
-    await expect(appPane.getByText('Active after grants are confirmed. No message sent.')).toBeVisible();
+    await expect(appPane.getByText('Admit Leah to the Partner Program.')).toBeVisible();
+    await expect(appPane.getByText('Role and access require separate approval. No message is sent.')).toBeVisible();
 
-    await appPane.getByRole('button', { name: 'Admit' }).click();
+    await appPane.getByRole('button', { name: 'Admit Leah' }).click();
 
     // The receipt replaces the review, and it is honest about what is pending.
     await expect(appPane.getByText('Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.')).toBeVisible();

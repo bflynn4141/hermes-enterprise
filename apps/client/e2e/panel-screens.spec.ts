@@ -56,13 +56,13 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
   {
     key: 'inbox',
     go: async (page) => void (await nav(page, /^Inbox/).click()),
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Inbox' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('list', { name: 'Requests needing review' })).toBeVisible()),
   },
   {
     key: 'request-review',
     go: async (page) => {
       await nav(page, /^Inbox/).click();
-      await app(page).getByRole('button', { name: /^Review/ }).first().click();
+      await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').first().click();
     },
     ready: async (page) => void (await expect(app(page).getByText('Missing evidence')).toBeVisible()),
   },
@@ -70,7 +70,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     key: 'document-viewer',
     go: async (page) => {
       await nav(page, /^Inbox/).click();
-      await app(page).getByRole('button', { name: /^Review/ }).nth(2).click();
+      await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
     },
     ready: async (page) => void (await expect(app(page).getByText('Services delivered')).toBeVisible()),
   },
@@ -78,8 +78,8 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     key: 'receipt',
     go: async (page) => {
       await nav(page, /^Inbox/).click();
-      await app(page).getByRole('button', { name: /^Review/ }).nth(2).click();
-      await app(page).getByRole('button', { name: 'Create invoice' }).click();
+      await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
+      await app(page).getByRole('button', { name: 'Approve invoice' }).click();
     },
     ready: async (page) => void (await expect(app(page).getByText('What this implies')).toBeVisible()),
   },

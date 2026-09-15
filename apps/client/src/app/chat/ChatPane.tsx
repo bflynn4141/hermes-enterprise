@@ -393,7 +393,7 @@ function ShareDialog({ open, session, onClose }: { open: boolean; session: Sessi
             Shared with {shared.audience} · View only. Viewers see the transcript up to the moment it was shared.
           </p>
           <div className="row" style={{ gap: 8 }}>
-            <span className="field" style={{ minHeight: 48, padding: '10px 14px', fontSize: 14, color: 'var(--muted)' }}>
+            <span className="field" style={{ minHeight: 48, padding: '10px 14px', fontSize: 11.2, color: 'var(--muted)' }}>
               <span className="truncate">{url ?? 'The link is shown once, when it is created.'}</span>
             </span>
             <span style={{ position: 'relative' }}>

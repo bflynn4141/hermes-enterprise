@@ -37,6 +37,19 @@ test('every workspace navigation control has a visible result', async ({ page })
   const app = page.getByRole('region', { name: 'Application' });
   await expect(sidebar.getByRole('button', { name: 'Agents', exact: true })).toBeVisible({ timeout: 20_000 });
 
+  // The compact type scale matches the 80% browser-zoom reference without
+  // shrinking layout or hit targets. Lock one library label and one native
+  // heading so both sides of that boundary stay on the same scale.
+  const navFont = await sidebar
+    .getByRole('button', { name: 'Agents', exact: true })
+    .locator('.sidebar-copy')
+    .evaluate((label) => parseFloat(getComputedStyle(label).fontSize));
+  const headingFont = await app
+    .getByRole('heading', { name: 'Iris', exact: true })
+    .evaluate((heading) => parseFloat(getComputedStyle(heading).fontSize));
+  expect(navFont).toBeCloseTo(11.2, 1);
+  expect(headingFont).toBeCloseTo(25.6, 1);
+
   const destinations = [
     ['Agents', 'Iris'],
     ['Inbox', 'Inbox'],

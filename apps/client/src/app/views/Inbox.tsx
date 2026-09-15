@@ -694,7 +694,7 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
                     <span className="doc-arrow">→</span>
                     <div className="col"><span className="doc-label">Bill to</span><strong>{payerName}</strong><span>{text(payer.email)}</span></div>
                   </div>
-                  <div className="row doc-rule" style={{ gap: 24, padding: '12px 0', fontSize: 14, color: '#000' }}>
+                  <div className="row doc-rule" style={{ gap: 24, padding: '12px 0', fontSize: 11.2, color: '#000' }}>
                     <span style={{ width: 208 }}>Issued · {issueDate}</span>
                     <span style={{ width: 208 }}>Due · {dueDate}</span>
                   </div>

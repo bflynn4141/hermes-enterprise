@@ -836,7 +836,7 @@ export function Setup({ step }: { step: string }) {
         {step === 'ready' && (
           <>
             <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email} right={<span className="meta">Loop not started</span>} />
-            <p style={{ fontSize: 20, lineHeight: '30px' }}>{state.agent.summary}</p>
+            <p style={{ fontSize: 16, lineHeight: '24px' }}>{state.agent.summary}</p>
             <div className="app-footer inline">
               <span className="meta">Every external action still waits for a human.</span>
               <span className="grow" />

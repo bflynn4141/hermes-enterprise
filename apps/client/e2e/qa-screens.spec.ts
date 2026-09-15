@@ -31,22 +31,23 @@ test('every main screen renders', async ({ page }) => {
 
   // 4. Inbox list.
   await page.getByRole('button', { name: /^Inbox/ }).click();
-  await expect(appPane.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  const reviewList = appPane.getByRole('list', { name: 'Requests needing review' });
+  await expect(reviewList).toBeVisible();
   await page.screenshot(shot('04-inbox-list'));
 
   // 5. Request review (an application).
-  await appPane.getByRole('button', { name: /^Review/ }).first().click();
+  await reviewList.getByRole('listitem').first().click();
   await expect(appPane.getByText('Missing evidence')).toBeVisible();
   await page.screenshot(shot('05-request-review'));
 
   // 6. The document viewer (the invoice request).
   await page.getByRole('button', { name: /^Inbox/ }).click();
-  await appPane.getByRole('button', { name: /^Review/ }).nth(2).click();
+  await appPane.getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
   await expect(appPane.getByText('Services delivered')).toBeVisible();
   await page.screenshot(shot('06-document-viewer'));
 
   // 7. The receipt, after a decision.
-  await appPane.getByRole('button', { name: 'Create invoice' }).click();
+  await appPane.getByRole('button', { name: 'Approve invoice' }).click();
   await expect(appPane.getByText('What this implies')).toBeVisible();
   await page.screenshot(shot('07-receipt'));
 

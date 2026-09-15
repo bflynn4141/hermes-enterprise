@@ -4552,3 +4552,30 @@ provenance only when the request payload carries that source id.
 - https://www.metaview.ai/resources/blog/candidate-review
 - https://www.hirevue.com/resources/research-paper/hirevue-structured-interviews
 - https://juicebox.ai/blog/announcing-peoplegpt-2.0
+
+---
+
+## C52. The workspace uses the 80% type scale without scaling its controls
+
+**Decided September 15, 2026.** Brian chose the visual density of the workspace
+at 80% browser zoom as the typography target. Client-owned font sizes and line
+heights are therefore 80% of the previous scale, with a 10 px floor for the
+smallest labels, including display type, conversation text, list rows, menus,
+onboarding and document previews. The few hard-coded pixel sizes inside
+`SidebarNav` are bridged from client CSS so the library rail and the native
+panes read at one scale.
+
+Widths, icons, padding and interactive target heights stay unchanged. In
+particular, the navigation rows remain 40 px with their existing 8 px rail
+gutters. This is intentionally a type-scale change, not `zoom: .8`: CSS zoom
+would also turn a 40 px target into 32 px, disturb the panel-width arithmetic
+and make the interface less usable for everyone rather than merely denser.
+
+**Evidence.** `panel-sidebar.spec.ts` measures the vendored navigation label at
+11.2 px and a native 32 px display heading at 25.6 px, then separately verifies
+that all seven navigation targets remain at least 40 px high. The rendered
+workspace is retained in `qa/panel/sidebar-after-shell.png`.
+
+**Would change it if.** User testing shows that the compact type is difficult
+to read at 100% system scaling. The next step would be a user-selectable density
+preference, not another browser-wide transform.

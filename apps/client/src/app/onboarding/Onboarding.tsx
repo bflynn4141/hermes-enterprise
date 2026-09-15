@@ -260,7 +260,7 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
         </div>
       </header>
       <div className="portal-body" style={{ alignItems: 'center', paddingTop: 100, width: 560, gap: 24 }}>
-        <h1 style={{ font: '500 44px/48px var(--font-display)' }}>Join a workspace</h1>
+        <h1 style={{ font: '500 35.2px/38.4px var(--font-display)' }}>Join a workspace</h1>
         {!checked ? (
           <Skeleton rows={2} label="Checking your session" />
         ) : !token ? (
@@ -292,7 +292,7 @@ export function SignIn({ returnTo }: { returnTo: string | null }) {
     <div className="portal">
       <div className="portal-body" style={{ alignItems: 'center', paddingTop: 140, width: 480, gap: 20 }}>
         <Glass name="iris" size={56} />
-        <h1 style={{ font: '500 40px/44px var(--font-display)' }}>Sign in to Hermes</h1>
+        <h1 style={{ font: '500 32px/35.2px var(--font-display)' }}>Sign in to Hermes</h1>
         <p className="meta" style={{ textAlign: 'center' }}>
           Your workspace is behind your organization's identity provider.
         </p>

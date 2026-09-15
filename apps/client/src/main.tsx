@@ -218,7 +218,7 @@ function WorkspacePicker() {
   return (
     <div className="portal">
       <div className="portal-body" style={{ paddingTop: 120, width: 560, gap: 20 }}>
-        <h1 style={{ font: '500 40px/44px var(--font-display)' }}>Your workspaces</h1>
+        <h1 style={{ font: '500 32px/35.2px var(--font-display)' }}>Your workspaces</h1>
         {workspaces.length === 0 ? (
           <EmptyState
             icon="context"

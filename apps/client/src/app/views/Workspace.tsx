@@ -201,7 +201,7 @@ export function Members() {
                         the app pane with the Iris panel open, and the action is
                         the part that must never be pushed off the edge. */}
                     <div className="row-main">
-                      <span className="t truncate" style={{ fontSize: 18 }}>
+                      <span className="t truncate" style={{ fontSize: 14.4 }}>
                         {member.name}
                         {member.user_id === state.user.id && <span className="meta"> · You</span>}
                       </span>
@@ -226,7 +226,7 @@ export function Members() {
                 <div className="list-row members-row" role="listitem" key={row.id} style={{ minHeight: 84 }}>
                   <Avatar person={{ name: row.email }} size={40} />
                   <div className="row-main">
-                    <span className="t truncate" style={{ fontSize: 18 }}>
+                    <span className="t truncate" style={{ fontSize: 14.4 }}>
                       {row.email}
                     </span>
                     <span className="s">Invited {new Date(row.invited_at).toLocaleDateString()}</span>
