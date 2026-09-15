@@ -250,5 +250,15 @@ export interface AgentDb extends AgentWrites {
   listMembers(): Promise<unknown[]>;
   /** True when a run is blocked on a human answer for this context key. */
   isAwaitingContext(key: string): Promise<boolean>;
+  /**
+   * The domains an Admin allowed `fetch_url` to read, from
+   * `workspace_settings.flags.fetch_url_allowlist`. A read, on a table the
+   * agent role already has SELECT on: no grant moves for this.
+   *
+   * Empty is the default and means the tool refuses every host. A workspace
+   * that has not said where its agent may read has said it may read nowhere,
+   * which is the answer that fails safe.
+   */
+  loadFetchAllowlist(): Promise<string[]>;
   readContextField(agentId: string | null, key: string): Promise<string | null>;
 }

@@ -4,6 +4,7 @@ import { ScriptedProvider } from '../../../src/model/scripted.js';
 import type { ModelProvider, ProviderEvent } from '../../../src/model/types.js';
 import { ProviderError, ZERO_USAGE } from '../../../src/model/types.js';
 import { runAttempt, type EngineDeps } from '../../../src/engine/engine.js';
+import type { FetchUrlRunner } from '../../../src/engine/tools.js';
 import type { EmittedEvent } from '../../../src/engine/agent-db.js';
 import { FakeAgentDb } from './fake-db.js';
 import { FakeStep } from './fake-step.js';
@@ -26,6 +27,8 @@ export interface HarnessOptions {
   readonly stopAfterForwards?: number;
   readonly armContextAnswer?: boolean;
   readonly attempt?: number;
+  /** A scripted `fetch_url`, so the network is never involved. */
+  readonly fetchUrl?: FetchUrlRunner;
 }
 
 export const textDelta = (text: string): ProviderEvent => ({ type: 'text_delta', text });
@@ -85,6 +88,7 @@ export async function runHarness(
     },
     now: () => new Date(),
     engineVersion: 1,
+    fetchUrl: options.fetchUrl,
   };
 
   let error: unknown = null;

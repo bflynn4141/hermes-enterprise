@@ -299,6 +299,11 @@ export class FakeAgentDb implements AgentDb {
   listMembers(): Promise<unknown[]> {
     return Promise.resolve([{ user_id: 'user-1', role: 'admin' }]);
   }
+  /** What an Admin put in `workspace_settings.flags.fetch_url_allowlist`. */
+  fetchAllowlist: string[] = [];
+  loadFetchAllowlist(): Promise<string[]> {
+    return Promise.resolve([...this.fetchAllowlist]);
+  }
   isAwaitingContext(key: string): Promise<boolean> {
     if (this.awaitingKeys.has(key)) return Promise.resolve(true);
     return Promise.resolve(this.run.status === 'waiting' && this.run.waitingFor === key);

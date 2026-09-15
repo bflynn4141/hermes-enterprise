@@ -26,6 +26,7 @@ import { adapterOptions, providerForTransport, ScriptedProvider, type Script } f
 import type { ModelProvider } from '../model/types.js';
 import type { Transport } from '@hermes/shared';
 import { PgAgentDb } from '../engine/pg-agent-db.js';
+import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
   TOOL_STEP_CONFIG,
@@ -203,6 +204,12 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           now: () => new Date(),
           engineVersion: params.engineVersion,
           scripted: this.env.MODEL_SCRIPTED === '1',
+          // This deployment's own hostnames are denied here rather than in the
+          // module: `fetch-url.ts` knows about Neon, R2 and the provider APIs
+          // because those are the same everywhere, and about *us* only because
+          // the Workflow tells it, which is the only place that knows.
+          fetchUrl: (url, method, allowlist) =>
+            fetchUrl(url, method, { allowlist, denyHosts: denyHostsFor(this.env) }),
         },
         engineStep(step),
         { runId: params.runId, attempt: params.attempt, traceId: params.traceId },

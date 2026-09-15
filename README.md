@@ -311,18 +311,109 @@ curl -sX POST -H "$AUTH" -H 'content-type: application/json' \
 
 ### What the agent can and cannot do
 
-Twelve tools: six reads (`list_requests`, `get_request`, `get_document_text`,
-`get_workspace_context`, `get_history`, `list_members`), five proposals
-(`propose_request`, `save_review_note`, `set_context_field`,
-`propose_instruction`, `ask_for_context`) and one view change (`set_focus`).
-There is no `decide`, `send`, `pay`, `sign`, `grant` or `invite` tool, and a
-build-time test fails if a registered name ever looks like one.
+Thirteen tools: seven reads (`list_requests`, `get_request`,
+`get_document_text`, `get_workspace_context`, `get_history`, `list_members`,
+`fetch_url`), five proposals (`propose_request`, `save_review_note`,
+`set_context_field`, `propose_instruction`, `ask_for_context`) and one view
+change (`set_focus`). There is no `decide`, `send`, `pay`, `sign`, `grant` or
+`invite` tool, and a build-time test fails if a registered name ever looks like
+one.
 
 Three layers keep it that way, and all three have tests: the database grants
 (`migrations/0004_grants.sql`), the `AgentWrites` interface the tools receive
 (six methods, with a type test asserting it has no `decide`, `execute`,
 `invite`, `role` or `job` method), and the block validator, which drops a
 model-authored button carrying a human-only command before anything renders it.
+
+## Tools and modes
+
+### The three modes
+
+A session's mode is what a person picks before they type, and it is the
+promise the product makes about what the conversation can do. It is copied onto
+the `runs` row when the turn is created, so switching the selector while a run
+is working changes the *next* run and never the one in flight.
+
+| Mode | Tools | What a proposal tool does |
+|---|---|---|
+| Ask | reads only | not offered |
+| Plan | the same list as Work | returns a `prepared` block; nothing is written |
+| Work | everything the capability rows allow | writes a row that waits for a person |
+
+The per-run allowlist is `agent_capabilities.tool_names` intersected with the
+mode's set — an intersection, never a union, so a mode cannot widen what a
+workspace configured and a workspace cannot widen what a mode allows. An agent
+with no capability rows gets no tools at all in a deployed environment; in
+`development` it falls back to the Work-mode set so a fresh checkout does
+something.
+
+`test/unit/engine-modes.test.ts` runs the same script in each mode. The
+assertion the plan asks for is the negative one: after a Plan run there is no
+`requests` row, no note and no instruction version.
+
+### `fetch_url`
+
+The one tool that leaves this system, and the only one with its own security
+module (`src/security/fetch-url.ts`).
+
+* **GET and HEAD only**, http or https, ports 80 and 443, no credentials in the
+  URL.
+* **A permanent deny list** that no workspace can allowlist its way past: this
+  deployment's own hostnames (from `ALLOWED_ORIGINS`), Neon, R2, the provider
+  APIs, and the cloud metadata names.
+* **An Admin-managed allowlist**, read from
+  `workspace_settings.flags.fetch_url_allowlist`. Empty is the default and
+  refuses every host:
+
+  ```sql
+  UPDATE workspace_settings
+     SET flags = flags || jsonb_build_object('fetch_url_allowlist',
+                   '["example.com","docs.example.org"]'::jsonb)
+   WHERE workspace_id = '...';
+  ```
+
+  Entries match the domain and its subdomains, never a lookalike:
+  `example.com` covers `docs.example.com` and not `example.com.evil.test`.
+* **DNS pre-resolution over DNS-over-HTTPS**, refusing private, loopback,
+  link-local, carrier-grade-NAT, multicast and IPv4-mapped-loopback answers, in
+  both address families — **re-resolved on every one of at most 3 redirect
+  hops**, each of which is also re-checked against the allowlist and the deny
+  list.
+* **2 MB and 10 s**, one deadline covering DNS and the fetch together.
+* **HTML reduced to text**: scripts and styles removed with their contents,
+  headings, paragraphs and list items kept as text, links rendered as
+  `words (href)`. Truncated at 8 KB with a marker.
+* **Every hop in the result**, so `run_turns` and the trace record what was
+  fetched and what it redirected to.
+
+The honest residual risk: a Worker cannot pin a DNS answer to a socket, so a
+record that flips between our check and the runtime's own lookup still wins that
+race. `test/unit/fetch-url.test.ts` carries both fixtures the plan names — a
+redirect to 169.254.169.254, and a flipping A record — and the second one
+documents the limit rather than pretending to close it.
+
+### Untrusted text, and the classifier
+
+Everything a tool returns arrives inside a JSON envelope carrying `source`,
+`retrieved_at` and `untrusted: true`. A cheap deterministic classifier
+(`src/security/injection.ts`) runs over the untrusted half and, when it matches,
+adds `suspicion` (`low` or `high`), the rule names, and one sentence reminding
+the model that the content is data. It never blocks a run and never ends one: a
+classifier that could stop a run would be a classifier whose false positives are
+outages. The decision gate is still the control.
+
+### Plain text
+
+Every model-authored string that reaches a human — note bodies, instruction
+bodies, every string inside a proposal payload, context values — is validated as
+plain text at the tool boundary: no HTML tags, no markdown links, no
+angle-bracket autolinks, no control characters or bidi overrides. A bare URL is
+allowed, because a citation has to be writable. The helper is
+`plainText` / `findMarkup` in `packages/shared/src/plain-text.ts`, so the writer
+refuses the markup rather than trusting every future renderer to escape it.
+
+Instruction proposals additionally carry provenance: the run that proposed them
+is always the first source, ahead of whatever the model said it read.
 
 ### The M0 spike against a real provider
 

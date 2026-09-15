@@ -119,7 +119,7 @@ export class PgAgentDb implements AgentDb {
       }>(
         `SELECT r.id, r.workspace_id, r.session_id, r.status, r.stop_requested, r.attempt,
                 r.engine_version, r.max_turns, r.model_id, r.effort, r.trace_id, r.active_ms,
-                r.waiting_for, r.client_turn_id, s.mode,
+                r.waiting_for, r.client_turn_id, coalesce(r.mode, s.mode) AS mode,
                 (SELECT a.id FROM agents a WHERE a.workspace_id = r.workspace_id ORDER BY a.created_at LIMIT 1) AS agent_id
            FROM runs r JOIN sessions s ON s.id = r.session_id
           WHERE r.id = $1`,
@@ -197,11 +197,27 @@ export class PgAgentDb implements AgentDb {
     });
   }
 
+  /**
+   * Guidance this run must read: its own, plus anything left over.
+   *
+   * The second half is the "Applied to your next message" case. Guidance typed
+   * during the run's final step arrives after the last provider step has read
+   * its guidance, so there is no next step to apply it — the Guide route parks
+   * it on the session with `run_id IS NULL` and tells the person it will reach
+   * the next message. This query is the other end of that promise: the next run
+   * in the session picks it up before its first provider step, which is what
+   * makes the copy true rather than reassuring.
+   */
   async loadGuidance(runId: string): Promise<GuidanceRow[]> {
     return this.tx(async (q) => {
       const { rows } = await q<{ id: string; text: string; status: string }>(
-        `SELECT id, text, status FROM messages
-          WHERE run_id = $1 AND kind = 'guidance' ORDER BY seq`,
+        `SELECT m.id, m.text, m.status
+           FROM messages m
+           JOIN runs r ON r.id = $1
+          WHERE m.kind = 'guidance'
+            AND m.status = 'streaming'
+            AND (m.run_id = r.id OR (m.run_id IS NULL AND m.session_id = r.session_id AND m.created_at <= r.created_at))
+          ORDER BY m.seq`,
         [runId],
       );
       return rows;
@@ -210,7 +226,9 @@ export class PgAgentDb implements AgentDb {
 
   async markGuidanceApplied(runId: string, guidanceId: string, turn: number): Promise<void> {
     await this.tx(async (q) => {
-      await q(`UPDATE messages SET status = 'complete', turn = $3 WHERE id = $2 AND run_id = $1`, [
+      // `run_id` is set here as well as the status, so a carried-over row
+      // records which run finally read it.
+      await q(`UPDATE messages SET status = 'complete', turn = $3, run_id = $1 WHERE id = $2 AND (run_id = $1 OR run_id IS NULL)`, [
         runId,
         guidanceId,
         turn,
@@ -683,6 +701,32 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, key],
       );
       return Number(rows[0]?.count ?? '0') > 0;
+    });
+  }
+
+  /**
+   * The workspace's `fetch_url` allowlist.
+   *
+   * It lives in `workspace_settings.flags` rather than in a table of its own
+   * because it is one list per workspace that an Admin edits in Settings, and
+   * a table with one row per workspace and one column that matters is a table
+   * that has to be joined everywhere to answer the same question. The shape is
+   * `{"fetch_url_allowlist": ["example.com", "docs.example.org"]}`; anything
+   * that is not an array of strings reads as empty, which refuses everything.
+   */
+  async loadFetchAllowlist(): Promise<string[]> {
+    return this.tx(async (q) => {
+      const { rows } = await q<{ flags: Record<string, unknown> | null }>(
+        `SELECT flags FROM workspace_settings WHERE workspace_id = $1`,
+        [this.workspaceId],
+      );
+      const raw = (rows[0]?.flags ?? {})['fetch_url_allowlist'];
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry.length > 0 && entry.length <= 253)
+        .slice(0, 200);
     });
   }
 

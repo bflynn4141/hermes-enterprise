@@ -382,6 +382,12 @@ export const runs = pgTable(
     stopRequested: boolean('stop_requested').notNull().default(false),
     engineVersion: integer('engine_version').notNull().default(1),
     clientTurnId: text('client_turn_id').notNull(),
+    /**
+     * The session's mode, copied at creation (migration 0011). Read from here
+     * and never from the session: flipping the selector mid-run must change the
+     * next run, not this one.
+     */
+    mode: text('mode'),
     startedAt: now('started_at'),
     endedAt: ts('ended_at'),
     createdAt: now('created_at'),
@@ -568,6 +574,10 @@ export const documents = pgTable(
     storageKey: text('storage_key'),
     renderStatus: text('render_status').notNull().default('pending'),
     renderError: text('render_error'),
+    // Separate from `render_status` because in this build they disagree: the
+    // HTML render is real and the PDF is not (docs/DECISIONS.md, D-7).
+    pdfStatus: text('pdf_status').notNull().default('none'),
+    pdfError: text('pdf_error'),
     createdBy: uuid('created_by'),
     createdAt: now('created_at'),
     updatedAt: now('updated_at'),

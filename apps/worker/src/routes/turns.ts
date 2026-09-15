@@ -190,9 +190,12 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     await work.tx.query('SAVEPOINT run_insert');
     try {
       const result = await work.tx.query<RunRow>(
+        // `mode` is copied onto the row here, not joined from the session at
+        // read time: a person switching the selector mid-run must change the
+        // next run rather than what this one may already have started doing.
         `INSERT INTO runs (id, workspace_id, session_id, status, model_id, effort, max_turns,
-                           trace_id, workflow_instance_id, attempt, engine_version, client_turn_id)
-         VALUES ($1, $2, $3, 'working', $4, $5, $6, $7, $8, 1, $9, $10)
+                           trace_id, workflow_instance_id, attempt, engine_version, client_turn_id, mode)
+         VALUES ($1, $2, $3, 'working', $4, $5, $6, $7, $8, 1, $9, $10, $11)
          RETURNING id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for`,
         [
           runId,
@@ -205,6 +208,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
           instanceId,
           engineVersion,
           clientTurnId,
+          session.mode,
         ],
       );
       inserted = result.rows[0];
@@ -346,6 +350,13 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
  * that a `run.guidance.applied` was legitimate: the guidance id is the message
  * id, and the validator refuses an "applied" for an id it never saw recorded.
  */
+/**
+ * What the client tells the person when their guidance arrived too late for the
+ * run they aimed it at. The plan names this copy; it is here so the route, the
+ * client and the test all read the same string.
+ */
+export const GUIDANCE_CARRIED_COPY = 'Applied to your next message';
+
 export async function guideRun(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
@@ -358,9 +369,13 @@ export async function guideRun(c: Context<{ Bindings: Env }>): Promise<Response>
   const body = await inWorkspace(c, async (work) => {
     await loadSessionForWrite(work, sessionId);
     const run = await loadRun(work, sessionId, runId);
-    if (!(ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
-      throw new RouteError('this run has already finished', 'run_finished', 409);
-    }
+    // Guidance typed while the run was in its final step arrives after the last
+    // provider step has already read its guidance: there is no next step of
+    // this run to apply it to. Refusing it would throw away what the person
+    // just said, so it is parked on the session with `run_id` null and the
+    // response says where it went. `PgAgentDb.loadGuidance` is the other end:
+    // the next run in this session reads it before its first provider step.
+    const carries = !(ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status);
     const seqRow = await work.tx.query<{ seq: number }>(
       `UPDATE sessions SET next_seq = next_seq + 1, last_activity_at = now()
         WHERE id = $1 RETURNING next_seq - 1 AS seq`,
@@ -370,7 +385,7 @@ export async function guideRun(c: Context<{ Bindings: Env }>): Promise<Response>
     const { rows } = await work.tx.query<{ id: string }>(
       `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, status, run_id)
        VALUES ($1, $2, $3, 'user', 'guidance', $4, 'streaming', $5) RETURNING id`,
-      [work.workspaceId, sessionId, seq, text, runId],
+      [work.workspaceId, sessionId, seq, text, carries ? null : runId],
     );
     const guidanceId = rows[0]?.id ?? '';
     work.jobs.push(
@@ -387,12 +402,14 @@ export async function guideRun(c: Context<{ Bindings: Env }>): Promise<Response>
             text,
             blocks: [],
             status: 'streaming',
-            run_id: runId,
+            run_id: carries ? null : runId,
           },
         },
       ])),
     );
-    return { guidance_id: guidanceId, status: 'queued' };
+    return carries
+      ? { guidance_id: guidanceId, status: 'next_message', copy: GUIDANCE_CARRIED_COPY }
+      : { guidance_id: guidanceId, status: 'queued' };
   });
   return c.json(body, 201);
 }

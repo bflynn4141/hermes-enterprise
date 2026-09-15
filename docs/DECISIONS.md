@@ -1244,3 +1244,160 @@ and neither can `pnpm test` on a machine that happens to have a key exported.
 file, not to a log line, not into an error message. The file says so at the top,
 because the failure mode is somebody pasting a key into `.dev.vars` to make it
 convenient.
+
+---
+
+# Series E — M3.5, the engine side
+
+Numbered separately because M3.5 was built by three people at once; the E series
+is the run engine's half (tools, allowlists, the classifier, the prompt and
+`src/security/**`).
+
+## E1. `fetch_url` is a module of its own, and the rules are written out
+
+**Decided.** The tool in the registry is thirty lines; every rule lives in
+`apps/worker/src/security/fetch-url.ts` and `ip.ts`, with the private ranges
+enumerated in code rather than pulled from a library.
+
+**Why the ranges are written out.** The list *is* the security property. A
+dependency that dropped `100.64.0.0/10` in a minor release would be a silent
+hole in the one check that stands between an uploaded document and a cloud
+metadata endpoint, and the whole list is thirty lines. `::ffff:127.0.0.1` is
+checked as IPv4, because an IPv4-mapped address is the oldest way past a naive
+loopback test.
+
+**Why a module and not a tool.** The tool's job is to turn a refusal into a
+sentence a model can act on. Everything else — the deny list, the allowlist, the
+resolution, the hop budget, the caps — is testable with no engine, no database
+and no network, which is why `test/unit/fetch-url.test.ts` can carry both of the
+plan's fixtures and still run in 40 ms.
+
+**The residual risk, stated.** A Worker cannot pin a DNS answer to a socket.
+We resolve, we check, and then `fetch()` resolves again on its own. Re-resolving
+every hop narrows the window; it does not close it. The flipping-A-record
+fixture documents the limit rather than pretending otherwise.
+
+---
+
+## E2. The allowlist lives in `workspace_settings.flags`, and empty means nothing
+
+**Decided.** `flags.fetch_url_allowlist` is an array of domains an Admin
+manages. No new table, and no grant change: the `agent` role already has SELECT
+on `workspace_settings` (migration 0004).
+
+**Why not a table.** One list per workspace, edited in Settings, read once per
+`fetch_url` call. A table with one row per workspace and one column that matters
+is a join in every read to answer a question a JSONB key already answers. If a
+per-domain audit trail is ever wanted, that is the moment for a table.
+
+**Why empty refuses everything.** A workspace that has not said where its agent
+may read has said it may read nowhere. The alternative — empty means
+unrestricted — is the configuration mistake that only shows up in the incident
+report. A malformed flag (a string, a number, an object) also reads as empty,
+for the same reason.
+
+---
+
+## E3. Modes are enforced by an intersection, and Plan prepares rather than writes
+
+**Decided.** `allowedTools(mode, capabilityNames)` intersects the mode's tool
+kinds with `agent_capabilities.tool_names`. Ask gets read tools only; Plan gets
+Work's list but `executeTool` returns a `prepared` block for the four tools that
+write; Work writes.
+
+**Why the intersection.** It cannot widen in either direction: a mode cannot add
+a tool the workspace did not configure, and a capability row cannot add one the
+mode does not allow. An unknown mode string falls back to Work's *kinds*, still
+intersected — a typo in a mode must not hand out tools nobody configured.
+
+**Why Plan still validates.** A prepared `propose_request` runs the document
+schema and the plain-text walk before returning. A plan whose payload would fail
+when applied is not a plan; it is a failure moved to later, when the person has
+already agreed to it.
+
+**Why `ask_for_context` is not prepared.** It writes nothing — it parks the run
+on a human answer — and a plan that cannot ask the question it needs answered is
+not a plan. `set_focus` stays live in Plan for the same reason and is excluded
+from Ask, where a pane that moves while somebody reads is something else
+happening.
+
+---
+
+## E4. `runs.mode` is written at turn creation (migration 0011)
+
+**Decided.** The mode is copied onto the `runs` row when the turn is created and
+read from there. `PgAgentDb.loadRun` coalesces to the session's mode so a code
+rollback still reads correctly on rows written before the column existed.
+
+**The failure this prevents.** The engine used to join `sessions.mode` on every
+`loadRun`. A person switching the selector from Plan to Work mid-run would have
+changed what the run already in flight was allowed to do — the run would start
+as a plan and finish by writing rows. "Plan writes nothing" is not a promise you
+can keep if the answer is re-read every step.
+
+---
+
+## E5. The classifier labels; it never blocks
+
+**Decided.** A deterministic pattern list (`src/security/injection.ts`) runs
+over every tool result whose source is not `engine`, and adds `suspicion`,
+`suspicion_rules` and a one-sentence reminder to the envelope. It never fails a
+tool, never ends a run and never rewrites the data.
+
+**Why deterministic rather than a model call.** A second model call inside a
+tool step doubles the latency and the failure surface of every read; its input
+is attacker-controlled text, so it is one more thing to inject; and a regexp
+list is auditable — a reviewer reads the threat model in forty lines and a test
+asserts each line.
+
+**Why it must not block.** A classifier that can stop a run has false positives
+that are outages, and one a model can argue with is not a control anyway. The
+control is the human decision gate. Anthropic's own reporting puts residual
+attack success near one percent even with training-level defenses, which is the
+number that says this layer is worth having and also says it is not the last
+one.
+
+**The false-positive fixtures matter as much as the attacks.** An agent that
+labels every CV "high" has taught everyone to ignore the label by Thursday, so
+`test/unit/injection.test.ts` asserts silence on an ordinary application, an
+ordinary invoice and a note that merely discusses approving something.
+
+---
+
+## E6. Plain text is refused at the writer, not escaped at the renderer
+
+**Decided.** `plainText` and `findMarkup` in `packages/shared/src/plain-text.ts`
+reject HTML tags, markdown links, angle-bracket autolinks, control characters
+and bidi overrides. The tool schemas apply them to note bodies, instruction
+bodies, context values and — by walking the parsed object — every string and
+every key inside a proposal payload.
+
+**Why the writer.** A renderer that escapes is one component away from a
+renderer that does not, and that component will be the one somebody adds for
+"just the invoice notes". A string that never reaches a row cannot be rendered
+by anything.
+
+**Why walk the payload instead of listing fields.** A document payload has forty
+string fields across three kinds. Enumerating them in a second place is how the
+two lists come apart; walking the parsed value covers a field added to
+`documents.ts` next year on the day it is added.
+
+**Why a bare URL is allowed.** It renders as text, it is not clickable, and
+forbidding it would stop the agent citing where it read something — which is the
+behaviour every other rule here is trying to encourage.
+
+---
+
+## E7. Late guidance is carried, not refused
+
+**Decided.** Guidance typed after the run it was aimed at has finished is stored
+on the session with `run_id` null; the route answers
+`{status: 'next_message', copy: 'Applied to your next message'}` instead of a
+409, and `PgAgentDb.loadGuidance` has the next run in that session read it
+before its first provider step, at which point the row records which run finally
+applied it.
+
+**Why not a 409.** The person typed a sentence a fraction of a second after the
+run stopped. Throwing it away to be technically correct about which run it
+belonged to is the product being right at the user's expense; the copy the plan
+names only becomes true if something carries it.

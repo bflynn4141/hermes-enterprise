@@ -37,10 +37,12 @@ import {
 import { extractBlocks } from './blocks.js';
 import {
   allowedTools,
+  executeTool,
   toolByName,
   toolResultEnvelope,
   FOCUS_TOOLS,
   TOOL_SOURCE,
+  type FetchUrlRunner,
   type ToolContext,
 } from './tools.js';
 import { buildSystemPrompt, historyToMessages } from './prompt.js';
@@ -100,6 +102,13 @@ export interface EngineDeps {
   readonly engineVersion: number;
   /** Set when the environment forces the scripted provider (MODEL_SCRIPTED=1). */
   readonly scripted?: boolean;
+  /**
+   * How `fetch_url` reaches the network. The Workflow builds one carrying this
+   * deployment's own hostnames as deny entries; a test passes a scripted one.
+   * Absent, `fetch_url` falls back to the module default, which still applies
+   * every rule but knows nothing about this deployment's hostnames.
+   */
+  readonly fetchUrl?: FetchUrlRunner;
 }
 
 export interface RunAttemptInput {
@@ -685,8 +694,19 @@ async function toolStep(
       run,
       toolCallId,
       now: deps.now,
+      // The run's mode, not the session's: a person flipping the selector from
+      // Plan to Work while a run is in flight changes the next run, never this
+      // one. `runs.mode` is written at turn creation for exactly that reason.
+      mode: run.mode,
+      fetchUrl: deps.fetchUrl,
     };
-    const outcome = await withTimeout(tool.run(args, ctx), TOOL_EXECUTION_TIMEOUT_MS, call.name);
+    const outcome = await withTimeout(
+      executeTool(tool, args, ctx),
+      // `fetch_url` carries its own 10 s budget (plan section 4, Tools); the
+      // 30 s here is the outer stop for a tool that hangs some other way.
+      TOOL_EXECUTION_TIMEOUT_MS,
+      call.name,
+    );
     if (outcome.ok) {
       ok = true;
       outcomeText = toolResultEnvelope(call.name, TOOL_SOURCE[call.name] ?? 'engine', outcome.data, deps.now());
