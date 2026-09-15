@@ -79,7 +79,9 @@ jobs:
       - name: Grant assertion on its own
         # Also run separately, so a failure here is unambiguous in the log: this
         # is the check that the agent role cannot decide.
-        run: pnpm db:test
+        # The GitHub service already owns port 5433, so call the focused Vitest
+        # project directly instead of the local launcher that starts Compose.
+        run: pnpm --filter @hermes/worker exec vitest run --project db test/db/grants.test.ts
 
   secrets:
     name: gitleaks

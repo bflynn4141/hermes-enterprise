@@ -208,7 +208,7 @@ describe('the workflow files', () => {
     it('runs typecheck, the full suite, the grant assertion and both dry runs', () => {
       expect(text).toContain('pnpm typecheck');
       expect(text).toContain('pnpm test');
-      expect(text).toContain('pnpm db:test');
+      expect(text).toContain('test/db/grants.test.ts');
       expect(text).toContain('--dry-run --env staging');
       expect(text).toContain('--dry-run --env production');
     });
