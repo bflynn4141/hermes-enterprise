@@ -8,4 +8,5 @@ export * from './events.js';
 export * from './run-log.js';
 export * from './mock-stream.js';
 export * from './catalog.js';
+export * from './provider-keys.js';
 export * from './api.js';

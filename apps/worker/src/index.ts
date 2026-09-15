@@ -14,6 +14,8 @@ import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
 import { bootstrap, events } from './routes/workspace.js';
+import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
+import { RouteError } from './routes/tenant.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -33,6 +35,9 @@ app.onError((error, c) => {
     const status = error.reason === 'not_a_member' ? 404 : 400;
     return c.json({ error: 'workspace not found', reason: error.reason }, status);
   }
+  if (error instanceof RouteError) {
+    return c.json({ error: error.message, reason: error.reason }, error.status);
+  }
   console.error('unhandled error', error);
   return c.json({ error: 'internal error', reason: 'internal' }, 500);
 });
@@ -40,6 +45,15 @@ app.onError((error, c) => {
 app.get('/health', health);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
+
+// Settings > Provider keys (Admin, step-up) and the catalog the model menu
+// reads (any member). See src/routes/keys.ts for why the two differ.
+app.get('/w/:ws/catalog', catalog);
+app.get('/w/:ws/provider-keys', listKeys);
+app.post('/w/:ws/provider-keys', addKey);
+app.post('/w/:ws/provider-keys/:id/verify', verifyKey);
+app.post('/w/:ws/provider-keys/:id/rotate', rotateKey);
+app.delete('/w/:ws/provider-keys/:id', deleteKey);
 
 // Anything else under /api or /w that did not match is a 404 as JSON, not the
 // SPA shell: a client that asked for data should not be handed HTML.

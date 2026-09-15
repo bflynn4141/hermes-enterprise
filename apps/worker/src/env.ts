@@ -30,6 +30,14 @@ export interface Env {
   WORKOS_COOKIE_PASSWORD?: string;
   /** The current key-encryption key, version 1. Rotations add KEK_V2, etc. */
   KEK_V1?: string;
+  /**
+   * Which KEK version new material is encrypted under. Unset means the highest
+   * one present, so a single-version environment needs nothing. It exists so a
+   * rotation is two deploys: add `KEK_V2`, deploy, then set this to 2. Between
+   * them an instance holding the new secret but not the new setting still
+   * writes v1, which every instance can read.
+   */
+  KEK_CURRENT?: string;
   SENTRY_DSN?: string;
 
   // --- Postgres through Hyperdrive -----------------------------------------

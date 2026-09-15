@@ -289,3 +289,172 @@ hubs exist and are tested through `/health`), no provider-key routes (M2), no
 `.dev.vars.example`; the client is added with the auth middleware in M2), no
 `@react-pdf/renderer` or pdfjs spike (M1's remaining half-day; both are recorded
 as **unverified** in the plan and neither blocks the rails).
+
+---
+
+## 21. The AAD is split so that a KEK rotation touches only the DEK
+
+**Decided.** The data ciphertext is sealed under
+`hermes/provider-key/v1|{workspace_id}|{key_id}`; the wrapped DEK is sealed under
+`hermes/provider-dek/v1|{workspace_id}|{key_id}|{kek_version}`.
+
+**Why the split is exactly there.** If the data ciphertext bound the KEK
+version, rotating the master secret would mean decrypting and re-encrypting
+every tenant's provider key — the one operation where plaintext would have to
+exist, in bulk, in a maintenance job. Binding the version only in the wrap makes
+a rotation 48 bytes per row and means `rewrapDek` never materialises a provider
+key at all. Both halves bind `(workspace_id, key_id)`, so a ciphertext moved to
+another row, or read as another tenant, fails to authenticate rather than
+decrypting quietly. That is a second, independent check of what row-level
+security already enforces: a policy regression alone is not enough to leak a
+key, and neither is a bug in the crypto layer.
+
+**Would change it if.** A provider key ever needed to be re-encrypted for
+another reason (a cipher change), in which case the data ciphertext gets its own
+version field and the same argument applies one level down.
+
+---
+
+## 22. `KEK_CURRENT` exists so a rotation is two deploys
+
+**Decided.** New material is encrypted under `KEK_CURRENT` when it is set, and
+under the highest `KEK_V{n}` present otherwise.
+
+**Why.** Without it, the moment `KEK_V2` lands as a secret it becomes current,
+and an older instance still serving requests — a deploy is not instantaneous —
+cannot read what a newer one has just written. With it the order is: add the
+secret, deploy, confirm every instance holds it, then set `KEK_CURRENT=2`. Old
+versions stay as secrets until every backup that could hold DEKs wrapped under
+them has expired; deleting `KEK_V1` the day after a rotation makes last week's
+`pg_dump` unreadable.
+
+---
+
+## 23. Nothing in this database can enumerate across tenants, including the KEK rotation
+
+**Found while building.** `runKekRotation` needs the list of workspaces holding
+keys. There is no query that answers it: every tenant table is FORCE ROW LEVEL
+SECURITY, `workspaces` is filtered on `id = app_workspace_id()`, and all three
+roles are `NOBYPASSRLS` — `owner` included, by decision 3.
+
+**Decided.** That is the isolation working, not a gap. The workspace list is a
+parameter: `runKekRotation` takes a `listTargets` and a `withWorkspace`, reads
+each workspace's rows inside that workspace's own transaction, and the
+production Workflow is one `step.do` per workspace with the list supplied by the
+provisioning connection that also applies migrations — already inside the trust
+boundary named in CONVENTIONS.md. The alternative, a fourth role with
+`BYPASSRLS` or a widened `app`, would hand every route the reach that one
+maintenance job wanted.
+
+**Would change it if.** A second maintenance job needed the same enumeration, at
+which point it is worth a dedicated role that only the ops path can authenticate
+as, rather than two injected cursors.
+
+---
+
+## 24. The provider probe happens with no transaction open
+
+**Decided.** Adding, verifying and rotating a key each run three phases: read in
+one transaction, probe the provider with nothing open, record in a second.
+
+**Why.** Hyperdrive in transaction mode pins one Postgres connection for the
+life of a transaction. A verification probe inside a transaction would hold a
+connection for as long as the provider took to answer, and the connection alarm
+in section 5 sits at 150 against roughly 209 available. The cost is that the two
+halves are not atomic: the worst case is a key whose status is one probe stale,
+and the next probe corrects it. The alternative trades a correctness property
+nobody can observe for an availability property everybody can.
+
+**Consequence.** The key is stored *before* it is verified, so a probe that
+times out leaves an `unverified` row the Admin can retry rather than losing the
+key they pasted — which is how a key ends up being pasted a second time, into
+somewhere worse.
+
+---
+
+## 25. Two 403s, then a one-token probe
+
+**Decided.** A 403 from a provider's list-models endpoint leaves the key
+`unverified` with a `reverify` job. The second consecutive 403 switches the
+probe to a 1-token `messages` call; 200 there is `verified (scoped)`, and the
+row records only the model that was actually called.
+
+**Why not one 403.** A single 403 is also what a transient gateway problem looks
+like, and the messages probe spends the Admin's money. **Why not treat 403 as
+invalid:** Anthropic's scoped keys can infer and cannot enumerate, so a
+workspace with a perfectly good key would be told its key was rejected. The
+count lives on the `reverify` job's payload rather than on the key row, so it is
+scoped to one verification episode and disappears when the job completes.
+
+**Consequence.** `verified_models` for a scoped key holds one entry. Claiming
+the rest of the catalog would be an invention the model menu acts on.
+
+---
+
+## 26. Reasoning is carried per transport, not normalised
+
+**Decided.** `ReasoningCarry` is a three-way union — Anthropic signed thinking
+blocks, DeepSeek `reasoning_content`, OpenAI `reasoning.encrypted_content` — and
+an adapter refuses a carry another transport produced.
+
+**Why.** All three vendors require their own thing back and two of them verify
+it: Anthropic checks a signature, OpenAI decrypts. A normalised "reasoning text"
+would be a paraphrase, and the failure it produces is the worst kind — the first
+turn works and the second is a 400 the user cannot act on. DeepSeek's is the
+dangerous one, because it is *not* verified: a re-encoded `reasoning_content`
+degrades continuity invisibly. So the payload is stored as it arrived and
+replayed byte for byte, and the type system refuses the mix-up rather than
+coercing it.
+
+**Consequence.** Effort is a property of the run, not the turn. Anthropic
+rejects a replayed thinking block when the thinking configuration changed
+mid-conversation, so `runs.effort` is fixed at creation and every turn maps
+through the same catalog `effort_map`.
+
+---
+
+## 27. Catalog policy and key state are different answers
+
+**Decided.** `GET /w/:ws/catalog` returns `enabled`, a `disabled_code` from
+`catalog | no_key | key_unverified | key_invalid`, and prose. Catalog policy
+wins: a row the pilot does not offer says so even when the workspace holds a
+good key.
+
+**Why.** "Not enabled for the pilot" and "add your Anthropic key" are different
+screens with different actions, and collapsing them into one absence is how a
+model menu teaches people that adding a key does nothing. The code is what the
+client keys its copy off; the prose is for a human, and a string comparison on
+prose is not a contract.
+
+**The Nous Portal row is still absent, and the catalog rows are unchanged.**
+Section 4 says it "stays disabled and unverified". It is: `workspace_provider_keys.provider`
+has no `nous_portal` value and there is no adapter, so no workspace could ever
+enable one. Adding a row that can never be reached would also break the two M1
+tests that assert the live `catalog` table equals `CATALOG_SEED` row for row —
+tests in files this milestone does not own — in exchange for nothing a user
+could see. Reclassifying Sonnet 4.6, Opus 4.7 or GPT-5.5 was declined for the
+same reason: decision 15 gives each disabled row a concrete, checkable reason,
+and replacing a checkable reason with a category is a loss.
+
+---
+
+## 28. Redaction is two defences, by name and by shape
+
+**Decided.** `logEvent` and `logError` in `src/keys/redact.ts` are the only way
+this milestone's code writes a log line. Fields named `authorization`,
+`x-api-key`, `cf-aig-authorization` and a dozen others are replaced whatever
+they hold; every string, at any depth, also has key shapes replaced.
+
+**Why both.** By name alone misses a key that arrived under a field nobody
+predicted — a provider error body, an interpolated message. By shape alone
+misses a credential that does not look like one, which every gateway token is.
+The error path matters as much as the log path: a provider that echoes the
+offending request back would otherwise put the key in an error string, and an
+error string reaches a log, a Sentry event and `runs.error`. So
+`errorFromResponse` reads the body, keeps at most an enum-shaped `type`, and
+discards the rest.
+
+**Note.** No credential-shaped literal appears in the tests. They are assembled
+at runtime from harmless parts, because a test for "a key must never appear in a
+log" that ships a key-shaped string is a test that trips gitleaks and teaches
+the next person to add an allowlist entry.

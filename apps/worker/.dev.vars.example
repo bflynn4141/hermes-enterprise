@@ -20,6 +20,10 @@ WORKOS_COOKIE_PASSWORD=""
 # The key-encryption key. Base64, 32 bytes. A rotation adds KEK_V2 and keeps
 # KEK_V1 until every backup that could hold DEKs wrapped under it has expired.
 KEK_V1=""
+# Which version new keys are encrypted under. Empty means the highest KEK_V{n}
+# present. A rotation sets this to the new number in a second deploy, after the
+# secret itself has landed everywhere.
+KEK_CURRENT=""
 
 # --- Observability ------------------------------------------------------------
 SENTRY_DSN=""

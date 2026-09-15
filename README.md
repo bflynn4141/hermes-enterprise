@@ -14,7 +14,8 @@ engine, WorkOS sign-in, provider keys and the client arrive in M2 to M5.
 |---|---|
 | The full Postgres schema: 37 tables, forced row-level security, three roles, the grant matrix, the append-only audit, the derived views | The run engine. `RunAttempt` is registered as a Workflow and throws `NonRetryableError` (M3) |
 | `GET /health`, `GET /w/:ws/bootstrap`, `GET /w/:ws/events?stream=&after=` | WorkOS AuthKit. `AUTH_MODE=fake` maps an `x-dev-user` header to a seeded user; the WorkOS adapter implements the same `getSession(c) -> {userId, sid, authenticatedAt}` (M2) |
-| One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | Provider keys. The `workspace_provider_keys` table and its envelope-encryption columns exist; nothing writes them yet (M2) |
+| One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | The run engine's use of the keys: `resolveKey` is called by a provider step that lands in M3 |
+| Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
 | The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | The client. `apps/client/dist/index.html` is a placeholder shell; the demo's reducer is ported in M2 |
 | `SessionHub` and `WorkspaceHub` Durable Objects: hibernating sockets, auto-response heartbeat, fan-out, eviction | Queue and cron handlers. Both are wired and log; the bodies land in M2 and M4 |
 | Both wrangler environments, the queues with dead-letter queues, two cron triggers, two Hyperdrive bindings, the CPU limit | Outreach, payment and signature. **No code for these exists or ever will in this repository**; they are `effects` rows a human executes |
@@ -60,6 +61,97 @@ curl -H "x-dev-user: maya@nous.example" \
 `/health` returns 200 only when Postgres answers through **both** Hyperdrive
 configs (they are separate configs with separate database roles) and a Durable
 Object round trip succeeds. Anything else is 503 with a per-check reason.
+
+## Bring your own key
+
+Hermes never holds a model-provider account of its own. A workspace brings its
+own key, the workspace is billed by its own provider, and the product's job is
+to store that key so that nobody — including whoever runs this service — can
+read it by accident.
+
+**How Brian adds his Anthropic key.** In the client (M5) it is
+Settings > Provider keys > Add: choose the provider, paste the key, Verify. The
+route requires an Admin session and a sign-in from the last five minutes (the
+same step-up the decision route uses), computes a SHA-256 fingerprint and the
+last four characters, encrypts the key, and probes the provider's free
+list-models endpoint. A 401 marks it invalid, a 200 marks it verified and
+records which models it covers, and a 403, 429 or 5xx leaves it unverified with
+a job to try again — because a throttled probe taught us nothing about the key.
+Two 403s in a row means the key is probably scoped rather than broken, so the
+probe becomes a one-token call and the key is marked "verified (scoped)".
+
+Until that client exists, the same routes answer over the fake-auth dev server:
+
+```sh
+cd apps/worker
+# A KEK for local development: 32 random bytes, base64. Put it in .dev.vars as
+# KEK_V1. Never reuse it anywhere that matters.
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+
+npx wrangler dev --local
+```
+
+```sh
+WS=11111111-1111-4111-8111-111111111111
+AUTH='x-dev-user: maya@nous.example'
+
+# Add and verify in one call. The response carries the masked row only.
+curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
+  -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"provider":"anthropic","label":"Ops key","key":"<paste the key>"}'
+
+# What Settings shows: provider, label, last4, fingerprint prefix, status,
+# verified models, who added it, and the dates. Never the key.
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/provider-keys"
+
+# The model menu. Every row, with this workspace's answer attached.
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog"
+
+# Re-verify, rotate (a new row that names the one it replaces), remove.
+curl -sX POST "http://localhost:8787/w/$WS/provider-keys/$KEY_ID/verify" -H "$AUTH"
+curl -sX POST "http://localhost:8787/w/$WS/provider-keys/$KEY_ID/rotate" \
+  -H "$AUTH" -H 'content-type: application/json' -d '{"key":"<the new key>"}'
+curl -sX DELETE "http://localhost:8787/w/$WS/provider-keys/$KEY_ID" -H "$AUTH"
+```
+
+Removing a key stops the runs that were using it and says how many, then zeroes
+the ciphertext. Rotating keeps the old row so that `model_calls` history stays
+answerable: a run from last month still points at the key that paid for it.
+
+**How it is stored.** Envelope encryption on Web Crypto. Each key gets its own
+AES-GCM data key; that data key is wrapped by a key-encryption key held as the
+Worker secret `KEK_V{n}`. The additional authenticated data is split so the two
+layers bind different things — the key ciphertext binds `(workspace_id, key_id)`
+and the wrap binds `(workspace_id, key_id, kek_version)` — which is what lets a
+KEK rotation re-wrap 48 bytes per row without any provider key's plaintext
+existing anywhere. Moving a ciphertext to another row, or reading it as another
+tenant, fails to decrypt: an independent check of what row-level security
+already enforces.
+
+The plaintext exists only inside the request that uses it. `resolveKey` runs
+inside every provider step, so a rotated key is picked up at the next step and a
+removed one stops the run at the next step. Nothing logs a key: every log line
+this milestone writes goes through a redactor that strips `Authorization`,
+`x-api-key` and `cf-aig-authorization` by name and key shapes by pattern, and a
+test asserts that neither a log nor an error message survives carrying one.
+
+**What the model menu does with it.** A catalog row is offered to a workspace
+only when the catalog does not disable the row *and* the workspace holds a
+verified key for that row's provider. The two are different answers and the API
+says which: `disabled_code` is `catalog` for a model the pilot does not offer,
+and `no_key`, `key_unverified` or `key_invalid` for one the workspace could
+reach if it did something. Prices come from the catalog with the date they were
+checked, and the Usage screen says "estimated, billed by your provider".
+
+**Why not AI Gateway's own BYOK.** It stores keys in Secrets Store (100 per
+account in beta, 20 gateways), its aliases work only on passthrough URLs with no
+read-back, and any token with Run permission reaches every stored key. That is
+fine for an account's own keys and wrong for tenant keys. An optional gateway
+sits behind `MODEL_GATEWAY_MODE=passthrough`, is off in every environment, and
+sends `cf-aig-collect-log-payload: false` on every request so that turning it on
+does not create a second copy of every applicant's text. A test asserts there is
+no configuration in which payload logging is on.
+
 
 ## Layout
 
