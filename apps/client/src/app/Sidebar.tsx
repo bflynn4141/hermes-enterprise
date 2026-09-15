@@ -11,7 +11,7 @@
 // below, which also carries the dev account switcher — and that switcher exists
 // only when `__AUTH_MODE__` is `fake`, a build-time constant, so neither it nor
 // the string `x-dev-user` survives into a production bundle (spec §12.8).
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SidebarNav } from '@hermes/motion-components';
 import { HISTORY, INBOX, LIB, MEMBERS, OV, SETTINGS, type Ref } from '@hermes/shared';
 import { useAppState, useAdapter, useDispatch, useNav } from './store-context.js';
@@ -37,6 +37,7 @@ export function Sidebar() {
   const dispatch = useDispatch();
   const [menu, setMenu] = useState(false);
   const meBtn = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const go = (ref: Ref): void => {
     setMenu(false);
     nav(ref);
@@ -63,11 +64,27 @@ export function Sidebar() {
   const recents = sessions.map((session) => ({ id: session.id, label: rowLabel(session) }));
   const active = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
 
+  // SidebarNav owns its disclosure state, but the shell owns the grid column
+  // around it. Mirror the component's public data attribute so collapsing the
+  // 52 px rail also releases the other 188 px to the workspace.
+  useEffect(() => {
+    const host = sidebarRef.current;
+    if (!host) return;
+    const sync = (): void => {
+      const collapsed = host.querySelector('[data-sidebar-collapsed="true"]') !== null;
+      if (collapsed !== state.ui.navCollapsed) dispatch({ type: 'ui/set', patch: { navCollapsed: collapsed } });
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(host, { attributes: true, subtree: true, attributeFilter: ['data-sidebar-collapsed'] });
+    return () => observer.disconnect();
+  }, [dispatch, state.ui.navCollapsed]);
+
   return (
     // `SidebarNav` renders its own <aside> with its own collapse control; this
-    // wrapper is the grid cell. It clips, because a component that decides its
-    // own width must not be able to decide the column's (decision C36).
-    <aside className="sidebar hermes-ui" aria-label="Workspace navigation">
+    // wrapper is the grid cell. It clips during the shared width transition so
+    // neither state can paint over the neighboring pane (decision C36).
+    <aside ref={sidebarRef} className="sidebar hermes-ui" aria-label="Workspace navigation">
       <SidebarNav
         fill
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}
@@ -107,10 +124,10 @@ export function Sidebar() {
           <Avatar person={{ name: state.user.name || 'You' }} />
           <span className="profile-name">{state.user.name || 'You'}</span>
         </button>
-        <Popover open={menu} onClose={() => setMenu(false)} anchorRef={meBtn} align="left" above width={280} label="Your account">
-          <div className="row">
-            <Avatar person={{ name: state.user.name }} size={40} />
-            <div className="col" style={{ gap: 2 }}>
+        <Popover open={menu} onClose={() => setMenu(false)} anchorRef={meBtn} align="left" above width={280} label="Your account" portal className="menu account-menu">
+          <div className="row account-head">
+            <Avatar person={{ name: state.user.name }} size={36} />
+            <div className="col" style={{ gap: 2, minWidth: 0 }}>
               <span className="p-title">{state.user.name || 'You'}</span>
               <span className="p-meta">
                 {state.user.email || state.workspace.name} · {state.user.role === 'admin' ? 'Admin' : 'Member'}
@@ -127,7 +144,7 @@ export function Sidebar() {
           <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
             Data and privacy
           </MenuItem>
-          <div className="row" style={{ padding: '8px 10px', fontSize: 14 }}>
+          <div className="row account-toggle">
             <span className="grow">Reduce motion</span>
             <Toggle
               checked={state.ui.reduceMotion}
@@ -141,6 +158,7 @@ export function Sidebar() {
             />
           </div>
           {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
+          <div className="divider" />
           <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signInUrl(window.location.href))}>
             <Icon name="external" />
             <span className="mi-body">

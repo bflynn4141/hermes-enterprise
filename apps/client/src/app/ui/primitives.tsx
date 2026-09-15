@@ -20,6 +20,7 @@ import {
   type RefObject,
 } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
+import { createPortal } from 'react-dom';
 import { Glass, Icon } from './icons.js';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -269,11 +270,38 @@ export interface PopoverProps {
   label: string;
   offset?: number;
   above?: boolean;
+  /** Render into document.body at a fixed position from the anchor, so a clipping ancestor (the sidebar) cannot cut it off. */
+  portal?: boolean;
 }
 
-export function Popover({ open, onClose, anchorRef, children, align = 'right', width, className = '', label, offset = 8, above = false }: PopoverProps) {
+export function Popover({ open, onClose, anchorRef, children, align = 'right', width, className = '', label, offset = 8, above = false, portal = false }: PopoverProps) {
   const panel = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
+  // Portal mode: fixed coordinates measured from the anchor, refreshed on resize and scroll.
+  const [fixedPos, setFixedPos] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    if (!open || !portal) {
+      setFixedPos(null);
+      return;
+    }
+    const measure = (): void => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pos: CSSProperties = { position: 'fixed', zIndex: 60, width };
+      if (align === 'right') pos.right = Math.max(8, window.innerWidth - rect.right);
+      else pos.left = Math.max(8, rect.left);
+      if (above) pos.bottom = Math.max(8, window.innerHeight - rect.top + offset);
+      else pos.top = rect.bottom + offset;
+      setFixedPos(pos);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [open, portal, above, align, offset, width, anchorRef]);
   const latest = useRef({ onClose, anchorRef });
   latest.current = { onClose, anchorRef };
   useEffect(() => {
@@ -301,8 +329,8 @@ export function Popover({ open, onClose, anchorRef, children, align = 'right', w
       if (returnTo && (document.activeElement === document.body || panel.current?.contains(document.activeElement))) (returnTo as HTMLElement).focus({ preventScroll: true });
     };
   }, [open]);
-  const style: CSSProperties = { width, [align === 'right' ? 'right' : 'left']: 0, ...(above ? { bottom: `calc(100% + ${offset}px)` } : { top: `calc(100% + ${offset}px)` }) };
-  return (
+  const style: CSSProperties = portal && fixedPos ? fixedPos : { width, [align === 'right' ? 'right' : 'left']: 0, ...(above ? { bottom: `calc(100% + ${offset}px)` } : { top: `calc(100% + ${offset}px)` }) };
+  const node = (
     <AnimatePresence>
       {open && (
         <motion.div
@@ -321,6 +349,8 @@ export function Popover({ open, onClose, anchorRef, children, align = 'right', w
       )}
     </AnimatePresence>
   );
+  if (portal && typeof document !== 'undefined') return createPortal(node, document.body);
+  return node;
 }
 
 export interface MenuItemProps {

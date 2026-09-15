@@ -115,11 +115,9 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .sidebar .profile { display: flex; align-items: center; gap: 12px; margin-top: auto; font-size: 14px; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: #242454; display: inline-grid; place-items: center; font-size: 12px; color: var(--muted); }
 .avatar.lg { width: 40px; height: 40px; font-size: 14px; }
-/* The demo's icon collapse below 1180 px is gone (decision C36). It narrowed
-   `--nav-w` to 76px while `SidebarNav` — which replaced the markup these rules
-   named — went on rendering at 224px, so the navigation drew across the pane
-   beside it at every width under 1180. The column is one width now, and the
-   library's own control is what collapses it. */
+/* Automatic breakpoint collapse remains gone (decision C36). The library's
+   own disclosure is mirrored into shell state, so its explicit 224→52 rail
+   transition and the surrounding grid release the same horizontal space. */
 .demo-pill { margin-left: auto; font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
 
 /* panes */
@@ -359,6 +357,11 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .empty-session { display: flex; flex-direction: column; gap: 16px; }
 .empty-session .lead { display: flex; align-items: flex-start; gap: 14px; font-size: 18px; line-height: 28px; }
 .empty-session .lead .mark { width: 26px; height: 26px; }
+.transcript-empty { min-height: 100%; justify-content: center; }
+.chat-welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; text-align: center; padding-block: 24px; }
+.chat-welcome .mark { flex-shrink: 0; }
+.chat-welcome p { font-size: 18px; line-height: 28px; }
+.chat-welcome-standalone { flex: 1; padding-inline: 24px; }
 .error-block { border: 1px solid rgba(255,150,150,.35); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; background: rgba(60,10,40,.35); }
 .error-block .t { font-size: 16px; }
 .error-block .s { font-size: 14px; color: var(--muted); }
@@ -842,3 +845,13 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
    and it has to reach a screen reader without them going looking for it. */
 .composer-refusal { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin-bottom: 8px; border-radius: 8px; border: 1px solid rgba(255,170,120,.35); background: rgba(60,26,20,.5); font-size: 14px; line-height: 20px; color: var(--body); }
 .composer-refusal .grow { flex: 1 1 0; min-width: 0; }
+
+/* ---------- account menu (portaled; compact spacing) ---------- */
+.popover.account-menu { padding: 6px; gap: 2px; }
+.popover.account-menu .account-head { gap: 10px; padding: 8px 10px 10px; }
+.popover.account-menu .account-head .p-title { font-size: 15px; line-height: 20px; }
+.popover.account-menu .account-head .p-meta { font-size: 13px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.popover.account-menu .menu-item.small { padding: 8px 10px; font-size: 14px; line-height: 20px; gap: 10px; }
+.popover.account-menu .account-toggle { padding: 6px 10px; font-size: 14px; line-height: 20px; min-height: 36px; }
+.popover.account-menu .dev-switcher { padding: 8px 10px 6px; gap: 4px; border-top: 1px solid var(--line-soft); margin-top: 2px; }
+.popover.account-menu .dev-switcher .p-meta { font-size: 12px; line-height: 16px; letter-spacing: .04em; text-transform: uppercase; }
