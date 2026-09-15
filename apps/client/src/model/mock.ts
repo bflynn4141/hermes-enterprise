@@ -184,6 +184,65 @@ export function createMockBackend(options: MockOptions = {}) {
     { model_id: 'gpt-5-5', label: 'GPT-5.5', provider: 'openai', effort: null, default_effort: null, enabled: false, disabled_reason: 'Awaiting the M3 reasoning-replay engine test for the Responses transport.' },
   ];
 
+  /**
+   * The same rows as `catalog`, in the shape `GET /w/:ws/catalog` answers, plus
+   * two OpenRouter rows so the model menu's vendor grouping and its
+   * tools-required note have something to render in a mock build.
+   */
+  const catalogEntries = [
+    ...catalog.map((row) => ({
+      model_id: row.model_id,
+      provider: row.provider,
+      label: row.label,
+      transport: 'deepseek_chat',
+      effort_map: row.effort === null ? null : Object.fromEntries(row.effort.map((value) => [value, value])),
+      default_effort: row.default_effort,
+      pricing_per_million: { input: 0.28, output: 0.42, input_off_peak: null, output_off_peak: null, cached_input: null },
+      pricing_verified_on: '2026-09-14',
+      enabled: row.enabled,
+      disabled_code: row.enabled ? null : 'no_key',
+      disabled_reason: row.disabled_reason,
+      source: 'seed',
+      context_length: 128_000,
+      supports_tools: true,
+      supports_reasoning: row.effort !== null,
+    })),
+    {
+      model_id: 'openrouter:anthropic/claude-sonnet-4.6',
+      provider: 'openrouter',
+      label: 'Anthropic: Claude Sonnet 4.6',
+      transport: 'openrouter_chat',
+      effort_map: { low: 'low', medium: 'medium', high: 'high' },
+      default_effort: 'medium',
+      pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
+      pricing_verified_on: '2026-09-15',
+      enabled: hasVerifiedKey,
+      disabled_code: hasVerifiedKey ? null : 'no_key',
+      disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.',
+      source: 'provider_list',
+      context_length: 200_000,
+      supports_tools: true,
+      supports_reasoning: true,
+    },
+    {
+      model_id: 'openrouter:meta-llama/llama-4-70b-instruct',
+      provider: 'openrouter',
+      label: 'Meta: Llama 4 70B Instruct',
+      transport: 'openrouter_chat',
+      effort_map: null,
+      default_effort: null,
+      pricing_per_million: { input: 0.27, output: 0.85, input_off_peak: null, output_off_peak: null, cached_input: null },
+      pricing_verified_on: '2026-09-15',
+      enabled: false,
+      disabled_code: 'catalog',
+      disabled_reason: 'This model has no tool calling, which every run needs.',
+      source: 'provider_list',
+      context_length: 131_072,
+      supports_tools: false,
+      supports_reasoning: false,
+    },
+  ];
+
   const sessions: MockSession[] = empty
     ? [{ id: SESSION_A, title: 'New session', mode: 'ask', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
@@ -441,7 +500,17 @@ export function createMockBackend(options: MockOptions = {}) {
     // There is no `/bootstrap/client` any more: the Worker has no such route,
     // so the client composes the same object out of `/auth/session`,
     // `/members`, `/invitations` and `/provider-keys`, and so does this.
-    if (p('/catalog')) return json({ models: catalog });
+    if (p('/catalog')) {
+      // The mock serves the *entry* shape, not bootstrap's trimmed one: the
+      // model menu parses this against `catalogPageSchema`, and a bootstrap
+      // row would fail the parse and send the menu to its fallback, which is
+      // exactly the state the screen fixtures are not trying to photograph.
+      const q = (new URL(path, 'https://mock.local').searchParams.get('q') ?? '').toLowerCase();
+      const models = catalogEntries.filter(
+        (row) => q === '' || row.model_id.toLowerCase().includes(q) || row.label.toLowerCase().includes(q),
+      );
+      return json({ models, total: models.length, next_cursor: null });
+    }
 
     if (p('/events')) {
       const after = BigInt(url.searchParams.get('after') ?? '0');

@@ -859,6 +859,33 @@ function scheduleCapWrite(write: () => void): void {
 
 const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verified: 'Verified', verified_scoped: 'Verified (scoped)', invalid: 'Invalid', revoked: 'Revoked' };
 
+/**
+ * The providers a workspace can install a key for.
+ *
+ * OpenRouter is described differently on purpose: the other three bill a
+ * vendor account and offer a fixed handful of models, and this one is a broker
+ * whose verification also syncs several hundred rows into the model menu. An
+ * Admin who does not know that will not understand why one key made the menu
+ * long.
+ */
+const PROVIDER_CHOICES: readonly { id: string; label: string; note: string }[] = [
+  { id: 'deepseek', label: 'DeepSeek', note: 'DeepSeek Flash. Keys are stored in the PRC — see Data and privacy.' },
+  { id: 'anthropic', label: 'Anthropic', note: 'Claude models, billed to your Anthropic account.' },
+  { id: 'openai', label: 'OpenAI', note: 'GPT models, billed to your OpenAI account.' },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    note: 'One key, every model OpenRouter brokers. Verifying also syncs its model list into the chat model menu.',
+  },
+];
+
+/** "342 models synced · 2 Mar" — or nothing, for a provider that has no list. */
+function syncLabel(key: MaskedProviderKey): string | null {
+  if (key.synced_model_count === null) return null;
+  const when = key.models_synced_at === null ? 'never' : new Date(key.models_synced_at).toLocaleDateString();
+  return `${key.synced_model_count} model${key.synced_model_count === 1 ? '' : 's'} synced · last sync ${when}`;
+}
+
 function ProviderKeysTab() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -939,10 +966,16 @@ function ProviderKeysTab() {
               <div className="row-main">
                 <span className="t">{STATUS_LABEL[key.status] ?? key.status}</span>
                 <span className="s">
-                  {key.verified_models.length} model{key.verified_models.length === 1 ? '' : 's'} · {key.fingerprint_prefix} · added {new Date(key.created_at).toLocaleDateString()}
+                  {/* An OpenRouter key verifies against hundreds of models, so
+                      the row says how many were synced and when, rather than
+                      listing them (decision R7). */}
+                  {syncLabel(key) ?? `${key.verified_models.length} model${key.verified_models.length === 1 ? '' : 's'}`} · {key.fingerprint_prefix} · added {new Date(key.created_at).toLocaleDateString()}
                   {key.rotated_at ? ` · rotated ${new Date(key.rotated_at).toLocaleDateString()}` : ''}
                 </span>
               </div>
+              {key.provider === 'openrouter' && (
+                <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
+              )}
               <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
               <Button
                 onClick={() => {
@@ -967,7 +1000,7 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        Plaintext is never echoed; only the last four characters are ever shown. DeepSeek keys carry the PRC-storage warning on Data and privacy; Anthropic and OpenAI rows show the recorded attestation there.
+        Plaintext is never echoed; only the last four characters are ever shown. DeepSeek keys carry the PRC-storage warning on Data and privacy; Anthropic and OpenAI rows show the recorded attestation there. An OpenRouter key is verified against its own key endpoint, and verifying it syncs that account's model list into the chat model menu.
       </p>
 
       <Dialog
@@ -984,9 +1017,9 @@ function ProviderKeysTab() {
         }
       >
         <div className="col" role="radiogroup" aria-label="Provider" style={{ gap: 4 }}>
-          {['deepseek', 'anthropic', 'openai'].map((item) => (
-            <MenuItem key={item} checked={provider === item} onClick={() => setProvider(item)}>
-              {item}
+          {PROVIDER_CHOICES.map((item) => (
+            <MenuItem key={item.id} checked={provider === item.id} sub={item.note} onClick={() => setProvider(item.id)}>
+              {item.label}
             </MenuItem>
           ))}
         </div>

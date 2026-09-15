@@ -634,3 +634,56 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
   outline: none;
   box-shadow: none;
 }
+
+/* ---------------------------------------------------------------------------
+   The model menu (OpenRouter, decision R10)
+   ---------------------------------------------------------------------------
+   A four-row list became a several-hundred-row one, so the menu grew a vendor
+   heading, a price line and a "Company default" pin. Appended as its own block
+   rather than folded into the popover rules above, because two other people are
+   editing this file today and a new block is the change that cannot conflict. */
+
+.model-list {
+  scroll-padding-block: 24px;
+}
+
+.model-group + .model-group {
+  margin-top: 6px;
+}
+
+/* Sticky, so the vendor you are scrolling through stays named. Not a heading
+   element: it labels a group of options inside a dialog, and a real <h*> here
+   would be announced as page structure. */
+.model-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8a8a8a);
+  background: var(--popover-bg, inherit);
+}
+
+.model-pin {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-dim, #8a8a8a);
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.3));
+}
+
+.model-note {
+  padding: 10px 12px;
+}
+
+/* The synced-model line on a provider-key row. */
+.key-sync {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}

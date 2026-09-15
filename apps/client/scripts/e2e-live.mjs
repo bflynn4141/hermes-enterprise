@@ -69,7 +69,11 @@ if (alreadyUp) {
   worker = spawn('npx', ['wrangler', 'dev', '--local', '--port', '8787'], {
     cwd: workerDir,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, AUTH_MODE: 'fake', MODEL_SCRIPTED: '1' },
+    // `OPENROUTER_FIXTURE=1` makes the Worker answer OpenRouter's `/key` and
+    // `/models` from a built-in fixture rather than the network, so
+    // `live-openrouter.spec.ts` can verify a key and sync a catalog offline.
+    // The Worker refuses the seam outside `ENVIRONMENT=development`.
+    env: { ...process.env, AUTH_MODE: 'fake', MODEL_SCRIPTED: '1', OPENROUTER_FIXTURE: '1' },
   });
   // Kept, not discarded: when the suite fails because the Worker did not come
   // up, the reason is in here and nowhere else.

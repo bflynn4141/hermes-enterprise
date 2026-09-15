@@ -379,7 +379,20 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
     /** The model menu. Any member may read it; only the key rows need step-up. */
-    catalog: (workspaceId: string) => request('GET', `${ws(workspaceId)}/catalog`, catalogPageSchema) as Promise<CatalogPage>,
+    /**
+     * One page of the catalog. Since OpenRouter the table is hundreds of rows,
+     * so the model menu asks for the page it is showing and the search runs in
+     * SQL rather than over a list the client downloaded.
+     */
+    catalog: (workspaceId: string, query: { q?: string; provider?: string; limit?: number; after?: string } = {}) => {
+      const params = new URLSearchParams();
+      if (query.q !== undefined && query.q !== '') params.set('q', query.q);
+      if (query.provider !== undefined && query.provider !== '') params.set('provider', query.provider);
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      if (query.after !== undefined && query.after !== '') params.set('after', query.after);
+      const suffix = params.size === 0 ? '' : `?${params.toString()}`;
+      return request('GET', `${ws(workspaceId)}/catalog${suffix}`, catalogPageSchema) as Promise<CatalogPage>;
+    },
 
     // --- settings, usage, onboarding ---
     settings: (workspaceId: string) => request('GET', `${ws(workspaceId)}/settings`, settingsViewSchema),

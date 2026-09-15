@@ -36,12 +36,17 @@ const envs = config.env as Record<string, Record<string, unknown>>;
 describe('the scripted-provider switch', () => {
   it('is on in development, because a fresh checkout has no provider key', () => {
     expect((config.vars as Record<string, string>).MODEL_SCRIPTED).toBe('1');
+    expect((config.vars as Record<string, string>).OPENROUTER_FIXTURE).toBe('1');
   });
 
   it('is absent from staging and production, in the config and not only in code', () => {
     for (const name of ['staging', 'production']) {
       const vars = envs[name]?.vars as Record<string, string> | undefined;
       expect(vars?.MODEL_SCRIPTED).toBeUndefined();
+      // Same rule for the OpenRouter verification fixture: a deployed Worker
+      // that answered `/key` from a canned 200 would mark every string an
+      // Admin pasted as a verified key.
+      expect(vars?.OPENROUTER_FIXTURE).toBeUndefined();
       // The environment name is what the code checks, so it has to be right.
       expect(vars?.ENVIRONMENT).toBe(name);
     }

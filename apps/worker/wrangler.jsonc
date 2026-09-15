@@ -46,6 +46,11 @@
     // be created with no provider key in the store. A unit test asserts the
     // deployed environments never set it.
     "MODEL_SCRIPTED": "1",
+    // Development only, and the same rule: OpenRouter's `/key` and `/models`
+    // answer from a built-in fixture rather than the network, so the live
+    // scenario can verify a key and sync a catalog with no key and no egress.
+    // A unit test asserts the deployed environments never set it.
+    "OPENROUTER_FIXTURE": "1",
     "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
     // The platform cap on Workflow creations per hour, across every tenant.
     // Empty means no cap, which is what local development wants.
@@ -168,7 +173,7 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
-        "ALLOWED_ORIGINS": "https://staging.hermes.example",
+        "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
       },
@@ -247,7 +252,7 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
-        "ALLOWED_ORIGINS": "https://app.hermes.example",
+        "ALLOWED_ORIGINS": "https://app.hermes.brianflynn.dev",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "2000",
         "R2_BUCKET": "hermes-uploads-production"
       },

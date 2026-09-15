@@ -16,6 +16,7 @@ import { Glass, Icon } from '../ui/icons.js';
 import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
+import { ModelMenu } from './ModelMenu.js';
 import type { SessionState } from '../../model/store.js';
 
 export function Composer({ session }: { session: SessionState }) {
@@ -164,68 +165,13 @@ export function Composer({ session }: { session: SessionState }) {
           </span>
           {!working && (
             <span style={{ position: 'relative', display: 'inline-flex' }}>
-              <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
+              {/* Named, not just labelled by its own text: the text is the
+                  current model, so "the control that changes the model" had no
+                  stable name for a screen reader or a test to ask for. */}
+              <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}`} aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
                 {model?.label ?? EMPTY.noProvider} <span aria-hidden="true">⌄</span>
               </button>
-              <Popover open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} width={460} label="Model" above>
-                <div className="row">
-                  <span className="p-title">Model</span>
-                  <span className="grow" />
-                  <span className="p-meta">This session · Next turn</span>
-                </div>
-                <div className="col" style={{ gap: 4 }}>
-                  {catalog.length === 0 && <div className="p-meta">{EMPTY.noProvider}</div>}
-                  {catalog.map((row) => (
-                    <MenuItem
-                      key={row.model_id}
-                      checked={session.model === row.model_id}
-                      disabled={!row.enabled}
-                      sub={row.enabled ? `via ${row.provider}` : row.disabled_reason ?? `No verified ${row.provider} key`}
-                      onClick={() => {
-                        dispatch({ type: 'session/set', id: session.id, patch: { model: row.model_id, effort: row.effort?.includes(session.effort ?? '') ? session.effort : row.default_effort } });
-                        void adapter.rest.patchSession(state.workspace.id, session.id, { model_id: row.model_id }).catch(() => undefined);
-                      }}
-                    >
-                      {row.label}
-                    </MenuItem>
-                  ))}
-                </div>
-                <div className="divider" />
-                <div className="row">
-                  <span>Effort</span>
-                  <span className="grow" />
-                  <span className="p-meta">{model?.effort ? session.effort ?? model.default_effort : 'Not available for this model'}</span>
-                </div>
-                {model?.effort && (
-                  <div className="effort-row" role="radiogroup" aria-label="Effort">
-                    {model.effort.map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        role="radio"
-                        aria-checked={session.effort === value}
-                        onClick={() => {
-                          dispatch({ type: 'session/set', id: session.id, patch: { effort: value } });
-                          void adapter.rest.patchSession(state.workspace.id, session.id, { effort: value }).catch(() => undefined);
-                        }}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="divider" />
-                <MenuItem
-                  small
-                  onClick={() => {
-                    setMenu(null);
-                    nav(SETTINGS('Agents'));
-                  }}
-                  right={<Icon name="arrow" size={16} />}
-                >
-                  Manage models
-                </MenuItem>
-              </Popover>
+              <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
             </span>
           )}
           {!working && (

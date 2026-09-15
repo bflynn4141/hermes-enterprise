@@ -3125,3 +3125,547 @@ O23, O24, O25, O27, O28, O29.
 **Would change it if.** Any of the four reasons stops being true: an operator
 with the account, a number for the cap, or a decision about what Stop means to a
 waiting run.
+
+---
+
+## R1. An OpenRouter catalog id is `openrouter:<vendor>/<model>`
+
+**Decided.** `catalog.model_id` for a synced row is the provider's own id behind
+one prefix: `openrouter:anthropic/claude-sonnet-4.6`. `openRouterCatalogId` and
+`openRouterModelId` in `packages/shared/src/catalog.ts` are the only two places
+that know, and the adapter strips the prefix before the request is built. The
+column's contract widened from 64 to 128 characters, because OpenRouter already
+publishes ids longer than 64 once prefixed.
+
+**Why.** Three reasons, and only the third is the deciding one.
+
+`catalog.model_id` is a single global primary key across every provider, and
+OpenRouter re-exports ids other providers also publish. Today
+`anthropic/claude-sonnet-4.6` collides with nothing; the day we add an Anthropic
+row whose id is that string, or OpenRouter brokers something called `gpt-5-5`,
+an unprefixed scheme has a primary-key conflict between two rows that are billed
+to different accounts and reached over different transports.
+
+Second, `model_calls.model_id` and `runs.model_id` are what somebody reads in
+six months to answer "who paid for this". A prefixed id answers that without a
+join to `catalog`, which matters because `catalog` is mutable and the run rows
+are not.
+
+Third, and the reason the alternative was rejected: the obvious alternative is
+to store the raw id and let `provider` disambiguate. That works until you write
+the *client*, where a model id travels alone — in a session row, in a URL, in a
+menu's selected value — and every consumer would have to carry the provider
+alongside it or look it up. One string that is self-describing is a smaller
+contract than two that must stay together.
+
+**Would change it if.** OpenRouter's ids ever collided with each other, at which
+point the prefix is not enough and the id has to be a surrogate key with the
+provider id as an attribute.
+
+---
+
+## R2. `openrouter_chat` is its own transport, not a second `deepseek_chat`
+
+**Decided.** A fourth value in `TRANSPORTS`, a fourth adapter, a fourth case in
+`providerForTransport`. Both speak OpenAI-compatible Chat Completions.
+
+**Why.** The transport enum in this product does not mean "wire format", it
+means "replay rules" — that is the sentence in `model/types.ts`, and it is what
+makes the enum worth having. OpenRouter's rules differ from DeepSeek's in all
+three places the interface cares about:
+
+* Reasoning comes back as `reasoning_details`, an ordered array of typed blocks,
+  and the docs require the whole consecutive sequence back unchanged. DeepSeek's
+  is one `reasoning_content` string. See R3.
+* The knob is `reasoning: { effort }`, not `reasoning_effort`.
+* 402 means the workspace's OpenRouter account is out of credits, which no other
+  provider in this product can say and which no other status maps to.
+
+Sharing an adapter would have meant a `if (this.provider === 'openrouter')` in
+six places inside `deepseek.ts`, which is the shape a second provider always
+takes just before it becomes a third.
+
+The duplication is real and it is priced: `toChatMessages`, the tool-call
+reassembly and the usage read are near-copies. They are near-copies that are
+free to diverge, which is the property that matters when the divergence is the
+whole reason the file exists.
+
+**Would change it if.** A third OpenAI-compatible broker arrives with the same
+reasoning shape, at which point there is a shared base worth extracting because
+there would be two things to share it between rather than one.
+
+---
+
+## R3. Reasoning is replayed as `reasoning_details`, in order, untouched
+
+**Decided.** A fourth `ReasoningCarry` variant,
+`{ kind: 'openrouter_reasoning_details', details }`, carrying the array as it
+arrived. The adapter refuses a carry another transport produced rather than
+coercing it, exactly as the other three do. `ReasoningDetail` is an open
+interface with an index signature.
+
+**Why.** The reasoning-tokens documentation is explicit: pass the assistant
+message's `reasoning_details` back, and "the entire sequence of consecutive
+reasoning blocks must match" — no rearranging. The blocks are typed
+(`reasoning.text`, `reasoning.summary`, `reasoning.encrypted`) and an encrypted
+one is opaque by construction, so there is no version of "normalise it" that is
+not "drop some of it".
+
+Two details are worth stating because they are where this goes wrong:
+
+The deltas and the carry are separate events, as they are for every other
+transport. `reasoning` (the plaintext string) is what a person reads and is
+emitted as `reasoning_delta`; `reasoning_details` is the protocol and is emitted
+once, at the end. A reducer that confused them would replay prose, which fails
+on the *next* turn of a tool-using run and looks like a model problem.
+
+The blocks accumulate by `index`: the same index across frames is one block
+whose text is being appended to, and `data` is replaced rather than appended
+because it arrives whole. A block that arrives with no index at all gets the
+next one, so a provider that omits it does not collapse three blocks into one.
+
+**Would change it if.** OpenRouter offered a documented normalised form that
+round-trips every upstream's requirements. `reasoning` (the string) looks like
+that form and is not: the docs recommend the array for tool-calling, which is
+every run this product makes.
+
+Cited: <https://openrouter.ai/docs/use-cases/reasoning-tokens>,
+<https://openrouter.ai/docs/api-reference/streaming>.
+
+---
+
+## R4. 402 is permanent with copy, 502 and 503 are transient
+
+**Decided.** `openRouterError` maps the documented table onto the existing
+failure classes: 401 → `auth`, 402 → `permanent` as an `OpenRouterCreditsError`
+whose message names credits and the page to add them, 403 → `auth`, 408 →
+`transient`, 429 → `rate_limit`, 502 and 503 → `transient`, everything else
+through the shared `classifyStatus`. A frame that carries an `error` object
+mid-stream is mapped the same way instead of ending the stream quietly.
+
+**Why.** Two of these are not the default and both are load-bearing.
+
+`classifyStatus` already turned 402 into `permanent`, which is the right class:
+retrying a request that was refused for want of money cannot succeed. What it
+did not have was copy. "openrouter responded 402" tells an Admin nothing they
+can act on, and the body cannot be quoted — `http.ts` refuses to carry provider
+prose into an error string, for good reasons about keys ending up in logs. So
+the copy is a constant of ours: the account is out of credits, add credit at
+openrouter.ai/credits, run again.
+
+502 and 503 would otherwise be `transient` anyway by the `>= 500` rule; they are
+called out because on OpenRouter they mean something specific — the chosen
+upstream is down, or no provider meets the routing requirements — and both are
+worth retrying against a different upstream, which is what OpenRouter does on
+the retry.
+
+The mid-stream case is the one that would have been missed. OpenRouter can
+answer 200, stream a few tokens, and then put a failure in the stream. Without
+the check, a moderation block or an upstream dying halfway reads as a short but
+successful answer, and the run completes with a truncated message nobody knows
+is truncated.
+
+**Found on the way.** `errorFromResponse` read `error.code` and passed it to
+`redactString` without checking it was a string. OpenRouter's `error.code` is
+the HTTP status as a *number*, the regular expression happily coerced it, and
+`redactString` threw a `TypeError` from inside the error path — so every non-2xx
+from this provider would have surfaced as a crash rather than a classified
+`ProviderError`. One line, and a test for each status.
+
+**Would change it if.** OpenRouter publishes a `Retry-After` we should honour
+rather than leaving to the Workflow step's own backoff.
+
+Cited: <https://openrouter.ai/docs/api-reference/errors>.
+
+---
+
+## R5. Attribution headers are constants, not configuration
+
+**Decided.** `HTTP-Referer` and `X-Title` are two module constants in
+`openrouter.ts`, sent on every request including the verification probe.
+
+**Why.** They identify the *product*, not the deployment: a workspace looking at
+its own OpenRouter dashboard should see one app name, whether the request came
+from staging or production. Making them vars would mean a header assembled from
+configuration on the one request in this codebase that also carries a customer's
+credential, and a header is a place a value ends up somewhere it is logged.
+
+**Would change it if.** A customer asks for their own attribution, at which
+point it is per-workspace data and not configuration either.
+
+---
+
+## R6. The catalog is synced on verification, by a SECURITY DEFINER function
+
+**Decided.** A successful OpenRouter verification fetches `GET /api/v1/models`
+and writes the usable rows into `catalog` with `source = 'provider_list'`. The
+write is one statement, `SELECT sync_openrouter_catalog($1, $2)`, and that
+function is `SECURITY DEFINER`: `app` keeps its SELECT-only grant on `catalog`.
+The weekly reverify job runs the same sync.
+
+**Why the function rather than a grant.** `GRANT INSERT, UPDATE ON catalog TO
+app` is one line and it is the wrong line. The catalog is the file that says
+what a model costs, and "a price change is a new migration, so the change is
+reviewable" is a property of this system that a route with UPDATE on the table
+quietly ends. The function's body cannot name a provider other than
+`openrouter`, and its upsert has `WHERE catalog.source = 'provider_list'`, so no
+payload — hostile, malformed or merely wrong — can rewrite a seeded row. The
+grant assertion in `test/db/grants.test.ts` still reads `catalog: ['SELECT']`,
+which is what a reviewer looks at.
+
+**What the sync refuses, and why it refuses quietly.** A row whose `prompt` or
+`completion` price does not parse is skipped, not defaulted to zero — a
+free-looking model that is not free is the error nobody catches until the
+invoice. A row that cannot take text in and produce text out is skipped. A row
+without tool calling is *written* and greyed with a reason, because every run in
+this product calls a tool and a model you can see and cannot pick is better than
+one that is mysteriously absent. The counts are returned and the Settings screen
+shows the written one.
+
+**What it does to a row that disappears.** Disabled with a reason, never
+deleted: `sessions.model_id`, `runs.model_id` and `model_calls.model_id` all
+reference `catalog`, and a session that named a model last week still has to
+render.
+
+**Where it is not.** Not in the verification transaction. The list is a call to
+a third party and Hyperdrive pins a Postgres connection for the life of a
+transaction, which is the same read-probe-record shape the rest of `keys/` uses.
+And a sync that fails does not fail the verification: the key is good, the
+catalog is stale, and the Settings row says when it last synced.
+
+**Would change it if.** The list grows past what one statement should carry, at
+which point it is a job with a cursor rather than a call.
+
+---
+
+## R7. The key row carries a count and a date, not the model list
+
+**Decided.** Two new columns on `workspace_provider_keys`,
+`synced_model_count` and `models_synced_at`, both null for every provider whose
+`verified_models` is the whole answer. An OpenRouter key's `verified_models`
+stays empty.
+
+**Why.** `verified_models` is a `text[]` that the Settings screen renders and
+every masked-key response carries. Several hundred ids in it would be a payload
+nobody reads, on a route that is called on every Settings open. The count and
+the date are what a person actually wants to know — "342 models synced · last
+sync 15 Mar" — and the list itself is already in the catalog, where the model
+menu reads it with search and paging.
+
+They are recorded by their own function rather than by `setKeyStatus`, because
+they are a different fact with a different lifetime: a key can verify without a
+sync, and a stale count surviving a later failed verification would claim models
+the workspace can no longer reach.
+
+**Would change it if.** A second provider needs a list this long, at which point
+the two columns want to be one `sync` jsonb rather than a pair per provider.
+
+---
+
+## R8. `GET /w/:ws/catalog` is paged and searched in SQL
+
+**Decided.** `?q=`, `?provider=`, `?limit=` (50 default, 200 max) and `?after=`,
+answering `{ models, total, next_cursor }`. `loadCatalog` — every row — still
+exists for the places that know the count is small. Bootstrap now carries only
+the seeded rows plus whatever this workspace's live sessions name.
+
+**Why.** Before OpenRouter the table had four rows and returning all of them was
+the simplest thing that could work. A workspace with a synced key has several
+hundred, and there are two payloads that would quietly become large: the model
+menu on every open, and `bootstrap` on every page load. The second is the worse
+one, because nobody would notice it in a menu they only open sometimes.
+
+The search runs in SQL rather than over a list the client already has, because
+the list the client already has is one page of it. `position(lower(...))` rather
+than `LIKE`, because the needle is user text and escaping `%` and `_` in it is
+one more thing to get wrong.
+
+**Found on the way.** The first version passed `workspaceId` as `$1` to both the
+page query and the count query. The count query does not mention a workspace, so
+Postgres refused to infer the parameter's type and the whole call failed with
+42P18. The filter's placeholders are now numbered from `$1` and the workspace id
+is appended last, for the page query only.
+
+**Would change it if.** Someone wants to sort by price, at which point the
+cursor cannot be `model_id` and becomes a composite.
+
+---
+
+## R9. `PATCH /w/:ws/sessions/:id` accepts `model_id`, and validates it
+
+**Decided.** The patch route takes `model_id`, checks the catalog has it, and —
+outside `MODEL_SCRIPTED` development — checks this workspace may actually run
+it: not disabled, has tool calling, and has a verified key for its provider.
+
+**Why.** It did not take it. The composer has sent `{ model_id }` on every model
+pick since M3, the route answered 422 `empty_patch`, and the client swallowed it
+with `.catch(() => undefined)`. Nothing broke, because the turns route carries a
+`model_id` of its own and re-sent it — so picking a model and immediately
+sending a message did the right thing, and picking a model and reloading the
+page put the old one back.
+
+With four models that was a curiosity. With three hundred it is a lie: you
+search a long list, pick something specific, the menu shows it selected, and the
+session did not keep it. That is the sort of bug that makes people stop trusting
+a control.
+
+Validated against what the workspace may run rather than against mere existence,
+because a session pointing at a model the turns route will refuse is a failure
+moved from the moment of the choice to the moment of the work.
+
+**Would change it if.** Nothing. This is the route the client always thought it
+was calling.
+
+---
+
+## R10. The model menu is searched and paged, and pinned rather than virtualised
+
+**Decided.** `apps/client/src/app/chat/ModelMenu.tsx`: a search box that queries
+the server, rows grouped by vendor prefix with a sticky heading, 60 rows a page
+behind "Show more", price per million and context window on each row, the
+workspace default marked "Company default", the effort control only for a model
+with `supports_reasoning`, a tool-less model greyed with its reason, and
+arrow-key navigation over the options.
+
+**Why a component.** It was eight lines inside `Composer.tsx` because the
+catalog was four rows. What changed is not the size of the list but what the
+control *is*: not a list to read, but a thing to search.
+
+**Why paged and not virtualised.** Virtualising is faster and is not free: it
+breaks find-in-page, it breaks the roving focus, and it is a dependency or a
+hundred lines of scroll maths. Sixty rows render in under a frame. If a single
+vendor group ever needs three thousand rows visible at once, this is the line to
+revisit.
+
+**Why the grouping is a pure exported function.** `groupByVendor` is the
+judgement the component makes about a list whose shape it did not choose, and
+getting it wrong is silent — a row in the wrong group is just a row somebody
+cannot find. It has a unit test; the rendering is covered by the live scenario.
+
+**One thing worth naming.** Picking a row also upserts it into the client's
+`catalog` entity cache. The composer's own button label reads that cache, which
+is seeded from the deliberately-trimmed bootstrap, so a row picked out of the
+paged list would not have been in it — and the button under the menu would keep
+showing the old model until the next page load, which reads as the pick not
+having worked.
+
+**Would change it if.** The catalog grows a second axis worth browsing by
+(modality, say), at which point the vendor headings become a filter row.
+
+---
+
+## R11. The OpenRouter verification fixture, and why it is a var
+
+**Decided.** `OPENROUTER_FIXTURE=1` makes the Worker answer OpenRouter's `/key`
+and `/models` from a built-in six-model fixture. Refused unless
+`ENVIRONMENT=development`, opt-in per deployment, set in `wrangler.jsonc`'s
+development vars only, and asserted absent from staging and production by the
+same test that guards `MODEL_SCRIPTED`.
+
+**Why it exists.** The deliverable asks for a live scenario that adds a key,
+verifies it, syncs a catalog and picks one of the synced models in the real
+client against the real Worker — with no network and no key. `MODEL_SCRIPTED`
+already covers the *run*; nothing covered *verification and sync*, which is the
+half this milestone is about.
+
+**Why a fixture and not a mocked fetch in the test.** The test drives a browser
+against a Worker in another process. There is no seam in the test to inject.
+
+**Why it is safe enough.** It serves a fixed fixture no caller can influence, so
+it is not a way to write arbitrary catalog rows; it answers 501 to anything but
+the two endpoints, so a run that reached for it fails loudly rather than
+answering fiction; and it is behind two independent gates, one of which is the
+environment name the code already trusts for `MODEL_SCRIPTED`. The README says
+it exists, in the section a person reads before adding a key, so nobody
+discovers it by grep.
+
+**Would change it if.** A staging environment ever wants to rehearse the
+OpenRouter flow, at which point it needs a real key in Secrets Store and not
+this.
+
+---
+
+## C33. The Iris panel has three states, and a rail is the middle one
+
+**Decided.** `ui.irisOpen: boolean` is gone. `ui.irisPanel` is `open | rail |
+hidden`, `ui.irisWidth` is a nullable number of pixels, and `ui.irisUnread` is a
+count.
+
+* **OPEN** — the chat pane at the remembered width. With nothing remembered the
+  demo's rule applies unchanged: 800 px at 1840 and wider, an equal split of the
+  work area below it. Minimum 420 px, maximum 60 percent of the work area.
+* **RAIL** — 56 px between the navigation and the app, carrying the Iris mark in
+  its live run state, an unread badge, "Open Iris ⌘L", and New session and
+  Sessions, both of which open the panel before they act.
+* **HIDDEN** — no rail. The app header's "Open Iris" is the way back, which is
+  the control that was already there.
+
+`iris/toggle` still works, and still means what its callers meant: `open: true`
+opens, `open: false` goes to the *rail* rather than to nothing, and no argument
+is open↔rail. From `hidden` it can only open — hiding completely is a deliberate
+choice and a toggle does not half-undo one. The preference is persisted per
+workspace and user, beside drafts and for the same reason; `hermes:iris-open`
+is migrated once and deleted, with `false` becoming `rail`.
+
+**What was borrowed, and from where.** Fifteen minutes of reading, and four
+things worth taking:
+
+1. **One shortcut, and it is ⌘L.** Cursor binds both `Cmd I` and `Cmd L` to
+   "Toggle Sidepanel" (https://cursor.com/docs/reference/keyboard-shortcuts).
+   Two keys for one action is two things to document; we took the one that is
+   already in people's hands and left ⌘I alone.
+2. **A persistent affordance to reopen, and it is an icon strip.** Codex's IDE
+   extension tells you to "choose the Codex icon" and, failing that, to run
+   "Codex: Open Codex Sidebar" from the Command Palette
+   (https://learn.chatgpt.com/docs/codex/ide) — the icon is an activity-bar
+   entry, which is a 56 px rail. ChatGPT's desktop app toggles its sidebar with
+   `⌘ + B` and leaves the rail behind
+   (https://learn.chatgpt.com/docs/reference/commands). A panel that closes to
+   nothing is a panel people lose.
+3. **The collapsed affordance reports state.** Cursor puts "an orange dot on
+   that tab" when a chat is awaiting input (https://cursor.com/changelog/0-48-x).
+   Our rail does the same with a number on it, and the mark itself keeps the
+   run's own state rather than going flat.
+4. **"Hide it completely" belongs in an overflow menu.** Cursor added "a 'More
+   Actions' ellipsis to hide the chat and configuring positioning directly"
+   (https://cursor.com/changelog/2-3). Ours is in the session options menu, one
+   level away from the ordinary Hide.
+
+Two things were deliberately **not** borrowed. Cursor's multiple chat tabs
+(`Cmd T`, `Cmd [`, `Cmd ]` — same source) and its Agents Window, which runs up
+to eight agents in parallel (https://cursor.com/changelog/2-0,
+https://cursor.com/changelog/3-0): this product has one Iris per session and a
+Sessions popover that already does the switching, and a tab strip would be a
+second session model beside the one the server has. Nothing in either product's
+official documentation says whether the pane is resizable or how wide it
+remembers being, so the width rules here are the demo's and ours.
+
+**Why a rail rather than a narrower chat pane.** The failure a collapse has to
+avoid is not "the chat is small", it is "the chat is gone and I did not mean
+that". 56 px is too narrow to read and wide enough to say *something is
+happening and here is how to get back* — which is the whole job. Below 1000 px
+there is no room for even that beside a usable app pane, so the rail is not
+shown there and the existing Chat/App switch is unchanged.
+
+**Two things this touched that were not obvious.**
+
+* `is-compact` used to be a fact about the *window* (`< 1560`), which was the
+  same thing as a fact about the chat pane while the chat pane was always half
+  of it. It is not any more: a 460 px pane in an 1840 px window needs the tighter
+  paddings whatever the window says, so it is now either.
+* **The app pane keeps a measure.** Collapsing hands the app 1544 px at 1840,
+  and a dashboard at 1544 px is not a better dashboard — it is the same rows
+  with a person's name at one edge and the button that acts on them at the
+  other. The pane caps its content at 1180 px and grows its gutters, applied to
+  the header, the subheader and the body together so nothing drifts out of line.
+  `padding-inline: max(28px, calc((100% - 1180px) / 2))` costs nothing in the
+  open layout, because at an 800 px pane the second term is negative.
+
+**One judgement inside the shortcut.** ⌘L fires from anywhere in the shell
+*except* an editable element — a shortcut that steals a keystroke mid-sentence
+is a shortcut people turn off. The composer is the one exception: there it still
+collapses, and focus moves to the app pane, because leaving focus inside a pane
+that is about to be 56 px wide is the one outcome nobody wants. `irisShortcut`
+in `src/app/panel.ts` is a pure function over the keystroke and its target, so
+that rule is testable and readable rather than buried in a handler.
+
+**The mark's fifth state.** Four of the rail's states are the ones the open
+header already shows. `comparing` needed a rule, and it is a fact about
+`run.steps` rather than a guess about the model: a working run that has finished
+at least one step has something to compare against. Every animated state in this
+client is driven by a server event, and this one is no exception.
+
+**Would change it if.** If people turn out to use `hidden` as their default, the
+rail is costing 56 px for nothing and the honest answer is a preference rather
+than three states. If a second agent ever shares the pane, the rail becomes a
+list and Cursor's tab model stops being the wrong shape.
+
+---
+
+## C34. Three identical "New session" rows, and the four bugs behind them
+
+**Decided.** Clicking New session three times used to produce three blank
+sessions, all titled "New session", all identical in the sidebar
+(`qa/panel/sidebar-before.png`). Four changes, and they are four different
+bugs:
+
+1. **New session reuses a blank session.** `createSession` looks for a session
+   with no messages, no run and still the placeholder title, and opens that
+   instead of creating a twin. It matches a *pending* one too, which is the
+   whole race: the first click inserts a local row and posts, the second arrives
+   before the POST answers, and a rule that skipped pending rows created the
+   second session anyway. It also opens the panel and puts the cursor in the
+   composer, because a New session that leaves you looking at a collapsed rail
+   is a New session you have to click twice.
+2. **A blank session is not listed** — in the sidebar or the sessions popover —
+   unless it is the one you are in. One is the session you just opened; three is
+   a list of nothing.
+3. **The first turn names the session**, from its first six words, dispatched
+   before the POST so the sidebar stops saying "New session" the moment Enter is
+   pressed, and PATCHed so a reload agrees. When the run finishes, the object it
+   produced renames it again — "Ada Ling · application" — derived from the
+   session's focus ref and the request already in the entity cache. No route was
+   added for either; both are `PATCH /w/:ws/sessions/:id`, which existed.
+4. **A manual rename wins, permanently.** `titleSource` moves to `manual` and
+   nothing auto-titles that session again. A title somebody typed is a decision,
+   and a product that quietly undoes it is a product people stop trusting with
+   names. Two races had to be closed for that to hold: a server row re-delivering
+   the old title must not undo a local rename, and a server row still saying
+   "New session" must not undo a local auto-title that the PATCH has not landed
+   yet. `session/upsert` handles both.
+
+Row lists call an unnamed session "Untitled session" rather than "New session".
+The stored title is untouched; the point is that "New session" is the name of
+the *control that creates one*, and two buttons a keystroke apart with the same
+accessible name is a sidebar where one phrase means two things.
+
+**The bug this uncovered, which is the one worth reading.** Focusing the
+composer on New session made something reachable that never had been: typing
+the first sentence *faster than `POST /w/:ws/sessions` answers*. The turn was
+posted to the optimistic id — `POST /w/:ws/sessions/local-…/turns` — which the
+Worker answers `400 {"reason":"bad_id"}`, and the message was simply gone. The
+adapter now keeps the creation promise per local id and resolves it before any
+route is built. Nothing was wrong with the optimistic session; what was wrong is
+that an id which is deliberately not a uuid was allowed into a URL.
+
+It is worth saying why nothing caught it. The optimistic id has been there since
+the first commit, and so has the 400; the two never met because no control put a
+cursor in the composer at the moment a session was being created. A latent bug
+of this shape is not found by testing the thing that changed — it is found by a
+scenario that does what a person would do, which is why `live-panel.spec.ts` N6
+types rather than posting.
+
+**Would change it if.** If auto-titling ever wants more than the first turn and
+the focus ref — a summary, say — it stops being derivable in the client and
+becomes a server concern, and the right shape is a title the run writes rather
+than one the client guesses.
+
+---
+
+## C35. The session row's status rides in its label, because the library has no slot
+
+**Decided.** `SidebarNav` renders a recent's `label` and nothing else: `prompt`
+reaches `onPick` and is never drawn, there is no second span, and the library
+decides which row is current by comparing `label` to `activeTitle`. So the live
+status is part of the label — "Partner applications · Needs review" — and
+`activeTitle` is decorated identically so the comparison still works.
+
+The row is allowed two lines rather than truncating. A person scanning this list
+is scanning for "Working", and a row that ellipsises exactly that word answers
+the wrong question.
+
+The words are the demo's, not the server's raw value. `v_session_status` is the
+*run's* status — `COALESCE(r.status, 'idle')` — so what arrives is `idle`,
+`working`, `waiting`, `stopped`, `completed`. Those five map to Ready, Working,
+Waiting, Stopped, Ready. Anything else the server sends is passed through
+unchanged, because a screen renders the server's sentence rather than its own
+and a server that writes a better one should win. A blank session gets no word
+at all: "Ready" on a session nobody has used is a status about nothing.
+
+**Why not fork the library.** It is not ours to edit, which is the standing rule
+here, and the alternative — rendering our own list beside `SidebarNav`'s — means
+duplicating its header, its search box and its selection model to gain one span.
+A label that reads well is the cheaper honest answer.
+
+**Would change it if.** The library grows a `sub` or a right slot on a recent,
+which is a two-line change here and deletes this decision.

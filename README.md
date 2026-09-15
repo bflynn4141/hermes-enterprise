@@ -148,7 +148,8 @@ curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
 # verified models, who added it, and the dates. Never the key.
 curl -s -H "$AUTH" "http://localhost:8787/w/$WS/provider-keys"
 
-# The model menu. Every row, with this workspace's answer attached.
+# The model menu. One page of rows, with this workspace's answer attached;
+# `?q=`, `?provider=`, `?limit=` and `?after=` narrow it.
 curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog"
 
 # Re-verify, rotate (a new row that names the one it replaces), remove.
@@ -186,6 +187,84 @@ says which: `disabled_code` is `catalog` for a model the pilot does not offer,
 and `no_key`, `key_unverified` or `key_invalid` for one the workspace could
 reach if it did something. Prices come from the catalog with the date they were
 checked, and the Usage screen says "estimated, billed by your provider".
+
+### OpenRouter
+
+One key, and every model OpenRouter brokers — several hundred, from
+`anthropic/`, `openai/`, `google/`, `meta-llama/` and the rest — appears in the
+chat's model menu.
+
+**Where Brian pastes his key.** Settings → Provider keys → **Add a key** →
+choose **OpenRouter** → paste it into the Key field → **Add and verify**. As
+with every other provider the route wants an Admin session and a sign-in from
+the last five minutes. The key is encrypted before it is verified, and the only
+thing the response carries back is the masked row.
+
+Get the key from <https://openrouter.ai/keys>. Nothing in this repository
+contains one, and nothing ever should: the Settings dialog is the only way in.
+
+**What verification checks.** `GET https://openrouter.ai/api/v1/key`, which is
+the endpoint that actually authenticates. Deliberately *not* `/models`: that one
+is public, and it answers 200 to an invalid key, a revoked key, and no key at
+all, so verifying against it would mark any string as working. The statuses are
+the same as every other provider's — 401 is `invalid`, 200 is `verified`, and a
+429 or a 5xx leaves the key `unverified` with a job to try again, because a
+throttled probe taught us nothing.
+
+**What verification also does.** On success it fetches
+`GET /api/v1/models` and writes those models into the catalog: id, name, context
+window, price per million computed from OpenRouter's per-token figures, whether
+the model takes tools, and whether it takes a reasoning effort. The key row then
+shows **"N models synced · last sync <date>"** instead of a model list, and the
+row carries a **Sync models** button that runs the same thing again. The weekly
+re-verification job refreshes both.
+
+**Where they turn up.** All of them, in the chat's model menu: searchable,
+grouped by vendor prefix, each row showing its price per million and context
+window, with the workspace default pinned as "Company default". A model that
+does not support tool calling is listed and greyed with the reason, because
+every run in this product calls a tool. The effort control appears only for a
+model that takes one.
+
+Two things the sync deliberately does not do. It does not change the workspace
+default — that stays whatever Settings says — and it cannot touch the four
+seeded rows: `sync_openrouter_catalog` is a `SECURITY DEFINER` function whose
+body cannot name a provider other than `openrouter` or update a row whose
+`source` is `seed`, so the Worker keeps its SELECT-only grant on `catalog`.
+
+**Model ids.** An OpenRouter row is `openrouter:anthropic/claude-sonnet-4.6` —
+the provider's own id behind one prefix. The prefix is what makes
+`model_calls.model_id` say which account was billed months later, and the
+adapter strips it before anything reaches the wire.
+
+**The development seam, and why it exists.** The live scenario
+(`apps/client/e2e/live-openrouter.spec.ts`) adds a key, verifies it, syncs a
+catalog and picks a model out of the menu, with no network call and no real key.
+It can do that because `OPENROUTER_FIXTURE=1` makes the Worker answer
+OpenRouter's `/key` and `/models` from a built-in six-model fixture
+(`apps/worker/src/model/openrouter-dev.ts`). Three guards: it is refused unless
+`ENVIRONMENT=development`, it is opt-in per deployment through that var, and it
+serves a fixed fixture that no caller can influence. `wrangler.jsonc` sets it in
+the development vars only, and a unit test asserts staging and production never
+set it — the same treatment `MODEL_SCRIPTED` gets, and for the same reason: a
+deployed Worker that answered `/key` from a canned 200 would call every pasted
+string a verified key.
+
+Over the dev server, the same path by hand:
+
+```sh
+WS=11111111-1111-4111-8111-111111111111
+AUTH='x-dev-user: maya@nous.example'
+
+curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
+  -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"provider":"openrouter","label":"OpenRouter","key":"<paste the key>"}'
+
+# One page of the merged catalog: search, filter and page, so the model menu
+# never downloads three hundred rows to show sixty.
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog?q=sonnet&limit=20"
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog?provider=openrouter&limit=50"
+```
 
 **Why not AI Gateway's own BYOK.** It stores keys in Secrets Store (100 per
 account in beta, 20 gateways), its aliases work only on passthrough URLs with no

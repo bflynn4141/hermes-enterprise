@@ -203,6 +203,7 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     archived?: boolean;
     mode?: string;
     effort?: string | null;
+    model_id?: string;
     focus_ref?: unknown;
   }>(c);
 
@@ -221,6 +222,42 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     if (typeof input.archived === 'boolean') push('archived', input.archived);
     if (input.mode === 'ask' || input.mode === 'plan' || input.mode === 'work') push('mode', input.mode);
     if (input.effort === null || typeof input.effort === 'string') push('effort', input.effort);
+    // The model the *next* turn uses.
+    //
+    // This was missing, which nobody noticed because the client sends it with
+    // `.catch(() => undefined)` and the turns route carries a `model_id` of its
+    // own: picking a model in the composer changed the local state, answered
+    // 422 `empty_patch`, and was silently correct only because the next turn
+    // re-sent it. Reloading the page before sending anything put the old model
+    // back. With OpenRouter that is a user-visible lie — you pick a model out
+    // of three hundred, the menu shows it, and the session did not keep it.
+    //
+    // Validated against what this workspace may actually run, rather than
+    // against the catalog's existence: a row that is disabled by policy, has no
+    // tool calling, or has no verified key would be a session that cannot take
+    // a turn, and the turns route would refuse it later with a worse message.
+    if (typeof input.model_id === 'string') {
+      const { rows: candidates } = await work.tx.query<{ offered: boolean }>(
+        `SELECT (c.disabled_reason IS NULL AND c.supports_tools AND EXISTS (
+                   SELECT 1 FROM workspace_provider_keys k
+                    WHERE k.workspace_id = $1 AND k.provider = c.provider
+                      AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
+                 )) AS offered
+           FROM catalog c WHERE c.model_id = $2`,
+        [work.workspaceId, input.model_id],
+      );
+      const candidate = candidates[0];
+      // A model the catalog does not have is a 422 in every environment: the
+      // column is a foreign key, and a 23503 would surface as a 500.
+      if (!candidate) throw new RouteError('the catalog does not have that model', 'unknown_model', 422);
+      // Scripted development has no provider key at all, and refusing there
+      // would make a working local stack look broken — the same exception
+      // `selectors.ts` makes on the client.
+      if (!candidate.offered && c.env.MODEL_SCRIPTED !== '1') {
+        throw new RouteError('that model is not available to this workspace', 'unknown_model', 422);
+      }
+      push('model_id', input.model_id);
+    }
     if ('focus_ref' in input) {
       values.push(input.focus_ref === null ? null : JSON.stringify(input.focus_ref));
       sets.push(`focus_ref = $${values.length}::jsonb`);
