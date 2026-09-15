@@ -298,6 +298,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   const lastIris = [...session.messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
   const showChips = !session.run || session.run.status === 'completed';
+  const showWelcome = session.messages.length === 0 && !session.stream && !session.carried;
   const fill = (text: string): void => {
     dispatch({ type: 'session/draft', id: session.id, text });
     document.getElementById(`composer-${session.id}`)?.focus();
@@ -306,7 +307,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   return (
     <div className="transcript-wrap">
       <div className="scroll" ref={ref} onScroll={onScroll} aria-live="polite" aria-relevant="additions">
-        <div className="transcript" role="log" aria-label={`Conversation with ${agent}`} ref={contentRef}>
+        <div className={`transcript${showWelcome ? ' transcript-empty' : ''}`} role="log" aria-label={`Conversation with ${agent}`} ref={contentRef}>
           {session.hasEarlier && session.messages.length > 0 && (
             <div className="row" style={{ justifyContent: 'center', padding: '8px 0' }}>
               <Button small onClick={() => void adapter.loadEarlier(session.id)}>
@@ -315,18 +316,23 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             </div>
           )}
 
-          {session.messages.length === 0 && !session.stream && (
+          {showWelcome && (
+            <div className="chat-welcome">
+              <IrisMark size={48} className="mark" />
+              <p>{EMPTY.chatReady(agent)}</p>
+            </div>
+          )}
+
+          {session.messages.length === 0 && !session.stream && session.carried && (
             <div className="empty-session">
               <div className="lead">
                 <IrisMark size={26} className="mark" />
                 <span>
-                  {session.carried
-                    ? `Continuing from “${session.carried.from}”. Reviewed context carried: ${session.carried.context}.`
-                    : EMPTY.chatReady(agent)}
+                  {`Continuing from “${session.carried.from}”. Reviewed context carried: ${session.carried.context}.`}
                 </span>
               </div>
               <div className="meta" style={{ paddingLeft: 40 }}>
-                {session.carried ? 'No completed actions were replayed.' : 'Open a conversation or start a new one.'}
+                No completed actions were replayed.
               </div>
             </div>
           )}

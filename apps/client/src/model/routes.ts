@@ -2,8 +2,8 @@
 //
 // No router library: the five URL shapes below are the whole surface, and the
 // app-pane object is carried in the fragment so that the serialiser and
-// `sameRef` are driven by the same `Ref` keys. A new ref key added to the
-// contract therefore reaches the URL without a second edit here.
+// `sameRef` describe the same view. Optional list filters live in the
+// fragment's query string, leaving existing positional links unchanged.
 import { refSchema, type Ref } from '@hermes/shared';
 
 /**
@@ -37,20 +37,33 @@ const REF_ORDER = ['section', 'view', 'id', 'sub', 'step', 'field'] as const;
 export function serialiseRef(ref: Ref): string {
   const parts = REF_ORDER.map((k) => encodeURIComponent(ref[k] ?? ''));
   while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
-  return parts.join('/');
+  const filters = new URLSearchParams();
+  for (const key of ['status', 'kind', 'query'] as const) {
+    const value = ref.filters?.[key];
+    if (value !== undefined) filters.set(key, value);
+  }
+  return `${parts.join('/')}${filters.size ? `?${filters}` : ''}`;
 }
 
 export function parseRef(hash: string): Ref | null {
   const raw = hash.replace(/^#/, '');
   if (!raw) return null;
-  const parts = raw.split('/').map((p) => decodeURIComponent(p));
-  const out: Record<string, string> = {};
-  REF_ORDER.forEach((key, i) => {
-    const value = parts[i];
-    if (value) out[key] = value;
-  });
-  const parsed = refSchema.safeParse(out);
-  return parsed.success ? parsed.data : null;
+  try {
+    const separator = raw.indexOf('?');
+    const path = separator < 0 ? raw : raw.slice(0, separator);
+    const query = separator < 0 ? '' : raw.slice(separator + 1);
+    const parts = path.split('/').map((p) => decodeURIComponent(p));
+    const out: Record<string, unknown> = {};
+    REF_ORDER.forEach((key, i) => {
+      const value = parts[i];
+      if (value) out[key] = value;
+    });
+    if (query) out.filters = Object.fromEntries(new URLSearchParams(query));
+    const parsed = refSchema.safeParse(out);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export function parseRoute(url: URL): Route {

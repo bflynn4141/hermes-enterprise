@@ -219,22 +219,14 @@ export const IRIS_RAIL_WIDTH = 56;
 export const WIDE_BREAKPOINT = 1840;
 export const PANE_SWITCH_BREAKPOINT = 1000;
 
-/**
- * The navigation column, which is one number at every width (decision C36).
- *
- * The demo collapsed its hand-rolled navigation to icons below 1180 px, and the
- * port kept the breakpoint after adopting `SidebarNav` — which renders at its
- * own width and collapses on its own control, so all the breakpoint did was
- * narrow the *column* to 76 px around a 224 px component and let it draw across
- * whatever was beside it. The way to buy horizontal room is now to collapse
- * Iris, which is what the panel's three states are for.
- */
+/** The two widths rendered by SidebarNav. The grid must use the same state. */
 export const NAV_WIDTH = 240;
+export const NAV_RAIL_WIDTH = 52;
 
-export const navWidthFor = (_windowWidth?: number): number => NAV_WIDTH;
+export const navWidthFor = (_windowWidth?: number, collapsed = false): number => (collapsed ? NAV_RAIL_WIDTH : NAV_WIDTH);
 
 /** The work area is everything the navigation does not take. */
-export const workAreaFor = (windowWidth: number): number => Math.max(0, windowWidth - navWidthFor(windowWidth));
+export const workAreaFor = (windowWidth: number, navCollapsed = false): number => Math.max(0, windowWidth - navWidthFor(windowWidth, navCollapsed));
 
 /** 60 percent of the work area, but never below the minimum: a 700 px window has no valid range otherwise. */
 export const irisMaxWidth = (workArea: number): number => Math.max(IRIS_MIN_WIDTH, Math.round(workArea * 0.6));
@@ -533,34 +525,66 @@ function upsertEntity(state: AppState, kind: EntityKind, id: string, version: nu
   return { ...state, entities: { ...state.entities, [kind]: { ...state.entities[kind], [id]: record } } };
 }
 
+/**
+ * The ref is the complete view, including list filters. Keep the older tab
+ * fields in sync for existing callers, but never let yesterday's tab override
+ * a new focus (or a pinned view restored with Follow Iris).
+ */
+function uiForRef(ui: UiState, app: Ref): UiState {
+  const historyView = app.view ?? 'decisions';
+  return {
+    ...ui,
+    app,
+    ...(app.section === 'inbox' && app.view !== 'request'
+      ? { inboxTab: app.view === 'rules' ? 'rules' : app.filters?.status === 'resolved' ? 'resolved' : 'needs-review' }
+      : {}),
+    ...(app.section === 'history' && ['all', 'decisions', 'blocked'].includes(historyView) ? { historyTab: historyView } : {}),
+    ...(app.section === 'library' ? { libraryTab: app.view ?? 'skills' } : {}),
+    ...(app.section === 'settings' ? { settingsTab: app.view ?? 'Notifications' } : {}),
+  };
+}
+
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'bootstrap/apply':
       return { ...state, ...action.patch };
 
-    // --- navigation / follow (kept verbatim from the demo) ---
+    // --- navigation / follow ---
     case 'nav/app': {
       const target = activeSession(state)?.focus ?? null;
       const same = sameRef(target, action.object);
       return {
         ...state,
         ui: {
-          ...state.ui,
-          app: action.object,
+          ...uiForRef(state.ui, action.object),
           follow: action.manual ? (same ? state.ui.follow : false) : state.ui.follow,
           pane: action.manual ? 'app' : state.ui.pane,
         },
       };
     }
-    case 'nav/tab':
+    case 'nav/tab': {
+      // Existing tabs are manual navigation too: pin the entire view, not
+      // just the page, so an incoming focus cannot replace a person's filter.
+      if (action.key === 'inboxTab') {
+        const filters = state.ui.app.section === 'inbox' ? state.ui.app.filters : undefined;
+        const object: Ref = action.value === 'rules'
+          ? { section: 'inbox', view: 'rules' }
+          : { section: 'inbox', view: 'list', filters: { ...filters, status: action.value === 'resolved' ? 'resolved' : 'pending' } };
+        return reduce(state, { type: 'nav/app', object, manual: true });
+      }
+      if (action.key === 'historyTab' || action.key === 'libraryTab' || action.key === 'settingsTab') {
+        const section = action.key === 'historyTab' ? 'history' : action.key === 'libraryTab' ? 'library' : 'settings';
+        return reduce(state, { type: 'nav/app', object: { section, view: action.value }, manual: true });
+      }
       return { ...state, ui: { ...state.ui, [action.key]: action.value } };
+    }
     case 'follow/resume': {
       const target = activeSession(state)?.focus;
-      return { ...state, ui: { ...state.ui, follow: true, app: target ?? state.ui.app } };
+      return { ...state, ui: { ...uiForRef(state.ui, target ?? state.ui.app), follow: true } };
     }
     case 'iris/focus': {
       const next = withSession(state, action.sessionId, (session) => ({ ...session, focus: action.object }));
-      if (state.ui.follow && action.sessionId === state.activeSessionId) return { ...next, ui: { ...next.ui, app: action.object } };
+      if (state.ui.follow && action.sessionId === state.activeSessionId) return { ...next, ui: uiForRef(next.ui, action.object) };
       return next;
     }
     // `iris/toggle` predates the three states and every existing caller still
@@ -683,7 +707,7 @@ export function reduce(state: AppState, action: Action): AppState {
         ...state,
         activeSessionId: action.id,
         sessions: { ...state.sessions, [action.id]: { ...session, unread: false } },
-        ui: { ...state.ui, follow: true, app: session.focus ?? state.ui.app, pane: 'chat' },
+        ui: { ...uiForRef(state.ui, session.focus ?? state.ui.app), follow: true, pane: 'chat' },
       };
     }
     case 'session/rename':

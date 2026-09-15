@@ -21,6 +21,7 @@
 //     the alternative is a context window spent on one document.
 import {
   FILE,
+  FOCUS_VIEWS,
   findForbiddenNames,
   findMarkup,
   LIB,
@@ -31,6 +32,8 @@ import {
   plainTextMessage,
   REQ,
   REQUEST_KINDS,
+  setFocusInputSchema,
+  viewFocusRef,
   type Ref,
   type RequestKind,
 } from '@hermes/shared';
@@ -100,8 +103,8 @@ export type FocusEntity = 'request' | 'document' | 'session' | 'agent' | 'member
 export interface ToolFocus {
   /** The app-pane ref, in the shared vocabulary the client already navigates by. */
   readonly ref: Ref;
-  readonly entityType: FocusEntity;
-  readonly entityId: string;
+  readonly entityType: FocusEntity | null;
+  readonly entityId: string | null;
 }
 
 /**
@@ -627,18 +630,32 @@ const askForContext: ToolDefinitionEntry = {
 const setFocus: ToolDefinitionEntry = {
   name: 'set_focus',
   kind: 'view',
-  description: 'Point the app at an object you are talking about, so the human sees what you see.',
+  description: 'Show an existing workspace screen or object in the right pane. Use view for a screen (no entity id needed), optionally filters for inbox; OR entity_type and a real entity_id for an object. This only navigates: it never creates a request. A pinned viewer stays pinned until the human resumes Follow Iris.',
   input_schema: OBJECT(
     {
+      view: { type: 'string', enum: FOCUS_VIEWS },
+      filters: OBJECT({
+        status: { type: 'string', enum: ['pending', 'resolved'] },
+        kind: { type: 'string', enum: ['all', 'application', 'documents', 'invoice', 'agreement'] },
+        query: { type: 'string', maxLength: 200 },
+      }, []),
       entity_type: { type: 'string', enum: ['request', 'document', 'session', 'agent', 'member', 'file'] },
-      entity_id: { type: 'string' },
+      entity_id: { type: 'string', minLength: 1, maxLength: 128 },
     },
-    ['entity_type', 'entity_id'],
+    [],
   ),
   async run(args, _ctx) {
-    const entityType = str(args.entity_type) as FocusEntity;
-    const entityId = str(args.entity_id).slice(0, 128);
-    if (!entityType || !entityId) return { ok: false, error: 'entity_type and entity_id are both required' };
+    const parsed = setFocusInputSchema.safeParse(args);
+    if (!parsed.success) return { ok: false, error: 'Use an allowed view with optional Inbox filters, OR entity_type and entity_id. Do not combine them.' };
+    if ('view' in parsed.data) {
+      const ref = viewFocusRef(parsed.data);
+      return {
+        ok: true,
+        data: { focused: parsed.data.view, ref, note: 'The view follows this focus unless the human has pinned it.' },
+        focus: { ref, entityType: null, entityId: null },
+      };
+    }
+    const { entity_type: entityType, entity_id: entityId } = parsed.data;
     return {
       ok: true,
       data: { focused: `${entityType}:${entityId}` },

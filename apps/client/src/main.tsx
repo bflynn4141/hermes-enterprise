@@ -17,7 +17,7 @@ import { createAdapter, type Adapter } from './model/adapter.js';
 import { createAuth } from './model/auth.js';
 import { RestError } from './model/rest.js';
 import { createRest } from './model/rest.js';
-import { currentRoute, parseRef, SHELL_PREFIX, type Route } from './model/routes.js';
+import { currentRoute, parseRef, serialiseRef, SHELL_PREFIX, type Route } from './model/routes.js';
 import { activeSessionKey } from './model/constants.js';
 import { StoreProvider, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
@@ -66,12 +66,12 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
         // The URL is the authority on what to show; bootstrap only supplies the
         // default when it names nothing.
         const hashRef = parseRef(window.location.hash);
-        if (hashRef) store.dispatch({ type: 'nav/app', object: hashRef, manual: true });
         const sessionId = current.sessionId ?? readActiveSession(current.workspaceId);
         if (sessionId && store.getState().sessions[sessionId]) {
           store.dispatch({ type: 'session/select', id: sessionId });
           next.openSession(sessionId);
         }
+        if (hashRef) store.dispatch({ type: 'nav/app', object: hashRef, manual: true });
         setAdapter(next);
       } catch (caught) {
         if (caught instanceof RestError && caught.status === 401) setError('signed-out');
@@ -146,6 +146,16 @@ function App() {
       /* ignore */
     }
   }, [state.workspace.id, state.activeSessionId]);
+
+  useEffect(() => {
+    if (!state.workspace.id) return;
+    // Replace, rather than push: each streamed focus or search keystroke is
+    // not a new browser-history entry. Preserve existing query flags in demos.
+    const url = new URL(window.location.href);
+    url.pathname = `/${SHELL_PREFIX}/${state.workspace.id}${state.activeSessionId ? `/s/${state.activeSessionId}` : ''}`;
+    url.hash = serialiseRef(state.ui.app);
+    if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+  }, [state.workspace.id, state.activeSessionId, state.ui.app]);
 
   return (
     <HermesMotionProvider reducedMotion={state.ui.reduceMotion}>

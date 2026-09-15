@@ -4,6 +4,36 @@ Choices made while building M1 where the production plan was silent, plus the
 places where reality differed from what the plan assumed. Each one says what was
 decided, why, and what would change it.
 
+## Navigation rail releases its grid column — September 15, 2026
+
+The left navigation's explicit collapse control now contracts both the shared
+`SidebarNav` and its application grid column from 240px to the component's 52px
+rail. Previously only the inner component changed width, leaving 188px of empty
+navigation background. The shell mirrors the component's disclosed state and
+uses the existing grid-column transition; reduced-motion preferences still make
+the change immediate.
+
+## Empty-chat welcome — September 15, 2026
+
+Brian's supplied reference replaces the left-aligned ready message and subtitle
+with a centered Iris icon above one line: “What do you need help with?” The
+group is centered in the available transcript area above the composer. The
+no-session state uses the same copy and preserves Start; carried context keeps
+its informational notice. No new motion. Verified rendered centering and a
+single text line at desktop and 900px, plus focused tests and client typecheck.
+The application bundle is rebuilt; visual QA used an isolated mock preview
+because the local Worker on 8787 was stopped during this pass.
+
+## Prompt-driven pane navigation — September 15, 2026
+
+Extend the existing `set_focus` capability and `run.focus` event rather than
+adding an external API or model-generated components. Validated screen names
+and Inbox filters select predefined views; view-only focus carries null entity
+metadata and creates no business rows. Full refs own the pane, filters and URL,
+so pin/resume and refresh preserve what the human chose. Ask-mode permissions
+and existing motion remain unchanged. Implementation and verification status:
+[Prompt-driven workspace views](PROMPT-NAVIGATION.md).
+
 ---
 
 ## 1. Migrations are hand-written SQL; Drizzle is the typed view
@@ -3779,12 +3809,14 @@ which is a two-line change here and deletes this decision.
 
 ---
 
-## C36. The navigation column is one width, because the breakpoint was collapsing a component that had been replaced
+## C36. Navigation width follows the explicit disclosure, never the window breakpoint
 
-**Decided.** `.shell.nav-collapsed { --nav-w: 76px }` is gone, and with it the
-`navCollapsed` flag, the `collapsed` prop on `Sidebar`, and the four rules that
-styled the collapse. The navigation column is 240 px at every width. The
-`.sidebar` grid cell is padded 8 px and clips.
+**Decided.** `.shell.nav-collapsed { --nav-w: 76px }` and the automatic
+breakpoint collapse remain gone. The navigation column is 240 px while the
+component is expanded. When a person uses `SidebarNav`'s own disclosure, the
+shell mirrors its public `data-sidebar-collapsed` state and gives the grid cell
+the component's 52 px rail width. The `.sidebar` cell clips throughout the
+transition.
 
 **What was actually wrong.** The demo collapsed its hand-rolled navigation to
 icons below 1180 px, and the rules that did it named `.brand-name`,
@@ -3802,16 +3834,12 @@ component is 264 px in a 240 px column, so even at full width the component
 overhung by 24 px — invisible only because the chat pane's own background
 painted over it in the one state anybody looked at.
 
-**Why not force the library narrow instead.** Its collapsed styling keys off a
-`data-sidebar-collapsed` attribute it sets on its own `<aside>`, and the width
-is an inline style from internal state. Driving that from outside means
-`!important` over another component's inline style plus a duplicate of its state
-contract, and an expand control that would then be visible and broken. The
-library is not ours to edit, and reaching past its API is the same decision with
-extra steps. The honest version is that a breakpoint-driven icon rail is not a
-thing this client has any more — and it does not need one, because the way to
-buy horizontal room is now to collapse Iris (C33), which is a control rather
-than a width nobody asked for.
+**Why mirror instead of force.** The library still owns the disclosure, inline
+width, focus handling and expand control. The client does not override any of
+those. It only observes the public state attribute after the control changes it
+and gives the surrounding grid the matching width. This avoids `!important`, a
+fork, and duplicate interaction state while allowing the explicit collapse a
+person requested to release real workspace space.
 
 **What the test had to change to see it.** Every assertion the panel suites
 already made was about the grid, and the grid was always right: a grid item's
@@ -3822,12 +3850,15 @@ clipping. `expectNoNavOverlap` hit-tests instead: sample a vertical line of
 pixels three px to the right of the column and ask `elementFromPoint` what is
 there. If the answer is ever inside the navigation, a person can see it. That
 assertion fails on the old code and passes on the new, which is the only
-evidence worth having.
+evidence worth having. A geometry regression also asserts that explicit
+collapse changes the outer grid cell from 240 px to 52 px, not merely the inner
+component.
 
-Two smaller things went with it. `.shell-outer` now clips: a focus or a
-`scrollIntoView` inside a pane was able to scroll the whole shell 48 px off the
-top, which is never something the shell should do. And `ui.navCollapsed` was
-written on every resize and read by nobody.
+Two smaller things went with the original breakpoint removal. `.shell-outer`
+now clips: a focus or a `scrollIntoView` inside a pane was able to scroll the
+whole shell 48 px off the top, which is never something the shell should do.
+`ui.navCollapsed` is now written only when the explicit disclosure changes and
+is read by the shell's column geometry.
 
 **Would change it if.** The library grows a controlled `collapsed` prop, at
 which point the breakpoint can come back and mean something.
@@ -4203,6 +4234,13 @@ creates `hermes_test` if it is absent, migrates and seeds it, and hands back the
 Hyperdrive strings; `pnpm e2e:live`, `pnpm db:test` and the worker vitest
 projects all go through it, and `apps/client/scripts/live-fixture.mjs` — which
 the live specs use to read rows back — defaults to it too.
+
+The worker's aggregate `test` script runs its unit, database and workerd
+projects serially, and the database phase goes through `db-test.mjs` so its
+idempotent migrations restore grants before every run. Vitest otherwise
+overlaps projects that both update the platform-wide model catalog, while a
+second bare database run can inherit grant and catalog state deliberately
+exercised by the first.
 
 **Four guards, because a default is not a guarantee.**
 

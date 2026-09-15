@@ -39,7 +39,8 @@ function describe(state: AppState): [string, string] {
       const request = entityData<RequestEntity>(state, 'request', app.id);
       return [request?.label ?? 'Request', request?.title ?? 'Review'];
     }
-    return ['Needs review', state.ui.inboxTab === 'resolved' ? 'Resolved' : state.ui.inboxTab === 'rules' ? 'Rules' : 'Needs review'];
+    const label = state.ui.inboxTab === 'resolved' ? 'Resolved' : state.ui.inboxTab === 'rules' ? 'Rules' : 'Needs review';
+    return [label, label];
   }
   if (section === 'members') return ['Team', 'Members and invitations'];
   if (section === 'history') return ['History', { all: 'All activity', decisions: 'Decisions', blocked: 'Blocked' }[state.ui.historyTab] ?? 'Decisions'];

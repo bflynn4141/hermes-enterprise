@@ -5,7 +5,7 @@
 // `actionsFor(parseStreamEvent(...))`, so a schema change in the contract fails
 // here rather than at runtime.
 import { describe, expect, it } from 'vitest';
-import { CTX, CTX_DEST, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type StreamEvent } from '@hermes/shared';
+import { CTX, CTX_DEST, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type Ref, type StreamEvent } from '@hermes/shared';
 import { parseRef, serialiseRef } from './routes.js';
 import {
   DEFAULT_SESSION_TITLE,
@@ -148,6 +148,98 @@ describe('follow and pin', () => {
     expect(other.sessions[SESSION_B]!.focus).toEqual(CTX);
     const mine = feed(start, event('run.focus', { run_id: RUN, session_id: SESSION_A, ref: CTX, entity_type: null, entity_id: null }, 1n));
     expect(mine.ui.app).toEqual(CTX);
+  });
+});
+
+describe('prompt-driven views and filters', () => {
+  const pendingApplications: Ref = { section: 'inbox', view: 'list', filters: { status: 'pending', kind: 'application' } };
+  const resolvedInvoices: Ref = { section: 'inbox', view: 'list', filters: { status: 'resolved', kind: 'invoice', query: 'Ada & Sons / 2026?' } };
+  const focusEvent = (ref: Ref, id: bigint = 1n, sessionId = SESSION_A): StreamEvent =>
+    event('run.focus', { run_id: RUN, session_id: sessionId, ref, entity_type: null, entity_id: null }, id, sessionId);
+
+  it('applies the complete incoming Inbox view without making a request or incrementing a badge', () => {
+    const start = base({ counts: { inbox: 4, pendingGrants: 2, createdDocuments: 3, decisions: 6 } });
+    const state = feed(start, focusEvent(resolvedInvoices));
+    expect(state.ui.app).toEqual(resolvedInvoices);
+    expect(state.ui.inboxTab).toBe('resolved');
+    expect(state.ui.follow).toBe(true);
+    expect(state.counts).toBe(start.counts);
+    expect(state.entities).toBe(start.entities);
+  });
+
+  it('replaces previous filters, including resetting an unfiltered Inbox to Needs review', () => {
+    const first = feed(base(), focusEvent(resolvedInvoices));
+    const second = feed(first, focusEvent(pendingApplications, 2n));
+    expect(second.ui.app.filters).toEqual({ status: 'pending', kind: 'application' });
+    expect(second.ui.inboxTab).toBe('needs-review');
+    const third = feed(second, focusEvent({ section: 'inbox', view: 'list' }, 3n));
+    expect(third.ui.app.filters).toBeUndefined();
+    expect(third.ui.inboxTab).toBe('needs-review');
+  });
+
+  it('pins manual filters, holds them during a new focus, and resumes the latest full view', () => {
+    const focused = feed(base(), focusEvent(pendingApplications));
+    const pinnedRef: Ref = { ...pendingApplications, filters: { ...pendingApplications.filters, query: 'Leah' } };
+    const pinned = reduce(focused, { type: 'nav/app', object: pinnedRef, manual: true });
+    expect(pinned.ui.follow).toBe(false);
+    const waiting = feed(pinned, focusEvent(resolvedInvoices, 2n));
+    expect(waiting.ui.app).toEqual(pinnedRef);
+    expect(waiting.ui.inboxTab).toBe('needs-review');
+    expect(waiting.sessions[SESSION_A]!.focus).toEqual(resolvedInvoices);
+    const resumed = reduce(waiting, { type: 'follow/resume' });
+    expect(resumed.ui.app).toEqual(resolvedInvoices);
+    expect(resumed.ui.inboxTab).toBe('resolved');
+    expect(resumed.ui.follow).toBe(true);
+  });
+
+  it('manual Inbox tabs update the canonical ref, retain list filters and pin the view', () => {
+    const focused = feed(base(), focusEvent(pendingApplications));
+    const resolved = reduce(focused, { type: 'nav/tab', key: 'inboxTab', value: 'resolved' });
+    expect(resolved.ui.app).toEqual({ section: 'inbox', view: 'list', filters: { kind: 'application', status: 'resolved' } });
+    expect(resolved.ui.inboxTab).toBe('resolved');
+    expect(resolved.ui.follow).toBe(false);
+    const rules = reduce(resolved, { type: 'nav/tab', key: 'inboxTab', value: 'rules' });
+    expect(rules.ui.app).toEqual({ section: 'inbox', view: 'rules' });
+    expect(rules.ui.inboxTab).toBe('rules');
+  });
+
+  it('does not let an inactive session alter the visible tab or filters, but restores them on selection', () => {
+    const focused = feed(base(), focusEvent(pendingApplications));
+    const other = feed(focused, focusEvent(resolvedInvoices, 1n, SESSION_B));
+    expect(other.ui.app).toEqual(pendingApplications);
+    expect(other.ui.inboxTab).toBe('needs-review');
+    const selected = reduce(other, { type: 'session/select', id: SESSION_B });
+    expect(selected.ui.app).toEqual(resolvedInvoices);
+    expect(selected.ui.inboxTab).toBe('resolved');
+  });
+
+  it('opens the Rules and History tabs and keeps manual History navigation pinned', () => {
+    const rules = feed(base(), focusEvent({ section: 'inbox', view: 'rules' }));
+    expect(rules.ui.inboxTab).toBe('rules');
+    const history = feed(rules, focusEvent({ section: 'history', view: 'blocked' }, 2n));
+    expect(history.ui.historyTab).toBe('blocked');
+    const manual = reduce(history, { type: 'nav/tab', key: 'historyTab', value: 'all' });
+    expect(manual.ui.app).toEqual({ section: 'history', view: 'all' });
+    expect(manual.ui.historyTab).toBe('all');
+    expect(manual.ui.follow).toBe(false);
+    const resumed = reduce(manual, { type: 'follow/resume' });
+    expect(resumed.ui.historyTab).toBe('blocked');
+  });
+
+  it('keeps legacy session refs from selecting a History tab that does not exist', () => {
+    const history = feed(base(), focusEvent({ section: 'history', view: 'blocked' }));
+    const sessionFocus = feed(history, focusEvent({ section: 'history', view: 'sessions', id: SESSION_B }, 2n));
+    expect(sessionFocus.ui.app).toEqual({ section: 'history', view: 'sessions', id: SESSION_B });
+    expect(sessionFocus.ui.historyTab).toBe('blocked');
+  });
+
+  it('round-trips status, kind and a search containing URL punctuation', () => {
+    expect(parseRef(`#${serialiseRef(resolvedInvoices)}`)).toEqual(resolvedInvoices);
+    expect(parseRef(`#${serialiseRef(pendingApplications)}`)).toEqual(pendingApplications);
+    expect(parseRef('#inbox/list?status=invalid')).toBeNull();
+    expect(parseRef('#inbox/list?kind=unknown')).toBeNull();
+    expect(parseRef('#inbox/list?unexpected=true')).toBeNull();
+    expect(parseRef('#inbox/%invalid')).toBeNull();
   });
 });
 
@@ -371,13 +463,18 @@ describe('the Iris panel', () => {
     expect(resolveIrisWidth(900, 1440)).toBe(720);
   });
 
-  it('gives the navigation one width, whatever the window is', () => {
-    // The regression guard for C36: a second nav width is what let the column
-    // and the component disagree.
+  it('keeps the expanded navigation width independent of the window', () => {
+    // The regression guard for C36: window width must not silently collapse a
+    // component whose disclosure state is still expanded.
     expect(navWidthFor(1840)).toBe(NAV_WIDTH);
     expect(navWidthFor(1100)).toBe(NAV_WIDTH);
     expect(navWidthFor(900)).toBe(NAV_WIDTH);
     expect(workAreaFor(900)).toBe(660);
+  });
+
+  it('releases the expanded navigation width when the sidebar becomes a rail', () => {
+    expect(navWidthFor(1840, true)).toBe(52);
+    expect(workAreaFor(1840, true)).toBe(1788);
   });
 
   it('counts Iris messages that arrive while collapsed, and clears on open', () => {

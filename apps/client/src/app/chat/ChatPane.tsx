@@ -16,6 +16,7 @@ import { Composer } from './Composer.js';
 import { agentName } from '../selectors.js';
 import { TOGGLE_SHORTCUT } from '../panel.js';
 import type { SessionState } from '../../model/store.js';
+import { EMPTY } from '../../model/constants.js';
 
 export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean }) {
   const state = useAppState();
@@ -59,16 +60,12 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
   if (!session) {
     return (
       <section className="pane pane-iris" data-active={active} aria-label={`${agent} conversation`}>
-        <div className="empty-session">
-          <div className="lead">
-            <IrisMark size={26} className="mark" />
-            <span>{agent} is ready. Describe what you need or attach a document.</span>
-          </div>
-          <div style={{ paddingLeft: 40 }}>
-            <Button primary onClick={() => void adapter.createSession()}>
-              Start
-            </Button>
-          </div>
+        <div className="chat-welcome chat-welcome-standalone">
+          <IrisMark size={48} className="mark" />
+          <p>{EMPTY.chatReady(agent)}</p>
+          <Button primary onClick={() => void adapter.createSession()}>
+            Start
+          </Button>
         </div>
       </section>
     );

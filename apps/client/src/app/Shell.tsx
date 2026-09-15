@@ -1,10 +1,8 @@
 // The shell. 1840 is 240 + 800 + 800 and below 1000 the two panes switch
 // explicitly with their state preserved, both from the demo. Three things are
 // not the demo's: the connection banner (client-port spec §2, §5.4), the Iris
-// panel's three states (decision C33), and the navigation column, which is 240
-// at every width now — the demo's icon collapse was a property of markup this
-// client replaced, and keeping the breakpoint only drew the navigation across
-// its own column (decision C36).
+// panel's three states (decision C33), and the navigation column, whose grid
+// width now follows SidebarNav's own open/rail disclosure (decision C36).
 //
 // The grid is written here rather than in CSS because the middle column is now
 // a number a person can drag. The `--iris-w` token stays as the fallback the
@@ -44,8 +42,8 @@ export function Shell() {
   const panel = state.ui.irisPanel;
   const narrow = width < PANE_SWITCH_BREAKPOINT && panel === 'open';
   const pane = state.ui.pane;
-  const navWidth = navWidthFor(width);
-  const workArea = workAreaFor(width);
+  const navWidth = navWidthFor(width, state.ui.navCollapsed);
+  const workArea = workAreaFor(width, state.ui.navCollapsed);
   const irisWidth = resolveIrisWidth(state.ui.irisWidth, width);
   // `is-compact` used to be a fact about the window, which was the same thing as
   // a fact about the chat pane when the chat pane was always half of it. Now
@@ -67,8 +65,8 @@ export function Shell() {
     restored.current = true;
     const prefs = readIrisPrefs(workspaceId, userId, window.innerWidth);
     if (prefs.panel !== 'open') dispatch({ type: 'iris/panel', panel: prefs.panel });
-    if (prefs.width !== null) dispatch({ type: 'iris/width', width: prefs.width, workArea: workAreaFor(window.innerWidth) });
-  }, [dispatch, workspaceId, userId]);
+    if (prefs.width !== null) dispatch({ type: 'iris/width', width: prefs.width, workArea: workAreaFor(window.innerWidth, state.ui.navCollapsed) });
+  }, [dispatch, workspaceId, userId, state.ui.navCollapsed]);
   useEffect(() => {
     if (!workspaceId || !userId || !restored.current) return;
     writeIrisPrefs(workspaceId, userId, panel, state.ui.irisWidth);
@@ -113,12 +111,12 @@ export function Shell() {
   }, [panel]);
 
   const columns = narrow
-    ? `var(--nav-w) minmax(0, 1fr)`
+    ? `${navWidth}px minmax(0, 1fr)`
     : panel === 'open'
-      ? `var(--nav-w) ${irisWidth}px minmax(0, 1fr)`
+      ? `${navWidth}px ${irisWidth}px minmax(0, 1fr)`
       : railShown
-        ? `var(--nav-w) ${IRIS_RAIL_WIDTH}px minmax(0, 1fr)`
-        : `var(--nav-w) minmax(0, 1fr)`;
+        ? `${navWidth}px ${IRIS_RAIL_WIDTH}px minmax(0, 1fr)`
+        : `${navWidth}px minmax(0, 1fr)`;
 
   return (
     <div className="shell-outer">

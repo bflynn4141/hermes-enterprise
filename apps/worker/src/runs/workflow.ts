@@ -204,6 +204,18 @@ const ASK_FOR_CONTEXT = {
  * are the ones the client-port spec uses, not the internal `SCRIPTS` keys,
  * because they are what a person types. See decision F6.
  */
+/** Deterministic navigation fixtures. Real models use the tool's schema and prompt. */
+const navigationScript = (args: Record<string, unknown>, label: string): readonly Script[] => [
+  { events: [
+    { type: 'tool_call', call: { id: 'call_focus', name: 'set_focus', arguments: JSON.stringify(args) } },
+    { type: 'stop', reason: 'tool_use' },
+  ] },
+  { events: [
+    { type: 'text_delta', text: `Iris is focused on ${label}. A pinned view stays where you left it.` },
+    { type: 'stop', reason: 'end_turn' },
+  ] },
+];
+
 export const DEV_SCRIPTS: Readonly<Record<string, readonly Script[]>> = {
   completed: DEV_SCRIPT,
   transient_5xx: [SCRIPTS.transient_5xx, ...DEV_SCRIPT],
@@ -214,6 +226,11 @@ export const DEV_SCRIPTS: Readonly<Record<string, readonly Script[]>> = {
   // A scenario that parked and never resumed would leave the suite with a run
   // it could not finish.
   waiting: [ASK_FOR_CONTEXT, ...DEV_SCRIPT],
+  navigation_pending: navigationScript({ view: 'inbox', filters: { status: 'pending', kind: 'application' } }, 'pending applications'),
+  navigation_resolved: navigationScript({ view: 'inbox', filters: { status: 'resolved', kind: 'application', query: 'Ada' } }, 'resolved applications matching Ada'),
+  navigation_members: navigationScript({ view: 'members' }, 'Members'),
+  navigation_context: navigationScript({ view: 'context' }, 'Context'),
+  navigation_inbox: navigationScript({ view: 'inbox' }, 'the Inbox'),
 };
 
 /**

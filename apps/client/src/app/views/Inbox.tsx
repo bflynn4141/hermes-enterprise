@@ -13,7 +13,7 @@
 //     decision.
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type RequestEntity } from '@hermes/shared';
+import { HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
@@ -29,14 +29,19 @@ export function InboxList() {
   const nav = useNav();
   const lists = useWorkspaceLists();
   const tab = state.ui.inboxTab;
-  const [query, setQuery] = useState('');
-  const [kind, setKind] = useState('all');
+  const filters = state.ui.app.filters;
+  const query = filters?.query ?? '';
+  const kind = filters?.kind ?? 'all';
+  const filtered = query.length > 0 || kind !== 'all';
+  const setFilters = (patch: NonNullable<Ref['filters']>): void => {
+    nav({ section: 'inbox', view: 'list', filters: { ...filters, ...patch } });
+  };
 
   const list = useMemo(
     () =>
       lists.requests
         .filter((request) => (tab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
-        .filter((request) => kind === 'all' || (kind === 'applications' ? request.kind === 'application' : request.kind !== 'application'))
+        .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind !== 'application' : request.kind === kind))
         .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase())),
     [lists.requests, tab, kind, query],
   );
@@ -77,12 +82,14 @@ export function InboxList() {
             <div className="row" style={{ gap: 16 }}>
               <label className="search grow">
                 <Icon name="search" />
-                <input placeholder="Search requests" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search requests" />
+                <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
               </label>
-              <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setKind(event.target.value)} style={{ background: 'var(--app)', appearance: 'none' }}>
+              <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })} style={{ background: 'var(--app)', appearance: 'none' }}>
                 <option value="all">All types</option>
-                <option value="applications">Applications</option>
+                <option value="application">Applications</option>
                 <option value="documents">Documents</option>
+                <option value="invoice">Invoices</option>
+                <option value="agreement">Agreements</option>
               </select>
             </div>
             <div className="col" role="list" aria-label={tab === 'resolved' ? 'Resolved requests' : 'Requests needing review'}>
@@ -109,9 +116,11 @@ export function InboxList() {
               {list.length === 0 && !lists.loading && (
                 <EmptyState
                   icon={tab === 'resolved' ? 'trace' : 'admission'}
-                  title={tab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                  detail={tab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
-                  action={<Button onClick={() => nav(tab === 'resolved' ? INBOX : HISTORY())}>{tab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
+                  title={filtered ? 'No matching requests' : tab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
+                  detail={filtered ? 'Try a different search or request type.' : tab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
+                  action={filtered
+                    ? <Button onClick={() => setFilters({ query: '', kind: 'all' })}>Clear filters</Button>
+                    : <Button onClick={() => nav(tab === 'resolved' ? INBOX : HISTORY())}>{tab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
                 />
               )}
               {list.length === 0 && lists.loading && <Skeleton rows={3} label="Loading requests" />}
