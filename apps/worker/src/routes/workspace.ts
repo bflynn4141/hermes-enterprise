@@ -17,6 +17,7 @@ import {
 import type { Env } from '../env.js';
 import { withTenantTransaction, type Tx } from '../db/client.js';
 import { allowedProviders } from '../model/allowed.js';
+import { runtimeLocation } from '../runtime/config.js';
 import { getSession } from '../auth.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
@@ -226,7 +227,9 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
     { workspaceId, userId: session.userId },
     (tx) => loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)),
   );
-  return c.json(body);
+  return c.json({ ...body, sessions: body.sessions.map((row) => ({ ...row,
+    runtime: runtimeLocation(c.env, workspaceId, row.agent_id, row.runtime ?? 'cloud'),
+  })) });
 }
 
 /**

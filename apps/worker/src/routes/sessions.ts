@@ -13,7 +13,7 @@
 // The response shapes come from `@hermes/shared/entities`, which is also what
 // the client parses. One schema per payload: a second one on the server would
 // drift, and the drift would show up as an empty pane rather than an error.
-import { runtimeBinding } from '../runtime/config.js';
+import { runtimeBinding, runtimeLocation } from '../runtime/config.js';
 import type { Context } from 'hono';
 import {
   draftSchema,
@@ -87,14 +87,14 @@ function requireOwner(work: TenantWork, session: { owner_id: string; read_only: 
   if (session.read_only) throw new RouteError('this session is read-only', 'read_only', 409);
 }
 
-const toSession = (row: Record<string, unknown>): unknown => ({
+const toSession = (row: Record<string, unknown>, env: Env, workspaceId: string): unknown => ({
   id: row.id,
   agent_id: row.agent_id,
   title: row.title,
   mode: row.mode,
   model_id: row.model_id,
   effort: row.effort ?? null,
-  runtime: row.runtime,
+  runtime: runtimeLocation(env, workspaceId, String(row.agent_id), row.runtime === 'local' ? 'local' : 'cloud'),
   pinned: row.pinned,
   archived: row.archived,
   focus_ref: row.focus_ref ?? null,
@@ -116,7 +116,7 @@ export async function listSessions(c: Context<{ Bindings: Env }>): Promise<Respo
       [work.workspaceId, work.userId, archived],
     );
     return paginatedSchema(sessionSchema).parse({
-      items: rows.map(toSession),
+      items: rows.map((row) => toSession(row, c.env, work.workspaceId)),
       cursor: null,
       total: rows.length,
     });
@@ -190,7 +190,7 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
     );
     const row = rows[0];
     if (!row) throw new RouteError('the session was not created', 'create_failed', 409);
-    return sessionSchema.parse(toSession({ ...row, status: 'idle' }));
+    return sessionSchema.parse(toSession({ ...row, status: 'idle' }, c.env, work.workspaceId));
   });
   return c.json(body, 201);
 }
@@ -208,7 +208,7 @@ export async function getSessionRoute(c: Context<{ Bindings: Env }>): Promise<Re
     );
     const row = rows[0];
     if (!row) throw new RouteError('no such session', 'unknown_session', 404);
-    return sessionSchema.parse(toSession(row));
+    return sessionSchema.parse(toSession(row, c.env, work.workspaceId));
   });
   return c.json(body);
 }
@@ -303,7 +303,7 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
       `SELECT status FROM v_session_status WHERE session_id = $1`,
       [sessionId],
     );
-    return sessionSchema.parse(toSession({ ...row, status: status.rows[0]?.status ?? 'idle' }));
+    return sessionSchema.parse(toSession({ ...row, status: status.rows[0]?.status ?? 'idle' }, c.env, work.workspaceId));
   });
   return c.json(body);
 }

@@ -294,6 +294,18 @@ describe('official Hermes enterprise projection', () => {
     expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges })).not.toContain(client.final.error);
   });
 
+  it('closes activity and preserves partial output when runtime status becomes unreachable', async () => {
+    const client = new FakeHermesClient();
+    client.onStatus = () => { if (client.statusReads > 1) throw new Error('private upstream failure'); };
+    const { db } = await execute(new FakeRuntimeDb(), client);
+    expect(db.statusChanges.at(-1)).toMatchObject({ status: 'error', error: { reason: 'hermes_unavailable' } });
+    expect(db.messages.get(0)).toMatchObject({ status: 'incomplete' });
+    expect(db.events.filter((event) => event.kind === 'run.step').at(-1)?.payload).toMatchObject({ state: 'failed' });
+    expect(db.events.filter((event) => event.kind === 'message.final')).toHaveLength(1);
+    expect(client.stops).toEqual([NATIVE_ID]);
+    expect(JSON.stringify(db.events)).not.toContain('private upstream failure');
+  });
+
   it('keeps an explicitly empty final output instead of promoting intermediate prose to the answer', async () => {
     const client = new FakeHermesClient();
     client.final.output = '';

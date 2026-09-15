@@ -42,6 +42,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   };
   let remoteId: string | null = null;
   let terminal = false;
+  let currentMessageId: string | null = null;
+  let visibleText = '';
   try {
     const existingBinding = await db.binding(run.id);
     if (existingBinding?.runtimeAttempt === run.attempt && ['completed', 'error', 'stopped'].includes(run.status)) return;
@@ -97,6 +99,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const progress = { runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'active' as const };
       const { stepAttempt } = await db.enterStep(progress);
       const { messageId } = await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: '', blocks: [], status: 'streaming', workedMs: null });
+      currentMessageId = messageId;
+      visibleText = '';
       await emit([
         { kind: 'run.step', payload: { run_id: run.id, attempt: run.attempt, turn: 0, step_id: 'hermes', label: 'Thinking', state: 'active', tool_call_id: null } },
         { kind: 'message.reset', payload: { run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, message_id: messageId } },
@@ -130,6 +134,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             const payload = event.value;
             if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
               text += payload.delta; pending += payload.delta;
+              visibleText = text;
               await flush();
             }
             if (payload.event.startsWith('run.') && ['run.completed','run.failed','run.cancelled'].includes(payload.event)) {
@@ -156,6 +161,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       } finally { controller.abort(); }
       terminal = true;
       await flush(true);
+      visibleText = status.output ?? text;
       const workedMs = db.activeRuntimeMs ? await db.activeRuntimeMs(run.id, run.attempt, startedAt, Date.now()) : Math.max(0, Date.now() - startedAt);
       const finalText = status.output ?? text;
       const parsed = extractBlocks(finalText);
@@ -196,7 +202,24 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   } catch (error) {
     if (remoteId && !terminal) await client.stop(remoteId).catch(() => undefined);
     const detail: RunErrorInput = { class: 'transient', retryable: true, reason: 'hermes_unavailable', message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.' };
-    await db.setRunStatus(run.id, 'error', { error: detail });
-    await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'error', error: detail } }]);
+    // Close the visible activity and preserve partial output even when the
+    // runtime disappears. A stale attempt may not overwrite its successor.
+    const failedEvents = await db.finalizeRuntime(run.id, run.attempt, async () => {
+      const events: EmitInput[] = [];
+      if (currentMessageId) {
+        const parsed = extractBlocks(visibleText);
+        await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: parsed.text, blocks: parsed.blocks, status: 'incomplete', workedMs: null });
+        await db.finishStep({ runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'failed' });
+        events.push(
+          { kind: 'run.step', payload: { run_id: run.id, attempt: run.attempt, turn: 0, step_id: 'hermes', label: 'Thinking', state: 'failed', tool_call_id: null } },
+          { kind: 'message.final', payload: { message_id: currentMessageId, session_id: run.sessionId, run_id: run.id, turn: 0, attempt: run.attempt, text: parsed.text, blocks: parsed.blocks, incomplete: true, worked_ms: null } },
+        );
+      }
+      await db.carryGuidance(run.id, (await db.loadGuidance(run.id)).map((row) => row.id));
+      await db.setRunStatus(run.id, 'error', { error: detail, waitingFor: null, waitingLabel: null });
+      events.push({ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'error', error: detail } });
+      return db.emit(events.map((event) => ({ ...event, sessionId: run.sessionId })));
+    });
+    if (failedEvents?.length) await deps.forward(run.sessionId, run.id, failedEvents).catch(() => undefined);
   }
 }

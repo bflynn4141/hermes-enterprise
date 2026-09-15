@@ -37,6 +37,17 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
       (url.protocol !== 'https:' && !(env.ENVIRONMENT === 'development' && local && url.protocol === 'http:'))) return misconfigured();
   return { workspaceId, agentId, profile: `agent-${agentId}`, baseUrl: url.toString().replace(/\/$/, ''), apiKey: row.api_key };
 }
+/** Existing sessions show the configured execution location after a rollout.
+ * Missing configuration still fails turn admission; it must not hide onboarding
+ * or historical conversations merely because a profile has not been provisioned.
+ */
+export function runtimeLocation(env: RuntimeEnv, workspaceId: string, agentId: string, fallback: 'local' | 'cloud'): 'local' | 'cloud' {
+  if (env.AGENT_RUNTIME !== 'hermes') return fallback;
+  try {
+    const url = new URL(runtimeBinding(env, workspaceId, agentId).baseUrl);
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ? 'local' : 'cloud';
+  } catch { return fallback; }
+}
 async function signingKey(env: RuntimeEnv): Promise<CryptoKey> {
   const secret = env.HERMES_BRIDGE_SECRET;
   if (!secret || secret.length < 32) return misconfigured();
