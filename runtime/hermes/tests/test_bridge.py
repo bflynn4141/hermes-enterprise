@@ -8,7 +8,7 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
-from start import clean_environment
+from start import clean_environment, validate_profile_path
 
 RUN_ID = "run_" + "a" * 32
 
@@ -81,6 +81,20 @@ class BridgeTests(unittest.TestCase):
             self.assertNotIn(name, env)
         self.assertEqual(env["HOME"], "/isolated/os-home")
         self.assertEqual(env["HERMES_HOME"], "/isolated/home")
+
+    def test_watchdog_guard_uses_real_socket_suffix_and_launch_pid(self):
+        agent_id = "44444444-4444-4444-8444-444444444444"
+        with self.assertRaises(ValueError):
+            validate_profile_path(pathlib.Path("/Users/gia/.hermes-enterprise") / agent_id, "darwin", pid=83824)
+        validate_profile_path(pathlib.Path("/Users/gia/.he-runtime") / agent_id, "darwin", pid=83824)
+        with self.assertRaises(ValueError):
+            validate_profile_path(pathlib.Path("/Users/gia/.he-runtime") / agent_id, "darwin", pid=2147483647)
+
+    def test_watchdog_guard_counts_utf8_bytes(self):
+        profile = pathlib.Path("/" + "é" * 35)
+        self.assertLess(len(str(profile / "home/state/gateway.loop-tick.2147483647.sock")), 104)
+        with self.assertRaises(ValueError):
+            validate_profile_path(profile, "darwin", pid=83824)
 
 
 if __name__ == "__main__":

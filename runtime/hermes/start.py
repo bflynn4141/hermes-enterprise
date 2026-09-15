@@ -16,6 +16,14 @@ import uuid
 from install import ROOT, REVISION, verify_source
 
 
+def validate_profile_path(profile, platform=sys.platform, pid=None):
+    # Match gateway.shutdown_watchdog.get_loop_tick_socket_path. execve keeps
+    # this process's PID when it becomes the foreground official gateway.
+    socket_path = profile / "home/state" / f"gateway.loop-tick.{os.getpid() if pid is None else pid}.sock"
+    if platform == "darwin" and len(str(socket_path).encode("utf-8")) >= 104:
+        raise ValueError("state-root is too long for the native macOS watchdog socket; use a shorter dedicated root")
+
+
 def private_write(path, text):
     temporary = path.with_suffix(path.suffix + ".tmp")
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -115,7 +123,7 @@ def main():
     parser.add_argument("--source", type=pathlib.Path, default=ROOT / ".state/source")
     parser.add_argument("--python", type=pathlib.Path, default=ROOT / ".state/venv/bin/python")
     parser.add_argument("--port", type=int, default=8642)
-    parser.add_argument("--state-root", type=pathlib.Path, default=pathlib.Path.home() / ".hermes-enterprise",
+    parser.add_argument("--state-root", type=pathlib.Path, default=pathlib.Path.home() / ".he-runtime",
                         help="Separate runtime state; use a short path for macOS Unix sockets")
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
@@ -158,8 +166,10 @@ def main():
     if state_root == personal_home or personal_home in state_root.parents:
         parser.error("state-root must be outside the personal ~/.hermes installation")
     profile = state_root / agent_id
-    if sys.platform == "darwin" and len(str(profile / "home/gateway-loop.sock").encode()) >= 104:
-        parser.error("state-root is too long for macOS Unix sockets; use the default short dedicated root")
+    try:
+        validate_profile_path(profile)
+    except ValueError as error:
+        parser.error(str(error))
     profile.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = open(profile / "launcher.lock", "a")
     try:
