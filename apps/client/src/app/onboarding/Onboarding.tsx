@@ -9,11 +9,12 @@
 //
 // The presenter, the intro slides and the "one week later" interstitial are not
 // ported: they were the demo's narration, not the product.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRest } from '../../model/rest.js';
 import { createAuth } from '../../model/auth.js';
 import { Glass, Icon } from '../ui/icons.js';
-import { Button } from '../ui/primitives.js';
+import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
+import { SHELL_PREFIX } from '../../model/routes.js';
 
 const STEPS = [
   ['workspace', 'Workspace'],
@@ -52,44 +53,7 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
   const [error, setError] = useState<string | null>(null);
 
   if (route === 'join-workspace') {
-    return (
-      <div className="portal">
-        <header className="portal-header">
-          <div className="pl">
-            <Glass name="iris" size={30} />
-            <span>Hermes</span>
-          </div>
-        </header>
-        <div className="portal-body" style={{ alignItems: 'center', paddingTop: 100, width: 560, gap: 24 }}>
-          <h1 style={{ font: '500 44px/48px var(--font-display)' }}>Join a workspace</h1>
-          <p className="meta" style={{ textAlign: 'center' }}>
-            {token ? 'Accepting this invitation adds you as a Member. A Member works with agents and reads every request; only an Admin records a decision.' : 'This link is missing its invitation token. Ask whoever invited you to send it again.'}
-          </p>
-          {error && <p className="meta">{error}</p>}
-          <button
-            type="button"
-            className="portal-btn"
-            style={{ width: 320 }}
-            disabled={!token || busy}
-            onClick={() => {
-              if (!token) return;
-              setBusy(true);
-              // An invitation is accepted through the identity provider, not
-              // here: WorkOS owns the email and the account, and the Worker
-              // mirrors the membership on the way back through
-              // `/auth/callback`. So the button hands the token to the sign-in
-              // route rather than posting it, which is also what makes
-              // accepting work for someone who has no account yet.
-              window.location.assign(`/auth/login?return_to=${encodeURIComponent(`/?invitation=${token}`)}`);
-              void rest;
-              void setError;
-            }}
-          >
-            Accept invitation
-          </button>
-        </div>
-      </div>
-    );
+    return <JoinWorkspace token={token} rest={rest} auth={auth} />;
   }
 
   const next = (): void => {
@@ -104,9 +68,18 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
     setError(null);
     void rest
       .createWorkspace({ name: name.trim() })
-      .then((boot) => window.location.assign(`/w/${boot.workspace.id}`))
-      .catch(() => {
-        setError('Could not create the workspace. Try again.');
+      .then((boot) => window.location.assign(`/${SHELL_PREFIX}/${boot.workspace.id}`))
+      .catch((caught: unknown) => {
+        const reason = (caught as { reason?: string }).reason;
+        setError(
+          reason === 'email_unverified'
+            ? 'Verify your email address before creating a workspace. An invitation sent from an unverified address is a phishing primitive, so the server refuses it.'
+            : reason === 'rate_limited'
+              ? 'Three workspaces a day, per person. Try again tomorrow.'
+              : reason === 'bad_name'
+                ? 'A workspace needs a name of 2 to 80 characters.'
+                : 'Could not create the workspace. Try again.',
+        );
         setBusy(false);
       });
   };
@@ -207,6 +180,105 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
                 Create workspace
               </button>
             </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Accepting an invitation, through the route that exists.
+ *
+ * This used to hand the token to `/auth/login` and hope: there was no accept
+ * route, so an invitation could only be honoured by WorkOS mirroring the
+ * membership on the way back, which does not happen in `AUTH_MODE=fake` at
+ * all. `POST /invitations/:token/accept` is that route now (server decision
+ * F2), and it answers with the whole workspace from inside the transaction
+ * that admitted them — so the shell is one navigation away and there is no
+ * window in which they are a member of a workspace that reads as missing.
+ *
+ * The token says which invitation; the session says who. A 401 means nobody is
+ * signed in yet, and the honest move is to sign in and come back rather than
+ * to post the token again.
+ */
+function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: ReturnType<typeof createRest>; auth: ReturnType<typeof createAuth> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<{ email: string } | null>(null);
+  const [checked, setChecked] = useState(false);
+
+  // Who is signed in, if anyone. `GET /auth/session` with no `?ws` answers
+  // that without naming a workspace (server decision F7); a 404 means signed
+  // in but in no workspace yet, which is exactly the person this screen is for.
+  useEffect(() => {
+    let live = true;
+    void rest
+      .authWorkspaces()
+      .then((session) => {
+        if (live) setMe({ email: session.user.email });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (live) setChecked(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [rest]);
+
+  const accept = (): void => {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    void rest
+      .acceptInvitation(token)
+      .then((boot) => window.location.assign(`/${SHELL_PREFIX}/${boot.workspace.id}`))
+      .catch((caught: unknown) => {
+        const failure = caught as { status?: number; reason?: string };
+        if (failure.status === 401) {
+          window.location.assign(auth.signInUrl(window.location.href));
+          return;
+        }
+        setError(
+          failure.reason === 'invitation_email_mismatch'
+            ? 'This invitation was sent to a different address. A forwarded link does not admit whoever opens it; ask for one addressed to you.'
+            : failure.reason === 'invitation_unavailable'
+              ? 'This invitation is not open. It may have been withdrawn, already accepted, or expired — ask for a new one.'
+              : 'Could not accept this invitation. Try again.',
+        );
+        setBusy(false);
+      });
+  };
+
+  return (
+    <div className="portal">
+      <header className="portal-header">
+        <div className="pl">
+          <Glass name="iris" size={30} />
+          <span>Hermes</span>
+        </div>
+      </header>
+      <div className="portal-body" style={{ alignItems: 'center', paddingTop: 100, width: 560, gap: 24 }}>
+        <h1 style={{ font: '500 44px/48px var(--font-display)' }}>Join a workspace</h1>
+        {!checked ? (
+          <Skeleton rows={2} label="Checking your session" />
+        ) : !token ? (
+          <EmptyState icon="context" title="This link is missing its invitation token" detail="Ask whoever invited you to send it again." />
+        ) : (
+          <>
+            <p className="meta" style={{ textAlign: 'center' }}>
+              Accepting this invitation adds you to the workspace with the role it was sent with. A Member works with agents and reads every request; only an Admin records a decision.
+            </p>
+            {me && <p className="meta">Signed in as {me.email}. The invitation has to have been sent to this address.</p>}
+            {error && (
+              <p className="meta" role="alert" style={{ textAlign: 'center' }}>
+                {error}
+              </p>
+            )}
+            <button type="button" className="portal-btn" style={{ width: 320 }} disabled={busy} onClick={accept}>
+              {busy ? 'Accepting…' : 'Accept invitation'}
+            </button>
           </>
         )}
       </div>

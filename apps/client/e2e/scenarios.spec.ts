@@ -43,7 +43,11 @@ test.describe('P1 · onboarding', () => {
   test('the join route needs a token and says so without one', async ({ page }) => {
     await page.goto('/onboarding/join');
     await expect(page.getByRole('heading', { name: 'Join a workspace' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeDisabled();
+    // Without a token there is nothing to accept, so there is no button to
+    // disable: the screen says what is missing and who can fix it. A disabled
+    // "Accept invitation" would imply the link was fine and the seat was not.
+    await expect(page.getByText('This link is missing its invitation token')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Accept invitation' })).toHaveCount(0);
 
     await page.goto('/onboarding/join?token=inv_demo');
     await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeEnabled();
@@ -73,9 +77,13 @@ test.describe('P2 · triage', () => {
     await expect(page.getByText('Add the destination; I’ll prepare the draft. Not an approval.')).toBeVisible();
 
     // Four rows in the app pane's "Needs you" list.
-    await expect(appPane.getByRole('button', { name: /^Review/ })).toHaveCount(4);
-    await expect(appPane.getByText('Leah Martinez')).toBeVisible();
-    await expect(appPane.getByText('Owen Reilly')).toBeVisible();
+    // Scoped to the list, because the names are also on the recommendation
+    // card above it now — two places, deliberately, and one of them is the
+    // list this assertion is about.
+    const needsYou = appPane.getByRole('list', { name: 'Requests that need you' });
+    await expect(needsYou.getByRole('button', { name: /^Review/ })).toHaveCount(4);
+    await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
+    await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
     // Following: nothing the agent said moved the pane off Overview.
     await expect(appPane.getByText('Iris / Overview')).toBeVisible();

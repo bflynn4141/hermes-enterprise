@@ -2,17 +2,45 @@
 //
 // History reads `events` rows — the demo's fabricated local event log is gone,
 // along with `eventTime()` and `uid('evt')`. Members read the WorkOS mirror.
-// Settings gains the two new tabs the plan added: Provider keys (§9) and Usage.
-import { useEffect, useMemo, useState } from 'react';
-import { InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DocumentEntity, type MaskedProviderKey, type UsageResponse } from '@hermes/shared';
+// Settings carries Provider keys, Usage and the data-and-privacy page, and the
+// one control in the product with no undo behind a confirmation and a step-up.
+//
+// Four library components are adopted here (plan 10b): `FilterTable` over
+// History, `RecordsTable` over Members, `InsightCards` over the usage report
+// and `FineTuneCard` over the two integer caps. Each is given real rows and
+// real callbacks; none of them is given a demo fixture.
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import { FilterTable, FineTuneCard, InsightCards, RecordsTable } from '@hermes/motion-components';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type MaskedProviderKey, type MemberEntity, type SettingsView, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
 import { EMPTY, LIBRARY_TABS, SETTINGS_TABS } from '../../model/constants.js';
 import { catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
+import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
+
+/**
+ * History, with `FilterTable` over the rows (plan 10b).
+ *
+ * Two axes, and they are not the same axis. The tabs pick which *kind* of
+ * activity is listed — everything, decisions only, blocked only — because that
+ * is the question a reviewer asks. The table's own filter picks the *state* a
+ * row is in, which is the question an operator asks. Neither is derived from
+ * the other, so both are offered and both are labelled.
+ *
+ * `FilterTable`'s three states are mapped from the server's `status` string,
+ * which is prose written per event kind rather than an enum; anything that is
+ * neither blocked nor a finished decision is "in progress", which is what
+ * "assigned, waiting on a person" actually is.
+ */
+const historyState = (row: EventRow): 'todo' | 'progress' | 'done' => {
+  const status = row.status.toLowerCase();
+  if (status.includes('blocked') || status.includes('failed')) return 'todo';
+  if (row.kind === 'decision.recorded' || status.includes('admitted') || status.includes('declined') || status.includes('saved') || status.includes('created')) return 'done';
+  return 'progress';
+};
 
 export function History() {
   const state = useAppState();
@@ -25,6 +53,19 @@ export function History() {
     [lists.history, tab],
   );
   const emptyCopy = tab === 'decisions' ? EMPTY.historyDecisions : tab === 'blocked' ? EMPTY.historyBlocked : EMPTY.historyAll;
+  // The table takes strings, so the row it hands back is matched on the same
+  // strings. `task` is unique enough in practice and the lookup falls back to
+  // the index, so an open never lands on the wrong event.
+  const tableRows = useMemo(
+    () =>
+      events.slice(0, 200).map((row) => ({
+        task: row.text,
+        date: new Date(row.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        status: historyState(row),
+        owner: row.actor_name,
+      })),
+    [events],
+  );
 
   return (
     <div className="scroll">
@@ -49,30 +90,44 @@ export function History() {
             subtitle={`${state.counts.pendingGrants} access grant${state.counts.pendingGrants === 1 ? '' : 's'} pending · ${state.counts.inbox} request${state.counts.inbox === 1 ? '' : 's'} still waiting`}
           />
         )}
-        <div className="col" role="list">
-          {events.length === 0 && <EmptyState icon="trace" title={emptyCopy} />}
-          {events.map((event) => (
-            <div className="list-row tall" role="listitem" key={event.id}>
-              <span className="time">{new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-              <div className="row-main">
-                <span className="t">{event.text}</span>
-                <span className="s">{event.detail}</span>
-              </div>
-              <span className="meta">{event.actor_name}</span>
-              {event.ref || event.request_id ? (
-                <Button link onClick={() => nav(event.ref ?? REQ(event.request_id!))}>
-                  Open →
-                </Button>
-              ) : (
-                <span style={{ width: 62 }} />
-              )}
-            </div>
-          ))}
-        </div>
+        {events.length === 0 ? (
+          <EmptyState icon="trace" title={emptyCopy} />
+        ) : (
+          <div className="hermes-ui table-host">
+            <FilterTable
+              rows={tableRows}
+              labels={{ columns: { task: 'Activity', date: 'When', status: 'State', owner: 'Who' } }}
+              onOpenRow={(row) => {
+                const found = events.find((event) => event.text === row.task);
+                if (!found) return;
+                if (found.ref) nav(found.ref);
+                else if (found.request_id) nav(REQ(found.request_id));
+              }}
+            />
+          </div>
+        )}
+        {events.length > 200 && <p className="meta">Showing the most recent 200 of {events.length}.</p>}
       </div>
     </div>
   );
 }
+
+/**
+ * Members, with `RecordsTable` over the rows (plan 10b).
+ *
+ * The table's columns are the library's and the values in them are this
+ * workspace's: the strength column ("Evidence coverage") reads the membership
+ * status, the links column reads the address WorkOS holds, and the optional
+ * calculation column — which a person adds by hand and which the library fills
+ * from `reviewGap` when no model is wired — is given each member's recorded
+ * reviewer roles. Nothing on this screen is generated; there is no
+ * `onCalculate`, because there is no route that would answer one, and a column
+ * that invented an answer would be worse than a column that has none.
+ *
+ * Opening a row opens the same Manage dialog the old list opened.
+ */
+const memberStrength = (member: MemberEntity): 'strong' | 'weak' | 'veryweak' | 'none' =>
+  member.status === 'active' ? 'strong' : member.status === 'invited' ? 'weak' : member.status === 'expired' ? 'veryweak' : 'none';
 
 export function Members() {
   const state = useAppState();
@@ -90,6 +145,20 @@ export function Members() {
   const list = tab === 'all' ? all : all.filter((member) => member.status !== 'active');
   const person = manage ? all.find((member) => member.id === manage) ?? null : null;
   const isYou = person?.user_id === state.user.id;
+
+  const records = useMemo(
+    () =>
+      list.map((member) => ({
+        id: member.id,
+        name: member.user_id === state.user.id ? `${member.name} · You` : member.name,
+        tags: [member.role === 'admin' ? 'Admin' : 'Member', member.status],
+        last: member.joined_at ? new Date(member.joined_at).toLocaleDateString() : 'No contact',
+        strength: memberStrength(member),
+        website: member.email,
+        reviewGap: member.reviewer_roles.length ? `${member.reviewer_roles.join(', ')} reviewer` : 'No reviewer role',
+      })),
+    [list, state.user.id],
+  );
 
   return (
     <div className="scroll">
@@ -111,30 +180,17 @@ export function Members() {
           onChange={setTab}
           label="Member views"
         />
-        <div className="col" role="list">
-          {list.length === 0 && <EmptyState icon="people" title={tab === 'all' ? 'No members yet' : EMPTY.invitations} />}
-          {list.map((member) => (
-            <div className="list-row members-row" role="listitem" key={member.id} style={{ minHeight: 84 }}>
-              <Avatar person={{ name: member.name }} size={40} />
-              <span className="t" style={{ width: 300, fontSize: 18 }}>
-                {member.name}
-                {member.user_id === state.user.id && <span className="meta"> · You</span>}
-              </span>
-              <span className="meta grow">
-                {member.role === 'admin' ? 'Admin' : 'Member'} · {member.status}
-                {member.reviewer_roles.length ? ` · ${member.reviewer_roles.join(', ')} reviewer` : ''}
-              </span>
-              {admin && (
-                <span style={{ position: 'relative' }}>
-                  <Button onClick={() => setManage(member.id)}>Manage</Button>
-                  <Ack show={ack === member.id} style={{ right: 0, top: -40 }}>
-                    Saved
-                  </Ack>
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
+        {list.length === 0 ? (
+          <EmptyState icon="people" title={tab === 'all' ? 'No members yet' : EMPTY.invitations} />
+        ) : (
+          <div className="hermes-ui table-host">
+            <RecordsTable rows={records} {...(admin ? { onOpenRow: (row: { id: string }) => setManage(row.id) } : {})} />
+          </div>
+        )}
+        {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
+        <Ack show={!!ack} style={{ right: 0, top: -12, position: 'relative' }}>
+          Saved
+        </Ack>
         <Dialog
           open={invite}
           title="Invite member"
@@ -146,7 +202,13 @@ export function Members() {
                 primary
                 disabled={!/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
                 onClick={() => {
-                  void adapter.rest.invite(state.workspace.id, { email, role: 'member' }).then((row) => adapter.ensure('invitation', row.id)).catch(() => undefined);
+                  void adapter.rest
+                    .invite(state.workspace.id, { email, role: 'member' })
+                    .then(() => {
+                      adapter.invalidateList('invitations');
+                      adapter.invalidateList('members');
+                    })
+                    .catch(() => undefined);
                   setEmail('');
                   setInvite(false);
                   setTab('invites');
@@ -177,7 +239,11 @@ export function Members() {
                 <Button
                   primary
                   onClick={() => {
-                    if (person) void adapter.rest.removeMember(state.workspace.id, person.id).catch(() => undefined);
+                    if (person)
+                      void adapter.rest
+                        .removeMember(state.workspace.id, person.id)
+                        .then(() => adapter.invalidateList('members'))
+                        .catch(() => undefined);
                     setManage(null);
                     setConfirmRemove(false);
                   }}
@@ -207,7 +273,10 @@ export function Members() {
                     sub={role === 'admin' ? 'Manages members, keys and decisions' : 'Works with agents; cannot decide'}
                     onClick={() => {
                       if (!person) return;
-                      void adapter.rest.setMemberRole(state.workspace.id, person.id, role).catch(() => undefined);
+                      void adapter.rest
+                        .setMemberRole(state.workspace.id, person.id, role)
+                        .then(() => adapter.invalidateList('members'))
+                        .catch(() => undefined);
                       setAck(person.id);
                       setTimeout(() => setAck(null), 1600);
                     }}
@@ -242,6 +311,7 @@ export function Library({ view, id }: { view: string; id: string | null }) {
         <Tabs tabs={LIBRARY_TABS} value={view} onChange={(next) => nav(LIB(next))} label="Library sections" />
         {view === 'skills' && <LibrarySkills />}
         {view === 'documents' && <LibraryDocuments />}
+        {/* The two that stay. M6 owns both, and neither has a route yet. */}
         {view === 'connections' && <EmptyState icon="context" title={EMPTY.libraryUnavailable} detail="Connections are managed outside the pilot." />}
         {view === 'intelligence' && <EmptyState icon="skill" title={EMPTY.libraryUnavailable} detail="Shared Intelligence proposals are reviewed by a human; the pilot does not publish them." />}
       </div>
@@ -328,7 +398,13 @@ function LibraryDocuments() {
               <span className="t">{doc.title}</span>
               <span className="s">
                 {doc.status}
-                {doc.pdf_status === 'preparing' ? ` · ${EMPTY.pdfPreparing}` : doc.pdf_status === 'failed' ? ` · ${EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')}` : ''}
+                {doc.pdf_status === 'preparing'
+                  ? ` · ${EMPTY.pdfPreparing}`
+                  : doc.pdf_status === 'failed'
+                    ? ` · ${EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')}`
+                    : doc.pdf_status === 'none' && doc.pdf_error
+                      ? ` · ${EMPTY.pdfUnavailable} · HTML render saved`
+                      : ''}
               </span>
             </div>
             <Button link onClick={() => nav(LIB('documents', doc.id))}>
@@ -386,10 +462,76 @@ export function Settings({ view }: { view: string }) {
   );
 }
 
+/**
+ * Organization, and the one control with no undo.
+ *
+ * Deleting a workspace is two halves that happen at two times, and the screen
+ * says which is which: access is revoked *now* — shares gone, sessions
+ * read-only, runs asked to stop, everyone evicted from their sockets — and the
+ * rows and objects go in seven days. The immediate half is immediate because
+ * one of the two reasons anybody presses this is "someone got in", and that
+ * cannot wait a week. The seven days exist so the other reason has a cancel.
+ *
+ * Admin, a typed confirmation, and step-up.
+ */
 function OrganizationTab() {
   const state = useAppState();
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
   const nav = useNav();
   const counts = memberCounts(state);
+  const [view, setView] = useState<SettingsView | null>(null);
+  const [dialog, setDialog] = useState<'delete' | 'undelete' | null>(null);
+  const [typed, setTyped] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [scheduled, setScheduled] = useState<{ at: string; copy: string } | null>(null);
+  const [reauthed, setReauthed] = useState(false);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void adapter.rest
+      .settings(state.workspace.id)
+      .then(setView)
+      .catch(() => undefined);
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind === 'workspace') {
+      setReauthed(true);
+      setDialog(intent.decision === 'decline' ? 'undelete' : 'delete');
+      adapter.clearStepUp();
+    }
+  }, [adapter]);
+
+  const pending = scheduled ?? (view?.deletion.scheduled_at ? { at: view.deletion.scheduled_at, copy: '' } : null);
+
+  const guarded = async (run: () => Promise<void>, intent: 'delete' | 'undelete'): Promise<void> => {
+    setNotice(null);
+    try {
+      await run();
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'workspace', decision: intent === 'undelete' ? 'decline' : 'approve', returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) window.location.assign(url);
+        else setNotice('This needs a recent sign-in. Sign in again to continue.');
+        return;
+      }
+      setNotice(
+        error.reason === 'already_scheduled'
+          ? 'This workspace is already scheduled for deletion.'
+          : error.reason === 'not_scheduled'
+            ? 'This workspace is not scheduled for deletion.'
+            : error.reason === 'not_admin'
+              ? EMPTY.adminOnly
+              : 'That did not go through. Try again.',
+      );
+    }
+  };
+
   return (
     <>
       {[
@@ -397,6 +539,7 @@ function OrganizationTab() {
         ['Your role', state.user.role === 'admin' ? 'Admin' : 'Member'],
         ['Signed in as', state.user.email || '—'],
         ['Jurisdiction', state.workspace.jurisdiction ?? 'default'],
+        ['Timezone', view?.timezone ?? 'UTC'],
         ['Members', `${counts.joined} joined · ${counts.invited} invited`],
       ].map(([key, value]) => (
         <div className="kv" key={key}>
@@ -409,6 +552,112 @@ function OrganizationTab() {
           )}
         </div>
       ))}
+
+      {admin && (
+        <>
+          <h2 className="section-title">Deleting this workspace</h2>
+          {pending ? (
+            <>
+              <Panel
+                icon="admission"
+                title="Scheduled for deletion"
+                subtitle={`Access was revoked when it was requested. The rows and objects go on ${new Date(pending.at).toLocaleString()}.`}
+                right={
+                  <Button
+                    onClick={() => {
+                      setDialog('undelete');
+                      setNotice(null);
+                    }}
+                  >
+                    Cancel deletion
+                  </Button>
+                }
+              />
+              {pending.copy && <p className="meta" style={{ maxWidth: 760 }}>{pending.copy}</p>}
+            </>
+          ) : (
+            <div className="row">
+              <span className="meta grow" style={{ maxWidth: 620 }}>
+                Every share is revoked, every session becomes read-only and every working run is asked to stop, immediately. The rows and the objects are destroyed seven days later, and that half can be cancelled until then.
+              </span>
+              <Button
+                quiet
+                onClick={() => {
+                  setDialog('delete');
+                  setTyped('');
+                  setNotice(null);
+                }}
+              >
+                Delete workspace…
+              </Button>
+            </div>
+          )}
+          {notice && <p className="meta" role="alert">{notice}</p>}
+        </>
+      )}
+
+      <Dialog
+        open={dialog === 'delete'}
+        title={`Delete ${state.workspace.name}?`}
+        onClose={() => setDialog(null)}
+        actions={
+          <>
+            <Button onClick={() => setDialog(null)}>Keep it</Button>
+            <Button
+              primary
+              disabled={typed.trim() !== state.workspace.name}
+              onClick={() =>
+                void guarded(async () => {
+                  const result = await adapter.rest.deleteWorkspace(state.workspace.id);
+                  setScheduled({ at: result.scheduled_at, copy: result.copy });
+                  setDialog(null);
+                  setReauthed(false);
+                  load();
+                }, 'delete')
+              }
+            >
+              {reauthed ? 'Confirm deletion' : 'Delete'}
+            </Button>
+          </>
+        }
+      >
+        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
+        <p>
+          Everyone loses access now. Nothing is destroyed for seven days, and a cancel is on this screen until then. Type the workspace name to confirm.
+        </p>
+        <label className="field">
+          <span className="sr-only">Workspace name</span>
+          <input placeholder={state.workspace.name} value={typed} onChange={(event) => setTyped(event.target.value)} />
+        </label>
+      </Dialog>
+
+      <Dialog
+        open={dialog === 'undelete'}
+        title="Cancel the deletion?"
+        onClose={() => setDialog(null)}
+        actions={
+          <>
+            <Button onClick={() => setDialog(null)}>Leave it scheduled</Button>
+            <Button
+              primary
+              onClick={() =>
+                void guarded(async () => {
+                  await adapter.rest.undeleteWorkspace(state.workspace.id);
+                  setScheduled(null);
+                  setDialog(null);
+                  setReauthed(false);
+                  load();
+                }, 'undelete')
+              }
+            >
+              {reauthed ? 'Confirm cancel' : 'Cancel deletion'}
+            </Button>
+          </>
+        }
+      >
+        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
+        <p>The workspace stops being scheduled for destruction. Sessions stay read-only until somebody puts them back deliberately: a cancel that silently resumed every run would resume runs that have been stopped for days against a world that moved on.</p>
+      </Dialog>
     </>
   );
 }
@@ -434,9 +683,17 @@ function InboxRulesTab() {
 }
 
 /**
- * Agents: the durable defaults. A catalog row is enabled only when a verified
- * key exists for its provider, so this screen and the composer agree by
- * construction.
+ * Agents: the durable defaults and the two caps.
+ *
+ * A catalog row is enabled only when a verified key exists for its provider, so
+ * this screen and the composer agree by construction.
+ *
+ * The caps are a `FineTuneCard` (plan 10b). It scrubs integers, which is what
+ * `daily_token_cap` and `max_concurrent_runs` are, and its `onChange` fires on
+ * every scrub — so the write is debounced and the *answer* is what the screen
+ * re-renders from. A cap the server rejected must not sit on screen looking
+ * saved. Zero tokens is a deliberate stop and the card can express it; the
+ * server reads zero the same way.
  */
 function AgentsTab() {
   const state = useAppState();
@@ -445,13 +702,48 @@ function AgentsTab() {
   const nav = useNav();
   const catalog = catalogRows(state);
   const [ack, setAck] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<SettingsView | null>(null);
   const settings = state.settings as { default_model_id?: string; default_effort?: string | null; default_runtime?: string; daily_token_cap?: number | null; max_concurrent_runs?: number };
   const current = catalog.find((row) => row.model_id === settings.default_model_id);
 
+  // The caps as the server holds them, not as bootstrap left them: bootstrap is
+  // a snapshot from page load and this screen is where they change.
+  useEffect(() => {
+    if (!state.workspace.id) return;
+    let live = true;
+    void adapter.rest
+      .settings(state.workspace.id)
+      .then((next) => {
+        if (live) setView(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [adapter, state.workspace.id]);
+
   const save = (patch: Record<string, unknown>): void => {
-    void adapter.rest.patchSettings(state.workspace.id, patch).catch(() => undefined);
-    setAck(true);
-    setTimeout(() => setAck(false), 1600);
+    setError(null);
+    void adapter.rest
+      .patchSettings(state.workspace.id, patch)
+      .then((next) => {
+        setView(next);
+        setAck(true);
+        setTimeout(() => setAck(false), 1600);
+      })
+      .catch((caught: unknown) => {
+        const reason = (caught as { reason?: string }).reason;
+        setError(reason === 'not_admin' ? EMPTY.adminOnly : reason === 'bad_cap' ? 'A cap is a whole number of tokens, or none.' : 'Could not save that. Try again.');
+      });
+  };
+
+  const caps = view?.caps ?? {
+    daily_token_cap: settings.daily_token_cap ?? null,
+    max_concurrent_runs: settings.max_concurrent_runs ?? 1,
+    tokens_today: 0,
+    active_runs: 0,
+    warn: false,
   };
 
   return (
@@ -481,7 +773,7 @@ function AgentsTab() {
           {catalog.map((row) => (
             <MenuItem
               key={row.model_id}
-              checked={settings.default_model_id === row.model_id}
+              checked={(view?.defaults.model_id ?? settings.default_model_id) === row.model_id}
               disabled={!row.enabled || !admin}
               sub={row.enabled ? `via ${row.provider}` : row.disabled_reason ?? `No verified ${row.provider} key`}
               onClick={() => save({ default_model_id: row.model_id })}
@@ -496,7 +788,7 @@ function AgentsTab() {
         {current?.effort ? (
           <div className="effort-row" role="radiogroup" aria-label="Default effort">
             {current.effort.map((value) => (
-              <button key={value} type="button" role="radio" aria-checked={settings.default_effort === value} disabled={!admin} onClick={() => save({ default_effort: value })}>
+              <button key={value} type="button" role="radio" aria-checked={(view?.defaults.effort ?? settings.default_effort) === value} disabled={!admin} onClick={() => save({ default_effort: value })}>
                 {value}
               </button>
             ))}
@@ -505,18 +797,64 @@ function AgentsTab() {
           <span className="meta">Not available for this model</span>
         )}
       </div>
+
+      <h2 className="section-title">Caps</h2>
+      {admin ? (
+        <div className="hermes-ui">
+          <FineTuneCard
+            labels={{ title: 'Run caps', layout: 'Limits', type: 'Default effort', adjust: 'Drag to change', edited: 'Unsaved' }}
+            options={(current?.effort ?? ['low', 'medium', 'high', 'max']).slice()}
+            fields={[
+              { key: 'daily_token_cap', label: 'Daily tokens', value: caps.daily_token_cap ?? 0, min: 0, max: 5_000_000, step: 10_000 },
+              { key: 'max_concurrent_runs', label: 'Concurrent runs', value: caps.max_concurrent_runs, min: 1, max: 20, step: 1 },
+            ]}
+            onChange={(next) => {
+              const cap = Math.round(next.values.daily_token_cap ?? 0);
+              const runs = Math.round(next.values.max_concurrent_runs ?? caps.max_concurrent_runs);
+              // Zero means "stop", not "unset": the server reads it that way
+              // too, and a cap of none is chosen with the button below.
+              scheduleCapWrite(() => save({ daily_token_cap: cap, max_concurrent_runs: runs }));
+            }}
+          />
+        </div>
+      ) : (
+        <p className="meta">{EMPTY.adminOnly}</p>
+      )}
       <div className="kv">
         <span className="grow">Daily token cap</span>
-        <span className="meta">{settings.daily_token_cap?.toLocaleString() ?? 'None'}</span>
+        <span className="meta">
+          {caps.daily_token_cap === null ? 'None' : `${caps.tokens_today.toLocaleString()} of ${caps.daily_token_cap.toLocaleString()} today`}
+        </span>
+        {admin && caps.daily_token_cap !== null && (
+          <Button link onClick={() => save({ daily_token_cap: null })}>
+            Remove cap
+          </Button>
+        )}
       </div>
       <div className="kv">
         <span className="grow">Concurrent runs</span>
-        <span className="meta">{settings.max_concurrent_runs ?? 1}</span>
+        <span className="meta">
+          {caps.active_runs} of {caps.max_concurrent_runs} active
+        </span>
       </div>
-      <p className="meta">Durable defaults live here and are recorded in History. A per-session choice applies only to that session's next turn. Caps are enforced server-side.</p>
-      {/* TODO(plan §10b, M5a): `FineTuneCard` replaces these rows once the sliders map to the integer columns. */}
+      {error && <p className="meta" role="alert">{error}</p>}
+      <p className="meta">Durable defaults live here and are recorded in History. A per-session choice applies only to that session&apos;s next turn. Caps are enforced server-side: this screen re-renders from the server&apos;s answer, never from what it hoped it sent.</p>
     </>
   );
+}
+
+/**
+ * One timer for the cap sliders.
+ *
+ * `FineTuneCard` fires `onChange` on every pointer move, and a PATCH per pixel
+ * is a PATCH per pixel. 600 ms after the last move is one write per gesture,
+ * which is also one audit row per gesture — `settings.changed` is an event
+ * somebody reads.
+ */
+let capWriteHandle: ReturnType<typeof setTimeout> | null = null;
+function scheduleCapWrite(write: () => void): void {
+  if (capWriteHandle) clearTimeout(capWriteHandle);
+  capWriteHandle = setTimeout(write, 600);
 }
 
 const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verified: 'Verified', verified_scoped: 'Verified (scoped)', invalid: 'Invalid', revoked: 'Revoked' };
@@ -704,73 +1042,272 @@ function ProviderKeysTab() {
   );
 }
 
+/**
+ * Usage.
+ *
+ * Three things, in this order: the sentence the server wrote, the numbers, and
+ * the caps. `disclaimer` is rendered beside the total rather than in a
+ * footnote, which is what `src/usage/aggregate.ts` asks for and why the string
+ * is the server's rather than ours — a client that forgot it would be a client
+ * quietly making a claim we cannot stand behind.
+ *
+ * The charts are `InsightCards`, driven by `by_day`: a cost-and-token compare
+ * card, an anomaly card over the same series, and an allocation card over
+ * `by_key`. When a range has one day in it there is no shape to draw, so the
+ * carousel is not rendered at all rather than drawn as a flat line.
+ */
 function UsageTab() {
   const state = useAppState();
   const adapter = useAdapter();
+  const [range, setRange] = useState<UsageRange>('7d');
   const [group, setGroup] = useState<'day' | 'session' | 'key'>('day');
-  const [usage, setUsage] = useState<UsageResponse | null>(null);
-  const [error, setError] = useState(false);
+  const [usage, setUsage] = useState<UsageReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!state.workspace.id) return;
-    const to = new Date().toISOString().slice(0, 10);
-    const from = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
+    let live = true;
     setUsage(null);
-    setError(false);
+    setError(null);
     void adapter.rest
-      .usage(state.workspace.id, from, to, group)
-      .then(setUsage)
-      .catch(() => setError(true));
-  }, [adapter, state.workspace.id, group]);
+      .usage(state.workspace.id, range)
+      .then((report) => {
+        if (live) setUsage(report);
+      })
+      .catch((caught: unknown) => {
+        if (live) setError((caught as { reason?: string }).reason ?? 'http_error');
+      });
+    return () => {
+      live = false;
+    };
+  }, [adapter, state.workspace.id, range]);
 
-  const capWarning = usage?.daily_token_cap ? usage.tokens_today / usage.daily_token_cap >= 0.8 : false;
+  const rows = useMemo(() => {
+    if (!usage) return [] as { key: string; label: string; sub: string; cost: number }[];
+    if (group === 'day')
+      return usage.by_day.map((day) => ({
+        key: day.day,
+        label: day.day,
+        sub: `${day.input_tokens.toLocaleString()} in · ${day.output_tokens.toLocaleString()} out · ${day.calls} call${day.calls === 1 ? '' : 's'}${day.errors ? ` · ${day.errors} error${day.errors === 1 ? '' : 's'}` : ''}`,
+        cost: day.cost_usd_estimate,
+      }));
+    if (group === 'session')
+      return usage.by_session.map((row) => ({
+        key: row.session_id ?? 'no-session',
+        label: row.title ?? 'Untitled session',
+        sub: `${row.total_tokens.toLocaleString()} tokens · ${row.runs} run${row.runs === 1 ? '' : 's'}${row.last_call_at ? ` · ${new Date(row.last_call_at).toLocaleString()}` : ''}`,
+        cost: row.cost_usd_estimate,
+      }));
+    return usage.by_key.map((row) => ({
+      key: row.key_id ?? `${row.provider}-deleted`,
+      label: row.label ?? `${row.provider ?? 'unknown'} · removed key`,
+      sub: `${row.total_tokens.toLocaleString()} tokens · ${row.calls} call${row.calls === 1 ? '' : 's'}${row.last4 ? ` · ····${row.last4}` : ''}${row.status ? ` · ${row.status}` : ''}`,
+      cost: row.cost_usd_estimate,
+    }));
+  }, [usage, group]);
+
+  const pages = useMemo(() => (usage ? insightPages(usage) : []), [usage]);
 
   return (
     <>
-      <Tabs
-        tabs={[
-          { id: 'day', label: 'By day' },
-          { id: 'session', label: 'By session' },
-          { id: 'key', label: 'By key' },
-        ]}
-        value={group}
-        onChange={(value) => setGroup(value as 'day' | 'session' | 'key')}
-        label="Usage grouping"
-      />
-      {error && <EmptyState icon="trace" title="Usage is unavailable" detail="The usage route did not answer. Try again shortly." />}
+      <div className="row" style={{ gap: 16 }}>
+        <Tabs
+          tabs={[
+            { id: 'today', label: 'Today' },
+            { id: '7d', label: '7 days' },
+            { id: '30d', label: '30 days' },
+            { id: '90d', label: '90 days' },
+          ]}
+          value={range}
+          onChange={(value) => setRange(value as UsageRange)}
+          label="Usage range"
+        />
+      </div>
+      {error && (
+        <EmptyState
+          icon="trace"
+          title="Usage is unavailable"
+          detail={error === 'contract_violation' ? 'The usage route answered a shape this client does not understand. That is a bug, not an outage.' : 'The usage route did not answer. Try again shortly.'}
+        />
+      )}
       {!usage && !error && <Skeleton rows={3} label="Loading usage" />}
-      {usage && usage.rows.length === 0 && <EmptyState icon="trace" title="No usage yet" detail="Usage appears after the first run." />}
-      {usage && usage.rows.length > 0 && (
+      {usage && (
         <>
-          {capWarning && (
+          <div className="stat-grid">
+            <div className="stat">
+              <span className="k">Tokens</span>
+              <span className="v">{usage.totals.total_tokens.toLocaleString()}</span>
+            </div>
+            <div className="stat">
+              <span className="k">Estimated cost</span>
+              <span className="v">${usage.totals.cost_usd_estimate.toFixed(3)}</span>
+            </div>
+            <div className="stat">
+              <span className="k">Calls</span>
+              <span className="v">
+                {usage.totals.calls.toLocaleString()}
+                {usage.totals.errors ? ` · ${usage.totals.errors} failed` : ''}
+              </span>
+            </div>
+          </div>
+          <p className="meta">{usage.disclaimer}</p>
+          {usage.caps.warn && (
             <Panel
               icon="admission"
               title="Approaching the daily token cap"
-              subtitle={`${usage.tokens_today.toLocaleString()} of ${usage.daily_token_cap?.toLocaleString()} tokens today`}
+              subtitle={`${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap?.toLocaleString() ?? 'no'} tokens today · ${usage.caps.active_runs} of ${usage.caps.max_concurrent_runs} runs active`}
             />
           )}
-          <div className="hermes-ui">
-            <InsightCards />
-          </div>
-          <div className="col">
-            {usage.rows.map((row) => (
-              <div className="list-row compact" key={row.key}>
-                <Glass name="trace" size={22} className="row-icon" />
-                <div className="row-main">
-                  <span className="t">{row.label}</span>
-                  <span className="s">
-                    {row.input_tokens.toLocaleString()} in · {row.output_tokens.toLocaleString()} out{row.model_id ? ` · ${row.model_id}` : ''}
-                  </span>
+          {pages.length > 0 && (
+            <div className="hermes-ui">
+              <InsightCards pages={pages} labels={{ title: `Usage · ${usage.range} · ${usage.timezone}` }} />
+            </div>
+          )}
+          <Tabs
+            tabs={[
+              { id: 'day', label: 'By day' },
+              { id: 'session', label: 'By session' },
+              { id: 'key', label: 'By key' },
+            ]}
+            value={group}
+            onChange={(value) => setGroup(value as 'day' | 'session' | 'key')}
+            label="Usage grouping"
+          />
+          {rows.length === 0 ? (
+            <EmptyState icon="trace" title="No usage yet" detail="Usage appears after the first run." />
+          ) : (
+            <div className="col">
+              {rows.map((row) => (
+                <div className="list-row compact" key={row.key}>
+                  <Glass name="trace" size={22} className="row-icon" />
+                  <div className="row-main">
+                    <span className="t">{row.label}</span>
+                    <span className="s">{row.sub}</span>
+                  </div>
+                  <span className="meta">${row.cost.toFixed(3)}</span>
                 </div>
-                <span className="meta">${row.estimated_cost_usd.toFixed(3)}</span>
-              </div>
-            ))}
+              ))}
+            </div>
+          )}
+          <div className="kv">
+            <span className="grow">Daily token cap</span>
+            <span className="meta">
+              {usage.caps.daily_token_cap === null ? 'None' : `${usage.caps.tokens_today.toLocaleString()} of ${usage.caps.daily_token_cap.toLocaleString()} today`}
+            </span>
+          </div>
+          <div className="kv">
+            <span className="grow">Concurrent runs</span>
+            <span className="meta">
+              {usage.caps.active_runs} of {usage.caps.max_concurrent_runs} active
+            </span>
           </div>
         </>
       )}
-      <p className="meta">Estimated — billed by your provider. Prices carry the date they were last verified against the vendor's own pricing page.</p>
     </>
   );
+}
+
+/**
+ * The three `InsightCards` pages, built from one report.
+ *
+ * The library's own `CompareCard`, `AnomalyCard` and `AllocationCard` are not
+ * reachable: `index.ts` exports the carousel and not the three cards it ships
+ * with, and the package publishes no subpath in its `exports` map, so there is
+ * nothing to import them from. What is adopted is therefore the carousel — the
+ * pager, the prose and the pill — with three small charts of our own drawn
+ * from `by_day` and `by_key`. Every number on them is a number the server sent;
+ * nothing is smoothed, padded or invented, and a range with fewer than two days
+ * has no series to draw, so the caller renders no carousel rather than a
+ * straight line pretending to be a trend.
+ */
+function Sparkline({ values, stroke, label }: { values: number[]; stroke: string; label: string }) {
+  const max = Math.max(...values, 1);
+  const width = 300;
+  const height = 96;
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+  const points = values.map((value, index) => `${(index * step).toFixed(1)},${(height - (value / max) * (height - 8) - 4).toFixed(1)}`);
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={label} style={{ display: 'block' }}>
+      <polyline points={points.join(' ')} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((point, index) => {
+        const [x, y] = point.split(',');
+        return <circle key={index} cx={x} cy={y} r="2.5" fill={stroke} />;
+      })}
+    </svg>
+  );
+}
+
+function Bars({ values, fill, label }: { values: number[]; fill: string; label: string }) {
+  const max = Math.max(...values, 1);
+  const width = 300;
+  const height = 96;
+  const slot = width / values.length;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={label} style={{ display: 'block' }}>
+      {values.map((value, index) => {
+        const barHeight = Math.max(2, (value / max) * (height - 6));
+        return <rect key={index} x={index * slot + slot * 0.2} y={height - barHeight} width={slot * 0.6} height={barHeight} rx="2" fill={fill} />;
+      })}
+    </svg>
+  );
+}
+
+function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card: () => JSX.Element; pill: string }[] {
+  const days = usage.by_day;
+  if (days.length < 2) return [];
+  const tokens = days.map((day) => day.total_tokens);
+  const spend = days.map((day) => day.cost_usd_estimate);
+  const keys = usage.by_key.filter((row) => row.total_tokens > 0);
+  const keyTotal = keys.reduce((sum, row) => sum + row.total_tokens, 0) || 1;
+
+  return [
+    {
+      key: 'tokens',
+      pill: `${days.length} days · ${usage.timezone}`,
+      prose: `${usage.totals.total_tokens.toLocaleString()} tokens over ${days.length} days, an estimated $${usage.totals.cost_usd_estimate.toFixed(3)}.`,
+      Card: () => (
+        <div className="usage-card">
+          <span className="meta">Tokens per day</span>
+          <Sparkline values={tokens} stroke="var(--accent, #4a86ff)" label={`Tokens per day over ${days.length} days`} />
+        </div>
+      ),
+    },
+    {
+      key: 'spend',
+      pill: `${usage.totals.calls.toLocaleString()} calls`,
+      prose: `${usage.totals.calls.toLocaleString()} model calls, ${usage.totals.errors} of them failed. Spend follows usage unless a model changed.`,
+      Card: () => (
+        <div className="usage-card">
+          <span className="meta">Estimated cost per day, USD</span>
+          <Bars values={spend} fill="var(--green, #2c8a5a)" label={`Estimated cost per day over ${days.length} days`} />
+        </div>
+      ),
+    },
+    {
+      key: 'keys',
+      pill: keys.length ? `${keys.length} key${keys.length === 1 ? '' : 's'}` : 'No key recorded',
+      prose: keys.length ? 'Which key paid for what. A removed key keeps its spend rather than vanishing from the total.' : 'No provider key is recorded against these calls.',
+      Card: () => (
+        <div className="usage-card">
+          {keys.length === 0 && <span className="meta">Nothing to allocate.</span>}
+          {keys.slice(0, 6).map((row) => {
+            const pct = Math.round((row.total_tokens / keyTotal) * 100);
+            return (
+              <div className="usage-alloc" key={row.key_id ?? `${row.provider}-removed`}>
+                <span className="t">{row.label ?? `${row.provider ?? 'unknown'} · removed key`}</span>
+                <span className="bar" aria-hidden>
+                  <span style={{ width: `${pct}%` }} />
+                </span>
+                <span className="meta">
+                  {pct}% · ${row.cost_usd_estimate.toFixed(3)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ),
+    },
+  ];
 }
 
 function NotificationsTab() {
@@ -807,10 +1344,75 @@ function NotificationsTab() {
   );
 }
 
+/**
+ * Data and privacy.
+ *
+ * Every fact on this screen is the server's. The retention table, the erasure
+ * timing, the residency lines and the per-provider warnings all come from
+ * `GET /w/:ws/settings/data-privacy`, because a client that paraphrased them
+ * would be a client making a data-protection claim nobody reviewed. The one
+ * control is the attestation, and it is Admin plus step-up: whoever writes it
+ * is asserting to a future auditor that a zero-retention arrangement or a DPA
+ * exists.
+ */
 function PrivacyTab() {
   const state = useAppState();
-  const keys = useWorkspaceLists().providerKeys;
-  const providers = [...new Set(keys.map((key) => key.provider))];
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
+  const [privacy, setPrivacy] = useState<DataPrivacy | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [target, setTarget] = useState<DataPrivacy['keys'][number] | null>(null);
+  const [kind, setKind] = useState('zdr');
+  const [reference, setReference] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reauthed, setReauthed] = useState(false);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void adapter.rest
+      .dataPrivacy(state.workspace.id)
+      .then((next) => {
+        setPrivacy(next);
+        setFailed(false);
+      })
+      .catch(() => setFailed(true));
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  // On the way back from a step-up the pane says so and waits for a second,
+  // deliberate click. The intent is read, never replayed.
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind === 'provider_key') {
+      setReauthed(true);
+      adapter.clearStepUp();
+    }
+  }, [adapter]);
+
+  const record = (): void => {
+    if (!target) return;
+    setNotice(null);
+    void adapter.rest
+      .setAttestation(state.workspace.id, target.key_id, { kind, reference: reference.trim() })
+      .then(() => {
+        setTarget(null);
+        setReference('');
+        setReauthed(false);
+        load();
+      })
+      .catch((caught: unknown) => {
+        const error = caught as { status?: number; reason?: string };
+        if (error.status === 401 && error.reason === 'reauth_required') {
+          storeStepUp({ kind: 'provider_key', keyId: target.key_id, returnTo: window.location.href });
+          const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+          if (url) window.location.assign(url);
+          else setNotice('This needs a recent sign-in. Sign in again to continue.');
+          return;
+        }
+        setNotice(error.reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record that attestation. Try again.');
+      });
+  };
+
   return (
     <>
       {[
@@ -826,18 +1428,101 @@ function PrivacyTab() {
           </span>
         </div>
       ))}
-      <h2 className="section-title">Processors</h2>
-      {providers.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
-      {providers.map((provider) => (
-        <div className="kv" key={provider}>
-          <span className="grow">{provider}</span>
-          <span className="meta" style={{ textAlign: 'right', maxWidth: 420 }}>
-            {provider === 'deepseek'
-              ? 'Prompts and completions are processed and may be stored in the PRC. Do not send personal data you cannot send there.'
-              : 'Zero-retention attestation recorded for API traffic; retention facts are per key and re-checked weekly.'}
-          </span>
-        </div>
-      ))}
+
+      {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
+      {!privacy && !failed && <Skeleton rows={4} label="Loading retention facts" />}
+
+      {privacy && (
+        <>
+          <h2 className="section-title">Processors</h2>
+          {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
+          {privacy.keys.map((key) => (
+            <div className="col" key={key.key_id} style={{ gap: 8, padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+              <div className="row">
+                <div className="row-main">
+                  <span className="t">
+                    {key.label} · {key.provider}
+                  </span>
+                  <span className="s">
+                    ····{key.last4} · {key.status}
+                    {key.verified_at ? ` · verified ${new Date(key.verified_at).toLocaleDateString()}` : ' · never verified'}
+                  </span>
+                </div>
+                <span className="meta">{key.attested ? `Attested · ${String(key.attestation?.kind ?? '')}` : 'No attestation'}</span>
+                {admin && (
+                  <Button
+                    onClick={() => {
+                      setTarget(key);
+                      setKind(String(key.attestation?.kind ?? 'zdr'));
+                      setReference(String(key.attestation?.reference ?? ''));
+                      setNotice(null);
+                    }}
+                  >
+                    {key.attested ? 'Update attestation' : 'Record attestation'}
+                  </Button>
+                )}
+              </div>
+              <span className="meta">{key.real_data_allowed ? 'Real applicant data is allowed on this key: an Admin has recorded an attestation and the provider carries no jurisdiction warning.' : 'Real applicant data is not allowed on this key. Use synthetic or consented data.'}</span>
+              {key.warnings.map((warning) => (
+                <p className="meta" key={warning} style={{ maxWidth: 720 }}>
+                  {warning}
+                </p>
+              ))}
+            </div>
+          ))}
+
+          <h2 className="section-title">What is kept, and for how long</h2>
+          <div className="col">
+            {privacy.retention.map((fact) => (
+              <div className="kv" key={fact.store}>
+                <span className="grow">{fact.store}</span>
+                <span className="meta" style={{ textAlign: 'right', maxWidth: 420 }}>
+                  {fact.retention} · {fact.erasure}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <h2 className="section-title">Erasure</h2>
+          <p style={{ maxWidth: 760 }}>{privacy.erasure.copy}</p>
+          <div className="stat-grid">
+            <div className="stat">
+              <span className="k">Tombstone</span>
+              <span className="v">{privacy.erasure.tombstone}</span>
+            </div>
+            <div className="stat">
+              <span className="k">Point-in-time history</span>
+              <span className="v">{privacy.erasure.point_in_time_history_days} days</span>
+            </div>
+            <div className="stat">
+              <span className="k">Backup copy</span>
+              <span className="v">{privacy.erasure.backup_retention_days} days</span>
+            </div>
+            <div className="stat">
+              <span className="k">Complete after</span>
+              <span className="v">{privacy.erasure.complete_after_days} days</span>
+            </div>
+          </div>
+
+          <h2 className="section-title">Where the data sits</h2>
+          {(
+            [
+              ['Identity provider', privacy.residency.identity_provider],
+              ['Database', privacy.residency.database],
+              ['Objects', privacy.residency.objects],
+              ['Processing', privacy.residency.processing],
+            ] as const
+          ).map(([label, value]) => (
+            <div className="kv" key={label}>
+              <span className="grow">{label}</span>
+              <span className="meta" style={{ textAlign: 'right', maxWidth: 480 }}>
+                {value}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
+
       <h2 className="section-title">Attribution</h2>
       <div className="kv">
         <span className="grow">Interface components</span>
@@ -845,6 +1530,42 @@ function PrivacyTab() {
           <a href="/LICENSE.beautiful-ui">Beautiful UI · MIT</a>
         </span>
       </div>
+
+      <Dialog
+        open={!!target}
+        title={`Attestation for ${target?.label ?? ''}`}
+        onClose={() => setTarget(null)}
+        actions={
+          <>
+            <Button onClick={() => setTarget(null)}>Cancel</Button>
+            <Button primary onClick={record}>
+              {reauthed ? 'Confirm and record' : 'Record'}
+            </Button>
+          </>
+        }
+      >
+        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
+        <div className="col" role="radiogroup" aria-label="Attestation kind" style={{ gap: 4 }}>
+          {(
+            [
+              ['zdr', 'Zero data retention agreed with this provider'],
+              ['dpa', 'A data-processing agreement is signed'],
+              ['synthetic_only', 'This key is for synthetic data only'],
+              ['none', 'Nothing is claimed'],
+            ] as const
+          ).map(([value, sub]) => (
+            <MenuItem key={value} checked={kind === value} sub={sub} onClick={() => setKind(value)}>
+              {value}
+            </MenuItem>
+          ))}
+        </div>
+        <label className="field">
+          <span className="sr-only">Reference</span>
+          <input placeholder="Contract or ticket reference" value={reference} onChange={(event) => setReference(event.target.value)} />
+        </label>
+        <p className="meta">Recorded against your name and the time. It is a statement about retention, not about jurisdiction: a provider&apos;s storage warning is not answered by it.</p>
+        {notice && <p className="meta" role="alert">{notice}</p>}
+      </Dialog>
     </>
   );
 }

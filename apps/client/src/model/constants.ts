@@ -52,6 +52,13 @@ export const EMPTY = {
   evicted: 'Your access to this workspace changed',
   pdfPreparing: 'PDF is being prepared',
   pdfFailed: (reason: string) => `Rendering failed: ${reason}`,
+  /**
+   * `pdf_status: 'none'` with a `pdf_error` is not "being prepared": it is the
+   * server saying there will never be one in this build, because the PDF
+   * renderer needs runtime WebAssembly and Workers refuse it (decision D7).
+   * Saying "being prepared" would be a spinner for something nobody is doing.
+   */
+  pdfUnavailable: 'PDF unavailable',
   incomplete: 'Response may be incomplete. Retry',
 } as const;
 

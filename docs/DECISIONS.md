@@ -2517,3 +2517,253 @@ The shapes are `packages/shared`'s, extended additively:
 `traceEntitySchema` gained `mode`, `model_id`, `active_ms`, `step_count`,
 `tool_calls`, `fetched_urls` and `focus`, all optional, so a client that ignores
 them still parses and a client that wants them does not need a second schema.
+
+---
+
+## C25. The usage screen was parsing a shape nobody served
+
+**Decided.** `packages/shared/src/api-m5.ts` is new and carries
+`usageReportSchema`, `settingsViewSchema`, `dataPrivacySchema`,
+`attestationResultSchema`, `workspaceDeletionSchema` and `undeleteResultSchema`
+— each written from the Worker's handler rather than from the client-port
+spec's sketch. `rest.usage` now calls `GET /w/:ws/usage?range=` and parses
+`usageReportSchema`.
+
+**Why.** `entities.ts` has carried a `usageResponseSchema` since M2:
+`{ group, from, to, rows, daily_token_cap, tokens_today }`. The route answers
+`{ range, timezone, from, to, disclaimer, totals, by_day, by_session, by_key,
+caps }`, and takes `?range=`, not `?from=&to=&group=`. Nothing had ever put the
+two together, because the only producer of the old shape was `mock.ts` and the
+only consumer was a screen that had never been opened against a live Worker. The
+client's own rule — nothing unvalidated reaches the reducer — did its job and
+turned every call into `contract_violation`, which the Usage tab rendered as its
+error state. So the screen was not broken subtly; it was broken completely, and
+quietly, on a path no test walked.
+
+Three consequences, in order of how much they matter:
+
+* the mock's fixture is now the live shape too, so the two cannot drift again
+  without the mock suite failing;
+* `usageResponseSchema` is left exported and untouched. It is additive-only
+  policy: something outside this repository may be reading it, and deleting a
+  published schema to fix a client is a second breakage;
+* `disclaimer` is rendered beside the total, not in a footnote, because
+  `src/usage/aggregate.ts` says so and because the sentence is a claim about
+  whose arithmetic the number is. A client that wrote its own version of it
+  would be a client making that claim on its own authority.
+
+**Would change it if.** The two shapes are reconciled upstream. The honest fix
+is one schema in `packages/shared` that both sides import, which is what
+`api-m5.ts` is for the four routes it covers.
+
+---
+
+## C26. There is no "propose an instruction" button, because there is no route
+
+**Decided.** `rest.proposeInstruction` is gone, and so is the composer for it on
+the Skills tab. What is left is review: a proposal a run wrote, its provenance,
+Accept and Discard — both Admin-only — and an empty state that says where a
+proposal comes from.
+
+**Why.** The client used to `POST /w/:ws/instructions`. The Worker's routing
+table has `/instructions` (GET), `/instructions/:id/accept`, `/save`,
+`/discard` and the DELETE, and nothing that creates a version; the catch-all
+answered `unknown_route`, so the button could only ever have 404ed. It had
+never been pressed against a live Worker.
+
+Restoring it would mean asking for a route, and the route is the wrong thing to
+ask for: an instruction version is written by the engine, with a `run_id` and a
+`tool_call_id` that say which run proposed it and why, and `instruction_versions`
+is shaped around that. A human-authored version with both columns null is a row
+that can never be traced back to anything. The reviewable artefact is the
+proposal; the thing a person does to it is decide.
+
+**Would change it if.** A written-by-a-person instruction is wanted as a
+first-class thing, in which case it needs its own provenance (`written by`,
+not `proposed by a run`) and the list has to distinguish them. The schema
+already has `provenance` for exactly that.
+
+---
+
+## C27. `AgentScreen` is not adopted, for the same reason as `PromptBar`
+
+**Decided.** Six more library components are adopted in M5a — `DiffTable` over
+an instruction proposal, `Flowchart` and `CodeBlock` on the trace detail,
+`ContextCards` over the URLs a run fetched, `RecommendationCard` over what needs
+a reviewer next, `FilterTable` over History, `RecordsTable` over Members,
+`FineTuneCard` over the two integer caps and `SelectionActions` over a selected
+invoice line. `AgentScreen` is not, and `PromptBar` still is not (C23, which is
+unchanged: it owns its draft in its own `useState` and exposes no controlled
+`value`).
+
+**Why.** `AgentScreen` ships a "Teach a loop" control whose own copy says
+"Capture is simulated in this showcase". In a gallery that is honest. In a
+product it is a button that claims to record a demonstration and records
+nothing, on the one screen whose entire purpose is that what it shows happened.
+There is no prop that removes it. Adopting it would mean putting a stub with a
+green tick next to a trace, which is the thing this codebase refuses everywhere
+else (CONVENTIONS, invariant 5).
+
+Three of the adoptions needed the same care, and got it rather than being
+skipped:
+
+* **`SelectionActions`** streams its own demo rewrite when `onRequestEdit` is
+  absent. It is supplied, and it never reaches a model: both actions compose
+  their text locally from the line the person clicked. Keeping the draft puts it
+  in the composer, where a person still presses send.
+* **`RecordsTable`**'s optional calculation column fabricates
+  `row.reviewGap ?? "Not assessed"` when `onCalculate` is absent. `onCalculate`
+  is *not* supplied — there is no route that would answer one — and `reviewGap`
+  is filled with a real fact the workspace holds: the member's recorded reviewer
+  roles. With no model wired the library labels the control "Preview sample
+  results", which is true.
+* **`InsightCards`** exports the carousel and not the three cards it ships
+  with, and the package publishes no subpath, so the cards are unreachable. The
+  carousel is adopted and the three charts are drawn from `by_day` and `by_key`
+  in `Workspace.tsx`. A range with fewer than two days renders no carousel at
+  all, because a one-point line pretending to be a trend is a chart that lies.
+
+**Would change it if.** `AgentScreen` gains a way to turn the capture control
+off, or `PromptBar` gains `value`/`onChange`.
+
+---
+
+## C28. A list is invalidated by the event that changes it, not by a timer
+
+**Decided.** Three more `list/invalidate` sites: `traces` on `run.started` and
+on any `run.status` that is not `working`; `instructions` after an accept or a
+discard; `context-fields` after the destination is answered. `adapter.invalidateList(key)`
+is the seam, and `TraceDetail` additionally forces one `ensure('trace', id, true)`
+per trace opened.
+
+**Why.** `ensureList` is idempotent by design — a list that is `ready` costs
+nothing — and that is exactly wrong after a write whose consequences only the
+server knows. Accepting an instruction moves three rows at once (`proposed`
+becomes `saved`, the previous `current` becomes an older `saved`), and which
+row is now current is a query, not an inference. The same shape of bug appeared
+three times and was found only by driving the live stack:
+
+* the Traces tab said "No runs yet." while the transcript beside it streamed
+  one, because the list was fetched when the shell mounted and a fresh workspace
+  had no runs then;
+* the Agent Overview went on saying "Missing · A reply is paused" after the
+  destination had been written, because `ensure` is a no-op for an id already
+  in the cache and the cached row was the stale one;
+* opening a trace showed "This run called no tools" for a run that had called
+  one, because the list and the detail are the same entity kind and
+  `GET /w/:ws/traces` fills half of it.
+
+The last one is the general hazard worth naming: **a list route and a detail
+route that answer the same entity kind with different completeness will always
+produce this**, and a cache keyed only on id cannot tell them apart. Forcing the
+detail fetch is the narrow fix; the wide one would be a `partial` flag on the
+cached record.
+
+**Would change it if.** The entity cache learns which fields a row was filled
+from, at which point the forced refetch becomes "fetch because this row is
+partial" rather than "fetch because this screen is the detail".
+
+---
+
+## C29. Fake mode has a step-up now, so the client stopped inventing one
+
+**Decided.** `stepUpUrl` returns `/auth/login?step_up=1&return_to=…` in both
+modes; the in-place challenge C24 described is gone, and so is the null return.
+`StepUpIntent.kind` gained `workspace` (delete and undelete) and `effect`
+(executing an effect from the receipt).
+
+**Why.** C24 was a workaround for a Worker that had no step-up route in
+`AUTH_MODE=fake`: `authenticated_at` was stamped once and never moved, so every
+guarded action started failing five minutes into a dev session and there was
+nowhere to send the browser. Server decision F4 built the route. One URL in both
+modes means one code path in the callers, which matters because the rule those
+callers keep is the one thing on this screen that cannot be got wrong: **the
+intent is stored before the redirect, read on the way back, and never replayed**.
+The pane re-renders as "Re-authenticated — confirm to continue" and waits for a
+second, deliberate click. That is asserted by `adapter.test.ts` and by P4.
+
+One caveat, recorded because it will bite somebody: the fake-mode step-up needs
+the `x-dev-user` header, and a browser cannot put a header on a top-level
+navigation. Playwright can (`extraHTTPHeaders`), so the live suite exercises it;
+a human clicking through `wrangler dev` in a real browser gets a 401 and should
+use `pnpm --filter client dev:step-up` instead.
+
+**Would change it if.** Nothing in `AUTH_MODE=fake` is meant to survive contact
+with production, and this does not either — the branch is behind both
+`AUTH_MODE === 'fake'` and an `ENVIRONMENT` check on the server.
+
+---
+
+## C30. Deleting a workspace is confirmed by typing its name, and cancelled from the same screen
+
+**Decided.** Settings → Organization carries the delete for an Admin: a
+confirmation dialog that enables its button only when the workspace's own name
+is typed, step-up, and — once scheduled — a "Cancel deletion" on the same panel
+until the grace period ends. The copy about *when* erasure is actually complete
+is the server's `ERASURE_TIMING.copy`, rendered verbatim.
+
+**Why.** Two halves happen at two times and a screen that blurred them would be
+lying in one direction or the other. Access is revoked immediately — shares
+revoked, sessions read-only, runs asked to stop, every member evicted from their
+sockets — because one of the two reasons anybody presses this is "someone got
+in". Destruction is seven days away because it is the operation with no undo.
+The panel says both, in that order.
+
+The cancel is on the screen rather than in a runbook for a reason the runbook
+itself cannot fix: a seven-day sleep with no cancel is a seven-day sleep that
+gets cancelled by an engineer with production credentials, which is how a team
+learns to keep such credentials handy.
+
+The typed name is not theatre. It is the one control in the product where
+"clicked the wrong row" and "meant it" have to be distinguishable, and a second
+confirm button distinguishes nothing.
+
+**Would change it if.** A soft-delete-with-export is added, at which point the
+screen should offer the export first and the deletion second.
+
+---
+
+## C31. The receipt's Execute records an attempt and says nothing was done
+
+**Decided.** A pending effect on the receipt gets an Execute button. Pressing it
+calls `POST /w/:ws/effects/:id/execute`, which answers `unavailable`, and the row
+re-renders with the server's own `reason` string. Below the list, when any
+effect is `unavailable`: "Nothing was sent, paid, granted or signed."
+
+**Why.** This is the most important honest surface in the product and the
+temptation is to hide it. A receipt that listed "Grant workspace access ·
+pending" with no control reads as *somebody else is doing this*. Nobody is.
+There is no executor in this repository — no SMTP client, no payment provider,
+no signature provider, not behind a flag — so the truthful interaction is: you
+press it, we record that you pressed it against your name, and we tell you the
+work is still yours. The role check and the step-up are on it for the same
+reason every audit-writing action has them.
+
+The copy is the server's `reason` rather than a client string, because two
+authors for one claim is one author too many.
+
+**Would change it if.** An executor exists, in which case the button changes
+meaning entirely and this decision should be re-argued from scratch rather than
+amended.
+
+---
+
+## C32. "Not available yet" is now only Connections and Shared Intelligence
+
+**Decided.** The placeholder copy is kept in exactly two places — Library →
+Connections and Library → Shared Intelligence, both M6's — and removed
+everywhere it stood in for a route that has since landed. Where a screen still
+has to describe an older server, it says which: "This server does not serve
+traces. The client is newer than the Worker it is talking to."
+
+**Why.** `EMPTY.libraryUnavailable` was doing two jobs: "this milestone has not
+happened" and "this build of the Worker is older than this client". They call
+for different sentences, because the second one is a deployment fact a reader
+can act on and the first is a roadmap fact they cannot. `PDF unavailable` is the
+same correction on the document viewer: `pdf_status: 'none'` with a `pdf_error`
+means there will never be a PDF in this build (decision D7 — the renderer needs
+runtime WebAssembly and Workers refuse it), and rendering "PDF is being
+prepared" for it was a spinner for something nobody was doing. The viewer now
+says what is true and offers the HTML render, which exists and is served.
+
+**Would change it if.** M6 lands, at which point both remaining uses go.

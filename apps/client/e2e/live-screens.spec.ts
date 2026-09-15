@@ -130,6 +130,20 @@ test('live · the main screens', async ({ browser }) => {
   await settle(page);
   await shot(page, '11-traces');
 
+  // The trace detail, with its arguments open: the screen that answers "what
+  // did it read before it proposed that".
+  await page.getByRole('button', { name: 'Open →' }).first().click();
+  await expect(page.getByRole('button', { name: 'Show arguments and result' }).first()).toBeVisible({ timeout: 15_000 });
+  await settle(page);
+  await shot(page, '21-trace-detail');
+  await page.getByRole('button', { name: 'Show arguments and result' }).first().click();
+  await settle(page);
+  await shot(page, '22-trace-tool-call');
+
+  await page.getByRole('tab', { name: 'Skills' }).click();
+  await settle(page);
+  await shot(page, '23-agent-skills');
+
   await openSection(page, 'Library', /Library|Skills|Documents/i);
   await settle(page);
   await shot(page, '12-library');
@@ -138,6 +152,55 @@ test('live · the main screens', async ({ browser }) => {
   await settle(page);
   await shot(page, '13-settings');
 
+  // The three Settings tabs M5a wired: Usage after a real run, the caps card,
+  // and the data-and-privacy page with the server's own retention facts on it.
+  await page.getByRole('tab', { name: 'Usage' }).click();
+  await expect(page.getByText('Estimated, billed by your provider', { exact: false })).toBeVisible({ timeout: 20_000 });
+  await settle(page);
+  await shot(page, '24-settings-usage');
+
+  await page.getByRole('tab', { name: 'Agents' }).click();
+  await settle(page);
+  await shot(page, '25-settings-agents-caps');
+
+  await page.getByRole('tab', { name: 'Organization' }).click();
+  await settle(page);
+  await shot(page, '26-settings-organization');
+
+  await context.close();
+});
+
+/**
+ * Onboarding, photographed through the routes that now exist.
+ *
+ * The stepper's first screen, the join screen, and the workspace picker at the
+ * root path — which only became a screen at all once `GET /auth/session` with
+ * no `?ws` started answering (server decision F7).
+ */
+test('live · onboarding and the workspace picker', async ({ browser }) => {
+  const fixture = freshWorkspace('Onboarding tour');
+  const context = await asUser(browser, fixture.adminEmail);
+  const page = await context.newPage();
+
+  await page.goto('/onboarding/create');
+  await expect(page.getByRole('heading', { name: 'Name your workspace' })).toBeVisible({ timeout: 15_000 });
+  await settle(page);
+  await shot(page, '27-onboarding-create');
+
+  const invited = await page.request.post(`/w/${fixture.workspaceId}/invitations`, {
+    data: { email: `tour-${fixture.workspaceId.slice(0, 8)}@nous.example`, role: 'member' },
+    headers: { origin: ORIGIN },
+  });
+  const token = (await invited.json()).id as string;
+  await page.goto(`/onboarding/join?token=${token}`);
+  await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeVisible({ timeout: 15_000 });
+  await settle(page);
+  await shot(page, '28-onboarding-join');
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Your workspaces' })).toBeVisible({ timeout: 15_000 });
+  await settle(page);
+  await shot(page, '29-workspace-picker');
   await context.close();
 });
 

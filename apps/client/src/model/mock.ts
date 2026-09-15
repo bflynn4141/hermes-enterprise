@@ -36,6 +36,26 @@ const TRACE_LEAH = mockUuid(50);
 
 export const MOCK_WORKSPACE_ID = WS;
 
+/**
+ * Two strings the server owns, copied here exactly.
+ *
+ * They are product claims about jurisdiction and about erasure, and the mock's
+ * job is to fail when the client stops rendering them — which it cannot do if
+ * the fixture's version is a paraphrase. See `apps/worker/src/routes/settings.ts`.
+ */
+const DEEPSEEK_WARNING =
+  'DeepSeek stores data on servers in the People’s Republic of China. Its privacy policy is explicit ' +
+  'about this. Do not send real applicant data, or any other personal data you do not have a lawful basis ' +
+  'to transfer there, on a DeepSeek key. Use synthetic or consented data, or a provider whose Admin has ' +
+  'recorded a zero-retention attestation.';
+
+const ERASURE_COPY =
+  'Erasure tombstones the rows immediately: the person’s text is gone from the product the moment you ' +
+  'ask, and the audit trail keeps only ids. The bytes take longer to disappear from the places that exist ' +
+  'so that we can recover from a failure. Point-in-time database history holds them for 7 days and the ' +
+  'nightly backup for 30, both on fixed expiry rules nobody here can shorten for one record. Erasure is ' +
+  'therefore complete 30 days after you ask, and we will not tell you otherwise.';
+
 interface MockSession {
   id: string;
   title: string;
@@ -259,19 +279,104 @@ export function createMockBackend(options: MockOptions = {}) {
         },
       ];
 
+  /**
+   * The usage report, in the shape `GET /w/:ws/usage?range=` actually answers.
+   *
+   * It used to be the shape `entities.ts` sketched — `{ group, rows,
+   * daily_token_cap }` — and the mock was the only thing producing it: the
+   * live route answers `{ range, totals, by_day, by_session, by_key, caps }`
+   * and the client's schema had never been pointed at it. Decision C25. The
+   * disclaimer is the server's exact sentence, because the whole point of the
+   * mock is that a response which does not satisfy the contract fails here.
+   */
+  const usageDays = empty
+    ? []
+    : [
+        { day: '2026-10-10', input_tokens: 184_000, output_tokens: 22_400, cached_input_tokens: 0, reasoning_tokens: 0, total_tokens: 206_400, cost_usd_estimate: 0.061, calls: 42, errors: 0 },
+        { day: '2026-10-11', input_tokens: 96_000, output_tokens: 12_100, cached_input_tokens: 0, reasoning_tokens: 0, total_tokens: 108_100, cost_usd_estimate: 0.032, calls: 21, errors: 1 },
+        { day: '2026-10-12', input_tokens: 310_000, output_tokens: 41_800, cached_input_tokens: 0, reasoning_tokens: 0, total_tokens: 351_800, cost_usd_estimate: 0.104, calls: 64, errors: 0 },
+      ];
   const usage = {
-    group: 'day' as const,
-    from: '2026-10-06',
-    to: '2026-10-12',
-    rows: empty
+    range: '7d' as const,
+    timezone: 'UTC',
+    from: '2026-10-06T00:00:00.000Z',
+    to: '2026-10-12T23:59:59.000Z',
+    disclaimer:
+      'Estimated, billed by your provider. These figures are our arithmetic over published prices; your provider invoices your own key and is the authority.',
+    totals: usageDays.reduce(
+      (acc, day) => ({
+        input_tokens: acc.input_tokens + day.input_tokens,
+        output_tokens: acc.output_tokens + day.output_tokens,
+        cached_input_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: acc.total_tokens + day.total_tokens,
+        cost_usd_estimate: Math.round((acc.cost_usd_estimate + day.cost_usd_estimate) * 1e6) / 1e6,
+        calls: acc.calls + day.calls,
+        errors: acc.errors + day.errors,
+      }),
+      { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, reasoning_tokens: 0, total_tokens: 0, cost_usd_estimate: 0, calls: 0, errors: 0 },
+    ),
+    by_day: usageDays,
+    by_session: empty
       ? []
-      : [
-          { key: '2026-10-10', label: 'Oct 10', input_tokens: 184_000, output_tokens: 22_400, estimated_cost_usd: 0.061, model_id: 'deepseek-flash' },
-          { key: '2026-10-11', label: 'Oct 11', input_tokens: 96_000, output_tokens: 12_100, estimated_cost_usd: 0.032, model_id: 'deepseek-flash' },
-          { key: '2026-10-12', label: 'Oct 12', input_tokens: 310_000, output_tokens: 41_800, estimated_cost_usd: 0.104, model_id: 'deepseek-flash' },
-        ],
-    daily_token_cap: 500_000,
-    tokens_today: empty ? 0 : 351_800,
+      : [{ session_id: mockUuid(20), title: 'Partner applications', runs: 3, total_tokens: 351_800, cost_usd_estimate: 0.104, last_call_at: '2026-10-12T16:04:00.000Z' }],
+    by_key: empty
+      ? []
+      : [{ key_id: mockUuid(21), provider: 'deepseek', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
+    caps: {
+      daily_token_cap: 500_000,
+      tokens_today: empty ? 0 : 351_800,
+      fraction_used: empty ? 0 : 0.704,
+      warn: false,
+      max_concurrent_runs: 3,
+      active_runs: 0,
+    },
+  };
+
+  /** `settingsView`, the shape `GET|PATCH /w/:ws/settings` answers. */
+  const settingsView = {
+    workspace_id: WS,
+    role: seat === 'admin' ? 'admin' : 'member',
+    defaults: { model_id: 'deepseek-flash', effort: 'high' as string | null, runtime: 'cloud' },
+    caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
+    timezone: 'UTC',
+    flags: {} as Record<string, unknown>,
+    fetch_url_allowlist: [] as string[],
+    notifications: { approvals: true, blocked: true, digest: false },
+    deletion: { requested_at: null as string | null, scheduled_at: null as string | null },
+  };
+
+  const dataPrivacy = {
+    keys: providerKeys.map((key) => ({
+      key_id: key.id,
+      provider: key.provider,
+      label: key.label,
+      last4: key.last4,
+      status: key.status,
+      verified_at: key.verified_at,
+      attestation: null,
+      attested: false,
+      warnings: key.provider === 'deepseek' ? [DEEPSEEK_WARNING] : [],
+      real_data_allowed: false,
+    })),
+    retention: [
+      { store: 'Requests, notes and documents', retention: 'until tombstoned', erasure: 'redact_subject' },
+      { store: 'Turns, messages and stream events', retention: '90 days', erasure: 'redact_subject plus subject_key search' },
+      { store: 'Uploads, extracted text and rendered documents', retention: 'until deleted', erasure: 'deleted by row' },
+      { store: 'Nightly backup copy', retention: '30 days', erasure: 'expires on the bucket lifecycle rule' },
+      { store: 'Workflow instance state', retention: '30 days after completion', erasure: 'ids only, by rule' },
+      { store: 'Database point-in-time history', retention: '7 days', erasure: 'expires' },
+      { store: 'Logs and error tracking', retention: '7 and 30 days', erasure: 'ids only; redaction tested' },
+      { store: 'Identity provider (WorkOS)', retention: 'authentication data only', erasure: 'account deletion' },
+    ],
+    erasure: { tombstone: 'immediate', point_in_time_history_days: 7, backup_retention_days: 30, complete_after_days: 30, copy: ERASURE_COPY },
+    residency: {
+      identity_provider: 'WorkOS, United States, under Standard Contractual Clauses',
+      database: 'the region this workspace’s Neon project was created in',
+      objects: 'the R2 bucket jurisdiction, set at creation and unchangeable',
+      processing:
+        'Workers and Workflow steps run wherever the request lands. Workflow state, queues and logs have no documented jurisdiction control; the pilot data-processing agreement states this.',
+    },
   };
 
   let head = 100n;
@@ -492,7 +597,25 @@ export function createMockBackend(options: MockOptions = {}) {
     }
 
     if (p('/usage')) return json(usage);
-    if (p('/settings') || path.startsWith(`/w/${WS}/agents/`)) return new Response(null, { status: 204 });
+    // Data and privacy, in the shape `GET /w/:ws/settings/data-privacy`
+    // answers. The warnings and the erasure copy are the server's strings,
+    // copied verbatim rather than paraphrased: this fixture exists so that a
+    // client which stopped rendering them fails here.
+    if (p('/settings/data-privacy')) return json(dataPrivacy);
+    if (p('/settings/undelete')) return json({ cancelled: true });
+    if (p('/settings')) {
+      if (method === 'PATCH') {
+        const caps = body as { daily_token_cap?: unknown; max_concurrent_runs?: unknown; notifications?: Record<string, unknown> };
+        if ('daily_token_cap' in caps) settingsView.caps.daily_token_cap = caps.daily_token_cap === null ? null : Number(caps.daily_token_cap);
+        if ('max_concurrent_runs' in caps) settingsView.caps.max_concurrent_runs = Number(caps.max_concurrent_runs);
+        if (caps.notifications) settingsView.notifications = { ...settingsView.notifications, ...(caps.notifications as Record<string, boolean>) };
+      }
+      return json(settingsView);
+    }
+    if (path === `/w/${WS}` && method === 'DELETE') {
+      return json({ workspace_id: WS, requested_by: USER, instance_id: `workspace-deletion:${WS}`, scheduled_at: iso(60 * 24 * 7), grace_period_days: 7, members_evicted: members.length, copy: ERASURE_COPY });
+    }
+    if (path.startsWith(`/w/${WS}/agents/`)) return new Response(null, { status: 204 });
     if (path.startsWith('/shared/')) {
       if (path.endsWith('revoked')) return json({ session: { id: SESSION_A, title: 'Partner applications', workspace_name: 'Nous' }, messages: [], message_cutoff_seq: 0, revoked: true });
       return json({ session: { id: SESSION_A, title: 'Partner applications', workspace_name: 'Nous' }, messages: messages[SESSION_A] ?? [], message_cutoff_seq: 2, revoked: false });

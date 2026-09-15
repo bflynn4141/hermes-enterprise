@@ -84,6 +84,16 @@ export interface Adapter {
   openSession(sessionId: string): void;
   ensure(kind: EntityKind, id: string, force?: boolean): void;
   ensureList(key: string, load: () => Promise<{ ids: string[]; cursor: string | null; total: number | null; rows: { kind: EntityKind; id: string; data: unknown; version?: number }[] }>): void;
+  /**
+   * Drop a list so the next render fetches it again.
+   *
+   * `ensureList` is idempotent by design — a list that is `ready` costs
+   * nothing — which is exactly wrong after a mutation the server owns the
+   * consequences of. Accepting an instruction moves three rows (`proposed`
+   * becomes `saved`, the old `current` becomes `saved`), and only the server
+   * knows which; refetching is the only honest way to find out.
+   */
+  invalidateList(key: string): void;
   createSession(opts?: { title?: string; mode?: string; runtime?: 'cloud' | 'local' }): Promise<string>;
   loadEarlier(sessionId: string): Promise<void>;
   refreshAuth(): Promise<void>;
@@ -691,7 +701,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
         // message from the server, so there is nothing for the client to do.
         return;
       case 'apply_prepared_proposal':
-        if (command.id) void rest.saveInstruction(workspaceId, command.id).catch(() => undefined);
+        if (command.id)
+          void rest
+            .acceptInstruction(workspaceId, command.id)
+            .then(() => dispatch({ type: 'list/invalidate', key: 'instructions' }))
+            .catch(() => undefined);
         return;
       default:
         return;
@@ -718,6 +732,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     openSession,
     ensure,
     ensureList,
+    invalidateList: (key: string) => dispatch({ type: 'list/invalidate', key }),
     createSession,
     loadEarlier,
     refreshAuth,

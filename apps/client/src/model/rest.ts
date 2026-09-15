@@ -55,7 +55,15 @@ import {
   sharedSessionSchema,
   skillVersionSchema,
   traceEntitySchema,
-  usageResponseSchema,
+  usageReportSchema,
+  settingsViewSchema,
+  dataPrivacySchema,
+  attestationResultSchema,
+  workspaceDeletionSchema,
+  undeleteResultSchema,
+  authWorkspacesSchema,
+  type AuthWorkspacesResponse,
+  type UsageRange,
   type AttachmentRef,
   type AuthSessionResponse,
   type DecisionResult,
@@ -207,13 +215,19 @@ export function createRest(options: RestOptions) {
     // --- bootstrap, auth, health ---
     bootstrap: (workspaceId: string) => request(`GET`, `${ws(workspaceId)}/bootstrap`, bootstrapSchema) as Promise<Bootstrap>,
     /**
-     * `?ws=` is not optional in practice. Without it the route walks
-     * `workspace_directory` — which only the WorkOS mirror writes — and a
-     * seeded development workspace is not in it, so the answer is 404
-     * `no_workspace`. The client always knows which workspace it is in.
+     * With `?ws=`: this workspace's session, its stream heads and a hub ticket.
+     *
+     * It used to be the only usable form — without `?ws=` the route walked
+     * `workspace_directory`, which only the WorkOS mirror writes, and answered
+     * 404 for a seeded workspace. Server decision F7 changed that: the bare
+     * route now answers who you are and which workspaces you are in, which is
+     * what the picker below needs. Two shapes, two schemas, because they mean
+     * two different things (`authWorkspaces`).
      */
-    authSession: (workspaceId?: string) =>
-      request('GET', `/auth/session${workspaceId ? `?ws=${encodeURIComponent(workspaceId)}` : ''}`, authSessionSchema) as Promise<AuthSessionResponse>,
+    authSession: (workspaceId: string) =>
+      request('GET', `/auth/session?ws=${encodeURIComponent(workspaceId)}`, authSessionSchema) as Promise<AuthSessionResponse>,
+    /** `GET /auth/session` with no `?ws`: the workspace picker's list. */
+    authWorkspaces: () => request('GET', '/auth/session', authWorkspacesSchema) as Promise<AuthWorkspacesResponse>,
     health: () => request('GET', '/health', healthSchema) as Promise<Health>,
     /**
      * Replay. The Worker takes `stream=session|workspace` and no session id:
@@ -283,9 +297,19 @@ export function createRest(options: RestOptions) {
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
     listInstructions: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)), emptyPage()),
-    proposeInstruction: (workspaceId: string, text: string) => request('POST', `${ws(workspaceId)}/instructions`, instructionVersionSchema, { text }),
-    saveInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/save`, instructionVersionSchema, {}),
-    discardInstruction: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/instructions/${id}`),
+    /**
+     * Accept and discard, and no `propose`.
+     *
+     * `POST /w/:ws/instructions` does not exist on the server — the routing
+     * table has `:id/accept`, `:id/save`, `:id/discard` and the DELETE, and
+     * nothing that creates a version. A proposal is written by a run, through
+     * the engine, which is the design: an instruction the agent proposes is a
+     * thing a person reviews. The client used to offer "Propose a change" and
+     * it could only ever have 404ed, so the button is gone (decision C26) and
+     * the finding is in the README's table.
+     */
+    acceptInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}),
+    discardInstruction: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}),
     listSkills: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)), emptyPage()),
     adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
@@ -348,14 +372,36 @@ export function createRest(options: RestOptions) {
     catalog: (workspaceId: string) => request('GET', `${ws(workspaceId)}/catalog`, catalogPageSchema) as Promise<CatalogPage>,
 
     // --- settings, usage, onboarding ---
-    patchSettings: (workspaceId: string, patch: Record<string, unknown>) => optional(() => send('PATCH', `${ws(workspaceId)}/settings`, patch), undefined),
+    settings: (workspaceId: string) => request('GET', `${ws(workspaceId)}/settings`, settingsViewSchema),
+    /**
+     * One route, two authorisations: the workspace fields need Admin, a body
+     * carrying only `notifications` does not. The answer is the whole view, so
+     * the screen re-renders from what was actually stored rather than from what
+     * it hoped it sent.
+     */
+    patchSettings: (workspaceId: string, patch: Record<string, unknown>) =>
+      request('PATCH', `${ws(workspaceId)}/settings`, settingsViewSchema, patch),
     patchAgent: (workspaceId: string, agentId: string, patch: Record<string, unknown>) => optional(() => send('PATCH', `${ws(workspaceId)}/agents/${agentId}`, patch), undefined),
-    usage: (workspaceId: string, from: string, to: string, group: 'day' | 'session' | 'key') =>
-      optional(
-        () => request('GET', `${ws(workspaceId)}/usage?from=${from}&to=${to}&group=${group}`, usageResponseSchema),
-        { rows: [], total_tokens: 0, total_cost: 0, cap: null } as unknown as z.infer<typeof usageResponseSchema>,
-      ),
+    /**
+     * `?range=`, not `?from=&to=&group=`. The client asked for a shape nobody
+     * served and parsed the answer against a schema nobody wrote: every call
+     * was a `contract_violation`. Decision C25.
+     */
+    usage: (workspaceId: string, range: UsageRange) =>
+      request('GET', `${ws(workspaceId)}/usage?range=${range}`, usageReportSchema),
+    dataPrivacy: (workspaceId: string) => request('GET', `${ws(workspaceId)}/settings/data-privacy`, dataPrivacySchema),
+    /** Admin + step-up. The claim is recorded against the person who made it. */
+    setAttestation: (workspaceId: string, keyId: string, body: { kind: string; reference?: string; note?: string }) =>
+      request('PATCH', `${ws(workspaceId)}/provider-keys/${keyId}/attestation`, attestationResultSchema, body),
+    /** Admin + step-up. Access is revoked now; destruction is seven days away. */
+    deleteWorkspace: (workspaceId: string) => request('DELETE', ws(workspaceId), workspaceDeletionSchema),
+    undeleteWorkspace: (workspaceId: string) => request('POST', `${ws(workspaceId)}/settings/undelete`, undeleteResultSchema, {}),
     createWorkspace: (body: { name: string }) => request('POST', '/workspaces', bootstrapSchema, body),
+    /**
+     * The whole workspace, from inside the transaction that admitted them —
+     * so the shell renders with no second round trip (server decision F2).
+     */
+    acceptInvitation: (token: string) => request('POST', `/invitations/${encodeURIComponent(token)}/accept`, bootstrapSchema, {}),
 
     setFocusRef: (workspaceId: string, sessionId: string, ref: Ref | null) => request('PATCH', `${ws(workspaceId)}/sessions/${sessionId}`, sessionSchema, { focus_ref: ref }),
   };

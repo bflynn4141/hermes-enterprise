@@ -14,7 +14,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type RequestEntity } from '@hermes/shared';
+import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
+import { storeStepUp } from '../../model/auth.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
@@ -133,12 +135,15 @@ export function RequestReview({ id }: { id: string | null }) {
     );
   }
   if (record.state === 'unavailable') {
-    // The Worker has no requests route in this build. Saying "not found" would
-    // tell the reviewer the request was redacted, which is not what happened.
+    // `unavailable` is the Worker answering `unknown_route`, which it no longer
+    // does for requests — the route has been there since M4. It is kept as the
+    // honest answer to a server that is older than this client, because
+    // "Request not found" would tell a reviewer the request was redacted, and
+    // that is a different and much more alarming sentence.
     return (
       <div className="scroll">
         <div className="app-body">
-          <EmptyState icon="admission" title={EMPTY.libraryUnavailable} detail="This build of the server does not serve requests yet." />
+          <EmptyState icon="admission" title="This server does not serve requests" detail="The client is newer than the Worker it is talking to. Nothing was deleted." />
         </div>
       </div>
     );
@@ -353,7 +358,7 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
   const adapter = useAdapter();
   const state = useAppState();
   const nav = useNav();
-  const [mode, setMode] = useState<'preview' | 'pdf'>('preview');
+  const [mode, setMode] = useState<'preview' | 'render' | 'pdf'>('preview');
   const [zoom, setZoom] = useState(100);
   const [line, setLine] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
@@ -385,6 +390,9 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
             <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>
               Preview
             </button>
+            <button type="button" aria-pressed={mode === 'render'} onClick={() => setMode('render')} disabled={!doc}>
+              HTML render
+            </button>
             <button type="button" aria-pressed={mode === 'pdf'} onClick={() => setMode('pdf')}>
               PDF
             </button>
@@ -395,12 +403,38 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
             {zoom}%
           </button>
         </div>
-        {mode === 'pdf' ? (
+        {mode === 'render' ? (
+          <div className="col grow" style={{ minHeight: 0, gap: 8, padding: 0 }}>
+            {doc ? (
+              // The saved render, served by `GET /w/:ws/documents/:id/render`
+              // as `text/html` under this workspace's key. Sandboxed with no
+              // `allow-scripts` and no `allow-same-origin`: it is a document
+              // the product produced, and it still does not get to run.
+              <iframe
+                className="pdf-embed"
+                sandbox=""
+                src={`/w/${state.workspace.id}/documents/${doc.id}/render`}
+                title={`${doc.title} · saved render`}
+              />
+            ) : (
+              <EmptyState icon="invoice" title="No saved render yet" detail="A render is written when the document is created." />
+            )}
+          </div>
+        ) : mode === 'pdf' ? (
           <div className="col grow" style={{ minHeight: 0, gap: 8, padding: 24 }}>
             {doc?.pdf_status === 'ready' && doc.pdf_url ? (
               <iframe className="pdf-embed" src={`${doc.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`${payload.number}.pdf`} />
             ) : doc?.pdf_status === 'failed' ? (
               <EmptyState icon="invoice" title={EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')} action={<Button onClick={() => adapter.ensure('document', doc.id)}>Retry</Button>} />
+            ) : doc?.pdf_status === 'none' && doc.pdf_error ? (
+              // The honest one. `none` with a reason means there is no renderer
+              // in this build and nobody is preparing anything.
+              <EmptyState
+                icon="invoice"
+                title={EMPTY.pdfUnavailable}
+                detail={doc.pdf_error}
+                action={<Button onClick={() => setMode('render')}>Open the HTML render</Button>}
+              />
             ) : (
               <EmptyState icon="invoice" title={EMPTY.pdfPreparing} detail="The preview below is the same content." />
             )}
@@ -468,30 +502,46 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
         )}
       </div>
       {selected && (
-        <div className="line-select-bar">
-          <span>
-            Selected line: {selected.label} · {fmtMoney(selected.amount_minor)}
-          </span>
-          <span className="grow" />
-          <span style={{ position: 'relative' }}>
-            <Button
-              small
-              onClick={() => {
-                if (!state.activeSessionId) return;
-                adapter.applyCommand(state.activeSessionId, { type: 'chat/prompt', text: `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${payload.number}: ` });
-                setAck(true);
-                setTimeout(() => setAck(false), 1600);
-              }}
-            >
-              Ask about this line
-            </Button>
-            <Ack show={ack} style={{ right: 0, top: -40 }}>
-              Added to the composer
-            </Ack>
-          </span>
-          <Button small quiet onClick={() => setLine(null)}>
-            Clear
-          </Button>
+        // `SelectionActions` over the selected invoice line (plan 10b).
+        //
+        // Every string it shows is composed here, locally, from the line the
+        // person clicked: `onRequestEdit` never reaches a model, which is why
+        // it is supplied at all — without it the component streams its own
+        // demo rewrite, and a fabricated sentence on an invoice is exactly the
+        // thing this product must not do. Keeping the draft puts it in the
+        // composer, where the person still has to press send.
+        <div className="hermes-ui selection-host">
+          <SelectionActions
+            text={{
+              lead: `Selected line on ${payload.number}:`,
+              original: `${selected.label} · ${selected.qty} × ${fmtMoney(selected.amount_minor)}`,
+              rewrite: `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${payload.number}: `,
+            }}
+            labels={{ keep: 'Add to the composer', discard: 'Clear', placeholder: 'Ask about this line' }}
+            explanation={`This line is ${selected.label}, ${selected.qty} × ${fmtMoney(selected.amount_minor)}, dated ${selected.date}. It is read from the document payload; nothing here was generated.`}
+            actions={{
+              primary: [
+                { id: 'Ask', icon: <Icon name="search" size={14} />, action: 'Ask', busyLabel: 'Composing' },
+                { id: 'Explain', icon: <Icon name="check" size={14} />, action: 'Explain' },
+              ],
+              more: [],
+            }}
+            onRequestEdit={async (action) =>
+              action === 'Explain'
+                ? `${selected.label}: ${selected.qty} × ${fmtMoney(selected.amount_minor)} on ${selected.date}.`
+                : `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${payload.number}: `
+            }
+            onKeep={(text) => {
+              if (!state.activeSessionId) return;
+              adapter.applyCommand(state.activeSessionId, { type: 'chat/prompt', text });
+              setAck(true);
+              setTimeout(() => setAck(false), 1600);
+            }}
+            onDiscard={() => setLine(null)}
+          />
+          <Ack show={ack} style={{ right: 0, top: -12, position: 'relative' }}>
+            Added to the composer
+          </Ack>
         </div>
       )}
       {readOnly ? (
@@ -515,21 +565,77 @@ export function DocumentView({ request, document: doc, readOnly }: { request: Re
   );
 }
 
-/** The receipt: what was decided, and what is still pending as an effect. */
+/**
+ * The receipt: what was decided, and what is still pending as an effect.
+ *
+ * The effects list is the most important honest surface in the product. There
+ * is no executor in this repository — no SMTP client, no payment provider, no
+ * signature provider — so pressing Execute records an attempt, writes
+ * `unavailable`, and says in the server's own words that nothing was sent,
+ * paid, granted or signed. The copy is the server's `reason` string rather than
+ * ours, because that sentence is the thing being relied on and it should have
+ * one author.
+ *
+ * Execute needs the reviewer role the effect names, and step-up. A second press
+ * finds the row already `unavailable` and is answered with it rather than
+ * appending a second audit row.
+ */
 export function Receipt({ request }: { request: RequestEntity }) {
   const state = useAppState();
   const adapter = useAdapter();
   const nav = useNav();
   const [effects, setEffects] = useState<EffectEntity[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reauthed, setReauthed] = useState(false);
   const declined = request.status === 'declined';
 
-  useEffect(() => {
+  const load = (): void => {
     if (!state.workspace.id) return;
     void adapter.rest
       .listEffects(state.workspace.id, request.id)
       .then((page) => setEffects(page.items))
       .catch(() => setEffects([]));
-  }, [adapter, state.workspace.id, request.id]);
+  };
+  useEffect(load, [adapter, state.workspace.id, request.id]);
+
+  // Back from a step-up: say so, and wait for a second, deliberate click.
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind === 'effect' && intent.requestId === request.id) {
+      setReauthed(true);
+      adapter.clearStepUp();
+    }
+  }, [adapter, request.id]);
+
+  const execute = (effect: EffectEntity): void => {
+    setBusy(effect.id);
+    setNotice(null);
+    void adapter.rest
+      .executeEffect(state.workspace.id, effect.id)
+      .then((row) => {
+        setEffects((current) => current.map((item) => (item.id === row.id ? row : item)));
+        setReauthed(false);
+      })
+      .catch((caught: unknown) => {
+        const error = caught as { status?: number; reason?: string };
+        if (error.status === 401 && error.reason === 'reauth_required') {
+          storeStepUp({ kind: 'effect', requestId: request.id, returnTo: window.location.href });
+          const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+          if (url) window.location.assign(url);
+          else setNotice('This needs a recent sign-in. Sign in again to continue.');
+          return;
+        }
+        setNotice(
+          error.reason === 'role_required'
+            ? `Executing this needs the ${effect.required_role} role.`
+            : error.reason === 'effect_cancelled'
+              ? 'A later version of this document cancelled that effect.'
+              : 'Could not record that attempt. Try again.',
+        );
+      })
+      .finally(() => setBusy(null));
+  };
 
   const title = declined ? `${request.subject ?? request.label} · Declined` : requestStatusLabel(request).split(' · ')[0]!;
   const sub = requestStatusLabel(request).split(' · ').slice(1).join(' · ');
@@ -548,20 +654,33 @@ export function Receipt({ request }: { request: RequestEntity }) {
         </div>
         <Panel selected icon={KIND_ICON[request.kind] ?? 'context'} title={title} subtitle={sub} right={<span className="meta">{request.decided_at ? new Date(request.decided_at).toLocaleString() : ''}</span>} />
         <h2 className="section-title">What this implies</h2>
+        {reauthed && <p className="meta">Re-authenticated — press Execute again to continue.</p>}
         <div className="col">
           {effects.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>Nothing else is required.</div>}
           {effects.map((effect) => (
-            <div className="list-row compact" key={effect.id}>
+            <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
               <Glass name="context" size={22} className="row-icon" />
               <div className="row-main">
                 <span className="t">{effect.label}</span>
                 <span className="s">
-                  {effect.status === 'unavailable' ? `Unavailable · ${effect.reason ?? 'no integration in the pilot'}` : `${effect.status} · needs ${effect.required_role}`}
+                  {effect.status === 'unavailable' ? 'Unavailable' : effect.status === 'cancelled' ? 'Cancelled' : `Pending · needs the ${effect.required_role} role`}
+                  {effect.reason ? ` · ${effect.reason}` : ''}
                 </span>
               </div>
+              {effect.status === 'pending' && (
+                <Button disabled={busy === effect.id} onClick={() => execute(effect)}>
+                  {busy === effect.id ? 'Recording…' : 'Execute'}
+                </Button>
+              )}
             </div>
           ))}
         </div>
+        {effects.some((effect) => effect.status === 'unavailable') && (
+          <p className="meta" style={{ maxWidth: 760 }}>
+            Nothing was sent, paid, granted or signed. There is no integration behind these in the pilot, so the attempt is recorded against your name and the work is still yours to do.
+          </p>
+        )}
+        {notice && <p className="meta" role="alert">{notice}</p>}
         {request.note && (
           <div className="note-block">
             <span className="k">Review note · Not sent</span>

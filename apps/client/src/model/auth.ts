@@ -9,13 +9,17 @@
 //           AUTH_MODE is `fake`
 //
 // The spec asked for a dev step-up route that stamps a fresh
-// `authenticated_at` and bounces straight back. The Worker does not have one:
-// in fake mode `auth_sessions` records `authenticated_at` when the dev session
-// is first seen and nothing ever moves it, and `/auth/login` is a 503 with no
-// WorkOS credentials. So `stepUpUrl` returns null in fake mode and the callers
-// render the challenge inline instead of redirecting into a 503. The
-// second-click rule is unchanged: nothing is ever replayed automatically.
-// `apps/client/scripts/dev-step-up.mjs` re-stamps the row for local QA.
+// `authenticated_at` and bounces straight back. The Worker did not have one,
+// so `stepUpUrl` used to return null in fake mode and the callers rendered the
+// challenge inline. Server decision F4 built it: `GET /auth/login?step_up=1`
+// re-stamps the row in `AUTH_MODE=fake` and redirects to `return_to`. So there
+// is now one URL for both modes and one code path in the callers.
+//
+// What did *not* change is the rule that matters: the intent is stored before
+// the redirect and read on the way back, and it is never replayed. The pane
+// re-renders as "Re-authenticated — confirm to continue" and waits for a
+// second, deliberate click. `apps/client/scripts/dev-step-up.mjs` still
+// re-stamps the row from the shell, which is what the fixtures use.
 //
 // The dev account switcher lives behind `mode === 'fake'`, which esbuild folds
 // to `false` in a production build, so the switcher and the header name are
@@ -25,7 +29,8 @@ import { STEPUP_KEY } from './constants.js';
 export type AuthMode = 'workos' | 'fake';
 
 export interface StepUpIntent {
-  kind: 'decision' | 'provider_key';
+  /** `workspace` is the delete/undelete pair; `decision: 'decline'` is the undelete. */
+  kind: 'decision' | 'provider_key' | 'workspace' | 'effect';
   requestId?: string;
   keyId?: string;
   decision?: 'approve' | 'decline';
@@ -37,7 +42,11 @@ export interface AuthAdapter {
   readonly mode: AuthMode;
   headers(): Record<string, string>;
   signInUrl(returnTo: string): string;
-  /** Null when this mode has nowhere to send the browser (see the header). */
+  /**
+   * Where to send the browser for a fresh `authenticated_at`. Never null now
+   * that fake mode has a step-up of its own; the type keeps the null so a
+   * caller written against the old seam still compiles.
+   */
   stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key'): string | null;
   devUser(): string | null;
   setDevUser(id: string): void;
@@ -97,7 +106,10 @@ export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
       return `/auth/login?return_to=${encodeURIComponent(sameOriginPath(returnTo))}`;
     },
     stepUpUrl(returnTo, reason) {
-      if (mode === 'fake') return null;
+      // One URL in both modes. In `workos` it asks WorkOS for `max_age: 0`; in
+      // `fake` the Worker re-stamps the dev row and bounces back. `reason` is
+      // not a query parameter: what the step-up was *for* is the client's own
+      // pending intent, and putting it in a URL would let a link claim it.
       void reason;
       return `/auth/login?step_up=1&return_to=${encodeURIComponent(sameOriginPath(returnTo))}`;
     },

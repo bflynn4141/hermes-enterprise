@@ -721,6 +721,14 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
           guidance: null,
         },
       });
+      // A run is a trace the moment it starts, and the Traces tab's list is
+      // loaded once when the shell mounts — on a fresh workspace, before any
+      // run exists. Without this the tab keeps saying "No runs yet." while the
+      // transcript beside it is streaming one. Same reasoning as
+      // `request.created` above, and the same fix: invalidate rather than
+      // guess at the row, because only `GET /w/:ws/traces` knows its subtitle,
+      // its step count and whether it needs anybody.
+      out.push({ type: 'list/invalidate', key: 'traces' });
       break;
     }
     case 'run.step': {
@@ -744,6 +752,9 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
               : null,
           },
         });
+      // The trace row's status, worked time and step count all move with this,
+      // and none of them is in the payload in the shape the list renders.
+      if (p.status !== 'working') out.push({ type: 'list/invalidate', key: 'traces' });
       break;
     }
     case 'run.focus': {

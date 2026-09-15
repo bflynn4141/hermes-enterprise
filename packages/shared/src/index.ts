@@ -12,6 +12,7 @@ export * from './provider-keys.js';
 export * from './api.js';
 export * from './entities.js';
 export * from './api-m2.js';
+export * from './api-m5.js';
 export * from './attachments.js';
 export * from './plain-text.js';
 export * from './wire.js';

@@ -376,17 +376,19 @@ describe('the adapter', () => {
   };
 
   it('a decision that needs step-up stores the intent and never replays it', async () => {
-    // Fake auth: the Worker has no step-up route, so there is nowhere to send
-    // the browser. The intent is still stored and the decision still is not
-    // re-posted — which is the part that matters.
+    // Fake auth has a step-up of its own now (server decision F4), so the
+    // browser is sent to the same URL `workos` mode uses. The part that
+    // matters is unchanged and is what this asserts: the intent is stored, the
+    // decision is posted exactly once, and nothing replays it — the pane
+    // re-renders on the way back and waits for a second, deliberate click.
     const { adapter, calls } = makeAdapter(reauthOverride);
     await adapter.start();
     const assign = vi.fn();
-    (globalThis as { window?: unknown }).window = { location: { href: 'http://test.local/w/x', assign } };
+    (globalThis as { window?: unknown }).window = { location: { href: 'http://test.local/workspace/x', assign } };
     const result = await adapter.decide(REQUEST, 'approve');
     expect(result).toBe('reauth_required');
     expect(adapter.pendingStepUp()).toMatchObject({ kind: 'decision', requestId: REQUEST, decision: 'approve' });
-    expect(assign).not.toHaveBeenCalled();
+    expect(assign).toHaveBeenCalledWith('/auth/login?step_up=1&return_to=%2Fworkspace%2Fx');
     expect(calls.filter((call) => call.path.endsWith('/decisions')).length).toBe(1);
     delete (globalThis as { window?: unknown }).window;
     adapter.dispose();

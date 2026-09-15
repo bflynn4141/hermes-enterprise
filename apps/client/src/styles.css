@@ -581,3 +581,19 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
    chain from `#root` to the shell runs through it. Without this the shell
    collapses to its content height and the panes stop scrolling. */
 #root > .hermes-ui { height: 100%; }
+
+/* M5a: the four library components adopted into full-width screens.
+   `RecordsTable` and `FilterTable` size themselves to their content and are
+   wider than the app pane on a narrow window, so each gets its own horizontal
+   scroller rather than making the whole pane scroll sideways. */
+.table-host { width: 100%; max-width: 100%; overflow-x: auto; }
+.table-host > * { max-width: none; }
+.selection-host { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+
+/* The usage charts. Drawn here, from the report's own numbers, because the
+   library exports its carousel and not the three cards it ships with. */
+.usage-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(21,12,54,.4); }
+.usage-alloc { display: grid; grid-template-columns: 1fr 96px auto; align-items: center; gap: 10px; font-size: 13px; }
+.usage-alloc .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-alloc .bar { display: block; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.usage-alloc .bar > span { display: block; height: 100%; background: var(--action); }

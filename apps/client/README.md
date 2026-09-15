@@ -6,8 +6,15 @@ fallback and `run_worker_first` on the API prefixes.
 
 It runs against the real Worker. `pnpm e2e:live` boots Docker Postgres, the
 migrations, `wrangler dev --local` with `AUTH_MODE=fake` and `MODEL_SCRIPTED=1`,
-and drives twenty-one scenarios through the live stack; `qa/live/` holds the
-screenshots that run produced.
+and drives thirty-two scenarios through the live stack; `qa/live/` holds the
+twenty-nine screenshots that run produced.
+
+Every tab is wired to a route now. Traces and the trace detail, Skills and
+instruction review, Context fields, Settings → Usage, Agents caps and Data and
+privacy, the Library's saved HTML render, effects on the receipt, workspace
+delete and undelete, and onboarding through `POST /workspaces` and
+`POST /invitations/:token/accept`. "Not available yet" survives in exactly two
+places, Library → Connections and Library → Shared Intelligence, both M6's.
 
 There is no framework and no router. Routing is `src/model/routes.ts`: two pure
 functions over `packages/shared/refs.ts`, so the URL and `sameRef` are driven by
@@ -61,8 +68,14 @@ rather than a client choice, and both recorded as decisions C16 and C24:
   provider-key changes started answering `reauth_required` five minutes after a
   dev workspace was first opened. The Worker now has a development step-up:
   `GET /auth/login?step_up=1` re-stamps the row in `AUTH_MODE=fake` and
-  redirects back (server decision F4). `pnpm --filter client dev:step-up` does
-  the same from the shell, which is what the fixtures use.
+  redirects back (server decision F4), and `stepUpUrl` returns it in both modes
+  (decision C29), so there is one code path rather than an in-place challenge.
+
+  One caveat that will bite somebody: the fake-mode step-up needs the
+  `x-dev-user` header, and a browser cannot put a header on a top-level
+  navigation. Playwright can, so the live suite exercises it; clicking through
+  `wrangler dev` in a real browser gets a 401 there, and the answer is
+  `pnpm --filter client dev:step-up`, which re-stamps the row from the shell.
 
 ## Mock server mode
 
@@ -110,6 +123,8 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
               qa-screens.spec.ts  the mock screenshots
               live.spec.ts        P4–P14, against wrangler dev
               live-findings.spec.ts the scenarios the server fixes unblocked
+              live-m5a.spec.ts    M1–M8: the tabs that got routes, and the
+                                  flows that got them second
               live-screens.spec.ts the live screenshots
 scripts/      e2e-live.mjs      boots the stack and runs the live suite
               live-fixture.mjs  a fresh workspace, and the step-up re-stamp
@@ -143,7 +158,16 @@ qa/live/      the same screens against the real Worker
   `tool_call_id`; `StreamingText` over the accumulator `message.delta` fills;
   `TaskRows` for the queue and the waiting and failed states. `ApprovalCard`
   carries the `choice` and `confirm` blocks `ask_for_context` produces, and
-  never decides. `PromptBar` is deliberately not adopted (decision C23).
+  never decides. `PromptBar` and `AgentScreen` are deliberately not adopted
+  (decisions C23 and C27); eleven other components are, and "The library,
+  adopted and not" below says what each one needed.
+* **A screen renders the server's sentence, not its own.** The usage
+  disclaimer, the DeepSeek jurisdiction warning, the erasure timing copy and an
+  effect's `reason` are all strings the Worker writes, rendered verbatim. Each
+  is a claim somebody could be held to, and a claim with two authors is a claim
+  that drifts. Where the client writes copy it is about the client — "this
+  server does not serve traces; the client is newer than the Worker it is
+  talking to" — not about the data.
 
 ## Server findings
 
@@ -191,15 +215,79 @@ The name is honoured on the **first attempt only**, so a Retry is allowed to
 succeed — which is what makes "a 503, then a Retry that works" one flag rather
 than two. It is refused outside `ENVIRONMENT=development`.
 
-### New read routes
+### What M5a found, driving the rest of the routes
+
+The nine above were found by the M3 integration. Six more came out of wiring
+the remaining tabs, and they are a different kind: each one is a place where a
+client screen had never been opened against a live Worker, so the mismatch was
+invisible until it was.
+
+| # | Where | What was wrong | Where it stands |
+|---|---|---|---|
+| 10 | `apps/worker/src/routes/usage.ts` and `src/usage/aggregate.ts` | `GET /w/:ws/usage` takes `?range=today\|7d\|30d\|90d` and answers `{ range, timezone, from, to, disclaimer, totals, by_day, by_session, by_key, caps }`. The client asked for `?from=&to=&group=` and parsed `usageResponseSchema` — `{ group, rows, daily_token_cap, tokens_today }` — which nothing has ever served. Every call was a `contract_violation` and the Usage tab rendered its error state. | **Client fixed.** `packages/shared/src/api-m5.ts` carries `usageReportSchema`, written from the handler; the mock's fixture is the live shape too, so they cannot drift again. The server is fine — the client was reading a sketch. Decision C25. |
+| 11 | the routing table in `apps/worker/src/index.ts` | There is no `POST /w/:ws/instructions`. The client offered "Propose a change" and posted to it; the catch-all answered `unknown_route`. | **Client fixed, and deliberately not by asking for the route.** An instruction version carries `run_id` and `tool_call_id`; a human-authored one with both null is a row nothing can trace. The Skills tab is review-only now. Decision C26. |
+| 12 | `apps/worker/src/routes/settings.ts` `patchSettings` | Notifications are `{ notifications: { approvals, blocked, digest } }`; the client sent `{ notify_approvals: true }`, which matches no field in `WORKSPACE_FIELDS` and is silently a no-op — no Admin check, no audit row, no error. | **Client fixed.** The screen now re-renders from the `settingsView` the PATCH returns, so a field the server ignored cannot sit on screen looking saved. |
+| 13 | `apps/worker/src/routes/settings.ts` `patchSettings` | Same silent no-op, from the other side: `PATCH .../settings { reduce_motion }` (the sidebar's motion toggle) touches no workspace field either. The preference is client-local and the call does nothing. | **Server finding, not fixed.** It is harmless — the toggle works, it is just not durable — but a PATCH that accepts anything and stores nothing will hide a real typo one day. A 422 on an unknown key would be better. |
+| 14 | `apps/worker/src/model/scripted.ts` / `src/runs/workflow.ts` `DEV_SCRIPTS` | The five scenarios cover provider failures and malformed tool arguments. None of them calls `ask_for_context`, so a run parked on a context key — the state the whole Context tab exists for — cannot be produced from the client at all. | **Server finding, not fixed.** `e2e/live-m5a.spec.ts` M3 inserts the parked run and the empty field with `psql` and drives the real `PATCH /w/:ws/context-fields/:field` from the UI, so the client half is covered. A sixth script would let the scenario start from a turn. |
+| 15 | `apps/worker/src/routes/turns.ts`, `queueMessage` (line ~471) and `stopRun` (line ~344) | A read-then-write race between Stop and Queue. `queueMessage` reads `run.status` and inserts `paused` if the run is stopping, `queued` otherwise; `stopRun` does `UPDATE run_queue SET status='paused' ... WHERE status='queued'`. Nothing serialises the two, so an enqueue that read `working` before Stop committed inserts a `queued` row *after* Stop's sweep has run, and it stays `queued` — a queue item that will never be sent and is not shown as paused either. | **Server finding, not fixed.** It is what makes P7 flaky: the scenario queues and stops back to back, and it fails roughly one full-suite run in three, always as `queued` where the assertion wants `paused` or `sent`. `SELECT ... FOR UPDATE` on the `runs` row in both handlers would close it. |
+
+### Read routes, and the screens on them
 
 `GET /w/:ws/traces`, `GET /w/:ws/traces/:runId`, `GET|POST /w/:ws/skills`,
 `GET /w/:ws/instructions` with `accept`/`discard`, and
-`GET|PATCH /w/:ws/context-fields` all exist now, so the Agent tab's panes render
-real rows rather than "Not available yet". The trace detail carries the run's
-tool calls and their results (with the 8 KB truncation marker intact), the URLs
-`fetch_url` retrieved, the focus history and the allowed-tools line.
+`GET|PATCH /w/:ws/context-fields` all exist, so the Agent tab's panes render
+real rows. The trace detail carries the run's tool calls and their results (with
+the 8 KB truncation marker intact, and shown truncated), the URLs `fetch_url`
+retrieved, the focus history and the allowed-tools line.
 
-`e2e/live-findings.spec.ts` is the suite that drives all of this: seven
-scenarios on top of the fourteen in `live.spec.ts`, and `pnpm e2e:live` runs
-both.
+One hazard that cost three bugs and is worth naming: **a list route and a detail
+route that answer the same entity kind with different completeness**. `GET
+/w/:ws/traces` fills `steps` and omits `tool_calls`, `fetched_urls` and `focus`;
+the client's cache is keyed on id and cannot tell the two apart, so opening a
+trace from the Traces tab found the list's half-row and rendered "This run
+called no tools" for a run that had called one. `TraceDetail` forces one fetch
+per trace opened, and three lists are invalidated by the events that change them.
+Decision C28.
+
+`e2e/live-findings.spec.ts` and `e2e/live-m5a.spec.ts` are the suites that drive
+all of this — seven and eleven scenarios on top of the fourteen in
+`live.spec.ts` — and `pnpm e2e:live` runs all of them plus the screenshots.
+
+### The live scenarios
+
+| Suite | What it drives |
+|---|---|
+| `live.spec.ts` | P4 two contexts racing one decision · P5 the Member seat · P6 guidance mid-run · P7 Stop · P8 Retry · P10 a dropped connection replaying · P11 the provider-key lifecycle · P13 the first-run empty states, both seats · P14 a proposal that decides nothing |
+| `live-findings.spec.ts` | F1 `/w/:ws` boots the app · F2 create a workspace, accept an invitation · F3 `request.created` on the workspace stream · F8 Traces lists and opens a run · P8/P9 through the scripted scenarios |
+| `live-m5a.spec.ts` | M1 the trace detail after a run · M2 an instruction accepted by an Admin and refused to a Member · M3 the context write that unparks a waiting run · M4 usage after a run, with the server's disclaimer · M5 create-workspace and accept-invite through the stepper, plus the picker · M6 workspace delete and undelete · M7 every empty state on a fresh workspace, both seats · M8 "Signed out" with the draft kept, and "Reconnecting…" |
+| `live-screens.spec.ts` | the twenty-nine screenshots in `qa/live/` |
+
+### The library, adopted and not
+
+Eleven of the twenty-one components are in the product, each given real rows and
+real callbacks:
+
+| Component | Where | The care it needed |
+|---|---|---|
+| `LoadingState`, `ThinkingState`, `StreamingText`, `ToolChips`, `TaskRows`, `ApprovalCard` | `chat/RunSurface.tsx` | driven only by server events; demo, loop and autoplay off |
+| `DiffTable` | Skills, over an instruction proposal | the server accepts or discards a whole version, so the only toggle offered is the addition and Save *is* Accept |
+| `Flowchart`, `CodeBlock` | the trace detail | read-only: no `onMove`, no `onSelect`, no `condition`. Node ids are the array index, because the engine reuses `provider` for every model call |
+| `ContextCards` | the URLs a run fetched | one chunk per URL, badged `untrusted`, which is what a fetched page is |
+| `RecommendationCard` | the Agent Overview | the meter is a count, not a confidence: three bars is complete evidence, two is evidence with named gaps. `onConfirm` navigates and nothing else |
+| `FilterTable` | History | two axes, deliberately: the tabs pick the kind of activity, the table's filter picks the state |
+| `RecordsTable` | Members | no `onCalculate` — there is no route that would answer one — and `reviewGap` is filled with the member's recorded reviewer roles, so the optional column shows a real fact |
+| `InsightCards` | Settings → Usage | the carousel only: the library exports it and not the three cards it ships with, and the package publishes no subpath. The charts are drawn from `by_day` and `by_key` |
+| `FineTuneCard` | Settings → Agents, the two integer caps | `onChange` fires per pointer move, so the write is debounced to one per gesture — which is also one `settings.changed` audit row per gesture |
+| `SelectionActions` | a selected invoice line | `onRequestEdit` is supplied and never reaches a model: without it the component streams its own demo rewrite, and a fabricated sentence on an invoice is the one thing this product must not do |
+
+Two are not adopted, and the reasons are the same shape:
+
+* **`PromptBar`** owns its draft in its own `useState` and exposes no controlled
+  `value`, so a composer built on it could not render a restored draft — and
+  "your draft is saved" would become a sentence the product does not keep
+  (decision C23).
+* **`AgentScreen`** ships a "Teach a loop" control whose own copy says "Capture
+  is simulated in this showcase". On the one screen whose entire purpose is that
+  what it shows happened, a button that claims to record and records nothing is
+  the stub-with-a-green-tick this codebase refuses everywhere else. There is no
+  prop that removes it (decision C27).

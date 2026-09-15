@@ -100,7 +100,8 @@ test('every main screen renders', async ({ page }) => {
 
   // 17. Settings → Usage.
   await appPane.getByRole('tab', { name: 'Usage' }).click();
-  await expect(appPane.getByText(/Estimated — billed by your provider/)).toBeVisible();
+  // The server's own sentence, which the client renders beside the total.
+  await expect(appPane.getByText(/Estimated, billed by your provider/)).toBeVisible();
   await page.screenshot(shot('17-settings-usage'));
 
   // 18. Settings → Agents.

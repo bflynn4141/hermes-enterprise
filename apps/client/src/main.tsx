@@ -16,13 +16,14 @@ import { createStore, initialState } from './model/store.js';
 import { createAdapter, type Adapter } from './model/adapter.js';
 import { createAuth } from './model/auth.js';
 import { RestError } from './model/rest.js';
-import { currentRoute, parseRef, type Route } from './model/routes.js';
+import { createRest } from './model/rest.js';
+import { currentRoute, parseRef, SHELL_PREFIX, type Route } from './model/routes.js';
 import { activeSessionKey } from './model/constants.js';
 import { StoreProvider, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
 import { Onboarding, SignIn } from './app/onboarding/Onboarding.js';
 import { SharedViewer } from './app/shared/SharedViewer.js';
-import { EmptyState, Skeleton } from './app/ui/primitives.js';
+import { Button, EmptyState, Skeleton } from './app/ui/primitives.js';
 
 const route = currentRoute();
 const store = createStore(initialState());
@@ -152,6 +153,89 @@ function App() {
   );
 }
 
+/**
+ * The root path: which workspace?
+ *
+ * `GET /auth/session` with no `?ws=` used to walk `workspace_directory`, which
+ * only the WorkOS mirror writes, and answer 404 for a seeded workspace — so
+ * there was nothing to build a picker on and the root path went straight to a
+ * sign-in screen even for someone already signed in. Server decision F7 made
+ * the bare route answer who you are and which workspaces you are in, which is
+ * exactly this screen.
+ *
+ * Three answers, three screens: a 401 is the sign-in, a 404 (signed in, in no
+ * workspace) offers the two onboarding routes, and a list is the picker. One
+ * workspace is not auto-opened: a redirect nobody asked for is a redirect
+ * somebody has to undo, and the row is one click away.
+ */
+function WorkspacePicker() {
+  const [state, setState] = useState<'loading' | 'signed-out' | 'ready' | 'failed'>('loading');
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string; role: string }[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    const rest = createRest({ auth: createAuth() });
+    void rest
+      .authWorkspaces()
+      .then((session) => {
+        if (!live) return;
+        setWorkspaces(session.workspaces.map((row) => ({ id: row.id, name: row.name, role: row.role })));
+        setState('ready');
+      })
+      .catch((caught: unknown) => {
+        if (!live) return;
+        const error = caught as { status?: number };
+        // 404 is "signed in, in no workspace": a real answer, and the screen
+        // for it is the empty picker with the two onboarding routes on it.
+        setState(error.status === 401 ? 'signed-out' : 'ready');
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (state === 'signed-out') return <SignIn returnTo={null} />;
+  if (state === 'loading' || state === 'failed')
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140 }}>
+          <Skeleton rows={3} label="Finding your workspaces" />
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="portal">
+      <div className="portal-body" style={{ paddingTop: 120, width: 560, gap: 20 }}>
+        <h1 style={{ font: '500 40px/44px var(--font-display)' }}>Your workspaces</h1>
+        {workspaces.length === 0 ? (
+          <EmptyState
+            icon="context"
+            title="You are not in a workspace yet"
+            detail="Create one, or open the invitation somebody sent you."
+            action={<Button primary onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>}
+          />
+        ) : (
+          <div className="col" role="list">
+            {workspaces.map((workspace) => (
+              <div className="list-row" role="listitem" key={workspace.id}>
+                <div className="row-main">
+                  <span className="t">{workspace.name}</span>
+                  <span className="s">{workspace.role === 'admin' ? 'Admin' : 'Member'}</span>
+                </div>
+                <Button onClick={() => window.location.assign(`/${SHELL_PREFIX}/${workspace.id}`)}>Open →</Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="row">
+          <Button onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Root() {
   if (route.kind === 'shared') return <SharedRoute token={route.token} />;
   if (route.kind === 'onboarding') return <Onboarding route={route.step} token={route.token} />;
@@ -168,7 +252,7 @@ function Root() {
   // In mock mode the root path is the mock workspace, so the bundle can be
   // opened straight from a file server with no worker and no URL to remember.
   if (__MOCK__) return <Bootstrap route={{ kind: 'workspace', workspaceId: MOCK_WORKSPACE_ID, sessionId: null, app: null }} />;
-  return <SignIn returnTo={null} />;
+  return <WorkspacePicker />;
 }
 
 const container = document.getElementById('root');

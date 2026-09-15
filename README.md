@@ -27,7 +27,7 @@ is where the guarded decision route lands.
 | One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | Nothing here. `resolveKey` now runs inside every provider step, so plaintext exists only for that step |
 | Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
 | The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | Nothing here |
-| The client, against this Worker: bootstrap, the two hubs with replay-then-buffer and a polling fallback, turns, Stop, Guide, Queue, Retry, Follow, decisions with step-up, provider keys, uploads, and the M3 run surface. `pnpm e2e:live` drives fourteen scenarios through the live stack | `PromptBar` in the composer (it cannot render a restored draft — DECISIONS, C23), and the Usage, Traces, Skills and Instructions screens, whose routes the Worker does not serve yet |
+| The client, against this Worker: bootstrap, the two hubs with replay-then-buffer and a polling fallback, turns, Stop, Guide, Queue, Retry, Follow, decisions with step-up, provider keys and uploads; the M3 run surface; Traces and the trace detail (steps, tool calls with the 8 KB marker, fetched URLs, focus history); Skills and instruction review; Context fields, including the human write that resumes a waiting run; Settings → Usage, Agents caps, and Data and privacy with the attestation; Inbox, History, Members, the Library with the saved HTML render; effects on the receipt; workspace delete and undelete; onboarding through `POST /workspaces` and `POST /invitations/:token/accept`, and the workspace picker. `pnpm e2e:live` drives thirty-two scenarios through the live stack | `PromptBar` in the composer and `AgentScreen` on the trace detail — neither can be adopted without breaking something the product promises (DECISIONS, C23 and C27). Library → Connections and Library → Shared Intelligence are M6 and say so |
 | `SessionHub` and `WorkspaceHub` Durable Objects: hibernating sockets, auto-response heartbeat, fan-out, eviction, and the `forward` RPC that carries deltas out and Stop back | The nightly validator Workflow (M5a) |
 | Both wrangler environments, the queues with dead-letter queues, two cron triggers, two Hyperdrive bindings, the CPU limit | Outreach, payment and signature. **No code for these exists or ever will in this repository**; they are `effects` rows a human executes |
 
@@ -74,7 +74,7 @@ there (DECISIONS, C12). `apps/client/README.md` has the rest, including the
 server findings this integration turned up and what each one costs.
 
 To run the whole thing end to end — Postgres, migrations, seed, bundle, Worker,
-and fourteen Playwright scenarios against all of it:
+and thirty-two Playwright scenarios against all of it:
 
 ```sh
 pnpm e2e:live
@@ -730,6 +730,7 @@ apps/worker        the Cloudflare Worker: Hono routes, Durable Object hubs,
 apps/client        the workspace client: React 19, esbuild, no router. Built
                    into dist/, which the Worker's assets binding serves. Its
                    README lists the server findings the integration turned up
+                   and which library components are adopted, and which are not
 docs/              DECISIONS.md, CONVENTIONS.md
 ```
 
