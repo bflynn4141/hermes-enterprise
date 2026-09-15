@@ -1031,3 +1031,216 @@ Three demo behaviours changed because the port fixed a bug the demo had:
 3. an acknowledgement is a server message that exists only after the commit, so
    the demo's third bug — acknowledging before the state settles — is
    structurally gone.
+
+---
+
+# M3: the run engine
+
+Numbering starts at 40 so that M3.5's attachments work, which was in flight at
+the same time, keeps 37 to 39.
+
+---
+
+## 40. The engine publishes by handing rows to the hub, not by enqueuing a job
+
+**Found while building.** Invariant 6 says every cross-system side effect after
+a commit is a `jobs` row. The engine's side effects are event deliveries, and
+`publishEvents` writes exactly such a row. But migration 0004 says
+`REVOKE ALL ON jobs FROM agent`, and the Workflow runs on the `agent` role.
+
+**Decided.** The engine writes `stream_events` in the same transaction as the
+change, as every writer does, and then hands the committed rows to the
+`SessionHub` itself by RPC. It enqueues no `publish` job. If that RPC is lost,
+the rows are already committed and the client's reconnect path —
+`GET /w/:ws/events?after=` — replays them.
+
+**Why not widen the grant.** Because the grant is the invariant. "The agent role
+has no INSERT on `jobs`" is one of the three sentences that make "the runtime
+never decides" checkable, and the reason it is worth having is precisely that it
+is inconvenient once. A job row is also a thing the agent could forge — a
+`receipt` job carries a `decision_id` — so `jobs` is not an incidental
+revocation.
+
+**What is lost.** The outbox's "a connected client cannot miss a committed
+event" becomes "a connected client cannot miss a committed event for longer than
+one reconnect" for run events specifically. Route-written events (requests,
+decisions, entity updates) keep the stronger property, because routes run as
+`app` and do enqueue the job.
+
+**Would change it if.** A `SECURITY DEFINER` function that enqueues only a
+`publish` job for a range of `stream_events` ids in the current tenant turns out
+to be worth the extra surface. It is a small function and it would restore the
+stronger guarantee; it was not written because the weaker one is already the
+behaviour every client sees after any disconnect.
+
+---
+
+## 41. Two consequences of an engine event are done by the Cron, as `app`
+
+**Found while building.** Two things the plan asks for are writes the `agent`
+role cannot make:
+
+* a provider 401 marks the key row `invalid` — `workspace_provider_keys` is
+  SELECT-only for `agent`;
+* the run queue drains after a run finishes and pauses on Stop — `run_queue` is
+  SELECT-only for `agent`.
+
+**Decided.** The engine does the half it can: on a 401 it sets
+`stop_requested` on the other working runs on that provider (it has UPDATE on
+`runs`) and records `error.reason = 'key_invalid'` on its own run. The minute
+Cron, which runs as `app`, then marks the key row invalid from that recorded
+reason and drains the queue. The Stop route pauses the queue itself, in the same
+transaction as the flag, so pausing is immediate; only the drain is on the
+minute.
+
+**What this costs.** Up to a minute between a 401 and the model menu saying
+"Your key was rejected", and up to a minute between a run finishing and its
+queued message starting. Both are visible in the UI as the state they actually
+are, not as a lie.
+
+**Why this is better than the alternative.** The alternative is one more grant
+or one more `SECURITY DEFINER` function per consequence, and the list of
+consequences only grows. Making the `app` role the place where an engine event
+turns into a workspace-level change keeps the boundary in one direction: the
+agent proposes and reports, and something with more authority acts on it. That
+is the same shape as the decision route.
+
+---
+
+## 42. The engine is a function over an abstract `step`, not a Workflow method
+
+**Decided.** `src/engine/engine.ts` exports `runAttempt(deps, step, input)`
+against an `EngineStep` interface with `do` and `waitForEvent`. `RunAttempt` in
+`src/runs/workflow.ts` wires the real `WorkflowStep`, a `PgAgentDb`, the
+provider adapter and the SessionHub RPC, and does nothing else.
+
+**Why.** The failure taxonomy is the part of this milestone most likely to be
+wrong, and it is untestable inside workerd: there is no way to say "this step
+fails at 40 percent of its stream, retries twice and then gives up" to a real
+Workflow in a test. With a fake `step` that checkpoints results by name and
+re-runs the body on a retryable throw, every row of the plan's table is a test
+that runs in 300 ms with no network. What workerd then has to prove is much
+smaller — the class registers, the RPC exists, `NonRetryableError` is real —
+and `test/worker/runs.test.ts` proves exactly that.
+
+**The cost.** Two step-option shapes to keep in sync, and a cast in the adapter
+because `step.do` is typed to return `Serializable<T>`. The cast is one line and
+sits next to the rule it depends on (step returns are ids only).
+
+**A bug this shape caught immediately.** `step` is an RPC stub: pulling `do` off
+it and calling `run.call(step, ...)` fails at run time with "the RPC receiver
+does not implement the method call". The adapter now calls through the object.
+
+---
+
+## 43. Deltas are batched at 500 ms, and Stop rides the reply
+
+**Decided.** The provider step accumulates text and flushes every 500 ms: one
+`stream_events` row and one `SessionHub.forward` RPC per batch. The RPC's reply
+carries `stop_requested`, and the engine also reads the row before every tool.
+
+**Why.** The subrequest limit is per instance. The plan's rejected arithmetic is
+twelve five-minute turns at one RPC per 250 ms — 14,400 against a 10,000
+default. At 500 ms the same pathological run is 7,200 and a realistic
+30-second-turn run is about 900. `test/unit/engine-config.test.ts` holds the
+arithmetic so the number is checkable rather than remembered.
+
+**Why Stop rides the reply rather than polling.** A separate poll doubles the
+per-batch cost to buy nothing: the batch is already a round trip to the object
+that holds the flag's cache.
+
+**Note on the outbox id.** `stream_events` is INSERT-only for the `agent` role,
+so `RETURNING id` is a read it may not do. The id comes from
+`currval('stream_events_id_seq')` instead, which the role does hold
+`USAGE, SELECT` on. `test/db/agent-db.test.ts` is the test that caught this, and
+it is the reason that file exists at all: the in-memory `AgentDb` the engine
+tests use would have passed with the wrong SQL forever.
+
+---
+
+## 44. `message.reset` carries a real message id, written before the first delta
+
+**Decided.** The provider step upserts the assistant `messages` row with
+`status = 'streaming'` and empty text *before* it starts the stream, so
+`message.reset` and every `message.delta` name a real message id. The row is
+keyed `(run_id, turn)`, so a step retry and a user Retry both replace it.
+
+**Why.** The alternative was a synthetic id like `${run_id}:${turn}`, which the
+event contract rejects — `message_id` is a uuid — and which would have made the
+reducer maintain two id spaces. Writing the row first also means a crash between
+the first delta and the end of the turn leaves a visible partial message rather
+than nothing.
+
+---
+
+## 45. `run_turns` sequence numbers separate a turn's inputs from its answer
+
+**Decided.** Within turn *N*: the tool results that feed it occupy seq 0, 1, 2…
+in the order the model asked for them, a human's answer to `ask_for_context`
+sits at seq 90, and the assistant's own message sits at seq 100.
+
+**Why.** `run_turns` is keyed `(run_id, turn, seq)` and the first version wrote
+both the opening user message and the assistant's reply at `(0, 0)`. Fixed
+positions are the smallest thing that makes the ordering total, replayable and
+obvious when reading a row by hand.
+
+---
+
+## 46. Blocks arrive in a fenced region, and the validator runs before anything renders
+
+**Decided.** A model authors blocks by emitting a ```` ```hermes-blocks ````
+fenced JSON array inside its text. The engine strips the fence from what the
+human reads, runs the array through the shared `validateModelBlocks`, keeps what
+passes and logs what does not with the command name.
+
+**Why a fence rather than a tool.** A `render_block` tool would be a tool whose
+whole purpose is to put a button in front of a human, and the forbidden-name
+test would not catch a block carrying `decide` inside its arguments. Keeping
+blocks in the text means every one of them goes through the same validator on
+the same path, and there is exactly one path.
+
+**The red-team test.** `test/unit/engine-redteam.test.ts` scripts a provider
+emitting a `confirm` block carrying `request/decide` and asserts three things:
+the block is dropped, no `decision.recorded` event exists in the outbox, and the
+request the run proposed is still `pending`. The text survives, minus the fence,
+so the human still reads the claim and can disagree with it.
+
+---
+
+## 47. `MODEL_SCRIPTED=1` is a development-only switch, asserted in two places
+
+**Decided.** With `MODEL_SCRIPTED=1` the engine answers from `ScriptedProvider`
+and resolves no key, so `wrangler dev --local` on a fresh checkout can run a
+turn end to end with nothing in the key store. `providerFactory` throws unless
+`ENVIRONMENT` is `development`, and `test/unit/engine-config.test.ts` asserts
+that neither staging nor production sets the variable.
+
+**Two things this caught.** A `ScriptedProvider` built per call rather than per
+invocation replays script zero forever, which looks exactly like an agent stuck
+in a loop until the turn cap stops it; and an agent with no
+`agent_capabilities` rows gets no tools, which is right in a deployed
+environment and useless in a freshly seeded one. The provider is memoised per
+invocation, and the empty-capabilities fallback to the Work-mode tool set
+applies only when `ENVIRONMENT` is `development`.
+
+---
+
+## 48. The M0 spike runs under vitest, and only when a key is in the environment
+
+**Decided.** `apps/worker/scripts/spike.ts` performs the M0 spike against a real
+provider: one streamed tool call, Stop measured against the 1 s budget, and a
+reasoning replay. It runs with `pnpm spike`, which is `vitest run --project
+spike`, and `vitest.config.ts` only defines that project when `HERMES_SPIKE_KEY`
+is set.
+
+**Why vitest rather than `node scripts/spike.ts`.** Node 26 strips types but
+refuses parameter properties, which the provider adapters use throughout; vitest
+is already a dependency and already knows how to load this repository's
+TypeScript. Making the project conditional means CI, which never sets the
+variable, cannot run the one file in this repository that touches the network —
+and neither can `pnpm test` on a machine that happens to have a key exported.
+
+**The key.** Read from `HERMES_SPIKE_KEY` and never written anywhere: not to a
+file, not to a log line, not into an error message. The file says so at the top,
+because the failure mode is somebody pasting a key into `.dev.vars` to make it
+convenient.

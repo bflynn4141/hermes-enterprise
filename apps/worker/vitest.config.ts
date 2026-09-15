@@ -35,9 +35,31 @@ const localAgent =
 process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP = localApp;
 process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT = localAgent;
 
+/**
+ * The M0 spike is the one thing in this repository that talks to a real
+ * provider. Its project exists only when `HERMES_SPIKE_KEY` is set, so CI —
+ * which never sets it — cannot run it even by accident, and `pnpm test` on a
+ * developer machine without a key does not either.
+ */
+const spikeProjects = process.env.HERMES_SPIKE_KEY
+  ? [
+      {
+        resolve: { alias: nodeAlias },
+        test: {
+          name: 'spike',
+          environment: 'node' as const,
+          include: ['scripts/spike.ts'],
+          testTimeout: 180_000,
+          hookTimeout: 180_000,
+        },
+      },
+    ]
+  : [];
+
 export default defineConfig({
   test: {
     projects: [
+      ...spikeProjects,
       {
         resolve: { alias: nodeAlias },
         test: {

@@ -50,6 +50,17 @@ import {
   uploadAttachment,
 } from './routes/attachments.js';
 import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
+import {
+  answerContext,
+  createTurn,
+  editQueueItem,
+  guideRun,
+  queueMessage,
+  removeQueueItem,
+  retryRun,
+  stopRun,
+} from './routes/turns.js';
+import { sweepRuns } from './runs/sweep.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
 import { drainJobs } from './jobs.js';
@@ -130,6 +141,19 @@ app.delete('/w/:ws/sessions/:id/shares/:shareId', revokeShare);
 app.delete('/w/:ws/sessions/:id', archiveSession);
 app.put('/w/:ws/messages/:id/feedback', setMessageFeedback);
 app.delete('/w/:ws/messages/:id/feedback', clearMessageFeedback);
+
+// Turns and the four controls. `client_turn_id` is the idempotency key: the
+// `runs` row is inserted under UNIQUE(session_id, client_turn_id) before the
+// Workflow instance is created, because `create()` throws on a duplicate id and
+// only `createBatch()` is idempotent.
+app.post('/w/:ws/sessions/:id/turns', createTurn);
+app.post('/w/:ws/sessions/:id/runs/:runId/stop', stopRun);
+app.post('/w/:ws/sessions/:id/runs/:runId/guide', guideRun);
+app.post('/w/:ws/sessions/:id/runs/:runId/retry', retryRun);
+app.post('/w/:ws/sessions/:id/runs/:runId/queue', queueMessage);
+app.patch('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', editQueueItem);
+app.delete('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', removeQueueItem);
+app.post('/w/:ws/sessions/:id/runs/:runId/context', answerContext);
 
 // Uploads. The bytes go from the browser to R2 through a presigned PUT, so
 // `complete` is where the file is checked: sniffed against its declared type,
@@ -213,11 +237,15 @@ export default {
         } catch (error) {
           console.log(JSON.stringify({ at: 'cron.workos', ok: false, error: String(error) }));
         }
-        // The orphan sweep: runs that claim to be working with no event for ten
-        // minutes. M2 can only see the row; comparing it with the Workflow
-        // instance's own status is M3, so nothing is marked errored yet and the
-        // count is logged instead of acted on.
-        console.log(JSON.stringify({ at: 'cron.orphans', note: 'instance status check lands in M3' }));
+        // The orphan sweep, plus the two `app`-role halves of things the run
+        // engine cannot do itself: marking a key invalid after a 401 and
+        // draining a session's queue once its run finished (decision 41).
+        try {
+          const swept = await sweepRuns(env);
+          console.log(JSON.stringify({ at: 'cron.orphans', ...swept }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.orphans', ok: false, error: String(error) }));
+        }
       })(),
     );
   },

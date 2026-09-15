@@ -14,7 +14,7 @@
     "db:seed": "node scripts/seed-dev.mjs",
     "db:test": "node scripts/roles.mjs && vitest run --project db",
     "cf-typegen": "wrangler types",
-    "spike": "esbuild scripts/spike.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/spike.mjs --log-level=warning && node node_modules/.cache/spike.mjs"
+    "spike": "vitest run --project spike"
   },
   "dependencies": {
     "@hermes/shared": "workspace:*",

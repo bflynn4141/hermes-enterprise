@@ -34,6 +34,10 @@
     "AUTH_MODE": "fake",
     "MODEL_GATEWAY_MODE": "off",
     "ENGINE_PAUSED": "0",
+    // Development only: the engine answers from ScriptedProvider, so a run can
+    // be created with no provider key in the store. A unit test asserts the
+    // deployed environments never set it.
+    "MODEL_SCRIPTED": "1",
     "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
     "R2_BUCKET": "hermes-uploads"
   },

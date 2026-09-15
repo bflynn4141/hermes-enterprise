@@ -18,6 +18,7 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "scripts/**/*.d.mts",
+    "scripts/spike.ts",
     "vitest.config.ts",
     "worker-configuration.d.ts"
   ]

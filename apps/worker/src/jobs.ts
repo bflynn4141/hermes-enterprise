@@ -14,6 +14,7 @@
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
+import { runReceiptJob } from './runs/receipt.js';
 import { runBackupUploads } from './storage/backup.js';
 
 export interface Job {
@@ -349,6 +350,10 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       await runBackupUploads(env, job.workspace_id);
       return;
     case 'receipt':
+      // Typed, parsed and inert: M4 posts the template into the originating
+      // session, keyed on `decision_id`. See src/runs/receipt.ts.
+      await runReceiptJob(env, job.key, job.payload);
+      return;
     case 'render':
     case 'reverify':
       // Registered, inert, and honest about it: the work lands with the routes

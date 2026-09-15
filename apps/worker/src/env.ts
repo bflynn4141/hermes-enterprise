@@ -24,6 +24,12 @@ export interface Env {
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
+   * '1' makes the run engine answer from `ScriptedProvider` instead of a real
+   * provider, so `wrangler dev --local` can create a run with no key in the
+   * store. Refused outside `ENVIRONMENT=development`.
+   */
+  MODEL_SCRIPTED?: string;
+  /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
    * out in its path. Not a secret, so it is a plain var per environment.

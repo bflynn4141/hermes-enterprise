@@ -201,6 +201,19 @@ export class SessionHub extends Hub {
   async stopRequested(runId: string): Promise<boolean> {
     return (await this.ctx.storage.get<number>(`stop:${runId}`)) !== undefined;
   }
+
+  /**
+   * Fan out a delta batch and answer with Stop in the same round trip.
+   *
+   * The engine calls this once per 500 ms batch. Riding Stop on the reply is
+   * what keeps the subrequest budget in range: a separate poll would double the
+   * per-batch cost, and twelve streaming turns at one RPC per 250 ms was the
+   * 14,400-subrequest figure the plan rejected.
+   */
+  async forward(runId: string, events: readonly HubEvent[]): Promise<PublishResult & { stop_requested: boolean }> {
+    const result = this.publish(events);
+    return { ...result, stop_requested: await this.stopRequested(runId) };
+  }
 }
 
 /**
