@@ -1,0 +1,5 @@
+name: enterprise_bridge
+version: 1.0.0
+description: Governed enterprise tools using trusted Hermes run context
+provides_hooks:
+  - pre_tool_call
