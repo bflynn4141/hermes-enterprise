@@ -1,6 +1,6 @@
 """Fixed, authenticated Hermes Cloud connector for the native Runs API.
 
-Mounted at ``/api/plugins/enterprise-bridge/control``. The dashboard's generic
+Mounted at ``/api/plugins/enterprise_bridge/control``. The dashboard's generic
 token-auth middleware protects this exact route with a per-agent service
 credential registered by the agent plugin. The connector is deliberately an
 operation allowlist, never an arbitrary loopback proxy.

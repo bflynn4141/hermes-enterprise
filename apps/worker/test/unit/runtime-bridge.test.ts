@@ -78,7 +78,7 @@ describe('official runtime configuration and authentication', () => {
       HERMES_RUNTIME_AGENTS: JSON.stringify({
         [agentId]: {
           workspace_id: workspaceId,
-          base_url: 'https://iris.example/api/plugins/enterprise-bridge/control',
+          base_url: 'https://iris.example/api/plugins/enterprise_bridge/control',
           api_key: 'runtime-key',
           transport: 'dashboard_connector',
         },
@@ -90,7 +90,7 @@ describe('official runtime configuration and authentication', () => {
       HERMES_RUNTIME_AGENTS: JSON.stringify({
         [agentId]: {
           workspace_id: workspaceId,
-          base_url: 'https://iris.example/api/plugins/enterprise-bridge/control',
+          base_url: 'https://iris.example/api/plugins/enterprise_bridge/control',
           api_key: 'runtime-key',
           transport: 'arbitrary_proxy',
         },

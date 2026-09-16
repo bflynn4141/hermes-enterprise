@@ -11,7 +11,7 @@ import urllib.request
 
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
-CONTROL_ROUTE = "/api/plugins/enterprise-bridge/control"
+CONTROL_ROUTE = "/api/plugins/enterprise_bridge/control"
 CONTROL_PROVIDER = "enterprise-control"
 SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 

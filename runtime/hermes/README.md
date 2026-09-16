@@ -26,7 +26,7 @@ native API Server remains on loopback. Install this directory as a pinned user
 plugin and enable it to add one machine-authenticated connector route:
 
 ```text
-POST /api/plugins/enterprise-bridge/control
+POST /api/plugins/enterprise_bridge/control
 ```
 
 Set a unique `HERMES_ENTERPRISE_CONTROL_SECRET` (at least 43 random URL-safe

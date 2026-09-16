@@ -78,16 +78,21 @@ resolve their location from the current profile binding too. Iris’s dedicated
 state lives under `~/.he-runtime/44444444-4444-4444-8444-444444444444/`; the personal
 `~/.hermes` installation is untouched.
 
-## Deployment limits
+## Staging acceptance and production limits
 
-This change does not deploy a runtime host to staging or production. The staging
-Worker cannot reach a loopback profile on this computer. A hosted deployment
-needs a private authenticated runtime endpoint for each configured profile and
-process/container supervision. Provisioning additional profiles is explicit
-configuration today; this change does not automatically start a runtime for every
-new member. A native run keeps its process while waiting and is bounded by the
-adapter’s 55-minute execution window (60-minute Workflow step timeout). Multi-day
-human waits need a durable suspend/resume lifecycle before hosted rollout. Inbox
+Staging now binds Iris to a managed Hermes Cloud profile through the authenticated
+dashboard connector described below. The acceptance run on September 16, 2026
+used WorkOS, a workspace Nous Portal OAuth grant, DeepSeek V4.1 Flash and the
+official Hermes `0.21.3` runtime. The persisted run was scoped to Iris's agent ID,
+reported `runtime_kind = hermes`, completed in 39 seconds with six governed tool
+calls, and created no requests, decisions, effects or outbound communication.
+The Traces UI displayed it as `Hermes Agent · work` under Iris.
+
+Provisioning additional profiles is still explicit configuration; workspace
+creation does not automatically start a Cloud runtime for every new member. A
+native run keeps its process while waiting and is bounded by the adapter’s
+55-minute execution window (60-minute Workflow step timeout). Multi-day human
+waits need a durable suspend/resume lifecycle before production rollout. Inbox
 proposals do not hold the runtime open while a reviewer decides.
 
 Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
@@ -191,6 +196,14 @@ The acceptance test for the Cloud instance is:
    set, and the reverse Enterprise tool/model bridge; and
 3. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS`, run
    one complete staged turn, and stop the test instance before merge.
+
+That staged turn passed on September 16, 2026. The connector's dashboard
+manifest, agent plugin and `plugins.enabled` entry all use the single identifier
+`enterprise_bridge`; its fixed service route is
+`/api/plugins/enterprise_bridge/control`. Keeping one identifier matters because
+Hermes independently gates the agent plugin and dashboard API against the enabled
+set. A mismatched dashboard name can leave the agent tools loaded while silently
+skipping the control endpoint.
 
 Do not substitute an interactive `agent_dashboard:access` session or an
 `mcp:manage_agents` token for `API_SERVER_KEY`. If Cloud does not publish the

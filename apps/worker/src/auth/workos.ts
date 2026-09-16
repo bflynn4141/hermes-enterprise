@@ -253,7 +253,7 @@ const toUser = (user: SdkUser): WorkOSUser => ({
   profilePictureUrl: user.profilePictureUrl ?? null,
 });
 
-class SdkWorkOS implements WorkOSPort {
+export class SdkWorkOS implements WorkOSPort {
   private readonly workos: WorkOS;
   private readonly clientId: string;
   private readonly cookiePassword: string;
@@ -314,21 +314,24 @@ class SdkWorkOS implements WorkOSPort {
       sessionData: sealed,
       cookiePassword: this.cookiePassword,
     });
-    const result = (await session.refresh({
+    const result = await session.refresh({
       cookiePassword: this.cookiePassword,
       ...(organizationId ? { organizationId } : {}),
-    })) as {
-      authenticated: boolean;
-      sealedSession?: string;
-      accessToken?: string;
-      reason?: string;
-    };
+    });
     if (!result.authenticated || !result.sealedSession) {
       // The SDK reports a spent refresh token as a failed result rather than a
       // throw; `classifyWorkOSError` reads the same `reason` either way.
-      throw Object.assign(new Error('refresh failed'), { code: result.reason ?? 'invalid_grant' });
+      const reason = 'reason' in result ? result.reason : undefined;
+      throw Object.assign(new Error('refresh failed'), { code: reason ?? 'invalid_grant' });
     }
-    return { sealedSession: result.sealedSession, accessToken: result.accessToken ?? '' };
+
+    // WorkOS deliberately omits the access token from a refresh response. The
+    // rotated token lives inside the newly sealed session, so read that cookie
+    // back through the SDK before returning to the authentication adapter.
+    // Passing an empty token here turns an ordinary refresh into `not a JWT`.
+    const refreshed = await this.unseal(result.sealedSession);
+    if (!refreshed?.accessToken) throw new Error('WorkOS refreshed the session without an access token');
+    return { sealedSession: result.sealedSession, accessToken: refreshed.accessToken };
   }
 
   async logoutUrl(sealed: string, returnTo?: string): Promise<string> {
