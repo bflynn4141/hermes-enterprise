@@ -197,7 +197,7 @@ function WorkspacePicker() {
         if (!live) return;
         const error = caught as { status?: number };
         // 404 is "signed in, in no workspace": a real answer, and the screen
-        // for it is the empty picker with the two onboarding routes on it.
+        // for it is the empty picker with its onboarding action.
         setState(error.status === 401 ? 'signed-out' : 'ready');
       });
     return () => {
@@ -239,9 +239,11 @@ function WorkspacePicker() {
             ))}
           </div>
         )}
-        <div className="row">
-          <Button onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>
-        </div>
+        {workspaces.length > 0 ? (
+          <div className="row">
+            <Button onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
