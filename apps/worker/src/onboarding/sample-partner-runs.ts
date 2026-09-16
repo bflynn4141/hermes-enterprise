@@ -379,7 +379,7 @@ export async function samplePartnerSnapshot(
     `SELECT id::text AS id, run_id, application_id, kind, state, request_id, detail, created_at
        FROM onboarding_sample_events
       WHERE workspace_id = $1 AND run_id = $2 AND id > $3::bigint
-      ORDER BY id LIMIT 100`,
+      ORDER BY onboarding_sample_events.id LIMIT 100`,
     [work.workspaceId, run.id, after],
   );
   const head = await work.tx.query<{ head: string }>(
