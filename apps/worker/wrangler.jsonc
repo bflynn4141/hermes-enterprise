@@ -183,6 +183,7 @@
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
         "WORKOS_REDIRECT_URI": "https://staging.hermes.brianflynn.dev/auth/callback",
+        "NOUS_PORTAL_OAUTH_ENABLED": "1",
         "ALLOWED_PROVIDERS": "nous_portal",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
@@ -264,6 +265,7 @@
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://app.hermes.brianflynn.dev",
         "WORKOS_REDIRECT_URI": "https://app.hermes.brianflynn.dev/auth/callback",
+        "NOUS_PORTAL_OAUTH_ENABLED": "1",
         "ALLOWED_PROVIDERS": "nous_portal",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "2000",
         "R2_BUCKET": "hermes-uploads-production"

@@ -1055,6 +1055,12 @@ export const workspaceProviderKeys = pgTable('workspace_provider_keys', {
   oauthClientId: text('oauth_client_id'),
   oauthScope: text('oauth_scope'),
   oauthExpiresAt: ts('oauth_expires_at'),
+  oauthAccountUserId: text('oauth_account_user_id'),
+  oauthAccountEmail: text('oauth_account_email'),
+  oauthOrganizationId: text('oauth_organization_id'),
+  oauthOrganizationName: text('oauth_organization_name'),
+  oauthOrganizationSlug: text('oauth_organization_slug'),
+  oauthAccountVerifiedAt: ts('oauth_account_verified_at'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });

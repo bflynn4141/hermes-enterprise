@@ -56,6 +56,15 @@ export const maskedProviderKeySchema = z
     replaces_key_id: z.uuid().nullable(),
     credential_kind: z.enum(['api_key', 'oauth_device_code']).default('api_key'),
     oauth_expires_at: z.iso.datetime().nullable().default(null),
+    /** Verified, display-safe account metadata returned by Nous Portal. */
+    oauth_account: z.object({
+      user_id: z.string().max(255).nullable(),
+      email: z.email().max(320).nullable(),
+      organization_id: z.string().max(255).nullable(),
+      organization_name: z.string().max(200).nullable(),
+      organization_slug: z.string().max(200).nullable(),
+      verified_at: z.iso.datetime().nullable(),
+    }).strict().nullable().optional(),
   })
   .strict();
 export type MaskedProviderKey = z.infer<typeof maskedProviderKeySchema>;

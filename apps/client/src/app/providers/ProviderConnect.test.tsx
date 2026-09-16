@@ -71,6 +71,10 @@ describe('ProviderConnect', () => {
     const waiting = render({ onOAuthStart: vi.fn(), status: { kind: 'authorizing', userCode: 'ABCD-1234', verificationUri: 'https://portal.nousresearch.com/device' } });
     expect(waiting).toContain('Waiting for approval…');
     expect(waiting).toContain('ABCD-1234');
+
+    const resumed = render({ onOAuthStart: vi.fn(), status: { kind: 'notice', message: 'Sign-in confirmed. Continue with Nous to approve this workspace.' } });
+    expect(resumed).toContain('role="status"');
+    expect(resumed).toContain('Sign-in confirmed. Continue with Nous');
   });
 
   it('shows the manual key only as an honest unconfigured fallback', () => {

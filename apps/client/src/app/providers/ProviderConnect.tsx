@@ -12,6 +12,7 @@ export type ProviderConnectStatus =
   | { kind: 'invalid'; message: string }
   | { kind: 'pending'; message: string }
   | { kind: 'error'; message: string }
+  | { kind: 'notice'; message: string }
   | { kind: 'authorizing'; userCode: string; verificationUri: string }
   | { kind: 'oauth_unavailable'; message: string };
 
@@ -88,6 +89,7 @@ export function ProviderConnect({
             {' '}<a href={status.verificationUri} target="_blank" rel="noopener noreferrer">Open Nous Portal</a>
           </div>
         )}
+        {status.kind === 'notice' && <p className="provider-connect-feedback" role="status">{status.message}</p>}
         {status.kind === 'error' && <p className="provider-connect-feedback is-error" role="alert">{status.message}</p>}
         <div className="provider-connect-actions">
           {onCancel && <Button onClick={onCancel}>Cancel</Button>}

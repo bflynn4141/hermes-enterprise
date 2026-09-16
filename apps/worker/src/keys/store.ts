@@ -61,11 +61,19 @@ interface KeyRow {
   models_synced_at: Date | null;
   credential_kind: string;
   oauth_expires_at: Date | null;
+  oauth_account_user_id: string | null;
+  oauth_account_email: string | null;
+  oauth_organization_id: string | null;
+  oauth_organization_name: string | null;
+  oauth_organization_slug: string | null;
+  oauth_account_verified_at: Date | null;
 }
 
 const MASKED_COLUMNS = `id, provider, label, last4, fingerprint, status, verified_models,
                         added_by, created_at, verified_at, rotated_at, revoked_at, replaces_key_id,
-                        synced_model_count, models_synced_at, credential_kind, oauth_expires_at`;
+                        synced_model_count, models_synced_at, credential_kind, oauth_expires_at,
+                        oauth_account_user_id, oauth_account_email, oauth_organization_id,
+                        oauth_organization_name, oauth_organization_slug, oauth_account_verified_at`;
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
@@ -91,6 +99,16 @@ function mask(row: KeyRow): MaskedProviderKey {
     models_synced_at: iso(row.models_synced_at),
     credential_kind: row.credential_kind as MaskedProviderKey['credential_kind'],
     oauth_expires_at: iso(row.oauth_expires_at),
+    oauth_account: row.oauth_account_user_id || row.oauth_account_email || row.oauth_organization_id
+      ? {
+          user_id: row.oauth_account_user_id,
+          email: row.oauth_account_email,
+          organization_id: row.oauth_organization_id,
+          organization_name: row.oauth_organization_name,
+          organization_slug: row.oauth_organization_slug,
+          verified_at: iso(row.oauth_account_verified_at),
+        }
+      : null,
   };
 }
 
@@ -105,11 +123,24 @@ export interface NousOAuthCredential {
   readonly expires_at: string;
 }
 
+export interface NousOAuthAccount {
+  readonly user_id: string | null;
+  readonly email: string | null;
+  readonly organization_id: string | null;
+  readonly organization_name: string | null;
+  readonly organization_slug: string | null;
+  readonly verified_at: string;
+}
+
 /** Store an OAuth bundle in the same envelope boundary as provider keys. */
 export async function addProviderOAuthConnection(
   tx: Tx,
   env: KekEnv,
-  input: { workspaceId: string; addedBy: string; credential: NousOAuthCredential },
+  input: {
+    workspaceId: string;
+    addedBy: string;
+    credential: NousOAuthCredential;
+  },
 ): Promise<MaskedProviderKey> {
   const keyId = crypto.randomUUID();
   const plaintext = JSON.stringify(input.credential);
@@ -147,6 +178,27 @@ export async function addProviderOAuthConnection(
   );
   const row = rows[0];
   if (!row) throw new KeyStoreError('the OAuth connection did not come back from the insert', 'not_found');
+  return mask(row);
+}
+
+/** Attach display-safe account attribution after the rotating grant is safe. */
+export async function setProviderOAuthAccount(
+  tx: Tx,
+  workspaceId: string,
+  keyId: string,
+  account: NousOAuthAccount,
+): Promise<MaskedProviderKey> {
+  const { rows } = await tx.query<KeyRow>(
+    `UPDATE workspace_provider_keys
+        SET oauth_account_user_id=$3, oauth_account_email=$4, oauth_organization_id=$5,
+            oauth_organization_name=$6, oauth_organization_slug=$7, oauth_account_verified_at=$8
+      WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'
+      RETURNING ${MASKED_COLUMNS}`,
+    [workspaceId, keyId, account.user_id, account.email, account.organization_id,
+     account.organization_name, account.organization_slug, new Date(account.verified_at)],
+  );
+  const row = rows[0];
+  if (!row) throw new KeyStoreError('the OAuth connection was not found', 'not_found');
   return mask(row);
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { INBOX } from '@hermes/shared';
 import { DEFAULT_PROVIDER } from '../../model/constants.js';
+import { storeStepUp } from '../../model/auth.js';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import {
@@ -85,6 +86,15 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   useEffect(() => {
     setState(loadState(storageKey));
   }, [storageKey]);
+
+  useEffect(() => {
+    if (!active) return;
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind !== 'provider_key' || intent.providerFlow !== 'oauth') return;
+    setManualProviderFlow(false);
+    setConnectStatus({ kind: 'notice', message: 'Sign-in confirmed. Continue with Nous to approve this workspace.' });
+    adapter.clearStepUp();
+  }, [active, adapter]);
 
   useEffect(() => {
     if (!active || !app.workspace.id) return;
@@ -202,7 +212,15 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
       popup?.close(); setConnectStatus({ kind: 'error', message: 'Nous sign-in expired. Start again.' });
     }).catch((caught: unknown) => {
       popup?.close();
-      const error = caught as { reason?: string };
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', providerFlow: 'oauth', returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+      }
       setConnectStatus(error.reason === 'oauth_not_configured'
         ? { kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled here yet. A workspace Admin can use an API key below.' }
         : { kind: 'error', message: 'Could not start Nous sign-in. Try again.' });

@@ -35,6 +35,8 @@ export interface StepUpIntent {
   keyId?: string;
   decision?: 'approve' | 'decline';
   note?: string;
+  /** Reopen the hosted provider flow rather than the manual key fallback. */
+  providerFlow?: 'oauth' | 'api_key';
   returnTo: string;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { pollDeviceToken, requestDeviceCode } from '../../src/routes/provider-oauth.js';
+import { fetchNousOAuthAccount, pollDeviceToken, requestDeviceCode } from '../../src/routes/provider-oauth.js';
 
 const cfg = { clientId: 'enterprise-hermes', portalBaseUrl: 'https://portal.nousresearch.com', scope: 'inference:invoke' };
 
@@ -51,5 +51,25 @@ describe('Nous inference OAuth contract', () => {
 
     const wrongScope = vi.fn(async () => Response.json({ access_token: 'access', refresh_token: 'refresh', scope: 'agent_dashboard:access', expires_in: 3600 }));
     await expect(pollDeviceToken(cfg, 'device-secret-value', wrongScope as typeof fetch)).resolves.toEqual({ kind: 'failed', reason: 'oauth_scope_invalid' });
+  });
+
+  it('attributes a grant only from the authenticated Nous account endpoint', async () => {
+    const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(input).toBe('https://portal.nousresearch.com/api/oauth/account');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer access-token');
+      return Response.json({
+        user: { id: 'nous-user-1', email: 'maya@nous.research' },
+        organisation: { id: 'nous-org-1', name: 'Nous Research', slug: 'nous-research' },
+      });
+    });
+    await expect(fetchNousOAuthAccount(cfg, 'access-token', send as typeof fetch)).resolves.toMatchObject({
+      user_id: 'nous-user-1',
+      email: 'maya@nous.research',
+      organization_id: 'nous-org-1',
+      organization_name: 'Nous Research',
+    });
+
+    const unavailable = vi.fn(async () => Response.json({ error: 'not_found' }, { status: 404 }));
+    await expect(fetchNousOAuthAccount(cfg, 'access-token', unavailable as typeof fetch)).resolves.toBeNull();
   });
 });

@@ -5,7 +5,13 @@ import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
 import { withTenantTransaction } from '../db/client.js';
 import { openKey, sealKey } from '../keys/envelope.js';
-import { addProviderOAuthConnection, getProviderKey, type NousOAuthCredential } from '../keys/store.js';
+import {
+  addProviderOAuthConnection,
+  getProviderKey,
+  setProviderOAuthAccount,
+  type NousOAuthAccount,
+  type NousOAuthCredential,
+} from '../keys/store.js';
 import { syncCatalogForKey } from '../keys/catalog-sync.js';
 import { adapterOptions } from '../model/index.js';
 import { allowedProviders } from '../model/allowed.js';
@@ -23,6 +29,54 @@ interface OAuthConfig { clientId: string; portalBaseUrl: string; scope: string }
 interface DeviceResponse {
   device_code: string; user_code: string; verification_uri: string;
   verification_uri_complete: string; expires_in: number; interval: number;
+}
+
+const boundedText = (value: unknown, max: number): string | null => {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text && text.length <= max ? text : null;
+};
+
+const boundedEmail = (value: unknown): string | null => {
+  const email = boundedText(value, 320);
+  return email && /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
+};
+
+/**
+ * Resolve the Nous identity that approved the workspace grant.
+ *
+ * The account endpoint is newer than the pinned device-code contract, so an
+ * older Portal deployment must not make inference unusable. A successful,
+ * trusted response is retained for the Admin audit surface; an unavailable
+ * endpoint leaves the connection explicitly unattributed instead of trusting
+ * unverified JWT display claims.
+ */
+export async function fetchNousOAuthAccount(
+  cfg: OAuthConfig,
+  accessToken: string,
+  fetcher: typeof fetch = fetch,
+): Promise<NousOAuthAccount | null> {
+  const response = await fetcher(`${cfg.portalBaseUrl}/api/oauth/account`, {
+    method: 'GET', redirect: 'manual',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) return null;
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!payload) return null;
+  const user = payload.user && typeof payload.user === 'object' ? payload.user as Record<string, unknown> : {};
+  const organization = payload.organisation && typeof payload.organisation === 'object'
+    ? payload.organisation as Record<string, unknown>
+    : {};
+  const account = {
+    user_id: boundedText(user.id ?? user.user_id, 255),
+    email: boundedEmail(user.email),
+    organization_id: boundedText(organization.id, 255),
+    organization_name: boundedText(organization.name, 200),
+    organization_slug: boundedText(organization.slug, 200),
+    verified_at: new Date().toISOString(),
+  } satisfies NousOAuthAccount;
+  return account.user_id || account.email || account.organization_id ? account : null;
 }
 
 function config(env: Env): OAuthConfig | null {
@@ -165,7 +219,10 @@ export async function pollNousOAuth(c: Context<{ Bindings: Env }>): Promise<Resp
   if (!cfg) return c.json({ error: 'Nous OAuth is not configured', reason: 'oauth_not_configured' }, 503);
   const id = pathUuid(c, 'id');
   const prepared = await inWorkspace(c, async (work) => {
-    work.requireAdmin('connecting Nous Portal'); requireStepUp(work.session);
+    // Step-up is enforced when the grant starts. Polling may legitimately run
+    // beyond the five-minute freshness window, but it still requires an active
+    // WorkOS session, current Admin membership, and the initiating user below.
+    work.requireAdmin('connecting Nous Portal');
     const { rows } = await work.tx.query<SessionRow>(`SELECT * FROM provider_oauth_sessions WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, [work.workspaceId, id]);
     const row = rows[0];
     if (!row || row.initiated_by !== work.userId) throw new RouteError('OAuth session not found', 'not_found', 404);
@@ -199,8 +256,12 @@ export async function pollNousOAuth(c: Context<{ Bindings: Env }>): Promise<Resp
     await withTenantTransaction(c.env, 'app', prepared, (tx) => tx.query(`UPDATE provider_oauth_sessions SET status=$2, completed_at=now(), ciphertext='\\x00'::bytea, wrapped_dek='\\x00'::bytea WHERE id=$1`, [id, outcome.reason === 'expired_token' ? 'expired' : 'failed']));
     return c.json(providerOAuthPollSchema.parse({ status: outcome.reason === 'expired_token' ? 'expired' : 'failed', reason: outcome.reason }));
   }
-  const key = await withTenantTransaction(c.env, 'app', prepared, async (tx) => {
-    const stored = await addProviderOAuthConnection(tx, c.env, { workspaceId: prepared.workspaceId, addedBy: prepared.userId, credential: outcome.credential });
+  let key = await withTenantTransaction(c.env, 'app', prepared, async (tx) => {
+    const stored = await addProviderOAuthConnection(tx, c.env, {
+      workspaceId: prepared.workspaceId,
+      addedBy: prepared.userId,
+      credential: outcome.credential,
+    });
     await tx.query(`UPDATE provider_oauth_sessions SET status='connected', connection_id=$2, completed_at=now(), ciphertext='\\x00'::bytea, wrapped_dek='\\x00'::bytea WHERE id=$1`, [id, stored.id]);
     if (stored.replaces_key_id) {
       await tx.query(`INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, key_id) VALUES ($1,'user',$2,'provider_key.revoked',$3)`, [prepared.workspaceId, prepared.userId, stored.replaces_key_id]);
@@ -208,6 +269,13 @@ export async function pollNousOAuth(c: Context<{ Bindings: Env }>): Promise<Resp
     await tx.query(`INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, key_id) VALUES ($1,'user',$2,'provider_key.added',$3)`, [prepared.workspaceId, prepared.userId, stored.id]);
     return stored;
   });
+  // Persist the rotating credential before making the optional account lookup.
+  // A Portal timeout here must not lose a successfully redeemed device grant.
+  const account = await fetchNousOAuthAccount(cfg, outcome.credential.access_token).catch(() => null);
+  if (account) {
+    key = await withTenantTransaction(c.env, 'app', prepared, (tx) =>
+      setProviderOAuthAccount(tx, prepared.workspaceId, key.id, account));
+  }
   const synced = await syncCatalogForKey(
     (fn) => withTenantTransaction(c.env, 'app', prepared, fn), adapterOptions(c.env),
     prepared.workspaceId, key.id,
