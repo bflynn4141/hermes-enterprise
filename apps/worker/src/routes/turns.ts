@@ -370,9 +370,9 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     );
     const seq = seqRow.rows[0]?.seq ?? 0;
     const message = await work.tx.query<{ id: string }>(
-      `INSERT INTO messages (workspace_id, session_id, seq, role, text, status, run_id, turn)
-       VALUES ($1, $2, $3, 'user', $4, 'complete', $5, 0) RETURNING id`,
-      [work.workspaceId, sessionId, seq, text, runId],
+      `INSERT INTO messages (workspace_id, session_id, seq, role, text, status, client_id, run_id, turn)
+       VALUES ($1, $2, $3, 'user', $4, 'complete', $5, $6, 0) RETURNING id`,
+      [work.workspaceId, sessionId, seq, text, clientTurnId, runId],
     );
     await work.tx.query(
       `INSERT INTO run_turns (workspace_id, run_id, turn, seq, role, provider_message)
@@ -397,6 +397,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
             blocks: [],
             status: 'complete',
             run_id: runId,
+            client_turn_id: clientTurnId,
           },
         },
       ])),

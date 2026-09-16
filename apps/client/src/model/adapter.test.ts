@@ -93,7 +93,7 @@ interface Call {
   body: unknown;
 }
 
-function makeFetch(overrides: Record<string, () => Response> = {}) {
+function makeFetch(overrides: Record<string, () => Response | Promise<Response>> = {}) {
   const calls: Call[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://test.local');
@@ -125,7 +125,7 @@ function makeFetch(overrides: Record<string, () => Response> = {}) {
   return { impl, calls };
 }
 
-function makeAdapter(overrides: Record<string, () => Response> = {}) {
+function makeAdapter(overrides: Record<string, () => Response | Promise<Response>> = {}) {
   const store = createStore(initialState());
   const { impl, calls } = makeFetch(overrides);
   const adapter = createAdapter({
@@ -387,6 +387,88 @@ describe('the adapter', () => {
     await vi.advanceTimersByTimeAsync(0);
     seen = [];
     expect(state().sessions[SESSION]!.draft.text).toBe('');
+    adapter.dispose();
+  });
+
+  it('shows the sent message and working state before turn admission answers, then reconciles once', async () => {
+    let answer: ((response: Response) => void) | null = null;
+    const pendingResponse = new Promise<Response>((resolve) => { answer = resolve; });
+    const { adapter, calls, store, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => pendingResponse,
+    });
+    await adapter.start();
+    store.dispatch({ type: 'session/draft', id: SESSION, text: 'Screen the next applicant.' });
+
+    const sent = adapter.send(SESSION, 'Screen the next applicant.');
+    const optimistic = state().sessions[SESSION]!;
+    expect(optimistic.pendingTurn?.message.text).toBe('Screen the next applicant.');
+    expect(optimistic.run).toMatchObject({ id: optimistic.pendingTurn?.clientTurnId, status: 'working' });
+    expect(optimistic.draft.text).toBe('');
+    await adapter.stop(SESSION);
+    expect(calls.some((call) => call.path.endsWith('/stop'))).toBe(false);
+
+    answer!(new Response(JSON.stringify({ run_id: RUN, status: 'working', attempt: 1 }), { status: 201, headers: { 'content-type': 'application/json' } }));
+    await sent;
+    const turnId = state().sessions[SESSION]!.pendingTurn!.clientTurnId;
+    expect(state().sessions[SESSION]!.pendingTurn?.runId).toBe(RUN);
+    expect(state().sessions[SESSION]!.run?.id).toBe(RUN);
+
+    const socket = FakeSocket.instances.find((candidate) => candidate.url.includes('/hub/session/'))!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.deliver(streamEvent('message.appended', {
+      message_id: mockUuid(22), session_id: SESSION, seq: 0, role: 'user', kind: null,
+      text: 'Screen the next applicant.', blocks: [], status: 'complete', run_id: RUN,
+      client_turn_id: turnId,
+    }, 1n));
+    expect(state().sessions[SESSION]!.pendingTurn).toBeNull();
+    expect(state().sessions[SESSION]!.messages).toHaveLength(1);
+    expect(state().sessions[SESSION]!.messages[0]?.text).toBe('Screen the next applicant.');
+    adapter.dispose();
+  });
+
+  it('keeps the first message recoverable when a new session cannot be created', async () => {
+    let refuseCreate: ((error: Error) => void) | null = null;
+    const pendingCreate = new Promise<Response>((_resolve, reject) => { refuseCreate = reject; });
+    const { adapter, store, state, calls } = makeAdapter({
+      [`POST /w/${WS}/sessions`]: () => pendingCreate,
+    });
+    await adapter.start();
+
+    const creating = adapter.createSession().catch((error: unknown) => error);
+    const localId = state().activeSessionId!;
+    expect(localId).toMatch(/^local-/);
+    store.dispatch({ type: 'session/draft', id: localId, text: 'Help me configure partner screening.' });
+    const sending = adapter.send(localId, 'Help me configure partner screening.').catch((error: unknown) => error);
+    expect(state().sessions[localId]!.pendingTurn?.message.text).toBe('Help me configure partner screening.');
+
+    refuseCreate!(new Error('offline'));
+    await Promise.all([creating, sending]);
+
+    expect(state().sessions[localId]).toBeDefined();
+    expect(state().sessions[localId]!.pending).toBe(false);
+    expect(state().sessions[localId]!.pendingTurn).toBeNull();
+    expect(state().sessions[localId]!.draft.text).toBe('Help me configure partner screening.');
+    expect(calls.some((call) => call.path.includes(`/sessions/${localId}/turns`))).toBe(false);
+    adapter.dispose();
+  });
+
+  it('removes the optimistic turn and restores the draft when admission is refused', async () => {
+    let refuse: ((error: Error) => void) | null = null;
+    const pendingResponse = new Promise<Response>((_resolve, reject) => { refuse = reject; });
+    const { adapter, store, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => pendingResponse,
+    });
+    await adapter.start();
+    store.dispatch({ type: 'session/draft', id: SESSION, text: 'Try this turn.' });
+
+    const sent = adapter.send(SESSION, 'Try this turn.');
+    expect(state().sessions[SESSION]!.pendingTurn).not.toBeNull();
+    refuse!(new Error('offline'));
+    await expect(sent).rejects.toThrow('offline');
+    expect(state().sessions[SESSION]!.pendingTurn).toBeNull();
+    expect(state().sessions[SESSION]!.run).toBeNull();
+    expect(state().sessions[SESSION]!.draft.text).toBe('Try this turn.');
     adapter.dispose();
   });
 

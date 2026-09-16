@@ -92,6 +92,21 @@ export interface DraftState {
   attachments: { id: string; label: string; icon?: string }[];
 }
 
+/**
+ * A turn the person has sent but the server has not projected back yet.
+ *
+ * Keeping it beside the authoritative message list makes the composer feel
+ * immediate without pretending the server accepted work it may still refuse.
+ * `clientTurnId` is the idempotency key that reconciles `run.started`; `runId`
+ * is filled as soon as either the POST response or that event arrives.
+ */
+export interface PendingTurn {
+  clientTurnId: string;
+  runId: string | null;
+  message: Message;
+  previousStatus: string;
+}
+
 export interface SessionState {
   id: string;
   agentId: string | null;
@@ -109,6 +124,7 @@ export interface SessionState {
   oldestSeq: number | null;
   hasEarlier: boolean;
   draft: DraftState;
+  pendingTurn: PendingTurn | null;
   run: Run | null;
   stream: StreamAccumulator | null;
   focus: Ref | null;
@@ -306,6 +322,7 @@ export function sessionFrom(row: Session): SessionState {
     oldestSeq: null,
     hasEarlier: true,
     draft: { text: '', attachments: [] },
+    pendingTurn: null,
     run: null,
     stream: null,
     focus: row.focus_ref,
@@ -336,7 +353,7 @@ export const DEFAULT_SESSION_TITLE = 'New session';
  * three of them are a bug that looks like a list of identical rows.
  */
 export const isBlankSession = (s: SessionState): boolean =>
-  s.messages.length === 0 && s.run === null && (s.title === DEFAULT_SESSION_TITLE || s.title.trim() === '');
+  s.messages.length === 0 && s.pendingTurn === null && s.run === null && (s.title === DEFAULT_SESSION_TITLE || s.title.trim() === '');
 
 /**
  * The word a session row shows beside its title.
@@ -426,10 +443,14 @@ export type Action =
   | { type: 'session/detach'; id: string; attachmentId: string }
   | { type: 'session/set'; id: string; patch: Partial<SessionState> }
   | { type: 'session/scroll'; id: string; scrollTop: number }
+  | { type: 'turn/optimistic'; sessionId: string; clientTurnId: string; message: Message; run: Run }
+  | { type: 'turn/accepted'; sessionId: string; clientTurnId: string; runId: string; status: Run['status']; attempt: number }
+  | { type: 'turn/rejected'; sessionId: string; clientTurnId: string }
   | { type: 'message/add'; sessionId: string; message: Message }
+  | { type: 'message/confirm-turn'; sessionId: string; message: Message; clientTurnId?: string | null }
   | { type: 'message/update'; sessionId: string; id: string; patch: Partial<Message> }
   | { type: 'message/prepend'; sessionId: string; messages: Message[]; hasEarlier: boolean }
-  | { type: 'run/start'; sessionId: string; run: Run }
+  | { type: 'run/start'; sessionId: string; run: Run; clientTurnId?: string }
   | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number; toolCallId?: string | null }
   | { type: 'run/status'; sessionId: string; status: Run['status']; patch?: Partial<Run> }
   | { type: 'run/guide'; sessionId: string; text: string; id: string }
@@ -639,6 +660,7 @@ export function reduce(state: AppState, action: Action): AppState {
         oldestSeq: null,
         hasEarlier: false,
         draft: { text: '', attachments: [] },
+        pendingTurn: null,
         run: null,
         stream: null,
         focus: null,
@@ -663,7 +685,15 @@ export function reduce(state: AppState, action: Action): AppState {
       if (!local) return state;
       const sessions = { ...state.sessions };
       delete sessions[action.localId];
-      sessions[action.serverId] = { ...local, id: action.serverId, pending: false };
+      sessions[action.serverId] = {
+        ...local,
+        id: action.serverId,
+        pending: false,
+        pendingTurn: local.pendingTurn
+          ? { ...local.pendingTurn, message: { ...local.pendingTurn.message, session_id: action.serverId } }
+          : null,
+        run: local.run ? { ...local.run, session_id: action.serverId } : null,
+      };
       return {
         ...state,
         sessions,
@@ -693,6 +723,7 @@ export function reduce(state: AppState, action: Action): AppState {
             oldestSeq: existing.oldestSeq,
             hasEarlier: existing.hasEarlier,
             draft: existing.draft,
+            pendingTurn: existing.pendingTurn,
             run: existing.run,
             stream: existing.stream,
             scrollTop: existing.scrollTop,
@@ -767,6 +798,46 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'session/scroll':
       return withSession(state, action.id, (s) => ({ ...s, scrollTop: action.scrollTop }));
 
+    // --- turn admission ---
+    // The first painted frame after Send is local: the person's own message
+    // and Iris's working state. Server events remain authoritative and replace
+    // this projection as soon as they arrive.
+    case 'turn/optimistic':
+      return withSession(state, action.sessionId, (s) => ({
+        ...s,
+        pendingTurn: { clientTurnId: action.clientTurnId, runId: null, message: action.message, previousStatus: s.status },
+        run: action.run,
+        status: 'Working',
+        lastActivity: Date.now(),
+      }));
+    case 'turn/accepted':
+      return withSession(state, action.sessionId, (s) => {
+        if (s.pendingTurn?.clientTurnId !== action.clientTurnId) return s;
+        const run = s.run && (s.run.id === action.clientTurnId || s.run.id === s.pendingTurn.runId)
+          ? { ...s.run, id: action.runId, status: action.status, attempt: action.attempt }
+          : s.run;
+        return {
+          ...s,
+          pendingTurn: {
+            ...s.pendingTurn,
+            runId: action.runId,
+            message: { ...s.pendingTurn.message, run_id: action.runId },
+          },
+          run,
+        };
+      });
+    case 'turn/rejected':
+      return withSession(state, action.sessionId, (s) => {
+        if (s.pendingTurn?.clientTurnId !== action.clientTurnId) return s;
+        const optimisticRun = s.run && (s.run.id === action.clientTurnId || s.run.id === s.pendingTurn.runId);
+        return {
+          ...s,
+          pendingTurn: null,
+          run: optimisticRun ? null : s.run,
+          status: optimisticRun ? s.pendingTurn.previousStatus : s.status,
+        };
+      });
+
     // --- messages ---
     case 'message/add': {
       const duplicate = state.sessions[action.sessionId]?.messages.some((m) => m.id === action.message.id) ?? false;
@@ -783,6 +854,37 @@ export function reduce(state: AppState, action: Action): AppState {
       );
       return duplicate ? next : countUnread(state, next, action.sessionId, action.message.role);
     }
+    case 'message/confirm-turn': {
+      const session = state.sessions[action.sessionId];
+      if (!session) return state;
+      const duplicate = session.messages.some((message) => message.id === action.message.id);
+      const pending = session.pendingTurn;
+      const confirmsPending = Boolean(
+        pending &&
+          action.message.role === 'user' &&
+          action.message.seq >= pending.message.seq &&
+          ((action.clientTurnId && action.clientTurnId === pending.clientTurnId) ||
+            (action.message.kind === null &&
+              action.message.text === pending.message.text &&
+              ((!pending.runId && action.message.run_id !== null) || action.message.run_id === pending.runId))),
+      );
+      const next = withSession(state, action.sessionId, (s) => {
+        let run = s.run;
+        if (confirmsPending && pending && run?.id === pending.clientTurnId && action.message.run_id) {
+          run = { ...run, id: action.message.run_id };
+        }
+        return {
+          ...s,
+          pendingTurn: confirmsPending ? null : s.pendingTurn,
+          run,
+          lastActivity: duplicate ? s.lastActivity : Date.now(),
+          unread: duplicate || action.sessionId === state.activeSessionId ? s.unread : true,
+          oldestSeq: duplicate ? s.oldestSeq : s.oldestSeq ?? action.message.seq,
+          messages: duplicate ? s.messages : [...s.messages, action.message],
+        };
+      });
+      return duplicate ? next : countUnread(state, next, action.sessionId, action.message.role);
+    }
     case 'message/update':
       return withSession(state, action.sessionId, (s) => ({ ...s, messages: s.messages.map((m) => (m.id === action.id ? { ...m, ...action.patch } : m)) }));
     case 'message/prepend':
@@ -795,7 +897,19 @@ export function reduce(state: AppState, action: Action): AppState {
 
     // --- runs ---
     case 'run/start':
-      return withSession(state, action.sessionId, (s) => ({ ...s, run: action.run, status: 'Working' }));
+      return withSession(state, action.sessionId, (s) => ({
+        ...s,
+        pendingTurn:
+          action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId
+            ? {
+                ...s.pendingTurn,
+                runId: action.run.id,
+                message: { ...s.pendingTurn.message, run_id: action.run.id },
+              }
+            : s.pendingTurn,
+        run: action.run,
+        status: 'Working',
+      }));
     case 'run/step':
       return withRun(state, action.sessionId, (run) => {
         const found = run.steps.some((step) => step.id === action.stepId);
@@ -952,7 +1066,14 @@ export function reduce(state: AppState, action: Action): AppState {
       // A resync drops derived state and keeps what the human typed (spec §5.5).
       const sessions: Record<string, SessionState> = {};
       for (const [id, session] of Object.entries(state.sessions)) {
-        sessions[id] = { ...session, messages: [], oldestSeq: null, hasEarlier: true, run: null, stream: null };
+        sessions[id] = {
+          ...session,
+          messages: [],
+          oldestSeq: null,
+          hasEarlier: true,
+          run: session.pendingTurn ? session.run : null,
+          stream: null,
+        };
       }
       return { ...state, entities: emptyEntities(), sessions, cursors: { session: {}, workspace: 0n } };
     }
@@ -989,6 +1110,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       out.push({
         type: 'run/start',
         sessionId: p.session_id,
+        clientTurnId: p.client_turn_id,
         run: {
           id: p.run_id,
           session_id: p.session_id,
@@ -1084,8 +1206,9 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     case 'message.appended': {
       const p = event.payload;
       out.push({
-        type: 'message/add',
+        type: p.role === 'user' ? 'message/confirm-turn' : 'message/add',
         sessionId: p.session_id,
+        ...(p.role === 'user' ? { clientTurnId: p.client_turn_id } : {}),
         message: { id: p.message_id, session_id: p.session_id, seq: p.seq, role: p.role, kind: p.kind, text: p.text, blocks: p.blocks, status: p.status, run_id: p.run_id, at: event.at },
       });
       break;

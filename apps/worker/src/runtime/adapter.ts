@@ -28,6 +28,8 @@ export interface RuntimeDeps {
   /** Exact non-secret managed skill/config versions persisted with the run. */
   skillSnapshot?: readonly RuntimeSkillManifest[];
   pollMs?: number;
+  /** Test seam for the durable stream coalescing window. */
+  batchMs?: number;
 }
 const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exponential' }, timeout: '1 minute' };
 // A failed stream is reconciled with native status, never replayed as a new run.
@@ -122,8 +124,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       let pending = '';
       let sequence = 0;
       let flushedAt = 0;
+      const pollMs = deps.pollMs ?? 1000;
+      const batchMs = deps.batchMs ?? 75;
       const flush = async (force = false) => {
-        if (!pending || (!force && Date.now() - flushedAt < 100)) return;
+        if (!pending || (!force && Date.now() - flushedAt < batchMs)) return;
         const delta = pending; pending = ''; flushedAt = Date.now();
         const saved = await db.emit([{ kind: 'message.delta', sessionId: run.sessionId, payload: {
           message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
@@ -141,8 +145,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       try {
         while (!terminalHermesStatus(status.status)) {
           if (Date.now() >= deadline) throw new Error('Hermes run exceeded its execution time limit');
-          const event = next ? await Promise.race([next, delay(deps.pollMs ?? 1000).then(() => undefined)]) : undefined;
-          if (event === null || event?.done) next = null;
+          // A short delta that arrives inside the coalescing window still gets
+          // a trailing deadline. Waiting only for the next native frame left
+          // that text parked until the one-second status poll when the model
+          // paused after a token burst.
+          const untilBatch = pending ? Math.max(0, batchMs - (Date.now() - flushedAt)) : pollMs;
+          const waitMs = Math.min(pollMs, untilBatch);
+          const event = next ? await Promise.race([next, delay(waitMs).then(() => undefined)]) : undefined;
+          if (event === null || event?.done) {
+            // `read1` can surface the last native bytes immediately before EOF
+            // or a disconnect. Publish them now; the status poll is recovery,
+            // not part of the person's text latency budget.
+            await flush(true);
+            next = null;
+          }
           else if (event?.value) {
             const payload = event.value;
             if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
@@ -151,11 +167,16 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
               await flush();
             }
             if (payload.event.startsWith('run.') && ['run.completed','run.failed','run.cancelled'].includes(payload.event)) {
+              // A terminal frame often follows the last token in the same TCP
+              // read. Do not hold that token behind a potentially slow status
+              // reconciliation request.
+              await flush(true);
               status = await client.status(id);
             }
             next = terminalHermesStatus(status.status) ? null : events.next().catch(() => null);
           }
-          if (Date.now() - lastControlCheck >= (deps.pollMs ?? 1000)) {
+          if (pending && Date.now() - flushedAt >= batchMs) await flush(true);
+          if (Date.now() - lastControlCheck >= pollMs) {
             lastControlCheck = Date.now();
             if (!stopped && await db.stopRequested(run.id)) {
               await client.stop(id); stopped = true;
@@ -166,10 +187,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
                 if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
               }
             }
-            status = await client.status(id);
             await flush(true);
+            status = await client.status(id);
           }
-          if (!next && !terminalHermesStatus(status.status)) await delay(deps.pollMs ?? 1000);
+          if (!next && !terminalHermesStatus(status.status)) await delay(pollMs);
         }
       } finally { controller.abort(); }
       terminal = true;

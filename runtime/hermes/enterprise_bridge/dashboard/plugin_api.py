@@ -134,8 +134,13 @@ class NativeControl:
 
 def _stream_native(response):
     try:
+        # ``HTTPResponse.read(size)`` waits for the requested byte count or
+        # EOF, which turns a short model response into one burst after the run
+        # finishes. ``read1`` returns the bytes already available from the
+        # socket, preserving the native SSE frame cadence through Hermes Cloud.
+        read_available = getattr(response, "read1", response.read)
         while True:
-            chunk = response.read(8192)
+            chunk = read_available(8192)
             if not chunk:
                 break
             yield chunk
@@ -170,7 +175,14 @@ async def enterprise_control(request: Request):
                 except (ValueError, UnicodeDecodeError):
                     body = {"error": "native events request failed"}
                 return JSONResponse(body, status_code=response.code)
-            return StreamingResponse(_stream_native(response), media_type="text/event-stream")
+            return StreamingResponse(
+                _stream_native(response),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         status, body = await asyncio.to_thread(control.dispatch, payload)
         return JSONResponse(body, status_code=status)
     except ValueError as error:

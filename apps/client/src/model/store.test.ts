@@ -51,6 +51,7 @@ function session(id: string, patch: Partial<SessionState> = {}): SessionState {
     oldestSeq: null,
     hasEarlier: false,
     draft: { text: '', attachments: [] },
+    pendingTurn: null,
     run: null,
     stream: null,
     focus: null,
@@ -248,6 +249,39 @@ describe('sessions', () => {
     const state = feed(base(), event('run.started', { run_id: RUN, session_id: SESSION_A, attempt: 1, engine_version: 1, client_turn_id: 't1', mode: 'work', model_id: 'deepseek-flash', effort: 'high', title: 'Screen', steps: [] }, 1n));
     expect(state.sessions[SESSION_A]!.run).not.toBeNull();
     expect(state.sessions[SESSION_B]!.run).toBeNull();
+  });
+
+  it('reconciles an optimistic turn exactly when server events beat the POST response', () => {
+    const clientTurnId = mockUuid(23);
+    let state = reduce(base(), {
+      type: 'turn/optimistic',
+      sessionId: SESSION_A,
+      clientTurnId,
+      message: {
+        id: mockUuid(24), session_id: SESSION_A, seq: 0, role: 'user', kind: null,
+        text: 'Screen the next applicant.', blocks: [], status: 'complete', run_id: clientTurnId,
+      },
+      run: {
+        id: clientTurnId, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+        attempt: 1, title: null, steps: [], queue: [], guidance: null,
+      },
+    });
+    state = feed(state, event('run.started', {
+      run_id: RUN, session_id: SESSION_A, attempt: 1, engine_version: 1,
+      client_turn_id: clientTurnId, mode: 'work', model_id: 'deepseek-flash',
+      effort: 'high', title: null, steps: [],
+    }, 1n));
+    expect(state.sessions[SESSION_A]!.pendingTurn?.runId).toBe(RUN);
+    expect(state.sessions[SESSION_A]!.run?.id).toBe(RUN);
+
+    state = feed(state, event('message.appended', {
+      message_id: MESSAGE, session_id: SESSION_A, seq: 0, role: 'user', kind: null,
+      text: 'Screen the next applicant.', blocks: [], status: 'complete', run_id: RUN,
+      client_turn_id: clientTurnId,
+    }, 2n));
+    expect(state.sessions[SESSION_A]!.pendingTurn).toBeNull();
+    expect(state.sessions[SESSION_A]!.messages).toHaveLength(1);
+    expect(state.sessions[SESSION_A]!.messages[0]?.id).toBe(MESSAGE);
   });
 
   it('archiving the active session falls back to the next unarchived one', () => {
