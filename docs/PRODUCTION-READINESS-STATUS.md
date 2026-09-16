@@ -34,7 +34,7 @@ Three internal read-only subagents completed client, server and repository sweep
 
 ## Remaining production gates
 
-- Configure WorkOS email methods, verified domains and enterprise SSO connections in a real staging WorkOS environment, then complete [the acceptance checklist](WORKOS-PRODUCTION-CHECKLIST.md). No WorkOS credentials were available for this pass.
+- Staging AuthKit is configured for invite-only access and the real hosted page and one application-wide invitation delivery have been verified. Complete invitation acceptance, callback/session/MFA/logout, organization reconciliation and workspace creation, then attach and exercise a real enterprise SSO connection using [the acceptance checklist](WORKOS-PRODUCTION-CHECKLIST.md).
 - Provision one hosted Hermes profile per agent with a unique supervisor/fence, whole-process sandbox, private network route, credential rotation, logs/metrics, profile erasure and backup/restore. Staging/production correctly remain on the legacy runtime until this exists.
 - Implement full immutable attachment delivery or a governed attachment-read tool. The current live path rejects nonempty attachments rather than pretending Iris read them.
 - Extend per-call reservations to ordinary runs, add durable orphan reconciliation, and integrate real payment/signature/mail/PDF executors. Approval and execution remain separate states.

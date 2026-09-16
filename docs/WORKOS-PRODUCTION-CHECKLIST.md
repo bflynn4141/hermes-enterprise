@@ -144,6 +144,30 @@ Record the WorkOS environment, application/client ID suffix, timestamp, and
 pass/fail evidence for each item. Do not record authorization codes, invitation
 tokens, cookies, API keys, or full JWTs.
 
+### Staging verification — September 15, 2026
+
+- **Environment:** WorkOS Staging; hosted UI
+  `reasonable-voyage-37-staging.authkit.app`; client suffix `…E90T`.
+- **Entry point:** `https://staging.hermes.brianflynn.dev/auth/login` redirected
+  to the expected AuthKit application. The live page displayed **Sign in to
+  Hermes** with email, Google, Microsoft, GitHub, and Apple options.
+- **Invite-only behavior:** public sign-up remains disabled. An application-wide
+  invitation was created for the first test user at 7:27 PM Pacific and the
+  WorkOS email event reached **Delivered**. The message also appeared in the
+  destination inbox with subject **[STAGING] You’ve been invited to Hermes**.
+- **Branding:** dark appearance, Inter, medium radius, the Hermes navy-to-violet
+  gradient, Iris mark, glass card, and branded primary action were saved and
+  visually verified on the live hosted page. The reusable source is in
+  [`assets/hermes-authkit.css`](assets/hermes-authkit.css) and
+  [`assets/hermes-authkit-icon.svg`](assets/hermes-authkit-icon.svg).
+
+This verifies the hosted entry point and WorkOS-managed invitation delivery. It
+does not yet verify invitation acceptance, callback state exchange, the session
+cookie, MFA, organization membership reconciliation, refresh, step-up, logout,
+workspace creation, or a real enterprise IdP. Complete those items using the
+fresh invitation; an earlier magic-code challenge for an unknown user remains
+invalid by design.
+
 ## What automated tests prove—and do not prove
 
 `FakeWorkOS` signs genuine RS256 JWTs and publishes an in-memory JWKS. Database
@@ -153,7 +177,8 @@ and fake-auth refusal deterministically. Client tests prove the visible sign-out
 control uses `/auth/logout`, and the production build scans for fake-auth UI
 markers.
 
-No WorkOS credentials were available during this sweep. Therefore no real
-hosted email, AuthKit page, MFA challenge, SSO IdP, live refresh rotation, or
-WorkOS logout was claimed as verified. The staging acceptance test above is the
-remaining external proof.
+The original code sweep had no WorkOS dashboard access, so its automated proof
+remains deliberately bounded. A later staging check verified the real hosted
+AuthKit page and WorkOS invitation delivery as recorded above. MFA, a real SSO
+IdP, callback/session behavior, refresh rotation, membership reconciliation,
+and WorkOS logout remain external acceptance work.
