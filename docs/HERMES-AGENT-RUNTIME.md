@@ -41,8 +41,11 @@ reasoning is required for the activity indicator.
 
 ## Tools and credentials
 
-The official runtime loads a narrow enterprise plugin. It gets runtime run and
-call IDs from native ContextVars, not model arguments. The Worker maps those IDs
+The official runtime loads a narrow enterprise plugin. The plugin also registers
+reviewed, read-only enterprise skills. The Worker returns an agent-scoped
+non-secret skill manifest before startup; selected packages are loaded through
+Hermes's native `skills.auto_load` and configured through `skills.config`. It
+gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
 refused. Old attempts and stopped runs cannot execute tools.
@@ -94,9 +97,13 @@ a job later appears. Automatic memory extraction, background review and learning
 are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before
-opening this execution path to hosted customer data. Shared skills stay governed
-by the enterprise app; this change does not claim full native skill lifecycle
-integration. Hermesmail remains a concept address, not a provisioned mailbox.
+opening this execution path to hosted customer data. Dedicated profiles remove
+the general bundled-skill catalog and can auto-load only reviewed plugin packages;
+the only native skill tool retained is `skill_view`, restricted by the plugin to
+the assigned package because official auto-load is gated on a skills tool. Skill
+listing, creation and self-editing remain disabled. See
+[Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md). Hermesmail remains
+a concept address, not a provisioned mailbox.
 
 Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server),
 [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),

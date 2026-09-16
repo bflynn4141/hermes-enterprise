@@ -8,6 +8,13 @@ that creates a pending Inbox request for a human reviewer. There is no outreach,
 messaging, application submission, admission, payment, signature, or other
 external write in this flow.
 
+Iris now receives this procedure as the native, read-only Hermes skill
+`enterprise_bridge:partner-program-screening` version `1.0.0`. Its approved
+non-secret program settings are injected through `skills.config`; source and
+model credentials remain server-side. The skill is automatically in use when
+this agent has a valid policy. It describes the review workflow but grants no
+tool or decision authority. See [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md).
+
 The connector's `deterministic_priority` is triage, not an Iris or Hermes
 decision. Its four configurable criteria are keyword relevance, recent
 repository activity, public adoption, and open-source signals. Each criterion
@@ -53,7 +60,8 @@ Source policy and quota references were checked on 2026-09-16:
    time, URL, API request count, rate-limit snapshot, score criteria,
    confidence, and gaps are preserved.
 4. The response gives the user a deliberate `ask_iris_to_screen` prompt. The
-   agent can call `list_partner_candidates` and `get_partner_candidate`; both
+   agent's auto-loaded Partner Program skill guides the review. It can call
+   `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates.
 5. Iris may call `propose_request`. A discovered application is accepted only
    if its candidate identity, source, priority, and every cited evidence ID

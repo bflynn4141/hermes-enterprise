@@ -17,6 +17,7 @@ const weightsSchema = z
 
 export const partnerAgentConfigSchema = z
   .object({
+    program_name: z.string().min(1).max(120).default('Hermes Partner Program'),
     source_purpose: z.literal('organization_partner_research'),
     organization_only: z.literal(true),
     no_outreach: z.literal(true),
@@ -107,6 +108,7 @@ export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMat
 /** Exact non-secret config persisted on a run for reproducible priority scores. */
 export function configSnapshot(config: PartnerAgentConfig): Record<string, unknown> {
   return {
+    program_name: config.program_name,
     source_purpose: config.source_purpose,
     organization_only: config.organization_only,
     no_outreach: config.no_outreach,

@@ -84,7 +84,9 @@ export class HermesClient {
     return { durableIdempotency: true, retentionSeconds };
   }
   async submit(body: Record<string, unknown>, key: string): Promise<string> {
-    const { _enterprise_tool_names, ...nativeBody } = body;
+    // Audit-only fields stay in the Worker's immutable runtime request. The
+    // native API sees the procedure through its governed profile instead.
+    const { _enterprise_tool_names, _enterprise_skills, ...nativeBody } = body;
     const response = await this.request('/v1/runs', { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(nativeBody) });
     const result = await response.json() as { run_id?: unknown };
     if (typeof result.run_id !== 'string' || !/^run_[\w-]{1,180}$/.test(result.run_id)) throw new Error('Hermes returned an invalid run id');

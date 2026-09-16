@@ -58,6 +58,23 @@ def main():
             elif self.path.endswith("/tools"):
                 self.reply(200, {"tools": [{"name": "enterprise_echo", "description": "Echo a value through the governed enterprise bridge.",
                                           "parameters": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}}]})
+            elif self.path.endswith("/skills"):
+                self.reply(200, {"skills": [{
+                    "name": "enterprise_bridge:partner-program-screening",
+                    "version": "1.0.0",
+                    "auto_load": True,
+                    "config": {"partner_program": {
+                        "program_name": "Hermes Partner Program",
+                        "role_label": "Technical ecosystem partner",
+                        "source_purpose": "organization_partner_research",
+                        "screening_dimensions": ["Track Record", "Capacity", "Fit"],
+                        "search_queries": ["developer agents"],
+                        "intake_urls": [], "keywords": ["agents"],
+                        "ranking_weights": {"relevance": 40, "activity": 25, "adoption": 20, "openness": 15},
+                        "minimum_priority": 50, "lookback_days": 365, "max_candidates": 5,
+                        "organization_only": True, "no_outreach": True, "human_review_required": True,
+                    }},
+                }]})
             elif self.path.endswith("/models"):
                 self.reply(200, {"object": "list", "data": [{"id": "test/fixture", "object": "model"}]})
             else:
@@ -201,7 +218,11 @@ def main():
                 "log": log_file.read_text(),
             }
             assert tool_calls[0]["tool_call_id"].startswith("call_"), tool_calls
-            assert catalog_names == {"enterprise_echo"}, catalog_names
+            assert catalog_names == {"enterprise_echo", "skill_view"}, catalog_names
+            assert any(
+                "Partner Program Screening" in str(message.get("content", ""))
+                for call in model_calls for message in call.get("messages", [])
+            ), "Managed Partner Program skill was not auto-loaded into model context"
             process.terminate()
             process.wait(timeout=20)
             process = None

@@ -29,6 +29,7 @@ import { RuntimeDb } from '../runtime/store.js';
 import { runtimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
+import { runtimeSkillManifests } from '../runtime/skills.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -342,8 +343,15 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
       const runInput = { runId: params.runId, attempt: params.attempt, traceId: params.traceId };
       if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
         const run = await db.loadRun(params.runId);
-        const binding = runtimeBinding(this.env, params.workspaceId, run?.agentId ?? '');
-        await runHermesAttempt({ db, client: new HermesClient(binding.baseUrl, binding.apiKey), profile: binding.profile, forward: deps.forward }, engineStep(step), runInput);
+        if (!run?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
+        const binding = runtimeBinding(this.env, params.workspaceId, run.agentId);
+        await runHermesAttempt({
+          db,
+          client: new HermesClient(binding.baseUrl, binding.apiKey),
+          profile: binding.profile,
+          forward: deps.forward,
+          skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
+        }, engineStep(step), runInput);
       } else {
         await runAttempt(deps, engineStep(step), runInput);
       }

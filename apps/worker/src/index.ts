@@ -15,7 +15,7 @@ import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
-import { listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
+import { listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
@@ -241,6 +241,7 @@ app.use('*', async (c, next) => {
 app.get('/health', health);
 // Server-to-server profile credentials; these routes never accept browser auth.
 app.get('/internal/runtime/w/:ws/agents/:agentId/tools', listRuntimeTools);
+app.get('/internal/runtime/w/:ws/agents/:agentId/skills', listRuntimeSkills);
 app.post('/internal/runtime/w/:ws/agents/:agentId/calls', callRuntimeTool);
 app.get('/internal/runtime/w/:ws/agents/:agentId/model/v1/models', runtimeModels);
 app.post('/internal/runtime/w/:ws/agents/:agentId/model/v1/chat/completions', runtimeChatCompletions);

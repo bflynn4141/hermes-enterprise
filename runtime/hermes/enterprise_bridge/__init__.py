@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import re
 import time
 import urllib.error
@@ -145,13 +146,27 @@ def register(ctx):
         pending_timeout=ctx.get_config("pending_timeout_seconds", 86400),
     )
     # Install the veto before network discovery; a discovery failure exposes zero tools.
-    allowed = set()
+    allowed = {"skill_view"}
 
-    def guard(tool_name, **kwargs):
+    def guard(tool_name, args=None, **kwargs):
+        if tool_name == "skill_view":
+            args = args if isinstance(args, dict) else {}
+            if (args.get("name") == "enterprise_bridge:partner-program-screening"
+                    and not args.get("file_path")
+                    and set(args).issubset({"name", "preprocess"})):
+                return None
+            return {"action": "block", "message": "Only the assigned managed skill can be viewed."}
         if tool_name not in allowed:
             return {"action": "block", "message": "Only governed enterprise tools are enabled in this profile."}
 
     ctx.register_hook("pre_tool_call", guard)
+    skill_path = pathlib.Path(__file__).parent / "skills" / "partner-program-screening" / "SKILL.md"
+    ctx.register_skill(
+        name="partner-program-screening",
+        path=skill_path,
+        description="Screen partner prospects and prepare cited human reviews.",
+        frontmatter={"version": "1.0.0", "metadata": {"hermes": {"category": "enterprise"}}},
+    )
     for schema in bridge.tools():
         name = schema["name"]
         handle = ctx.register_tool(name=name, toolset=TOOLSET, schema=schema,

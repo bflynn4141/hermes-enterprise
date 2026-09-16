@@ -1,6 +1,8 @@
 import json
+import io
 import pathlib
 import sys
+import tempfile
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -8,7 +10,14 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
-from start import assert_native_cron_empty, clean_environment, native_cron_route, validate_profile_path
+from start import (
+    assert_native_cron_empty,
+    clean_environment,
+    load_enterprise_skills,
+    native_cron_route,
+    reset_managed_skill_home,
+    validate_profile_path,
+)
 
 RUN_ID = "run_" + "a" * 32
 
@@ -73,6 +82,90 @@ class BridgeTests(unittest.TestCase):
         with patch.object(bridge, "request", return_value=(200, {"tools": [tool, tool]})):
             with self.assertRaises(plugin.BridgeError):
                 bridge.tools()
+
+    def test_plugin_registers_the_packaged_partner_skill(self):
+        class Context:
+            def __init__(self):
+                self.skills = []
+                self.hook = None
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                }.get(name, default)
+
+            def register_hook(self, _name, callback):
+                self.hook = callback
+                return None
+
+            def register_skill(self, **kwargs):
+                self.skills.append(kwargs)
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]):
+            plugin.register(context)
+        self.assertEqual(context.skills[0]["name"], "partner-program-screening")
+        self.assertTrue(context.skills[0]["path"].is_file())
+        self.assertIsNone(context.hook("skill_view", {"name": "enterprise_bridge:partner-program-screening"}))
+        self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
+        self.assertEqual(context.hook("skill_manage", {})["action"], "block")
+
+    def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
+        payload = {"skills": [{
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.0.0",
+            "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
+        }]}
+
+        class Response(io.BytesIO):
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        class Opener:
+            def __init__(self, body):
+                self.body = body
+
+            def open(self, request, timeout=0):
+                self.request, self.timeout = request, timeout
+                return Response(json.dumps(self.body).encode())
+
+        opener = Opener(payload)
+        result = load_enterprise_skills("https://enterprise.example/internal/runtime/w/w/agents/a", "token", opener)
+        self.assertEqual(result["auto_load"], ["enterprise_bridge:partner-program-screening"])
+        self.assertEqual(result["config"]["partner_program"]["no_outreach"], True)
+        self.assertEqual(opener.request.get_header("Authorization"), "Bearer token")
+        with self.assertRaisesRegex(RuntimeError, "credentials"):
+            load_enterprise_skills(
+                "https://enterprise.example/internal/runtime/w/w/agents/a", "token",
+                Opener({"skills": [{**payload["skills"][0], "config": {"api_key": "no"}}]}),
+            )
+        with self.assertRaisesRegex(RuntimeError, "HTTPS"):
+            load_enterprise_skills("http://enterprise.example/runtime", "token", opener)
+
+    def test_enterprise_profile_removes_unmanaged_bundled_skills(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = pathlib.Path(temporary)
+            old = profile / "home/skills/bundled/example"
+            old.mkdir(parents=True)
+            (old / "SKILL.md").write_text("old")
+            reset_managed_skill_home(profile)
+            self.assertFalse(old.exists())
+            self.assertEqual(
+                (profile / "home/skills/.no-bundled-skills").read_text(),
+                "managed by Hermes Enterprise\n",
+            )
 
     def test_personal_environment_does_not_survive(self):
         with patch.dict(plugin.os.environ, {"OPENROUTER_API_KEY": "private", "TELEGRAM_BOT_TOKEN": "private", "HTTP_PROXY": "private", "HERMES_SESSION_KEY": "spoof"}):

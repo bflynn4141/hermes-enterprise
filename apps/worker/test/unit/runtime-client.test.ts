@@ -54,7 +54,11 @@ describe('official Hermes Runs transport', () => {
 
   it('submits one authenticated request with the durable idempotency key and no redirect forwarding', async () => {
     const { client, send } = transport(() => json({ run_id: RUN_ID, status: 'started' }, 202));
-    const body = { input: 'Review this application.', session_id: 'session-1', provider: 'custom' };
+    const body = {
+      input: 'Review this application.', session_id: 'session-1', provider: 'custom',
+      _enterprise_tool_names: ['propose_request'],
+      _enterprise_skills: [{ name: 'enterprise_bridge:partner-program-screening', version: '1.0.0' }],
+    };
     expect(await client.submit(body, 'enterprise-local-a1')).toBe(RUN_ID);
     expect(send).toHaveBeenCalledOnce();
     const [url, init] = send.mock.calls[0]!;
@@ -64,7 +68,9 @@ describe('official Hermes Runs transport', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
     expect(new Headers(init?.headers).get('Idempotency-Key')).toBe('enterprise-local-a1');
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
-    expect(JSON.parse(String(init?.body))).toEqual(body);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      input: 'Review this application.', session_id: 'session-1', provider: 'custom',
+    });
     expect(String(init?.body)).not.toContain(SECRET);
   });
 

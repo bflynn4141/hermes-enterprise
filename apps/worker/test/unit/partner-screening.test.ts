@@ -11,6 +11,7 @@ import { deterministicDiscoveryPriority, type PublicOrganization, type PublicRep
 const AGENT_ID = '11111111-1111-4111-8111-111111111111';
 
 const config: PartnerAgentConfig = {
+  program_name: 'Hermes Partner Program',
   source_purpose: 'organization_partner_research',
   organization_only: true,
   no_outreach: true,

@@ -40,6 +40,10 @@ documented in [`docs/PARTNER-SCREENING.md`](docs/PARTNER-SCREENING.md). It keeps
 live GitHub evidence, deterministic source triage, Iris judgment, and the
 clearly labeled onboarding simulation separate.
 
+Enterprise-packaged Hermes skills, including the managed Partner Program
+screening procedure, are documented in
+[`docs/ENTERPRISE-SKILLS.md`](docs/ENTERPRISE-SKILLS.md).
+
 ```sh
 pnpm install
 
