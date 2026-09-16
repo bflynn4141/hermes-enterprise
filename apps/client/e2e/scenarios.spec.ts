@@ -29,8 +29,11 @@ test.describe('P1 · onboarding', () => {
     await expect(page.getByRole('heading', { name: 'Add context' })).toBeVisible();
     await page.getByRole('button', { name: 'Set approvals' }).click();
 
-    // The approvals are stated as properties, not as switches.
-    await expect(page.getByText('Always an Admin decision. This cannot be turned off.').first()).toBeVisible();
+    // The approval boundary is a policy preview, not a set of switches.
+    await expect(page.getByRole('heading', { name: 'Review boundaries' })).toBeVisible();
+    await expect(page.getByText('Iris prepares')).toBeVisible();
+    await expect(page.locator('article.onboarding-approval-card')).toHaveCount(6);
+    await expect(page.getByText('Admin + Finance')).toBeVisible();
 
     // Back keeps the typed value: nothing is thrown away between steps.
     await page.getByRole('button', { name: 'Back' }).click();

@@ -25,6 +25,15 @@ const STEPS = [
 
 type StepId = (typeof STEPS)[number][0];
 
+const APPROVAL_GATES = [
+  { icon: 'loop', title: 'Plans & coordination', detail: 'Plans, budgets and team handoffs', reviewer: 'Workspace admin' },
+  { icon: 'context', title: 'Access & records', detail: 'Access, data sharing and record changes', reviewer: 'Workspace admin' },
+  { icon: 'inbox', title: 'External communication', detail: 'Messages, documents and signatures', reviewer: 'Workspace admin' },
+  { icon: 'invoice', title: 'Money movement', detail: 'Invoices, payments and spend changes', reviewer: 'Admin + Finance' },
+  { icon: 'settings', title: 'Agent & team changes', detail: 'Admissions, roles and agent configuration', reviewer: 'Workspace admin' },
+  { icon: 'skill', title: 'Shared learning', detail: 'Skills, deliverables and policy exceptions', reviewer: 'Workspace admin' },
+] as const;
+
 function Stepper({ step }: { step: StepId }) {
   const index = STEPS.findIndex(([id]) => id === step);
   return (
@@ -85,7 +94,7 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
   };
 
   return (
-    <div className="portal">
+    <div className={step === 'approvals' ? 'portal onboarding-approval-portal' : 'portal'}>
       <header className="portal-header">
         <div className="pl">
           <Glass name="iris" size={30} />
@@ -93,7 +102,7 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
         </div>
       </header>
       <Stepper step={step} />
-      <div className="portal-body">
+      <div className={step === 'approvals' ? 'portal-body wide onboarding-approval-body' : 'portal-body'}>
         {step === 'workspace' && (
           <>
             <h1 className="portal-title">Name your workspace</h1>
@@ -160,17 +169,39 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
         )}
         {step === 'approvals' && (
           <>
-            <h1 className="portal-title">What needs a human</h1>
-            <div className="col">
-              {['Admissions and benefits', 'Document creation', 'Sending, payment and signature'].map((item) => (
-                <div className="perm-row" key={item}>
-                  <div className="pr-body">
-                    <span className="pr-title">{item}</span>
-                    <span className="pr-sub">Always an Admin decision. This cannot be turned off.</span>
+            <div className="onboarding-approval-heading">
+              <h1 className="portal-title">Review boundaries</h1>
+              <span className="onboarding-protected"><Icon name="shield" size={15} /> Human review required</span>
+            </div>
+            <div className="onboarding-approval-flow" aria-label="How an approval works">
+              <div className="onboarding-approval-step">
+                <span className="onboarding-approval-icon"><Glass name="iris" size={34} /></span>
+                <strong>Iris prepares</strong>
+              </div>
+              <Icon name="arrow" size={18} className="onboarding-flow-arrow" />
+              <div className="onboarding-approval-step">
+                <span className="onboarding-approval-icon"><Glass name="inbox" size={32} /></span>
+                <strong>A reviewer decides</strong>
+              </div>
+              <Icon name="arrow" size={18} className="onboarding-flow-arrow" />
+              <div className="onboarding-approval-step">
+                <span className="onboarding-approval-icon"><Icon name="check" size={20} /></span>
+                <strong>The action runs</strong>
+              </div>
+            </div>
+            <div className="onboarding-approval-grid">
+              {APPROVAL_GATES.map((gate) => (
+                <article className="onboarding-approval-card" key={gate.title}>
+                  <span className="onboarding-approval-icon"><Glass name={gate.icon} size={31} /></span>
+                  <div className="col grow onboarding-approval-copy">
+                    <strong>{gate.title}</strong>
+                    <span>{gate.detail}</span>
+                    <span className="onboarding-reviewer"><Icon name="users" size={13} /> {gate.reviewer}</span>
                   </div>
-                </div>
+                </article>
               ))}
             </div>
+            <p className="meta onboarding-approval-note">Add finance or specialist reviewers later. These safeguards stay on.</p>
             {error && <p className="meta">{error}</p>}
             <div className="portal-footer">
               <button type="button" className="portal-back" onClick={() => setStep('context')}>
