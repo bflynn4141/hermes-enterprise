@@ -8,7 +8,7 @@ Updated September 15, 2026. Scope: [production-readiness plan](PRODUCTION-READIN
 - Main checkout: `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/hermes-enterprise`.
 - Plan baseline: `92083de`.
 - Approval Inbox, server and runtime workstreams are integrated on `main`.
-- The running localhost workspace and Iris profile are not test targets for these tasks.
+- The implementation tasks did not mutate the existing localhost workspace or Iris profile. After integration, the existing profile was started through the hardened launcher for the live smoke check recorded below.
 
 ## New isolated tasks
 
@@ -51,3 +51,4 @@ The detailed source inventory and intentional test-only exceptions remain in [PR
 - Workerd: 5 files / 29 tests passed in local Hermes mode.
 - Root production build and Worker Wrangler dry run passed.
 - Python Hermes tests: 14 passed; exact pinned official gateway + `AIAgent` fixture probe passed in the isolated hardening task.
+- Local live smoke check passed with the existing Iris profile: the exact locked source verified, native `/health` returned `200`, and the enterprise `/health` returned `200` with `hermes:runs` ready. The process is attached to the current local development session; a durable hosted supervisor remains a production gate.
