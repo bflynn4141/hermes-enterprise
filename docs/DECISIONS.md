@@ -4726,3 +4726,34 @@ real, but they should not delay acknowledgment of the person's own action.
 Separately, model tokens are useful only when each transport layer preserves
 their cadence. Exact id reconciliation retains the fail-closed server contract
 while making the feedback loop immediate.
+
+---
+
+## C58. Live text uses a transient WebSocket fast lane over durable checkpoints
+
+**Decided September 16, 2026.** Native Hermes text is sent to the authorized
+session Durable Object as a `message.preview` frame before its Postgres
+checkpoint completes. The frame carries the run, step attempt, character offset
+and fragment, but no stream id: it is a display hint, not history. Durable
+`message.delta` events and `message.final` remain authoritative and replayable.
+
+The client tracks its committed prefix separately from the text currently on
+screen. A preview can append only at a matching offset. When the overlapping
+durable delta arrives, it advances the committed prefix without appending a
+second copy. Gaps and conflicts are ignored until replay or the next checkpoint
+repairs them. A reconnect therefore may lose a momentary preview but cannot
+lose, duplicate or invent transcript text.
+
+Durable writes run serially on a dedicated restricted database connection beside
+native stream consumption rather than blocking it or overlapping control
+transactions on the run's connection. Only one checkpoint may be in flight;
+additional tokens coalesce behind it, and the run drains every checkpoint before finalization. Preview
+delivery is best effort, session-authorized and failure-tolerant, so a broken
+socket falls back to the existing replay and polling paths without failing the
+agent run.
+
+**Why.** Postgres is the right source of truth and the wrong paint loop. Making
+every visible fragment wait for a cross-region commit coupled perceived model
+speed to database latency. The fast lane preserves the audit and recovery
+contract while letting the UI reflect the runtime as soon as text reaches the
+Worker.

@@ -13,6 +13,7 @@
 // extends that expiry only against a ticket it can verify itself — which is an
 // HMAC check, not a query.
 import { DurableObject } from 'cloudflare:workers';
+import type { MessagePreviewFrame } from '@hermes/shared';
 import type { Env } from './env.js';
 import { verifyHubTicket } from './auth/tickets.js';
 
@@ -97,6 +98,24 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
       delivered += visible.length;
     }
     return { delivered, lastId: events.at(-1)?.id ?? null };
+  }
+
+  /** Fan out a non-durable frame through the same authorization boundary. */
+  protected publishTransient(sessionId: string, frame: MessagePreviewFrame): PublishResult {
+    const now = Date.now();
+    let delivered = 0;
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as SocketAttachment | null;
+      if (!attachment) continue;
+      if (attachment.authorizedUntil <= now) {
+        socket.close(4401, 'authorization expired');
+        continue;
+      }
+      if (!this.maySee(attachment, { session_id: sessionId })) continue;
+      socket.send(JSON.stringify(frame));
+      delivered += 1;
+    }
+    return { delivered, lastId: null };
   }
 
   /** Close every socket belonging to a user whose access was removed. */
@@ -203,12 +222,22 @@ export class SessionHub extends Hub {
   }
 
   /**
+   * Paint assistant text before its durable checkpoint finishes.
+   *
+   * This frame is intentionally absent from replay and has no stream id. A
+   * reconnect falls back to committed `message.delta` rows, while the client
+   * uses `offset` to reconcile an overlapping preview without duplicating it.
+   */
+  preview(frame: MessagePreviewFrame): PublishResult {
+    return this.publishTransient(frame.session_id, frame);
+  }
+
+  /**
    * Fan out a delta batch and answer with Stop in the same round trip.
    *
-   * The engine calls this once per 500 ms batch. Riding Stop on the reply is
+   * The engine calls this once per durable batch. Riding Stop on the reply is
    * what keeps the subrequest budget in range: a separate poll would double the
-   * per-batch cost, and twelve streaming turns at one RPC per 250 ms was the
-   * 14,400-subrequest figure the plan rejected.
+   * per-batch cost.
    */
   async forward(runId: string, events: readonly HubEvent[]): Promise<PublishResult & { stop_requested: boolean }> {
     const result = this.publish(events);

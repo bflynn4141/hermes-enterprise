@@ -283,6 +283,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
     }
 
     const db = new RuntimeDb(this.env, params.workspaceId, params.traceId);
+    let checkpointDb: RuntimeDb | null = null;
     try {
       const deps = {
           db,
@@ -345,18 +346,26 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         const run = await db.loadRun(params.runId);
         if (!run?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
         const binding = runtimeBinding(this.env, params.workspaceId, run.agentId);
+        checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
         await runHermesAttempt({
           db,
           client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport),
           profile: binding.profile,
           forward: deps.forward,
+          checkpoint: (events) => checkpointDb!.emit(events),
+          preview: (frame) =>
+            this.env.SESSION_HUB.get(this.env.SESSION_HUB.idFromName(frame.session_id)).preview(frame),
           skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
         }, engineStep(step), runInput);
       } else {
         await runAttempt(deps, engineStep(step), runInput);
       }
     } finally {
-      await db.close();
+      try {
+        await checkpointDb?.close();
+      } finally {
+        await db.close();
+      }
     }
   }
 }

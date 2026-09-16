@@ -9,6 +9,7 @@ import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
 import { HermesClient, HermesApiError, terminalHermesStatus } from './client.js';
 import type { RuntimeSkillManifest } from './skills.js';
+import type { MessagePreviewFrame } from '@hermes/shared';
 
 export interface RuntimePersistence extends AgentDb {
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
@@ -25,6 +26,10 @@ export interface RuntimeDeps {
   client: HermesClient;
   profile: string;
   forward(sessionId: string, runId: string, events: readonly EmittedEvent[]): Promise<{stop_requested:boolean}>;
+  /** Dedicated persistence lane so streaming checkpoints never overlap control queries on one pg client. */
+  checkpoint?(events: EmitInput[]): Promise<EmittedEvent[]>;
+  /** Best-effort WebSocket fast lane; durable checkpoints remain authoritative. */
+  preview?(frame: MessagePreviewFrame): Promise<unknown>;
   /** Exact non-secret managed skill/config versions persisted with the run. */
   skillSnapshot?: readonly RuntimeSkillManifest[];
   pollMs?: number;
@@ -122,23 +127,55 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       ]);
       let text = '';
       let pending = '';
+      let previewPending = '';
+      let previewOffset = 0;
       let sequence = 0;
       let flushedAt = 0;
+      let previewFlushedAt = 0;
+      let durableInFlight: Promise<void> | null = null;
+      let durableFailure: unknown = null;
+      let stopFromForward = false;
       const pollMs = deps.pollMs ?? 1000;
       const batchMs = deps.batchMs ?? 75;
-      const flush = async (force = false) => {
-        if (!pending || (!force && Date.now() - flushedAt < batchMs)) return;
+      const previewMs = Math.min(batchMs, 75);
+      const flushPreview = async (force = false) => {
+        if (!previewPending || (!force && Date.now() - previewFlushedAt < previewMs)) return;
+        const delta = previewPending;
+        previewPending = '';
+        const offset = previewOffset;
+        previewOffset += delta.length;
+        previewFlushedAt = Date.now();
+        await deps.preview?.({
+          type: 'message.preview', session_id: run.sessionId, run_id: run.id,
+          turn: 0, attempt: run.attempt, step_attempt: stepAttempt, offset, delta,
+        }).catch(() => undefined);
+      };
+      const flush = (force = false) => {
+        if (durableInFlight || !pending || (!force && Date.now() - flushedAt < batchMs)) return;
         const delta = pending; pending = '';
-        const saved = await db.emit([{ kind: 'message.delta', sessionId: run.sessionId, payload: {
-          message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
-        } }]);
-        await deps.forward(run.sessionId, run.id, saved);
-        // The batching clock measures from delivery, not from the start of a
-        // potentially slow durable write. If persistence itself takes longer
-        // than the window, stamping this before the await makes every already-
-        // buffered native token look overdue and serializes one database write
-        // per token. Stamping it here lets the next burst coalesce normally.
         flushedAt = Date.now();
+        const task = (async () => {
+          try {
+            const saved = await (deps.checkpoint ?? ((events: EmitInput[]) => db.emit(events)))([{ kind: 'message.delta', sessionId: run.sessionId, payload: {
+              message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
+            } }]);
+            const reply = await deps.forward(run.sessionId, run.id, saved);
+            stopFromForward ||= reply.stop_requested;
+          } catch (error) {
+            durableFailure ??= error;
+          } finally {
+            durableInFlight = null;
+          }
+        })();
+        durableInFlight = task;
+      };
+      const drainDurable = async () => {
+        while (durableInFlight || pending) {
+          if (durableFailure) throw durableFailure;
+          if (!durableInFlight) flush(true);
+          if (durableInFlight) await durableInFlight;
+        }
+        if (durableFailure) throw durableFailure;
       };
       let status = await client.status(id);
       const controller = new AbortController();
@@ -155,33 +192,47 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           // a trailing deadline. Waiting only for the next native frame left
           // that text parked until the one-second status poll when the model
           // paused after a token burst.
-          const untilBatch = pending ? Math.max(0, batchMs - (Date.now() - flushedAt)) : pollMs;
-          const waitMs = Math.min(pollMs, untilBatch);
-          const event = next ? await Promise.race([next, delay(waitMs).then(() => undefined)]) : undefined;
+          const untilBatch = pending && !durableInFlight ? Math.max(0, batchMs - (Date.now() - flushedAt)) : pollMs;
+          const untilPreview = previewPending ? Math.max(0, previewMs - (Date.now() - previewFlushedAt)) : pollMs;
+          const waitMs = Math.min(pollMs, untilBatch, untilPreview);
+          const wake: Array<Promise<Awaited<NonNullable<typeof next>> | undefined>> = [delay(waitMs).then(() => undefined)];
+          if (next) wake.push(next);
+          const activeWrite = durableInFlight as Promise<void> | null;
+          if (activeWrite) wake.push(activeWrite.then(() => undefined));
+          const event = await Promise.race(wake);
           if (event === null || event?.done) {
             // `read1` can surface the last native bytes immediately before EOF
             // or a disconnect. Publish them now; the status poll is recovery,
             // not part of the person's text latency budget.
-            await flush(true);
+            await flushPreview(true);
+            flush(true);
             next = null;
           }
           else if (event?.value) {
             const payload = event.value;
             if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
-              text += payload.delta; pending += payload.delta;
+              text += payload.delta; pending += payload.delta; previewPending += payload.delta;
               visibleText = text;
-              await flush();
+              await flushPreview();
+              flush();
             }
             if (payload.event.startsWith('run.') && ['run.completed','run.failed','run.cancelled'].includes(payload.event)) {
               // A terminal frame often follows the last token in the same TCP
               // read. Do not hold that token behind a potentially slow status
               // reconciliation request.
-              await flush(true);
+              await flushPreview(true);
+              flush(true);
               status = await client.status(id);
             }
             next = terminalHermesStatus(status.status) ? null : events.next().catch(() => null);
           }
-          if (pending && Date.now() - flushedAt >= batchMs) await flush(true);
+          if (previewPending && Date.now() - previewFlushedAt >= previewMs) await flushPreview(true);
+          if (durableFailure) throw durableFailure;
+          if (!stopped && stopFromForward) {
+            await client.stop(id);
+            stopped = true;
+          }
+          if (pending && Date.now() - flushedAt >= batchMs) flush(true);
           if (Date.now() - lastControlCheck >= pollMs) {
             lastControlCheck = Date.now();
             if (!stopped && await db.stopRequested(run.id)) {
@@ -193,14 +244,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
                 if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
               }
             }
-            await flush(true);
+            await flushPreview(true);
+            flush(true);
             status = await client.status(id);
           }
           if (!next && !terminalHermesStatus(status.status)) await delay(pollMs);
         }
-      } finally { controller.abort(); }
+      } finally {
+        controller.abort();
+        // No execution path may let finalization overtake a checkpoint that is
+        // still using the dedicated persistence lane.
+        await flushPreview(true);
+        await drainDurable();
+      }
       terminal = true;
-      await flush(true);
       visibleText = status.output ?? text;
       const workedMs = db.activeRuntimeMs ? await db.activeRuntimeMs(run.id, run.attempt, startedAt, Date.now()) : Math.max(0, Date.now() - startedAt);
       const finalText = status.output ?? text;

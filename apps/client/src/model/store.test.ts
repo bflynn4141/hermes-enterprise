@@ -371,6 +371,28 @@ describe('the entity cache', () => {
 });
 
 describe('streaming text and step_attempt', () => {
+  it('shows a preview immediately and reconciles committed overlap without duplication', () => {
+    let state = reduce(base(), { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1 });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Hello world' });
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('Hello world');
+    expect(state.sessions[SESSION_A]!.stream?.durableText).toBe('');
+
+    state = reduce(state, { type: 'stream/delta', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, delta: 'Hello ' });
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('Hello world');
+    expect(state.sessions[SESSION_A]!.stream?.durableText).toBe('Hello ');
+    state = reduce(state, { type: 'stream/delta', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, delta: 'world' });
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('Hello world');
+    expect(state.sessions[SESSION_A]!.stream?.durableText).toBe('Hello world');
+  });
+
+  it('ignores a preview gap and lets the next durable checkpoint recover it', () => {
+    let state = reduce(base(), { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1 });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 6, delta: 'world' });
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('');
+    state = reduce(state, { type: 'stream/delta', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, delta: 'Hello world' });
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('Hello world');
+  });
+
   it('reset → deltas → reset → deltas → final leaves exactly one copy of the text', () => {
     let state = base();
     for (const streamEvent of mockRunStream('step_retry', { workspaceId: WS, sessionId: SESSION_A, runId: RUN })) state = feed(state, streamEvent);

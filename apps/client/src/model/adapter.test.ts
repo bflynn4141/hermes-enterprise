@@ -154,6 +154,36 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('the hub keepalive', () => {
+  it('delivers a transient preview without moving the durable event path', async () => {
+    const previews: unknown[] = [];
+    const events: string[] = [];
+    const hub = createHub({
+      kind: 'session',
+      url: 'ws://test.local/hub',
+      ticket: 't',
+      after: 7n,
+      onEvent: (event) => events.push(event.id),
+      onPreview: (frame) => previews.push(frame),
+      onState: () => undefined,
+      onResync: () => undefined,
+      replay: async () => ({ events: [], resync: false, head: '7' }),
+      onSignedOut: () => undefined,
+      onEvicted: () => undefined,
+      socketFactory: (url) => new FakeSocket(url),
+    });
+    const socket = FakeSocket.instances[0]!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.deliver({
+      type: 'message.preview', session_id: SESSION, run_id: RUN,
+      turn: 0, attempt: 1, step_attempt: 1, offset: 0, delta: 'Now',
+    });
+
+    expect(previews).toEqual([expect.objectContaining({ type: 'message.preview', offset: 0, delta: 'Now' })]);
+    expect(events).toEqual([]);
+    hub.close();
+  });
+
   it('sends exactly one `ping` per 20 s', async () => {
     const hub = createHub({
       kind: 'workspace',

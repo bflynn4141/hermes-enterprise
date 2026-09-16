@@ -117,9 +117,20 @@ export const directUploadResultSchema = z.object({ ok: z.boolean(), size: z.numb
  */
 export const hubFrameSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('events'), events: z.array(streamEventSchema).max(500) }).strict(),
+  z.object({
+    type: z.literal('message.preview'),
+    session_id: uuidSchema,
+    run_id: uuidSchema,
+    turn: z.number().int().nonnegative(),
+    attempt: z.number().int().min(1),
+    step_attempt: z.number().int().min(1),
+    offset: z.number().int().nonnegative(),
+    delta: z.string().min(1).max(65_536),
+  }).strict(),
   z.object({ type: z.literal('ticket.accepted'), authorized_until: z.number() }).strict(),
 ]);
 export type HubFrame = z.infer<typeof hubFrameSchema>;
+export type MessagePreviewFrame = Extract<HubFrame, { type: 'message.preview' }>;
 
 /** What the client may send a hub. The key is `ticket`, not `value`. */
 export const hubClientMessageSchema = z
