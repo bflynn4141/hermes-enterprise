@@ -440,7 +440,7 @@ function LibraryDocuments() {
   const [query, setQuery] = useState('');
   const match = (text: string): boolean => text.toLowerCase().includes(query.toLowerCase());
   const documents = lists.documents.filter((doc) => match(doc.title));
-  const drafts = lists.requests.filter((request) => request.kind !== 'application' && request.status === 'pending');
+  const drafts = lists.requests.filter((request) => (request.kind === 'invoice' || request.kind === 'agreement') && request.status === 'pending');
 
   return (
     <>

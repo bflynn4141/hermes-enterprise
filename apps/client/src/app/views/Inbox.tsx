@@ -22,6 +22,15 @@ import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMone
 import { EMPTY } from '../../model/constants.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
+import {
+  ApprovalRequest,
+  approvalActionLabel,
+  approvalIcon,
+  approvalPreview,
+  approvalReviewerLabel,
+  approvalTypeLabel,
+  matchesReviewerFilter,
+} from './Approval.js';
 
 type RequestPayload = Record<string, unknown>;
 
@@ -67,6 +76,7 @@ function SourceMark({ source, size = 26 }: { source: ApplicantSource; size?: num
 function requestType(request: RequestEntity): string {
   if (request.kind === 'application') return 'Application';
   if (request.kind === 'invoice') return 'Invoice';
+  if (request.kind === 'approval') return approvalTypeLabel(request);
   return 'Signature';
 }
 
@@ -82,6 +92,7 @@ function requestPreview(request: RequestEntity): string {
     const amount = typeof payload.total_minor === 'number' ? fmtMoney(payload.total_minor) : null;
     return [payee, amount].filter(Boolean).join(' · ');
   }
+  if (request.kind === 'approval') return approvalPreview(request);
   const parties = Array.isArray(payload.parties)
     ? payload.parties.map((party) => text(record(party).name)).filter((party): party is string => !!party)
     : [];
@@ -92,6 +103,7 @@ function requestAction(request: RequestEntity): string {
   if (request.status !== 'pending') return requestStatusLabel(request);
   if (request.kind === 'application') return 'Review applicant';
   if (request.kind === 'invoice') return 'Review invoice';
+  if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
   return 'Review for signature';
 }
 
@@ -112,12 +124,15 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const nav = useNav();
+  const reducedMotion = useReducedMotion();
   const lists = useWorkspaceLists();
   const tab = state.ui.inboxTab;
   const filters = state.ui.app.filters;
+  const approvalDemo = record(state.settings.flags).approval_demo === true;
   const query = filters?.query ?? '';
   const kind = filters?.kind ?? 'all';
-  const filtered = query.length > 0 || kind !== 'all';
+  const reviewer = filters?.reviewer ?? 'for_me';
+  const filtered = query.length > 0 || kind !== 'all' || reviewer !== 'for_me';
   const selected = lists.requests.find((request) => request.id === selectedId) ?? null;
   const activeTab = selected
     ? selected.status === 'pending' ? 'needs-review' : 'resolved'
@@ -130,9 +145,10 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
     () =>
       lists.requests
         .filter((request) => (activeTab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
-        .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind !== 'application' : request.kind === kind))
+        .filter((request) => activeTab === 'resolved' || matchesReviewerFilter(request, reviewer))
+        .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind === 'invoice' || request.kind === 'agreement' : request.kind === kind))
         .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase())),
-    [lists.requests, activeTab, kind, query],
+    [lists.requests, activeTab, kind, query, reviewer],
   );
   const listLabel = activeTab === 'resolved' ? 'Resolved requests' : 'Requests needing review';
   const backRef: Ref = { section: 'inbox', view: 'list', filters };
@@ -156,16 +172,29 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
         />
         {activeTab !== 'rules' && (
           <div className="inbox-tools">
+            {approvalDemo && <span className="approval-demo-tools"><span className="pill illustrative">Illustrative demo</span><Button link onClick={() => window.location.reload()} aria-label="Reset approval demo">Reset</Button></span>}
             <label className="search grow">
               <Icon name="search" />
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
             </label>
+            {activeTab === 'needs-review' && (
+              <span className="reviewer-filter" role="group" aria-label="Reviewer">
+                {([
+                  ['for_me', 'For me'],
+                  ['waiting', 'Waiting on others'],
+                  ['all', 'All'],
+                ] as const).map(([value, label]) => (
+                  <button key={value} type="button" aria-pressed={reviewer === value} onClick={() => setFilters({ reviewer: value })}>{label}</button>
+                ))}
+              </span>
+            )}
             <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
               <option value="all">All types</option>
               <option value="application">Applications</option>
               <option value="documents">Documents</option>
               <option value="invoice">Invoices</option>
               <option value="agreement">Signatures</option>
+              <option value="approval">Approvals</option>
             </select>
           </div>
         )}
@@ -203,10 +232,10 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                     onClick={() => nav(REQ(request.id, { filters }))}
                     layout
                     initial={false}
-                    exit={{ opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }}
-                    transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                    exit={reducedMotion ? { opacity: 0 } : { opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }}
+                    transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                   >
-                    <Glass name={KIND_ICON[request.kind] ?? 'context'} size={30} className="inbox-item-icon" />
+                    <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={30} className="inbox-item-icon" />
                     <span className="inbox-item-body">
                       <span className="inbox-item-line">
                         <span className="inbox-item-subject">{request.subject ?? request.label}</span>
@@ -229,7 +258,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                 title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
                 detail={filtered ? 'Try a different search or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
                 action={filtered
-                  ? <Button onClick={() => setFilters({ query: '', kind: 'all' })}>Clear filters</Button>
+                  ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me' })}>Clear filters</Button>
                   : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
               />
             )}
@@ -239,9 +268,9 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
             <motion.div
               className="inbox-detail"
               key={selectedId}
-              initial={{ opacity: 0, x: 8 }}
+              initial={reducedMotion ? false : { opacity: 0, x: 8 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              transition={reducedMotion ? { duration: 0 } : { duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
             >
               <div className="inbox-detail-nav">
                 <Button link onClick={() => nav(backRef)} aria-label="Back to Inbox">
@@ -277,6 +306,7 @@ function RequestDetail({ id }: { id: string | null }) {
     );
   }
   const request = entity.data;
+  if (request.kind === 'approval') return <ApprovalRequest request={request} />;
   if (request.status !== 'pending') return <Receipt request={request} />;
   return request.kind === 'application' ? <ApplicationView request={request} /> : <DocumentView request={request} />;
 }

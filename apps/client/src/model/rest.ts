@@ -27,8 +27,10 @@ import {
   attachmentSchema,
   attachmentDetailSchema,
   attachmentUploadSchema,
+  approvalViewSchema,
   directUploadResultSchema,
   type AttachmentUpload,
+  type ApprovalView,
   type Bootstrap,
   type CatalogPage,
   type EventsPage,
@@ -63,6 +65,9 @@ import {
   undeleteResultSchema,
   authWorkspacesSchema,
   type AuthWorkspacesResponse,
+  type DecideApprovalInput,
+  type ReviseApprovalInput,
+  type RouteApprovalInput,
   type UsageRange,
   type AttachmentRef,
   type AuthSessionResponse,
@@ -281,6 +286,14 @@ export function createRest(options: RestOptions) {
     // this product cannot have, so a missing route surfaces as an error.
     decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
+    getApproval: (workspaceId: string, requestId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
+    decideApproval: (workspaceId: string, requestId: string, body: DecideApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/revisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
 
     // --- entities ---

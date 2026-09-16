@@ -14,6 +14,7 @@ import { Ack, Button, Dialog, EmptyState, Panel, Skeleton, Tabs } from '../ui/pr
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
+import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
 
 function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -36,10 +37,10 @@ function AgentTabsRow({ value }: { value: string }) {
 }
 
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
-  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : 'Create agreement';
+  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : approvalTypeLabel(request);
   return (
     <div className="list-row">
-      <Glass name={KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
+      <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
       <div className="row-id">
         <span className="t">{request.subject ?? request.label}</span>
         <span className="s">{request.title ?? ''}</span>
@@ -48,7 +49,7 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
         <span className="t">{type}</span>
         <span className="s">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{action} →</Button>
+      <Button onClick={onAction}>{request.kind === 'approval' ? approvalActionLabel(request) : action} →</Button>
     </div>
   );
 }
@@ -59,7 +60,7 @@ export function AgentOverview() {
   const lists = useWorkspaceLists();
   const admin = useIsAdmin();
   const agent = agentName(state);
-  const pending = lists.requests.filter((r) => r.status === 'pending');
+  const pending = lists.requests.filter((request) => request.status === 'pending' && matchesReviewerFilter(request, 'for_me'));
   const destination = rows<ContextField>(state, LIST_KEYS.contextFields, 'context_field').find((field) => field.field === 'destination');
   const blocked = destination ? !destination.value : false;
   if (lists.loading) return <div className="scroll"><div className="app-body"><Skeleton rows={4} /></div></div>;

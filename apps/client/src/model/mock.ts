@@ -16,13 +16,16 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, type StreamEvent } from '@hermes/shared';
-import type { MaskedProviderKey, Ref } from '@hermes/shared';
+import type { ApprovalView, MaskedProviderKey, Ref, RequestEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
+import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
 const MEMBER_USER = mockUuid(101);
 const AGENT = mockUuid(102);
+const MAYA_MEMBER = mockUuid(200);
+const ALEX_MEMBER = mockUuid(201);
 const SESSION_A = mockUuid(2);
 const SESSION_B = mockUuid(20);
 const RUN = mockUuid(3);
@@ -75,6 +78,7 @@ interface MockSession {
 }
 
 const iso = (offsetMinutes = 0) => new Date(Date.UTC(2026, 9, 12, 9, 49 + offsetMinutes, 0)).toISOString();
+const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toString(16).padStart(64, '0')}`;
 
 interface MockOptions {
   /** `admin` is the first-run Admin seat; `member` exercises the Member copy. */
@@ -95,29 +99,13 @@ interface MockOptions {
    * then `/?reply=markdown`.
    */
   reply?: 'seeded' | 'markdown';
+  /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
+  scenario?: 'legacy' | 'approvals';
 }
 
-interface MockRequest {
-  id: string;
-  kind: 'application' | 'invoice' | 'agreement';
-  status: string;
-  label: string;
-  subject: string;
-  title: string;
-  session_id: string;
-  run_id: string;
-  created_at: string;
-  version: number;
-  payload: Record<string, unknown>;
-  sources: { id: string; name: string; note: string }[];
-  missing: string[];
-  note: string | null;
-  decision_id: string | null;
-  decided_at: string | null;
-  decided_by_name: string | null;
-}
+type MockRequest = RequestEntity;
 
-function request(id: string, kind: 'application' | 'invoice' | 'agreement', status: string, subject: string, label: string, extra: Record<string, unknown> = {}): MockRequest {
+function request(id: string, kind: 'application' | 'invoice' | 'agreement', status: RequestEntity['status'], subject: string, label: string, extra: Record<string, unknown> = {}): MockRequest {
   return {
     id,
     kind,
@@ -148,6 +136,7 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
 export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
   const empty = options.data === 'empty';
+  const approvalScenario = options.scenario === 'approvals' && !empty;
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
   const replyText =
     options.reply === 'markdown'
@@ -188,7 +177,7 @@ export function createMockBackend(options: MockOptions = {}) {
     { id: 'youtube', name: 'YouTube', note: 'Illustrative bootcamp sessions and technical walkthroughs.', url: 'https://www.youtube.com/' },
     { id: 'x', name: 'X profile', note: 'Illustrative public writing about field engineering.', url: 'https://x.com/' },
   ];
-  const requests: MockRequest[] = empty
+  const legacyRequests: MockRequest[] = empty
     ? []
     : [
         request(REQ_LEAH, 'application', 'pending', 'Leah Martinez', 'Leah Martinez', {
@@ -216,11 +205,24 @@ export function createMockBackend(options: MockOptions = {}) {
         request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', notes: 'Fictional demo invoice. No provider is connected.', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
+  const approvalDemo = createApprovalDemoFixtures({
+    workspaceId: WS,
+    sessionId: SESSION_A,
+    runId: mockUuid(1_030),
+    requesterAgentId: AGENT,
+    mayaUserId: USER,
+    mayaMemberId: MAYA_MEMBER,
+    alexUserId: MEMBER_USER,
+    alexMemberId: ALEX_MEMBER,
+    at: iso,
+  });
+  const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
+  const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
 
   const members = [
-    { id: mockUuid(200), user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access'], joined_at: iso(-4000), version: 1 },
+    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
     ...(empty ? [] : [
-      { id: mockUuid(201), user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance'], joined_at: iso(-5000), version: 1 },
+      { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance', 'agent_admin'], joined_at: iso(-5000), version: 1 },
       { id: mockUuid(202), user_id: null, name: 'Lena Fischer', email: 'lena@nous.example', role: 'member' as const, status: 'invited' as const, reviewer_roles: [], joined_at: null, version: 1 },
     ]),
   ];
@@ -322,10 +324,14 @@ export function createMockBackend(options: MockOptions = {}) {
             seq: 2,
             role: 'iris',
             kind: null,
-            heading: 'Four requests are ready',
-            text: replyText,
+            heading: approvalScenario ? 'Approval inbox is ready' : 'Four requests are ready',
+            text: approvalScenario ? 'I prepared ten illustrative approval requests without making any external change. Maya has nine decisions; Alex owns the agent-configuration review. The plan requires Maya first and Alex second.' : replyText,
             blocks: [
               { type: 'card', title: 'Leah Martinez', subtitle: '82 / 100 · Awaiting your review', action: { label: 'Open request', command: { type: 'open_request', id: REQ_LEAH } } },
+              ...(approvalScenario ? [
+                { type: 'receipt', requestId: APPROVAL_DEMO_REQUEST_IDS.run_plan },
+                { type: 'receipt', requestId: APPROVAL_DEMO_REQUEST_IDS.communication },
+              ] : []),
               { type: 'card', title: 'Unblock Noor’s reply', subtitle: 'Add the destination; I’ll prepare the draft. Not an approval.', action: { label: 'Open context', command: { type: 'nav', object: { section: 'agents', view: 'context', field: 'destination' } } } },
               { type: 'sources', title: 'Sources', subtitle: 'Partner criteria.md · Feedback guide.md' },
             ],
@@ -461,7 +467,7 @@ export function createMockBackend(options: MockOptions = {}) {
     defaults: { model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high' as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
-    flags: {} as Record<string, unknown>,
+    flags: approvalScenario ? { approval_demo: true } : {} as Record<string, unknown>,
     fetch_url_allowlist: [] as string[],
     notifications: { approvals: true, blocked: true, digest: false },
     deletion: { requested_at: null as string | null, scheduled_at: null as string | null },
@@ -500,6 +506,100 @@ export function createMockBackend(options: MockOptions = {}) {
     },
   };
 
+  const viewerUserId = seat === 'member' ? MEMBER_USER : USER;
+  const viewerMemberId = seat === 'member' ? ALEX_MEMBER : MAYA_MEMBER;
+  const viewerName = seat === 'member' ? 'Alex Rivera' : 'Maya Chen';
+
+  function approvalForViewer(source: ApprovalView): ApprovalView {
+    const current = source.steps.filter((step) => step.status === 'current');
+    const eligible = source.status === 'pending'
+      ? current.filter((step) => step.current_reviewer_member_ids.includes(viewerMemberId)).map((step) => step.step_id)
+      : [];
+    const canDecide = eligible.length > 0;
+    return {
+      ...source,
+      capabilities: source.status === 'changes_requested'
+        ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: seat === 'admin', reason: seat === 'admin' ? 'Submit a revised proposal for review.' : 'Waiting for a revised proposal.' }
+        : source.status !== 'pending'
+          ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: 'Review complete.' }
+          : canDecide
+            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: false, reason: null }
+            : { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: `Waiting for ${current.flatMap((step) => step.current_reviewer_member_ids).map((id) => source.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name).filter(Boolean).join(', ') || 'an eligible reviewer'}.` },
+    };
+  }
+
+  function approvalProjection(view: ApprovalView) {
+    const current = view.steps.filter((step) => step.status === 'current');
+    const names = current
+      .flatMap((step) => step.current_reviewer_member_ids)
+      .map((id) => view.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name)
+      .filter((name): name is string => !!name);
+    const pendingForViewer = view.status === 'pending' && current.some((step) => step.current_reviewer_member_ids.includes(viewerMemberId));
+    return {
+      approval_type: view.payload.approval_type,
+      authorization_status: view.status,
+      authorization_revision: view.payload.authorization.revision,
+      expires_at: view.payload.authorization.expires_at,
+      pending_for_viewer: pendingForViewer,
+      waiting_on_others: view.status === 'pending' && !pendingForViewer,
+      current_reviewer_names: names,
+      effect_status: view.effect.status,
+      work_status: view.work.status,
+    };
+  }
+
+  function requestForViewer(row: MockRequest): MockRequest {
+    const approval = approvalViews.get(row.id);
+    return approval ? { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) } : row;
+  }
+
+  function approvalResult(view: ApprovalView, decision: 'approve' | 'decline' | 'request_changes', note: string | null, idempotencyKey: string): ApprovalView {
+    const current = view.steps.find((step) => step.status === 'current' && step.current_reviewer_member_ids.includes(viewerMemberId));
+    if (!current) return view;
+    const recordedAt = iso(1);
+    view.votes.push({
+      id: mockUuid(1_300 + view.votes.length + [...approvalViews.keys()].indexOf(view.request_id) * 10),
+      step_id: current.step_id,
+      decision,
+      authorization_revision: view.payload.authorization.revision,
+      authorization_hash: view.payload.authorization.hash,
+      reviewer_member_id: viewerMemberId,
+      reviewer_user_id: viewerUserId,
+      reviewer_name: viewerName,
+      note,
+      idempotency_key: idempotencyKey,
+      recorded_at: recordedAt,
+    });
+    current.status = decision === 'approve' ? 'approved' : decision === 'decline' ? 'declined' : 'changes_requested';
+    current.approvals_recorded = decision === 'approve' ? current.quorum : 0;
+    current.current_reviewer_member_ids = [];
+
+    if (decision === 'approve') {
+      const next = view.steps.find((step) => step.status === 'blocked');
+      if (next) {
+        next.status = 'current';
+        const selector = view.payload.policy.steps.find((step) => step.id === next.step_id)?.reviewers[0];
+        next.current_reviewer_member_ids = selector?.kind === 'member' ? [selector.member_id] : [ALEX_MEMBER];
+        view.work = { status: 'waiting', continuation_id: null, reason: `Waiting for ${view.identities.reviewers.find((reviewer) => reviewer.member_id === next.current_reviewer_member_ids[0])?.name ?? 'the next reviewer'}.` };
+      } else {
+        view.status = 'approved';
+        view.finalized_at = recordedAt;
+        const hasEffect = view.effect.kind !== 'none';
+        view.effect = hasEffect
+          ? { ...view.effect, status: 'unavailable', reason: 'Illustrative demo only; no external provider is connected and no effect occurred.' }
+          : { ...view.effect, status: 'not_required', reason: 'No external provider effect is required.' };
+        const status = view.payload.approval_type === 'team_commitment' ? 'admitted' : view.payload.approval_type === 'deliverable' ? 'ready' : 'completed';
+        view.work = { status, continuation_id: null, reason: status === 'admitted' ? 'The bounded task was admitted to the illustrative queue.' : status === 'ready' ? 'The dependent illustrative request is ready.' : 'Authorization recorded; no external work ran in this demo.' };
+      }
+    } else {
+      view.status = decision === 'decline' ? 'declined' : 'changes_requested';
+      view.finalized_at = recordedAt;
+      view.effect = { ...view.effect, status: view.effect.kind === 'none' ? 'not_required' : 'cancelled', reason: decision === 'decline' ? 'Declined before any effect.' : 'Waiting for a revised authorization.' };
+      view.work = { status: decision === 'decline' ? 'cancelled' : 'waiting', continuation_id: null, reason: decision === 'decline' ? 'Declined before work began.' : 'Waiting for a revised proposal.' };
+    }
+    return view;
+  }
+
   let head = 100n;
   const listeners = new Set<(event: StreamEvent) => void>();
   const backlog: StreamEvent[] = [];
@@ -535,7 +635,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/auth/session')
       return json({
-        user: { id: USER, name: seat === 'admin' ? 'Maya Chen' : 'Alex Rivera', email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example', role: seat },
+        user: { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example', role: seat },
         workspace: { id: WS, name: 'Nous' },
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
@@ -549,12 +649,19 @@ export function createMockBackend(options: MockOptions = {}) {
           id: WS,
           name: 'Nous',
           jurisdiction: 'default',
-          settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
+          settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
         },
-        viewer: { user_id: USER, role: seat, reviewer_roles: seat === 'admin' ? ['access'] : [] },
+        viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
         agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
         heads: { session: head.toString(), workspace: head.toString() },
-        counts: { inbox: requests.filter((r) => r.status === 'pending').length, pending_grants: 0, created_documents: documents.length, decisions: 0 },
+        counts: {
+          inbox: requests.filter((r) => r.status === 'pending').length,
+          pending_grants: 0,
+          created_documents: documents.length,
+          decisions: requests.filter((r) => r.status !== 'pending').length,
+          pending_for_me: requests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
+          pending_for_others: requests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
+        },
         sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
         requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
         catalog,
@@ -633,6 +740,72 @@ export function createMockBackend(options: MockOptions = {}) {
       const id = requestMatch[1]!;
       const rest = requestMatch[2] ?? '';
       const row = requests.find((r) => r.id === id);
+      const approval = approvalViews.get(id);
+      const syncApprovalRow = (): void => {
+        if (!row || !approval) return;
+        row.status = approval.status === 'superseded' ? 'withdrawn' : approval.status;
+        row.version += 1;
+        row.payload = approval.payload as unknown as Record<string, unknown>;
+        row.approval = approvalProjection(approval);
+        row.decided_at = approval.finalized_at;
+        row.decided_by_name = approval.votes.at(-1)?.reviewer_name ?? null;
+      };
+      if (rest === '/approval' && method === 'GET') return approval ? json(approvalForViewer(approval)) : fail(404, 'not_found');
+      if (rest === '/approval/decisions' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        const revision = Number(body.expected_authorization_revision);
+        const authorizationHash = String(body.expected_authorization_hash ?? '');
+        const idempotencyKey = String(body.idempotency_key ?? '');
+        if (approval.votes.some((vote) => vote.idempotency_key === idempotencyKey)) return json(approvalForViewer(approval));
+        if (revision !== approval.payload.authorization.revision || authorizationHash !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const current = approval.steps.find((step) => step.status === 'current' && step.current_reviewer_member_ids.includes(viewerMemberId));
+        if (!current) return fail(403, 'not_eligible', 'The current step belongs to another reviewer');
+        const decision = body.decision === 'decline' ? 'decline' : body.decision === 'request_changes' ? 'request_changes' : 'approve';
+        approvalResult(approval, decision, typeof body.note === 'string' ? body.note : null, idempotencyKey);
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
+      if (rest === '/approval/revisions' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        if (seat !== 'admin' || approval.status !== 'changes_requested') return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
+        if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const proposal = body.proposal as Record<string, unknown> | undefined;
+        if (!proposal || proposal.approval_type !== approval.payload.approval_type) return fail(422, 'invalid_revision', 'The revised approval type must not change');
+        const nextRevision = approval.payload.authorization.revision + 1;
+        approval.payload = {
+          ...proposal,
+          context: approval.payload.context,
+          policy: approval.payload.policy,
+          resource_bindings: approval.payload.resource_bindings,
+          authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + [...approvalViews.keys()].indexOf(id) * 100) },
+        } as ApprovalView['payload'];
+        approval.status = 'pending';
+        approval.finalized_at = null;
+        approval.steps = approval.payload.policy.steps.map((step, index) => ({
+          step_id: step.id,
+          label: step.label,
+          order: step.order,
+          status: index === 0 ? 'current' : 'blocked',
+          approvals_recorded: 0,
+          quorum: step.quorum,
+          current_reviewer_member_ids: index === 0 && step.reviewers[0]?.kind === 'member' ? [step.reviewers[0].member_id] : [],
+        }));
+        approval.effect = { ...approval.effect, status: approval.effect.kind === 'none' ? 'not_required' : 'waiting', reason: 'Waiting for authorization.' };
+        approval.work = { status: 'waiting', continuation_id: null, reason: 'Waiting for authorization.' };
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
+      if (rest === '/approval/route' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const step = approval.steps.find((item) => item.step_id === body.step_id && item.status === 'current');
+        const reviewer = approval.identities.reviewers.find((item) => item.member_id === body.reviewer_member_id);
+        if (!step || !step.current_reviewer_member_ids.includes(viewerMemberId) || !reviewer) return fail(403, 'not_eligible', 'This review cannot be routed by the viewer');
+        step.current_reviewer_member_ids = [reviewer.member_id];
+        approval.work = { status: 'waiting', continuation_id: null, reason: `Waiting for ${reviewer.name}.` };
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
       if (rest === '/decisions' && method === 'POST') {
         if (seat !== 'admin') return fail(403, 'not_admin', 'Admin decision required');
         if (!row) return fail(404, 'not_found');
@@ -666,10 +839,10 @@ export function createMockBackend(options: MockOptions = {}) {
         return json(row, 201);
       }
       if (rest === '/effects') return page([]);
-      if (!rest) return row ? json(row) : fail(404, 'not_found');
+      if (!rest) return row ? json(requestForViewer(row)) : fail(404, 'not_found');
     }
 
-    if (p('/requests')) return page(requests);
+    if (p('/requests')) return page(requests.map(requestForViewer));
     if (p('/documents')) return page(documents);
     const documentMatch = match(new RegExp(`^/w/${WS}/documents/([^/]+)$`));
     if (documentMatch) {

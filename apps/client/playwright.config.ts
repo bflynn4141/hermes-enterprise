@@ -32,7 +32,7 @@ export default defineConfig({
   // The mock suite never runs against the live server and the live suite never
   // runs against the mock bundle: each asserts things only true of its own.
   testIgnore: process.env.E2E_BASE_URL
-    ? ['**/scenarios.spec.ts', '**/qa-screens.spec.ts', '**/panel-screens.spec.ts', '**/panel-sidebar.spec.ts', '**/panel-narrow.spec.ts', '**/chat-screens.spec.ts']
+    ? ['**/scenarios.spec.ts', '**/approval-inbox.spec.ts', '**/qa-screens.spec.ts', '**/panel-screens.spec.ts', '**/panel-sidebar.spec.ts', '**/panel-narrow.spec.ts', '**/chat-screens.spec.ts']
     : ['**/live.spec.ts', '**/live-screens.spec.ts', '**/live-findings.spec.ts', '**/live-m5a.spec.ts', '**/live-tables.spec.ts', '**/live-panel.spec.ts', '**/live-openrouter.spec.ts', '**/live-transcript.spec.ts', '**/live-chat-screens.spec.ts'],
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   ...(process.env.E2E_BASE_URL
