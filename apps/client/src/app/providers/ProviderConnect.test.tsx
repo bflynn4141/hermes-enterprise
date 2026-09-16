@@ -77,5 +77,13 @@ describe('ProviderConnect', () => {
     const html = render({ onOAuthStart: vi.fn(), status: { kind: 'oauth_unavailable', message: 'Hosted sign-in is unavailable.' } });
     expect(html).toContain('Hosted sign-in is unavailable.');
     expect(html).toContain('Nous Portal API key');
+
+    const invalidManual = render({
+      onOAuthStart: vi.fn(),
+      preferManual: true,
+      status: { kind: 'invalid', message: 'Nous Portal did not accept this key.' },
+    });
+    expect(invalidManual).toContain('Nous Portal did not accept this key.');
+    expect(invalidManual).toContain('Try verification again');
   });
 });

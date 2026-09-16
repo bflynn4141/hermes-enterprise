@@ -59,7 +59,7 @@ test('the Inbox count follows persisted review state rather than discovery', asy
   await expect(page.getByLabel('0 applications need review')).toBeVisible();
 
   await page.evaluate((view) => window.sampleRunFixture.setView(view), run([received]));
-  await expect(page.getByText('Owen Reilly')).toBeVisible();
+  await expect(page.getByText('Owen Reilly', { exact: true })).toBeVisible();
   await expect(page.getByText('Received', { exact: true })).toBeVisible();
   await expect(page.getByLabel('0 applications need review')).toBeVisible();
 

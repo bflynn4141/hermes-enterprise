@@ -27,6 +27,8 @@ export interface ProviderConnectProps {
   autoFocusKey?: boolean;
   connectLabel?: string;
   onOAuthStart?: () => void;
+  /** Keep the API-key flow active after hosted OAuth reports unavailable. */
+  preferManual?: boolean;
 }
 
 /**
@@ -48,6 +50,7 @@ export function ProviderConnect({
   autoFocusKey = false,
   connectLabel = 'Connect and continue',
   onOAuthStart,
+  preferManual = false,
 }: ProviderConnectProps) {
   const fieldId = useId();
   const helpId = `${fieldId}-help`;
@@ -71,7 +74,7 @@ export function ProviderConnect({
     );
   }
 
-  if (onOAuthStart && status.kind !== 'oauth_unavailable') {
+  if (onOAuthStart && !preferManual && status.kind !== 'oauth_unavailable') {
     return (
       <div className="provider-connect" aria-busy={busy}>
         <div className="provider-connect-oauth-mark" aria-hidden="true"><Icon name="key" size={20} /></div>

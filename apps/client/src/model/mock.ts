@@ -975,6 +975,12 @@ export function createMockBackend(options: MockOptions = {}) {
         behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
       });
     }
+    if (p('/provider-connections/nous/start') && method === 'POST') {
+      // The ordinary browser fixture has no hosted OAuth client. Returning the
+      // same typed refusal as an unconfigured deployment exercises the real
+      // manual workspace-key fallback without inventing an OAuth credential.
+      return fail(503, 'oauth_not_configured', 'Hosted Nous sign-in is not configured in this fixture.');
+    }
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
       // Explicit fake values let browser tests exercise both outcomes without

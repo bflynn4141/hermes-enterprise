@@ -97,19 +97,15 @@ export function useFirstRunSample({
     const accept = (snapshot: SampleRunSnapshot): void => {
       remember(runKey, snapshot.runId);
       if (cancelled) return;
-      setView((current) => {
-        // GET requests after=0 and should be a full snapshot. Preserve prior
-        // applications if a server optimization returns an events-only page.
-        const merged = snapshot.applications.length === 0 && current.snapshot?.applications.length
-          ? { ...snapshot, applications: current.snapshot.applications }
-          : snapshot;
-        return viewFor(merged);
-      });
+      // `after=0` is the worker's full snapshot contract. Replacing instead of
+      // merging prevents a deleted/stale run from leaking applicants into a
+      // newly created run during recovery.
+      setView(viewFor(snapshot));
       if (snapshot.status === 'starting' || snapshot.status === 'running') schedule(snapshot.runId, snapshot.nextPollMs);
     };
 
     const begin = async (): Promise<void> => {
-      if (!cancelled) setView((current) => ({ phase: 'starting', snapshot: current.snapshot, message: null }));
+      if (!cancelled) setView({ phase: 'starting', snapshot: null, message: null });
       try {
         const snapshot = await startSampleRun(rest, workspaceId, agentId, setupAttemptId(storageKey));
         accept(snapshot);

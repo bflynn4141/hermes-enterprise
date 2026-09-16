@@ -327,19 +327,16 @@ export async function startSamplePartnerRun(
     throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
   }
 
-  const session = await work.tx.query<{ id: string }>(
-    `SELECT id FROM sessions
-      WHERE workspace_id = $1 AND agent_id = $2 AND owner_id = $3 AND NOT archived
-      ORDER BY created_at LIMIT 1`,
-    [work.workspaceId, agentId, work.userId],
-  );
+  // This walkthrough belongs to onboarding, not to an arbitrary chat. Leaving
+  // it unbound prevents its Inbox requests from appearing to originate in the
+  // oldest pre-existing session when a person has several conversations.
   const inserted = await work.tx.query<{ id: string; started_at: Date }>(
     `INSERT INTO onboarding_sample_runs
        (workspace_id, agent_id, created_by, session_id, setup_attempt_id)
-     VALUES ($1,$2,$3,$4,$5)
+     VALUES ($1,$2,$3,NULL,$4)
      ON CONFLICT (workspace_id, created_by, agent_id) DO NOTHING
      RETURNING id, started_at`,
-    [work.workspaceId, agentId, work.userId, session.rows[0]?.id ?? null, setupAttemptId],
+    [work.workspaceId, agentId, work.userId, setupAttemptId],
   );
   const created = inserted.rows[0];
   const existing = created ? null : await work.tx.query<{ id: string; started_at: Date }>(

@@ -662,6 +662,8 @@
 .first-run-application-status > span { width: 5px; height: 5px; border-radius: 50%; background: #8d88a8; }
 .first-run-application-status.is-researching { color: #b7d7ed; border-color: rgba(95, 180, 218, .28); background: rgba(34, 111, 153, .16); }
 .first-run-application-status.is-researching > span { background: #5ec4e5; }
+.first-run-application-status.is-screened { color: #d3d0ff; border-color: rgba(155, 145, 241, .3); background: rgba(87, 80, 180, .2); }
+.first-run-application-status.is-screened > span { background: #9d95f4; }
 .first-run-application-status.is-needs_review { color: #ebd6a0; border-color: rgba(225, 181, 82, .28); background: rgba(154, 108, 22, .17); }
 .first-run-application-status.is-needs_review > span { background: #efb84e; }
 

@@ -71,6 +71,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const [state, setState] = useState<FirstRunState>(() => loadState(storageKey));
   const [apiKey, setApiKey] = useState('');
   const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
+  const [manualProviderFlow, setManualProviderFlow] = useState(false);
   const [storedKeyId, setStoredKeyId] = useState<string | null>(null);
   const [providerReady, setProviderReady] = useState(false);
   const sample = useFirstRunSample({
@@ -91,6 +92,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     void adapter.rest.providerKeys(app.workspace.id).then(({ keys }) => {
       if (!live) return;
       const key = keys.find((row) => row.provider === DEFAULT_PROVIDER && row.status !== 'revoked');
+      setManualProviderFlow(key?.credential_kind === 'api_key');
       const ready = key?.status === 'verified' || key?.status === 'verified_scoped';
       setProviderReady(ready);
       setStoredKeyId(key?.id ?? null);
@@ -130,6 +132,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     const key = apiKey.trim();
     if (!key) return;
     setConnectStatus({ kind: 'connecting' });
+    setManualProviderFlow(true);
     void adapter.rest.addProviderKey(app.workspace.id, { provider: DEFAULT_PROVIDER, key }).then((result) => {
       setApiKey('');
       setStoredKeyId(result.key.id);
@@ -171,10 +174,12 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const onOAuthStart = useCallback((): void => {
     const popup = window.open('about:blank', '_blank');
     if (popup) popup.opener = null;
+    setManualProviderFlow(false);
     setConnectStatus({ kind: 'connecting' });
     void adapter.rest.startNousOAuth(app.workspace.id).then(async (started) => {
       if (started.status === 'unavailable') {
         popup?.close();
+        setManualProviderFlow(true);
         setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled here yet. A workspace Admin can use an API key below.' });
         return;
       }
@@ -201,6 +206,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
       setConnectStatus(error.reason === 'oauth_not_configured'
         ? { kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled here yet. A workspace Admin can use an API key below.' }
         : { kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
+      if (error.reason === 'oauth_not_configured') setManualProviderFlow(true);
     });
   }, [adapter, app.workspace.id]);
 
@@ -220,7 +226,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     const applications = sample.view.snapshot?.applications ?? [];
     const stages: string[] = [];
     if (applications.length > 0) stages.push('Application');
-    if (applications.some((item) => item.status === 'researching' || item.status === 'needs_review')) stages.push('Research');
+    if (applications.some((item) => item.status === 'researching' || item.status === 'screened' || item.status === 'needs_review')) stages.push('Research');
     if (applications.some((item) => item.status === 'needs_review')) stages.push('Evidence brief');
     return stages;
   }, [sample.view.snapshot]);
@@ -235,9 +241,10 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
       onConnect={onConnect}
       onRetry={storedKeyId ? onRetry : undefined}
       onOAuthStart={onOAuthStart}
+      preferManual={manualProviderFlow}
       connectLabel="Connect and continue"
     />
-  ), [apiKey, connectStatus, onConnect, onOAuthStart, onRetry, storedKeyId]);
+  ), [apiKey, connectStatus, manualProviderFlow, onConnect, onOAuthStart, onRetry, storedKeyId]);
 
   if (!active) return null;
   return {

@@ -8,7 +8,11 @@ async function openProviderConnect(page: import('@playwright/test').Page) {
   const app = page.getByRole('region', { name: 'Application' });
   await app.getByRole('tab', { name: 'Provider keys' }).click();
   await app.getByRole('button', { name: 'Connect Nous Portal' }).click();
-  return page.getByRole('dialog', { name: 'Connect Nous Portal' });
+  const dialog = page.getByRole('dialog', { name: 'Connect Nous Portal' });
+  await expect(dialog.getByRole('button', { name: 'Continue with Nous' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Continue with Nous' }).click();
+  await expect(dialog.getByLabel('Nous Portal API key')).toBeVisible();
+  return dialog;
 }
 
 test.describe('Nous Portal connection', () => {
@@ -19,8 +23,7 @@ test.describe('Nous Portal connection', () => {
     const portal = dialog.getByRole('link', { name: 'Continue with Nous' });
     await expect(portal).toHaveAttribute('href', 'https://portal.nousresearch.com/api-keys');
     await expect(portal).toHaveAttribute('target', '_blank');
-    await expect(portal).toBeFocused();
-    await expect(dialog.getByText(/opens the official API key page in a new tab/)).toBeVisible();
+    await expect(dialog.getByText(/Hosted Nous sign-in is not enabled/)).toBeVisible();
     await expect(dialog.getByText(/No Nous account access is granted to Hermes/)).toBeVisible();
 
     const key = dialog.getByLabel('Nous Portal API key');

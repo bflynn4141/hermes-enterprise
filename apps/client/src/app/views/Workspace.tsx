@@ -1177,6 +1177,7 @@ function ProviderKeysTab() {
   const [secret, setSecret] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
+  const [manualProviderFlow, setManualProviderFlow] = useState(false);
   const [connectKeyId, setConnectKeyId] = useState<string | null>(null);
   const [autoFocusKey, setAutoFocusKey] = useState(false);
   const keys = lists.providerKeys;
@@ -1189,6 +1190,7 @@ function ProviderKeysTab() {
     setConnectStatus({ kind: 'idle' });
     setConnectKeyId(null);
     setAutoFocusKey(false);
+    setManualProviderFlow(false);
   };
 
   // On the way back from a recent-sign-in challenge, reopen the same flow and
@@ -1199,6 +1201,7 @@ function ProviderKeysTab() {
     const intent = adapter.pendingStepUp();
     if (intent?.kind !== 'provider_key') return;
     setDialog('add');
+    setManualProviderFlow(true);
     setAutoFocusKey(!intent.keyId);
     setConnectStatus(
       intent.keyId
@@ -1231,6 +1234,7 @@ function ProviderKeysTab() {
 
   const connect = async (): Promise<void> => {
     if (!secret.trim()) return;
+    setManualProviderFlow(true);
     setConnectStatus({ kind: 'connecting' });
     try {
       const result = await adapter.rest.addProviderKey(state.workspace.id, { provider: DEFAULT_PROVIDER, key: secret.trim() });
@@ -1281,11 +1285,13 @@ function ProviderKeysTab() {
   const startOAuth = async (): Promise<void> => {
     const popup = window.open('about:blank', '_blank');
     if (popup) popup.opener = null;
+    setManualProviderFlow(false);
     setConnectStatus({ kind: 'connecting' });
     try {
       const started = await adapter.rest.startNousOAuth(state.workspace.id);
       if (started.status === 'unavailable') {
         popup?.close();
+        setManualProviderFlow(true);
         setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
         return;
       }
@@ -1315,9 +1321,12 @@ function ProviderKeysTab() {
         const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
         if (url) { window.location.assign(url); return; }
       }
-      setConnectStatus(error.reason === 'oauth_not_configured'
-        ? { kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' }
-        : { kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
+      if (error.reason === 'oauth_not_configured') {
+        setManualProviderFlow(true);
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
+      } else {
+        setConnectStatus({ kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
+      }
     }
   };
 
@@ -1368,6 +1377,7 @@ function ProviderKeysTab() {
             setConnectStatus({ kind: 'idle' });
             setConnectKeyId(null);
             setAutoFocusKey(false);
+            setManualProviderFlow(false);
             setNotice(null);
           }}
         >
@@ -1457,6 +1467,7 @@ function ProviderKeysTab() {
           onCancel={closeConnect}
           onDone={closeConnect}
           onOAuthStart={() => void startOAuth()}
+          preferManual={manualProviderFlow}
         />
       </Dialog>
 
