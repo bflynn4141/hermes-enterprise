@@ -330,7 +330,11 @@ function TestQuestion({ providerStatus, providerSlot, sampleStatus, completedSam
   return (
     <>
       <IrisPrompt>
-        {providerReady ? <p>I’m ready. Want to see the loop with a sample application? Nothing will be sent or changed.</p> : <p>Connect Nous Portal, then we can run one safe sample. Nothing will be sent or changed.</p>}
+        {providerReady
+          ? onRunSample
+            ? <p>I’m ready. Want to see the loop with a sample application? Nothing will be sent or changed.</p>
+            : <p>Nous Portal is connected. Add your program criteria before the first application.</p>
+          : <p>Connect Nous Portal, then we can run one safe sample. Nothing will be sent or changed.</p>}
       </IrisPrompt>
       {!providerReady ? (
         <div className="first-run-provider-slot" data-testid="first-run-provider-slot">
@@ -338,11 +342,18 @@ function TestQuestion({ providerStatus, providerSlot, sampleStatus, completedSam
         </div>
       ) : null}
       {providerReady && sampleStatus === 'idle' ? (
-        <button type="button" className="first-run-sample" onClick={onRunSample} disabled={!onRunSample}>
-          <Glass name="admission" size={32} />
-          <span><strong>Run sample application</strong><small>Uses sample data and creates no external effects</small></span>
-          <Icon name="arrow" size={16} />
-        </button>
+        onRunSample ? (
+          <button type="button" className="first-run-sample" onClick={onRunSample}>
+            <Glass name="admission" size={32} />
+            <span><strong>Run sample application</strong><small>Uses sample data and creates no external effects</small></span>
+            <Icon name="arrow" size={16} />
+          </button>
+        ) : (
+          <div className="first-run-sample first-run-sample-next" role="status">
+            <Glass name="context" size={32} />
+            <span><strong>Add program criteria</strong><small>Iris will flag this gap until a real source is connected.</small></span>
+          </div>
+        )
       ) : null}
       {providerReady && sampleStatus === 'running' ? <SampleProgress stages={stages} completed={completedSampleStages} /> : null}
       {providerReady && sampleStatus === 'complete' ? (

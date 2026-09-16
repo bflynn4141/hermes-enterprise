@@ -453,6 +453,11 @@
 .first-run-sample:hover { border-color: rgba(207, 205, 255, .42); background: linear-gradient(110deg, rgba(80, 74, 171, .4), rgba(28, 17, 78, .5)); }
 .first-run-sample:disabled { cursor: default; opacity: .65; }
 .first-run-sample > svg:last-child { color: var(--muted); }
+.first-run-sample-next { cursor: default; }
+.first-run-sample-next:hover {
+  border-color: rgba(220, 218, 255, .2);
+  background: linear-gradient(110deg, rgba(71, 66, 151, .31), rgba(18, 11, 60, .44));
+}
 
 .first-run-sample-progress { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: rgba(7, 4, 39, .32); }
 .first-run-sample-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
