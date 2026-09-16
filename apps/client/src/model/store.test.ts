@@ -320,6 +320,20 @@ describe('the entity cache', () => {
     // Reducing an unknown action is a no-op: `request/decide` does not exist.
     expect(reduce(decided, { type: 'request/decide' } as unknown as Action)).toBe(decided);
   });
+
+  it('refreshes member and invitation lists for an invitation-derived agent join', () => {
+    const actions = actionsFor(event('member.agent_joined', {
+      source: 'invitation.accepted',
+      invitation_id: mockUuid(80),
+      member_id: mockUuid(81),
+      agent_id: mockUuid(82),
+      coordination_request_id: REQUEST,
+    }, 5n, null), base());
+    expect(actions).toContainEqual({ type: 'list/invalidate', key: 'members' });
+    expect(actions).toContainEqual({ type: 'list/invalidate', key: 'invitations' });
+    expect(actions.some((action) => action.type === 'message/add')).toBe(false);
+    expect(actions.some((action) => action.type === 'run/start')).toBe(false);
+  });
 });
 
 describe('streaming text and step_attempt', () => {

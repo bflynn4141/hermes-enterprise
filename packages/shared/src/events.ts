@@ -290,6 +290,20 @@ export const entityUpdatedSchema = event(
     .strict(),
 );
 
+/** A member accepted an invitation and their owned Hermes agent was provisioned. */
+export const memberAgentJoinedSchema = event(
+  'member.agent_joined',
+  z
+    .object({
+      source: z.literal('invitation.accepted'),
+      invitation_id: uuidSchema,
+      member_id: uuidSchema,
+      agent_id: uuidSchema,
+      coordination_request_id: uuidSchema.nullable(),
+    })
+    .strict(),
+);
+
 /**
  * The cursor cannot be replayed (older than the 90-day retention, or a schema
  * migration made the rows unreadable). The client refetches bootstrap.
@@ -323,6 +337,7 @@ export const streamEventSchema = z.discriminatedUnion('kind', [
   requestCreatedSchema,
   decisionRecordedSchema,
   entityUpdatedSchema,
+  memberAgentJoinedSchema,
   resyncSchema,
 ]);
 
@@ -343,6 +358,7 @@ export const EVENT_KINDS_CONTRACT = [
   'request.created',
   'decision.recorded',
   'entity.updated',
+  'member.agent_joined',
   'resync',
 ] as const satisfies readonly StreamEventKind[];
 
@@ -365,6 +381,7 @@ export const EVENT_STREAM: Readonly<Record<StreamEventKind, 'session' | 'workspa
   'request.created': 'workspace',
   'decision.recorded': 'workspace',
   'entity.updated': 'workspace',
+  'member.agent_joined': 'workspace',
   resync: 'either',
 };
 

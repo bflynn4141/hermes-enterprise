@@ -31,10 +31,30 @@ describe('event contract', () => {
       'request.created',
       'decision.recorded',
       'entity.updated',
+      'member.agent_joined',
       'resync',
     ];
     expect([...EVENT_KINDS_CONTRACT]).toEqual(expected);
     for (const kind of expected) expect(EVENT_STREAM[kind as keyof typeof EVENT_STREAM]).toBeDefined();
+  });
+
+  it('validates the invitation-derived member and agent join event', () => {
+    expect(streamEventSchema.safeParse({
+      id: '15',
+      workspace_id: '00000000-0000-4000-8000-000000000001',
+      session_id: null,
+      schema_version: SCHEMA_VERSION,
+      trace_id: 'invite-accepted',
+      at: '2026-09-15T18:00:00.000Z',
+      kind: 'member.agent_joined',
+      payload: {
+        source: 'invitation.accepted',
+        invitation_id: '00000000-0000-4000-8000-000000000002',
+        member_id: '00000000-0000-4000-8000-000000000003',
+        agent_id: '00000000-0000-4000-8000-000000000004',
+        coordination_request_id: '00000000-0000-4000-8000-000000000005',
+      },
+    }).success).toBe(true);
   });
 
   it('round-trips every event the mock stream produces', () => {

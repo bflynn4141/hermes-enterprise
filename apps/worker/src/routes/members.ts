@@ -43,7 +43,12 @@ export interface MirrorMembership {
  * twice within a second from those two paths and a second row would mean two
  * answers to "what is this person's role?".
  */
-export async function mirrorMembership(tx: Tx, membership: MirrorMembership): Promise<string> {
+export interface MirroredMembership {
+  readonly memberId: string;
+  readonly acceptedInvitation: { readonly id: string; readonly invitedByUserId: string | null } | null;
+}
+
+export async function mirrorMembership(tx: Tx, membership: MirrorMembership): Promise<MirroredMembership> {
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO members (workspace_id, user_id, role, workos_membership_id, status)
      VALUES ($1, $2, $3, $4, $5)
@@ -57,14 +62,18 @@ export async function mirrorMembership(tx: Tx, membership: MirrorMembership): Pr
   const id = rows[0]?.id;
   if (!id) throw new RouteError('the membership mirror did not write', 'mirror_failed', 409);
 
-  if (membership.email) {
-    await tx.query(
+  let acceptedInvitation: MirroredMembership['acceptedInvitation'] = null;
+  if (membership.email && membership.status === 'active') {
+    const accepted = await tx.query<{ id: string; invited_by: string | null }>(
       `UPDATE invitations SET status = 'accepted', accepted_by = $3
-        WHERE workspace_id = $1 AND email = lower($2) AND status = 'pending'`,
+        WHERE workspace_id = $1 AND email = lower($2) AND status = 'pending'
+        RETURNING id, invited_by`,
       [membership.workspaceId, membership.email, membership.userId],
     );
+    const invitation = accepted.rows[0];
+    if (invitation) acceptedInvitation = { id: invitation.id, invitedByUserId: invitation.invited_by };
   }
-  return id;
+  return { memberId: id, acceptedInvitation };
 }
 
 export interface MemberRow {

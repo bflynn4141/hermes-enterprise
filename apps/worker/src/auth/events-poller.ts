@@ -22,6 +22,7 @@ import { connect } from '../db/client.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { optionalWorkosPort, type WorkOSEvent } from './workos.js';
 import { mirrorMembership, revokeAccess, type MemberRow } from '../routes/members.js';
+import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
 
 interface MembershipEventData {
   id?: string;
@@ -172,14 +173,28 @@ async function applyEvent(env: Env, event: WorkOSEvent): Promise<boolean> {
       }
     }
 
-    await mirrorMembership(tx, {
+    const joiningUser = await tx.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+    const mirrored = await mirrorMembership(tx, {
       workspaceId: workspaceId as string,
       userId: userId as string,
       role,
       workosMembershipId: data.id ?? null,
       status: 'active',
+      email: joiningUser.rows[0]?.email,
     });
-    return [];
+    const coordinationJobs: string[] = [];
+    if (mirrored.acceptedInvitation) {
+      await coordinateAcceptedMember({
+        tx,
+        workspaceId: workspaceId as string,
+        joiningUserId: userId as string,
+        joiningMemberId: mirrored.memberId,
+        invitationId: mirrored.acceptedInvitation.id,
+        invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
+        jobs: coordinationJobs,
+      });
+    }
+    return coordinationJobs;
   });
 
   if (jobs.length > 0) await runJobsAfterCommit(env, workspaceId, jobs);

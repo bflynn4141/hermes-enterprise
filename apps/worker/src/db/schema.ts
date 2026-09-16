@@ -904,6 +904,7 @@ export const events = pgTable('events', {
   documentId: uuid('document_id'),
   memberId: uuid('member_id'),
   invitationId: uuid('invitation_id'),
+  agentId: uuid('agent_id'),
   subjectId: uuid('subject_id'),
   keyId: uuid('key_id'),
   createdAt: now('created_at'),

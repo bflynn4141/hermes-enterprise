@@ -37,6 +37,12 @@ export interface ApprovalProposerContext extends ApprovalWork {
   readonly userId?: string | null;
   readonly sessionId?: string | null;
   readonly runId?: string | null;
+  readonly sourceTrigger?: {
+    readonly kind: 'member_agent_joined';
+    readonly invitation_id: string;
+    readonly member_id: string;
+    readonly agent_id: string;
+  } | null;
 }
 
 export interface ApprovalHumanContext extends ApprovalWork {
@@ -435,7 +441,11 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
 async function requesterContext(
   context: ApprovalProposerContext,
 ): Promise<{ userId: string | null; memberId: string | null; sessionId: string | null; runId: string | null }> {
-  const agent = await context.tx.query(`SELECT 1 FROM agents WHERE workspace_id = $1 AND id = $2 AND status = 'started'`, [context.workspaceId, context.agentId]);
+  const allowedAgentStatuses = context.sourceTrigger ? ['draft', 'started'] : ['started'];
+  const agent = await context.tx.query(
+    `SELECT 1 FROM agents WHERE workspace_id = $1 AND id = $2 AND status = ANY ($3::text[])`,
+    [context.workspaceId, context.agentId, allowedAgentStatuses],
+  );
   if (agent.rowCount !== 1) throw new RouteError('the proposing agent is not active in this workspace', 'invalid_requester_agent', 422);
 
   let userId = context.userId ?? null;
@@ -467,6 +477,31 @@ async function requesterContext(
     if (!memberId) throw new RouteError('the requester is not an active workspace member', 'invalid_requester', 422);
   }
   return { userId, memberId, sessionId: context.sessionId ?? null, runId: context.runId ?? null };
+}
+
+async function validateJoinSource(context: ApprovalProposerContext): Promise<void> {
+  const trigger = context.sourceTrigger;
+  if (!trigger) return;
+  if (!context.userId || !context.sessionId || context.runId) {
+    throw new RouteError('a member join proposal requires a human-owned source session and no source run', 'invalid_join_source', 422);
+  }
+  const { rows } = await context.tx.query<{ invited_by: string | null; proposer_role: string | null }>(
+    `SELECT i.invited_by,
+            (SELECT role FROM members
+              WHERE workspace_id = $1 AND user_id = $6 AND status = 'active') AS proposer_role
+       FROM invitations i
+       JOIN members m ON m.workspace_id = i.workspace_id AND m.id = $3
+       JOIN agent_owners ao ON ao.workspace_id = i.workspace_id
+                           AND ao.member_id = m.id AND ao.agent_id = $4
+      WHERE i.workspace_id = $1 AND i.id = $2 AND i.status = 'accepted'
+        AND i.accepted_by = m.user_id AND $5 = 'member_agent_joined'`,
+    [context.workspaceId, trigger.invitation_id, trigger.member_id, trigger.agent_id, trigger.kind, context.userId],
+  );
+  const row = rows[0];
+  if (!row) throw new RouteError('the member join source is not backed by an accepted invitation and agent owner', 'invalid_join_source', 422);
+  if (row.invited_by ? row.invited_by !== context.userId : row.proposer_role !== 'admin') {
+    throw new RouteError('only the inviter or an active admin can sponsor join coordination', 'invalid_join_sponsor', 403);
+  }
 }
 
 async function ownerForAgent(tx: Tx, workspaceId: string, agentId: string): Promise<string> {
@@ -718,12 +753,21 @@ async function publishRequestChanged(
 
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
   const input = proposeApprovalInputSchema.parse(rawInput);
+  await validateJoinSource(context);
+  if (context.sourceTrigger) {
+    if (input.proposal.approval_type !== 'team_commitment'
+      || input.proposal.details.recipient_agent_id !== context.sourceTrigger.agent_id
+      || input.proposal.details.receiving_owner_member_id !== context.sourceTrigger.member_id) {
+      throw new RouteError('the join trigger must propose coordination with the newly owned agent', 'invalid_join_target', 422);
+    }
+  }
   const { idempotency_key: _key, ...proposalMaterial } = input;
   const proposalIdempotencyHash = await sha256({
     requester_agent_id: context.agentId,
     requester_user_id: context.userId ?? null,
     source_session_id: context.sessionId ?? null,
     source_run_id: context.runId ?? null,
+    source_trigger: context.sourceTrigger ?? null,
     input: proposalMaterial,
   });
   await idempotencyLock(context.tx, context.workspaceId, input.idempotency_key);
@@ -760,7 +804,12 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
     target_agent_ids: targets.targetAgentIds,
     target_member_ids: targets.targetMemberIds,
     target_resource_ids: targets.targetResourceIds,
-    source: { session_id: requester.sessionId, run_id: requester.runId, dependent_request_ids: targets.dependentRequestIds },
+    source: {
+      session_id: requester.sessionId,
+      run_id: requester.runId,
+      dependent_request_ids: targets.dependentRequestIds,
+      trigger: context.sourceTrigger ?? null,
+    },
   };
   const hash = await authorizationHash({ proposal: input.proposal, context: serverContext, policy: selected.policy, resource_bindings: bindings, expires_at: expiresAt });
   const payload = approvalPayloadSchema.parse({ ...input.proposal, context: serverContext, authorization: { revision: 1, hash, expires_at: expiresAt }, policy: selected.policy, resource_bindings: bindings });
