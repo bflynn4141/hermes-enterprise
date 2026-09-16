@@ -166,4 +166,3 @@ export function deterministicDiscoveryPriority(
     sourceUpdatedAt: sourceTimes.length > 0 ? new Date(Math.max(...sourceTimes)).toISOString() : null,
   };
 }
-

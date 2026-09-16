@@ -90,4 +90,3 @@ export async function getPartnerScreening(c: Context<{ Bindings: Env }>): Promis
   const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, runId));
   return c.json(partnerScreeningSnapshotSchema.parse(snapshot));
 }
-
