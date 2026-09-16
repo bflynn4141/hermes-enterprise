@@ -15,10 +15,11 @@ CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT="postgres://agent
 WORKOS_API_KEY=""
 WORKOS_CLIENT_ID=""
 WORKOS_COOKIE_PASSWORD=""
-# Optional. The callback is normally this Worker's own origin plus
-# /auth/callback; set this only when the browser reaches us through a different
-# host than the Worker sees. Whatever it resolves to must be registered as a
-# redirect URI in the WorkOS dashboard, exactly.
+# Exact `issuer` from this application's OIDC discovery document. Required by
+# staging and production readiness; do not infer it from another application.
+WORKOS_ISSUER=""
+# Explicit in staging and production. Whatever it resolves to must be
+# registered as a redirect URI in the WorkOS dashboard, exactly.
 WORKOS_REDIRECT_URI=""
 
 # Signs the hub tickets a WebSocket presents to extend its authorisation.

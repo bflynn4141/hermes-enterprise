@@ -553,8 +553,9 @@ yet. Building the mechanism without a route that uses it would leave it
 untested until M4, and the member routes are the other place where an
 unattended laptop is the threat: promoting yourself an accomplice to Admin is
 as consequential as approving one admission. `/auth/login?step_up=1` is the way
-back, asking AuthKit for `max_age: 0`, which yields a new `sid` whose
-`authenticated_at` is now.
+back, asking AuthKit for `max_age: 0`. WorkOS retains the `sid`, advances the
+access token's `auth_time`, and the callback persists that value as
+`authenticated_at`.
 
 **Note.** Whether `max_age: 0` also re-challenges MFA is still **unverified**;
 it needs a live WorkOS environment, and it is listed in the final report as

@@ -62,20 +62,28 @@ export async function signAccessToken(claims: {
   sid: string;
   exp?: number;
   iat?: number;
+  iss?: string | null;
+  client_id?: string | null;
+  auth_time?: number | null;
   org_id?: string;
   role?: string;
 }): Promise<string> {
   const { privateKey, kid } = await signingKeys();
   const now = Math.floor(Date.now() / 1000);
+  const iat = claims.iat ?? now;
+  const payloadClaims: Record<string, unknown> = {
+    sub: claims.sub,
+    sid: claims.sid,
+    iat,
+    exp: claims.exp ?? now + 300,
+    ...(claims.org_id ? { org_id: claims.org_id } : {}),
+    ...(claims.role ? { role: claims.role } : {}),
+  };
+  if (claims.iss !== null) payloadClaims.iss = claims.iss ?? 'https://api.workos.com';
+  if (claims.client_id !== null) payloadClaims.client_id = claims.client_id ?? 'client_test';
+  if (claims.auth_time !== null) payloadClaims.auth_time = claims.auth_time ?? iat;
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid }));
-  const payload = b64url(
-    JSON.stringify({
-      iss: 'https://api.workos.com',
-      iat: claims.iat ?? now,
-      exp: claims.exp ?? now + 300,
-      ...claims,
-    }),
-  );
+  const payload = b64url(JSON.stringify(payloadClaims));
   const signature = await crypto.subtle.sign(
     'RSASSA-PKCS1-v1_5',
     privateKey,
@@ -121,16 +129,25 @@ export class FakeWorkOS implements WorkOSPort {
   /** The code `/auth/callback` will be given, and who it resolves to. */
   pendingCode: { code: string; userId: string; organizationId: string | null; sid: string } | null = null;
 
-  authorizationUrl(options: { redirectUri: string; state?: string; maxAge?: number }): string {
+  authorizationUrl(options: {
+    redirectUri: string;
+    state?: string;
+    screenHint?: 'sign-in' | 'sign-up';
+    invitationToken?: string;
+    organizationId?: string;
+    maxAge?: number;
+  }): string {
     this.calls.push({ method: 'authorizationUrl', argument: options });
     const url = new URL('https://api.workos.com/user_management/authorize');
     url.searchParams.set('redirect_uri', options.redirectUri);
     if (options.state) url.searchParams.set('state', options.state);
+    if (options.invitationToken) url.searchParams.set('invitation_token', options.invitationToken);
+    if (options.organizationId) url.searchParams.set('organization_id', options.organizationId);
     if (options.maxAge !== undefined) url.searchParams.set('max_age', String(options.maxAge));
     return url.toString();
   }
 
-  async authenticateWithCode(options: { code: string }): Promise<WorkOSAuthentication> {
+  async authenticateWithCode(options: { code: string; invitationToken?: string }): Promise<WorkOSAuthentication> {
     this.calls.push({ method: 'authenticateWithCode', argument: options });
     const pending = this.pendingCode;
     if (!pending || pending.code !== options.code) throw new FakeWorkOSError('bad code', 400, 'invalid_grant');
@@ -153,8 +170,8 @@ export class FakeWorkOS implements WorkOSPort {
     return Promise.resolve(unsealData<SealedPayload>(sealed));
   }
 
-  async refresh(sealed: string): Promise<{ sealedSession: string; accessToken: string }> {
-    this.calls.push({ method: 'refresh', argument: sealed });
+  async refresh(sealed: string, organizationId?: string): Promise<{ sealedSession: string; accessToken: string }> {
+    this.calls.push({ method: 'refresh', argument: { sealed, organizationId } });
     if (this.refreshFailure) throw this.refreshFailure;
     const current = unsealData<SealedPayload>(sealed);
     if (!current) throw new FakeWorkOSError('bad cookie', 400, 'invalid_grant');
@@ -165,18 +182,41 @@ export class FakeWorkOS implements WorkOSPort {
           .replace(/_/g, '/')
           .padEnd(Math.ceil((current.accessToken.split('.')[1] ?? '').length / 4) * 4, '='),
       ),
-    ) as { sub: string; sid: string };
-    const accessToken = await signAccessToken({ sub: previous.sub, sid: previous.sid });
+    ) as { sub: string; sid: string; auth_time?: number; org_id?: string };
+    const accessToken = await signAccessToken({
+      sub: previous.sub,
+      sid: previous.sid,
+      ...(typeof previous.auth_time === 'number' ? { auth_time: previous.auth_time } : {}),
+      ...(organizationId || previous.org_id ? { org_id: organizationId ?? previous.org_id } : {}),
+    });
     return { sealedSession: seal({ accessToken, user: current.user }), accessToken };
   }
 
-  logoutUrl(): Promise<string> {
+  logoutUrl(sealed: string, returnTo?: string): Promise<string> {
+    this.calls.push({ method: 'logoutUrl', argument: { sealed, returnTo } });
     return Promise.resolve('https://api.workos.com/user_management/sessions/logout');
   }
 
   createOrganization(name: string): Promise<{ id: string }> {
     this.calls.push({ method: 'createOrganization', argument: name });
     return Promise.resolve({ id: `org_${crypto.randomUUID().slice(0, 8)}` });
+  }
+
+  createOrganizationMembership(options: {
+    userId: string;
+    organizationId: string;
+    roleSlug: string;
+  }): Promise<WorkOSMembership> {
+    this.calls.push({ method: 'createOrganizationMembership', argument: options });
+    const membership: WorkOSMembership = {
+      id: `om_${crypto.randomUUID().slice(0, 8)}`,
+      userId: options.userId,
+      organizationId: options.organizationId,
+      role: options.roleSlug,
+      status: 'active',
+    };
+    this.memberships.push(membership);
+    return Promise.resolve(membership);
   }
 
   deleteOrganization(organizationId: string): Promise<void> {
@@ -188,6 +228,7 @@ export class FakeWorkOS implements WorkOSPort {
     userId?: string;
     organizationId?: string;
   }): Promise<WorkOSMembership[]> {
+    this.calls.push({ method: 'listOrganizationMemberships', argument: options });
     return Promise.resolve(
       this.memberships.filter(
         (membership) =>

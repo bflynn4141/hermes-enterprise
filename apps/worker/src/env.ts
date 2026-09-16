@@ -69,6 +69,12 @@ export interface Env {
   WORKOS_CLIENT_ID?: string;
   WORKOS_COOKIE_PASSWORD?: string;
   /**
+   * Exact expected `iss` in AuthKit user access tokens. Read it from the
+   * application's OIDC discovery document. Tests may omit it and use WorkOS's
+   * legacy API-origin value; staging and production readiness require it.
+   */
+  WORKOS_ISSUER?: string;
+  /**
    * Overrides the redirect URI sent to AuthKit. Normally the callback is this
    * Worker's own origin plus `/auth/callback`, which is what a single-origin
    * deployment wants; the variable exists for the case where the browser

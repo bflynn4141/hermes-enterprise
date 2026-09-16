@@ -8,8 +8,8 @@
 // exercise.
 import { describe, expect, it } from 'vitest';
 import { seedWorkspace } from './helpers.js';
-import { makeEnv, readTenant } from './harness.js';
-import { drainJobs, publishEvents, withWorkspaceTransaction } from '../../src/jobs.js';
+import { clearFakeWorkOS, makeEnv, readTenant } from './harness.js';
+import { drainJobs, publishEvents, runJob, withWorkspaceTransaction } from '../../src/jobs.js';
 
 /**
  * `drainJobs` is cross-tenant by design — that is the whole point of the
@@ -125,5 +125,49 @@ describe('the Cron drain', () => {
       return Number(rows[0]?.count ?? '0');
     });
     expect(pointers).toBe(0);
+  });
+});
+
+describe('WorkOS synchronization', () => {
+  it('records failure and retries when workos auth has no usable port', async () => {
+    clearFakeWorkOS();
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv({
+      ENVIRONMENT: 'production',
+      AUTH_MODE: 'workos',
+      WORKOS_API_KEY: undefined,
+      WORKOS_CLIENT_ID: undefined,
+      WORKOS_COOKIE_PASSWORD: undefined,
+    });
+    const resourceId = crypto.randomUUID();
+    const key = `workos:${resourceId}:remove`;
+    await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      tx.query(
+        `INSERT INTO workos_sync (workspace_id, resource_type, resource_id, direction, payload)
+         VALUES ($1, 'membership', $2, 'outbound', $3::jsonb)`,
+        [fixture.workspaceId, resourceId, JSON.stringify({ job_key: key })],
+      ),
+    );
+
+    await expect(
+      runJob(env, {
+        id: crypto.randomUUID(),
+        workspace_id: fixture.workspaceId,
+        kind: 'workos_sync',
+        key,
+        payload: { action: 'deactivate_membership', workos_membership_id: 'om_test' },
+        attempts: 1,
+      }),
+    ).rejects.toThrow(/WorkOS is required/);
+
+    const sync = await readTenant(fixture.workspaceId, fixture.adminId, async (c) => {
+      const result = await c.query<{ status: string; last_error: string | null }>(
+        `SELECT status, last_error FROM workos_sync
+          WHERE workspace_id = $1 AND payload->>'job_key' = $2`,
+        [fixture.workspaceId, key],
+      );
+      return result.rows[0];
+    });
+    expect(sync).toEqual({ status: 'failed', last_error: 'workos not configured' });
   });
 });

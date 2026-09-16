@@ -20,10 +20,11 @@
 import type { Context } from 'hono';
 import { bootstrapSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { getSession, requireCsrf, requireOrigin } from '../auth.js';
+import { AuthError, getSession, requireCsrf, requireOrigin, takeRefreshedCookie } from '../auth.js';
+import { readCookie, SESSION_COOKIE, sessionCookie } from '../auth/cookies.js';
 import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
-import { optionalWorkosPort } from '../auth/workos.js';
+import { workosPort, type WorkOSPort } from '../auth/workos.js';
 import { jsonBody, RouteError } from './tenant.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
@@ -48,8 +49,12 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
 
   const client = await connect(c.env, 'app');
   try {
-    const { rows } = await client.query<{ email: string; email_verified: boolean }>(
-      `SELECT email, email_verified FROM users WHERE id = $1`,
+    const { rows } = await client.query<{
+      email: string;
+      email_verified: boolean;
+      workos_user_id: string | null;
+    }>(
+      `SELECT email, email_verified, workos_user_id FROM users WHERE id = $1`,
       [session.userId],
     );
     const user = rows[0];
@@ -64,8 +69,28 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
     // transaction below then fails, an empty organization is left behind in
     // WorkOS: the cheaper of the two orphans, and the reconciliation query in
     // the runbook finds it.
-    const port = optionalWorkosPort(c.env);
-    const organization = port ? await port.createOrganization(name) : null;
+    let port: WorkOSPort | null = null;
+    let organization: { id: string } | null = null;
+    if (c.env.AUTH_MODE === 'workos') {
+      port = workosPort(c.env);
+      if (!user.workos_user_id) {
+        throw new AuthError('the signed-in account is not linked to WorkOS', 'invalid_session');
+      }
+      organization = await port.createOrganization(name);
+      try {
+        await port.createOrganizationMembership({
+          userId: user.workos_user_id,
+          organizationId: organization.id,
+          roleSlug: 'admin',
+        });
+      } catch (error) {
+        // Do not knowingly leave an empty organization behind when the owner
+        // membership itself failed. Cleanup is best effort; the reconciliation
+        // query still catches a delete failure.
+        await port.deleteOrganization(organization.id).catch(() => undefined);
+        throw error;
+      }
+    }
 
     const workspaceId = crypto.randomUUID();
     await client.query('BEGIN');
@@ -108,7 +133,31 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // without a window where the workspace exists but reads as empty.
       const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId, allowedProviders(c.env)));
       await client.query('COMMIT');
-      return c.json(body, 201);
+
+      const response = c.json(body, 201);
+      // WorkOS sessions are organization-scoped. Once the admin membership and
+      // local workspace both exist, switch the sealed session to the new
+      // organization. A transient refresh failure does not make a committed
+      // workspace look like a failed POST: local membership already authorizes
+      // the returned bootstrap, and the next explicit sign-in can select it.
+      const sealed = session.refreshedCookie ?? readCookie(c, SESSION_COOKIE);
+      if (port && organization && sealed) {
+        try {
+          const switched = await port.refresh(sealed, organization.id);
+          takeRefreshedCookie(c.req.raw);
+          response.headers.append('Set-Cookie', sessionCookie(c.env, switched.sealedSession));
+        } catch (error) {
+          console.log(
+            JSON.stringify({
+              at: 'workspace.create.session_switch',
+              workspace_id: workspaceId,
+              switched: false,
+              error: error instanceof Error ? error.name : 'unknown',
+            }),
+          );
+        }
+      }
+      return response;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

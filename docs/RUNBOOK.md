@@ -473,6 +473,7 @@ E=production   # or staging
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_API_KEY --env $E
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_CLIENT_ID --env $E
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_COOKIE_PASSWORD --env $E   # >= 32 chars
+pnpm --filter @hermes/worker exec wrangler secret put WORKOS_ISSUER --env $E            # exact OIDC discovery issuer
 pnpm --filter @hermes/worker exec wrangler secret put HUB_TICKET_SECRET --env $E        # set explicitly; see §6
 
 # Envelope encryption. KEK_CURRENT is a var, not a secret (see §4).
@@ -490,8 +491,10 @@ pnpm --filter @hermes/worker exec wrangler secret put SENTRY_DSN --env $E
 
 Confirm: `wrangler secret list --env $E`.
 
-`WORKOS_REDIRECT_URI` is a secret only where the browser reaches the Worker
-through a different host than the Worker sees. Normally omit it.
+`WORKOS_REDIRECT_URI` is an ordinary variable pinned to each deployed host in
+`wrangler.jsonc`. `/health` refuses staging or production if it is missing,
+off-origin, or not exactly `/auth/callback`. The full dashboard and live test
+sequence is `docs/WORKOS-PRODUCTION-CHECKLIST.md`.
 
 ### GitHub secrets and variables
 

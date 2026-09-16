@@ -157,6 +157,10 @@ describe('wrangler.jsonc', () => {
     expect((config.vars as { AUTH_MODE: string }).AUTH_MODE).toBe('fake');
     for (const [name, scope] of Object.entries(envs)) {
       expect((scope.vars as { AUTH_MODE: string }).AUTH_MODE, `${name} trusts a header`).toBe('workos');
+      const vars = scope.vars as { ALLOWED_ORIGINS: string; WORKOS_REDIRECT_URI?: string };
+      expect(vars.WORKOS_REDIRECT_URI, `${name} has no explicit WorkOS callback`).toBe(
+        `${vars.ALLOWED_ORIGINS}/auth/callback`,
+      );
     }
   });
 });

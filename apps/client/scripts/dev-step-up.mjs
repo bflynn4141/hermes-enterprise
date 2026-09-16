@@ -3,18 +3,17 @@
 // Why this exists. Decisions and every provider-key route call `requireStepUp`,
 // which compares `auth_sessions.authenticated_at` against a five-minute window.
 // In `AUTH_MODE=workos` the client sends the person to `/auth/login?step_up=1`
-// and WorkOS stamps a new `sid`. In `AUTH_MODE=fake` there is no such route:
+// and WorkOS advances the access token's `auth_time` while retaining `sid`. In
+// `AUTH_MODE=fake` there is no external challenge:
 // `apps/worker/src/auth/adapters.ts` writes `authenticated_at` once, on the
 // INSERT for `sid = dev-<user id>`, and every later request only touches
 // `last_seen_at`. So five minutes after a dev workspace is first opened, every
 // guarded route answers `reauth_required` for ever and nothing in the product
 // can clear it.
 //
-// The honest fix is a dev step-up route on the Worker (see "Server findings" in
-// this app's README). Until that exists this script is the fixture: it
-// re-stamps the row, which is exactly what `/auth/callback` does in the real
-// flow, and it is what `pnpm e2e:live` runs before the scenarios that need
-// step-up.
+// The Worker now has a fake-mode step-up route. This script remains the batch
+// fixture that `pnpm e2e:live` uses before scenarios that need every seeded
+// session fresh; it re-stamps the same row the route does.
 //
 // It goes through the Docker container rather than a Postgres driver on
 // purpose: `apps/client` has no database dependency and should not grow one to

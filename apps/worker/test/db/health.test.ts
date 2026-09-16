@@ -72,6 +72,7 @@ describe('GET /health', () => {
         'answered',
         'reachable',
         'within budget',
+        'configured',
         'alarming',
         'unauthorized',
         'unreachable',
@@ -112,6 +113,35 @@ describe('GET /health', () => {
     const { env } = makeEnv();
     const body = (await (await call(env, '/health')).json()) as HealthBody;
     expect(body.checks.map((c) => c.name)).not.toContain('workos:jwks');
+    expect(body.checks.find((c) => c.name === 'auth:config')?.ok).toBe(true);
+  });
+
+  it('fails readiness when a deployed environment enables fake authentication', async () => {
+    const { env } = makeEnv({ ENVIRONMENT: 'production', AUTH_MODE: 'fake' } as Partial<Env>);
+    const response = await call(env, '/health');
+    const body = (await response.json()) as HealthBody;
+
+    expect(response.status).toBe(503);
+    expect(body.checks.find((check) => check.name === 'auth:config')).toMatchObject({
+      ok: false,
+      detail: 'misconfigured',
+    });
+  });
+
+  it('fails readiness when deployed WorkOS auth has no explicit callback configuration', async () => {
+    const keys = await signingKeys();
+    setJwksFetcherForTests(() => Promise.resolve(keys.jwks));
+    const { env } = workosEnv({
+      ENVIRONMENT: 'production',
+      ALLOWED_ORIGINS: 'https://app.hermes.test',
+      WORKOS_REDIRECT_URI: undefined,
+    } as Partial<Env>);
+    const body = (await (await call(env, '/health')).json()) as HealthBody;
+
+    expect(body.checks.find((check) => check.name === 'auth:config')).toMatchObject({
+      ok: false,
+      detail: 'misconfigured',
+    });
   });
 
   it('checks the WorkOS JWKS in workos mode', async () => {

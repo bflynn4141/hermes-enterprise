@@ -526,7 +526,7 @@ Five guards, in this order:
 | `X-Requested-From: inbox` | Which surface of our own client issued it. Not authentication — a custom header also forces a CORS preflight, and it catches *our* mistakes: a replayed POST, a route that copied this one | 403 `wrong_surface` |
 | Double-submit CSRF | The `hermes_csrf` cookie and the `X-CSRF-Token` header agree | 403 `csrf_failed` |
 | An Admin session | Read from `members` inside the transaction, keyed on the workspace in the path. A Member sees "Admin decision required" | 403 `admin_required` |
-| Step-up, five minutes | The caller's `sid` authenticated recently. The access token carries no `auth_time` and its `iat` moves on every refresh, so the answer comes from `auth_sessions.authenticated_at`, written by `/auth/callback` | 401 `reauth_required` |
+| Step-up, five minutes | The caller's WorkOS `auth_time` is recent. WorkOS keeps `sid` stable across reauthentication and advances `auth_time`; `/auth/callback` persists that claim in `auth_sessions.authenticated_at`. Token `iat` is not used because ordinary refreshes advance it too | 401 `reauth_required` |
 
 Then one transaction: lock the request; `INSERT decisions` (UNIQUE on
 `request_id`); `UPDATE requests SET status = <resulting> WHERE id = $1 AND status
@@ -827,7 +827,7 @@ curl -H "x-dev-user: maya@nous.example" \
 
 ### `AUTH_MODE=workos`
 
-Set three secrets in `apps/worker/.dev.vars` (or with `wrangler secret put` for
+Set these values in `apps/worker/.dev.vars` (or with `wrangler secret put` for
 a deployed environment):
 
 | Secret | What it is |
@@ -835,12 +835,16 @@ a deployed environment):
 | `WORKOS_API_KEY` | The environment's secret key, `sk_...` |
 | `WORKOS_CLIENT_ID` | The environment's client id, `client_...` |
 | `WORKOS_COOKIE_PASSWORD` | At least 32 characters, ours to generate. Rotating it signs everyone out, so it happens off-hours |
+| `WORKOS_ISSUER` | Exact `issuer` from this application's OIDC discovery document; required by deployed readiness |
 | `HUB_TICKET_SECRET` | Optional; signs the WebSocket tickets. Falls back to `WORKOS_COOKIE_PASSWORD` |
-| `WORKOS_REDIRECT_URI` | Optional; only when the browser reaches us on a different host than the Worker sees |
+| `WORKOS_REDIRECT_URI` | Exact callback. Explicitly pinned in `wrangler.jsonc` for staging and production |
 
 Then `AUTH_MODE=workos wrangler dev --local`, or deploy: staging and production
 already set `AUTH_MODE=workos` in `wrangler.jsonc`, and a unit test asserts they
 always will.
+
+The complete dashboard setup and live acceptance sequence is in
+[`docs/WORKOS-PRODUCTION-CHECKLIST.md`](docs/WORKOS-PRODUCTION-CHECKLIST.md).
 
 ### What to configure in the WorkOS dashboard
 

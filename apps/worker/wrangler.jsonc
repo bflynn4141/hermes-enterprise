@@ -180,6 +180,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
+        "WORKOS_REDIRECT_URI": "https://staging.hermes.brianflynn.dev/auth/callback",
         "ALLOWED_PROVIDERS": "openrouter",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
@@ -260,6 +261,7 @@
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
         "ALLOWED_ORIGINS": "https://app.hermes.brianflynn.dev",
+        "WORKOS_REDIRECT_URI": "https://app.hermes.brianflynn.dev/auth/callback",
         "ALLOWED_PROVIDERS": "openrouter",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "2000",
         "R2_BUCKET": "hermes-uploads-production"

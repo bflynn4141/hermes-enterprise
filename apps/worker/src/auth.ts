@@ -42,7 +42,7 @@ export const isStepUpFresh = (session: Session, maxAgeSeconds = STEP_UP_MAX_AGE_
  *
  * The client's answer to `reauth_required` is to send the person back through
  * `/auth/login?step_up=1`, which asks WorkOS for `max_age: 0` and comes back
- * with a new `sid` whose `authenticated_at` is now.
+ * with the same `sid` and a newer `auth_time` persisted as `authenticated_at`.
  */
 export function requireStepUp(session: Session, maxAgeSeconds = STEP_UP_MAX_AGE_SECONDS): void {
   if (!isStepUpFresh(session, maxAgeSeconds)) {

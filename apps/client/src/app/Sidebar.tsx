@@ -183,7 +183,7 @@ export function Sidebar() {
         </div>
         {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
         <div className="divider" />
-        <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signInUrl(window.location.href))}>
+        <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signOutUrl())}>
           <Icon name="external" />
           <span className="mi-body">
             <span>Sign out</span>

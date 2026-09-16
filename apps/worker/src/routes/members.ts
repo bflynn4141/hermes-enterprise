@@ -18,7 +18,7 @@ import { invitationEntitySchema, memberEntitySchema, paginatedSchema } from '@he
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
-import { optionalWorkosPort } from '../auth/workos.js';
+import { optionalWorkosPort, workosPort } from '../auth/workos.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
@@ -286,7 +286,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
     throw new RouteError('an invitation needs an email address', 'bad_email', 422);
   }
 
-  const port = optionalWorkosPort(c.env);
+  const port = c.env.AUTH_MODE === 'workos' ? workosPort(c.env) : optionalWorkosPort(c.env);
   const result = await inWorkspace(c, async (work) => {
     work.requireAdmin('inviting someone');
     await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.invite);
@@ -300,6 +300,9 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
 
     let workosInvitation: { id: string; expiresAt: string } | null = null;
     const organizationId = await workosOrganizationId(work);
+    if (!alreadyMember && c.env.AUTH_MODE === 'workos' && !organizationId) {
+      throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
+    }
     if (!alreadyMember && port && organizationId) {
       // WorkOS sends the email. This product contains no mail code, and this
       // is the one call that causes a message to be sent to a human.
@@ -358,7 +361,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const invitationId = pathUuid(c, 'id');
-  const port = optionalWorkosPort(c.env);
+  const port = c.env.AUTH_MODE === 'workos' ? workosPort(c.env) : optionalWorkosPort(c.env);
 
   const body = await inWorkspace(c, async (work) => {
     work.requireAdmin('resending an invitation');
@@ -381,6 +384,9 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
 
     let workosInvitation: { id: string; acceptInvitationUrl: string | null; expiresAt: string } | null = null;
     const organizationId = await workosOrganizationId(work);
+    if (c.env.AUTH_MODE === 'workos' && !organizationId) {
+      throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
+    }
     if (port && organizationId) {
       const sent = invitation.workos_invitation_id
         ? await port.resendInvitation(invitation.workos_invitation_id)

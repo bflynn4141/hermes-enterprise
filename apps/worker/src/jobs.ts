@@ -310,10 +310,15 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
   };
 
   if (!port) {
-    // Nothing to mirror to: `AUTH_MODE=fake`, or a deployment with no WorkOS
-    // credentials. The row still records that we tried, so a workspace that
-    // later gains credentials has a visible backlog rather than a silence.
-    await mark('done', 'workos not configured');
+    if (env.AUTH_MODE === 'workos' || env.ENVIRONMENT === 'staging' || env.ENVIRONMENT === 'production') {
+      // A production-mode sync is not complete when the system that owns the
+      // organization or invitation was never called. Mark the evidence failed
+      // and throw so the durable job keeps retrying instead of erasing the gap.
+      await mark('failed', 'workos not configured');
+      throw new Error('WorkOS is required for this synchronization job');
+    }
+    // Fake development has deliberately no upstream to mirror to.
+    await mark('done', 'workos disabled in development');
     return;
   }
 
