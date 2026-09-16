@@ -36,13 +36,21 @@ export const openInvitations = (state: AppState): InvitationEntity[] =>
 /**
  * "invited" counts the invitations list, not the membership mirror: a row in
  * `members` is a person who has accepted, so the mirror's `invited` status is
- * one the server never writes on this path. The mirror is still counted, so
- * that a status arriving from WorkOS is not silently dropped.
+ * one the server normally never writes on this path. The mirror is still
+ * counted so a transitional WorkOS status is not silently dropped, but the
+ * same email appearing in both sources remains one invitation.
  */
 export function memberCounts(state: AppState): { joined: number; invited: number } {
   const all = members(state);
-  const pendingMembers = all.filter((m) => m.status === 'invited' || m.status === 'expired').length;
-  return { joined: all.filter((m) => m.status === 'active').length, invited: openInvitations(state).length + pendingMembers };
+  const invitedEmails = new Set(
+    openInvitations(state).map((invitation) => invitation.email.trim().toLowerCase()),
+  );
+  for (const member of all) {
+    if (member.status === 'invited' || member.status === 'expired') {
+      invitedEmails.add(member.email.trim().toLowerCase());
+    }
+  }
+  return { joined: all.filter((m) => m.status === 'active').length, invited: invitedEmails.size };
 }
 
 export const catalogRows = (state: AppState): Bootstrap['catalog'] =>

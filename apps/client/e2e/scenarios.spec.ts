@@ -78,6 +78,13 @@ test.describe('P2 · triage', () => {
     // … and the blocker card offers context, not an approval.
     await expect(page.getByText('Unblock Noor’s reply')).toBeVisible();
     await expect(page.getByText('Add the destination; I’ll prepare the draft. Not an approval.')).toBeVisible();
+    // React StrictMode intentionally starts and cancels the bootstrap once in
+    // development. The canceled adapter must not prepend the message window a
+    // second time or leave another hub/poller running behind this transcript.
+    const messageIds = await page.locator('[role="log"] [data-message-id]').evaluateAll((messages) =>
+      messages.map((message) => message.getAttribute('data-message-id')),
+    );
+    expect(new Set(messageIds).size).toBe(messageIds.length);
 
     // Four rows in the app pane's "Needs you" list.
     // Scoped to the list, because the names are also on the recommendation

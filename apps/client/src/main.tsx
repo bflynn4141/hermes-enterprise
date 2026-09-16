@@ -58,12 +58,21 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
   const [error, setError] = useState<'signed-out' | 'not-found' | 'failed' | null>(null);
 
   useEffect(() => {
-    let disposed: Adapter | null = null;
+    let live = true;
+    let active: Adapter | null = null;
     void (async () => {
       try {
         const next = await buildAdapter(current.workspaceId);
-        disposed = next;
+        if (!live) {
+          next.dispose();
+          return;
+        }
+        active = next;
         await next.start();
+        if (!live) {
+          next.dispose();
+          return;
+        }
         // The URL is the authority on what to show; bootstrap only supplies the
         // default when it names nothing.
         const hashRef = parseRef(window.location.hash);
@@ -75,12 +84,16 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
         if (hashRef) store.dispatch({ type: 'nav/app', object: hashRef, manual: true });
         setAdapter(next);
       } catch (caught) {
+        if (!live) return;
         if (caught instanceof RestError && caught.status === 401) setError('signed-out');
         else if (caught instanceof RestError && caught.status === 404) setError('not-found');
         else setError('failed');
       }
     })();
-    return () => disposed?.dispose();
+    return () => {
+      live = false;
+      active?.dispose();
+    };
   }, [current.workspaceId, current.sessionId]);
 
   if (error === 'signed-out') return <SignIn returnTo={window.location.href} />;
@@ -199,7 +212,7 @@ function WorkspacePicker() {
         const error = caught as { status?: number };
         // 404 is "signed in, in no workspace": a real answer, and the screen
         // for it is the empty picker with its onboarding action.
-        setState(error.status === 401 ? 'signed-out' : 'ready');
+        setState(error.status === 401 ? 'signed-out' : error.status === 404 ? 'ready' : 'failed');
       });
     return () => {
       live = false;
@@ -207,11 +220,24 @@ function WorkspacePicker() {
   }, []);
 
   if (state === 'signed-out') return <SignIn returnTo={null} />;
-  if (state === 'loading' || state === 'failed')
+  if (state === 'loading')
     return (
       <div className="portal">
         <div className="portal-body" style={{ paddingTop: 140 }}>
           <Skeleton rows={3} label="Finding your workspaces" />
+        </div>
+      </div>
+    );
+  if (state === 'failed')
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140, width: 560 }}>
+          <EmptyState
+            icon="trace"
+            title="Could not load your workspaces"
+            detail="The server did not answer. Check your connection and try again."
+            action={<Button primary onClick={() => window.location.reload()}>Try again</Button>}
+          />
         </div>
       </div>
     );
