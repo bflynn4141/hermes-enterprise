@@ -273,6 +273,18 @@ export function createAdapter(options: AdapterOptions): Adapter {
       after: state().cursors.session[sessionId] ?? sessionHead,
       accept: (event) => event.session_id === sessionId,
       onEvent: (event) => applyEvent(event),
+      onPreview: (frame) => {
+        if (frame.session_id !== sessionId) return;
+        dispatch({
+          type: 'stream/preview',
+          sessionId,
+          runId: frame.run_id,
+          turn: frame.turn,
+          stepAttempt: frame.step_attempt,
+          offset: frame.offset,
+          delta: frame.delta,
+        });
+      },
       onState: (link) => dispatch({ type: 'link/state', kind: 'session', patch: link }),
       onResync: () => void resync(),
       replay: async (after) => {

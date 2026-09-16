@@ -24,7 +24,7 @@
 //     set a header on a WebSocket handshake, so a socket is refused with 401
 //     before it exists. Polling goes through `onEvent` with the same cursor and
 //     the same ordering, so the only thing that changes is latency.
-import { hubFrameSchema, safeParseStreamEvent, type StreamEvent } from '@hermes/shared';
+import { hubFrameSchema, safeParseStreamEvent, type MessagePreviewFrame, type StreamEvent } from '@hermes/shared';
 import type { LinkState, LinkStatus } from './store.js';
 
 export type HubKind = 'session' | 'workspace';
@@ -46,6 +46,8 @@ export interface HubOptions {
   ticket: string;
   after: bigint;
   onEvent(event: StreamEvent, id: bigint): void;
+  /** A best-effort live fragment. It never advances the durable replay cursor. */
+  onPreview?(frame: MessagePreviewFrame): void;
   onState(state: LinkState): void;
   onResync(): void;
   /**
@@ -111,6 +113,7 @@ export function createHub(options: HubOptions): Hub {
   let closed = false;
   let buffering = false;
   let buffer: { event: StreamEvent; id: bigint }[] = [];
+  let previewBuffer: MessagePreviewFrame[] = [];
   let pingHandle: unknown = null;
   let silenceHandle: unknown = null;
   let reconnectHandle: unknown = null;
@@ -192,11 +195,24 @@ export function createHub(options: HubOptions): Hub {
     options.onEvent(streamEvent, id);
   }
 
+  function intakePreview(frame: MessagePreviewFrame): void {
+    if (buffering) {
+      previewBuffer.push(frame);
+      return;
+    }
+    options.onPreview?.(frame);
+  }
+
   function applyBuffered(): void {
     const pending = buffer;
+    const pendingPreviews = previewBuffer;
     buffer = [];
+    previewBuffer = [];
     buffering = false;
     for (const item of pending) intake(item.event);
+    // Durable replay and live committed events establish the prefix first.
+    // Offset reconciliation then makes an overlapping preview a no-op.
+    for (const frame of pendingPreviews) intakePreview(frame);
   }
 
   /** At most this many pages per catch-up, so a very stale cursor cannot spin. */
@@ -213,6 +229,7 @@ export function createHub(options: HubOptions): Hub {
         const page = await options.replay(cursor);
         if (page.resync) {
           buffer = [];
+          previewBuffer = [];
           buffering = false;
           options.onResync();
           setStatus('open');
@@ -271,6 +288,7 @@ export function createHub(options: HubOptions): Hub {
     polling = true;
     buffering = false;
     buffer = [];
+    previewBuffer = [];
     stopTimers();
     if (reconnectHandle) clearTimer(reconnectHandle);
     reconnectHandle = null;
@@ -283,6 +301,7 @@ export function createHub(options: HubOptions): Hub {
     setStatus(attempts === 0 ? 'connecting' : 'reconnecting');
     buffering = true;
     buffer = [];
+    previewBuffer = [];
     const url = `${options.url}${options.url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}&after=${cursor.toString()}`;
     let ws: SocketLike;
     try {
@@ -319,6 +338,10 @@ export function createHub(options: HubOptions): Hub {
       const frame = hubFrameSchema.safeParse(json);
       if (frame.success) {
         if (frame.data.type === 'ticket.accepted') return;
+        if (frame.data.type === 'message.preview') {
+          intakePreview(frame.data);
+          return;
+        }
         for (const streamEvent of frame.data.events) intake(streamEvent);
         return;
       }

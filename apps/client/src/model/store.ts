@@ -83,6 +83,8 @@ export interface StreamAccumulator {
   turn: number;
   stepAttempt: number;
   text: string;
+  /** Prefix reconstructed from committed `message.delta` events. */
+  durableText: string;
   blocks: Block[];
   status: 'streaming' | 'complete' | 'incomplete';
 }
@@ -463,6 +465,7 @@ export type Action =
   | { type: 'run/clear'; sessionId: string }
   | { type: 'stream/reset'; sessionId: string; runId: string; turn: number; stepAttempt: number }
   | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string }
+  | { type: 'stream/preview'; sessionId: string; runId: string; turn: number; stepAttempt: number; offset: number; delta: string }
   | { type: 'stream/final'; sessionId: string; message: Message }
   | { type: 'entity/upsert'; kind: EntityKind; id: string; version?: number | null; data?: unknown; state?: EntityState }
   | { type: 'entity/loading'; kind: EntityKind; id: string }
@@ -960,7 +963,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'stream/reset':
       return withSession(state, action.sessionId, (s) => ({
         ...s,
-        stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', blocks: [], status: 'streaming' },
+        stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', blocks: [], status: 'streaming' },
       }));
     case 'stream/delta':
       return withSession(state, action.sessionId, (s) => {
@@ -969,10 +972,25 @@ export function reduce(state: AppState, action: Action): AppState {
         // attempt is an implicit reset, in case the reset was lost across a hub
         // restart.
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
-          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, blocks: [], status: 'streaming' } };
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt) return s;
-        return { ...s, stream: { ...current, text: current.text + action.delta } };
+        const durableText = current.durableText + action.delta;
+        const text = current.text.startsWith(durableText) ? current.text : durableText;
+        return { ...s, stream: { ...current, text, durableText } };
+      });
+    case 'stream/preview':
+      return withSession(state, action.sessionId, (s) => {
+        const current = s.stream;
+        if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
+          if (action.offset !== 0) return s;
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', blocks: [], status: 'streaming' } };
+        }
+        if (action.stepAttempt < current.stepAttempt || action.offset > current.text.length) return s;
+        const overlap = Math.min(action.delta.length, current.text.length - action.offset);
+        if (current.text.slice(action.offset, action.offset + overlap) !== action.delta.slice(0, overlap)) return s;
+        if (overlap === action.delta.length) return s;
+        return { ...s, stream: { ...current, text: current.text + action.delta.slice(overlap) } };
       });
     // A streamed reply ends here rather than at `message/add`, and this is the
     // path almost every Iris message actually takes — so the rail's badge has to

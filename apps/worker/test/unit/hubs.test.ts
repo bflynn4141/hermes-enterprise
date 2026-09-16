@@ -99,6 +99,27 @@ describe('the session hub', () => {
     expect(theirs.sent).toHaveLength(0);
   });
 
+  it('keeps a transient preview inside its session and outside the replay stream', () => {
+    const mine = socket(attachment('user-a', 'session-a'));
+    const theirs = socket(attachment('user-b', 'session-b'));
+    const hub = new SessionHub(hubContext([mine, theirs]), env);
+
+    const result = hub.preview({
+      type: 'message.preview',
+      session_id: 'session-a',
+      run_id: 'run-a',
+      turn: 0,
+      attempt: 1,
+      step_attempt: 1,
+      offset: 0,
+      delta: 'Visible now',
+    });
+
+    expect(result).toEqual({ delivered: 1, lastId: null });
+    expect(JSON.parse(mine.sent[0]!)).toMatchObject({ type: 'message.preview', offset: 0, delta: 'Visible now' });
+    expect(theirs.sent).toHaveLength(0);
+  });
+
   it('closes a socket whose authorization window has passed instead of delivering to it', () => {
     const stale = socket(attachment('user-a', 'session-a', -1));
     const hub = new SessionHub(hubContext([stale]), env);

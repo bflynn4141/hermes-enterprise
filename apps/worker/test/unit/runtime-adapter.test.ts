@@ -135,12 +135,13 @@ async function execute(
   client = new FakeHermesClient(),
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
-  timing: { pollMs?: number; batchMs?: number } = {},
+  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview'] } = {},
 ) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
     db, client, profile: PROFILE, pollMs: timing.pollMs ?? 0, batchMs: timing.batchMs,
     forward: forward ?? (async () => ({ stop_requested: db.stopFlag })),
+    ...(timing.preview ? { preview: timing.preview } : {}),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
 }
@@ -218,6 +219,39 @@ describe('official Hermes enterprise projection', () => {
     const deltas = db.events.filter((event) => event.kind === 'message.delta');
     expect(deltas).toHaveLength(2);
     expect(deltas.map((event) => (event.payload as { delta: string }).delta).join('')).toBe(client.deltas.join(''));
+  });
+
+  it('previews native text before a slow durable checkpoint completes', async () => {
+    class SlowDeltaDb extends FakeRuntimeDb {
+      durableDeltaFinished = false;
+      override async emit(events: Parameters<FakeRuntimeDb['emit']>[0]) {
+        const saved = await super.emit(events);
+        if (events.some((event) => event.kind === 'message.delta')) {
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          this.durableDeltaFinished = true;
+        }
+        return saved;
+      }
+    }
+
+    const db = new SlowDeltaDb();
+    const client = new FakeHermesClient();
+    client.deltas = ['Fast ', 'lane'];
+    const previews: { offset: number; delta: string; beforeDurable: boolean }[] = [];
+    await execute(db, client, new FakeStep(), undefined, {
+      pollMs: 100,
+      batchMs: 5,
+      preview: async (frame) => {
+        previews.push({ offset: frame.offset, delta: frame.delta, beforeDurable: !db.durableDeltaFinished });
+      },
+    });
+
+    expect(previews.map(({ offset, delta }) => ({ offset, delta }))).toEqual([
+      { offset: 0, delta: 'Fast ' },
+      { offset: 5, delta: 'lane' },
+    ]);
+    expect(previews.every((frame) => frame.beforeDurable)).toBe(true);
+    expect(db.events.filter((event) => event.kind === 'message.delta').map((event) => (event.payload as { delta: string }).delta).join('')).toBe('Fast lane');
   });
 
   it.each(['eof', 'error'] as const)('flushes a suppressed delta immediately when the native stream ends by %s', async (ending) => {
