@@ -21,7 +21,7 @@ import {
 } from './FirstRunSetup.model.js';
 
 export type ProviderStatus = 'disconnected' | 'encrypting' | 'verifying' | 'syncing' | 'ready' | 'error';
-export type SampleStatus = 'idle' | 'running' | 'complete' | 'error';
+export type SampleStatus = 'idle' | 'starting' | 'running' | 'complete' | 'error';
 
 export interface FirstRunSetupProps {
   agentName?: string;
@@ -330,40 +330,40 @@ function TestQuestion({ providerStatus, providerSlot, sampleStatus, completedSam
   return (
     <>
       <IrisPrompt>
-        {providerReady
-          ? onRunSample
-            ? <p>I’m ready. Want to see the loop with a sample application? Nothing will be sent or changed.</p>
-            : <p>Nous Portal is connected. Add your program criteria before the first application.</p>
-          : <p>Connect Nous Portal, then we can run one safe sample. Nothing will be sent or changed.</p>}
+        {sampleStatus === 'complete'
+          ? <p>The sample applications are ready. I stopped before every decision and external action.</p>
+          : sampleStatus === 'error'
+            ? <p>The sample run paused. Its last saved state is still visible.</p>
+            : sampleStatus === 'starting' || sampleStatus === 'running'
+              ? <p>I’m showing you the loop with simulated applications. Watch the app as each saved state arrives.</p>
+              : <p>Let’s see the loop with simulated applications. Nothing will be sent or changed.</p>}
       </IrisPrompt>
       {!providerReady ? (
         <div className="first-run-provider-slot" data-testid="first-run-provider-slot">
           {providerSlot ?? <DefaultProviderSlot status={providerStatus} />}
         </div>
       ) : null}
-      {providerReady && sampleStatus === 'idle' ? (
-        onRunSample ? (
-          <button type="button" className="first-run-sample" onClick={onRunSample}>
-            <Glass name="admission" size={32} />
-            <span><strong>Run sample application</strong><small>Uses sample data and creates no external effects</small></span>
-            <Icon name="arrow" size={16} />
-          </button>
-        ) : (
-          <div className="first-run-sample first-run-sample-next" role="status">
-            <Glass name="context" size={32} />
-            <span><strong>Add program criteria</strong><small>Iris will flag this gap until a real source is connected.</small></span>
-          </div>
-        )
+      {sampleStatus === 'idle' && onRunSample ? (
+        <button type="button" className="first-run-sample" onClick={onRunSample}>
+          <Glass name="admission" size={32} />
+          <span><strong>Run simulated applications</strong><small>No provider, web search, messages, or decisions</small></span>
+          <Icon name="arrow" size={16} />
+        </button>
       ) : null}
-      {providerReady && sampleStatus === 'running' ? <SampleProgress stages={stages} completed={completedSampleStages} /> : null}
-      {providerReady && sampleStatus === 'complete' ? (
+      {(sampleStatus === 'starting' || sampleStatus === 'running') ? <SampleProgress starting={sampleStatus === 'starting'} stages={stages} completed={completedSampleStages} /> : null}
+      {sampleStatus === 'complete' ? (
         <div className="first-run-sample-complete" role="status">
           <span><Icon name="check" size={17} /></span>
-          <div><strong>Sample brief is ready</strong><p>Sources, evidence and the approval consequence are waiting in Inbox.</p></div>
+          <div><strong>Sample briefs are ready</strong><p>The approval consequences are waiting in Inbox.</p></div>
           <button type="button" onClick={onOpenSample} disabled={!onOpenSample}>Open sample</button>
         </div>
       ) : null}
-      {sampleStatus === 'error' ? <p className="first-run-error" role="alert">The sample could not finish. Nothing was sent or changed. Try again when the provider is available.</p> : null}
+      {sampleStatus === 'error' ? (
+        <div className="first-run-error" role="alert">
+          <span>The sample could not finish. Nothing was sent or changed.</span>
+          {onRunSample ? <button type="button" onClick={onRunSample}>Retry</button> : null}
+        </div>
+      ) : null}
       <button type="button" className="first-run-back" onClick={onBack}><Icon name="arrow" size={14} />Back</button>
     </>
   );
@@ -383,10 +383,10 @@ function DefaultProviderSlot({ status }: { status: ProviderStatus }) {
   );
 }
 
-function SampleProgress({ stages, completed }: { stages: readonly string[]; completed: readonly string[] }) {
+function SampleProgress({ starting, stages, completed }: { starting: boolean; stages: readonly string[]; completed: readonly string[] }) {
   return (
-    <div className="first-run-sample-progress" aria-label="Sample progress">
-      <span className="first-run-sample-label"><span className="first-run-live-dot" />Running safe sample</span>
+    <div className="first-run-sample-progress" aria-label="Sample progress" aria-live="off">
+      <span className="first-run-sample-label"><span className="first-run-live-dot" />{starting ? 'Starting simulated run' : 'Screening sample applications'}</span>
       <ol>
         {stages.map((stage) => {
           const done = completed.includes(stage);

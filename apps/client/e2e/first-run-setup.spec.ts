@@ -81,18 +81,18 @@ test('provider and sample states only move when their external source moves', as
   await reachTest(page);
 
   await page.evaluate(() => window.firstRunFixture.setProviderStatus('ready'));
-  const run = page.getByRole('button', { name: /Run sample application/ });
+  const run = page.getByRole('button', { name: /Run simulated applications/ });
   await expect(run).toBeVisible();
   await run.click();
   expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('run-sample');
   await expect(page.getByText('Running safe sample')).toHaveCount(0);
 
   await page.evaluate(() => window.firstRunFixture.setSampleStatus('running', ['Application', 'Research']));
-  await expect(page.getByText('Running safe sample')).toBeVisible();
+  await expect(page.getByText('Screening sample applications')).toBeVisible();
   await expect(page.getByLabel('Sample progress').locator('li.is-complete')).toHaveCount(2);
 
   await page.evaluate(() => window.firstRunFixture.setSampleStatus('complete'));
-  await expect(page.getByText('Sample brief is ready')).toBeVisible();
+  await expect(page.getByText('Sample briefs are ready')).toBeVisible();
   await page.getByRole('button', { name: 'Open sample' }).click();
   expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('open-sample');
 });

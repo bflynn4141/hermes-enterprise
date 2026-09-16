@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { INBOX } from '@hermes/shared';
 import { DEFAULT_PROVIDER } from '../../model/constants.js';
-import { useAdapter, useAppState } from '../store-context.js';
+import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import {
   FirstRunConversation,
@@ -12,6 +13,8 @@ import {
   type FirstRunState,
   type ProviderStatus,
 } from './FirstRunSetup.js';
+import { FirstRunSampleRun, type SampleRunPhase } from './FirstRunSampleRun.js';
+import { useFirstRunSample } from './useFirstRunSample.js';
 import './FirstRunSetup.css';
 
 interface FirstRunExperience {
@@ -57,17 +60,26 @@ function providerPhase(status: ProviderConnectStatus, ready: boolean): ProviderS
  * controller intentionally keeps the evolving UX answers in workspace-scoped
  * browser storage until the setup endpoint proposed in the design note is
  * reviewed. Provider state is real and comes from the existing encrypted-key
- * routes; no progress state is simulated.
+ * routes. The labeled first-run applications are simulated by the worker; the
+ * client only renders persisted sample-run snapshots and never advances them.
  */
 export function useFirstRunExperience(active: boolean): FirstRunExperience | null {
   const app = useAppState();
   const adapter = useAdapter();
+  const nav = useNav();
   const storageKey = `hermes:first-run:${app.workspace.id}:${app.user.id}`;
   const [state, setState] = useState<FirstRunState>(() => loadState(storageKey));
   const [apiKey, setApiKey] = useState('');
   const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
   const [storedKeyId, setStoredKeyId] = useState<string | null>(null);
   const [providerReady, setProviderReady] = useState(false);
+  const sample = useFirstRunSample({
+    enabled: active && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
+    rest: adapter.rest,
+    agentId: app.agent.id ?? '',
+    workspaceId: app.workspace.id,
+    storageKey: `${storageKey}:partner-screening`,
+  });
 
   useEffect(() => {
     setState(loadState(storageKey));
@@ -193,6 +205,25 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   }, [adapter, app.workspace.id]);
 
   const phase = providerPhase(connectStatus, providerReady);
+  const sampleStatus = useMemo(() => {
+    const byPhase: Record<SampleRunPhase, 'idle' | 'starting' | 'running' | 'complete' | 'error'> = {
+      idle: state.step === 'test' && state.loopId === 'screen-partners' && app.agent.id ? 'starting' : 'idle',
+      starting: 'starting',
+      resuming: 'starting',
+      running: 'running',
+      complete: 'complete',
+      error: 'error',
+    };
+    return byPhase[sample.view.phase];
+  }, [app.agent.id, sample.view.phase, state.loopId, state.step]);
+  const completedSampleStages = useMemo(() => {
+    const applications = sample.view.snapshot?.applications ?? [];
+    const stages: string[] = [];
+    if (applications.length > 0) stages.push('Application');
+    if (applications.some((item) => item.status === 'researching' || item.status === 'needs_review')) stages.push('Research');
+    if (applications.some((item) => item.status === 'needs_review')) stages.push('Evidence brief');
+    return stages;
+  }, [sample.view.snapshot]);
   const providerSlot = useMemo(() => (
     <ProviderConnect
       apiKey={apiKey}
@@ -218,12 +249,18 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
         ownerName={app.user.name || 'You'}
         providerStatus={phase}
         providerSlot={providerSlot}
+        sampleStatus={sampleStatus}
+        completedSampleStages={completedSampleStages}
+        onRunSample={sample.retry}
+        onOpenSample={() => nav(INBOX)}
       />
     ),
     agreement: (
       <div className="first-run-app-surface">
         <FirstRunProgress current={state.step} />
-        <FirstRunWorkingAgreement state={state} />
+        {state.step === 'test' && state.loopId === 'screen-partners' ? (
+          <FirstRunSampleRun view={sample.view} onRetry={sample.retry} onOpenInbox={() => nav(INBOX)} />
+        ) : <FirstRunWorkingAgreement state={state} />}
       </div>
     ),
   };
