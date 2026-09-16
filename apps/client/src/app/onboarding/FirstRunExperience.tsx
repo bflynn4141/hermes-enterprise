@@ -75,6 +75,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const [manualProviderFlow, setManualProviderFlow] = useState(false);
   const [storedKeyId, setStoredKeyId] = useState<string | null>(null);
   const [providerReady, setProviderReady] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const sample = useFirstRunSample({
     enabled: active && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
     rest: adapter.rest,
@@ -127,16 +128,28 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   }, [active, adapter, app.workspace.id]);
 
   const onAction = useCallback((action: FirstRunAction): void => {
-    setState((current) => {
-      const next = firstRunReducer(current, action);
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify(next));
-      } catch {
-        // A blocked storage write should not make the setup controls unusable.
-      }
-      return next;
-    });
-  }, [storageKey]);
+    const next = firstRunReducer(state, action);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {
+      // A blocked storage write should not make the setup controls unusable.
+    }
+    setState(next);
+    if (action.type === 'reviewers/confirm' && app.agent.id && next.roleId && next.loopId) {
+      setSetupError(null);
+      void adapter.rest.patchAgent(app.workspace.id, app.agent.id, {
+          first_run: {
+            role_id: next.roleId,
+            role_label: next.roleLabel,
+            loop_id: next.loopId,
+            reviewers: next.reviewers,
+          },
+        }).catch(() => {
+          setSetupError('I could not save this setup. Try again.');
+          setState((current) => ({ ...current, step: 'boundaries' }));
+        });
+    }
+  }, [adapter, app.agent.id, app.workspace.id, state, storageKey]);
 
   const onConnect = useCallback((): void => {
     const key = apiKey.trim();
@@ -274,6 +287,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
         ownerName={app.user.name || 'You'}
         providerStatus={phase}
         providerSlot={providerSlot}
+        setupError={setupError}
         sampleStatus={sampleStatus}
         completedSampleStages={completedSampleStages}
         onRunSample={sample.retry}

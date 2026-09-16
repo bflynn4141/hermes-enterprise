@@ -160,6 +160,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result["auto_load"], ["enterprise_bridge:partner-program-screening"])
         self.assertEqual(result["config"]["partner_program"]["no_outreach"], True)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer token")
+        self.assertEqual(opener.request.get_header("User-agent"), "Hermes-Enterprise-Bridge/1.0")
         with self.assertRaisesRegex(RuntimeError, "credentials"):
             load_enterprise_skills(
                 "https://enterprise.example/internal/runtime/w/w/agents/a", "token",

@@ -139,7 +139,11 @@ def load_enterprise_skills(base_url, token, opener=None):
         raise RuntimeError("Enterprise skill manifest needs HTTPS or loopback HTTP.")
     request = urllib.request.Request(
         base_url.rstrip("/") + "/skills", method="GET",
-        headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/json",
+            "User-Agent": "Hermes-Enterprise-Bridge/1.0",
+        },
     )
     transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     try:

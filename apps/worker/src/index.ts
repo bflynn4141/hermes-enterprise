@@ -136,6 +136,7 @@ import {
   partnerScreeningSources,
   startPartnerScreening,
 } from './routes/partner-screening.js';
+import { patchAgent } from './routes/agents.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -271,6 +272,7 @@ app.post('/integrations/slack/events', slackEvents);
 app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
+app.patch('/w/:ws/agents/:agentId', patchAgent);
 
 // A durable first-run simulation. It never calls a model, searches the web or
 // reaches an intake system; polling materializes its server-timed stages.

@@ -13,6 +13,7 @@ TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 CONTROL_ROUTE = "/api/plugins/enterprise-bridge/control"
 CONTROL_PROVIDER = "enterprise-control"
+SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 
 
 class BridgeError(Exception):
@@ -124,7 +125,7 @@ class Bridge:
         data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + token, "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json", "User-Agent": SERVICE_USER_AGENT,
         })
         try:
             response = self.opener.open(request, timeout=self.request_timeout)

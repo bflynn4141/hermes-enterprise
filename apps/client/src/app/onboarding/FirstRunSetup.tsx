@@ -30,6 +30,7 @@ export interface FirstRunSetupProps {
   initialState?: FirstRunState;
   providerStatus?: ProviderStatus;
   providerSlot?: ReactNode;
+  setupError?: string | null;
   sampleStatus?: SampleStatus;
   completedSampleStages?: readonly string[];
   onAgreementChange?: (agreement: WorkingAgreement) => void;
@@ -50,6 +51,7 @@ export function FirstRunSetup({
   initialState,
   providerStatus = 'disconnected',
   providerSlot,
+  setupError,
   sampleStatus = 'idle',
   completedSampleStages = [],
   onAgreementChange,
@@ -98,6 +100,7 @@ export function FirstRunSetup({
           ownerName={ownerName}
           providerStatus={providerStatus}
           providerSlot={providerSlot}
+          setupError={setupError}
           sampleStatus={sampleStatus}
           completedSampleStages={completedSampleStages}
           onRunSample={onRunSample}
@@ -116,6 +119,7 @@ export interface FirstRunConversationProps {
   ownerName?: string;
   providerStatus?: ProviderStatus;
   providerSlot?: ReactNode;
+  setupError?: string | null;
   sampleStatus?: SampleStatus;
   completedSampleStages?: readonly string[];
   onRunSample?: () => void;
@@ -129,6 +133,7 @@ export function FirstRunConversation({
   ownerName = 'Maya',
   providerStatus = 'disconnected',
   providerSlot,
+  setupError,
   sampleStatus = 'idle',
   completedSampleStages = [],
   onRunSample,
@@ -162,7 +167,7 @@ export function FirstRunConversation({
               <LoopQuestion state={state} onSelect={(id) => onAction({ type: 'loop/select', id })} onConfirm={() => onAction({ type: 'loop/confirm' })} onAdjust={() => onAction({ type: 'loop/adjust' })} onBack={() => onAction({ type: 'step/back' })} />
             ) : null}
             {state.step === 'boundaries' ? (
-              <BoundaryQuestion state={state} onEdit={() => onAction({ type: 'reviewers/edit' })} onChange={(id, reviewer) => onAction({ type: 'reviewers/change', id, reviewer })} onConfirm={() => onAction({ type: 'reviewers/confirm' })} onBack={() => onAction({ type: 'step/back' })} />
+              <BoundaryQuestion state={state} error={setupError} onEdit={() => onAction({ type: 'reviewers/edit' })} onChange={(id, reviewer) => onAction({ type: 'reviewers/change', id, reviewer })} onConfirm={() => onAction({ type: 'reviewers/confirm' })} onBack={() => onAction({ type: 'step/back' })} />
             ) : null}
             {state.step === 'test' ? (
               <TestQuestion
@@ -294,7 +299,7 @@ function LoopQuestion({ state, onSelect, onConfirm, onAdjust, onBack }: { state:
   );
 }
 
-function BoundaryQuestion({ state, onEdit, onChange, onConfirm, onBack }: { state: FirstRunState; onEdit: () => void; onChange: (id: (typeof DEFAULT_BOUNDARIES)[number]['id'], reviewer: Reviewer) => void; onConfirm: () => void; onBack: () => void }) {
+function BoundaryQuestion({ state, error, onEdit, onChange, onConfirm, onBack }: { state: FirstRunState; error?: string | null; onEdit: () => void; onChange: (id: (typeof DEFAULT_BOUNDARIES)[number]['id'], reviewer: Reviewer) => void; onConfirm: () => void; onBack: () => void }) {
   const boundaries = boundariesForRole(state.roleId);
   return (
     <>
@@ -315,6 +320,7 @@ function BoundaryQuestion({ state, onEdit, onChange, onConfirm, onBack }: { stat
           </div>
         ))}
       </div>
+      {error ? <div className="first-run-error" role="alert"><span>{error}</span></div> : null}
       <p className="first-run-gap"><Icon name="info" size={15} />Program criteria and financial terms stay unset until you add real source material.</p>
       <div className="first-run-actions">
         <button type="button" className="first-run-primary" onClick={onConfirm}>{state.editingReviewers ? 'Save boundaries' : 'Yes'}</button>
