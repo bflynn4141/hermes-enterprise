@@ -24,12 +24,15 @@ import {
 } from '../../src/keys/store.js';
 import { listRotationTargets, runKekRotation } from '../../src/keys/rotation.js';
 import { enqueueWeeklyReverify, defaultProbeModel } from '../../src/keys/reverify.js';
-import { probeKey, recordVerification, forbiddenCountFor } from '../../src/keys/verify.js';
+import { probeKey, recordVerification, forbiddenCountFor, scheduleReverify } from '../../src/keys/verify.js';
 import { SCRIPTS, ScriptedProvider } from '../../src/model/scripted.js';
 import { loadCatalog, loadModel } from '../../src/model/catalog.js';
 import { checkCaps, recordModelCall } from '../../src/model/usage.js';
 import { ZERO_USAGE } from '../../src/model/types.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
+import { makeEnv } from './harness.js';
+import { drainJobs, runJob, type Job } from '../../src/jobs.js';
+import { runNightly } from '../../src/ops/nightly.js';
 
 /** A deterministic 32-byte KEK, generated so no secret-shaped literal is here. */
 function kek(seed: number): string {
@@ -431,6 +434,15 @@ describe('verification', () => {
     expect(first).toMatchObject({ status: 'unverified', reason: 'forbidden', retry: true, forbiddenCount: 1 });
     await asTenant(fx, (tx) => recordVerification(tx, { ...base, forbiddenCount: 0 }, first));
     expect(await asTenant(fx, (tx) => forbiddenCountFor(tx, fx.workspaceId, key.id))).toBe(1);
+    const ready = await asTenant(fx, (tx) =>
+      tx.query(
+        `SELECT 1 FROM job_ready r
+          JOIN jobs j ON j.id = r.job_id
+         WHERE r.workspace_id = $1 AND j.kind = 'reverify' AND j.key = $2`,
+        [fx.workspaceId, `reverify:${key.id}`],
+      ),
+    );
+    expect(ready.rowCount).toBe(1);
 
     const second = await probeKey(new ScriptedProvider([SCRIPTS.scoped_key]), { ...base, forbiddenCount: 1 });
     expect(second.status).toBe('verified_scoped');
@@ -475,9 +487,153 @@ describe('verification', () => {
     // and UNIQUE(kind, key) is global.
     expect(await asTenant(fx, (tx) => enqueueWeeklyReverify(tx, fx.workspaceId))).toBe(1);
     const jobs = await asTenant(fx, (tx) =>
-      tx.query('SELECT 1 FROM jobs WHERE workspace_id = $1 AND kind = $2', [fx.workspaceId, 'reverify']),
+      tx.query(
+        `SELECT j.id, r.job_id
+           FROM jobs j
+           LEFT JOIN job_ready r ON r.job_id = j.id
+          WHERE j.workspace_id = $1 AND j.kind = $2`,
+        [fx.workspaceId, 'reverify'],
+      ),
     );
     expect(jobs.rowCount).toBe(1);
+    expect(jobs.rows[0]?.job_id).toBe(jobs.rows[0]?.id);
+  });
+
+  it('the nightly pass schedules the weekly key sweep on Monday, not Tuesday', async () => {
+    const fx = await seedWorkspace();
+    const key = await asTenant(fx, async (tx) => {
+      const added = await addProviderKey(tx, ENV_V1, {
+        workspaceId: fx.workspaceId,
+        provider: 'deepseek',
+        label: '',
+        plaintext: KEY_A,
+        addedBy: fx.adminId,
+      });
+      await setKeyStatus(tx, fx.workspaceId, added.id, 'invalid', []);
+      // `runNightly` enumerates the deliberately narrow platform directory;
+      // ordinary db fixtures are not added to it because most tests do not
+      // exercise cross-tenant scheduled work.
+      await tx.query(
+        `INSERT INTO workspace_directory (workspace_id) VALUES ($1)
+         ON CONFLICT (workspace_id) DO NOTHING`,
+        [fx.workspaceId],
+      );
+      return added;
+    });
+    const { env } = makeEnv({ ...ENV_V1 } as never);
+
+    await runNightly(env, new Date('2026-09-15T03:17:00Z')); // Tuesday
+    expect(
+      await asTenant(fx, (tx) =>
+        tx.query(`SELECT 1 FROM jobs WHERE workspace_id = $1 AND kind = 'reverify' AND key = $2`, [
+          fx.workspaceId,
+          `reverify:${key.id}`,
+        ]),
+      ),
+    ).toHaveProperty('rowCount', 0);
+
+    const monday = await runNightly(env, new Date('2026-09-14T03:17:00Z'));
+    expect(monday.reverifications).toBeGreaterThanOrEqual(1);
+    const queued = await asTenant(fx, (tx) =>
+      tx.query(
+        `SELECT r.job_id
+           FROM jobs j JOIN job_ready r ON r.job_id = j.id
+          WHERE j.workspace_id = $1 AND j.kind = 'reverify' AND j.key = $2`,
+        [fx.workspaceId, `reverify:${key.id}`],
+      ),
+    );
+    expect(queued.rowCount).toBe(1);
+  });
+
+  it('dispatches a queued invalid key through the existing reverify runner', async () => {
+    const fx = await seedWorkspace();
+    const key = await asTenant(fx, async (tx) => {
+      const added = await addProviderKey(tx, ENV_V1, {
+        workspaceId: fx.workspaceId,
+        provider: 'deepseek',
+        label: '',
+        plaintext: KEY_A,
+        addedBy: fx.adminId,
+      });
+      await setKeyStatus(tx, fx.workspaceId, added.id, 'invalid', []);
+      await scheduleReverify(tx, fx.workspaceId, added.id, 'deepseek', 0);
+      const { rows } = await tx.query<Job>(
+        `SELECT id, workspace_id, kind, key, payload, attempts
+           FROM jobs WHERE workspace_id = $1 AND kind = 'reverify' AND key = $2`,
+        [fx.workspaceId, `reverify:${added.id}`],
+      );
+      return { added, job: rows[0]! };
+    });
+    const { env } = makeEnv({ ...ENV_V1 } as never);
+    let calls = 0;
+    await runJob(env, key.job, {
+      fetch: () => {
+        calls += 1;
+        return Promise.resolve(Response.json({ data: [{ id: 'deepseek-flash' }] }));
+      },
+    });
+
+    expect(calls).toBe(1);
+    const after = (await asTenant(fx, (tx) => listProviderKeys(tx, fx.workspaceId))).find(
+      (row) => row.id === key.added.id,
+    );
+    expect(after?.status).toBe('verified');
+  });
+
+  it('keeps an inconclusive reverify queued with failure state and backoff', async () => {
+    const fx = await seedWorkspace();
+    const key = await asTenant(fx, async (tx) => {
+      const added = await addProviderKey(tx, ENV_V1, {
+        workspaceId: fx.workspaceId,
+        provider: 'deepseek',
+        label: '',
+        plaintext: KEY_A,
+        addedBy: fx.adminId,
+      });
+      await setKeyStatus(tx, fx.workspaceId, added.id, 'verified', ['deepseek-flash']);
+      await scheduleReverify(tx, fx.workspaceId, added.id, 'deepseek', 0);
+      await tx.query(
+        `UPDATE jobs SET next_at = now() - interval '100 years'
+          WHERE workspace_id = $1 AND kind = 'reverify' AND key = $2`,
+        [fx.workspaceId, `reverify:${added.id}`],
+      );
+      await tx.query(
+        `UPDATE job_ready SET next_at = now() - interval '100 years'
+          WHERE job_id = (SELECT id FROM jobs WHERE workspace_id = $1 AND kind = 'reverify' AND key = $2)`,
+        [fx.workspaceId, `reverify:${added.id}`],
+      );
+      return added;
+    });
+    const { env } = makeEnv({ ...ENV_V1 } as never);
+    const drained = await drainJobs(env, 1, {
+      fetch: () => Promise.resolve(Response.json({ error: { message: 'provider unavailable' } }, { status: 503 })),
+    });
+    expect(drained).toEqual({ claimed: 1, done: 0, failed: 1 });
+
+    const retry = await asTenant(fx, async (tx) => {
+      const { rows } = await tx.query<{
+        attempts: number;
+        last_error: string | null;
+        job_future: boolean;
+        ready_future: boolean;
+        done_at: Date | null;
+      }>(
+        `SELECT j.attempts, j.last_error, j.done_at,
+                j.next_at > now() AS job_future,
+                r.next_at > now() AS ready_future
+           FROM jobs j JOIN job_ready r ON r.job_id = j.id
+          WHERE j.workspace_id = $1 AND j.kind = 'reverify' AND j.key = $2`,
+        [fx.workspaceId, `reverify:${key.id}`],
+      );
+      return rows[0];
+    });
+    expect(retry).toMatchObject({
+      attempts: 1,
+      done_at: null,
+      job_future: true,
+      ready_future: true,
+    });
+    expect(retry?.last_error).toContain('inconclusive');
   });
 
   it('picks an offered catalog model to probe with', async () => {

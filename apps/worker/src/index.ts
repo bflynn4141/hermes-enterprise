@@ -438,10 +438,10 @@ const handler = {
           } catch (error) {
             console.log(JSON.stringify({ at: 'cron.counters', ok: false, error: String(error) }));
           }
-          // The night's per-workspace work: the uploads backup, the weekly
-          // audit CSV on a Monday, and yesterday's spend as a metric. All three
-          // become `jobs` rows rather than work done here, because this handler
-          // has 30 seconds of CPU (src/ops/nightly.ts).
+          // The night's per-workspace work: the uploads backup, Monday's audit
+          // CSV and provider-key re-verification, and yesterday's spend metric.
+          // Effects become `jobs` rows rather than work done here, because this
+          // handler has 30 seconds of CPU (src/ops/nightly.ts).
           try {
             const queued = await runNightly(env, new Date(event.scheduledTime));
             console.log(JSON.stringify({ at: 'cron.nightly.queued', ...queued }));

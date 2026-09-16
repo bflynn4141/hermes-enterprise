@@ -1,6 +1,7 @@
 // What the nightly Cron queues, per workspace.
 //
-// Three things, and none of them is done here: each one becomes a `jobs` row,
+// Four things, and none of the external work is done here: each effect becomes
+// a `jobs` row,
 // because the Cron handler has 30 seconds of CPU and copying a workspace's
 // uploads prefix does not fit in it, and because a `jobs` row is retried until
 // it is done while a Cron body that failed is simply a night that did not
@@ -8,6 +9,7 @@
 //
 //   backup_uploads   nightly, keyed by workspace and day
 //   events_export    weekly, keyed by workspace and ISO week
+//   reverify          weekly, one durable job per stale provider key
 //   spend.daily      written straight to Analytics Engine, because it is a
 //                    metric rather than an effect: nothing downstream depends
 //                    on it and a missing point is a gap in a chart
@@ -23,6 +25,7 @@ import { backupJobKey } from '../storage/backup.js';
 import { eventsExportKey } from './events-export.js';
 import { recordDailySpend } from './analytics.js';
 import { logEvent } from '../keys/redact.js';
+import { enqueueWeeklyReverify } from '../keys/reverify.js';
 
 /** `2026-W07`. The key's uniqueness unit for the weekly export. */
 export function isoWeek(date: Date): string {
@@ -52,6 +55,7 @@ export interface NightlyResult {
   readonly workspaces: number;
   readonly backups: number;
   readonly exports: number;
+  readonly reverifications: number;
   readonly spendPoints: number;
 }
 
@@ -71,6 +75,7 @@ export async function runNightly(env: Env, now: Date = new Date()): Promise<Nigh
 
   let backups = 0;
   let exports = 0;
+  let reverifications = 0;
   let spendPoints = 0;
 
   for (const workspaceId of workspaces) {
@@ -80,6 +85,7 @@ export async function runNightly(env: Env, now: Date = new Date()): Promise<Nigh
         if (weekly && (await enqueueJob(tx, workspaceId, 'events_export', eventsExportKey(workspaceId, week), { week }))) {
           exports += 1;
         }
+        if (weekly) reverifications += await enqueueWeeklyReverify(tx, workspaceId);
 
         // Yesterday's spend, in the workspace's own timezone, for the daily
         // platform-spend series. Read here rather than in a job because it is
@@ -116,7 +122,7 @@ export async function runNightly(env: Env, now: Date = new Date()): Promise<Nigh
     }
   }
 
-  const result = { workspaces: workspaces.length, backups, exports, spendPoints };
+  const result = { workspaces: workspaces.length, backups, exports, reverifications, spendPoints };
   logEvent({ at: 'cron.nightly', ...result, weekly });
   return result;
 }

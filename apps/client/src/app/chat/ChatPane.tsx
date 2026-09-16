@@ -7,6 +7,7 @@
 // and gains "Load earlier to search more", because a find that silently only
 // searches the loaded window is a find that lies.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { SHARE_AUDIENCE } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Ack, Button, Dialog, IconButton, IrisMark, MenuItem, Popover } from '../ui/primitives.js';
@@ -149,7 +150,7 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
           <span className="current truncate">{session.title}</span>
         </span>
         {session.share && (
-          <span className="share-tag" title={`Shared with ${session.share.audience} · View only`}>
+          <span className="share-tag" title={`${SHARE_AUDIENCE} · View only`}>
             <Icon name="external" size={14} /> Shared
           </span>
         )}
@@ -309,15 +310,20 @@ function RenameDialog({ open, initial, onClose, onSave }: { open: boolean; initi
  * server once and is never re-readable, so the dialog shows it while it has it
  * and says so.
  */
-function ShareDialog({ open, session, onClose }: { open: boolean; session: SessionState; onClose: () => void }) {
+export async function revokeSharedSession(revoke: () => Promise<void>, markRevoked: () => void): Promise<void> {
+  await revoke();
+  markRevoked();
+}
+
+export function ShareDialog({ open, session, onClose }: { open: boolean; session: SessionState; onClose: () => void }) {
   const state = useAppState();
   const adapter = useAdapter();
   const dispatch = useDispatch();
-  const [audience, setAudience] = useState('team');
   const [copied, setCopied] = useState(false);
   const [copyFail, setCopyFail] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -326,16 +332,36 @@ function ShareDialog({ open, session, onClose }: { open: boolean; session: Sessi
       setCopyFail(false);
       setUrl(session.share?.url ?? null);
       setError(null);
+      setRevoking(false);
     }
   }, [open, session.share?.url]);
 
   const create = async (): Promise<void> => {
+    setError(null);
     try {
-      const share = await adapter.rest.share(state.workspace.id, session.id, audience === 'team' ? 'Workspace' : 'Named member');
-      dispatch({ type: 'session/share', id: session.id, share: { id: share.id, url: share.url, audience: share.audience } });
+      const share = await adapter.rest.share(state.workspace.id, session.id);
+      dispatch({ type: 'session/share', id: session.id, share: { id: share.id, url: share.url, audience: SHARE_AUDIENCE } });
       setUrl(share.url);
     } catch {
       setError('Could not create the link. Try again.');
+    }
+  };
+
+  const revoke = async (): Promise<void> => {
+    if (!session.share || revoking) return;
+    const shareId = session.share.id;
+    setRevoking(true);
+    setError(null);
+    try {
+      await revokeSharedSession(
+        () => adapter.rest.unshare(state.workspace.id, session.id, shareId),
+        () => dispatch({ type: 'session/unshare', id: session.id }),
+      );
+      setUrl(null);
+    } catch {
+      setError('Could not stop sharing. The link is still active. Try again.');
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -365,13 +391,10 @@ function ShareDialog({ open, session, onClose }: { open: boolean; session: Sessi
         shared ? (
           <>
             <Button
-              onClick={() => {
-                void adapter.rest.unshare(state.workspace.id, session.id, shared.id).catch(() => undefined);
-                dispatch({ type: 'session/unshare', id: session.id });
-                setUrl(null);
-              }}
+              disabled={revoking}
+              onClick={() => void revoke()}
             >
-              Stop sharing
+              {revoking ? 'Stopping…' : 'Stop sharing'}
             </Button>
             <Button primary onClick={onClose}>
               Done
@@ -390,7 +413,7 @@ function ShareDialog({ open, session, onClose }: { open: boolean; session: Sessi
       {shared ? (
         <>
           <p>
-            Shared with {shared.audience} · View only. Viewers see the transcript up to the moment it was shared.
+            {SHARE_AUDIENCE} can view this read-only snapshot. Viewers see the transcript up to the moment it was shared.
           </p>
           <div className="row" style={{ gap: 8 }}>
             <span className="field" style={{ minHeight: 48, padding: '10px 14px', fontSize: 11.2, color: 'var(--muted)' }}>
@@ -408,19 +431,12 @@ function ShareDialog({ open, session, onClose }: { open: boolean; session: Sessi
               </Ack>
             </span>
           </div>
-          <p className="meta">Viewers cannot send messages, decide requests or change context. Referenced objects open only for members.</p>
+          <p className="meta">Possession of the link grants access. It is not restricted to workspace members. Viewers cannot send messages, decide requests or change context.</p>
+          {error && <p className="meta" role="alert">{error}</p>}
         </>
       ) : (
         <>
-          <p className="meta">Creates a read-only link. Nothing is sent outside the workspace.</p>
-          <div className="col" role="radiogroup" aria-label="Audience" style={{ gap: 4 }}>
-            <MenuItem checked={audience === 'team'} sub={`Everyone in ${state.workspace.name}`} onClick={() => setAudience('team')}>
-              Workspace
-            </MenuItem>
-            <MenuItem checked={audience === 'named'} sub="A single named member" onClick={() => setAudience('named')}>
-              Named member
-            </MenuItem>
-          </div>
+          <p className="meta">Creates a read-only bearer link. Anyone who has the link can view this snapshot.</p>
           {error && <p className="meta">{error}</p>}
         </>
       )}

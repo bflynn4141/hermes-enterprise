@@ -18,6 +18,8 @@ import { runReceiptJob } from './runs/receipt.js';
 import { runBackupUploads } from './storage/backup.js';
 import { runCapWarningJob } from './ops/cap-warning.js';
 import { runEventsExport } from './ops/events-export.js';
+import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
+import type { AdapterOptions } from './model/types.js';
 
 export interface Job {
   readonly id: string;
@@ -32,11 +34,9 @@ export interface Job {
 export const CLAIM_SECONDS = 120;
 
 /**
- * The kinds this milestone knows about. `receipt`, `render` and `reverify` are
- * registered and inert: the rows they would be written by (a decision, a
- * document version, a key re-verification) belong to M4 and to the keys module,
- * and a runner that pretended to do their work would be a lie the Cron tells
- * once a minute.
+ * The kinds this Worker knows how to dispatch. Keeping the registry explicit
+ * makes an unknown kind visible rather than letting a misspelled job retry
+ * forever with no owner.
  */
 export const JOB_KINDS = [
   'publish',
@@ -360,7 +360,7 @@ async function runRender(env: Env, job: Job): Promise<void> {
 }
 
 /** Dispatch. An unknown kind is done rather than retried forever. */
-export async function runJob(env: Env, job: Job): Promise<void> {
+export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<void> {
   switch (job.kind) {
     case 'publish':
       await runPublish(env, job);
@@ -399,9 +399,26 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       await runEventsExport(env, job);
       return;
     case 'reverify':
-      // Registered, inert, and honest about it: the work lands with the keys
-      // module.
-      console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'registered placeholder' }));
+      {
+        const payload = (job.payload ?? {}) as Partial<ReverifyPayload>;
+        if (typeof payload.key_id !== 'string' || typeof payload.provider !== 'string') {
+          console.log(JSON.stringify({ at: 'job.reverify', key: job.key, ok: false, note: 'malformed payload' }));
+          return;
+        }
+        const result = await runReverifyJob(
+          (fn) => withWorkspaceTransaction(env, job.workspace_id, fn),
+          env,
+          job.workspace_id,
+          payload as ReverifyPayload,
+          adapterOptions,
+        );
+        // A 403, 429 or provider outage is not completion. `recordVerification`
+        // has preserved the unverified status; throwing here lets the generic
+        // wrapper retain this same job and apply its bounded retry backoff.
+        if ('status' in result && result.status === 'unverified') {
+          throw new Error('provider key re-verification was inconclusive');
+        }
+      }
       return;
     default:
       console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'unknown kind' }));
@@ -410,11 +427,16 @@ export async function runJob(env: Env, job: Job): Promise<void> {
 }
 
 /** Claim, run, finish or fail. Returns true when the job was run to done. */
-async function claimRunFinish(env: Env, workspaceId: string, jobId: string): Promise<boolean> {
+async function claimRunFinish(
+  env: Env,
+  workspaceId: string,
+  jobId: string,
+  adapterOptions: AdapterOptions = {},
+): Promise<boolean> {
   const job = await withWorkspaceTransaction(env, workspaceId, (tx) => claimJob(tx, jobId));
   if (!job) return false;
   try {
-    await runJob(env, job);
+    await runJob(env, job, adapterOptions);
     await withWorkspaceTransaction(env, workspaceId, (tx) => finishJob(tx, job.id));
     return true;
   } catch (error) {
@@ -451,6 +473,7 @@ export async function runJobsAfterCommit(env: Env, workspaceId: string, jobIds: 
 export async function drainJobs(
   env: Env,
   limit = 50,
+  adapterOptions: AdapterOptions = {},
 ): Promise<{ claimed: number; done: number; failed: number }> {
   const client = await connect(env, 'app');
   let due: { job_id: string; workspace_id: string }[];
@@ -471,7 +494,7 @@ export async function drainJobs(
   // already claimed by another drainer is neither: a test that drains to a
   // quiet state needs to tell "nothing left" from "nothing I could do".
   for (const row of due) {
-    if (await claimRunFinish(env, row.workspace_id, row.job_id)) done += 1;
+    if (await claimRunFinish(env, row.workspace_id, row.job_id, adapterOptions)) done += 1;
     else failed += 1;
   }
   return { claimed: due.length, done, failed };

@@ -100,6 +100,11 @@ node scripts/seed-dev.mjs         # one workspace, one Admin, one Member
 npx wrangler dev --local
 ```
 
+The seed prints its credential-free target before connecting. It accepts a
+loopback database or a clearly test-named database such as `hermes_test`; any
+other target is refused unless the exceptional
+`HERMES_SEED_ALLOW_NONLOCAL=1` override is supplied intentionally.
+
 That serves the API *and* the client, from `apps/client/dist`, which the assets
 binding points at. Build it first, with fake auth so the dev account switcher
 survives, and open the workspace:

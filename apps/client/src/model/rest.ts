@@ -354,7 +354,7 @@ export function createRest(options: RestOptions) {
     withdrawInvitation: (workspaceId: string, id: string) => send('POST', `${ws(workspaceId)}/invitations/${id}/withdraw`, {}),
 
     // --- shares, feedback ---
-    share: (workspaceId: string, sessionId: string, audience: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema, { audience }) as Promise<ShareResponse>,
+    share: (workspaceId: string, sessionId: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema) as Promise<ShareResponse>,
     unshare: (workspaceId: string, sessionId: string, shareId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}/shares/${shareId}`),
     sharedSession: (token: string, etag: string | null) =>
       request('GET', `/shared/${token}`, sharedSessionSchema, undefined, etag ? { headers: { 'If-None-Match': etag } } : {}) as Promise<SharedSession>,

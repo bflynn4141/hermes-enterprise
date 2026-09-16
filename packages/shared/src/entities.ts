@@ -469,6 +469,13 @@ export const decisionResultSchema = z
   .strict();
 export type DecisionResult = z.infer<typeof decisionResultSchema>;
 
+/**
+ * A session share is a bearer capability: possession of the URL is the whole
+ * authorization check. This label is deliberately shared by the API and UI so
+ * neither can imply workspace- or recipient-bound access that does not exist.
+ */
+export const SHARE_AUDIENCE = 'Anyone with the link';
+
 export const shareResponseSchema = z
   .object({
     id: uuidSchema,

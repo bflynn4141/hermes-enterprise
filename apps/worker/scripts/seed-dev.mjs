@@ -7,12 +7,19 @@
 // Idempotent: running it twice leaves one workspace.
 import pg from 'pg';
 import { OWNER_URL } from './db-config.mjs';
+import { assertSeedTargetAllowed } from './seed-guard.mjs';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
 const MEMBER_ID = '33333333-3333-4333-8333-333333333333';
 const AGENT_ID = '44444444-4444-4444-8444-444444444444';
 const SESSION_ID = '55555555-5555-4555-8555-555555555555';
+
+const target = assertSeedTargetAllowed(OWNER_URL, process.env.HERMES_SEED_ALLOW_NONLOCAL);
+process.stdout.write(`seed target: ${target.display}\n`);
+if (target.exceptionalOverride && !target.local && !target.test) {
+  process.stdout.write('warning: HERMES_SEED_ALLOW_NONLOCAL=1 bypassed the development seed guard\n');
+}
 
 const client = new pg.Client({ connectionString: OWNER_URL });
 await client.connect();
