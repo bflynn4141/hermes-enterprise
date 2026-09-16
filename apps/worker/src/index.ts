@@ -130,6 +130,7 @@ import {
   startSlackOAuth,
 } from './routes/slack.js';
 import { slackEvents } from './routes/slack-events.js';
+import { getOnboardingSample, startOnboardingSample } from './routes/onboarding-sample.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -264,6 +265,11 @@ app.post('/integrations/slack/events', slackEvents);
 app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
+
+// A durable first-run simulation. It never calls a model, searches the web or
+// reaches an intake system; polling materializes its server-timed stages.
+app.post('/w/:ws/onboarding/sample-runs', startOnboardingSample);
+app.get('/w/:ws/onboarding/sample-runs/:id', getOnboardingSample);
 
 // Settings > Provider keys (Admin, step-up) and the catalog the model menu
 // reads (any member). See src/routes/keys.ts for why the two differ.

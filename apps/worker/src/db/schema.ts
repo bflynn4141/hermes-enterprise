@@ -638,6 +638,64 @@ export const requestNotes = pgTable('request_notes', {
   createdAt: now('created_at'),
 });
 
+/** Explicitly simulated first-run walkthrough; separate from real model runs. */
+export const onboardingSampleRuns = pgTable(
+  'onboarding_sample_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    createdBy: uuid('created_by').notNull(),
+    sessionId: uuid('session_id'),
+    setupAttemptId: uuid('setup_attempt_id').notNull(),
+    status: text('status').notNull().default('running'),
+    simulated: boolean('simulated').notNull().default(true),
+    startedAt: now('started_at'),
+    completedAt: ts('completed_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('onboarding_sample_runs_attempt_key').on(t.workspaceId, t.agentId, t.setupAttemptId)],
+);
+
+export const onboardingSampleApplications = pgTable(
+  'onboarding_sample_applications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    sampleKey: text('sample_key').notNull(),
+    displayName: text('display_name').notNull(),
+    state: text('state').notNull().default('received'),
+    payload: jsonb('payload').notNull(),
+    requestId: uuid('request_id').unique(),
+    receivedAt: ts('received_at').notNull(),
+    researchingAt: ts('researching_at'),
+    screenedAt: ts('screened_at'),
+    needsReviewAt: ts('needs_review_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('onboarding_sample_applications_key').on(t.runId, t.sampleKey)],
+);
+
+export const onboardingSampleEvents = pgTable(
+  'onboarding_sample_events',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    workspaceId: uuid('workspace_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    applicationId: uuid('application_id'),
+    eventKey: text('event_key').notNull(),
+    kind: text('kind').notNull(),
+    state: text('state'),
+    requestId: uuid('request_id'),
+    detail: text('detail').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('onboarding_sample_events_key').on(t.runId, t.eventKey)],
+);
+
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1200,6 +1258,9 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  onboarding_sample_runs: onboardingSampleRuns,
+  onboarding_sample_applications: onboardingSampleApplications,
+  onboarding_sample_events: onboardingSampleEvents,
   decisions,
   effects,
   request_notes: requestNotes,
