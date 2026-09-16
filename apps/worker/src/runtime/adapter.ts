@@ -76,11 +76,14 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
       const previous = await db.loadBootstrapHistory(run);
       const model = await db.loadModel(run.modelId);
-      if (!model || model.provider !== 'openrouter') throw new Error('Hermes requires an allowed OpenRouter model');
+      if (!model || !['openrouter', 'nous_portal'].includes(model.provider)) {
+        throw new Error('Hermes requires a runtime-supported model');
+      }
+      const wireModel = model.model_id.replace(/^(?:openrouter|nous):/, '');
       const proposed: Record<string, unknown> = {
         input: userInput,
         session_id: run.sessionId,
-        model: model.model_id.replace(/^openrouter:/, ''),
+        model: wireModel,
         provider: 'custom',
         instructions: await buildSystemPrompt(db, run, []),
         _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),

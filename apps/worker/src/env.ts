@@ -30,10 +30,10 @@ export interface Env {
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
-   * Comma-separated provider names this deployment offers: `openrouter` in
-   * every environment (decision R12). A key, a catalog row, a session model or
+   * Comma-separated provider names this deployment offers. The Hermes
+   * Enterprise deployment uses `nous_portal` (decision C55). A key, a catalog row, a session model or
    * a run naming anything else is refused with `provider_not_allowed`. Unset
-   * means `openrouter` rather than everything, so a missing variable fails
+   * means `nous_portal` rather than everything, so a missing variable fails
    * closed; `model/allowed.ts` is the only reader.
    */
   ALLOWED_PROVIDERS?: string;
@@ -57,6 +57,8 @@ export interface Env {
    * `model/openrouter-dev.ts` and the README's OpenRouter section.
    */
   OPENROUTER_FIXTURE?: string;
+  /** Development-only Nous Portal verification and catalog fixture. */
+  NOUS_PORTAL_FIXTURE?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket

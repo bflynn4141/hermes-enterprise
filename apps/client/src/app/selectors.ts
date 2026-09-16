@@ -64,7 +64,7 @@ const SCRIPTED_DEV = __AUTH_MODE__ === 'fake' && !__MOCK__;
 
 /**
  * Whether the composer may send at all, and whose key was rejected. A workspace
- * with no verified key is an empty state ("Add your OpenRouter key in Settings to
+ * with no verified key is an empty state ("Add your Nous Portal key in Settings to
  * start"), not an error: in M1 that is every workspace.
  *
  * `any` is what the composer disables itself on; `banner` is what the shell

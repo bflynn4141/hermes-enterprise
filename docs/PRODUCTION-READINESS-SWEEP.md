@@ -41,7 +41,7 @@ File names such as `placeholder.invalid`, test doubles and `unavailable` receipt
 
 ### A. Placeholder and QA inventory
 
-Run independent client, server and repository sweeps. Record exact file/line, configuration gate, production reachability, user impact and disposition. Search generated bundles as well as source so compile-time flags are proven eliminated. Inspect the deployed-environment configuration for fake auth, scripted providers, fixture OpenRouter, hardcoded identities, demo bank/signature language, mock request creation, localhost callbacks and test routes.
+Run independent client, server and repository sweeps. Record exact file/line, configuration gate, production reachability, user impact and disposition. Search generated bundles as well as source so compile-time flags are proven eliminated. Inspect the deployed-environment configuration for fake auth, scripted providers, provider fixtures, hardcoded identities, demo bank/signature language, mock request creation, localhost callbacks and test routes.
 
 Deliver `docs/PRODUCTION-READINESS-FINDINGS.md` with P0–P3 findings and an appendix of legitimate test-only code. Remediation happens only after the approval branches land, grouped by file owner to avoid conflicting edits. Removing tracked visual baselines is a separate repository-size decision; it is not required to make runtime behavior safe.
 
@@ -77,7 +77,7 @@ Compare the exact pinned tree, the current stable tag and current official docs 
 - memory/skills/cron/delegation disabled or governed as claimed;
 - data deletion, retention and hosted runtime operational gaps.
 
-Classify each item as compliant, compliant-by-design but operationally unverified, divergent intentionally, or incorrect. Any source-pin change requires the official native probe, Python tests, Worker runtime tests and one real governed session with no paid/external side effect. Do not replace official Hermes with a generic OpenRouter chat loop.
+Classify each item as compliant, compliant-by-design but operationally unverified, divergent intentionally, or incorrect. Any source-pin change requires the official native probe, Python tests, Worker runtime tests and one real governed session with no paid/external side effect. Keep official Hermes as the runtime; a gateway-compatible model API is inference transport, not a replacement agent loop.
 
 ## Ordering and isolation
 

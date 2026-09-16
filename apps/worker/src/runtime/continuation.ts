@@ -473,7 +473,10 @@ export async function admitApprovalContinuation(
     await move(tx, intent.id, 'failed', 'agent_or_session_not_available');
     return { status: 'refused', continuationId: intent.id, reason: 'agent_or_session_not_available' };
   }
-  if (session.model_provider !== 'openrouter' || session.model_transport !== 'openrouter_chat' ||
+  const runtimeModel =
+    (session.model_provider === 'openrouter' && session.model_transport === 'openrouter_chat') ||
+    (session.model_provider === 'nous_portal' && session.model_transport === 'nous_chat');
+  if (!runtimeModel ||
       session.model_disabled_reason !== null || !session.model_supports_tools ||
       !isProviderAllowed(env, session.model_provider)) {
     await move(tx, intent.id, 'failed', 'approved_model_not_runtime_supported');

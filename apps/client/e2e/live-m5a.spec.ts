@@ -61,7 +61,7 @@ async function runTurn(page: Page, workspaceId: string, title: string): Promise<
   const sessionId = (await session.json()).id as string;
   const turn = await page.request.post(`/w/${workspaceId}/sessions/${sessionId}/turns`, {
     // No `model_id`: the session carries the workspace default, which is an
-    // OpenRouter id from the seed onwards (decision R13).
+    // Nous Portal id from the seed onwards (decision R13).
     data: { text: 'Screen the applicant.', client_turn_id: randomUUID(), attachments: [], mode: 'work', effort: null },
     headers: { origin: ORIGIN },
   });
@@ -107,7 +107,7 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   // refetch: without it the pane said "This run called no tools" for a run
   // that called one.
   const app = pane(page);
-  await expect(app.getByRole('heading', { name: /work · openrouter:anthropic\/claude-sonnet-5/ })).toBeVisible({ timeout: 15_000 });
+  await expect(app.getByRole('heading', { name: /work · nous:anthropic\/claude-sonnet-5/ })).toBeVisible({ timeout: 15_000 });
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
   await expect(app.getByText('propose_request').first()).toBeVisible();
 
@@ -211,9 +211,9 @@ test('M3 · answering the destination from the Context tab writes it and unparks
     SELECT set_config('app.workspace_id', ${q(fixture.workspaceId)}, true);
     SELECT set_config('app.user_id', ${q(fixture.adminId)}, true);
     INSERT INTO sessions (id, workspace_id, title, mode, model_id, owner_id)
-      VALUES (${q(sessionId)}, ${q(fixture.workspaceId)}, 'M3 waiting', 'work', 'openrouter:anthropic/claude-sonnet-5', ${q(fixture.adminId)});
+      VALUES (${q(sessionId)}, ${q(fixture.workspaceId)}, 'M3 waiting', 'work', 'nous:anthropic/claude-sonnet-5', ${q(fixture.adminId)});
     INSERT INTO runs (id, workspace_id, session_id, status, waiting_for, waiting_label, model_id, client_turn_id, mode)
-      VALUES (${q(runId)}, ${q(fixture.workspaceId)}, ${q(sessionId)}, 'waiting', 'destination', 'Feedback destination', 'openrouter:anthropic/claude-sonnet-5', ${q(randomUUID())}, 'work');
+      VALUES (${q(runId)}, ${q(fixture.workspaceId)}, ${q(sessionId)}, 'waiting', 'destination', 'Feedback destination', 'nous:anthropic/claude-sonnet-5', ${q(randomUUID())}, 'work');
     INSERT INTO agent_context_fields (workspace_id, agent_id, key, value, scope, run_id)
       VALUES (${q(fixture.workspaceId)}, ${q(fixture.agentId)}, 'destination', NULL, 'reply', ${q(runId)});
     COMMIT;
@@ -463,12 +463,12 @@ async function sweepEmptyStates(page: Page, seat: 'admin' | 'member'): Promise<v
   await expect(app.getByText('No usage yet')).toBeVisible({ timeout: 15_000 });
 
   await app.getByRole('tab', { name: 'Agents' }).click();
-  // Not an empty state: the OpenRouter rows are there — the default's row is
+  // Not an empty state: the Nous Portal rows are there — the default's row is
   // written by migration 0016 — and each says *why* it cannot be chosen. That
   // is the honest shape: "no models" would be wrong, and a silent list of
-  // disabled rows would be worse. Only OpenRouter rows are listed, because the
+  // disabled rows would be worse. Only Nous Portal rows are listed, because the
   // others are not offered by this deployment at all (decision R12).
-  await expect(app.getByText('No verified openrouter key')).toBeVisible();
+  await expect(app.getByText('No verified Nous Portal key')).toBeVisible();
   await expect(app.getByText('Daily token cap')).toBeVisible();
 
   await app.getByRole('tab', { name: 'Data and privacy' }).click();
@@ -492,7 +492,7 @@ test('M7 · every empty state on a fresh workspace, for an Admin', async ({ brow
   const context = await asUser(browser, fixture.adminEmail);
   const page = await context.newPage();
   await openShell(page, fixture.workspaceId);
-  await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
+  await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
   await sweepEmptyStates(page, 'admin');
   await context.close();
 });

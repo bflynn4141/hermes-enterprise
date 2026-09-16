@@ -71,8 +71,8 @@ describe('GET /w/:ws/bootstrap', () => {
     // are no longer in any payload a client sees (decision R12).
     expect(body.catalog.length).toBeGreaterThanOrEqual(1);
     expect(body.catalog.every((row) => row.enabled === false)).toBe(true);
-    expect(body.catalog.map((row) => row.model_id)).toContain('openrouter:anthropic/claude-sonnet-5');
-    for (const row of body.catalog) expect(row.model_id.startsWith('openrouter:')).toBe(true);
+    expect(body.catalog.map((row) => row.model_id)).toContain('nous:anthropic/claude-sonnet-5');
+    for (const row of body.catalog) expect(row.model_id.startsWith('nous:')).toBe(true);
   });
 
   it('refuses a caller who is not a member, without confirming the workspace exists', async () => {

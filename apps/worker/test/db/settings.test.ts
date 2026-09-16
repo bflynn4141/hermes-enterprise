@@ -53,7 +53,7 @@ describe('GET/PATCH /w/:ws/settings', () => {
       notifications: { blocked: boolean };
       role: string;
     };
-    expect(body.defaults.model_id).toBe('openrouter:anthropic/claude-sonnet-5');
+    expect(body.defaults.model_id).toBe('nous:anthropic/claude-sonnet-5');
     expect(body.caps.max_concurrent_runs).toBe(3);
     // Decision E2: empty means nothing is reachable, not everything.
     expect(body.fetch_url_allowlist).toEqual([]);

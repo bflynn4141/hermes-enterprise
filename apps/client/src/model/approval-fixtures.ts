@@ -85,7 +85,7 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
             currency: 'USD', estimated_min_minor: 180, estimated_max_minor: 360, cap_minor: 500,
             estimated_input_tokens: 16_000, estimated_output_tokens: 7_000,
             total_token_cap: 25_000, call_cap: 8, max_output_tokens_per_call: 5_000, max_parallel_calls: 2,
-            model_ids: ['openrouter:anthropic/claude-sonnet-5'], metered_tools: ['web-search'], retries_included: 1, illustrative: true,
+            model_ids: ['nous:anthropic/claude-sonnet-5'], metered_tools: ['web-search'], retries_included: 1, illustrative: true,
           },
         },
       },

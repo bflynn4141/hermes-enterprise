@@ -404,7 +404,7 @@ export function createRest(options: RestOptions) {
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**
-     * One page of the catalog. Since OpenRouter the table is hundreds of rows,
+     * One page of the catalog. Since Nous Portal the table is hundreds of rows,
      * so the model menu asks for the page it is showing and the search runs in
      * SQL rather than over a list the client downloaded.
      */

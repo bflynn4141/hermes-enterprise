@@ -4637,3 +4637,37 @@ asking a first-time admin to design a policy graph prematurely.
 - https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments
 - https://learn.microsoft.com/en-us/microsoft-365/copilot/agent-essentials/agent-lifecycle/agent-copilot-studio-requested
 - https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/agent-design-canvas-framework
+
+---
+
+## C55. Nous Portal supplies inference; Hermes Agent remains the runtime
+
+**Decided September 15, 2026.** Workspace model inference uses the Nous Portal
+OpenAI-compatible API at `https://inference-api.nousresearch.com/v1`. Durable
+catalog IDs use `nous:<vendor>/<model>`, and all deployed environments set
+`ALLOWED_PROVIDERS=nous_portal`. The default is
+`nous:anthropic/claude-sonnet-5` with medium effort. Existing OpenRouter code is
+kept for historical records and transport regression tests, but is not offered
+by the current product path.
+
+The official Hermes Agent runtime still owns planning, transcript continuity,
+tool orchestration and execution. Its agent-scoped Worker proxy supplies the
+selected model and resolves the workspace's encrypted Nous Portal key on each
+call. `HERMES_BRIDGE_SECRET` authenticates the runtime to that proxy; it is not
+an inference credential and does not replace the workspace key.
+
+Nous Portal's `/models` route is public, so it cannot validate a credential.
+Key verification therefore sends one minimal one-token chat-completions request
+before syncing the public catalog. The local fixture reproduces both responses
+only in development and is absent from staging and production configuration.
+
+**Why.** One product provider keeps setup and billing legible while still
+offering the Portal catalog. Keeping the runtime and inference credentials
+separate preserves tenant billing, rotation and audit attribution without
+copying workspace secrets into Hermes profiles. A public catalog response alone
+would create false-positive verification for invalid or revoked keys.
+
+**Would change it if.** Nous Portal publishes a free authenticated key-introspection
+endpoint, in which case verification should use it instead of a billed minimal
+completion. Adding another customer-facing provider requires a separate policy,
+catalog and UI decision rather than merely compiling another adapter.

@@ -160,7 +160,8 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
   }
   async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
     const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
-      `SELECT model_id, provider FROM catalog WHERE provider = 'openrouter' AND transport = 'openrouter_chat'
+      `SELECT model_id, provider FROM catalog
+         WHERE (provider, transport) IN (('openrouter', 'openrouter_chat'), ('nous_portal', 'nous_chat'))
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;
   }

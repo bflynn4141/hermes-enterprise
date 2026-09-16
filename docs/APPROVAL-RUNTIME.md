@@ -59,7 +59,7 @@ unsupported authorizations are terminal refusals.
 ## Hard model-call budget
 
 `approval_runtime_budgets` stores the normalized reviewed limit for one admitted
-continuation. Immediately before each OpenRouter request, the model bridge:
+continuation. Immediately before each provider request, the model bridge:
 
 1. rechecks the admitted continuation and the server's current approval
    projection;

@@ -52,11 +52,13 @@ workspace context/documents, prepare Inbox requests, write review notes and
 propose context/instruction changes. Human approval, payments, signatures, role
 changes and invitation authority remain in the enterprise routes.
 
-OpenRouter remains the model provider. The native runtime calls an authenticated,
+Nous Portal supplies model inference. The native runtime calls an authenticated,
 agent-scoped model proxy; the Worker resolves the workspace's current encrypted
-key for each call. Provider keys are never copied into profile configuration.
-Only the selected catalog model can be called. Each profile executes one run at
-a time, enforced in the Worker and native API.
+Nous Portal key for each call. That key is separate from `HERMES_BRIDGE_SECRET`,
+which authenticates the runtime process to the Worker. Provider keys are never
+copied into profile configuration. Only the selected catalog model can be
+called. Each profile executes one run at a time, enforced in the Worker and
+native API.
 
 ## Running locally
 
@@ -102,9 +104,11 @@ and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.m
 
 ## Verified locally — September 15, 2026
 
-Real calls used the workspace’s encrypted OpenRouter credential and its selected
-`anthropic/claude-sonnet-5` catalog model, through the official pinned AIAgent.
-These checks are separate from the native probe’s fixture model.
+The previously recorded real-call checks used the workspace’s encrypted
+OpenRouter credential and `anthropic/claude-sonnet-5` through the official
+pinned AIAgent. They predate the Nous Portal migration and are retained as
+historical runtime evidence. Current automated checks use the Nous Portal
+fixture; no paid Nous Portal inference call is claimed here.
 
 | Check | Observed result |
 | --- | --- |

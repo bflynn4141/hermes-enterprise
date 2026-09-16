@@ -66,7 +66,7 @@ test('hidden provider-key details permit a server-validated turn without claimin
   await mount(page, { status: 'none', keysLocked: true, keyStatus: 'none' });
   const input = page.getByRole('textbox', { name: 'Message Iris' });
   await expect(input).toBeEnabled();
-  await expect(page.getByText('Add your OpenRouter key in Settings to start')).toHaveCount(0);
+  await expect(page.getByText('Connect Nous Portal in Settings to start')).toHaveCount(0);
   await input.fill('Review the application.');
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect.poll(() => page.evaluate(() => window.composerFixture.calls)).toEqual([
@@ -77,7 +77,7 @@ test('hidden provider-key details permit a server-validated turn without claimin
 test('a confirmed missing key still blocks a new turn', async ({ page }) => {
   await mount(page, { status: 'none', keyStatus: 'none' });
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toBeDisabled();
-  await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
+  await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
 });
 
 test('working runs keep their guidance and follow-up controls', async ({ page }) => {

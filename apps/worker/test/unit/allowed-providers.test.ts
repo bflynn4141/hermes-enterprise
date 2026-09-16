@@ -11,14 +11,14 @@ import { allowedProviders, isProviderAllowed, requireAllowedProvider } from '../
 import { RouteError } from '../../src/routes/tenant.js';
 
 describe('which providers a deployment offers', () => {
-  it('fails closed: no variable means OpenRouter, not everything', () => {
-    expect(allowedProviders({})).toEqual(['openrouter']);
-    expect(allowedProviders({ ALLOWED_PROVIDERS: '' })).toEqual(['openrouter']);
-    expect(allowedProviders({ ALLOWED_PROVIDERS: '   ' })).toEqual(['openrouter']);
+  it('fails closed: no variable means Nous Portal, not everything', () => {
+    expect(allowedProviders({})).toEqual(['nous_portal']);
+    expect(allowedProviders({ ALLOWED_PROVIDERS: '' })).toEqual(['nous_portal']);
+    expect(allowedProviders({ ALLOWED_PROVIDERS: '   ' })).toEqual(['nous_portal']);
     // A name nobody recognises is dropped, and dropping every name falls back
     // rather than allowing none — "no provider at all" is a deployment that
     // cannot run a turn and would look like an outage.
-    expect(allowedProviders({ ALLOWED_PROVIDERS: 'openrooter' })).toEqual(['openrouter']);
+    expect(allowedProviders({ ALLOWED_PROVIDERS: 'openrooter' })).toEqual(['nous_portal']);
   });
 
   it('reads a list, trimming and ignoring what it does not know', () => {
@@ -43,7 +43,7 @@ describe('which providers a deployment offers', () => {
       expect(error.status).toBe(422);
       expect(error.reason).toBe('provider_not_allowed');
       expect(error.message).toBe(PROVIDER_NOT_ALLOWED_COPY);
-      expect(error.message).toBe('Only OpenRouter keys can be used in this workspace');
+      expect(error.message).toBe('Only Nous Portal connections can be used in this workspace');
     }
   });
 });

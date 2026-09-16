@@ -841,7 +841,7 @@ function AgentsTab() {
         </span>
       </div>
       {catalog.length === 0 ? (
-        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(SETTINGS('Provider keys'))}>Add a key</Button>} />
+        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(SETTINGS('Provider keys'))}>Connect Nous Portal</Button>} />
       ) : (
         <div className="col" role="radiogroup" aria-label="Default model" style={{ gap: 4 }}>
           {catalog.map((row) => (
@@ -936,7 +936,7 @@ const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verifie
 /**
  * Can this key still be used at all?
  *
- * OpenRouter is the only provider this product offers (decision R12), so a row
+ * Nous Portal is the only provider this product offers (decision C55), so a row
  * for anything else is a key that was installed before that and can no longer
  * pay for a run. It is shown rather than hidden, because a credential that
  * still exists somewhere is a thing its owner should be told about.
@@ -1011,7 +1011,7 @@ function ProviderKeysTab() {
             setNotice(null);
           }}
         >
-          Add a key
+          Connect Nous Portal
         </Button>
       </div>
       {keys.length === 0 ? (
@@ -1030,7 +1030,7 @@ function ProviderKeysTab() {
               <div className="row-main">
                 <span className="t">{usable(key) ? STATUS_LABEL[key.status] ?? key.status : EMPTY.keyNotAllowed}</span>
                 <span className="s">
-                  {/* An OpenRouter key verifies against hundreds of models, so
+                  {/* A Nous Portal key verifies against hundreds of models, so
                       the row says how many were synced and when, rather than
                       listing them (decision R7). */}
                   {syncLabel(key) ?? `${key.verified_models.length} model${key.verified_models.length === 1 ? '' : 's'}`} · {key.fingerprint_prefix} · added {new Date(key.created_at).toLocaleDateString()}
@@ -1044,7 +1044,7 @@ function ProviderKeysTab() {
                   which is the only thing left worth doing to it. */}
               {usable(key) && (
                 <>
-                  {key.provider === 'openrouter' && (
+                  {key.provider === 'nous_portal' && (
                     <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
                   )}
                   <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
@@ -1074,12 +1074,12 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        OpenRouter is the only provider this workspace can use. Plaintext is never echoed; only the last four characters are ever shown. The key is verified against OpenRouter&apos;s own key endpoint, and verifying it syncs that account&apos;s model list into the chat model menu.
+        Nous Portal powers Iris through the Hermes Agent runtime. The key stays encrypted and only its last four characters are shown. Verification makes one minimal model request, then syncs the current catalog.
       </p>
 
       <Dialog
         open={dialog === 'add'}
-        title="Add your OpenRouter key"
+        title="Connect Nous Portal"
         onClose={() => setDialog(null)}
         actions={
           <>

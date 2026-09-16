@@ -233,12 +233,12 @@ export function createMockBackend(options: MockOptions = {}) {
       : [
           {
             id: KEY_ID,
-            provider: 'openrouter',
+            provider: 'nous_portal',
             label: 'Program key',
             last4: '9f2c',
             fingerprint_prefix: 'a41b93cd77e0',
             status: keyMode === 'invalid' ? 'invalid' : 'verified',
-            // An OpenRouter key's `verified_models` stays empty: the list is
+            // A Nous Portal key's `verified_models` stays empty: the list is
             // several hundred ids and lives in the catalog, so the row carries
             // a count and a date instead (decision R7).
             verified_models: [],
@@ -255,18 +255,18 @@ export function createMockBackend(options: MockOptions = {}) {
 
   const hasVerifiedKey = providerKeys.some((k) => k.status === 'verified' || k.status === 'verified_scoped');
 
-  // OpenRouter rows only, because that is the only provider the Worker offers
+  // Nous Portal rows only, because that is the only provider the Worker offers
   // and the only one `GET /w/:ws/catalog` returns (decision R12). A mock that
   // still listed DeepSeek and GPT rows would be a fixture teaching the client's
   // own scenarios about a screen the product no longer has.
   const catalog = [
-    { model_id: 'openrouter:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'openrouter', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
-    { model_id: 'openrouter:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'openrouter', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
+    { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 
   /**
    * The same rows as `catalog`, in the shape `GET /w/:ws/catalog` answers, plus
-   * one tool-less OpenRouter row so the model menu's vendor grouping and its
+   * one tool-less Nous Portal row so the model menu's vendor grouping and its
    * tools-required note have something to render in a mock build.
    */
   const catalogEntries = [
@@ -274,7 +274,7 @@ export function createMockBackend(options: MockOptions = {}) {
       model_id: row.model_id,
       provider: row.provider,
       label: row.label,
-      transport: 'openrouter_chat',
+      transport: 'nous_chat',
       effort_map: row.effort === null ? null : Object.fromEntries(row.effort.map((value) => [value, value])),
       default_effort: row.default_effort,
       pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
@@ -288,10 +288,10 @@ export function createMockBackend(options: MockOptions = {}) {
       supports_reasoning: row.effort !== null,
     })),
     {
-      model_id: 'openrouter:meta-llama/llama-4-70b-instruct',
-      provider: 'openrouter',
+      model_id: 'nous:meta-llama/llama-4-70b-instruct',
+      provider: 'nous_portal',
       label: 'Meta: Llama 4 70B Instruct',
-      transport: 'openrouter_chat',
+      transport: 'nous_chat',
       effort_map: null,
       default_effort: null,
       pricing_per_million: { input: 0.27, output: 0.85, input_off_peak: null, output_off_peak: null, cached_input: null },
@@ -307,10 +307,10 @@ export function createMockBackend(options: MockOptions = {}) {
   ];
 
   const sessions: MockSession[] = empty
-    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
+    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
       ];
 
   const messages: Record<string, unknown[]> = {
@@ -449,7 +449,7 @@ export function createMockBackend(options: MockOptions = {}) {
       : [{ session_id: mockUuid(20), title: 'Partner applications', runs: 3, total_tokens: 351_800, cost_usd_estimate: 0.104, last_call_at: '2026-10-12T16:04:00.000Z' }],
     by_key: empty
       ? []
-      : [{ key_id: mockUuid(21), provider: 'openrouter', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
+      : [{ key_id: mockUuid(21), provider: 'nous_portal', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
     caps: {
       daily_token_cap: 500_000,
       tokens_today: empty ? 0 : 351_800,
@@ -464,7 +464,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const settingsView = {
     workspace_id: WS,
     role: seat === 'admin' ? 'admin' : 'member',
-    defaults: { model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high' as string | null, runtime: 'cloud' },
+    defaults: { model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium' as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
     flags: approvalScenario ? { approval_demo: true } : {} as Record<string, unknown>,
@@ -649,7 +649,7 @@ export function createMockBackend(options: MockOptions = {}) {
           id: WS,
           name: 'Nous',
           jurisdiction: 'default',
-          settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
+          settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
         },
         viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
         agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
@@ -689,7 +689,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/sessions') && method === 'GET') return page(sessions);
     if (p('/sessions') && method === 'POST') {
-      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
+      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
       sessions.push(created);
       messages[created.id] = [];
       return json(created);
@@ -702,7 +702,7 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = sessions.find((s) => s.id === sessionId);
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
-        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Add your OpenRouter key in Settings to start');
+        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
         runScenario('completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
@@ -872,7 +872,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/skills')) return page(skills);
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
-      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'openrouter', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'nous_portal', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
       providerKeys.push(added);
       return json({ key: added, verification: { status: 'unverified', reason: 'unavailable' } }, 201);
     }

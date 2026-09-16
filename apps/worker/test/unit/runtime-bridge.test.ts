@@ -170,14 +170,14 @@ describe('enterprise runtime tool boundary', () => {
 });
 
 describe('workspace model credential proxy', () => {
-  const selected = 'openrouter:nousresearch/hermes-4';
+  const selected = 'nous:nousresearch/hermes-4';
   const makeModelDb = () => ({
     activeProfileRun: async () => (await db({ modelId: selected }).loadRun()),
-    allowedRuntimeModels: async () => [{ model_id: selected, provider: 'openrouter' }],
-    resolveCredential: vi.fn(async () => ({ provider: 'openrouter', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
+    allowedRuntimeModels: async () => [{ model_id: selected, provider: 'nous_portal' }],
+    resolveCredential: vi.fn(async () => ({ provider: 'nous_portal', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
     recordModelCall: vi.fn(async () => undefined),
   });
-  it('forwards only the selected raw catalog model to fixed OpenRouter with fresh workspace credentials', async () => {
+  it('forwards only the selected raw catalog model to fixed Nous Portal with fresh workspace credentials', async () => {
     const store = makeModelDb();
     const fetcher = vi.fn<typeof fetch>(async () => Response.json({
       choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 2 } },
@@ -185,14 +185,14 @@ describe('workspace model credential proxy', () => {
     const value = { model: 'nousresearch/hermes-4', messages: [], models: ['evil/model'], provider: { api_key: 'attacker' }, base_url: 'https://attacker.example', reasoning_effort: 'high' };
     const response = await proxyRuntimeModel(env, store, workspaceId, agentId, value, fetcher);
     expect(response.status).toBe(200);
-    expect(fetcher.mock.calls[0]?.[0]).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(fetcher.mock.calls[0]?.[0]).toBe('https://inference-api.nousresearch.com/v1/chat/completions');
     const init = fetcher.mock.calls[0]?.[1];
     expect(init?.redirect).toBe('manual');
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer workspace-provider-secret');
     expect(JSON.parse(String(init?.body))).toEqual({ model: 'nousresearch/hermes-4', messages: [], reasoning: { effort: 'high' } });
     expect(await response.text()).not.toContain('workspace-provider-secret');
     expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
-      runId: expect.any(String), turn: null, modelId: selected, provider: 'openrouter', keyId: 'key-1',
+      runId: expect.any(String), turn: null, modelId: selected, provider: 'nous_portal', keyId: 'key-1',
       usage: { input_tokens: 7, output_tokens: 3, cached_input_tokens: 2, reasoning_tokens: 0 }, status: 'ok',
     }));
   });

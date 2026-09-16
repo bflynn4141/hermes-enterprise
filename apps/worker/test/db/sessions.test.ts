@@ -64,7 +64,7 @@ describe('POST /w/:ws/sessions', () => {
       title: 'Partner applications',
       // The workspace default, which is an OpenRouter id from the seed onwards
       // (decision R13). The row it names is the placeholder 0016 wrote.
-      model_id: 'openrouter:anthropic/claude-sonnet-5',
+      model_id: 'nous:anthropic/claude-sonnet-5',
       effort: 'low',
       runtime: 'local',
       status: 'idle',

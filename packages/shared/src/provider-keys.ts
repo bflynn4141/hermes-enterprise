@@ -42,7 +42,7 @@ export const maskedProviderKeySchema = z
     status: z.enum(KEY_STATUSES),
     verified_models: z.array(z.string().max(128)),
     /**
-     * OpenRouter lists hundreds of models, so the key row carries a count and a
+     * Brokered model gateways list hundreds of models, so the key row carries a count and a
      * timestamp instead of the list (decision R7). Null for every provider
      * whose `verified_models` is the whole answer.
      */
@@ -115,8 +115,8 @@ export const catalogEntrySchema = catalogRowSchema
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
 /**
- * One page of the catalog. Paged from the moment OpenRouter is a provider: the
- * list is in the hundreds, and a model menu that downloads all of it on open is
+ * One page of the catalog. Paged because a gateway catalog can contain
+ * hundreds of rows, and a model menu that downloads all of it on open is
  * the failure the paging exists to prevent.
  */
 export const catalogPageSchema = z

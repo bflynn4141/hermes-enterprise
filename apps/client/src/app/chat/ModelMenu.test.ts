@@ -11,9 +11,9 @@ import { contextLabel, groupByVendor, priceLabel } from './ModelMenu.js';
 
 const entry = (model_id: string, over: Partial<CatalogEntry> = {}): CatalogEntry => ({
   model_id,
-  provider: 'openrouter',
+  provider: 'nous_portal',
   label: model_id,
-  transport: 'openrouter_chat',
+  transport: 'nous_chat',
   effort_map: null,
   default_effort: null,
   pricing_per_million: { input: 1, output: 2, input_off_peak: null, output_off_peak: null, cached_input: null },
@@ -29,25 +29,25 @@ const entry = (model_id: string, over: Partial<CatalogEntry> = {}): CatalogEntry
 });
 
 describe('grouping the model list by vendor', () => {
-  it('groups OpenRouter rows by the segment before the slash', () => {
+  it('groups Nous Portal rows by the segment before the slash', () => {
     const groups = groupByVendor([
-      entry('openrouter:openai/gpt-5.5'),
-      entry('openrouter:anthropic/claude-sonnet-4.6'),
-      entry('openrouter:anthropic/claude-haiku-4.5'),
-      entry('openrouter:meta-llama/llama-4-70b-instruct'),
+      entry('nous:openai/gpt-5.5'),
+      entry('nous:anthropic/claude-sonnet-4.6'),
+      entry('nous:anthropic/claude-haiku-4.5'),
+      entry('nous:meta-llama/llama-4-70b-instruct'),
     ]);
     expect(groups.map((g) => g.vendor)).toEqual(['anthropic', 'meta-llama', 'openai']);
     expect(groups[0]!.rows.map((r) => r.model_id)).toEqual([
-      'openrouter:anthropic/claude-sonnet-4.6',
-      'openrouter:anthropic/claude-haiku-4.5',
+      'nous:anthropic/claude-sonnet-4.6',
+      'nous:anthropic/claude-haiku-4.5',
     ]);
   });
 
   it('puts the directly-keyed models first, under one heading', () => {
     const groups = groupByVendor([
-      entry('openrouter:zzz/model'),
+      entry('nous:zzz/model'),
       entry('deepseek-flash', { provider: 'deepseek', source: 'seed' }),
-      entry('openrouter:aaa/model'),
+      entry('nous:aaa/model'),
     ]);
     expect(groups[0]!.vendor).toBe('Direct');
     expect(groups[0]!.rows.map((r) => r.model_id)).toEqual(['deepseek-flash']);
@@ -55,12 +55,12 @@ describe('grouping the model list by vendor', () => {
   });
 
   it('keeps the server’s ordering inside a group rather than re-sorting it', () => {
-    const groups = groupByVendor([entry('openrouter:x/b'), entry('openrouter:x/a')]);
-    expect(groups[0]!.rows.map((r) => r.model_id)).toEqual(['openrouter:x/b', 'openrouter:x/a']);
+    const groups = groupByVendor([entry('nous:x/b'), entry('nous:x/a')]);
+    expect(groups[0]!.rows.map((r) => r.model_id)).toEqual(['nous:x/b', 'nous:x/a']);
   });
 
-  it('gives a bare OpenRouter id its own group rather than dropping it', () => {
-    expect(groupByVendor([entry('openrouter:bare-id')])[0]!.vendor).toBe('other');
+  it('gives a bare Nous Portal id its own group rather than dropping it', () => {
+    expect(groupByVendor([entry('nous:bare-id')])[0]!.vendor).toBe('other');
   });
 
   it('answers an empty list with no groups', () => {

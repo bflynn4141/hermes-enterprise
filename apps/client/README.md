@@ -89,14 +89,14 @@ the one thing in that database a script cannot regenerate.
 ### Real local mode, and what it costs
 
 `wrangler.jsonc`'s development block ships `MODEL_SCRIPTED="1"` and
-`OPENROUTER_FIXTURE="1"`, so a local Worker answers turns from
+`NOUS_PORTAL_FIXTURE="1"`, so a local Worker answers turns from
 `ScriptedProvider` and verifies provider keys from a built-in fixture. Nothing
-reaches a network. To drive the product against the **real** OpenRouter API on a
+reaches a network. To drive the product against the **real** Nous Portal API on a
 real key, change exactly two values in `apps/worker/.dev.vars`:
 
 ```
 MODEL_SCRIPTED="0"
-OPENROUTER_FIXTURE="0"
+NOUS_PORTAL_FIXTURE="0"
 ```
 
 then **restart the Worker** — wrangler reads `.dev.vars` once, at startup — and
@@ -110,7 +110,7 @@ decision C37: `.dev.vars` beats the process environment in wrangler, so
 provider while three comments said it was scripted.
 
 * `pnpm e2e:live` generates `apps/worker/.dev.vars.test` from `.dev.vars` with
-  `AUTH_MODE=fake`, `MODEL_SCRIPTED=1`, `OPENROUTER_FIXTURE=1` and the
+  `AUTH_MODE=fake`, `MODEL_SCRIPTED=1`, both provider fixtures enabled and the
   `hermes_test` connection strings forced, starts wrangler with `--env-file`
   pointing at it (which makes wrangler skip `.dev.vars` entirely), and then
   **sends one turn** and waits for the scripted provider's own sentence before
@@ -174,7 +174,7 @@ Query parameters pick the fixture:
 | URL | What it shows |
 |---|---|
 | `/` | The seeded October 12 workspace: four requests, a blocked reply, a run |
-| `/?data=empty&key=none` | Every first-run empty state, and the composer greyed with "Add your OpenRouter key in Settings to start" |
+| `/?data=empty&key=none` | Every first-run empty state, and the composer greyed with "Connect Nous Portal in Settings to start" |
 | `/?seat=member` | The Member seat: the review pane reads "Admin decision required" |
 | `/?key=invalid` | A rejected key: "Your deepseek key was rejected. Re-verify or rotate it" |
 | `/onboarding/create`, `/onboarding/join?token=…` | The two onboarding routes |

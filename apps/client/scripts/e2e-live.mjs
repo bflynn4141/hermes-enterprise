@@ -41,10 +41,10 @@
 // ## Why the env file, and not `env:` on the spawn (decision C37)
 //
 // This script used to hand `wrangler dev` `MODEL_SCRIPTED=1` and
-// `OPENROUTER_FIXTURE=1` in the child process's environment. Wrangler does not
+// `NOUS_PORTAL_FIXTURE=1` in the child process's environment. Wrangler does not
 // read the process environment for bindings: it reads `.dev.vars`, and
 // `.dev.vars` wins. So a developer who set `MODEL_SCRIPTED="0"` in `.dev.vars`
-// to try the product against the real OpenRouter API — which is the documented
+// to try the product against the real Nous Portal API — which is the documented
 // way to do that (`apps/client/README.md`, "Real local mode") — was running the
 // entire live suite, thirty-odd scenarios with a turn each, against a real
 // provider on their own key, and nothing said so.
@@ -89,15 +89,21 @@ if (PORT === '8787') {
 /**
  * The values the suite forces, whatever `.dev.vars` says.
  *
- * `MODEL_SCRIPTED` and `OPENROUTER_FIXTURE` are the two that cost money when
+ * `MODEL_SCRIPTED` and `NOUS_PORTAL_FIXTURE` are the two that cost money when
  * they are wrong. `AUTH_MODE` is here because every scenario authenticates with
  * `x-dev-user`, and a `workos` worker would fail all of them in a way that
  * reads like a client bug.
  */
 const FORCED = {
   AUTH_MODE: 'fake',
+  // This suite owns no official Hermes profiles. Keeping the runtime legacy
+  // makes fresh-workspace sessions deterministic while MODEL_SCRIPTED supplies
+  // their no-spend answers.
+  AGENT_RUNTIME: 'legacy',
   MODEL_SCRIPTED: '1',
+  // Kept deterministic for the legacy transport regression scenarios too.
   OPENROUTER_FIXTURE: '1',
+  NOUS_PORTAL_FIXTURE: '1',
   // The two that make the test Worker a different stack rather than a second
   // front door onto the developer's rows.
   ...hyperdriveStrings(TEST_DATABASE),
@@ -250,7 +256,7 @@ for (const [key, value] of Object.entries(written)) {
   }
 }
 process.stdout.write(
-  `test worker variables: AUTH_MODE=fake MODEL_SCRIPTED=1 OPENROUTER_FIXTURE=1 database=${TEST_DATABASE}\n`,
+  `test worker variables: AUTH_MODE=fake MODEL_SCRIPTED=1 NOUS_PORTAL_FIXTURE=1 database=${TEST_DATABASE}\n`,
 );
 
 // --- 6 the Worker ------------------------------------------------------------
@@ -369,7 +375,11 @@ if (process.env.E2E_SKIP_PROBE !== '1') {
 }
 
 // --- 7 the scenarios ---------------------------------------------------------
+// `pnpm e2e:live -- file.spec.ts` may preserve the conventional separator as
+// a literal first argument. Playwright treats that as "run everything", so
+// strip only the leading separator and keep every real Playwright argument.
 const args = process.argv.slice(2);
+if (args[0] === '--') args.shift();
 const playwright = spawnSync('npx', ['playwright', 'test', ...args], {
   cwd: clientDir,
   stdio: 'inherit',

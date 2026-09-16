@@ -48,6 +48,17 @@ try {
     `INSERT INTO workspace_settings (workspace_id) VALUES ($1) ON CONFLICT (workspace_id) DO NOTHING`,
     [WORKSPACE_ID],
   );
+  // The isolated test database is reused across runs. Keep its deterministic
+  // seed on the product's current provider without overwriting a developer's
+  // own model choice in the durable `hermes` database.
+  if (target.test) {
+    await client.query(
+      `UPDATE workspace_settings
+          SET default_model_id = 'nous:anthropic/claude-sonnet-5', default_effort = 'medium'
+        WHERE workspace_id = $1`,
+      [WORKSPACE_ID],
+    );
+  }
   await client.query(
     `INSERT INTO members (workspace_id, user_id, role, reviewer_roles) VALUES
        ($1, $2, 'admin', ARRAY['access','finance']),
@@ -66,7 +77,7 @@ try {
   );
   await client.query(
     `INSERT INTO sessions (id, workspace_id, owner_id, title, model_id)
-     VALUES ($1, $2, $3, 'Partner applications', 'deepseek-flash')
+     VALUES ($1, $2, $3, 'Partner applications', 'nous:anthropic/claude-sonnet-5')
      ON CONFLICT (id) DO NOTHING`,
     [SESSION_ID, WORKSPACE_ID, ADMIN_ID],
   );

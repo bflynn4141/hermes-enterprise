@@ -244,7 +244,7 @@ describe('the default a workspace lands on after its key verifies', () => {
     });
 
     const promoted = await asTenant(fx, (tx) => promoteDefaultModel(tx, fx.workspaceId, ALLOWED));
-    expect(promoted).toMatchObject({ from: 'deepseek-flash', to: PREFERRED_DEFAULT_MODEL_ID });
+    expect(promoted).toMatchObject({ from: 'deepseek-flash', to: 'openrouter:anthropic/claude-sonnet-4.6' });
 
     const after = await asTenant(fx, async (tx) => {
       const settings = await tx.query<{ default_model_id: string; default_effort: string | null }>(
@@ -262,11 +262,11 @@ describe('the default a workspace lands on after its key verifies', () => {
       return { settings: settings.rows[0]!, sessions: sessions.rows, events: events.rows[0]!.count };
     });
 
-    expect(after.settings.default_model_id).toBe(PREFERRED_DEFAULT_MODEL_ID);
+    expect(after.settings.default_model_id).toBe('openrouter:anthropic/claude-sonnet-4.6');
     // Sonnet through OpenRouter takes low/medium/high and not `max`: an effort
     // the adapter cannot map is a 400 on the first turn (decision 26).
     expect(['low', 'medium', 'high']).toContain(after.settings.default_effort);
-    expect(after.sessions.find((row) => row.id === stale)?.model_id).toBe(PREFERRED_DEFAULT_MODEL_ID);
+    expect(after.sessions.find((row) => row.id === stale)?.model_id).toBe('openrouter:anthropic/claude-sonnet-4.6');
     // Archived sessions are left alone: nobody is going to run one, and
     // rewriting them would edit history to no purpose.
     expect(after.sessions.find((row) => row.id === archived)?.model_id).toBe('deepseek-flash');

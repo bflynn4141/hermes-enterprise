@@ -78,7 +78,7 @@ const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
  * The composer, once it is usable.
  *
  * A fresh workspace's provider-key rows arrive a beat after the shell does, and
- * until they do the composer is greyed with "Add your OpenRouter key in Settings to
+ * until they do the composer is greyed with "Add your Nous Portal key in Settings to
  * start" — which is correct behaviour and a race for anything that wants to
  * type. Every test that types waits here first.
  */

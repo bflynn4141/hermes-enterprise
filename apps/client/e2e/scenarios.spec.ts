@@ -63,7 +63,7 @@ test.describe('P1 · onboarding', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).not.toContainText('4');
     await expect(page.getByText('What do you need help with?')).toBeVisible();
     // No verified provider key: the composer is greyed and says what to do.
-    await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
+    await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
     await expect(page.getByRole('textbox', { name: /^Message Iris/ })).toBeDisabled();
   });
 });

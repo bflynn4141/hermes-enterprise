@@ -131,7 +131,7 @@ test('the first-run empty states render', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await appPane.getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(appPane.getByText(/Add your OpenRouter key to enable models/)).toBeVisible();
+  await expect(appPane.getByText(/Connect Nous Portal to enable models/)).toBeVisible();
   await page.screenshot(shot('22-empty-provider-keys'));
 });
 

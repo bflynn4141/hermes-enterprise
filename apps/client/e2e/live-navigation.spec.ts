@@ -35,11 +35,11 @@ test('prompt navigation follows, pins, resumes, resets filters and never creates
   refreshStepUp();
   // Fake key + the development fixture only; no provider network or billing.
   const added = await page.request.post(`/w/${fixture.workspaceId}/provider-keys`, {
-    data: { provider: 'openrouter', label: 'Navigation test fixture', key: ['sk', 'or', 'v1', '0'.repeat(24)].join('-') }, headers: { origin },
+    data: { provider: 'nous_portal', label: 'Navigation test fixture', key: ['sk', 'or', 'v1', '0'.repeat(24)].join('-') }, headers: { origin },
   });
   expect(added.status(), await added.text()).toBe(201);
   const created = await page.request.post(`/w/${fixture.workspaceId}/sessions`, {
-    data: { title: 'Prompt-driven views', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-4.6' }, headers: { origin },
+    data: { title: 'Prompt-driven views', mode: 'work', model_id: 'nous:anthropic/claude-sonnet-4.6' }, headers: { origin },
   });
   expect(created.status(), await created.text()).toBe(201);
   const { id } = await created.json();

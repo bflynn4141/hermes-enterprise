@@ -1,13 +1,14 @@
 // Authenticated official Hermes callbacks. The runtime receives only scoped
 // bridge credentials; enterprise tools retain the existing agent-role boundary.
 import type { Context } from 'hono';
-import { openRouterModelId } from '@hermes/shared';
+import { nousModelId, openRouterModelId } from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { AgentDb, EmittedEvent, EngineRunRow, EmitInput } from '../engine/agent-db.js';
 import { allowedTools, executeTool, FOCUS_TOOLS, TOOL_SOURCE, toolResultEnvelope, type FetchUrlRunner } from '../engine/tools.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import { isProviderAllowed } from '../model/allowed.js';
 import { ATTRIBUTION_HEADERS, OPENROUTER_BASE } from '../model/openrouter.js';
+import { NOUS_PORTAL_BASE, NOUS_PORTAL_HEADERS } from '../model/nous.js';
 import type { ProviderMessage } from '../model/types.js';
 import { pathUuid, RouteError } from '../routes/tenant.js';
 import {
@@ -313,14 +314,35 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
 function modelError(reason: string, status: number): Response {
   return Response.json({ error: { message: reason, type: 'runtime_bridge_error', code: reason } }, { status });
 }
+
+interface RuntimeProviderConfig {
+  readonly base: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly wireId: (catalogId: string) => string | null;
+}
+
+const RUNTIME_PROVIDERS: Readonly<Record<string, RuntimeProviderConfig>> = {
+  openrouter: { base: OPENROUTER_BASE, headers: ATTRIBUTION_HEADERS, wireId: openRouterModelId },
+  nous_portal: { base: NOUS_PORTAL_BASE, headers: NOUS_PORTAL_HEADERS, wireId: nousModelId },
+};
+
 export async function runtimeModels(c: Context<{ Bindings: Env }>): Promise<Response> {
   let db: RuntimeDb | undefined;
   try {
     const { workspaceId } = await authenticate(c);
-    if (!isProviderAllowed(c.env, 'openrouter')) return modelError('provider_not_allowed', 403);
     db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
-    await db.resolveCredential('openrouter');
-    return c.json({ object: 'list', data: (await db.allowedRuntimeModels()).map((model) => ({ id: openRouterModelId(model.model_id), object: 'model', created: 0, owned_by: 'openrouter' })) });
+    const models = (await db.allowedRuntimeModels()).filter((model) => isProviderAllowed(c.env, model.provider));
+    const providers = [...new Set(models.map((model) => model.provider))];
+    if (providers.length === 0) return modelError('provider_not_allowed', 403);
+    await Promise.all(providers.map((provider) => db!.resolveCredential(provider)));
+    return c.json({
+      object: 'list',
+      data: models.flatMap((model) => {
+        const config = RUNTIME_PROVIDERS[model.provider];
+        const id = config?.wireId(model.model_id);
+        return config && id ? [{ id, object: 'model', created: 0, owned_by: model.provider }] : [];
+      }),
+    });
   } catch (error) {
     return modelError(error instanceof RouteError ? error.reason : 'runtime_model_unavailable', error instanceof RouteError ? error.status : 503);
   } finally { await db?.close(); }
@@ -359,14 +381,14 @@ export async function proxyRuntimeModel(
   fetchImpl: typeof fetch = fetch,
   lifecycle?: ModelProxyLifecycle,
 ): Promise<Response> {
-  if (!isProviderAllowed(env, 'openrouter')) return modelError('provider_not_allowed', 403);
   if (!object(value) || typeof value.model !== 'string' || !Array.isArray(value.messages)) return modelError('bad_body', 400);
   const run = await db.activeProfileRun(agentId);
   if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
   const allowed = await db.allowedRuntimeModels();
-  const selected = allowed.find((model) => model.model_id === run.modelId && model.provider === 'openrouter');
-  if (!selected || value.model !== openRouterModelId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
-  // Whitelist request fields: OpenRouter fallback models, provider credentials,
+  const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
+  const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
+  if (!selected || !config || value.model !== config.wireId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
+  // Whitelist request fields: fallback models, provider credentials,
   // routing URLs, and other caller-controlled routing cannot bypass the catalog.
   const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
   for (const key of ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty']) {
@@ -388,7 +410,7 @@ export async function proxyRuntimeModel(
     if (response) return response;
     throw error;
   }
-  const credential = await db.resolveCredential('openrouter');
+  const credential = await db.resolveCredential(selected.provider);
   let reservation: RuntimeBudgetReservation | null = null;
   if (prepared) {
     try {
@@ -425,7 +447,7 @@ export async function proxyRuntimeModel(
       // first-class usage row, but must not invent an Enterprise turn number.
       turn: null,
       modelId: selected.model_id,
-      provider: 'openrouter',
+      provider: selected.provider,
       keyId: credential.keyId,
       usage: {
         input_tokens: counted.inputTokens,
@@ -452,9 +474,9 @@ export async function proxyRuntimeModel(
     await db.recordModelCall(modelCall);
   };
   try {
-    response = await fetchImpl(`${OPENROUTER_BASE}/chat/completions`, {
+    response = await fetchImpl(`${config.base}/chat/completions`, {
       method: 'POST', redirect: 'manual',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}`, ...ATTRIBUTION_HEADERS },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}`, ...config.headers },
       body: JSON.stringify(forwarded),
     });
   } catch (error) {

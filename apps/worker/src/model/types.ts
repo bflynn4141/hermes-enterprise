@@ -73,6 +73,11 @@ export type ReasoningCarry =
       readonly details: readonly ReasoningDetail[];
     }
   | {
+      /** Ordered reasoning blocks returned by the Nous Portal chat gateway. */
+      readonly kind: 'nous_reasoning_details';
+      readonly details: readonly ReasoningDetail[];
+    }
+  | {
       readonly kind: 'openai_encrypted';
       readonly items: readonly { readonly id?: string; readonly encrypted_content: string }[];
     };

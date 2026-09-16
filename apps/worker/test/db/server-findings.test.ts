@@ -311,7 +311,7 @@ describe('F5 · app.onError', () => {
       // OpenRouter, because it is the only provider a key may name (decision
       // R12) and a refusal on *that* rule would hide the one this test is
       // about: the KEK check happens after the provider check.
-      body: JSON.stringify({ provider: 'openrouter', label: 'test', key: 'fake-provider-key' }),
+      body: JSON.stringify({ provider: 'nous_portal', label: 'test', key: 'fake-provider-key' }),
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'kek_unavailable' });

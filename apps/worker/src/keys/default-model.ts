@@ -1,12 +1,12 @@
 // Moving a workspace onto a model it can actually run (decision R13).
 //
 // The problem this solves is the first five minutes of a workspace's life. A
-// fresh workspace's default is `openrouter:anthropic/claude-sonnet-5`, whose
+// fresh workspace's default is a gateway-backed model whose
 // catalog row is a placeholder until a key has been verified and the list
-// synced; and a workspace created before this deployment narrowed to OpenRouter
+// synced; and a workspace created before this deployment narrowed to one gateway
 // has a default of `deepseek-flash`, which no longer exists as far as the
 // product is concerned. In both cases the person's next action is the same —
-// they add their OpenRouter key — and the thing they must not then meet is a
+// they add their provider key — and the thing they must not then meet is a
 // composer that says "Add a deepseek key in Settings to start" about a provider
 // the Settings screen no longer offers.
 //
@@ -17,7 +17,7 @@
 //     left alone, because it was somebody's choice and a sync is not a reason
 //     to overrule it.
 //   * It prefers one named model and falls back to the list. `claude-sonnet-5`
-//     is what the product is documented around; a workspace whose OpenRouter
+//     is what the product is documented around; a workspace whose provider
 //     account cannot reach it gets the first tool-capable row rather than
 //     nothing, because "no default" is not a state any other code handles.
 //   * It repoints the *sessions* too. A session's model is copied from the

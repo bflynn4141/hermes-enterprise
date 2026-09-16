@@ -1,7 +1,7 @@
 // The model menu.
 //
 // It used to be eight lines inside the composer, because the catalog was four
-// rows. With OpenRouter a workspace's catalog is several hundred, and that
+// rows. With Nous Portal a workspace's catalog is several hundred, and that
 // changes what the menu *is*: not a list to read but a thing to search.
 //
 // What the shape has to earn, in order:
@@ -12,7 +12,7 @@
 //                       downloaded, because the list we already downloaded is
 //                       one page of it.
 //   Grouped by vendor.  `anthropic/`, `openai/`, `google/`, `meta-llama/`. The
-//                       segment before the slash is the only grouping OpenRouter
+//                       segment before the slash is the only grouping Nous Portal
 //                       gives us and it is the one people already think in.
 //   Paged, not scrolled forever. 60 rows, then "Show more". Virtualising would
 //                       be faster and is not free: it breaks find-in-page, it

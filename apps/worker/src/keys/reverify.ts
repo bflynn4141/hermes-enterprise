@@ -22,16 +22,16 @@ import { logError, logEvent } from './redact.js';
 import { enqueueReverifyJob } from './reverify-queue.js';
 import { getProviderKey, KeyStoreError, openKeyForVerification } from './store.js';
 import { probeKey, recordVerification } from './verify.js';
-import { syncOpenRouterForKey } from './catalog-sync.js';
+import { syncCatalogForKey } from './catalog-sync.js';
 
 /**
  * Whether this provider's verification probe needs a model to name.
  *
- * OpenRouter's is `GET /api/v1/key`, which authenticates without one — and it
+ * Broker verification authenticates without a catalog row — and it
  * has to be, because its catalog rows do not exist until the first sync has
  * run, so requiring a row would make the first key unverifiable forever.
  */
-export const needsProbeModel = (provider: string): boolean => provider !== 'openrouter';
+export const needsProbeModel = (provider: string): boolean => provider !== 'openrouter' && provider !== 'nous_portal';
 
 /** How often the weekly sweep re-probes a key that is already verified. */
 export const REVERIFY_INTERVAL_DAYS = 7;
@@ -106,9 +106,9 @@ export async function runReverifyJob(
     // The weekly sweep is also the weekly catalog refresh: OpenRouter adds and
     // retires models continuously, and a price that is a fortnight stale is the
     // thing `pricing_verified_on` exists to make visible rather than tolerable.
-    if (payload.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
+    if ((payload.provider === 'openrouter' || payload.provider === 'nous_portal') && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
       const allowed = allowedProviders(env);
-      await syncOpenRouterForKey(
+      await syncCatalogForKey(
         run,
         options,
         workspaceId,

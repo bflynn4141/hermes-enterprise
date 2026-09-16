@@ -217,11 +217,11 @@ test('live · settings, with a verified provider key', async ({ browser }) => {
   await settle(page);
   await shot(page, '14-provider-keys-empty');
 
-  // OpenRouter, because it is the only provider the route accepts (decision
-  // R12), and `OPENROUTER_FIXTURE=1` verifies it and syncs its models — so the
+  // Nous Portal, because it is the only provider the route accepts (decision
+  // R12), and `NOUS_PORTAL_FIXTURE=1` verifies it and syncs its models — so the
   // screenshot is of a working key rather than of a rejected one.
   await page.request.post(`/w/${fixture.workspaceId}/provider-keys`, {
-    data: { provider: 'openrouter', label: 'Program key', key: 'sk-or-v1-fake-key-for-live-screenshots-0001' },
+    data: { provider: 'nous_portal', label: 'Program key', key: 'nous-fake-key-for-live-screenshots-0001' },
     headers: { origin: ORIGIN },
   });
   await page.reload();
