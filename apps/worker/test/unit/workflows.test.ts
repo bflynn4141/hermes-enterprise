@@ -199,6 +199,7 @@ describe('the workflow files', () => {
       expect(text).toContain('workflow_run:');
       expect(text).toContain('workflows: [CI]');
       expect(text).toContain('branches: [main]');
+      expect(text).not.toContain('workflow_dispatch:');
       expect(text).not.toMatch(/^\s\spush:/m);
       expect(text).toContain("github.event.workflow_run.event == 'push'");
       expect(text).toContain("github.event.workflow_run.conclusion == 'success'");
