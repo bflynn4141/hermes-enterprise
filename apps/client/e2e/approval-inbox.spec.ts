@@ -2,6 +2,19 @@ import { expect, test, type Page } from '@playwright/test';
 
 const APPROVALS = '/?scenario=approvals';
 
+const APPROVAL_CASES = [
+  { type: 'run_plan', subject: 'Launch partner research sprint', label: 'Plan and budget', marker: 'Enforced run limits', action: 'Approve plan', effect: null, work: null },
+  { type: 'team_commitment', subject: 'Assign the onboarding synthesis', label: 'Team commitment', marker: 'Bounded task', action: 'Accept task', effect: 'not required', work: 'admitted' },
+  { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'unavailable', work: 'completed' },
+  { type: 'communication', subject: 'Send pilot invitation', label: 'Communication', marker: 'Illustrative pilot outline.pdf', action: 'Approve send', effect: 'unavailable', work: 'completed' },
+  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Publish skill', effect: 'unavailable', work: 'completed' },
+  { type: 'deliverable', subject: 'Accept onboarding recommendation', label: 'Deliverable', marker: 'Smallest credible onboarding pilot', action: 'Accept result', effect: 'not required', work: 'ready' },
+  { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'unavailable', work: 'completed' },
+  { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'unavailable', work: 'completed' },
+  { type: 'exception', subject: 'Allow a 24-hour review extension', label: 'Exception', marker: 'Rule remains in force', action: 'Allow exception', effect: 'not required', work: 'completed' },
+  { type: 'agent_governance', subject: 'Change Rowan’s schedule and tools', label: 'Agent governance', marker: 'Current schedule', action: null, effect: null, work: null },
+] as const;
+
 async function openInbox(page: Page) {
   await page.goto(APPROVALS);
   await page.getByRole('button', { name: /^Inbox/ }).click();
@@ -20,20 +33,9 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByText('Illustrative demo')).toBeVisible();
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
 
-    const expected = [
-      ['Launch partner research sprint', 'Plan and budget'],
-      ['Assign the onboarding synthesis', 'Team commitment'],
-      ['Read-only access to partner feedback', 'Temporary access'],
-      ['Send pilot invitation', 'Communication'],
-      ['Publish partner evidence checklist', 'Shared learning'],
-      ['Accept onboarding recommendation', 'Deliverable'],
-      ['Share redacted pilot summary', 'Data disclosure'],
-      ['Update pilot readiness records', 'Record change'],
-      ['Allow a 24-hour review extension', 'Exception'],
-    ] as const;
-    for (const [subject, type] of expected) {
-      await expect(app.getByText(subject)).toBeVisible();
-      await expect(app.getByText(type).first()).toBeVisible();
+    for (const approval of APPROVAL_CASES.filter((item) => item.type !== 'agent_governance')) {
+      await expect(app.getByText(approval.subject)).toBeVisible();
+      await expect(app.getByText(approval.label).first()).toBeVisible();
     }
     await expect(app.getByText('Leah Martinez')).toBeVisible();
     await expect(app.locator('.inbox-item').filter({ hasText: /Invoice/ })).toBeVisible();
@@ -52,25 +54,85 @@ test.describe('enterprise approval inbox', () => {
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
     await app.getByRole('button', { name: 'All' }).click();
-    const previews = [
-      ['Launch partner research sprint', 'Enforced run limits'],
-      ['Assign the onboarding synthesis', 'Bounded task'],
-      ['Read-only access to partner feedback', 'Access recipient'],
-      ['Send pilot invitation', 'Illustrative pilot outline.pdf'],
-      ['Publish partner evidence checklist', 'Skill changes'],
-      ['Accept onboarding recommendation', 'Smallest credible onboarding pilot'],
-      ['Share redacted pilot summary', 'Example Research Cooperative'],
-      ['Update pilot readiness records', 'Record changes'],
-      ['Allow a 24-hour review extension', 'Rule remains in force'],
-      ['Change Rowan’s schedule and tools', 'Current schedule'],
-    ] as const;
-    for (const [subject, marker] of previews) {
-      await openRequest(app, new RegExp(subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-      await expect(app.getByRole('heading', { name: subject })).toBeVisible();
-      await expect(app.getByText(marker).or(app.getByLabel(marker)).first()).toBeVisible();
+    for (const approval of APPROVAL_CASES) {
+      await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
+      await expect(app.getByText(approval.marker).or(app.getByLabel(approval.marker)).first()).toBeVisible();
       await app.getByRole('button', { name: 'Back to Inbox' }).click();
     }
   });
+
+  for (const approval of APPROVAL_CASES.filter((item) => item.action !== null)) {
+    test(`${approval.type} records the configured action and result states`, async ({ page }) => {
+      const app = await openInbox(page);
+      await app.getByRole('button', { name: 'All' }).click();
+      await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      await app.getByRole('button', { name: approval.action }).click();
+
+      if (approval.type === 'run_plan') {
+        await expect(app.locator('.approval-footer')).toContainText('Waiting for Alex Rivera');
+        await expect(app.getByText('Decision and result')).toHaveCount(0);
+        return;
+      }
+
+      const result = app.locator('.approval-result-track');
+      await expect(result.getByText('approved', { exact: true })).toBeVisible();
+      await expect(result.getByText(approval.work, { exact: true })).toBeVisible();
+      await expect(result.getByText(approval.effect, { exact: true })).toBeVisible();
+      if (approval.effect === 'unavailable') {
+        await expect(result.getByText('Illustrative demo only; no external provider is connected and no effect occurred.')).toBeVisible();
+      }
+    });
+  }
+
+  for (const viewport of [{ name: 'desktop', width: 1440, height: 1100 }, { name: 'narrow', width: 900, height: 1100 }] as const) {
+    test(`all ten previews remain contained in the ${viewport.name} approval shell`, async ({ page }) => {
+      test.setTimeout(90_000);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const app = await openInbox(page);
+      await app.getByRole('button', { name: 'All' }).click();
+
+      for (const approval of APPROVAL_CASES) {
+        await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
+        await expect(app.getByText(approval.marker).or(app.getByLabel(approval.marker)).first()).toBeVisible();
+        if (approval.action) {
+          await expect(app.getByRole('button', { name: 'Request changes' })).toBeVisible();
+          await expect(app.getByRole('button', { name: approval.action })).toBeVisible();
+          await expect(app.getByRole('button', { name: 'More approval actions' })).toBeVisible();
+        } else {
+          await expect(app.locator('.approval-footer')).toContainText('Waiting for Alex Rivera');
+          await expect(app.getByRole('button', { name: 'Request changes' })).toHaveCount(0);
+          await expect(app.getByRole('button', { name: 'More approval actions' })).toHaveCount(0);
+        }
+
+        const layout = await page.evaluate(() => {
+          const scroll = document.querySelector<HTMLElement>('.request-scroll');
+          const footer = document.querySelector<HTMLElement>('.approval-footer');
+          const footerRect = footer?.getBoundingClientRect();
+          return {
+            documentWidth: document.documentElement.scrollWidth,
+            viewportWidth: document.documentElement.clientWidth,
+            scrollWidth: scroll?.scrollWidth ?? 0,
+            scrollClientWidth: scroll?.clientWidth ?? 0,
+            footerLeft: footerRect?.left ?? -1,
+            footerRight: footerRect?.right ?? Number.POSITIVE_INFINITY,
+          };
+        });
+        expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+        expect(layout.scrollWidth).toBeLessThanOrEqual(layout.scrollClientWidth);
+        expect(layout.footerLeft).toBeGreaterThanOrEqual(0);
+        expect(layout.footerRight).toBeLessThanOrEqual(viewport.width);
+
+        const screenshotDir = process.env.APPROVAL_SCREENSHOT_DIR;
+        if (screenshotDir) {
+          await page.screenshot({ path: `${screenshotDir}/${viewport.name}-${approval.type}.png` });
+        }
+        await app.getByRole('button', { name: 'Back to Inbox' }).click();
+      }
+    });
+  }
 
   test('a version-bound plan advances to the second reviewer without starting work', async ({ page }) => {
     const app = await openInbox(page);

@@ -823,7 +823,9 @@ export function createMockBackend(options: MockOptions = {}) {
           quorum: step.quorum,
           current_reviewer_member_ids: index === 0 && step.reviewers[0]?.kind === 'member' ? [step.reviewers[0].member_id] : [],
         }));
-        approval.effect = { ...approval.effect, status: approval.effect.kind === 'none' ? 'not_required' : 'waiting', reason: 'Waiting for authorization.' };
+        approval.effect = approval.effect.kind === 'none'
+          ? { ...approval.effect, status: 'not_required', reason: 'No external provider effect is required.' }
+          : { ...approval.effect, status: 'unavailable', reason: 'Illustrative demo only; no external provider is connected and no effect occurred.' };
         approval.work = { status: 'waiting', continuation_id: null, reason: 'Waiting for authorization.' };
         syncApprovalRow();
         return json(approvalForViewer(approval));

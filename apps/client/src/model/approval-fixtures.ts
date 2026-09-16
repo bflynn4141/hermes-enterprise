@@ -52,9 +52,44 @@ function effectFor(type: ApprovalType): ApprovalView['effect']['kind'] {
   }
 }
 
+const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort();
+
+function targetAgentIds(proposal: ApprovalProposal): string[] {
+  switch (proposal.approval_type) {
+    case 'run_plan': return sortedUnique(proposal.details.participating_agents.map((agent) => agent.agent_id));
+    case 'team_commitment': return [proposal.details.recipient_agent_id];
+    case 'access': return [proposal.details.requested_agent_id];
+    case 'agent_governance': return [proposal.details.agent_id];
+    default: return [];
+  }
+}
+
+function targetResourceIds(proposal: ApprovalProposal): string[] {
+  switch (proposal.approval_type) {
+    case 'access': return [proposal.details.resource_id];
+    case 'shared_learning': return [proposal.details.skill_id];
+    case 'deliverable': return [proposal.details.artifact_id];
+    case 'data_disclosure': return sortedUnique(proposal.details.items.map((item) => item.resource_id));
+    case 'record_change': return [proposal.details.system_id];
+    case 'exception': return [proposal.details.rule_id];
+    default: return [];
+  }
+}
+
+function targetMemberIds(
+  proposal: ApprovalProposal,
+  resourceIds: readonly string[],
+  defaultOwnerMemberId: string,
+): string[] {
+  const ids = resourceIds.length > 0 ? [defaultOwnerMemberId] : [];
+  if (proposal.approval_type === 'team_commitment') ids.push(proposal.details.receiving_owner_member_id);
+  if (proposal.approval_type === 'communication') ids.push(proposal.details.sender.member_id);
+  if (proposal.approval_type === 'agent_governance') ids.push(defaultOwnerMemberId);
+  return sortedUnique(ids);
+}
+
 export function createApprovalDemoFixtures(context: ApprovalDemoContext): ApprovalDemoFixtures {
   const recipientAgentId = mockUuid(1_020);
-  const operationsAgentId = mockUuid(1_021);
   const releaseRequestId = mockUuid(1_022);
   const proposals: { type: ApprovalType; subject: string; label: string; proposal: ApprovalProposal }[] = [
     {
@@ -266,12 +301,18 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       mode: (isPlan ? 'sequential' : 'parallel') as 'sequential' | 'parallel',
       prevent_self_review: true, require_distinct_reviewers: true as const, steps: policySteps,
     };
+    const derivedTargetAgentIds = targetAgentIds(proposal);
+    const derivedTargetResourceIds = targetResourceIds(proposal);
+    const derivedTargetMemberIds = targetMemberIds(proposal, derivedTargetResourceIds, context.mayaMemberId);
+    const effectKind = effectFor(type);
+    const effectUnavailableReason = 'Illustrative demo only; no external provider is connected and no effect occurred.';
     const payload: ApprovalPayload = {
       ...proposal,
       context: {
         requester: { agent_id: context.requesterAgentId, member_id: null, user_id: null },
-        target_agent_ids: type === 'team_commitment' || type === 'access' || type === 'agent_governance' || type === 'run_plan' ? [recipientAgentId] : [],
-        target_member_ids: [], target_resource_ids: [],
+        target_agent_ids: derivedTargetAgentIds,
+        target_member_ids: derivedTargetMemberIds,
+        target_resource_ids: derivedTargetResourceIds,
         source: { session_id: context.sessionId, run_id: context.runId, dependent_request_ids: type === 'deliverable' ? [releaseRequestId] : [] },
       },
       authorization: { revision: 1, hash: hashFor(index + 1), expires_at: context.at(60 * 24 * 7) },
@@ -288,7 +329,7 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       expires_at: payload.authorization.expires_at,
       pending_for_viewer: !waitsForAlex, waiting_on_others: waitsForAlex,
       current_reviewer_names: [waitsForAlex ? 'Alex Rivera' : 'Maya Chen'],
-      effect_status: effectFor(type) === 'none' ? 'not_required' : 'waiting', work_status: 'waiting',
+      effect_status: effectKind === 'none' ? 'not_required' : 'unavailable', work_status: 'waiting',
     };
     requests.push({
       id: requestId, kind: 'approval', status: 'pending', label, subject, title: subject,
@@ -300,10 +341,9 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       request_id: requestId, workspace_id: context.workspaceId, status: 'pending', payload,
       identities: {
         requester_agent: { id: context.requesterAgentId, name: 'Iris', email: 'iris@hermesmail.example' },
-        target_agents: [
-          { id: recipientAgentId, name: 'Rowan', email: 'rowan@hermesmail.example', responsible_member_id: context.mayaMemberId, responsible_member_name: 'Maya Chen' },
-          { id: operationsAgentId, name: 'Juniper', email: 'juniper@hermesmail.example', responsible_member_id: context.alexMemberId, responsible_member_name: 'Alex Rivera' },
-        ],
+        target_agents: derivedTargetAgentIds.map((agentId) => agentId === context.requesterAgentId
+          ? { id: agentId, name: 'Iris', email: 'iris@hermesmail.example', responsible_member_id: null, responsible_member_name: null }
+          : { id: agentId, name: 'Rowan', email: 'rowan@hermesmail.example', responsible_member_id: context.mayaMemberId, responsible_member_name: 'Maya Chen' }),
         reviewers: [
           { member_id: context.mayaMemberId, user_id: context.mayaUserId, name: 'Maya Chen', authority_roles: ['workspace_owner'] },
           { member_id: context.alexMemberId, user_id: context.alexUserId, name: 'Alex Rivera', authority_roles: ['finance', 'agent_admin'] },
@@ -318,7 +358,7 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       capabilities: waitsForAlex
         ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: 'Waiting for Alex Rivera.' }
         : { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: [policySteps[0]!.id], can_route: true, can_submit_revision: false, reason: null },
-      effect: { kind: effectFor(type), status: effectFor(type) === 'none' ? 'not_required' : 'waiting', effect_id: null, reason: effectFor(type) === 'none' ? 'No external provider effect is required.' : 'Waiting for authorization.' },
+      effect: { kind: effectKind, status: effectKind === 'none' ? 'not_required' : 'unavailable', effect_id: null, reason: effectKind === 'none' ? 'No external provider effect is required.' : effectUnavailableReason },
       work: { status: 'waiting', continuation_id: null, reason: 'Waiting for authorization.' },
       finalized_at: null,
     });

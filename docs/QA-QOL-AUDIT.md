@@ -19,6 +19,7 @@ September 15, 2026
 | Low | Run the credential-free mock and finish create-workspace or invitation acceptance. The walkthrough stopped before the write, so those client transitions could not be tested without a live database. | Mock mode now implements both writes in memory and carries a created workspace name across the onboarding navigation. Browser tests complete both routes. |
 | Low | The workspace picker had live happy-path coverage but no deterministic browser coverage for its response matrix. | Mock-browser coverage now distinguishes signed out, 404/no membership, zero, one, multiple, and network-failure responses. |
 | Low | The mock put a pending invite in both the accepted-members mirror and invitations list, contradicting the server model and teaching fixtures to tolerate the wrong source of truth. | Pending invitations now live only in the mock invitations list. Selector deduplication remains as a defensive bridge for transitional server data. |
+| Medium | Several approval demo payloads passed schema validation but omitted server-derived target agents, responsible members, and resource identifiers. Effectful approvals also started as `waiting`, although the production domain already knows that no executor is configured. | Client fixtures now derive the same typed targets as the approval domain, expose only those target identities, and report effectful consequences as `unavailable` from creation and after revision. Contract tests cover all ten approval types. |
 
 ## Walkthrough result
 
@@ -26,12 +27,16 @@ September 15, 2026
 - Sidebar collapse/expand, Chat/App switching, Inbox list/detail navigation, approval request changes/revision/routing, legacy application/invoice/agreement details, and Iris composer waiting/error behaviors remained usable.
 - Members and Settings remained within the 900 px viewport with no document-level horizontal overflow.
 - The narrow approval path remains keyboard reachable and uses the immediate reduced-motion path already covered by Playwright.
+- Every specialized approval preview—run plan, team commitment, access, communication, shared learning, deliverable, data disclosure, record change, exception, and agent governance—was visually inspected at 1440 px and 900 px. The matrix checks each type-specific marker, configured primary action, request-changes and overflow actions, waiting-on-another-reviewer state, footer containment, and document/internal-scroll overflow.
+- All nine decisions available to Maya were exercised. The plan advances to Alex without starting work; effect-free approvals report `not required`; effectful approvals report `unavailable` with an explicit no-provider/no-effect message. Agent governance remains read-only for Maya and correctly names Alex as the reviewer.
+- Shared-schema approval tests and the isolated PostgreSQL approval suite cover strict payload parsing, policy selection, self-review prevention, distinct reviewers/quorum, sequential steps, idempotency, stale revisions, expiry, tenant isolation, source-run validity, and creation of all ten typed fixtures.
 - Members write failures were exercised in the rendered UI; errors remain visible, and invite email input survives a rejected write.
 - The tested responsive floor for this desktop shell is 900 CSS px. Below that, a phone-sized navigation treatment is a separate product change rather than an accidental promise of support.
 
 ## Remaining limitations
 
 - Mock onboarding validates client transitions and contract shapes; the existing live suite remains authoritative for persistence, invitation identity matching, and authorization.
+- External executor success/failure cannot be validated until the Nous provider migration supplies those integrations. The UI currently and deliberately shows effectful approvals as unavailable; it never claims that an email, access grant, disclosure, publication, record update, or agent configuration change occurred.
 - Workspace-directory success with multiple real memberships was not mutated in the shared database; the deterministic browser fixture covers rendering while the live suite remains authoritative for the real route.
 - This was desktop-browser and 900 px responsive emulation, not physical-device testing.
 - Re-run the focused composer, model-menu, Settings, and empty-state walkthrough after the Nous provider migration is integrated; this branch intentionally does not touch that concurrent scope.
