@@ -20,9 +20,26 @@ CREATE TABLE IF NOT EXISTS onboarding_sample_runs (
   completed_at     timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT onboarding_sample_runs_attempt_key
-    UNIQUE (workspace_id, agent_id, setup_attempt_id)
+  CONSTRAINT onboarding_sample_runs_creator_agent_key
+    UNIQUE (workspace_id, created_by, agent_id)
 );
+-- Earlier development previews keyed uniqueness to the caller-provided setup
+-- attempt. Replace that constraint when this migration is replayed locally so
+-- a fresh UUID cannot create a second shared Inbox walkthrough.
+ALTER TABLE onboarding_sample_runs
+  DROP CONSTRAINT IF EXISTS onboarding_sample_runs_attempt_key;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'onboarding_sample_runs_creator_agent_key'
+       AND conrelid = 'onboarding_sample_runs'::regclass
+  ) THEN
+    ALTER TABLE onboarding_sample_runs
+      ADD CONSTRAINT onboarding_sample_runs_creator_agent_key
+      UNIQUE (workspace_id, created_by, agent_id);
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS onboarding_sample_runs_workspace_idx
   ON onboarding_sample_runs (workspace_id, created_by, created_at DESC);
 

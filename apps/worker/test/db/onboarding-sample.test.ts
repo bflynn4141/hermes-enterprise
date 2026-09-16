@@ -3,9 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 
+async function bindAgentToMember(
+  fixture: Awaited<ReturnType<typeof seedWorkspace>>,
+  userId = fixture.adminId,
+): Promise<void> {
+  await withClient('owner', async (client) => {
+    await client.query('BEGIN');
+    await setTenant(client, fixture.workspaceId, fixture.adminId);
+    await client.query(
+      `INSERT INTO agent_owners (workspace_id, agent_id, member_id)
+       SELECT $1, $2, id FROM members WHERE workspace_id = $1 AND user_id = $3`,
+      [fixture.workspaceId, fixture.agentId, userId],
+    );
+    await client.query('COMMIT');
+  });
+}
+
 describe('Partner Program onboarding sample run', () => {
   it('persists a delayed simulation, cursor events and two sample Inbox requests exactly once', async () => {
     const fixture = await seedWorkspace();
+    await bindAgentToMember(fixture);
     const { env } = makeEnv();
     const setupAttempt = randomUUID();
     const path = `/w/${fixture.workspaceId}/onboarding/sample-runs`;
@@ -36,6 +53,16 @@ describe('Partner Program onboarding sample run', () => {
     expect(replay.status).toBe(200);
     expect(replay.headers.get('x-hermes-idempotent-replay')).toBe('true');
     expect(((await replay.json()) as { run: { id: string } }).run.id).toBe(initial.run.id);
+
+    // A new client setup UUID is not permission to create another shared run.
+    // The durable workspace+creator+agent walkthrough is resumed instead.
+    const freshAttempt = await asUser(env, fixture.adminId, path, {
+      method: 'POST',
+      body: { agent_id: fixture.agentId, setup_attempt_id: randomUUID() },
+    });
+    expect(freshAttempt.status).toBe(200);
+    expect(freshAttempt.headers.get('x-hermes-idempotent-replay')).toBe('true');
+    expect(((await freshAttempt.json()) as { run: { id: string } }).run.id).toBe(initial.run.id);
 
     // Move server time forward without sleeping. At four seconds Owen is
     // researching, Leah has just arrived, and the Inbox remains empty.
@@ -138,21 +165,34 @@ describe('Partner Program onboarding sample run', () => {
     // third application, request or event.
     await asUser(env, fixture.adminId, `${path}/${initial.run.id}?after=0`);
     const counts = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+      const runs = await client.query(
+        `SELECT id FROM onboarding_sample_runs
+          WHERE workspace_id = $1 AND created_by = $2 AND agent_id = $3`,
+        [fixture.workspaceId, fixture.adminId, fixture.agentId],
+      );
       const requests = await client.query(`SELECT id FROM requests WHERE subject_key LIKE $1`, [`sample:${initial.run.id}:%`]);
       const events = await client.query(`SELECT id FROM onboarding_sample_events WHERE run_id = $1`, [initial.run.id]);
-      return [requests.rowCount, events.rowCount];
+      return [runs.rowCount, requests.rowCount, events.rowCount];
     });
-    expect(counts).toEqual([2, 10]);
+    expect(counts).toEqual([1, 2, 10]);
   });
 
-  it('does not expose one member’s setup attempt to another member', async () => {
+  it('only starts the profile-bound agent and keeps its run private', async () => {
     const fixture = await seedWorkspace();
+    await bindAgentToMember(fixture);
     const { env } = makeEnv();
     const started = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/onboarding/sample-runs`, {
       method: 'POST',
       body: { agent_id: fixture.agentId, setup_attempt_id: randomUUID() },
     });
     const runId = ((await started.json()) as { run: { id: string } }).run.id;
+    const forbiddenStart = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/onboarding/sample-runs`, {
+      method: 'POST',
+      body: { agent_id: fixture.agentId, setup_attempt_id: randomUUID() },
+    });
+    expect(forbiddenStart.status).toBe(403);
+    expect(await forbiddenStart.json()).toMatchObject({ reason: 'agent_not_bound' });
+
     const response = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/onboarding/sample-runs/${runId}`);
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ reason: 'unknown_sample_run' });

@@ -655,7 +655,7 @@ export const onboardingSampleRuns = pgTable(
     createdAt: now('created_at'),
     updatedAt: now('updated_at'),
   },
-  (t) => [unique('onboarding_sample_runs_attempt_key').on(t.workspaceId, t.agentId, t.setupAttemptId)],
+  (t) => [unique('onboarding_sample_runs_creator_agent_key').on(t.workspaceId, t.createdBy, t.agentId)],
 );
 
 export const onboardingSampleApplications = pgTable(

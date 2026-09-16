@@ -309,8 +309,23 @@ export async function startSamplePartnerRun(
   agentId: string,
   setupAttemptId: string,
 ): Promise<{ runId: string; created: boolean }> {
-  const agent = await work.tx.query(`SELECT 1 FROM agents WHERE workspace_id = $1 AND id = $2`, [work.workspaceId, agentId]);
-  if (agent.rowCount !== 1) throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+  // Starting the walkthrough creates shared Inbox requests, so workspace
+  // membership alone is not enough authority. A person may only start the
+  // agent bound to their own member profile.
+  const agent = await work.tx.query(
+    `SELECT 1
+       FROM agents a
+       JOIN agent_owners ao
+         ON ao.workspace_id = a.workspace_id AND ao.agent_id = a.id
+       JOIN members m
+         ON m.workspace_id = ao.workspace_id AND m.id = ao.member_id
+      WHERE a.workspace_id = $1 AND a.id = $2
+        AND m.user_id = $3 AND m.status = 'active'`,
+    [work.workspaceId, agentId, work.userId],
+  );
+  if (agent.rowCount !== 1) {
+    throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
+  }
 
   const session = await work.tx.query<{ id: string }>(
     `SELECT id FROM sessions
@@ -322,20 +337,18 @@ export async function startSamplePartnerRun(
     `INSERT INTO onboarding_sample_runs
        (workspace_id, agent_id, created_by, session_id, setup_attempt_id)
      VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (workspace_id, agent_id, setup_attempt_id) DO NOTHING
+     ON CONFLICT (workspace_id, created_by, agent_id) DO NOTHING
      RETURNING id, started_at`,
     [work.workspaceId, agentId, work.userId, session.rows[0]?.id ?? null, setupAttemptId],
   );
   const created = inserted.rows[0];
-  const existing = created ? null : await work.tx.query<{ id: string; started_at: Date; created_by: string }>(
-    `SELECT id, started_at, created_by FROM onboarding_sample_runs
-      WHERE workspace_id = $1 AND agent_id = $2 AND setup_attempt_id = $3`,
-    [work.workspaceId, agentId, setupAttemptId],
+  const existing = created ? null : await work.tx.query<{ id: string; started_at: Date }>(
+    `SELECT id, started_at FROM onboarding_sample_runs
+      WHERE workspace_id = $1 AND created_by = $2 AND agent_id = $3`,
+    [work.workspaceId, work.userId, agentId],
   );
   const row = created ?? existing?.rows[0];
-  if (!row || ('created_by' in row && row.created_by !== work.userId)) {
-    throw new RouteError('that setup attempt belongs to another member', 'setup_attempt_conflict', 409);
-  }
+  if (!row) throw new RouteError('the sample run could not be resumed', 'sample_run_conflict', 409);
   if (!created) return { runId: row.id, created: false };
 
   await insertSampleEvent(work, {
