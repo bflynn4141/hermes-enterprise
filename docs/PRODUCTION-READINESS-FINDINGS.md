@@ -50,6 +50,13 @@ This inventory separates production-reachable gaps from intentional test and dem
 - **Disposition:** complete the create/update contract and fail visibly. Coordinate after the active Inbox branch, which currently owns overlapping `Agent.tsx` work.
 - **Owner:** later isolated onboarding task after approval Inbox integration.
 
+### Chat attachments do not reach the agent runtime
+
+- **Evidence:** the client uploads attachment records and sends their IDs with a turn, but `apps/worker/src/routes/turns.ts` creates a text-only provider message and does not resolve or pass those attachments to Hermes. The composer presents attached files as context for the next response.
+- **Impact:** Iris can answer as though it considered a document that it never received.
+- **Disposition:** resolve authorized attachment IDs to immutable content references, bind them to the turn/run request and prove one representative PDF reaches the official Hermes tool/runtime path. Until then, disable attachments for live runs or show an explicit unsupported state.
+- **Owner:** runtime bridge work after the compliance audit; avoid overlapping the active approval-runtime branch.
+
 ### Development seeding can write to an arbitrary database
 
 - **Evidence:** `apps/worker/scripts/seed-dev.mjs` accepts `DATABASE_URL_OWNER`, carries fixed QA identities and lacks an environment, hostname or explicit confirmation guard.
@@ -101,6 +108,8 @@ This inventory separates production-reachable gaps from intentional test and dem
 - **Disposition:** retain explicit preview/authorization language and `unavailable` receipts until providers are integrated. Treat “approved” and “executed” as separate durable states.
 - **Owner:** approval server/UI tasks for truthful copy; provider integrations remain future work.
 
+The integrated Inbox still labels its seeded payment account, signature and files as demo/illustrative and separates authorization from bank execution. Those strings are fixture presentation, not hidden production execution. Tenant-derived signer identity and real provider adapters remain launch work.
+
 ### Hosted environments do not select Hermes runtime
 
 - **Evidence:** staging and production Wrangler variables do not set `AGENT_RUNTIME=hermes`; the hosted runtime also needs profile processes, API keys and network bindings.
@@ -142,6 +151,7 @@ This inventory separates production-reachable gaps from intentional test and dem
 - Mock backends, scripted model providers, fake-auth identities, fixed UUID fixtures and `placeholder.invalid` addresses remain valid when guarded to development/test and absent from production bundles.
 - Demo applications, invoices and agreements are useful for the interview flow when the UI labels the workspace as fictional/demo data. Their presence in seeds is not proof of a production fallback.
 - Existing `unavailable` effect receipts are the correct fail-closed behavior until real bank/signature/mail adapters exist.
+- Partner-program, admissions and Nous-specific copy is acceptable only inside the labeled interview scenario. Generic tenant onboarding and default agent configuration must use workspace-owned content.
 
 ## Documentation residue
 
