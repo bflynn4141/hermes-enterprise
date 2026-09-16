@@ -287,6 +287,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--line); font-size: 10.4px; line-height: 17.6px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 .pill-ok { color: var(--body); border-color: var(--line-strong); }
 .pill-warn { color: #E7C27D; border-color: #6A5A39; }
+.action-error { color: #E7C27D; }
 .members-row .joined { white-space: nowrap; flex-shrink: 0; }
 .settings-row { display: flex; align-items: center; gap: 12px; height: 78px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 12.8px; }
 .kv { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--line); font-size: 12.8px; }

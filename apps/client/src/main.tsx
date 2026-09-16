@@ -30,6 +30,15 @@ const store = createStore(initialState());
 
 /** `mockUuid(1)`, inlined so the mock module is not pulled into the main chunk. */
 const MOCK_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
+const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
+
+function readMockWorkspaceName(): string | undefined {
+  try {
+    return sessionStorage.getItem(MOCK_WORKSPACE_NAME_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Mock mode. The adapter is handed a `fetch` and a socket factory instead of
@@ -47,10 +56,37 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
+      workspaceName: readMockWorkspaceName(),
+      memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }
   return createAdapter({ store, workspaceId, auth: createAuth() });
+}
+
+/** Onboarding uses the same credential-free backend as the shell in mock mode. */
+function MockOnboarding({ step, token }: { step: 'create-workspace' | 'join-workspace'; token: string | null }) {
+  const [fetchImpl, setFetchImpl] = useState<typeof fetch | null>(null);
+  useEffect(() => {
+    let live = true;
+    void import('./model/mock.js').then((module) => {
+      if (!live) return;
+      const backend = module.createMockBackend({ workspaceName: readMockWorkspaceName() });
+      setFetchImpl(() => backend.fetchImpl);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!fetchImpl)
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140 }}>
+          <Skeleton rows={3} label="Loading onboarding" />
+        </div>
+      </div>
+    );
+  return <Onboarding route={step} token={token} fetchImpl={fetchImpl} />;
 }
 
 function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspace' }> }) {
@@ -278,7 +314,7 @@ function WorkspacePicker() {
 
 function Root() {
   if (route.kind === 'shared') return <SharedRoute token={route.token} />;
-  if (route.kind === 'onboarding') return <Onboarding route={route.step} token={route.token} />;
+  if (route.kind === 'onboarding') return __MOCK__ ? <MockOnboarding step={route.step} token={route.token} /> : <Onboarding route={route.step} token={route.token} />;
   if (route.kind === 'signin' || route.kind === 'callback') {
     // `/auth/callback` lands back inside the workspace; the pending step-up
     // intent is read there and always requires a second click.
@@ -289,6 +325,9 @@ function Root() {
     return <SignIn returnTo={route.kind === 'signin' ? route.returnTo : null} />;
   }
   if (route.kind === 'workspace') return <Bootstrap route={route} />;
+  // Browser tests can exercise the real picker state machine while the rest of
+  // the mock bundle still opens directly into its seeded workspace.
+  if (__MOCK__ && new URL(window.location.href).searchParams.get('picker') === '1') return <WorkspacePicker />;
   // In mock mode the root path is the mock workspace, so the bundle can be
   // opened straight from a file server with no worker and no URL to remember.
   if (__MOCK__) return <Bootstrap route={{ kind: 'workspace', workspaceId: MOCK_WORKSPACE_ID, sessionId: null, app: null }} />;

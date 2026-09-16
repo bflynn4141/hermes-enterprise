@@ -51,9 +51,9 @@ function Stepper({ step }: { step: StepId }) {
   );
 }
 
-export function Onboarding({ route, token }: { route: 'create-workspace' | 'join-workspace'; token: string | null }) {
+export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspace' | 'join-workspace'; token: string | null; fetchImpl?: typeof fetch }) {
   const auth = createAuth();
-  const rest = createRest({ auth });
+  const rest = createRest({ auth, ...(fetchImpl ? { fetchImpl } : {}) });
   const [step, setStep] = useState<StepId>('workspace');
   const [name, setName] = useState('');
   const [agent, setAgent] = useState('Iris');

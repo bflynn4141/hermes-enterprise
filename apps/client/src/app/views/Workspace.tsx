@@ -155,6 +155,10 @@ export function Members() {
   const [manage, setManage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [manageNotice, setManageNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -166,6 +170,25 @@ export function Members() {
     adapter.invalidateList('invitations');
     adapter.invalidateList('members');
   };
+  const showAck = (message: string): void => {
+    setAck(message);
+    setTimeout(() => setAck(null), 1600);
+  };
+  const runInvitationAction = (action: 'resend' | 'withdraw', row: InvitationEntity): void => {
+    const key = `${action}:${row.id}`;
+    setPending(key);
+    setNotice(null);
+    const request = action === 'resend'
+      ? adapter.rest.resendInvitation(state.workspace.id, row.id)
+      : adapter.rest.withdrawInvitation(state.workspace.id, row.id);
+    void request
+      .then(() => {
+        invitationsChanged();
+        showAck(action === 'resend' ? 'Invitation resent' : 'Invitation withdrawn');
+      })
+      .catch(() => setNotice(action === 'resend' ? 'Could not resend that invitation. Try again.' : 'Could not withdraw that invitation. Try again.'))
+      .finally(() => setPending(null));
+  };
 
   return (
     <div className="scroll">
@@ -176,7 +199,11 @@ export function Members() {
           <span className="meta">
             {counts.joined} joined · {counts.invited} invited
           </span>
-          {admin && <Button onClick={() => setInvite(true)}>Invite member</Button>}
+          {admin && <Button onClick={() => {
+            setNotice(null);
+            setInviteError(null);
+            setInvite(true);
+          }}>Invite member</Button>}
         </div>
         <Tabs
           tabs={[
@@ -184,7 +211,10 @@ export function Members() {
             { id: 'invites', label: 'Invitations' },
           ]}
           value={tab}
-          onChange={setTab}
+          onChange={(next) => {
+            setNotice(null);
+            setTab(next);
+          }}
           label="Member views"
         />
         {tab === 'all' ? (
@@ -210,7 +240,11 @@ export function Members() {
                     <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
                     <Pill tone={statusTone(status)}>{status}</Pill>
                     <span className="meta joined">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
-                    {admin && <Button onClick={() => setManage(member.id)}>Manage</Button>}
+                    {admin && <Button onClick={() => {
+                      setNotice(null);
+                      setManageNotice(null);
+                      setManage(member.id);
+                    }}>Manage</Button>}
                   </div>
                 );
               })}
@@ -238,21 +272,21 @@ export function Members() {
                       {/* One route behind two words: the server resends a
                           pending invitation and an expired one alike. */}
                       <Button
+                        disabled={pending !== null}
                         onClick={() => {
-                          void adapter.rest.resendInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
-                          setAck(row.id);
-                          setTimeout(() => setAck(null), 1600);
+                          runInvitationAction('resend', row);
                         }}
                       >
-                        {row.status === 'expired' ? 'Reinvite' : 'Resend'}
+                        {pending === `resend:${row.id}` ? 'Sending…' : row.status === 'expired' ? 'Reinvite' : 'Resend'}
                       </Button>
                       <Button
                         link
+                        disabled={pending !== null}
                         onClick={() => {
-                          void adapter.rest.withdrawInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
+                          runInvitationAction('withdraw', row);
                         }}
                       >
-                        Withdraw
+                        {pending === `withdraw:${row.id}` ? 'Withdrawing…' : 'Withdraw'}
                       </Button>
                     </>
                   )}
@@ -262,33 +296,44 @@ export function Members() {
           </div>
         )}
         {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
+        {notice && <p className="meta action-error" role="alert">{notice}</p>}
         <Ack show={!!ack} style={{ right: 0, top: -12, position: 'relative' }}>
-          Saved
+          {ack}
         </Ack>
         <Dialog
           open={invite}
           title="Invite member"
-          onClose={() => setInvite(false)}
+          onClose={() => {
+            if (pending === 'invite') return;
+            setInvite(false);
+            setInviteError(null);
+          }}
           actions={
             <>
-              <Button onClick={() => setInvite(false)}>Cancel</Button>
+              <Button disabled={pending === 'invite'} onClick={() => {
+                setInvite(false);
+                setInviteError(null);
+              }}>Cancel</Button>
               <Button
                 primary
-                disabled={!/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
+                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
                 onClick={() => {
+                  setPending('invite');
+                  setInviteError(null);
                   void adapter.rest
                     .invite(state.workspace.id, { email, role: 'member' })
                     .then(() => {
-                      adapter.invalidateList('invitations');
-                      adapter.invalidateList('members');
+                      invitationsChanged();
+                      setEmail('');
+                      setInvite(false);
+                      setTab('invites');
+                      showAck('Invitation sent');
                     })
-                    .catch(() => undefined);
-                  setEmail('');
-                  setInvite(false);
-                  setTab('invites');
+                    .catch(() => setInviteError('Could not send that invitation. Check the address and try again.'))
+                    .finally(() => setPending(null));
                 }}
               >
-                Invite
+                {pending === 'invite' ? 'Inviting…' : 'Invite'}
               </Button>
             </>
           }
@@ -298,35 +343,51 @@ export function Members() {
             <input type="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           <p className="meta">The invitation is recorded now; the email is sent by the identity provider.</p>
+          {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog
           open={!!person}
           title={person?.name ?? ''}
           onClose={() => {
+            if (pending?.startsWith('member:')) return;
             setManage(null);
             setConfirmRemove(false);
+            setManageNotice(null);
           }}
           actions={
             confirmRemove ? (
               <>
-                <Button onClick={() => setConfirmRemove(false)}>Keep</Button>
+                <Button disabled={pending === `member:remove:${person?.id ?? ''}`} onClick={() => {
+                  setConfirmRemove(false);
+                  setManageNotice(null);
+                }}>Keep</Button>
                 <Button
                   primary
+                  disabled={pending === `member:remove:${person?.id ?? ''}`}
                   onClick={() => {
-                    if (person)
-                      void adapter.rest
-                        .removeMember(state.workspace.id, person.id)
-                        .then(() => adapter.invalidateList('members'))
-                        .catch(() => undefined);
-                    setManage(null);
-                    setConfirmRemove(false);
+                    if (!person) return;
+                    setPending(`member:remove:${person.id}`);
+                    setManageNotice(null);
+                    void adapter.rest
+                      .removeMember(state.workspace.id, person.id)
+                      .then(() => {
+                        adapter.invalidateList('members');
+                        setManage(null);
+                        setConfirmRemove(false);
+                        showAck('Member removed');
+                      })
+                      .catch(() => setManageNotice('Could not remove this member. Their access has not changed. Try again.'))
+                      .finally(() => setPending(null));
                   }}
                 >
-                  Remove
+                  {pending === `member:remove:${person?.id ?? ''}` ? 'Removing…' : 'Remove'}
                 </Button>
               </>
             ) : (
-              <Button onClick={() => setManage(null)}>Done</Button>
+              <Button disabled={pending?.startsWith('member:')} onClick={() => {
+                setManage(null);
+                setManageNotice(null);
+              }}>Done</Button>
             )
           }
         >
@@ -344,15 +405,20 @@ export function Members() {
                   <MenuItem
                     key={role}
                     checked={person?.role === role}
+                    disabled={pending?.startsWith('member:')}
                     sub={role === 'admin' ? 'Manages members, keys and decisions' : 'Works with agents; cannot decide'}
                     onClick={() => {
                       if (!person) return;
+                      setPending(`member:role:${person.id}`);
+                      setManageNotice(null);
                       void adapter.rest
                         .setMemberRole(state.workspace.id, person.id, role)
-                        .then(() => adapter.invalidateList('members'))
-                        .catch(() => undefined);
-                      setAck(person.id);
-                      setTimeout(() => setAck(null), 1600);
+                        .then(() => {
+                          adapter.invalidateList('members');
+                          setManageNotice('Role updated.');
+                        })
+                        .catch(() => setManageNotice('Could not change this role. Nothing was changed. Try again.'))
+                        .finally(() => setPending(null));
                     }}
                   >
                     {role === 'admin' ? 'Admin' : 'Member'}
@@ -361,12 +427,16 @@ export function Members() {
               </div>
               <div className="row">
                 <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
-                <Button link onClick={() => setConfirmRemove(true)}>
+                <Button link disabled={pending?.startsWith('member:')} onClick={() => {
+                  setConfirmRemove(true);
+                  setManageNotice(null);
+                }}>
                   Remove…
                 </Button>
               </div>
             </>
           )}
+          {manageNotice && <p className={`meta${manageNotice === 'Role updated.' ? '' : ' action-error'}`} role={manageNotice === 'Role updated.' ? 'status' : 'alert'}>{manageNotice}</p>}
         </Dialog>
       </div>
     </div>

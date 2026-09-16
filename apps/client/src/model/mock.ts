@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, MaskedProviderKey, Ref, RequestEntity } from '@hermes/shared';
+import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
@@ -38,6 +38,7 @@ const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
 
 export const MOCK_WORKSPACE_ID = WS;
+export const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
 
 /**
  * Two strings the server owns, copied here exactly.
@@ -101,6 +102,10 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  /** Preserve the name created by the credential-free onboarding fixture. */
+  workspaceName?: string;
+  /** Browser regression fixture for rejected member and invitation writes. */
+  memberWrites?: 'ok' | 'fail';
 }
 
 type MockRequest = RequestEntity;
@@ -138,6 +143,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const empty = options.data === 'empty';
   const approvalScenario = options.scenario === 'approvals' && !empty;
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
+  let workspaceName = options.workspaceName?.trim() || 'Nous';
   const replyText =
     options.reply === 'markdown'
       ? [
@@ -219,13 +225,18 @@ export function createMockBackend(options: MockOptions = {}) {
   const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
   const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
 
-  const members = [
+  const members: MemberEntity[] = [
     { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
     ...(empty ? [] : [
       { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance', 'agent_admin'], joined_at: iso(-5000), version: 1 },
-      { id: mockUuid(202), user_id: null, name: 'Lena Fischer', email: 'lena@nous.example', role: 'member' as const, status: 'invited' as const, reviewer_roles: [], joined_at: null, version: 1 },
     ]),
   ];
+  // Pending invitations live here, not in the accepted-members mirror. Keeping
+  // the mock shaped like the server prevents the Members fixture from teaching
+  // the client two contradictory sources of truth.
+  const invitations: InvitationEntity[] = empty
+    ? []
+    : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }];
 
   const providerKeys: MaskedProviderKey[] =
     keyMode === 'none'
@@ -610,6 +621,29 @@ export function createMockBackend(options: MockOptions = {}) {
     for (const listener of listeners) listener(event);
   }
 
+  const bootstrap = () => ({
+    workspace: {
+      id: WS,
+      name: workspaceName,
+      jurisdiction: 'default',
+      settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
+    },
+    viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
+    agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
+    heads: { session: head.toString(), workspace: head.toString() },
+    counts: {
+      inbox: requests.filter((r) => r.status === 'pending').length,
+      pending_grants: 0,
+      created_documents: documents.length,
+      decisions: requests.filter((r) => r.status !== 'pending').length,
+      pending_for_me: requests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
+      pending_for_others: requests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
+    },
+    sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
+    requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
+    catalog,
+  });
+
   /** Run one contract scenario on the session socket, paced for a human. */
   function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
     const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n });
@@ -633,39 +667,38 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 
-    if (path === '/auth/session')
+    if (path === '/auth/session') {
+      const user = { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example' };
+      if (!url.searchParams.has('ws')) return json({ user, workspaces: [{ id: WS, name: workspaceName, role: seat }], authenticated_at: iso(0) });
       return json({
-        user: { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example', role: seat },
-        workspace: { id: WS, name: 'Nous' },
+        user: { ...user, role: seat },
+        workspace: { id: WS, name: workspaceName },
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
         expires_at: iso(600),
         authenticated_at: iso(0),
       });
+    }
 
-    if (p('/bootstrap'))
-      return json({
-        workspace: {
-          id: WS,
-          name: 'Nous',
-          jurisdiction: 'default',
-          settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
-        },
-        viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-        agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
-        heads: { session: head.toString(), workspace: head.toString() },
-        counts: {
-          inbox: requests.filter((r) => r.status === 'pending').length,
-          pending_grants: 0,
-          created_documents: documents.length,
-          decisions: requests.filter((r) => r.status !== 'pending').length,
-          pending_for_me: requests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
-          pending_for_others: requests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
-        },
-        sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
-        requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
-        catalog,
-      });
+    if (p('/bootstrap')) return json(bootstrap());
+
+    if (path === '/workspaces' && method === 'POST') {
+      const name = String(body.name ?? '').trim();
+      if (name.length < 2 || name.length > 80) return fail(422, 'bad_name', 'A workspace needs a name of 2 to 80 characters');
+      workspaceName = name;
+      try {
+        sessionStorage.setItem(MOCK_WORKSPACE_NAME_KEY, workspaceName);
+      } catch {
+        /* The in-memory response is still complete when storage is unavailable. */
+      }
+      return json(bootstrap(), 201);
+    }
+
+    if (path.startsWith('/invitations/') && path.endsWith('/accept') && method === 'POST') {
+      const token = decodeURIComponent(path.split('/')[2] ?? '');
+      if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
+      return json(bootstrap());
+    }
 
     // There is no `/bootstrap/client` any more: the Worker has no such route,
     // so the client composes the same object out of `/auth/session`,
@@ -849,8 +882,46 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = documents.find((d) => d.id === documentMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/members')) return page(members);
-    if (p('/invitations')) return page(empty ? [] : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }]);
+    if (p('/members') && method === 'GET') return page(members);
+    const memberMatch = match(new RegExp(`^/w/${WS}/members/([^/]+)$`));
+    if (memberMatch) {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Member write fixture failed');
+      const index = members.findIndex((row) => row.id === memberMatch[1]);
+      if (index < 0) return fail(404, 'not_found');
+      const row = members[index]!;
+      if (method === 'PATCH') {
+        row.role = body.role === 'admin' ? 'admin' : 'member';
+        row.version += 1;
+        return json(row);
+      }
+      if (method === 'DELETE') {
+        members.splice(index, 1);
+        return new Response(null, { status: 204 });
+      }
+    }
+    if (p('/invitations') && method === 'GET') return page(invitations);
+    if (p('/invitations') && method === 'POST') {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      const row: InvitationEntity = { id: mockUuid(220 + invitations.length), email: String(body.email ?? ''), role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0), version: 1 };
+      invitations.push(row);
+      return json(row, 201);
+    }
+    const invitationMatch = match(new RegExp(`^/w/${WS}/invitations/([^/]+)/(resend|withdraw)$`));
+    if (invitationMatch) {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      const row = invitations.find((item) => item.id === invitationMatch[1]);
+      if (!row) return fail(404, 'not_found');
+      if (invitationMatch[2] === 'withdraw') {
+        row.status = 'withdrawn';
+        row.version += 1;
+        return new Response(null, { status: 204 });
+      }
+      row.status = 'resent';
+      row.version += 1;
+      const successor: InvitationEntity = { ...row, id: mockUuid(220 + invitations.length), status: 'pending', invited_at: iso(0), version: 1 };
+      invitations.push(successor);
+      return json(successor);
+    }
     if (p('/history')) return page(history);
     if (p('/traces')) return page(traces);
     const traceMatch = match(new RegExp(`^/w/${WS}/traces/([^/]+)$`));
@@ -936,8 +1007,6 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({ session: { id: SESSION_A, title: 'Partner applications', workspace_name: 'Nous' }, messages: messages[SESSION_A] ?? [], message_cutoff_seq: 2, revoked: false });
     }
     if (path.startsWith(`/w/${WS}/messages/`)) return new Response(null, { status: 204 });
-    if (path === '/workspaces' && method === 'POST') return fail(501, 'not_implemented', 'Workspace creation is not available in mock mode');
-
     return fail(404, 'no_mock_route', `mock backend has no route for ${method} ${path}`);
   };
 
