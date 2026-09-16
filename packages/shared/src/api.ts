@@ -26,6 +26,25 @@ export const healthSchema = z
   .strict();
 export type Health = z.infer<typeof healthSchema>;
 
+/**
+ * `POST /workspaces` creates the first agent as part of the same transaction.
+ * Keeping the agent fields in this contract prevents onboarding from collecting
+ * configuration that the server never receives.
+ */
+export const workspaceCreateInputSchema = z
+  .object({
+    name: z.string().trim().min(2).max(80),
+    jurisdiction: z.enum(['default', 'eu']).optional(),
+    agent: z
+      .object({
+        name: z.string().trim().min(1).max(80),
+        instructions: z.string().trim().min(1).max(8000),
+      })
+      .strict(),
+  })
+  .strict();
+export type WorkspaceCreateInput = z.infer<typeof workspaceCreateInputSchema>;
+
 export const bootstrapSchema = z
   .object({
     workspace: z
@@ -53,9 +72,17 @@ export const bootstrapSchema = z
       .object({
         id: uuidSchema,
         name: z.string().max(80),
-        email: z.string().max(200),
+        /** Null until HermesMail ingress is provisioned for this agent. */
+        email: z.string().max(200).nullable(),
         responsibility: z.string().max(2000).nullable(),
         setup_step: z.string().max(32).nullable(),
+      })
+      .strict(),
+    capabilities: z
+      .object({
+        email_ingress: z.boolean(),
+        turn_attachments: z.boolean(),
+        automated_triggers: z.boolean(),
       })
       .strict(),
     /** Replay cursors: the client asks for events after these. */

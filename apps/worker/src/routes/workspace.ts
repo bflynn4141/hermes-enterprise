@@ -216,9 +216,14 @@ export async function loadBootstrap(
     agent: {
       id: agent.id,
       name: agent.name,
-      email: `${agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '')}@hermesmail.example`,
+      email: null,
       responsibility: agent.responsibility,
       setup_step: agent.setup_step,
+    },
+    capabilities: {
+      email_ingress: false,
+      turn_attachments: false,
+      automated_triggers: false,
     },
     heads: { session: head.session_head, workspace: head.workspace_head },
     counts: {

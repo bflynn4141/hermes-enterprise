@@ -18,7 +18,7 @@
 //     never decide anything, and the last-Admin trigger would then have nothing
 //     to protect.
 import type { Context } from 'hono';
-import { bootstrapSchema } from '@hermes/shared';
+import { bootstrapSchema, SETUP, workspaceCreateInputSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { AuthError, getSession, requireCsrf, requireOrigin, takeRefreshedCookie } from '../auth.js';
 import { readCookie, SESSION_COOKIE, sessionCookie } from '../auth/cookies.js';
@@ -36,16 +36,26 @@ const slugify = (name: string): string =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'workspace';
 
+export const FIRST_SETUP_MESSAGE = 'Let’s set up the work you want me to repeat. What do you own?';
+
 export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const session = await getSession(c);
-  const input = await jsonBody<{ name?: string; jurisdiction?: string }>(c);
-  const name = (input.name ?? '').trim();
-  if (name.length < 2 || name.length > 80) {
-    throw new RouteError('a workspace needs a name of 2 to 80 characters', 'bad_name', 422);
+  const parsed = workspaceCreateInputSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) {
+    const path = parsed.error.issues[0]?.path ?? [];
+    if (path[0] === 'name') {
+      throw new RouteError('a workspace needs a name of 2 to 80 characters', 'bad_name', 422);
+    }
+    if (path[0] === 'agent' && path[1] === 'name') {
+      throw new RouteError('the agent needs a name of 1 to 80 characters', 'bad_agent_name', 422);
+    }
+    throw new RouteError('agent instructions are required and may contain up to 8000 characters', 'bad_instructions', 422);
   }
-  const jurisdiction = input.jurisdiction === 'eu' ? 'eu' : 'default';
+  const input = parsed.data;
+  const name = input.name;
+  const jurisdiction = input.jurisdiction ?? 'default';
 
   const client = await connect(c.env, 'app');
   try {
@@ -120,12 +130,41 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // The agent starts in `draft`: the Setup flow is what moves it to
       // `started`, and an agent that could run before anyone described its
       // responsibility is an agent with no instructions.
+      const createdAgent = await client.query<{ id: string }>(
+        `INSERT INTO agents (workspace_id, name, instructions_active, status)
+         VALUES ($1, $2, $3, 'draft')
+         RETURNING id`,
+        [workspaceId, input.agent.name, input.agent.instructions],
+      );
+      const agentId = createdAgent.rows[0]?.id;
+      if (!agentId) throw new RouteError('the agent was not created', 'create_failed', 409);
       await client.query(
-        `INSERT INTO agents (workspace_id, name, status) VALUES ($1, 'Iris', 'draft')`,
-        [workspaceId],
+        `INSERT INTO instruction_versions
+           (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
+         VALUES ($1, $2, $3, 'saved', $4, '[]'::jsonb, now())`,
+        [workspaceId, agentId, input.agent.instructions, session.userId],
+      );
+
+      // This session and message are product-authored setup state. They do not
+      // create a run, call a model, or require a provider key.
+      const setupSessionId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO sessions
+           (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+         SELECT $1, $2, $3, $4, 'Set up Iris', 'work',
+                default_model_id, default_effort, default_runtime, 1, $5::jsonb
+           FROM workspace_settings WHERE workspace_id = $2`,
+        [setupSessionId, workspaceId, session.userId, agentId, JSON.stringify(SETUP('identity'))],
       );
       await client.query(
-        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind) VALUES ($1, 'user', $2, 'workspace.created')`,
+        `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, status)
+         VALUES ($1, $2, 0, 'iris', 'setup', $3, 'complete')`,
+        [workspaceId, setupSessionId, FIRST_SETUP_MESSAGE],
+      );
+      await client.query(
+        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
+         VALUES ($1, 'user', $2, 'workspace.created'),
+                ($1, 'user', $2, 'instruction.saved')`,
         [workspaceId, session.userId],
       );
       // The whole workspace state, from inside the transaction that created

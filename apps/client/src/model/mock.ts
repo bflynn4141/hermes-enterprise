@@ -629,7 +629,8 @@ export function createMockBackend(options: MockOptions = {}) {
       settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
     },
     viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-    agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
+    agent: { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+    capabilities: { email_ingress: false, turn_attachments: false, automated_triggers: false },
     heads: { session: head.toString(), workspace: head.toString() },
     counts: {
       inbox: requests.filter((r) => r.status === 'pending').length,

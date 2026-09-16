@@ -896,7 +896,7 @@ function AgentsTab() {
         <Glass name="iris" size={32} className="row-icon" />
         <div className="row-main">
           <span className="t">{state.agent.name}</span>
-          <span className="s">{state.agent.email}</span>
+          <span className="s">{state.agent.email ?? 'Email not connected'}</span>
         </div>
         <Button onClick={() => nav(CTX)}>Manage</Button>
       </div>

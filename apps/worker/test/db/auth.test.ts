@@ -394,7 +394,10 @@ describe('POST /workspaces in workos mode', () => {
 
     const response = await call(env, '/workspaces', {
       method: 'POST',
-      body: { name: 'WorkOS Created Workspace' },
+      body: {
+        name: 'WorkOS Created Workspace',
+        agent: { name: 'Iris', instructions: 'Help the team define one repeatable workflow.' },
+      },
       headers: {
         cookie: `${SESSION_COOKIE}=${encodeURIComponent(sealedSession)}; ${CSRF_COOKIE}=${csrf}`,
         [CSRF_HEADER]: csrf,

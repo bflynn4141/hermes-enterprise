@@ -340,10 +340,10 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
     views.set(requestId, {
       request_id: requestId, workspace_id: context.workspaceId, status: 'pending', payload,
       identities: {
-        requester_agent: { id: context.requesterAgentId, name: 'Iris', email: 'iris@hermesmail.example' },
+        requester_agent: { id: context.requesterAgentId, name: 'Iris', email: null },
         target_agents: derivedTargetAgentIds.map((agentId) => agentId === context.requesterAgentId
-          ? { id: agentId, name: 'Iris', email: 'iris@hermesmail.example', responsible_member_id: null, responsible_member_name: null }
-          : { id: agentId, name: 'Rowan', email: 'rowan@hermesmail.example', responsible_member_id: context.mayaMemberId, responsible_member_name: 'Maya Chen' }),
+          ? { id: agentId, name: 'Iris', email: null, responsible_member_id: null, responsible_member_name: null }
+          : { id: agentId, name: 'Rowan', email: null, responsible_member_id: context.mayaMemberId, responsible_member_name: 'Maya Chen' }),
         reviewers: [
           { member_id: context.mayaMemberId, user_id: context.mayaUserId, name: 'Maya Chen', authority_roles: ['workspace_owner'] },
           { member_id: context.alexMemberId, user_id: context.alexUserId, name: 'Alex Rivera', authority_roles: ['finance', 'agent_admin'] },

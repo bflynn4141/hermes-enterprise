@@ -318,7 +318,7 @@ test('M5 · create-workspace and accept-invite, driven from the stepper', async 
 
   // It lands on the shell of the workspace it made, at `/workspace/:ws`.
   await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}/, { timeout: 25_000 });
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Let’s set up the work you want me to repeat. What do you own?')).toBeVisible({ timeout: 20_000 });
   const createdId = new URL(page.url()).pathname.split('/')[2]!;
   expect(rows(`SELECT role FROM members WHERE workspace_id = ${q(createdId)};`)).toEqual(['admin']);
 
@@ -559,6 +559,6 @@ test('M8 · losing the connection shows "Reconnecting…" and it clears on its o
   await expect(page.getByText('Reconnecting…')).toBeVisible({ timeout: 90_000 });
   await context.setOffline(false);
   await expect(page.getByText('Reconnecting…')).toHaveCount(0, { timeout: 60_000 });
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible();
+  await expect(page.getByText('What do you need help with?')).toBeVisible();
   await context.close();
 });

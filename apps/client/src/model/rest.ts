@@ -38,6 +38,7 @@ import {
   type Ref,
   type ReplayStream,
   type RunView,
+  type WorkspaceCreateInput,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -443,7 +444,7 @@ export function createRest(options: RestOptions) {
     /** Admin + step-up. Access is revoked now; destruction is seven days away. */
     deleteWorkspace: (workspaceId: string) => request('DELETE', ws(workspaceId), workspaceDeletionSchema),
     undeleteWorkspace: (workspaceId: string) => request('POST', `${ws(workspaceId)}/settings/undelete`, undeleteResultSchema, {}),
-    createWorkspace: (body: { name: string }) => request('POST', '/workspaces', bootstrapSchema, body),
+    createWorkspace: (body: WorkspaceCreateInput) => request('POST', '/workspaces', bootstrapSchema, body),
     /**
      * The whole workspace, from inside the transaction that admitted them —
      * so the shell renders with no second round trip (server decision F2).

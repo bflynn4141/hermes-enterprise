@@ -358,7 +358,7 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
   await expect(page.getByText('Nothing needs you yet. Iris works when you message it.')).toBeVisible();
   // Zero renders no badge at all, because the count comes from `v_inbox_count`.
@@ -379,7 +379,7 @@ test('P13 · the same fresh workspace, opened by a Member', async ({ browser }) 
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
   await expect(page.getByText('No reviews waiting')).toBeVisible();
   await context.close();

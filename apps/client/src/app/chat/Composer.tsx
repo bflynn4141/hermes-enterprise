@@ -3,9 +3,9 @@
 // Rewired: the model and effort lists come from `catalog` rows, and a disabled
 // row shows its `disabled_reason` rather than vanishing — a model you cannot
 // pick and cannot see why is worse than one you can see is unavailable. When a
-// verified provider key is known to be missing, the composer greys and says so. Attach opens the
-// presign flow (POST /attachments → PUT to R2 → POST /complete) and the file
-// arrives as a chip whose extraction status is updated by `entity.updated`.
+// verified provider key is known to be missing, the composer greys and says so.
+// The server capability contract keeps attachment controls out of the live
+// composer until uploaded content can actually reach the agent runtime.
 //
 // TODO(plan §10b, M4): the chip row becomes `PromptBar`, with Guide / After
 // this as its segmented control and `demo={false}`.
@@ -71,6 +71,7 @@ export function Composer({ session }: { session: SessionState }) {
   const catalog = catalogRows(state);
   const model = catalog.find((row) => row.model_id === session.model) ?? catalog[0];
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
+  const attachmentsAvailable = state.capabilities.turnAttachments;
 
   useEffect(() => {
     const el = textarea.current;
@@ -224,18 +225,19 @@ export function Composer({ session }: { session: SessionState }) {
       <div
         className="composer"
         data-blocked={blocked}
-        data-dragging={dragging}
-        aria-busy={uploading > 0}
-        onDragEnter={enterDropZone}
+        data-dragging={attachmentsAvailable && dragging}
+        aria-busy={attachmentsAvailable && uploading > 0}
+        onDragEnter={attachmentsAvailable ? enterDropZone : undefined}
         onDragOver={(event) => {
+          if (!attachmentsAvailable) return;
           if (!carriesFiles(event)) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
         }}
-        onDragLeave={leaveDropZone}
-        onDrop={dropDocuments}
+        onDragLeave={attachmentsAvailable ? leaveDropZone : undefined}
+        onDrop={attachmentsAvailable ? dropDocuments : undefined}
       >
-        {dragging && (
+        {attachmentsAvailable && dragging && (
           <div className="composer-drop-hint" role="status">
             <span className="composer-drop-icon" aria-hidden="true">
               <Glass name="context" size={24} />
@@ -271,13 +273,13 @@ export function Composer({ session }: { session: SessionState }) {
         )}
         <div className="attachments">
           {session.context?.label && <Chip icon="context" onClick={() => session.context?.ref && nav(session.context.ref)}>{session.context.label}</Chip>}
-          {session.draft.attachments.map((attachment) => (
+          {attachmentsAvailable && session.draft.attachments.map((attachment) => (
             <Chip key={attachment.id} icon={attachment.icon ?? 'context'} onRemove={() => dispatch({ type: 'session/detach', id: session.id, attachmentId: attachment.id })} removeLabel={`Remove ${attachment.label}`}>
               {attachment.label}
             </Chip>
           ))}
         </div>
-        {(uploading > 0 || uploadError) && (
+        {attachmentsAvailable && (uploading > 0 || uploadError) && (
           <div className={`composer-upload-status${uploadError ? ' error' : ''}`} role={uploadError ? 'alert' : 'status'}>
             {uploading > 0 ? <><span className="upload-pulse" aria-hidden="true" />Adding {uploading === 1 ? 'document' : `${uploading} documents`}…</> : uploadError}
           </div>
@@ -301,13 +303,15 @@ export function Composer({ session }: { session: SessionState }) {
           }}
         />
         <div className="tools">
-          <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <button ref={attachBtn} type="button" className="text-btn light" aria-label="Add context" aria-expanded={menu === 'attach'} onClick={() => setMenu(menu === 'attach' ? null : 'attach')}>
-              <Icon name="plus" />
-              <span className="chip-label"> Context</span>
-            </button>
-            <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} onUpload={uploadFiles} />
-          </span>
+          {attachmentsAvailable && (
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
+              <button ref={attachBtn} type="button" className="text-btn light" aria-label="Add context" aria-expanded={menu === 'attach'} onClick={() => setMenu(menu === 'attach' ? null : 'attach')}>
+                <Icon name="plus" />
+                <span className="chip-label"> Context</span>
+              </button>
+              <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} onUpload={uploadFiles} />
+            </span>
+          )}
           <span className="spacer" />
           {active && !contextKey && (
             <span className="send-mode" role="radiogroup" aria-label={`How to send while ${agent} is working`}>

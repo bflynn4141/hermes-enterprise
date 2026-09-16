@@ -181,7 +181,8 @@ export interface UiState {
 export interface AppState {
   workspace: { id: string; name: string; role: 'admin' | 'member'; jurisdiction: string | null };
   user: { id: string; name: string; email: string; role: 'admin' | 'member' };
-  agent: { id: string | null; name: string; email: string; summary: string; setupStep: string | null };
+  agent: { id: string | null; name: string; email: string | null; summary: string; setupStep: string | null };
+  capabilities: { emailIngress: boolean; turnAttachments: boolean; automatedTriggers: boolean };
   entities: EntityCache;
   sessions: Record<string, SessionState>;
   sessionOrder: string[];
@@ -258,7 +259,8 @@ export function initialState(): AppState {
   return {
     workspace: { id: '', name: '', role: 'member', jurisdiction: null },
     user: { id: '', name: '', email: '', role: 'member' },
-    agent: { id: null, name: 'Iris', email: '', summary: '', setupStep: null },
+    agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null },
+    capabilities: { emailIngress: false, turnAttachments: false, automatedTriggers: false },
     entities: emptyEntities(),
     sessions: {},
     sessionOrder: [],

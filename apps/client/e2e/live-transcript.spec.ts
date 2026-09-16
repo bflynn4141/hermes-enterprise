@@ -340,10 +340,10 @@ test('T7 · a refused turn shows the server’s sentence, keeps the draft, and d
 });
 
 // ---------------------------------------------------------------------------
-// T8 · the compact composer accepts dropped documents
+// T8 · the compact composer does not promise unsupported document context
 // ---------------------------------------------------------------------------
 
-test('T8 · the compact composer gives dropped documents to the real attachment pipeline', async ({ browser }) => {
+test('T8 · the compact composer hides attachments until they reach the runtime', async ({ browser }) => {
   const page = await openSession(browser, 'T8 document drop');
   const composer = page.locator('.composer');
 
@@ -359,18 +359,14 @@ test('T8 · the compact composer gives dropped documents to the real attachment 
     return data;
   });
 
+  const uploads: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/attachments$/.test(new URL(request.url()).pathname)) uploads.push(request.url());
+  });
   await composer.dispatchEvent('dragenter', { dataTransfer: transfer });
-  await expect(page.getByText('Drop documents', { exact: true })).toBeVisible();
-
-  const declaration = page.waitForResponse((response) => response.request().method() === 'POST' && /\/attachments$/.test(new URL(response.url()).pathname));
   await composer.dispatchEvent('drop', { dataTransfer: transfer });
-  const declared = await declaration;
-  expect(declared.status(), await declared.text()).toBe(201);
-  const body = (await declared.json()) as { attachment: { id: string } };
-
-  await expect(page.getByText('drag-check.txt', { exact: true })).toBeVisible();
+  await page.waitForTimeout(100);
   await expect(page.getByText('Drop documents', { exact: true })).toHaveCount(0);
-
-  const removed = await page.request.delete(`/w/${SEED_WORKSPACE}/attachments/${body.attachment.id}`, { headers: { origin: ORIGIN } });
-  expect(removed.status(), await removed.text()).toBe(204);
+  await expect(composer.getByRole('button', { name: 'Add context' })).toHaveCount(0);
+  expect(uploads).toEqual([]);
 });
