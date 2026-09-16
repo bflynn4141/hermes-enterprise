@@ -70,9 +70,7 @@ jobs:
         run: pnpm --filter @hermes/worker test:unit
 
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_CONFIG: .gitleaks.toml
+        run: .github/scripts/gitleaks-scan.sh
 
       # build.mjs removes the previous dist first. The production defaults use
       # WorkOS auth and emit no public source maps, so Wrangler validates only

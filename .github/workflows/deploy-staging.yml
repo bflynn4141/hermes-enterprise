@@ -54,16 +54,14 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # The three checks that are cheap here and expensive in production. They
-      # duplicate CI on purpose: a deploy triggered by workflow_dispatch on a
-      # branch CI did not run has to prove the same things.
+      # Repeat the inexpensive trust-boundary checks at the exact commit being
+      # deployed. The deploy is already gated on a successful main-branch CI,
+      # and this catches a compromised or misconfigured deploy checkout too.
       - name: Exports parity, migration filenames, secret hygiene
         run: pnpm --filter @hermes/worker test:unit
 
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_CONFIG: .gitleaks.toml
+        run: .github/scripts/gitleaks-scan.sh
 
       # Migrations run as `owner` against the target Neon branch, from here
       # rather than from the Worker: the Worker's two roles are deliberately
