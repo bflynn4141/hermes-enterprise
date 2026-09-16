@@ -137,7 +137,7 @@ Tunnel URLs are ephemeral, and the runtime must be restarted in a separate
 staging profile whose `enterprise_url` points back to staging. The temporary
 tunnel and its Worker secrets were removed after the proof.
 
-Hermes Cloud is the preferred managed-hosting candidate. The official Cloud MCP
+Hermes Cloud is the selected managed-hosting target. The official Cloud MCP
 was connected to the Portal organization and exposed five management tools:
 instance lifecycle, Team Gateway, usage, and organization-scoped machine
 credentials in addition to instance reads. Those machine credentials use the
@@ -146,16 +146,44 @@ the Cloud management plane, not the agent's `/v1/runs` API. The organization
 currently has no Cloud instance, so the remaining execution contract cannot be
 verified without provisioning one.
 
+Cloudflare remains the Enterprise application control plane: it owns identity,
+approvals, audit data, model credentials, and the reverse tool/model bridge. It
+must not proxy a developer laptop or impersonate the agent runtime. A Cloud
+instance binds to the Worker exactly like any other hosted runtime because
+`HERMES_RUNTIME_AGENTS` already accepts a per-agent HTTPS base URL and native
+API key.
+
+The official image can persist user-managed plugins, skills and configuration
+under its data volume. Hermes Desktop can install an agent plugin into a
+selected Cloud profile from a Git repository, including a private repository
+and an exact commit pin. That makes the Enterprise bridge portable to Cloud,
+but it does not yet make provisioning deterministic. The documented Cloud MCP
+can update environment variables and move an instance to the current official
+image; it does not expose profile import, plugin installation, arbitrary
+configuration writes, a custom image, or a pinned Hermes image digest.
+
+Before production, move the remaining launcher-only policy into the pinned
+Enterprise plugin and profile configuration so the ordinary managed Hermes
+process can enforce it. That policy currently removes native cron routes,
+limits the API Server to the Enterprise bridge plus read-only assigned skills,
+disables unmanaged memory and background features, and verifies the reverse
+provider binding. Cloud bootstrap must then install the pinned plugin, apply the
+profile configuration and secrets, and fail health checks if any step is
+missing. A manual Desktop install is acceptable for the first acceptance test,
+not for fleet provisioning.
+
 The acceptance test for a Cloud instance is:
 
-1. create a minimum-size instance with a dedicated `API_SERVER_KEY` and the
-   official API Server enabled;
+1. create a Medium instance in the Test organization with a dedicated
+   `API_SERVER_KEY` and the official API Server enabled;
 2. determine whether Cloud publishes an authenticated route to that API Server,
    rather than only the dashboard and Team Gateway;
-3. verify capabilities, submit/events/stop/steer, idempotency and the reverse
-   Enterprise tool/model bridge; and
-4. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS` and
-   run one complete staged turn before merge.
+3. install the Enterprise bridge at its reviewed commit and apply the governed
+   profile configuration without modifying the immutable Hermes source tree;
+4. verify capabilities, submit/events/stop/steer, idempotency, the governed tool
+   set, and the reverse Enterprise tool/model bridge; and
+5. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS`, run
+   one complete staged turn, and stop the test instance before merge.
 
 Do not substitute an interactive `agent_dashboard:access` session or an
 `mcp:manage_agents` token for `API_SERVER_KEY`. If Cloud does not publish the
