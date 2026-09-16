@@ -12,7 +12,10 @@ import {
   kekVersions,
   last4,
   openKey,
+  openSecret,
   rewrapDek,
+  rewrapSecretDek,
+  sealSecret,
   sealKey,
   type KekEnv,
   type StoredEnvelope,
@@ -94,6 +97,16 @@ describe('envelope encryption', () => {
     // though both secrets are present.
     const lying: StoredEnvelope = { ...sealed, kekVersion: 2 };
     await expect(openKey(envV1V2, id, lying)).rejects.toThrow(KeyCryptoError);
+  });
+
+  it('domain-separates and rotates encrypted Slack material', async () => {
+    const id = { workspaceId: WORKSPACE_A, keyId: KEY_1, namespace: 'hermes/slack-installation/v1' };
+    const sealed = await sealSecret(envV1, id, JSON.stringify({ access_token: 'fixture-only' }));
+    await expect(openSecret(envV1, id, sealed)).resolves.toContain('fixture-only');
+    await expect(openSecret(envV1, { ...id, namespace: 'hermes/other-integration/v1' }, sealed)).rejects.toThrow(KeyCryptoError);
+    const rewrapped = await rewrapSecretDek(envV1V2, id, sealed, 2);
+    await expect(openSecret(envV1V2, id, { ...sealed, ...rewrapped })).resolves.toContain('fixture-only');
+    expect(rewrapped.kekVersion).toBe(2);
   });
 
   it('refuses to seal when no KEK is configured', async () => {

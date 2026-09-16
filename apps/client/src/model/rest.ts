@@ -21,6 +21,10 @@ import {
   providerKeyMutationSchema,
   providerKeyRemovedSchema,
   providerKeyVerifySchema,
+  slackConnectionSchema,
+  slackDisconnectSchema,
+  slackLinkCodeSchema,
+  slackOAuthStartSchema,
   runViewSchema,
   guidanceAcceptedSchema,
   queueStateSchema,
@@ -403,6 +407,10 @@ export function createRest(options: RestOptions) {
     rotateProviderKey: (workspaceId: string, id: string, key: string) =>
       request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
+    slackConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/slack`, slackConnectionSchema),
+    startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
+    createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
+    disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**
      * One page of the catalog. Since Nous Portal the table is hundreds of rows,

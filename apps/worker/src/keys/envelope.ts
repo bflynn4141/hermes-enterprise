@@ -165,6 +165,19 @@ export interface EnvelopeIdentity {
   readonly keyId: string;
 }
 
+export interface SecretEnvelopeIdentity extends EnvelopeIdentity {
+  /** Stable, non-secret domain separator such as `hermes/slack-installation/v1`. */
+  readonly namespace: string;
+}
+
+function secretDataAad(id: SecretEnvelopeIdentity): Uint8Array {
+  return encoder.encode(`${id.namespace}|data|${id.workspaceId}|${id.keyId}`);
+}
+
+function secretWrapAad(id: SecretEnvelopeIdentity, kekVersion: number): Uint8Array {
+  return encoder.encode(`${id.namespace}|dek|${id.workspaceId}|${id.keyId}|${kekVersion}`);
+}
+
 async function aesEncrypt(key: CryptoKey, iv: Uint8Array, aad: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
   const out = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: iv as BufferSource, additionalData: aad as BufferSource },
@@ -220,6 +233,32 @@ export async function sealKey(env: KekEnv, id: EnvelopeIdentity, plaintext: stri
   return { ciphertext, iv, wrappedDek, wrapIv, kekVersion };
 }
 
+/**
+ * Encrypt non-provider integration material under its own AAD namespace.
+ * This shares the KEK/DEK boundary and rotation mechanics without allowing a
+ * Slack token envelope to authenticate as a provider credential (or vice versa).
+ */
+export async function sealSecret(
+  env: KekEnv,
+  id: SecretEnvelopeIdentity,
+  plaintext: string,
+): Promise<StoredEnvelope> {
+  if (plaintext.length === 0) throw new KeyCryptoError('a secret cannot be empty', 'plaintext_empty');
+  if (!/^hermes\/[a-z0-9-]+\/v\d+$/.test(id.namespace)) {
+    throw new KeyCryptoError('the secret namespace is invalid', 'decrypt_failed');
+  }
+  const kekVersion = currentKekVersion(env);
+  const kek = await importKek(env, kekVersion);
+  const dekBytes = randomBytes(DEK_BYTES);
+  const dek = await crypto.subtle.importKey('raw', dekBytes as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  const iv = randomBytes(IV_BYTES);
+  const ciphertext = await aesEncrypt(dek, iv, secretDataAad(id), encoder.encode(plaintext));
+  const wrapIv = randomBytes(IV_BYTES);
+  const wrappedDek = await aesEncrypt(kek, wrapIv, secretWrapAad(id, kekVersion), dekBytes);
+  dekBytes.fill(0);
+  return { ciphertext, iv, wrappedDek, wrapIv, kekVersion };
+}
+
 /** Recover the plaintext. Only for the workspace and row it was sealed under. */
 export async function openKey(env: KekEnv, id: EnvelopeIdentity, stored: StoredEnvelope): Promise<string> {
   const kek = await importKek(env, stored.kekVersion);
@@ -239,6 +278,32 @@ export async function openKey(env: KekEnv, id: EnvelopeIdentity, stored: StoredE
     dataAad(id.workspaceId, id.keyId),
     stored.ciphertext,
     'the key ciphertext',
+  );
+  return decoder.decode(plaintext);
+}
+
+/** Recover integration material only under the namespace and row it was sealed for. */
+export async function openSecret(
+  env: KekEnv,
+  id: SecretEnvelopeIdentity,
+  stored: StoredEnvelope,
+): Promise<string> {
+  const kek = await importKek(env, stored.kekVersion);
+  const dekBytes = await aesDecrypt(
+    kek,
+    stored.wrapIv,
+    secretWrapAad(id, stored.kekVersion),
+    stored.wrappedDek,
+    'the wrapped data key',
+  );
+  const dek = await crypto.subtle.importKey('raw', dekBytes as BufferSource, 'AES-GCM', false, ['decrypt']);
+  dekBytes.fill(0);
+  const plaintext = await aesDecrypt(
+    dek,
+    stored.iv,
+    secretDataAad(id),
+    stored.ciphertext,
+    'the secret ciphertext',
   );
   return decoder.decode(plaintext);
 }
@@ -270,6 +335,28 @@ export async function rewrapDek(
   const wrappedDek = await aesEncrypt(to, wrapIv, wrapAad(id.workspaceId, id.keyId, toVersion), dekBytes);
   dekBytes.fill(0);
 
+  return { wrappedDek, wrapIv, kekVersion: toVersion };
+}
+
+/** Re-wrap a namespaced integration DEK without decrypting its token payload. */
+export async function rewrapSecretDek(
+  env: KekEnv,
+  id: SecretEnvelopeIdentity,
+  stored: StoredEnvelope,
+  toVersion: number,
+): Promise<Pick<StoredEnvelope, 'wrappedDek' | 'wrapIv' | 'kekVersion'>> {
+  const from = await importKek(env, stored.kekVersion);
+  const dekBytes = await aesDecrypt(
+    from,
+    stored.wrapIv,
+    secretWrapAad(id, stored.kekVersion),
+    stored.wrappedDek,
+    'the wrapped data key',
+  );
+  const to = await importKek(env, toVersion);
+  const wrapIv = randomBytes(IV_BYTES);
+  const wrappedDek = await aesEncrypt(to, wrapIv, secretWrapAad(id, toVersion), dekBytes);
+  dekBytes.fill(0);
   return { wrappedDek, wrapIv, kekVersion: toVersion };
 }
 

@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -598,12 +598,158 @@ export function Settings({ view }: { view: string }) {
         {view === 'Organization' && <OrganizationTab />}
         {view === 'Inbox rules' && <InboxRulesTab />}
         {view === 'Agents' && <AgentsTab />}
+        {view === 'Slack' && <SlackTab />}
         {view === 'Provider keys' && <ProviderKeysTab />}
         {view === 'Usage' && <UsageTab />}
         {view === 'Notifications' && <NotificationsTab />}
         {view === 'Data and privacy' && <PrivacyTab />}
       </div>
     </div>
+  );
+}
+
+function SlackTab() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
+  const [connection, setConnection] = useState<SlackConnection | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [linkCommand, setLinkCommand] = useState<string | null>(null);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void adapter.rest.slackConnection(state.workspace.id).then(setConnection).catch(() => {
+      setNotice('Slack status could not be loaded. Try again.');
+    });
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  const stepUp = (): boolean => {
+    const url = adapter.auth.stepUpUrl(window.location.href, 'slack');
+    if (url) {
+      window.location.assign(url);
+      return true;
+    }
+    setNotice('This needs a recent sign-in. Sign in again to continue.');
+    return false;
+  };
+
+  const connect = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const started = await adapter.rest.startSlackOAuth(state.workspace.id);
+      window.location.assign(started.authorize_url);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        stepUp();
+      } else {
+        setNotice(error.reason === 'slack_unavailable'
+          ? 'Slack is not configured for this Hermes deployment.'
+          : error.reason === 'admin_required'
+            ? EMPTY.adminOnly
+            : 'Slack authorization could not be started. Try again.');
+      }
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await adapter.rest.disconnectSlack(state.workspace.id);
+      setDisconnectOpen(false);
+      setNotice(result.remote_revocation === 'pending'
+        ? 'Slack is disconnected in Hermes. Slack-side token revocation is queued and will retry automatically.'
+        : 'Slack is disconnected.');
+      load();
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') stepUp();
+      else setNotice(error.reason === 'admin_required' ? EMPTY.adminOnly : 'Slack could not be disconnected. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createLinkCode = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await adapter.rest.createSlackLinkCode(state.workspace.id);
+      setLinkCommand(result.command);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') stepUp();
+      else setNotice(error.reason === 'agent_unavailable'
+        ? 'Your Hermes agent is not ready yet.'
+        : 'A Slack link code could not be created. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!connection) return <Skeleton rows={5} label="Loading Slack connection" />;
+  const connected = connection.status === 'connected';
+  const destination = connection.enterprise_name ?? connection.team_name ?? 'Slack';
+  return (
+    <>
+      <div className="row">
+        <div>
+          <h2 className="section-title">Slack</h2>
+          <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
+        </div>
+        <span className="grow" />
+        {admin && connection.configured && (
+          <Button primary={!connected} disabled={busy} onClick={connected ? () => setDisconnectOpen(true) : connect}>
+            {connected ? 'Disconnect' : busy ? 'Opening Slack…' : 'Connect Slack'}
+          </Button>
+        )}
+      </div>
+      {notice && <Ack show>{notice}</Ack>}
+      {!connection.configured ? (
+        <EmptyState icon="context" title="Slack is not configured" detail="An operator must set the Slack app credentials before an Admin can connect this workspace." />
+      ) : (
+        <Panel
+          icon="context"
+          title={connected ? `Connected to ${destination}` : connection.status === 'error' ? 'Slack needs to be reconnected' : 'Connect this workspace to Slack'}
+          subtitle={connected
+            ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Your Hermes agent'}`
+            : 'A workspace Admin completes Slack OAuth. No Slack credential is entered into Hermes.'}
+        >
+          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
+          <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
+          {connected && <div className="kv"><span className="grow">Permissions</span><span className="meta">{connection.granted_scopes.join(', ')}</span></div>}
+          {connected && (
+            <div className="col" style={{ gap: 8, marginTop: 12 }}>
+              <div className="row">
+                <div className="grow">
+                  <div className="panel-title">Link your Slack identity</div>
+                  <div className="meta">Create a one-time command, then send it to the app in a direct message. It expires in 10 minutes.</div>
+                </div>
+                <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
+              </div>
+              {linkCommand && <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>}
+            </div>
+          )}
+          {!admin && <p className="meta">A workspace Admin manages this connection.</p>}
+          {admin && connection.status === 'error' && <Button disabled={busy} onClick={connect}>Reconnect Slack</Button>}
+        </Panel>
+      )}
+      <Dialog
+        open={disconnectOpen}
+        title="Disconnect Slack?"
+        onClose={() => setDisconnectOpen(false)}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
+      >
+        <p>New Slack messages will stop reaching Hermes immediately. Existing Hermes sessions and their history stay in Hermes.</p>
+      </Dialog>
+    </>
   );
 }
 

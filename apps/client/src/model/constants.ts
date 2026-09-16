@@ -13,6 +13,7 @@ export const SETTINGS_TABS = [
   'Organization',
   'Inbox rules',
   'Agents',
+  'Slack',
   'Provider keys',
   'Usage',
   'Notifications',

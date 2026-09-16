@@ -33,7 +33,7 @@
     "directory": "../client/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+    "run_worker_first": ["/health", "/internal/*", "/integrations/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
   },
 
   "vars": {
@@ -52,6 +52,7 @@
     // A unit test asserts the deployed environments never set it.
     "OPENROUTER_FIXTURE": "1",
     "NOUS_PORTAL_FIXTURE": "1",
+    "SLACK_ENABLED": "0",
     "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
     // The only provider this product offers (decision C55). Read by
     // `model/allowed.ts`; a key, a catalog row, a session model or a run naming

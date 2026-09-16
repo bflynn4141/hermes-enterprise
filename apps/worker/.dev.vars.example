@@ -22,6 +22,18 @@ WORKOS_ISSUER=""
 # registered as a redirect URI in the WorkOS dashboard, exactly.
 WORKOS_REDIRECT_URI=""
 
+# --- Slack workspace channel -------------------------------------------------
+# Create one granular-permissions Slack app from docs/slack-app-manifest.yaml.
+# The redirect URI and Events API Request URL must exactly match the public
+# Worker origin. Leave disabled to render the truthful unconfigured state.
+SLACK_ENABLED="0"
+SLACK_CLIENT_ID=""
+SLACK_CLIENT_SECRET=""
+SLACK_SIGNING_SECRET=""
+# Independent HMAC secret for expiring OAuth state. Generate at least 32 random bytes.
+SLACK_STATE_SECRET=""
+SLACK_REDIRECT_URI="http://localhost:8787/integrations/slack/oauth/callback"
+
 # Signs the hub tickets a WebSocket presents to extend its authorisation.
 # Falls back to WORKOS_COOKIE_PASSWORD; in development only, to a constant.
 # A deployed environment with neither refuses to mint a ticket rather than

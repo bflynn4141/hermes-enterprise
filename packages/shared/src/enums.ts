@@ -184,6 +184,9 @@ export const EVENT_KINDS = [
   'provider_key.attested',
   'provider_key.rewrapped',
   'validator.failed',
+  'slack.connected',
+  'slack.disconnected',
+  'slack.credential_rewrapped',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
@@ -200,6 +203,9 @@ export const JOB_KINDS = [
   'evict',
   'workos_sync',
   'token_cap_warning',
+  'slack_ingest',
+  'slack_deliver',
+  'slack_revoke',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

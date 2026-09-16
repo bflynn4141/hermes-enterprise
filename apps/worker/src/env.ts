@@ -83,6 +83,13 @@ export interface Env {
    * reaches us through a different host than the Worker sees.
    */
   WORKOS_REDIRECT_URI?: string;
+  /** Slack app installation and HTTP Events API. All values are server-only. */
+  SLACK_ENABLED?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  SLACK_SIGNING_SECRET?: string;
+  SLACK_STATE_SECRET?: string;
+  SLACK_REDIRECT_URI?: string;
   /**
    * Signs hub tickets. Falls back to WORKOS_COOKIE_PASSWORD, and in
    * development only, to a constant; a deployed environment with neither

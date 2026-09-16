@@ -57,6 +57,11 @@ export const JOB_KINDS = [
   // durable job is the crash-safe seam between the human decision transaction
   // and Workflow instance creation.
   'approval_continue',
+  // Slack Events API ingestion and terminal answer delivery stay behind the
+  // same durable transaction + retry seam as every other side effect.
+  'slack_ingest',
+  'slack_deliver',
+  'slack_revoke',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -111,8 +116,17 @@ export async function finishJob(tx: Tx, jobId: string): Promise<void> {
 }
 
 /** Release a failed job for a later attempt, with backoff. */
-export async function failJob(tx: Tx, jobId: string, error: string, attempts: number): Promise<void> {
-  const backoffSeconds = Math.min(3600, 30 * 2 ** Math.max(0, attempts - 1));
+export async function failJob(
+  tx: Tx,
+  jobId: string,
+  error: string,
+  attempts: number,
+  retryAfterSeconds = 0,
+): Promise<void> {
+  const backoffSeconds = Math.max(
+    Math.min(3600, 30 * 2 ** Math.max(0, attempts - 1)),
+    Math.min(3600, Math.max(0, retryAfterSeconds)),
+  );
   await tx.query(
     `UPDATE jobs
         SET locked_until = NULL,
@@ -468,6 +482,15 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'approval_continue':
       await runApprovalContinue(env, job);
       return;
+    case 'slack_ingest':
+      await (await import('./integrations/slack/ingest.js')).runSlackIngestJob(env, job);
+      return;
+    case 'slack_deliver':
+      await (await import('./integrations/slack/deliver.js')).runSlackDeliverJob(env, job);
+      return;
+    case 'slack_revoke':
+      await (await import('./integrations/slack/revoke.js')).runSlackRevokeJob(env, job);
+      return;
     case 'reverify':
       {
         const payload = (job.payload ?? {}) as Partial<ReverifyPayload>;
@@ -511,7 +534,12 @@ async function claimRunFinish(
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts));
+    const retryAfter = error instanceof Error
+      && 'retryAfterSeconds' in error
+      && typeof error.retryAfterSeconds === 'number'
+      ? error.retryAfterSeconds
+      : 0;
+    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts, retryAfter));
     return false;
   }
 }

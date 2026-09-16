@@ -106,6 +106,8 @@ interface MockOptions {
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
+  slack?: 'disconnected' | 'connected';
 }
 
 type MockRequest = RequestEntity;
@@ -483,6 +485,8 @@ export function createMockBackend(options: MockOptions = {}) {
     notifications: { approvals: true, blocked: true, digest: false },
     deletion: { requested_at: null as string | null, scheduled_at: null as string | null },
   };
+
+  let slackConnected = options.slack === 'connected';
 
   const dataPrivacy = {
     keys: providerKeys.map((key) => ({
@@ -944,6 +948,31 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/instructions')) return page(instructions);
     if (p('/skills')) return page(skills);
+    if (path.startsWith(`/w/${WS}/integrations/slack`)) {
+      if (method === 'POST' && path.endsWith('/oauth/start')) {
+        return json({ authorize_url: 'https://slack.com/oauth/v2/authorize?client_id=fixture', expires_at: iso(600) }, 201);
+      }
+      if (method === 'DELETE') {
+        slackConnected = false;
+        return json({ status: 'disconnected', remote_revocation: 'not_applicable' });
+      }
+      if (method === 'POST' && path.endsWith('/link-code')) {
+        return json({ command: 'link hmx_fixture_only_not_a_credential', expires_at: iso(600) }, 201);
+      }
+      return json({
+        configured: true,
+        status: slackConnected ? 'connected' : 'disconnected',
+        installation_kind: slackConnected ? 'workspace' : null,
+        team_name: slackConnected ? 'Fixture workspace' : null,
+        enterprise_name: null,
+        connected_at: slackConnected ? iso(0) : null,
+        granted_scopes: slackConnected ? ['app_mentions:read', 'chat:write', 'im:history'] : [],
+        agent: { id: AGENT, name: 'Iris' },
+        can_manage: seat === 'admin',
+        reconnect_required: false,
+        behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
+      });
+    }
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
       // Explicit fake values let browser tests exercise both outcomes without

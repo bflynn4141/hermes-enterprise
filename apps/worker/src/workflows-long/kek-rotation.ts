@@ -116,10 +116,18 @@ export async function runKekRotationWorkflow(
       // was touched, even though nothing about the key itself changed.
       await step.do(`audit-${workspaceId}`, async () => {
         await withWorkspaceTransaction(env, workspaceId, async (tx) => {
-          await tx.query(
-            `INSERT INTO events (workspace_id, actor_type, kind) VALUES ($1, 'system', 'provider_key.rewrapped')`,
-            [workspaceId],
-          );
+          if (report.rewrappedByKind.provider_key > 0) {
+            await tx.query(
+              `INSERT INTO events (workspace_id, actor_type, kind) VALUES ($1, 'system', 'provider_key.rewrapped')`,
+              [workspaceId],
+            );
+          }
+          if (report.rewrappedByKind.slack_installation > 0) {
+            await tx.query(
+              `INSERT INTO events (workspace_id, actor_type, kind) VALUES ($1, 'system', 'slack.credential_rewrapped')`,
+              [workspaceId],
+            );
+          }
         });
         return true;
       });

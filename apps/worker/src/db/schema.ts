@@ -912,6 +912,126 @@ export const workspaceProviderKeys = pgTable('workspace_provider_keys', {
   updatedAt: now('updated_at'),
 });
 
+// Slack is a transport into an existing agent/profile. The installation is
+// workspace-wide; a linked Slack user is resolved to their active member and
+// established agent binding before a private Hermes session can be opened.
+export const slackOauthStates = pgTable('slack_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull().unique(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const slackInstallations = pgTable('slack_installations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installedBy: uuid('installed_by').notNull(),
+  slackInstallKey: text('slack_install_key').notNull(),
+  slackAppId: text('slack_app_id').notNull(),
+  slackEnterpriseId: text('slack_enterprise_id'),
+  slackEnterpriseName: text('slack_enterprise_name'),
+  slackTeamId: text('slack_team_id'),
+  slackTeamName: text('slack_team_name'),
+  isEnterpriseInstall: boolean('is_enterprise_install').notNull().default(false),
+  slackBotUserId: text('slack_bot_user_id').notNull(),
+  slackAuthedUserId: text('slack_authed_user_id'),
+  grantedScopes: text('granted_scopes').array().notNull().default([]),
+  ciphertext: bytea('ciphertext').notNull(),
+  iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(),
+  tokenExpiresAt: ts('token_expires_at'),
+  status: text('status').notNull().default('connected'),
+  lastErrorCode: text('last_error_code'),
+  remoteRevocationPending: boolean('remote_revocation_pending').notNull().default(false),
+  connectedAt: now('connected_at'),
+  revokedAt: ts('revoked_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const slackInstallationDirectory = pgTable('slack_installation_directory', {
+  slackInstallKey: text('slack_install_key').primaryKey(),
+  targetWorkspaceId: uuid('target_workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull().unique(),
+  updatedAt: now('updated_at'),
+});
+
+export const slackUserLinks = pgTable('slack_user_links', {
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackUserId: text('slack_user_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  linkedBy: uuid('linked_by'),
+  revokedAt: ts('revoked_at'),
+  linkedAt: now('linked_at'),
+}, (t) => [primaryKey({ columns: [t.installationId, t.slackUserId] })]);
+
+export const slackLinkCodes = pgTable('slack_link_codes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  codeDigest: text('code_digest').notNull().unique(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedBySlackUser: text('consumed_by_slack_user'),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const slackConversations = pgTable('slack_conversations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackChannelId: text('slack_channel_id').notNull(),
+  conversationKey: text('conversation_key').notNull(),
+  conversationKind: text('conversation_kind').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  sessionId: uuid('session_id').notNull(),
+  ownerId: uuid('owner_id').notNull(),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const slackEvents = pgTable('slack_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackEventId: text('slack_event_id').notNull().unique(),
+  eventType: text('event_type').notNull(),
+  payloadSha256: text('payload_sha256').notNull(),
+  retryNum: integer('retry_num'),
+  status: text('status').notNull().default('received'),
+  runId: uuid('run_id'),
+  errorCode: text('error_code'),
+  receivedAt: now('received_at'),
+  processedAt: ts('processed_at'),
+});
+
+export const slackRunDeliveries = pgTable('slack_run_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  sourceEventId: uuid('source_event_id').notNull().unique(),
+  runId: uuid('run_id').notNull().unique(),
+  slackChannelId: text('slack_channel_id').notNull(),
+  slackThreadTs: text('slack_thread_ts').notNull(),
+  status: text('status').notNull().default('pending'),
+  slackMessageTs: text('slack_message_ts'),
+  attempts: integer('attempts').notNull().default(0),
+  lastErrorCode: text('last_error_code'),
+  approvalNotifiedAt: ts('approval_notified_at'),
+  approvalClientMsgId: uuid('approval_client_msg_id').notNull().defaultRandom(),
+  deliveredAt: ts('delivered_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
 // ---------------------------------------------------------------------------
 // M2: drafts, and the two platform tables the Cron and the auth callback need
 // ---------------------------------------------------------------------------
@@ -1068,6 +1188,14 @@ export const ALL_TABLES = {
   jobs,
   workos_sync: workosSync,
   workspace_provider_keys: workspaceProviderKeys,
+  slack_oauth_states: slackOauthStates,
+  slack_installations: slackInstallations,
+  slack_installation_directory: slackInstallationDirectory,
+  slack_user_links: slackUserLinks,
+  slack_link_codes: slackLinkCodes,
+  slack_conversations: slackConversations,
+  slack_events: slackEvents,
+  slack_run_deliveries: slackRunDeliveries,
   session_drafts: sessionDrafts,
   workspace_directory: workspaceDirectory,
   member_directory: memberDirectory,

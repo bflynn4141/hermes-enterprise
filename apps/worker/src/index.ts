@@ -121,6 +121,14 @@ import { PLATFORM_WORKSPACE_ID } from './auth/rate-limit.js';
 import { handleQueue } from './queues/index.js';
 import { sweepOrphanedUploads } from './storage/lifecycle.js';
 import { pollWorkOSEvents } from './auth/events-poller.js';
+import {
+  disconnectSlack,
+  createSlackLinkCode,
+  getSlackConnection,
+  slackOAuthCallback,
+  startSlackOAuth,
+} from './routes/slack.js';
+import { slackEvents } from './routes/slack-events.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -243,6 +251,11 @@ app.post('/workspaces', createWorkspace);
 // Accepting an invitation is the other one: the workspace is what the call is
 // trying to reach, so it cannot be the key the call is authorised under.
 app.post('/invitations/:token/accept', acceptInvitation);
+// Slack calls these two routes without a Hermes browser session. The callback
+// is bound to a short-lived, single-use signed state row; Events API requests
+// are verified against the raw request bytes before JSON parsing.
+app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
+app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
 // authorisation — and the only route in the system that answers without a
 // session. It grants one session, read-only, up to the share's cutoff. See
@@ -259,6 +272,10 @@ app.post('/w/:ws/provider-keys', addKey);
 app.post('/w/:ws/provider-keys/:id/verify', verifyKey);
 app.post('/w/:ws/provider-keys/:id/rotate', rotateKey);
 app.delete('/w/:ws/provider-keys/:id', deleteKey);
+app.get('/w/:ws/integrations/slack', getSlackConnection);
+app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
+app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
+app.delete('/w/:ws/integrations/slack', disconnectSlack);
 
 // Sessions, and everything hanging off one.
 app.get('/w/:ws/sessions', listSessions);

@@ -32,11 +32,13 @@ import type { Tx } from '../db/client.js';
 import { currentKekVersion, type KekEnv } from './envelope.js';
 import { logError, logEvent } from './redact.js';
 import { rewrapProviderKey } from './store.js';
+import { rewrapSlackInstallation } from '../integrations/slack/store.js';
 
 export interface RotationTarget {
   readonly workspaceId: string;
   readonly keyId: string;
   readonly kekVersion: number;
+  readonly credentialKind?: 'provider_key' | 'slack_installation';
 }
 
 export interface RotationDeps {
@@ -54,6 +56,7 @@ export interface RotationReport {
   readonly examined: number;
   readonly rewrapped: number;
   readonly skipped: number;
+  readonly rewrappedByKind: Readonly<Record<'provider_key' | 'slack_installation', number>>;
   readonly failed: readonly { readonly keyId: string; readonly reason: string }[];
 }
 
@@ -62,10 +65,13 @@ export interface RotationReport {
  * Three columns, none of them ciphertext: a rotation never reads key material.
  */
 export const LIST_TARGETS_SQL = `
-  SELECT workspace_id, id AS key_id, kek_version
-    FROM workspace_provider_keys
-   WHERE revoked_at IS NULL AND kek_version <> $1
-   ORDER BY workspace_id, created_at`;
+  SELECT workspace_id, id AS key_id, kek_version, 'provider_key' AS credential_kind
+    FROM workspace_provider_keys WHERE revoked_at IS NULL AND kek_version <> $1
+  UNION ALL
+  SELECT workspace_id, id AS key_id, kek_version, 'slack_installation' AS credential_kind
+    FROM slack_installations
+   WHERE (status <> 'revoked' OR remote_revocation_pending) AND kek_version <> $1
+   ORDER BY workspace_id, credential_kind, key_id`;
 
 /**
  * Re-wrap every live key onto `toVersion`.
@@ -87,14 +93,20 @@ export async function runKekRotation(
   const targets = await deps.listTargets(toVersion);
   let rewrapped = 0;
   let skipped = 0;
+  const rewrappedByKind = { provider_key: 0, slack_installation: 0 };
   const failed: { keyId: string; reason: string }[] = [];
 
   for (const target of targets) {
     try {
       const changed = await deps.withWorkspace(target.workspaceId, (tx) =>
-        rewrapProviderKey(tx, env, target.workspaceId, target.keyId, toVersion),
+        target.credentialKind === 'slack_installation'
+          ? rewrapSlackInstallation(tx, env, target.workspaceId, target.keyId, toVersion)
+          : rewrapProviderKey(tx, env, target.workspaceId, target.keyId, toVersion),
       );
-      if (changed) rewrapped += 1;
+      if (changed) {
+        rewrapped += 1;
+        rewrappedByKind[target.credentialKind ?? 'provider_key'] += 1;
+      }
       else skipped += 1;
     } catch (error) {
       // A failure on one key must not stop the rotation: leaving the other
@@ -104,14 +116,14 @@ export async function runKekRotation(
     }
   }
 
-  const report: RotationReport = { toVersion, examined: targets.length, rewrapped, skipped, failed };
+  const report: RotationReport = { toVersion, examined: targets.length, rewrapped, skipped, rewrappedByKind, failed };
   logEvent({ at: 'kek_rotation.done', ...report, failed: failed.length });
   return report;
 }
 
 /** The per-workspace enumeration. Runs inside that workspace's transaction. */
 export async function listRotationTargets(tx: Tx, toVersion: number): Promise<RotationTarget[]> {
-  const { rows } = await tx.query<{ workspace_id: string; key_id: string; kek_version: number }>(
+  const { rows } = await tx.query<{ workspace_id: string; key_id: string; kek_version: number; credential_kind: 'provider_key' | 'slack_installation' }>(
     LIST_TARGETS_SQL,
     [toVersion],
   );
@@ -119,5 +131,6 @@ export async function listRotationTargets(tx: Tx, toVersion: number): Promise<Ro
     workspaceId: row.workspace_id,
     keyId: row.key_id,
     kekVersion: row.kek_version,
+    credentialKind: row.credential_kind,
   }));
 }
