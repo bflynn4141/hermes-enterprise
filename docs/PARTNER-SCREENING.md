@@ -93,7 +93,7 @@ limit small: one enriched candidate normally costs two core API calls after the
 search call. The source-matrix route is read-only and reports credentials only
 as `authenticated`, `unauthenticated`, or `not_applicable`.
 
-Start the Worker after applying migration `0027_partner_screening.sql`, then:
+Start the Worker after applying migration `0028_partner_screening.sql`, then:
 
 ```sh
 WS=11111111-1111-4111-8111-111111111111

@@ -1,4 +1,4 @@
--- 0027_partner_screening.sql
+-- 0028_partner_screening.sql
 -- Read-only public-source ingestion for the Partner Program agent.
 --
 -- Source collection and agent judgment are deliberately separate. The app

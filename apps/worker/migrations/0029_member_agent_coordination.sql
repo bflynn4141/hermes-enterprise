@@ -12,5 +12,6 @@ ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
   'run.errored', 'usage.cap_warning', 'workspace.deletion_cancelled', 'workspace.deleted',
   'provider_key.attested', 'provider_key.rewrapped', 'validator.failed',
   'approval.proposed', 'approval.vote_recorded', 'approval.revised', 'approval.routed',
-  'approval.finalized', 'approval.expired'
+  'approval.finalized', 'approval.expired', 'slack.connected', 'slack.disconnected',
+  'slack.credential_rewrapped'
 ));

@@ -1,4 +1,4 @@
--- 0029_nous_oauth_account.sql
+-- 0030_nous_oauth_account.sql
 -- Display-safe Nous account attribution for the workspace provider grant.
 --
 -- The OAuth token bundle remains envelope-encrypted. These columns retain only
