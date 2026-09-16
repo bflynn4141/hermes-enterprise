@@ -131,18 +131,35 @@ verified from a Worker running on Cloudflare's network:
 | `GET /v1/capabilities` without a key | `401` |
 | The same capabilities request with `API_SERVER_KEY` | `200`, including the durable Runs endpoints |
 
-This makes a tunnel suitable for the staging acceptance test. It is not a
-production runtime host: the Mac must remain online, Quick Tunnel URLs are
-ephemeral, and the runtime must be restarted in a separate staging profile whose
-`enterprise_url` points back to staging. Otherwise native tool and model calls
-return to the local control plane, which does not own the staging run mapping.
+The tunnel proved the network diagnosis and adapter contract. It is not the
+selected staging or production topology: the Mac must remain online, Quick
+Tunnel URLs are ephemeral, and the runtime must be restarted in a separate
+staging profile whose `enterprise_url` points back to staging. The temporary
+tunnel and its Worker secrets were removed after the proof.
 
-Hermes Cloud is the preferred managed-hosting candidate, but its documented
-Portal integration currently covers instance lifecycle and interactive dashboard
-OAuth. The public contract does not document a service credential that an
-Enterprise Worker can use for unattended `POST /v1/runs` calls. Do not substitute
-an interactive `agent_dashboard:access` token for `API_SERVER_KEY`. Adopt Hermes
-Cloud when Nous confirms one of these contracts for an Enterprise-owned instance:
+Hermes Cloud is the preferred managed-hosting candidate. The official Cloud MCP
+was connected to the Portal organization and exposed five management tools:
+instance lifecycle, Team Gateway, usage, and organization-scoped machine
+credentials in addition to instance reads. Those machine credentials use the
+OAuth client-credentials grant with scope `mcp:manage_agents`; they authorize
+the Cloud management plane, not the agent's `/v1/runs` API. The organization
+currently has no Cloud instance, so the remaining execution contract cannot be
+verified without provisioning one.
+
+The acceptance test for a Cloud instance is:
+
+1. create a minimum-size instance with a dedicated `API_SERVER_KEY` and the
+   official API Server enabled;
+2. determine whether Cloud publishes an authenticated route to that API Server,
+   rather than only the dashboard and Team Gateway;
+3. verify capabilities, submit/events/stop/steer, idempotency and the reverse
+   Enterprise tool/model bridge; and
+4. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS` and
+   run one complete staged turn before merge.
+
+Do not substitute an interactive `agent_dashboard:access` session or an
+`mcp:manage_agents` token for `API_SERVER_KEY`. If Cloud does not publish the
+Runs endpoint, request one of these contracts from Nous:
 
 1. a public or private Runs endpoint with a rotatable service credential; or
 2. a Portal service-to-service proxy that preserves the Runs API, agent identity,
@@ -150,10 +167,9 @@ Cloud when Nous confirms one of these contracts for an Enterprise-owned instance
 
 If that contract is unavailable, deploy the official pinned Docker/runtime image
 under our own supervisor with persistent profile storage, HTTPS, an
-`API_SERVER_KEY`, and network access limited to the Enterprise control plane. A
-named Cloudflare Tunnel is acceptable for a short-lived staging pilot; the
-self-hosted runtime or a confirmed Hermes Cloud service contract is required for
-production.
+`API_SERVER_KEY`, and network access limited to the Enterprise control plane.
+The self-hosted runtime or a confirmed Hermes Cloud service contract is required
+for production.
 
 ## Verified locally — September 15, 2026
 
