@@ -25,6 +25,8 @@ import type {
   InvitationEntity,
   MaskedProviderKey,
   MemberEntity,
+  Message,
+  Run,
 } from '@hermes/shared';
 
 /** What `loadExtra` composes out of the routes the Worker actually serves. */
@@ -611,6 +613,42 @@ export function createAdapter(options: AdapterOptions): Adapter {
     // and discarded on a 2xx, so a duplicate POST returns the existing run.
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
     turnIds.set(sessionId, turnId);
+    const attachments = state().capabilities.turnAttachments
+      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
+      : [];
+    const seq = (session.messages.at(-1)?.seq ?? -1) + 1;
+    const message: Message = {
+      id: uuid(),
+      session_id: sessionId,
+      seq,
+      role: 'user',
+      kind: null,
+      text: trimmed,
+      blocks: [],
+      status: 'complete',
+      run_id: turnId,
+      attachments,
+      at: new Date(now()).toISOString(),
+    };
+    const agentId = session.agentId ?? state().agent.id;
+    const projected = Boolean(agentId);
+    if (agentId) {
+      const run: Run = {
+        id: turnId,
+        session_id: sessionId,
+        agent_id: agentId,
+        status: 'working',
+        attempt: 1,
+        title: null,
+        steps: [],
+        queue: [],
+        guidance: null,
+      };
+      // Paint the person's message and Iris's working state before the first
+      // network await. Server events replace both; this state never claims the
+      // turn was accepted or completed.
+      dispatch({ type: 'turn/optimistic', sessionId, clientTurnId: turnId, message, run });
+    }
     dispatch({ type: 'session/draft-clear', id: sessionId });
     // The first turn names the session. It is dispatched before the POST so the
     // sidebar stops saying "New session" the moment Enter is pressed, and
@@ -626,23 +664,42 @@ export function createAdapter(options: AdapterOptions): Adapter {
     autoTitle(sessionId, trimmed);
     // The route needs a real id. A person who types their first sentence faster
     // than the create POST answers used to lose the turn to a 400 `bad_id`.
-    const routeId = await serverSessionId(sessionId);
+    let routeId = sessionId;
     try {
-      await rest.sendTurn(workspaceId, routeId, {
+      routeId = await serverSessionId(sessionId);
+      const accepted = await rest.sendTurn(workspaceId, routeId, {
         text: trimmed,
         client_turn_id: turnId,
-        attachments: state().capabilities.turnAttachments
-          ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
-          : [],
+        attachments,
         mode: session.mode,
         model_id: session.model,
         effort: session.effort,
+      });
+      const id = state().sessions[routeId] ? routeId : sessionId;
+      dispatch({
+        type: 'turn/accepted',
+        sessionId: id,
+        clientTurnId: turnId,
+        runId: accepted.run_id,
+        status: accepted.status,
+        attempt: accepted.attempt,
       });
       turnIds.delete(sessionId);
     } catch (error) {
       // The draft comes back so the text is never lost — under whichever id the
       // store is keyed on now, which is the server's if the await reconciled.
       const id = state().sessions[routeId] ? routeId : sessionId;
+      const pending = state().sessions[id]?.pendingTurn;
+      // A lost HTTP response can race a successful `run.started` or
+      // `message.appended`. If either already reconciled this turn, the server
+      // accepted it and putting the text back in the composer would invite a
+      // duplicate retry.
+      const committed = projected && (!pending || pending.clientTurnId !== turnId || pending.runId !== null);
+      if (committed) {
+        turnIds.delete(sessionId);
+        return;
+      }
+      if (projected) dispatch({ type: 'turn/rejected', sessionId: id, clientTurnId: turnId });
       dispatch({ type: 'session/draft', id, text: trimmed });
       // And the name goes back, unless a person has renamed it in between: a
       // manual rename wins permanently (decision C34), and that is still true
@@ -672,8 +729,49 @@ export function createAdapter(options: AdapterOptions): Adapter {
   async function serverSessionId(sessionId: string): Promise<string> {
     if (!sessionId.startsWith('local-')) return sessionId;
     const pending = creating.get(sessionId);
-    if (!pending) return sessionId;
-    return pending;
+    if (pending) return pending;
+    const local = state().sessions[sessionId];
+    if (!local) throw new Error('The new session could not be created. Try again.');
+    // A failed create keeps a local draft rather than deleting the sentence a
+    // person just wrote. Retrying Send restarts creation before admission, so
+    // a `local-*` id is never sent to a Worker route.
+    return beginSessionCreation(sessionId, {
+      ...(local.title === DEFAULT_SESSION_TITLE ? {} : { title: local.title }),
+      mode: local.mode,
+      runtime: local.runtime,
+    });
+  }
+
+  function beginSessionCreation(
+    localId: string,
+    opts: { title?: string; mode?: string; runtime?: 'cloud' | 'local' },
+  ): Promise<string> {
+    const inFlight = creating.get(localId);
+    if (inFlight) return inFlight;
+    dispatch({ type: 'session/set', id: localId, patch: { pending: true } });
+    const settled = (async () => {
+      try {
+        const agentId = state().agent.id;
+        const row = await rest.createSession(workspaceId, { ...opts, ...(agentId ? { agent_id: agentId } : {}) });
+        dispatch({ type: 'session/reconcile', localId, serverId: row.id });
+        dispatch({ type: 'session/upsert', session: row });
+        openSession(row.id);
+        // A title chosen while the row was still local (decision C34). Somebody
+        // who types their first sentence fast enough beats this POST, and the
+        // PATCH that would have persisted their title had nowhere to go.
+        const parked = pendingTitles.get(localId);
+        if (parked) {
+          pendingTitles.delete(localId);
+          dispatch({ type: 'session/auto-title', id: row.id, title: parked });
+          void rest.patchSession(workspaceId, row.id, { title: parked }).catch(() => undefined);
+        }
+        return row.id;
+      } finally {
+        creating.delete(localId);
+      }
+    })();
+    creating.set(localId, settled);
+    return settled;
   }
 
   async function createSession(opts: { title?: string; mode?: string; runtime?: 'cloud' | 'local'; reuse?: boolean } = {}): Promise<string> {
@@ -697,31 +795,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
     }
     const localId = `local-${uuid()}`;
     dispatch({ type: 'session/create', id: localId, ...opts, pending: true });
-    const settled = (async () => {
-      const agentId = state().agent.id;
-      const row = await rest.createSession(workspaceId, { ...opts, ...(agentId ? { agent_id: agentId } : {}) });
-      dispatch({ type: 'session/reconcile', localId, serverId: row.id });
-      dispatch({ type: 'session/upsert', session: row });
-      openSession(row.id);
-      // A title chosen while the row was still local (decision C34). Somebody
-      // who types their first sentence fast enough beats this POST, and the
-      // PATCH that would have persisted their title had nowhere to go.
-      const parked = pendingTitles.get(localId);
-      if (parked) {
-        pendingTitles.delete(localId);
-        dispatch({ type: 'session/auto-title', id: row.id, title: parked });
-        void rest.patchSession(workspaceId, row.id, { title: parked }).catch(() => undefined);
-      }
-      return row.id;
-    })();
-    creating.set(localId, settled);
+    const createOpts = { title: opts.title, mode: opts.mode, runtime: opts.runtime };
     try {
-      return await settled;
+      return await beginSessionCreation(localId, createOpts);
     } catch (error) {
-      dispatch({ type: 'session/rollback', id: localId });
+      const local = state().sessions[localId];
+      const hasRecoverableWork = Boolean(local?.pendingTurn || local?.draft.text.trim() || local?.draft.attachments.length);
+      if (hasRecoverableWork) dispatch({ type: 'session/set', id: localId, patch: { pending: false } });
+      else dispatch({ type: 'session/rollback', id: localId });
       throw error;
-    } finally {
-      creating.delete(localId);
     }
   }
 
@@ -748,7 +830,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * between the last delta and a click should not raise anything.
    */
   function currentRunId(sessionId: string): string | null {
-    return state().sessions[sessionId]?.run?.id ?? null;
+    const session = state().sessions[sessionId];
+    // The optimistic run uses client_turn_id until admission answers. It is a
+    // render-only identity and is not a valid `/runs/:id` route target.
+    if (session?.pendingTurn && !session.pendingTurn.runId) return null;
+    return session?.run?.id ?? null;
   }
 
   async function stop(sessionId: string): Promise<void> {
@@ -946,6 +1032,7 @@ function sessionSeed(row: import('@hermes/shared').Bootstrap['sessions'][number]
     oldestSeq: null,
     hasEarlier: true,
     draft: { text: '', attachments: [] },
+    pendingTurn: null,
     run: null,
     stream: null,
     focus: row.focus_ref,

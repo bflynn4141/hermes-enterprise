@@ -4700,3 +4700,27 @@ real Iris turn then completed through Hermes Cloud with model
 `nous:deepseek/deepseek-v4.1-flash`, native runtime identity and agent-scoped
 traces. Regression coverage asserts the WorkOS refresh response shape and the
 Cloud connector used during turn admission.
+
+---
+
+## C57. Chat acknowledges locally, then reconciles against the durable turn
+
+**Decided September 16, 2026.** Pressing Send immediately projects the person's
+message and one working state in the transcript. The projection carries the
+turn's client idempotency key; the turn route persists that key on the user
+message and emits it with `message.appended`, so either `run.started` or the
+message event can reconcile the local state without a duplicate. A refusal
+removes the projection and restores the draft. The UI never projects success,
+tool use, or completion before an authoritative event.
+
+Hermes Cloud streams native SSE with available-byte reads rather than an 8 KB
+buffer-filling read. The Worker durably coalesces deltas over 75 ms and always
+performs a trailing flush, so a pause cannot hold text until the one-second
+runtime status poll. The connector disables intermediary response transforms
+and buffering where supported.
+
+**Why.** The network round trips needed for admission and durable execution are
+real, but they should not delay acknowledgment of the person's own action.
+Separately, model tokens are useful only when each transport layer preserves
+their cadence. Exact id reconciliation retains the fail-closed server contract
+while making the feedback loop immediate.

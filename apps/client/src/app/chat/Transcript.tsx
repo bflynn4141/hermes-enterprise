@@ -126,11 +126,13 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   const adapter = useAdapter();
   const reduce = useReducedMotion() ?? false;
   const agent = agentName(state);
+  const messages = session.pendingTurn ? [...session.messages, session.pendingTurn.message] : session.messages;
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
   const [away, setAway] = useState(false);
-  const lastCount = useRef(session.messages.length);
+  const lastCount = useRef(messages.length);
+  const lastMessageId = messages.at(-1)?.id ?? null;
   const nearBottom = useRef(true);
   /** The user message the send-scroll parked at the top, while it is still the last one. */
   const anchorId = useRef<string | null>(null);
@@ -208,7 +210,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     el.scrollTop = session.scrollTop ?? el.scrollHeight;
     nearBottom.current = measure();
     setAway(!nearBottom.current);
-    lastCount.current = session.messages.length;
+    lastCount.current = messages.length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
@@ -217,9 +219,19 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (session.messages.length === lastCount.current) return;
-    const last = session.messages[session.messages.length - 1];
-    lastCount.current = session.messages.length;
+    const last = messages[messages.length - 1];
+    if (messages.length === lastCount.current) {
+      // Admission replaces the local message id with the durable one without
+      // changing the list length. Keep the send anchor attached to that same
+      // question instead of letting the tail spacer lose its target.
+      if (last?.role === 'user' && anchorId.current && anchorId.current !== last.id) {
+        anchorId.current = last.id;
+        sizeSpacer();
+        toBottom();
+      }
+      return;
+    }
+    lastCount.current = messages.length;
     if (last?.role === 'user') {
       anchorId.current = last.id;
       sizeSpacer();
@@ -230,7 +242,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
       sizeSpacer();
       toBottom();
     } else setAway(true);
-  }, [session.messages.length, sizeSpacer, toBottom]);
+  }, [messages.length, lastMessageId, sizeSpacer, toBottom]);
 
   // Every delta, every step row, every queue row: re-size the spacer, and
   // follow only if the reader is at the bottom. `run` and `stream` are named in
@@ -270,7 +282,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     dispatch({ type: 'session/scroll', id: session.id, scrollTop: el.scrollTop });
   }, [dispatch, session.id]);
 
-  useFind(ref, find, reduce, [session.messages.length, session.stream?.text]);
+  useFind(ref, find, reduce, [messages.length, session.stream?.text]);
 
   // The messages this run produced are rendered *after* the activity block and
   // the rest before it, so a finished turn reads trace-then-answer exactly as a
@@ -285,20 +297,20 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   // "after the anchor".
   const runId = session.run?.id ?? null;
   const split = ((): number => {
-    if (!runId) return session.messages.length;
-    let index = session.messages.length;
-    while (index > 0 && session.messages[index - 1]!.run_id === runId && session.messages[index - 1]!.role === 'iris') index -= 1;
+    if (!runId) return messages.length;
+    let index = messages.length;
+    while (index > 0 && messages[index - 1]!.run_id === runId && messages[index - 1]!.role === 'iris') index -= 1;
     return index;
   })();
-  const before = collapseHistoricalMessages(split === session.messages.length ? session.messages : session.messages.slice(0, split));
-  const during = split === session.messages.length ? [] : session.messages.slice(split);
+  const before = collapseHistoricalMessages(split === messages.length ? messages : messages.slice(0, split));
+  const during = split === messages.length ? [] : messages.slice(split);
   const settled = Boolean(session.run && ['completed', 'stopped', 'error'].includes(session.run.status));
   const currentRunMessages = partitionRunMessages(during, settled, settled ? session.run?.active_ms : null);
 
-  const lastIris = [...session.messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
+  const lastIris = [...messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
   const showChips = !session.run || session.run.status === 'completed';
-  const showWelcome = session.messages.length === 0 && !session.stream && !session.carried;
+  const showWelcome = messages.length === 0 && !session.stream && !session.carried;
   const fill = (text: string): void => {
     dispatch({ type: 'session/draft', id: session.id, text });
     document.getElementById(`composer-${session.id}`)?.focus();
@@ -308,7 +320,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
     <div className="transcript-wrap">
       <div className="scroll" ref={ref} onScroll={onScroll} aria-live="polite" aria-relevant="additions">
         <div className={`transcript${showWelcome ? ' transcript-empty' : ''}`} role="log" aria-label={`Conversation with ${agent}`} ref={contentRef}>
-          {session.hasEarlier && session.messages.length > 0 && (
+          {session.hasEarlier && messages.length > 0 && (
             <div className="row" style={{ justifyContent: 'center', padding: '8px 0' }}>
               <Button small onClick={() => void adapter.loadEarlier(session.id)}>
                 Load earlier
@@ -323,7 +335,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             </div>
           )}
 
-          {session.messages.length === 0 && !session.stream && session.carried && (
+          {messages.length === 0 && !session.stream && session.carried && (
             <div className="empty-session">
               <div className="lead">
                 <IrisMark size={26} className="mark" />

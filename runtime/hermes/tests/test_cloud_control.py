@@ -85,6 +85,29 @@ class CloudControlTests(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer native-secret")
         self.assertNotIn("native-secret", json.dumps(body))
 
+    def test_native_stream_yields_available_bytes_without_waiting_for_eof(self):
+        class IncrementalResponse:
+            def __init__(self):
+                self.parts = [b"data: {\"event\":\"message.delta\"}\n\n", b""]
+                self.closed = False
+
+            def read(self, _limit=-1):
+                raise AssertionError("buffer-filling read must not be used for SSE")
+
+            def read1(self, _limit=-1):
+                return self.parts.pop(0)
+
+            def close(self):
+                self.closed = True
+
+        response = IncrementalResponse()
+        stream = cloud._stream_native(response)
+        self.assertEqual(next(stream), b"data: {\"event\":\"message.delta\"}\n\n")
+        self.assertFalse(response.closed)
+        with self.assertRaises(StopIteration):
+            next(stream)
+        self.assertTrue(response.closed)
+
 
 if __name__ == "__main__":
     unittest.main()

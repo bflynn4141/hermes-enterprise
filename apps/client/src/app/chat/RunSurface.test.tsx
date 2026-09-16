@@ -27,6 +27,7 @@ function session(run: Run, streamText = ''): SessionState {
     oldestSeq: null,
     hasEarlier: false,
     draft: { text: '', attachments: [] },
+    pendingTurn: null,
     run,
     stream: { runId, turn: 0, stepAttempt: 1, text: streamText, blocks: [], status: 'streaming' },
     focus: null,

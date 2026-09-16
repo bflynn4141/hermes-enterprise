@@ -63,6 +63,7 @@ export function Composer({ session }: { session: SessionState }) {
   const working = run?.status === 'working';
   const waiting = run?.status === 'waiting';
   const active = working || waiting;
+  const admitting = Boolean(session.pendingTurn && !session.pendingTurn.runId);
   const contextKey = waiting ? run.waiting_for : null;
   const text = session.draft.text;
   const keys = hasVerifiedKey(state);
@@ -107,7 +108,7 @@ export function Composer({ session }: { session: SessionState }) {
     const el = textarea.current;
     if (!el || el.disabled) return;
     if (takeComposerFocus()) el.focus();
-  }, [session.id, blocked]);
+  }, [session.id, blocked, admitting]);
 
   /**
    * Send, guide, queue or answer context — and say so when the server refuses.
@@ -119,7 +120,7 @@ export function Composer({ session }: { session: SessionState }) {
    */
   const send = (): void => {
     const draft = text;
-    if (!draft.trim() || blocked) return;
+    if (!draft.trim() || blocked || admitting) return;
     setRefusal(null);
     const attempt =
       contextKey
@@ -209,7 +210,7 @@ export function Composer({ session }: { session: SessionState }) {
                   : `${status.error?.message ?? 'Error'} · Completed work kept`}
           </span>
           <span className="grow" />
-          {(status.status === 'working' || status.status === 'waiting') && (
+          {(status.status === 'working' || status.status === 'waiting') && !admitting && (
             <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
               Stop work
             </Button>
@@ -291,7 +292,7 @@ export function Composer({ session }: { session: SessionState }) {
           // The one input ⌘L is allowed to fire inside; `panel.ts` reads it.
           data-composer="true"
           value={text}
-          disabled={blocked}
+          disabled={blocked || admitting}
           placeholder={blocked ? EMPTY.noKey : contextKey ? run?.waiting_label ?? 'Answer to continue…' : active ? 'Guide this run or queue a follow-up…' : `Message ${agent}…`}
           aria-label={`Message ${agent}`}
           onChange={(event) => dispatch({ type: 'session/draft', id: session.id, text: event.target.value })}
@@ -377,7 +378,7 @@ export function Composer({ session }: { session: SessionState }) {
               </Popover>
             </span>
           )}
-          <button type="button" className="send" aria-label={contextKey ? 'Send context answer' : active ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked} onClick={send}>
+          <button type="button" className="send" aria-label={contextKey ? 'Send context answer' : active ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked || admitting} onClick={send}>
             <Icon name="up" />
           </button>
         </div>

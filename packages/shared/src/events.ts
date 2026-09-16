@@ -174,6 +174,8 @@ export const messageAppendedSchema = event(
       blocks: z.array(blockSchema).max(20),
       status: messageStatusSchema,
       run_id: uuidSchema.nullable(),
+      /** Present for the user turn accepted from the composer. */
+      client_turn_id: z.string().min(1).max(128).nullable().optional(),
     })
     .strict(),
 );

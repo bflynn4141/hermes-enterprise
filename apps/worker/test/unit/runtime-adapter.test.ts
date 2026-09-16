@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence } from '../../src/runtime/adapter.js';
-import { HermesClient, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import { HermesClient, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
@@ -130,10 +130,16 @@ class FakeHermesClient extends HermesClient {
   }
 }
 
-async function execute(db = new FakeRuntimeDb(), client = new FakeHermesClient(), step = new FakeStep(), forward?: RuntimeDeps['forward']) {
+async function execute(
+  db = new FakeRuntimeDb(),
+  client = new FakeHermesClient(),
+  step = new FakeStep(),
+  forward?: RuntimeDeps['forward'],
+  timing: { pollMs?: number; batchMs?: number } = {},
+) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
-    db, client, profile: PROFILE, pollMs: 0,
+    db, client, profile: PROFILE, pollMs: timing.pollMs ?? 0, batchMs: timing.batchMs,
     forward: forward ?? (async () => ({ stop_requested: db.stopFlag })),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
@@ -155,6 +161,111 @@ describe('official Hermes enterprise projection', () => {
     expect(db.modelCalls).toEqual([]);
     expect(client.streamSignal?.aborted).toBe(true);
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
+  });
+
+  it('flushes a trailing delta during a native pause instead of waiting for the status poll', async () => {
+    class PausingClient extends FakeHermesClient {
+      beforeTerminal: (() => void) | null = null;
+
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'First. ' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Second.' };
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        this.beforeTerminal?.();
+        this.current = this.final;
+        yield { event: `run.${this.final.status}`, ...this.final };
+      }
+    }
+
+    const client = new PausingClient();
+    let forwardedDeltas = 0;
+    client.beforeTerminal = () => expect(forwardedDeltas).toBe(2);
+    await execute(
+      new FakeRuntimeDb(),
+      client,
+      new FakeStep(),
+      async (_session, _run, events) => {
+        forwardedDeltas += events.filter((event) => event.kind === 'message.delta').length;
+        return { stop_requested: false };
+      },
+      { pollMs: 100, batchMs: 5 },
+    );
+    expect(forwardedDeltas).toBe(2);
+  });
+
+  it.each(['eof', 'error'] as const)('flushes a suppressed delta immediately when the native stream ends by %s', async (ending) => {
+    class EndingClient extends FakeHermesClient {
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'First. ' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Last.' };
+        this.current = this.final;
+        if (ending === 'error') throw new Error('native stream disconnected');
+      }
+    }
+
+    const client = new EndingClient();
+    const started = Date.now();
+    let secondDeltaAt = Number.POSITIVE_INFINITY;
+    await execute(
+      new FakeRuntimeDb(),
+      client,
+      new FakeStep(),
+      async (_session, _run, events) => {
+        if (events.some((event) => event.kind === 'message.delta' && (event.payload as { delta?: string }).delta === 'Last.')) {
+          secondDeltaAt = Date.now() - started;
+        }
+        return { stop_requested: false };
+      },
+      { pollMs: 200, batchMs: 1000 },
+    );
+    expect(secondDeltaAt).toBeLessThan(150);
+  });
+
+  it('forwards the last delta before a slow terminal status reconciliation', async () => {
+    class SlowTerminalClient extends FakeHermesClient {
+      terminalStatusResolved = false;
+
+      override status() {
+        this.statusReads += 1;
+        if (!terminalHermesStatus(this.current.status)) return Promise.resolve({ ...this.current });
+        return new Promise<HermesStatus>((resolve) => {
+          setTimeout(() => {
+            this.terminalStatusResolved = true;
+            resolve({ ...this.current });
+          }, 80);
+        });
+      }
+
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'First. ' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Last.' };
+        this.current = this.final;
+        yield { event: `run.${this.final.status}`, ...this.final };
+      }
+    }
+
+    const client = new SlowTerminalClient();
+    let lastDeltaBeforeStatus = false;
+    await execute(
+      new FakeRuntimeDb(),
+      client,
+      new FakeStep(),
+      async (_session, _run, events) => {
+        if (events.some((event) => event.kind === 'message.delta' && (event.payload as { delta?: string }).delta === 'Last.')) {
+          lastDeltaBeforeStatus = !client.terminalStatusResolved;
+        }
+        return { stop_requested: false };
+      },
+      { pollMs: 200, batchMs: 75 },
+    );
+    expect(lastDeltaBeforeStatus).toBe(true);
+    expect(client.terminalStatusResolved).toBe(true);
   });
 
   it('snapshots request metadata before submission and persists the binding before consuming native execution', async () => {
