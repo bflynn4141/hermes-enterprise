@@ -471,12 +471,6 @@ async function sweepEmptyStates(page: Page, seat: 'admin' | 'member'): Promise<v
   await expect(app.getByText('No verified Nous Portal key')).toBeVisible();
   await expect(app.getByText('Daily token cap')).toBeVisible();
 
-  await app.getByRole('tab', { name: 'Data and privacy' }).click();
-  await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
-  // The retention facts are the server's and are there with or without a key.
-  await expect(app.getByText('Database point-in-time history')).toBeVisible();
-  await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
-
   await app.getByRole('tab', { name: 'Organization' }).click();
   if (seat === 'admin') {
     await expect(app.getByRole('button', { name: 'Delete workspace…' })).toBeVisible();

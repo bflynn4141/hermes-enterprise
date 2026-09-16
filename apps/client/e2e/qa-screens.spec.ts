@@ -113,10 +113,6 @@ test('every main screen renders', async ({ page }) => {
   await expect(appPane.getByText('Model defaults')).toBeVisible();
   await page.screenshot(shot('18-settings-agents'));
 
-  // 19. Settings → Data and privacy, with the processor facts.
-  await appPane.getByRole('tab', { name: 'Data and privacy' }).click();
-  await expect(appPane.getByText('Processors')).toBeVisible();
-  await page.screenshot(shot('19-settings-privacy'));
 });
 
 test('the first-run empty states render', async ({ page }) => {

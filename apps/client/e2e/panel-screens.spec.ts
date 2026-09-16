@@ -154,14 +154,6 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     },
     ready: async (page) => void (await expect(app(page).getByText('Model defaults')).toBeVisible()),
   },
-  {
-    key: 'settings-privacy',
-    go: async (page) => {
-      await nav(page, 'Settings').click();
-      await app(page).getByRole('tab', { name: 'Data and privacy' }).click();
-    },
-    ready: async (page) => void (await expect(app(page).getByText('Processors')).toBeVisible()),
-  },
 ];
 
 const app = (page: Page) => page.getByRole('region', { name: 'Application' });

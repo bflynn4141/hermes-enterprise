@@ -97,6 +97,15 @@ test('every workspace navigation control has a visible result', async ({ page })
   await expect(sidebar.locator('[data-sidebar-collapsed="false"]')).toBeVisible();
 });
 
+test('the removed privacy route falls back to Notifications without settings follow controls', async ({ page }) => {
+  await page.goto('/#settings/Data%20and%20privacy');
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByRole('tab', { name: 'Notifications', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toHaveCount(0);
+  await expect(app.getByText('View pinned', { exact: true })).toHaveCount(0);
+  await expect(app.getByRole('button', { name: 'Follow Iris', exact: true })).toHaveCount(0);
+});
+
 test('workspace and user menus route correctly and align to the left rail', async ({ page }) => {
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/');
@@ -134,11 +143,12 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   await account.click();
   await page.getByRole('menuitem', { name: 'Provider keys', exact: true }).click();
   await expect(app.getByRole('tab', { name: 'Provider keys', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toHaveCount(0);
+  await expect(app.getByText('View pinned', { exact: true })).toHaveCount(0);
+  await expect(app.getByRole('button', { name: 'Follow Iris', exact: true })).toHaveCount(0);
   await account.click();
-  await page.getByRole('menuitem', { name: 'Data and privacy', exact: true }).click();
-  await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('menuitem', { name: 'Data and privacy', exact: true })).toHaveCount(0);
 
-  await account.click();
   const reduceMotion = page.getByRole('switch', { name: 'Reduce motion', exact: true });
   const before = await reduceMotion.getAttribute('aria-checked');
   await reduceMotion.click();

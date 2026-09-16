@@ -165,9 +165,6 @@ export function Sidebar() {
         <MenuItem small icon="key" onClick={() => go(SETTINGS('Provider keys'))}>
           Provider keys
         </MenuItem>
-        <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
-          Data and privacy
-        </MenuItem>
         <div className="row account-toggle">
           <span className="grow">Reduce motion</span>
           <Toggle

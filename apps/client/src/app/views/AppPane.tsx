@@ -18,6 +18,7 @@ import { agentName } from '../selectors.js';
 import { TOGGLE_SHORTCUT } from '../panel.js';
 import { entityData } from '../../model/store.js';
 import type { AppState } from '../../model/store.js';
+import { SETTINGS_TABS } from '../../model/constants.js';
 
 const SECTION_LABEL: Record<string, string> = { agents: 'Agents', inbox: 'Inbox', members: 'Members', history: 'History', library: 'Library', settings: 'Settings' };
 
@@ -48,7 +49,10 @@ function describe(state: AppState): [string, string] {
     const label = { skills: 'Shared skills', documents: 'Documents', connections: 'Connections', intelligence: 'Shared Intelligence' }[view ?? 'skills'] ?? 'Skills';
     return [label, label];
   }
-  if (section === 'settings') return [app.view ?? 'Notifications', app.view ?? 'Notifications'];
+  if (section === 'settings') {
+    const label = SETTINGS_TABS.find((tab) => tab === app.view) ?? 'Notifications';
+    return [label, label];
+  }
   return ['', ''];
 }
 
@@ -113,7 +117,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
       <div className="pane-subheader">
         <span className="truncate">{sub}</span>
         <span className="grow" />
-        {following ? (
+        {app.section !== 'settings' && (following ? (
           <button type="button" className="follow-btn" aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { follow: false } })} title={`The app follows ${agent}'s object changes · Click to pin this view`}>
             Following {agent}
           </button>
@@ -126,7 +130,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
               Follow {agent}
             </button>
           </>
-        )}
+        ))}
       </div>
       <motion.div key={key} className={`object-view${firstRun ? ' object-view-first-run' : ''}`} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
         {firstRun ?? view}
