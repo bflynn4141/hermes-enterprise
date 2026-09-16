@@ -67,6 +67,12 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   documents: ['SELECT', 'INSERT'],
   run_turns: ['SELECT', 'INSERT'],
   model_calls: ['SELECT', 'INSERT'],
+  // Source collection runs as the app role. The official agent can only read
+  // its own persisted candidate evidence before proposing an Inbox request.
+  partner_screening_runs: ['SELECT'],
+  partner_source_artifacts: ['SELECT'],
+  partner_candidates: ['SELECT'],
+  partner_screening_run_candidates: ['SELECT'],
   stream_events: ['INSERT'],
   instruction_versions: ['SELECT', 'INSERT'],
   run_steps: ['SELECT', 'INSERT', 'UPDATE'],
@@ -113,6 +119,10 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'approval_continuations', privileges: ['UPDATE', 'DELETE'] },
   { table: 'approval_runtime_budgets', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_model_reservations', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_screening_runs', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_source_artifacts', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_screening_run_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

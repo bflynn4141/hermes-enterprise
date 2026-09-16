@@ -696,6 +696,90 @@ export const onboardingSampleEvents = pgTable(
   (t) => [unique('onboarding_sample_events_key').on(t.runId, t.eventKey)],
 );
 
+export const partnerScreeningRuns = pgTable(
+  'partner_screening_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    createdBy: uuid('created_by').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    status: text('status').notNull().default('running'),
+    source: text('source').notNull(),
+    authentication: text('authentication').notNull(),
+    configSnapshot: jsonb('config_snapshot').notNull(),
+    apiRequestsMax: integer('api_requests_max').notNull(),
+    apiRequestsUsed: integer('api_requests_used').notNull().default(0),
+    rateLimits: jsonb('rate_limits').notNull().default([]),
+    candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
+    errorCode: text('error_code'),
+    errorDetail: text('error_detail'),
+    startedAt: now('started_at'),
+    completedAt: ts('completed_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_screening_runs_idempotency').on(t.workspaceId, t.agentId, t.idempotencyKey)],
+);
+
+export const partnerSourceArtifacts = pgTable(
+  'partner_source_artifacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    source: text('source').notNull(),
+    artifactKey: text('artifact_key').notNull(),
+    kind: text('kind').notNull(),
+    sourceUrl: text('source_url').notNull(),
+    sourceUpdatedAt: ts('source_updated_at'),
+    fetchedAt: ts('fetched_at').notNull(),
+    sha256: text('sha256').notNull(),
+    content: jsonb('content').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('partner_source_artifacts_run_key').on(t.runId, t.artifactKey)],
+);
+
+export const partnerCandidates = pgTable(
+  'partner_candidates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    source: text('source').notNull(),
+    sourceKey: text('source_key').notNull(),
+    displayName: text('display_name').notNull(),
+    profileUrl: text('profile_url').notNull(),
+    deterministicPriority: integer('deterministic_priority').notNull(),
+    priorityBreakdown: jsonb('priority_breakdown').notNull(),
+    confidence: text('confidence').notNull(),
+    evidenceGaps: text('evidence_gaps').array().notNull().default([]),
+    sourceUpdatedAt: ts('source_updated_at'),
+    latestRunId: uuid('latest_run_id').notNull(),
+    firstSeenAt: ts('first_seen_at').notNull(),
+    lastSeenAt: ts('last_seen_at').notNull(),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_candidates_source_key').on(t.workspaceId, t.agentId, t.source, t.sourceKey)],
+);
+
+export const partnerScreeningRunCandidates = pgTable(
+  'partner_screening_run_candidates',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    candidateId: uuid('candidate_id').notNull(),
+    deterministicPriority: integer('deterministic_priority').notNull(),
+    priorityBreakdown: jsonb('priority_breakdown').notNull(),
+    confidence: text('confidence').notNull(),
+    evidenceGaps: text('evidence_gaps').array().notNull().default([]),
+    artifactIds: uuid('artifact_ids').array().notNull().default([]),
+    createdAt: now('created_at'),
+  },
+);
+
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1262,6 +1346,10 @@ export const ALL_TABLES = {
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,
   onboarding_sample_events: onboardingSampleEvents,
+  partner_screening_runs: partnerScreeningRuns,
+  partner_source_artifacts: partnerSourceArtifacts,
+  partner_candidates: partnerCandidates,
+  partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,
   request_notes: requestNotes,

@@ -39,6 +39,7 @@ import type {
   StepProgress,
 } from './agent-db.js';
 import { persistApprovalContinuation } from '../runtime/continuation-intent.js';
+import { partnerAgentConfig } from '../partner-screening/config.js';
 
 /**
  * The tool names a workspace with no configured capability rows still gets.
@@ -275,7 +276,13 @@ export class PgAgentDb implements AgentDb {
         [agentId],
       );
       const configured = [...new Set(rows.flatMap((row) => row.tool_names ?? []))];
-      if (configured.length > 0) return configured;
+      // A valid per-agent public-source config is also the explicit enablement
+      // for the two read tools and the existing pending-only proposal tool.
+      // It does not add any decision, contact or external-write ability.
+      const partnerTools = partnerAgentConfig(this.env, agentId).config
+        ? ['list_partner_candidates', 'get_partner_candidate', 'propose_request']
+        : [];
+      if (configured.length > 0 || partnerTools.length > 0) return [...new Set([...configured, ...partnerTools])];
       // No capability rows at all means nobody configured this agent. In a
       // deployed environment that is the answer — an unconfigured agent gets no
       // tools, which fails closed. In development it would mean a freshly
@@ -588,10 +595,13 @@ export class PgAgentDb implements AgentDb {
     input: ProposeRequestInput,
   ): Promise<{ requestId: string; created: boolean; events?: readonly EmittedEvent[] }> {
     return this.tx(async (q) => {
+      const discoveredCandidate = input.subjectKey.startsWith('partner-candidate:');
       const inserted = await q<{ id: string }>(
         `INSERT INTO requests (workspace_id, kind, subject_key, label, payload, status, run_id, session_id, tool_call_id)
          VALUES ($1, $2, $3, $4, $5::jsonb, 'pending', $6, $7, $8)
-         ON CONFLICT (run_id, tool_call_id) WHERE run_id IS NOT NULL AND tool_call_id IS NOT NULL
+         ${discoveredCandidate
+           ? `ON CONFLICT (workspace_id, subject_key) WHERE subject_key LIKE 'partner-candidate:%'`
+           : 'ON CONFLICT (run_id, tool_call_id) WHERE run_id IS NOT NULL AND tool_call_id IS NOT NULL'}
          DO NOTHING
          RETURNING id`,
         [
@@ -627,10 +637,15 @@ export class PgAgentDb implements AgentDb {
         });
         return { requestId: created, created: true, events: event ? [event] : [] };
       }
-      const existing = await q<{ id: string }>(
-        `SELECT id FROM requests WHERE run_id = $1 AND tool_call_id = $2`,
-        [input.runId, input.toolCallId],
-      );
+      const existing = discoveredCandidate
+        ? await q<{ id: string }>(
+            `SELECT id FROM requests WHERE workspace_id = $1 AND subject_key = $2 ORDER BY created_at LIMIT 1`,
+            [this.workspaceId, input.subjectKey],
+          )
+        : await q<{ id: string }>(
+            `SELECT id FROM requests WHERE run_id = $1 AND tool_call_id = $2`,
+            [input.runId, input.toolCallId],
+          );
       // A replayed step wrote nothing, so it publishes nothing: a second
       // `request.created` for the same id would put the row in the Inbox twice
       // on a client that had not seen the first.
@@ -843,6 +858,77 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId],
       );
       return rows;
+    });
+  }
+
+  async listPartnerCandidates(agentId: string | null, minimumPriority: number, limit: number): Promise<unknown[]> {
+    if (!agentId) return [];
+    return this.tx(async (q) => {
+      const { rows } = await q<Record<string, unknown>>(
+        `SELECT c.id, c.source, c.source_key, c.display_name, c.profile_url,
+                c.deterministic_priority, c.confidence, c.evidence_gaps,
+                c.source_updated_at, c.last_seen_at,
+                (SELECT r.id FROM requests r
+                  WHERE r.workspace_id = c.workspace_id
+                    AND r.subject_key = 'partner-candidate:' || c.id::text
+                  ORDER BY r.created_at LIMIT 1) AS existing_request_id
+           FROM partner_candidates c
+          WHERE c.workspace_id = $1 AND c.agent_id = $2
+            AND c.deterministic_priority >= $3
+          ORDER BY c.deterministic_priority DESC, c.last_seen_at DESC
+          LIMIT $4`,
+        [this.workspaceId, agentId, Math.max(0, Math.min(100, minimumPriority)), Math.max(1, Math.min(10, limit))],
+      );
+      return rows;
+    });
+  }
+
+  async getPartnerCandidate(agentId: string | null, candidateId: string): Promise<unknown | null> {
+    if (!agentId) return null;
+    return this.tx(async (q) => {
+      const { rows } = await q<Record<string, unknown> & { latest_run_id: string; artifact_ids: string[] }>(
+        `SELECT c.id, c.source, c.source_key, c.display_name, c.profile_url,
+                c.deterministic_priority, c.priority_breakdown, c.confidence,
+                c.evidence_gaps, c.source_updated_at, c.first_seen_at, c.last_seen_at,
+                c.latest_run_id, rc.artifact_ids,
+                (SELECT r.id FROM requests r
+                  WHERE r.workspace_id = c.workspace_id
+                    AND r.subject_key = 'partner-candidate:' || c.id::text
+                  ORDER BY r.created_at LIMIT 1) AS existing_request_id
+           FROM partner_candidates c
+           JOIN partner_screening_run_candidates rc
+             ON rc.run_id = c.latest_run_id AND rc.candidate_id = c.id
+          WHERE c.workspace_id = $1 AND c.agent_id = $2 AND c.id = $3`,
+        [this.workspaceId, agentId, candidateId],
+      );
+      const candidate = rows[0];
+      if (!candidate) return null;
+      const artifacts = await q<Record<string, unknown>>(
+        `SELECT id, source, kind, source_url, source_updated_at, fetched_at, sha256, content
+           FROM partner_source_artifacts
+          WHERE run_id = $1 AND id = ANY($2::uuid[])
+          ORDER BY kind, id`,
+        [candidate.latest_run_id, candidate.artifact_ids],
+      );
+      const { latest_run_id: _run, artifact_ids: _ids, ...summary } = candidate;
+      return {
+        ...summary,
+        deterministic_priority_note: 'Connector-side triage only; independently apply the Partner Program criteria.',
+        source_artifacts: artifacts.rows,
+        proposal_provenance: {
+          candidate_id: candidate.id,
+          source: candidate.source,
+          source_key: candidate.source_key,
+          discovered_at: candidate.last_seen_at,
+          deterministic_priority: candidate.deterministic_priority,
+        },
+        constraints: [
+          'Do not claim this organization applied or consented.',
+          'Cite only source_artifact ids returned here.',
+          'Do not infer capacity, availability, identity, or interest from missing public metadata.',
+          'A proposal remains pending until a human reviews it; do not contact the organization.',
+        ],
+      };
     });
   }
 

@@ -65,6 +65,15 @@ export interface Env {
   NOUS_PORTAL_OAUTH_CLIENT_ID?: string;
   /** Production is pinned to portal.nousresearch.com; tests may override it. */
   NOUS_PORTAL_BASE_URL?: string;
+  /** Non-secret, per-agent GitHub queries and deterministic ranking policy. */
+  PARTNER_SCREENING_CONFIG_JSON?: string;
+  /** Source credentials are separate from model/provider credentials. */
+  PARTNER_GITHUB_TOKEN?: string;
+  /** Reserved for future approved connectors; this build reports but does not use them. */
+  PARTNER_YOUTUBE_API_KEY?: string;
+  PARTNER_X_BEARER_TOKEN?: string;
+  /** Test-only fetch injection; production uses global fetch against api.github.com. */
+  PARTNER_SOURCE_FETCHER?: Fetcher;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket

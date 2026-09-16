@@ -140,6 +140,21 @@ export const applicationPayloadSchema = z
       .max(50)
       .default([]),
     missing: z.array(z.string().min(1).max(200)).max(50).default([]),
+    /**
+     * Stable provenance for a candidate discovered by a read-only source
+     * connector. The id is what deduplicates repeated Iris screening runs;
+     * none of these fields says the organization applied or consented.
+     */
+    discovery: z
+      .object({
+        candidate_id: z.uuid(),
+        source: z.literal('github'),
+        source_key: z.string().min(1).max(200),
+        discovered_at: z.iso.datetime({ offset: true }),
+        deterministic_priority: z.number().int().min(0).max(100),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

@@ -131,6 +131,11 @@ import {
 } from './routes/slack.js';
 import { slackEvents } from './routes/slack-events.js';
 import { getOnboardingSample, startOnboardingSample } from './routes/onboarding-sample.js';
+import {
+  getPartnerScreening,
+  partnerScreeningSources,
+  startPartnerScreening,
+} from './routes/partner-screening.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -270,6 +275,13 @@ app.get('/w/:ws/events', events);
 // reaches an intake system; polling materializes its server-timed stages.
 app.post('/w/:ws/onboarding/sample-runs', startOnboardingSample);
 app.get('/w/:ws/onboarding/sample-runs/:id', getOnboardingSample);
+
+// Live public-source ingestion is separate from the labeled simulation and
+// from Iris's judgment. The connector persists evidence; the bound agent reads
+// it through read-only tools and may propose a pending Inbox request.
+app.get('/w/:ws/partner-screening/agents/:agentId/sources', partnerScreeningSources);
+app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
+app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
 
 // Settings > Provider keys (Admin, step-up) and the catalog the model menu
 // reads (any member). See src/routes/keys.ts for why the two differ.
