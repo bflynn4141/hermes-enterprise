@@ -19,7 +19,7 @@ interface ApprovalMeta {
 
 export const APPROVAL_META: Record<ApprovalType, ApprovalMeta> = {
   run_plan: { label: 'Plan and budget', action: 'Approve plan', icon: 'loop' },
-  team_commitment: { label: 'Team commitment', action: 'Review collaboration', icon: 'people' },
+  team_commitment: { label: 'Team commitment', action: 'Accept task', icon: 'people' },
   access: { label: 'Temporary access', action: 'Allow access', icon: 'context' },
   communication: { label: 'Communication', action: 'Approve send', icon: 'inbox' },
   shared_learning: { label: 'Shared learning', action: 'Publish skill', icon: 'skill' },
@@ -61,7 +61,10 @@ export function approvalActionLabel(request: RequestEntity): string {
 }
 
 export function approvalPrimaryAction(view: ApprovalView): string {
-  if (view.payload.approval_type !== 'team_commitment') return APPROVAL_META[view.payload.approval_type].action;
+  if (view.payload.approval_type !== 'team_commitment'
+    || view.payload.context.source.trigger?.kind !== 'member_agent_joined') {
+    return APPROVAL_META[view.payload.approval_type].action;
+  }
   const currentStep = view.steps.find((step) => step.status === 'current');
   return currentStep?.step_id === 'receiving-owner' ? 'Accept collaboration' : 'Approve proposal';
 }
@@ -186,7 +189,9 @@ function TeamCommitmentPreview({ view }: { view: ApprovalView }) {
       <section className="approval-lead-block"><span className="approval-kicker">Bounded task</span><h2>{details.workload}</h2></section>
       <div className="approval-facts"><Fact label="Due">{shortDateTime(details.due_at)}</Fact><Fact label="Mandate">Receiving agent only</Fact></div>
       <div className="approval-two-col"><section><span className="approval-kicker">Dependencies</span><CheckList items={details.dependencies} /></section><section><span className="approval-kicker">Acceptance criteria</span><CheckList items={details.acceptance_criteria} /></section></div>
-      <p className="approval-boundary-note">Approval records this proposed collaboration. No agent message or run is sent until a delivery executor exists.</p>
+      {view.payload.context.source.trigger?.kind === 'member_agent_joined' && (
+        <p className="approval-boundary-note">Approval records this proposed collaboration. No agent message or run is sent until a delivery executor exists.</p>
+      )}
     </div>
   );
 }
