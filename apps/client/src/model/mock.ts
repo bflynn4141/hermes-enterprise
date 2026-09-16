@@ -411,12 +411,19 @@ export function createMockBackend(options: MockOptions = {}) {
           needs_you: true,
           ref: { section: 'agents', view: 'trace', id: TRACE_LEAH },
           steps: [
-            { id: 'read', label: 'Read the application', state: 'done' as const, detail: 'partner site, GitHub repository' },
-            { id: 'criteria', label: 'Read criteria', state: 'done' as const, detail: 'Partner criteria.md' },
-            { id: 'score', label: 'Score against the criteria', state: 'done' as const, detail: '82 / 100' },
+            { id: 'read', label: 'get_request', state: 'done' as const, tool_call_id: 'mock-call-get-request', detail: 'Leah Martinez · Partner Program application' },
+            { id: 'criteria', label: 'get_document_text', state: 'done' as const, tool_call_id: 'mock-call-get-document', detail: 'Partner criteria.md' },
+            { id: 'propose', label: 'propose_request', state: 'done' as const, tool_call_id: 'mock-call-propose-request', detail: '82 / 100 · Awaiting review' },
             { id: 'wait', label: 'Waiting for a human decision', state: 'active' as const, detail: null },
           ],
-          allowed_tools: ['get_document_text', 'score_application', 'propose_request'],
+          allowed_tools: ['get_request', 'get_document_text', 'propose_request'],
+          tool_calls: [
+            { tool_call_id: 'mock-call-get-request', name: 'get_request', turn: 0, arguments: JSON.stringify({ request_id: REQ_LEAH }), result: JSON.stringify({ source: 'workspace.requests', untrusted: true, data: { label: 'Leah Martinez', status: 'pending' } }), truncated: false },
+            { tool_call_id: 'mock-call-get-document', name: 'get_document_text', turn: 0, arguments: JSON.stringify({ document_id: mockUuid(60) }), result: JSON.stringify({ source: 'workspace.documents', untrusted: true, data: { name: 'Partner criteria.md', text: 'Track record (30) · Capacity (30) · Fit (40)' } }), truncated: false },
+            { tool_call_id: 'mock-call-propose-request', name: 'propose_request', turn: 0, arguments: JSON.stringify({ kind: 'application', label: 'Leah Martinez' }), result: JSON.stringify({ source: 'workspace.requests', untrusted: true, data: { request_id: REQ_LEAH, status: 'pending' } }), truncated: false },
+          ],
+          fetched_urls: [],
+          focus: [],
           version: 1,
         },
       ];

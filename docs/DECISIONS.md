@@ -4801,3 +4801,36 @@ a person most needed to understand a run. Putting the intent selector among
 the persistent controls also caused the send button to jump to another row as
 the Iris pane was resized. One stable composer preserves orientation while
 still making clear whether the next message affects this run or follows it.
+## C61. Agent activity is a truthful ambient signal, not a decorative loop
+
+**Decided September 16, 2026.** Agent Overview carries one compact activity
+surface that remains visible when the conversation is collapsed. It answers
+three questions without opening chat: whether Iris is working, waiting, stopped
+or idle; which task owns the current state; and, when a tool event exists, the
+exact tool name beside a short human translation. `get_document_text → Reading
+a source document` is intentionally both machine-legible and understandable.
+The full arguments and results remain in the trace.
+
+Live session state wins across the agent's sessions. When no run is live, the
+newest server-sorted trace supplies the last real activity; a fresh workspace
+says `No active work right now`. Only `working` animates. Waiting, stopped and
+idle states are static, and the member's reduced-motion preference disables the
+working mark and pulse as well. No timer cycles through fake steps, and this UI
+does not claim to add background scheduling: actual proactive work still needs
+a real workflow or scheduled run to emit these events.
+
+**Why.** GitHub's agent panel uses live session status and a drill-down session
+log; Replit separates Draft, Active, Queued, Ready and Done, then pairs finished
+work with its work log and test results; Cursor's background-agent surface keeps
+status available outside the main conversation. The shared pattern is ambient
+state first, evidence on demand—not an animated avatar with no operational
+meaning.
+
+**Evidence.** `agent-activity.test.ts` covers live, waiting, recent-trace and
+idle derivation. `agent-activity.spec.ts` proves a real mock run remains visible
+after Iris collapses, pairs a tool with its human wording, keeps idle still and
+removes all activity animation when reduced motion is on.
+
+- https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents
+- https://docs.replit.com/core-concepts/agent/task-system
+- https://docs.cursor.com/background-agent

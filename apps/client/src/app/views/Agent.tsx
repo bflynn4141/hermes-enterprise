@@ -5,16 +5,17 @@
 // and the shared skill library. What did not change is the shape of the screens
 // or their copy.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { CodeBlock, ContextCards, DiffTable, Flowchart, ThinkingState } from '@hermes/motion-components';
-import { CTX, CTX_DEST, HISTORY, INBOX, OV, REQ, SKILLS_VIEW, TRACES, type AgentFile, type ContextField, type InstructionVersion, type RequestEntity, type SkillVersion, type TraceEntity, type Ref } from '@hermes/shared';
+import { CTX, CTX_DEST, HISTORY, INBOX, OV, REQ, SKILLS_VIEW, TRACE, TRACES, type AgentFile, type ContextField, type InstructionVersion, type RequestEntity, type SkillVersion, type TraceEntity, type Ref } from '@hermes/shared';
 import { useAdapter, useAppState, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, KIND_ICON } from '../ui/icons.js';
-import { Ack, Button, Dialog, EmptyState, Panel, Skeleton, Tabs } from '../ui/primitives.js';
+import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from '../ui/primitives.js';
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
+import { agentActivity, type AgentActivityState } from './agent-activity.js';
 
 function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -54,6 +55,59 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
   );
 }
 
+const activityMarkState = (state: AgentActivityState): 'reading' | 'waiting' | 'stopped' | 'static' =>
+  state === 'working' ? 'reading' : state === 'waiting' ? 'waiting' : state === 'stopped' ? 'stopped' : 'static';
+
+function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
+  const state = useAppState();
+  const nav = useNav();
+  const prefersReducedMotion = useReducedMotion();
+  const activity = agentActivity(state, traces);
+  const reduced = state.ui.reduceMotion || Boolean(prefersReducedMotion);
+  const target = activity.traceId ? TRACE(activity.traceId) : TRACES;
+
+  return (
+    <section className="agent-activity-card" data-activity-state={activity.state} aria-label="Agent activity">
+      <div className="agent-activity-head">
+        <span className="agent-activity-mark">
+          <IrisMark size={32} state={activityMarkState(activity.state)} />
+        </span>
+        <div className="agent-activity-identity">
+          <span className="agent-activity-title">{state.workspace.name}</span>
+          <span className="agent-activity-subtitle">{state.agent.summary || 'Screening · Drafting · Routing'}</span>
+        </div>
+        <div className="agent-activity-actions">
+          <span className="agent-activity-status" role="status" aria-live="polite">
+            <i aria-hidden="true" />
+            {activity.status}
+          </span>
+          <Button link onClick={() => nav(target)}>{activity.traceId ? 'View trace →' : 'View traces →'}</Button>
+        </div>
+      </div>
+
+      <div className="agent-activity-feed">
+        <motion.div
+          className="agent-activity-update"
+          key={activity.key}
+          initial={reduced ? false : { opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduced ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <span className="agent-activity-label">{activity.label}</span>
+          <span className="agent-activity-task">{activity.task}</span>
+          {activity.tool && (
+            <span className="agent-tool-pair" data-tool-state={activity.tool.state}>
+              <code>{activity.tool.name}</code>
+              <span aria-hidden="true">→</span>
+              <span>{activity.tool.summary}</span>
+            </span>
+          )}
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
 export function AgentOverview() {
   const state = useAppState();
   const nav = useNav();
@@ -70,19 +124,7 @@ export function AgentOverview() {
       <div className="app-body">
         <AgentHead full />
         <AgentTabsRow value="overview" />
-        <Panel
-          icon="loop"
-          title={state.workspace.name}
-          subtitle={state.agent.summary || 'Screening · Drafting · Routing'}
-          right={
-            <div className="col" style={{ alignItems: 'flex-end', gap: 3 }}>
-              <span className="meta">{state.capabilities.automatedTriggers ? 'Enabled' : 'Manual only'}</span>
-              <Button link onClick={() => nav(TRACES)}>
-                View traces →
-              </Button>
-            </div>
-          }
-        />
+        <AgentActivityPanel traces={lists.traces} />
         <div className="row" style={{ height: 32 }}>
           <h2 className="section-title">{admin ? 'Needs you' : 'Assigned to you'}</h2>
           <span className="grow" />

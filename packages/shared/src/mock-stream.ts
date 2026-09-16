@@ -109,7 +109,7 @@ export function mockRunStream(scenario: MockScenario = 'completed', options: Moc
 
   const steps = [
     { id: 'read', label: 'Read the application', state: 'todo' as const },
-    { id: 'score', label: 'Score against the criteria', state: 'todo' as const },
+    { id: 'criteria', label: 'Read the partner criteria', state: 'todo' as const },
   ];
 
   b.push('run.started', {
@@ -131,11 +131,11 @@ export function mockRunStream(scenario: MockScenario = 'completed', options: Moc
     entity_type: 'session',
     entity_id: session,
   });
-  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: steps[0]!.label, state: 'active' });
+  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: 'get_request', state: 'active', tool_call_id: 'mock-call-get-request' });
 
   if (scenario === 'stopped') {
     b.push('run.status', { run_id: runId, attempt: 1, status: 'stopping' });
-    b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: steps[0]!.label, state: 'todo' });
+    b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: 'get_request', state: 'todo', tool_call_id: 'mock-call-get-request' });
     b.push('run.status', { run_id: runId, attempt: 1, status: 'stopped', active_ms: 1250 });
     return b.done();
   }
@@ -150,8 +150,8 @@ export function mockRunStream(scenario: MockScenario = 'completed', options: Moc
     return b.done();
   }
 
-  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: steps[0]!.label, state: 'done' });
-  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'score', label: steps[1]!.label, state: 'active' });
+  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'read', label: 'get_request', state: 'done', tool_call_id: 'mock-call-get-request' });
+  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'criteria', label: 'get_document_text', state: 'active', tool_call_id: 'mock-call-get-document' });
 
   if (scenario === 'step_retry') {
     // First step attempt streams, then fails. Its deltas stay in the outbox.
@@ -167,7 +167,7 @@ export function mockRunStream(scenario: MockScenario = 'completed', options: Moc
     b.push('message.delta', { message_id: messageId, run_id: runId, turn: 0, attempt: 1, step_attempt: 1, seq: 1, delta: 'Customer impact is unverified.' });
   }
 
-  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'score', label: steps[1]!.label, state: 'done' });
+  b.push('run.step', { run_id: runId, attempt: 1, turn: 0, step_id: 'criteria', label: 'get_document_text', state: 'done', tool_call_id: 'mock-call-get-document' });
 
   if (scenario === 'proposes_request') {
     b.push('run.focus', {
