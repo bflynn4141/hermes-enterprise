@@ -18,10 +18,11 @@ import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } f
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
 import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
-import { catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
+import { LIST_KEYS, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
+import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -1027,21 +1028,116 @@ function ProviderKeysTab() {
   const lists = useWorkspaceLists();
   const [dialog, setDialog] = useState<'add' | 'rotate' | 'remove' | null>(null);
   const [target, setTarget] = useState<MaskedProviderKey | null>(null);
-  const [provider, setProvider] = useState(DEFAULT_PROVIDER);
-  const [label, setLabel] = useState('');
   const [secret, setSecret] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
+  const [connectKeyId, setConnectKeyId] = useState<string | null>(null);
+  const [autoFocusKey, setAutoFocusKey] = useState(false);
   const keys = lists.providerKeys;
 
-  // Every mutation is step-up gated; a 401 `reauth_required` redirects and the
-  // dialog reopens in a confirm state on the way back.
+  const refreshKeys = (): void => adapter.invalidateList(LIST_KEYS.providerKeys);
+
+  const closeConnect = (): void => {
+    setDialog(null);
+    setSecret('');
+    setConnectStatus({ kind: 'idle' });
+    setConnectKeyId(null);
+    setAutoFocusKey(false);
+  };
+
+  // On the way back from a recent-sign-in challenge, reopen the same flow and
+  // wait for a deliberate confirmation. Plaintext is never persisted across
+  // the redirect; an already-stored key can be retried by id without another
+  // paste, while a not-yet-stored key is focused for the Admin to paste again.
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind !== 'provider_key') return;
+    setDialog('add');
+    setAutoFocusKey(!intent.keyId);
+    setConnectStatus(
+      intent.keyId
+        ? { kind: 'pending', message: 'Re-authenticated. Confirm to verify the saved key again; you do not need to paste it again.' }
+        : { kind: 'idle' },
+    );
+    setConnectKeyId(intent.keyId ?? null);
+    adapter.clearStepUp();
+  }, [adapter]);
+
+  const connectFeedback = (status: string, reason: string, keyId: string, modelCount: number | null): void => {
+    setSecret('');
+    refreshKeys();
+    if (status === 'verified' || status === 'verified_scoped') {
+      setConnectStatus({ kind: 'connected', modelCount });
+      return;
+    }
+    setConnectKeyId(keyId);
+    if (status === 'invalid' || reason === 'rejected') {
+      setConnectStatus({ kind: 'invalid', message: 'Nous Portal did not accept this key. Check the key in Nous Portal, then retry verification or close this dialog and rotate it.' });
+      return;
+    }
+    const detail = reason === 'throttled'
+      ? 'Nous Portal asked us to slow down.'
+      : reason === 'forbidden'
+        ? 'Nous Portal did not allow this verification attempt.'
+        : 'Nous Portal could not be reached.';
+    setConnectStatus({ kind: 'pending', message: `The key is encrypted and saved, but it is not verified yet. ${detail} Try verification again; you do not need to paste it again.` });
+  };
+
+  const connect = async (): Promise<void> => {
+    if (!secret.trim()) return;
+    setConnectStatus({ kind: 'connecting' });
+    try {
+      const result = await adapter.rest.addProviderKey(state.workspace.id, { provider: DEFAULT_PROVIDER, key: secret.trim() });
+      connectFeedback(result.verification.status, result.verification.reason, result.key.id, result.key.synced_model_count);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+        setConnectStatus({ kind: 'error', message: 'This needs a recent sign-in. Sign in again to continue.' });
+        return;
+      }
+      const message = error.reason === 'bad_key'
+        ? 'That does not look like a Nous Portal API key. Copy the complete key from Nous Portal and try again.'
+        : error.reason === 'key_exists'
+          ? 'This workspace already has a Nous Portal key. Close this dialog and rotate the existing key instead.'
+          : error.reason === 'not_admin'
+            ? 'A workspace Admin must connect the Nous Portal key.'
+            : 'The key could not be saved. Check your connection and try again.';
+      setConnectStatus({ kind: 'error', message });
+    }
+  };
+
+  const retryConnect = async (): Promise<void> => {
+    if (!connectKeyId) return;
+    setConnectStatus({ kind: 'retrying', message: 'Checking the saved key with Nous Portal…' });
+    try {
+      const result = await adapter.rest.verifyProviderKey(state.workspace.id, connectKeyId);
+      connectFeedback(result.status, result.reason, result.key_id, result.synced?.count ?? null);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', keyId: connectKeyId, returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+      }
+      setConnectStatus({ kind: 'pending', message: 'The key remains encrypted and saved, but verification did not finish. Try again shortly.' });
+    }
+  };
+
+  // Every other key mutation keeps its existing step-up boundary. Refreshing
+  // invalidates the cached list so the next render reads the server's result.
   const guarded = async (run: () => Promise<unknown>, reason: 'provider_key' = 'provider_key'): Promise<void> => {
     try {
       await run();
-      adapter.ensureList('provider-keys', async () => {
-        const page = await adapter.rest.providerKeys(state.workspace.id);
-        return { ids: page.keys.map((k) => k.id), cursor: null, total: page.keys.length, rows: page.keys.map((k) => ({ kind: 'provider_key' as const, id: k.id, data: k, version: 1 })) };
-      });
+      refreshKeys();
       setDialog(null);
       setSecret('');
     } catch (error) {
@@ -1058,7 +1154,7 @@ function ProviderKeysTab() {
         setNotice('This needs a recent sign-in. Sign in again to continue.');
         return;
       }
-      setNotice(code === 'provider_rejected' ? `Your ${provider} key was rejected. Re-verify or rotate it` : `Could not reach ${provider}. We'll re-check shortly.`);
+      setNotice(code === 'provider_rejected' ? 'Your Nous Portal key was rejected. Re-verify or rotate it.' : "Could not reach Nous Portal. We'll re-check shortly.");
     }
   };
 
@@ -1078,6 +1174,11 @@ function ProviderKeysTab() {
         <Button
           onClick={() => {
             setDialog('add');
+            setTarget(null);
+            setSecret('');
+            setConnectStatus({ kind: 'idle' });
+            setConnectKeyId(null);
+            setAutoFocusKey(false);
             setNotice(null);
           }}
         >
@@ -1150,43 +1251,21 @@ function ProviderKeysTab() {
       <Dialog
         open={dialog === 'add'}
         title="Connect Nous Portal"
-        onClose={() => setDialog(null)}
-        actions={
-          <>
-            <Button onClick={() => setDialog(null)}>Cancel</Button>
-            <Button primary disabled={!secret.trim() || !label.trim()} onClick={() => void guarded(() => adapter.rest.addProviderKey(state.workspace.id, { provider, label: label.trim(), key: secret.trim() }))}>
-              Add and verify
-            </Button>
-          </>
-        }
+        onClose={closeConnect}
       >
-        {/* One provider, so no chooser: a radio group of one is a control that
-            asks a question with a single answer (decision R12). The list is
-            still mapped rather than hard-coded, because that is what a second
-            allowed provider would need and it costs one line. */}
-        <div className="col" role={PROVIDER_CHOICES.length > 1 ? 'radiogroup' : undefined} aria-label="Provider" style={{ gap: 4 }}>
-          {PROVIDER_CHOICES.map((item) =>
-            PROVIDER_CHOICES.length > 1 ? (
-              <MenuItem key={item.id} checked={provider === item.id} sub={item.note} onClick={() => setProvider(item.id)}>
-                {item.label}
-              </MenuItem>
-            ) : (
-              <div className="row-main" key={item.id}>
-                <span className="t">{item.label}</span>
-                <span className="s">{item.note}</span>
-              </div>
-            ),
-          )}
-        </div>
-        <label className="field">
-          <span className="sr-only">Label</span>
-          <input placeholder="Label, e.g. Program key" value={label} onChange={(event) => setLabel(event.target.value)} />
-        </label>
-        <label className="field">
-          <span className="sr-only">Key</span>
-          <input type="password" placeholder="Paste the key" value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete="off" />
-        </label>
-        <p className="meta">The key is encrypted at rest and never returned. You will be asked to re-authenticate first.</p>
+        <ProviderConnect
+          apiKey={secret}
+          onApiKeyChange={(value) => {
+            setSecret(value);
+            if (connectStatus.kind === 'error') setConnectStatus({ kind: 'idle' });
+          }}
+          status={connectStatus}
+          autoFocusKey={autoFocusKey}
+          onConnect={() => void connect()}
+          onRetry={() => void retryConnect()}
+          onCancel={closeConnect}
+          onDone={closeConnect}
+        />
       </Dialog>
 
       <Dialog

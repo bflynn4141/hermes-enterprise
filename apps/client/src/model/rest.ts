@@ -397,7 +397,7 @@ export function createRest(options: RestOptions) {
 
     // --- provider keys (every mutation needs step-up) ---
     providerKeys: (workspaceId: string) => request('GET', `${ws(workspaceId)}/provider-keys`, providerKeyListSchema),
-    addProviderKey: (workspaceId: string, body: { provider: string; label: string; key: string }) =>
+    addProviderKey: (workspaceId: string, body: { provider: string; label?: string; key: string }) =>
       request('POST', `${ws(workspaceId)}/provider-keys`, providerKeyMutationSchema, body),
     verifyProviderKey: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-keys/${id}/verify`, providerKeyVerifySchema, {}),
     rotateProviderKey: (workspaceId: string, id: string, key: string) =>

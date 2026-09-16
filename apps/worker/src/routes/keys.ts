@@ -115,6 +115,9 @@ function readKey(value: unknown): string {
 const readLabel = (value: unknown): string =>
   typeof value === 'string' ? value.trim().slice(0, MAX_LABEL_LENGTH) : '';
 
+/** A first-run client should not need to invent a name for the only provider. */
+const defaultProviderLabel = (provider: string): string => provider === 'nous_portal' ? 'Nous Portal' : provider;
+
 /**
  * Adapter options for one provider.
  *
@@ -219,7 +222,7 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await jsonBody<AddKeyBody>(c);
   const provider = readProvider(c.env, body.provider);
   const plaintext = readKey(body.key);
-  const label = readLabel(body.label);
+  const label = readLabel(body.label) || defaultProviderLabel(provider);
 
   const prepared = await inWorkspace(c, async (work) => {
     work.requireAdmin('adding a provider key');
