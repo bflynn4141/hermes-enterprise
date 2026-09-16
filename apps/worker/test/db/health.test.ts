@@ -6,7 +6,7 @@
 // the WorkOS check appears only in `AUTH_MODE=workos` — because in fake mode
 // there is no JWKS and a check that failed there would make every local
 // `/health` red for no reason.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { CONNECTION_ALARM, CONNECTION_CEILING, readConnectionMetric } from '../../src/ops/connections.js';
 import { setJwksFetcherForTests } from '../../src/auth/jwks.js';
@@ -20,13 +20,82 @@ interface HealthBody {
   checks: { name: string; ok: boolean; detail: string; duration_ms: number }[];
 }
 
-afterEach(() => setJwksFetcherForTests(null));
+afterEach(() => {
+  setJwksFetcherForTests(null);
+  vi.unstubAllGlobals();
+});
 // The route memoises its answer per isolate for `CACHE_MS` so that an
 // unauthenticated poll does not cost three Postgres connections a hit. These
 // tests change the world between calls, which no real deployment does.
 beforeEach(() => resetHealthCacheForTests());
 
 describe('GET /health', () => {
+  it('checks every configured Hermes profile for the durable Runs contract', async () => {
+    const workspaceId = '11111111-1111-4111-8111-111111111111';
+    const agentId = '44444444-4444-4444-8444-444444444444';
+    const upstream = vi.fn<typeof fetch>(async () => Response.json({
+      object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+      features: {
+        run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+        runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+      },
+      endpoints: {
+        runs: { method: 'POST', path: '/v1/runs' },
+        run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+        run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+        run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+        run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+      },
+    }));
+    vi.stubGlobal('fetch', upstream);
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agentId]: { workspace_id: workspaceId, base_url: 'https://runtime.example', api_key: 'native-secret' },
+      }),
+    } as Partial<Env>);
+    const body = (await (await call(env, '/health')).json()) as HealthBody;
+
+    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: true, detail: 'ready' });
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
+  it('fails readiness when a Hermes profile reports in-memory run reservations', async () => {
+    const workspaceId = '11111111-1111-4111-8111-111111111111';
+    const agentId = '44444444-4444-4444-8444-444444444444';
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({
+      object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+      features: {
+        run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+        runs_idempotency: { supported: true, durable: false, retention_seconds: 86_400 },
+      },
+      endpoints: {
+        runs: { method: 'POST', path: '/v1/runs' },
+        run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+        run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+        run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+        run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+      },
+    })));
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agentId]: { workspace_id: workspaceId, base_url: 'https://runtime.example', api_key: 'native-secret' },
+      }),
+    } as Partial<Env>);
+    const response = await call(env, '/health');
+    const body = (await response.json()) as HealthBody;
+
+    expect(response.status).toBe(503);
+    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: false, detail: 'failed' });
+  });
+
   it('reports the connection count with its denominator', async () => {
     const { env } = makeEnv();
     // The Node harness has no Durable Object runtime, so `hub:workspace` fails

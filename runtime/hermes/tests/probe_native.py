@@ -118,11 +118,6 @@ def main():
             token_file, log_file = temporary / "token", temporary / "native.log"
             token_file.write_text(token)
             token_file.chmod(0o600)
-            with log_file.open("w") as log:
-                process = subprocess.Popen([sys.executable, str(ROOT / "start.py"), "--source", str(args.source),
-                    "--python", str(args.python), "--workspace-id", "test-workspace", "--agent-id", agent_id,
-                    "--enterprise-url", f"http://127.0.0.1:{server.server_port}", "--model", "test/fixture",
-                    "--token-file", str(token_file), "--port", str(port), "--state-root", str(state_root)], stdout=log, stderr=log)
             native_key = None
 
             def request(method, path, body=None, key=None):
@@ -136,22 +131,42 @@ def main():
                 except urllib.error.HTTPError as error:
                     response = error
                 with response:
-                    return response.code, json.loads(response.read())
-
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise AssertionError("Native startup failed:\n" + log_file.read_text())
-                if (profile / "api.key").exists():
-                    native_key = (profile / "api.key").read_text().strip()
+                    raw = response.read()
                     try:
-                        if request("GET", "/v1/capabilities")[0] == 200:
-                            break
-                    except OSError:
-                        pass
-                time.sleep(0.2)
-            else:
+                        payload = json.loads(raw)
+                    except (ValueError, UnicodeDecodeError):
+                        payload = raw.decode(errors="replace")
+                    return response.code, payload
+
+            def start_native():
+                with log_file.open("a") as log:
+                    launched = subprocess.Popen([sys.executable, str(ROOT / "start.py"), "--source", str(args.source),
+                        "--python", str(args.python), "--workspace-id", "test-workspace", "--agent-id", agent_id,
+                        "--enterprise-url", f"http://127.0.0.1:{server.server_port}", "--model", "test/fixture",
+                        "--token-file", str(token_file), "--port", str(port), "--state-root", str(state_root)], stdout=log, stderr=log)
+                deadline = time.monotonic() + 120
+                while time.monotonic() < deadline:
+                    if launched.poll() is not None:
+                        raise AssertionError("Native startup failed:\n" + log_file.read_text())
+                    if (profile / "api.key").exists():
+                        key = (profile / "api.key").read_text().strip()
+                        try:
+                            probe = urllib.request.Request(f"http://127.0.0.1:{port}/v1/capabilities",
+                                method="GET", headers={"Authorization": "Bearer " + key})
+                            with urllib.request.urlopen(probe, timeout=5) as response:
+                                capabilities = json.loads(response.read())
+                            return launched, key, capabilities
+                        except OSError:
+                            pass
+                    time.sleep(0.2)
+                launched.terminate()
+                launched.wait(timeout=10)
                 raise AssertionError("Native startup timed out:\n" + log_file.read_text())
+
+            process, native_key, capabilities = start_native()
+            assert capabilities["object"] == "hermes.api_server.capabilities", capabilities
+            assert capabilities["features"]["runs_idempotency"]["durable"] is True, capabilities
+            assert request("GET", "/api/jobs")[0] == 404, "native cron routes remain reachable"
             body = {"input": "ECHO_VALUE", "session_id": "fixture-session", "provider": "custom", "model": "test/fixture"}
             code, accepted = request("POST", "/v1/runs", body, "fixture-first")
             assert code == 202, accepted
@@ -187,6 +202,17 @@ def main():
             }
             assert tool_calls[0]["tool_call_id"].startswith("call_"), tool_calls
             assert catalog_names == {"enterprise_echo"}, catalog_names
+            process.terminate()
+            process.wait(timeout=20)
+            process = None
+            # The profile state, not the listener number, owns idempotency.
+            # A fresh loopback port avoids macOS's post-close bind window.
+            port = free_port()
+            process, native_key, restarted_capabilities = start_native()
+            assert restarted_capabilities["features"]["runs_idempotency"]["durable"] is True
+            replay_code, replay = request("POST", "/v1/runs", body, "fixture-first")
+            assert replay_code == 202 and replay["run_id"] == run_id and replay["replayed"], replay
+            assert request("GET", "/v1/runs/" + run_id)[1]["status"] == "completed"
             second_body = {**body, "input": "SECOND_TURN"}
             _, second = request("POST", "/v1/runs", second_body, "fixture-second")
             assert settle(second["run_id"])["status"] == "completed"
@@ -203,8 +229,12 @@ def main():
             stopped = settle(waiting_id)
             assert stopped["status"] == "cancelled", stopped
             assert time.monotonic() - before_stop < 8, "Stop was not responsive"
+            jobs_file = profile / "home/cron/jobs.json"
+            jobs_file.parent.mkdir(parents=True, exist_ok=True)
+            jobs_file.write_text(json.dumps({"jobs": [{"id": "forbidden-fixture", "enabled": False}]}))
+            assert request("GET", "/health")[0] == 503, "native health ignored a nonempty cron store"
             print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model.")
-            print("Verified trusted run/call identity, exact tool allowlist, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
+            print("Verified durable capabilities, restart replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

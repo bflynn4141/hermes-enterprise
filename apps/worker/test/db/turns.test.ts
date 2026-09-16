@@ -6,7 +6,7 @@
 // the instance created, with a duplicate-id error a no-op. Whether the Workflow
 // then does anything is the engine tests' subject.
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { runAttemptInstanceId } from '../../src/runs/workflow.js';
 import { asUser, makeEnv, type HubCall } from './harness.js';
@@ -96,6 +96,7 @@ beforeAll(async () => {
   fx = await seedWorkspace();
 });
 afterAll(() => undefined);
+afterEach(() => vi.restoreAllMocks());
 
 const turnPath = (f: Fixture): string => `/w/${f.workspaceId}/sessions/${f.sessionId}/turns`;
 
@@ -108,6 +109,70 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     });
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ reason: 'client_turn_id_required' });
+  });
+
+  it('rejects nonempty attachments before persisting a message or admitting a run', async () => {
+    const workspace = await seedWorkspace();
+    const { env, created } = envWithWorkflow();
+    const clientTurnId = `turn-attachment-${randomUUID()}`;
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: {
+        client_turn_id: clientTurnId,
+        text: 'Review the attached application.',
+        attachments: [{ id: randomUUID(), label: 'application.pdf', kind: 'file', status: 'ready' }],
+      },
+    });
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ reason: 'attachments_unsupported' });
+    expect(created).toEqual([]);
+    const count = await asTenant(workspace.workspaceId, workspace.adminId, async (c) =>
+      c.query<{ count: string }>('SELECT count(*)::text AS count FROM runs WHERE client_turn_id = $1', [clientTurnId]));
+    expect(count.rows[0]?.count).toBe('0');
+  });
+
+  it('refuses Hermes admission before creating a run when reservations are not durable', async () => {
+    const workspace = await seedWorkspace();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
+      object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+      features: {
+        run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+        runs_idempotency: { supported: true, durable: false, retention_seconds: 86_400 },
+      },
+      endpoints: {
+        runs: { method: 'POST', path: '/v1/runs' },
+        run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+        run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+        run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+        run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+      },
+    }));
+    const { env, created } = envWithWorkflow({
+      MODEL_SCRIPTED: '0',
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [workspace.agentId]: {
+          workspace_id: workspace.workspaceId,
+          base_url: 'https://runtime.example',
+          api_key: 'native-secret',
+        },
+      }),
+    });
+    const clientTurnId = `turn-nondurable-${randomUUID()}`;
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST', body: { client_turn_id: clientTurnId, text: 'Do not admit this.' },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'runtime_unhealthy' });
+    expect(created).toEqual([]);
+    const count = await asTenant(workspace.workspaceId, workspace.adminId, async (c) =>
+      c.query<{ count: string }>('SELECT count(*)::text AS count FROM runs WHERE client_turn_id = $1', [clientTurnId]));
+    expect(count.rows[0]?.count).toBe('0');
   });
 
   it('creates one run, one instance, and names the instance ${run_id}-a1', async () => {

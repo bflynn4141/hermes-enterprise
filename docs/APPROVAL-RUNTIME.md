@@ -141,9 +141,11 @@ same finalization path but creates no run and reports
 ## Known adjacent gaps
 
 This layer does not make unsupported input appear supported. Turn attachments
-are still not delivered to Hermes; callers must not claim that the runtime read
-them until the turn route persists immutable references/content. Native Runs
-admission also does not yet require the `/v1/capabilities` durable-idempotency
-flag. Finally, the reservation introduced here is the reviewed continuation's
-hard budget; ordinary runs still rely on the existing workspace daily cap at
-turn admission rather than a per-provider-call daily-cap reservation.
+are not yet delivered to Hermes, so the turn route rejects any nonempty
+`attachments` array before persisting a message or admitting a run. Native Runs
+health, initial admission, Workflow replay, and reconciliation require the
+expected `/v1/capabilities` Runs contract and durable idempotency. The remaining
+adjacent gap is budget scope: the reservation introduced here is the reviewed
+continuation's hard budget; ordinary runs still rely on the existing workspace
+daily cap at turn admission rather than a per-provider-call daily-cap
+reservation.

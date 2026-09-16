@@ -86,7 +86,9 @@ human waits need a durable suspend/resume lifecycle before hosted rollout. Inbox
 proposals do not hold the runtime open while a reviewer decides.
 
 Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
-not enabled. Automatic memory extraction, background review and learning nudges
+not enabled. The launcher additionally refuses nonempty native cron state,
+removes native cron REST routes before binding, and makes native health fail if
+a job later appears. Automatic memory extraction, background review and learning nudges
 are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before

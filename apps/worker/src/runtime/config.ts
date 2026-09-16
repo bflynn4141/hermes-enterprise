@@ -37,6 +37,20 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
       (url.protocol !== 'https:' && !(env.ENVIRONMENT === 'development' && local && url.protocol === 'http:'))) return misconfigured();
   return { workspaceId, agentId, profile: `agent-${agentId}`, baseUrl: url.toString().replace(/\/$/, ''), apiKey: row.api_key };
 }
+export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
+  if (env.AGENT_RUNTIME !== 'hermes') return [];
+  let bindings: unknown;
+  try { bindings = JSON.parse(env.HERMES_RUNTIME_AGENTS ?? ''); } catch { return misconfigured(); }
+  if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) return misconfigured();
+  const rows = Object.entries(bindings as Record<string, unknown>);
+  if (rows.length === 0) return misconfigured();
+  return rows.map(([agentId, entry]) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return misconfigured();
+    const workspaceId = (entry as Record<string, unknown>).workspace_id;
+    if (typeof workspaceId !== 'string') return misconfigured();
+    return runtimeBinding(env, workspaceId, agentId);
+  });
+}
 /** Existing sessions show the configured execution location after a rollout.
  * Missing configuration still fails turn admission; it must not hide onboarding
  * or historical conversations merely because a profile has not been provisioned.

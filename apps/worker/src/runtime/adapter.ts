@@ -66,6 +66,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       return { ok: true };
     });
     const submitted = await step.do('hermes-submit', CHECKPOINT, async () => {
+      // A Workflow callback may be replaying after either process restarted.
+      // Re-read the live contract before trusting a persisted binding or
+      // replaying the stable idempotency key.
+      await client.capabilities();
       const existing = await db.binding(run.id);
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
       const history = await db.loadHistory(run.id, 100);
@@ -94,6 +98,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
     remoteId = submitted.id;
     const id = submitted.id;
     await step.do('hermes-execute', EXECUTION, async () => {
+      // This step is independently retried. Do not let an API server that
+      // restarted into its in-memory fallback look healthy on reconciliation.
+      await client.capabilities();
       const startedAt = Date.now();
       const progress = { runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'active' as const };
       const { stepAttempt } = await db.enterStep(progress);

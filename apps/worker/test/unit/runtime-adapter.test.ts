@@ -83,8 +83,17 @@ class FakeHermesClient extends HermesClient {
   onStatus: (() => void) | null = null;
   onStop: (() => void) | null = null;
   streamFailure: Error | null = null;
+  capabilityReads = 0;
+  capabilityFailure: Error | null = null;
 
   constructor() { super('https://runtime.invalid', 'test-runtime-key'); }
+
+  override capabilities() {
+    this.capabilityReads += 1;
+    return this.capabilityFailure
+      ? Promise.reject(this.capabilityFailure)
+      : Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+  }
 
   override submit(body: Record<string, unknown>, key: string) {
     this.onSubmit?.();
@@ -178,8 +187,21 @@ describe('official Hermes enterprise projection', () => {
     await execute(db, client, new FakeStep());
     expect(client.submissions).toEqual([]);
     expect(client.eventSubscriptions).toBe(0);
+    expect(client.capabilityReads).toBe(2);
     expect(db.messages.get(0)?.text).toBe(client.final.output);
     expect(db.statusChanges.at(-1)?.status).toBe('completed');
+  });
+
+  it('fails closed on replay when the restarted runtime loses durable idempotency', async () => {
+    const db = new FakeRuntimeDb();
+    db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };
+    const client = new FakeHermesClient();
+    client.capabilityFailure = new Error('native durability unavailable');
+    await execute(db, client);
+    expect(client.capabilityReads).toBeGreaterThan(0);
+    expect(client.submissions).toEqual([]);
+    expect(client.statusReads).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
   });
 
   it('uses the snapshotted request on a submit retry even if current context has changed', async () => {

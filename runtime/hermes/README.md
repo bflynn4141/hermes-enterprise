@@ -15,7 +15,9 @@ python3 runtime/hermes/start.py \
   --model 'raw-model-id-from-the-enterprise-catalog'
 ```
 
-To reuse an already cloned **pinned official** source tree, pass `--source /absolute/path/to/hermes-agent` to both commands. The installer rejects a different commit or modified tracked files. The gateway runs in the foreground; run it under the deployment's process supervisor for lasting service. `--port` defaults to `8642`; assign a different port to each additional agent.
+To reuse an already cloned **pinned official** source tree, pass `--source /absolute/path/to/hermes-agent` to both commands. The installer rejects a different commit, modified tracked files, or an untracked/missing `uv.lock`. It uses `uv sync --locked --no-install-project` against that tree, so dependency artifacts are checked against the upstream lock while the launcher imports the exact verified source through `PYTHONPATH`; there is no editable package or live dependency resolution. The API server's `aiohttp` dependency comes from the upstream `sms` extra, its smallest aiohttp-only locked extra. The resulting source revision, lock SHA-256, and exact package inventory are written to ignored local state at `runtime/hermes/.state/installed-packages.json`.
+
+The gateway runs in the foreground; run it under the deployment's process supervisor for lasting service. `--port` defaults to `8642`; assign a different port to each additional agent.
 
 The env file has the fields shown in `credentials.env.example`. Provision `ENTERPRISE_RUNTIME_TOKEN` through the enterprise service's per-agent credential mechanism. `API_SERVER_KEY` is the random bearer secret the enterprise adapter uses to call this native runtime. Keep the file mode `0600`. There are **no workspace provider credentials** in this file. `--env-file` parses literal key/value data and never sources shell commands. CLI workspace, agent and URL flags override the corresponding file fields. Alternatively use `--token-file` with `--workspace-id`, `--agent-id` and `--enterprise-url`; the launcher then generates a native API key.
 
@@ -23,7 +25,7 @@ The default dedicated profile is `~/.he-runtime/<agent-uuid>/`, separate from th
 
 When relocating an existing profile, first stop its gateway and verify the process exited, then move the **whole agent UUID directory** to the new state root. This preserves transcript databases, run idempotency reservations and API credentials. Restart with the same enterprise credentials; do not start a fresh empty directory while the previous profile is still running. The initial development profile used `~/.hermes-enterprise`; its longer prefix exceeded the watchdog socket limit on macOS.
 
-Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
+Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. It also refuses a profile whose native cron store is nonempty. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
 
 ## Supported configuration and scope
 
@@ -49,7 +51,7 @@ gateway:
 
 The launcher also disables every native built-in toolset, all MCP servers, both built-in memory stores, memory/skill nudges, background review and title generation. Only this plugin is enabled. A plugin pre-tool hook vetoes every name outside its discovered enterprise tools. Startup fails closed unless the resolved tool definitions contain only enterprise tools. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
-`API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. The platform's other native REST routes also require that secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
+`API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. The launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds. Native health and capabilities return 503 if the cron store later becomes nonempty. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
 
 ## Tool bridge protocol
 
@@ -90,7 +92,7 @@ Send a bearer-authenticated `POST /v1/runs` with `input`, `session_id`, optional
 {"run_id":"run_<32 hex>","status":"started","replayed":false}
 ```
 
-Use a stable `Idempotency-Key` for one logical turn. It must be 1–255 visible ASCII characters. The fingerprint includes the complete body and `X-Hermes-Session-Key`. Identical repeats return the same ID with `replayed:true` and `Idempotency-Replayed: true`; changed payload returns HTTP 409 `idempotency_key_conflict`. Always reuse the original exact submission body when resolving lost acceptance. Reservations persist in `runs_idempotency.db`, scoped to profile and API credential, with 24-hour terminal retention. Check `/v1/capabilities` idempotency durability; Hermes can fall back to memory if its SQLite store cannot open. Restart does not automatically re-execute interrupted work; a retained nonterminal run whose owner died becomes `interrupted` when polled/replayed.
+Use a stable `Idempotency-Key` for one logical turn. It must be 1–255 visible ASCII characters. The fingerprint includes the complete body and `X-Hermes-Session-Key`. Identical repeats return the same ID with `replayed:true` and `Idempotency-Replayed: true`; changed payload returns HTTP 409 `idempotency_key_conflict`. Always reuse the original exact submission body when resolving lost acceptance. Reservations persist in `runs_idempotency.db`, scoped to profile and API credential, with 24-hour terminal retention. The Worker validates the authenticated server-agent Runs endpoint contract and requires `runs_idempotency.durable === true` in deployment health, turn admission, Workflow submit/replay, and execution reconciliation. Hermes can fall back to memory if its SQLite store cannot open; that state is now unhealthy and cannot admit a native run. Restart does not automatically re-execute interrupted work; a retained nonterminal run whose owner died becomes `interrupted` when polled/replayed.
 
 `GET /v1/runs/<id>` is authoritative reconciliation. Statuses: `queued`, `running`, `waiting_for_approval`, `stopping`, `completed`, `failed`, `cancelled`, `interrupted`. Polling includes `object:"hermes.run"`, `run_id`, `session_id`, model, Unix-second `created_at`/`updated_at`, and terminal output/usage or error. Non-idempotent terminal statuses remain in memory for one hour.
 
@@ -125,7 +127,7 @@ python3 runtime/hermes/tests/probe_native.py \
   --python runtime/hermes/.state/venv/bin/python
 ```
 
-The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under a disposable isolated home. It checks the model proxy, exact tool catalog, trusted run/call IDs, admission replay/conflict, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
+The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under a disposable isolated home. It checks the durable capability contract, exact model/tool boundary, admission replay/conflict, a full gateway restart followed by durable replay, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
 
 ## Official source anchors
 
