@@ -4717,7 +4717,9 @@ Hermes Cloud streams native SSE with available-byte reads rather than an 8 KB
 buffer-filling read. The Worker durably coalesces deltas over 75 ms and always
 performs a trailing flush, so a pause cannot hold text until the one-second
 runtime status poll. The connector disables intermediary response transforms
-and buffering where supported.
+and buffering where supported. The coalescing clock starts again after a
+durable write is delivered; database latency therefore cannot make an
+already-buffered native burst fall into one write per token.
 
 **Why.** The network round trips needed for admission and durable execution are
 real, but they should not delay acknowledgment of the person's own action.
