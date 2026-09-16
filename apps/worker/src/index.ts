@@ -18,6 +18,7 @@ import { health } from './routes/health.js';
 import { listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
+import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -276,6 +277,8 @@ app.get('/w/:ws/integrations/slack', getSlackConnection);
 app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
 app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
+app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
+app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
 // Sessions, and everything hanging off one.
 app.get('/w/:ws/sessions', listSessions);

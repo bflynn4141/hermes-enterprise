@@ -16,7 +16,7 @@ import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { loadApprovalView, proposeApproval as proposeEnterpriseApproval } from '../domain/approvals.js';
 import { SYSTEM_USER_ID, withWorkspaceTransaction } from '../jobs.js';
-import { resolveKey } from '../keys/store.js';
+import { KeyStoreError, resolveKey } from '../keys/store.js';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 import { estimateCostUsd, loadModel } from '../model/catalog.js';
 import { MODE_TOOL_KINDS, TOOLS } from './tools.js';
@@ -318,10 +318,11 @@ export class PgAgentDb implements AgentDb {
   }
 
   async resolveCredential(provider: string): Promise<Credential> {
-    return this.tx(async (q) => {
-      const resolved = await resolveKey({ query: q as never }, this.env, this.workspaceId, provider);
-      return { provider: resolved.provider, apiKey: resolved.apiKey, keyId: resolved.keyId };
-    });
+    const resolved = await this.tx((q) => resolveKey({ query: q as never }, this.env, this.workspaceId, provider));
+    if (resolved.status === 'invalid' || resolved.apiKey === '') {
+      throw new KeyStoreError(`the ${provider} OAuth connection must be reconnected`, 'key_invalid');
+    }
+    return { provider: resolved.provider, apiKey: resolved.apiKey, keyId: resolved.keyId };
   }
 
   async stopOtherRunsOnProvider(provider: string, exceptRunId: string): Promise<number> {

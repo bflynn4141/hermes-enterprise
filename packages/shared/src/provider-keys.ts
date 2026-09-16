@@ -54,6 +54,8 @@ export const maskedProviderKeySchema = z
     rotated_at: z.iso.datetime().nullable(),
     revoked_at: z.iso.datetime().nullable(),
     replaces_key_id: z.uuid().nullable(),
+    credential_kind: z.enum(['api_key', 'oauth_device_code']).default('api_key'),
+    oauth_expires_at: z.iso.datetime().nullable().default(null),
   })
   .strict();
 export type MaskedProviderKey = z.infer<typeof maskedProviderKeySchema>;

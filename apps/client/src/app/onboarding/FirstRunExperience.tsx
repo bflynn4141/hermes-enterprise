@@ -156,6 +156,42 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     }).catch(() => setConnectStatus({ kind: 'pending', message: 'Verification did not finish. The key remains encrypted and saved; try again shortly.' }));
   }, [adapter, app.workspace.id, storedKeyId]);
 
+  const onOAuthStart = useCallback((): void => {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) popup.opener = null;
+    setConnectStatus({ kind: 'connecting' });
+    void adapter.rest.startNousOAuth(app.workspace.id).then(async (started) => {
+      if (started.status === 'unavailable') {
+        popup?.close();
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled here yet. A workspace Admin can use an API key below.' });
+        return;
+      }
+      if (popup) popup.location.href = started.verification_uri;
+      setConnectStatus({ kind: 'authorizing', userCode: started.user_code, verificationUri: started.verification_uri });
+      let delay = started.poll_after_ms;
+      while (Date.now() < new Date(started.expires_at).getTime()) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        const polled = await adapter.rest.pollNousOAuth(app.workspace.id, started.session_id);
+        if (polled.status === 'pending') { delay = polled.poll_after_ms; continue; }
+        popup?.close();
+        if (polled.status === 'connected') {
+          setStoredKeyId(polled.key.id); setProviderReady(true);
+          setConnectStatus({ kind: 'connected', modelCount: polled.synced?.count ?? polled.key.synced_model_count });
+        } else {
+          setConnectStatus({ kind: 'error', message: polled.status === 'expired' ? 'Nous sign-in expired. Start again.' : 'Nous could not connect this workspace. Start again.' });
+        }
+        return;
+      }
+      popup?.close(); setConnectStatus({ kind: 'error', message: 'Nous sign-in expired. Start again.' });
+    }).catch((caught: unknown) => {
+      popup?.close();
+      const error = caught as { reason?: string };
+      setConnectStatus(error.reason === 'oauth_not_configured'
+        ? { kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled here yet. A workspace Admin can use an API key below.' }
+        : { kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
+    });
+  }, [adapter, app.workspace.id]);
+
   const phase = providerPhase(connectStatus, providerReady);
   const providerSlot = useMemo(() => (
     <ProviderConnect
@@ -167,9 +203,10 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
       status={connectStatus}
       onConnect={onConnect}
       onRetry={storedKeyId ? onRetry : undefined}
+      onOAuthStart={onOAuthStart}
       connectLabel="Connect and continue"
     />
-  ), [apiKey, connectStatus, onConnect, onRetry, storedKeyId]);
+  ), [apiKey, connectStatus, onConnect, onOAuthStart, onRetry, storedKeyId]);
 
   if (!active) return null;
   return {

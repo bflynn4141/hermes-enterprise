@@ -49,6 +49,17 @@ KEK_V1=""
 # secret itself has landed everywhere.
 KEK_CURRENT=""
 
+# --- Nous Portal OAuth -------------------------------------------------------
+# Nous must provision this public/enterprise client id for the deployment.
+# When either value is absent, the UI says hosted sign-in is unavailable and
+# offers the existing manual workspace-key fallback. Do not use the dashboard
+# `agent:{id}` client: that token has agent_dashboard:access, not inference:invoke.
+NOUS_PORTAL_OAUTH_ENABLED="0"
+NOUS_PORTAL_OAUTH_CLIENT_ID=""
+# Production is pinned to https://portal.nousresearch.com. Override only for a
+# local integration fixture.
+NOUS_PORTAL_BASE_URL=""
+
 # --- R2 uploads (M3.5) --------------------------------------------------------
 # The bucket itself is a binding (wrangler.jsonc, UPLOADS) and needs no secret.
 # These three exist only so the Worker can sign a presigned PUT, so that 20 MB

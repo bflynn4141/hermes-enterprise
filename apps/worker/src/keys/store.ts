@@ -59,11 +59,13 @@ interface KeyRow {
   replaces_key_id: string | null;
   synced_model_count: number | null;
   models_synced_at: Date | null;
+  credential_kind: string;
+  oauth_expires_at: Date | null;
 }
 
 const MASKED_COLUMNS = `id, provider, label, last4, fingerprint, status, verified_models,
                         added_by, created_at, verified_at, rotated_at, revoked_at, replaces_key_id,
-                        synced_model_count, models_synced_at`;
+                        synced_model_count, models_synced_at, credential_kind, oauth_expires_at`;
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
@@ -87,7 +89,65 @@ function mask(row: KeyRow): MaskedProviderKey {
     // row carries how many were synced and when (decision R7).
     synced_model_count: row.synced_model_count,
     models_synced_at: iso(row.models_synced_at),
+    credential_kind: row.credential_kind as MaskedProviderKey['credential_kind'],
+    oauth_expires_at: iso(row.oauth_expires_at),
   };
+}
+
+export interface NousOAuthCredential {
+  readonly access_token: string;
+  readonly refresh_token: string;
+  readonly client_id: string;
+  readonly scope: string;
+  readonly token_type: string;
+  readonly portal_base_url: string;
+  readonly inference_base_url: string;
+  readonly expires_at: string;
+}
+
+/** Store an OAuth bundle in the same envelope boundary as provider keys. */
+export async function addProviderOAuthConnection(
+  tx: Tx,
+  env: KekEnv,
+  input: { workspaceId: string; addedBy: string; credential: NousOAuthCredential },
+): Promise<MaskedProviderKey> {
+  const keyId = crypto.randomUUID();
+  const plaintext = JSON.stringify(input.credential);
+  const sealed = await sealKey(env, { workspaceId: input.workspaceId, keyId }, plaintext);
+  const fingerprint = await computeFingerprint(input.credential.refresh_token);
+  const live = await tx.query<{ id: string }>(
+    `SELECT id FROM workspace_provider_keys
+      WHERE workspace_id = $1 AND provider = 'nous_portal' AND revoked_at IS NULL
+      FOR UPDATE`,
+    [input.workspaceId],
+  );
+  const replaces = live.rows[0]?.id ?? null;
+  if (replaces) {
+    await tx.query(
+      `UPDATE workspace_provider_keys
+          SET status='revoked', revoked_at=now(), rotated_at=now(),
+              ciphertext='\\x00'::bytea, wrapped_dek='\\x00'::bytea
+        WHERE workspace_id=$1 AND id=$2`,
+      [input.workspaceId, replaces],
+    );
+  }
+  const { rows } = await tx.query<KeyRow>(
+    `INSERT INTO workspace_provider_keys
+       (id, workspace_id, provider, label, ciphertext, iv, wrapped_dek, wrap_iv, kek_version,
+        fingerprint, last4, status, added_by, credential_kind, oauth_client_id, oauth_scope, oauth_expires_at, replaces_key_id)
+     VALUES ($1, $2, 'nous_portal', 'Nous Portal', $3, $4, $5, $6, $7,
+             $8, 'auth', 'verified', $9, 'oauth_device_code', $10, $11, $12, $13)
+     RETURNING ${MASKED_COLUMNS}`,
+    [
+      keyId, input.workspaceId, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
+      Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
+      fingerprint, input.addedBy, input.credential.client_id, input.credential.scope,
+      new Date(input.credential.expires_at), replaces,
+    ],
+  );
+  const row = rows[0];
+  if (!row) throw new KeyStoreError('the OAuth connection did not come back from the insert', 'not_found');
+  return mask(row);
 }
 
 /**
@@ -217,16 +277,17 @@ export async function resolveKey(
     id: string;
     provider: string;
     status: string;
+    credential_kind: string;
     ciphertext: Uint8Array;
     iv: Uint8Array;
     wrapped_dek: Uint8Array;
     wrap_iv: Uint8Array;
     kek_version: number;
   }>(
-    `SELECT id, provider, status, ciphertext, iv, wrapped_dek, wrap_iv, kek_version
+    `SELECT id, provider, status, credential_kind, ciphertext, iv, wrapped_dek, wrap_iv, kek_version
        FROM workspace_provider_keys
       WHERE workspace_id = $1 AND provider = $2 AND revoked_at IS NULL
-      LIMIT 1`,
+      LIMIT 1 FOR UPDATE`,
     [workspaceId, provider],
   );
 
@@ -246,8 +307,95 @@ export async function resolveKey(
     wrapIv: bytes(row.wrap_iv),
     kekVersion: row.kek_version,
   };
-  const apiKey = await openKey(env, { workspaceId, keyId: row.id }, stored);
+  let apiKey = await openKey(env, { workspaceId, keyId: row.id }, stored);
+  if (row.credential_kind === 'oauth_device_code') {
+    let credential: NousOAuthCredential;
+    try {
+      credential = JSON.parse(apiKey) as NousOAuthCredential;
+    } catch {
+      throw new KeyStoreError('the OAuth connection is invalid', 'key_invalid');
+    }
+    if (!credential.access_token || !credential.refresh_token || !credential.expires_at) {
+      throw new KeyStoreError('the OAuth connection is incomplete', 'key_invalid');
+    }
+    const expires = Date.parse(credential.expires_at);
+    if (!Number.isFinite(expires)) throw new KeyStoreError('the OAuth connection expiry is invalid', 'key_invalid');
+    if (expires <= Date.now() + 120_000) {
+      try {
+        credential = await refreshNousOAuthCredential(credential);
+      } catch (error) {
+        if (error instanceof OAuthRefreshError && error.terminal) {
+          // Quarantine the rotating token after a terminal grant failure. The
+          // next run stops before decrypting or replaying it.
+          await tx.query(
+            `UPDATE workspace_provider_keys SET status='invalid'
+              WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'`,
+            [workspaceId, row.id],
+          );
+          // Return a refusal sentinel so the tenant transaction can commit the
+          // quarantine. The caller throws only after its transaction closes.
+          return { keyId: row.id, provider: row.provider, apiKey: '', status: 'invalid' };
+        }
+        throw new KeyStoreError('the Nous OAuth session must be reconnected', 'key_invalid');
+      }
+      const plaintext = JSON.stringify(credential);
+      const sealed = await sealKey(env, { workspaceId, keyId: row.id }, plaintext);
+      await tx.query(
+        `UPDATE workspace_provider_keys
+            SET ciphertext=$3, iv=$4, wrapped_dek=$5, wrap_iv=$6, kek_version=$7,
+                fingerprint=$8, oauth_expires_at=$9
+          WHERE workspace_id=$1 AND id=$2 AND credential_kind='oauth_device_code'`,
+        [workspaceId, row.id, Buffer.from(sealed.ciphertext), Buffer.from(sealed.iv),
+         Buffer.from(sealed.wrappedDek), Buffer.from(sealed.wrapIv), sealed.kekVersion,
+         await computeFingerprint(credential.refresh_token), new Date(credential.expires_at)],
+      );
+    }
+    apiKey = credential.access_token;
+  }
   return { keyId: row.id, provider: row.provider, apiKey, status: row.status as KeyStatus };
+}
+
+class OAuthRefreshError extends Error {
+  constructor(readonly terminal: boolean) { super('Nous OAuth refresh failed'); }
+}
+
+async function refreshNousOAuthCredential(current: NousOAuthCredential): Promise<NousOAuthCredential> {
+  const portal = new URL(current.portal_base_url);
+  if (portal.origin !== 'https://portal.nousresearch.com' || portal.username || portal.password) {
+    throw new KeyStoreError('the OAuth issuer is not allowed', 'key_invalid');
+  }
+  const response = await fetch(`${portal.origin}/api/oauth/token`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(15_000),
+    headers: {
+      Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded',
+      'x-nous-refresh-token': current.refresh_token,
+    },
+    body: new URLSearchParams({ grant_type: 'refresh_token', client_id: current.client_id }),
+  });
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const code = typeof failure.error === 'string' ? failure.error : '';
+    const description = typeof failure.error_description === 'string' ? failure.error_description : '';
+    // Match Hermes Agent's quarantine rule. A rate limit, entitlement error,
+    // or Portal outage can recover; only a retired/reused grant is unsafe to
+    // replay and therefore invalidates the workspace connection.
+    const terminal = ['invalid_grant', 'invalid_token', 'refresh_token_reused'].includes(code)
+      || description.toLowerCase().includes('reuse');
+    throw new OAuthRefreshError(terminal);
+  }
+  const value = await response.json() as Record<string, unknown>;
+  const access = typeof value.access_token === 'string' ? value.access_token : '';
+  const refresh = typeof value.refresh_token === 'string' ? value.refresh_token : current.refresh_token;
+  const ttl = Number(value.expires_in);
+  if (!access || !refresh || !Number.isFinite(ttl) || ttl < 60 || ttl > 86_400) {
+    throw new OAuthRefreshError(true);
+  }
+  return {
+    ...current, access_token: access, refresh_token: refresh,
+    token_type: typeof value.token_type === 'string' ? value.token_type : current.token_type,
+    scope: typeof value.scope === 'string' ? value.scope : current.scope,
+    expires_at: new Date(Date.now() + ttl * 1_000).toISOString(),
+  };
 }
 
 /**

@@ -59,6 +59,12 @@ export interface Env {
   OPENROUTER_FIXTURE?: string;
   /** Development-only Nous Portal verification and catalog fixture. */
   NOUS_PORTAL_FIXTURE?: string;
+  /** Enables the official Nous inference device-authorization flow. */
+  NOUS_PORTAL_OAUTH_ENABLED?: string;
+  /** Enterprise/public OAuth client id provisioned by Nous for this deployment. */
+  NOUS_PORTAL_OAUTH_CLIENT_ID?: string;
+  /** Production is pinned to portal.nousresearch.com; tests may override it. */
+  NOUS_PORTAL_BASE_URL?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
