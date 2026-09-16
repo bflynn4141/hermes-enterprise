@@ -13,6 +13,24 @@ export default {
     if (url.pathname === '/v1/runs/run_redirect') {
       return Response.redirect('https://runtime-redirect.test/capture', 302);
     }
+    if (url.pathname === '/v1/capabilities') {
+      return Response.json({
+        object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+        auth: { type: 'bearer', required: true },
+        runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+        features: {
+          run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+          runs_idempotency: { supported: true, durable: true, retention_seconds: 86400 },
+        },
+        endpoints: {
+          runs: { method: 'POST', path: '/v1/runs' },
+          run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+          run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+          run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+          run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+        },
+      });
+    }
     if (url.pathname === '/v1/runs' && request.method === 'POST') {
       const body = await request.json();
       if (request.headers.get('Idempotency-Key') !== 'worker-stable-key' || body.input !== 'Review the application.') {

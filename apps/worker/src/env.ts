@@ -30,10 +30,10 @@ export interface Env {
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
-   * Comma-separated provider names this deployment offers: `openrouter` in
-   * every environment (decision R12). A key, a catalog row, a session model or
+   * Comma-separated provider names this deployment offers. The Hermes
+   * Enterprise deployment uses `nous_portal` (decision C55). A key, a catalog row, a session model or
    * a run naming anything else is refused with `provider_not_allowed`. Unset
-   * means `openrouter` rather than everything, so a missing variable fails
+   * means `nous_portal` rather than everything, so a missing variable fails
    * closed; `model/allowed.ts` is the only reader.
    */
   ALLOWED_PROVIDERS?: string;
@@ -57,6 +57,8 @@ export interface Env {
    * `model/openrouter-dev.ts` and the README's OpenRouter section.
    */
   OPENROUTER_FIXTURE?: string;
+  /** Development-only Nous Portal verification and catalog fixture. */
+  NOUS_PORTAL_FIXTURE?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
@@ -69,12 +71,25 @@ export interface Env {
   WORKOS_CLIENT_ID?: string;
   WORKOS_COOKIE_PASSWORD?: string;
   /**
+   * Exact expected `iss` in AuthKit user access tokens. Read it from the
+   * application's OIDC discovery document. Tests may omit it and use WorkOS's
+   * legacy API-origin value; staging and production readiness require it.
+   */
+  WORKOS_ISSUER?: string;
+  /**
    * Overrides the redirect URI sent to AuthKit. Normally the callback is this
    * Worker's own origin plus `/auth/callback`, which is what a single-origin
    * deployment wants; the variable exists for the case where the browser
    * reaches us through a different host than the Worker sees.
    */
   WORKOS_REDIRECT_URI?: string;
+  /** Slack app installation and HTTP Events API. All values are server-only. */
+  SLACK_ENABLED?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  SLACK_SIGNING_SECRET?: string;
+  SLACK_STATE_SECRET?: string;
+  SLACK_REDIRECT_URI?: string;
   /**
    * Signs hub tickets. Falls back to WORKOS_COOKIE_PASSWORD, and in
    * development only, to a constant; a deployed environment with neither

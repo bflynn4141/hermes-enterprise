@@ -19,18 +19,19 @@ import type { AdapterOptions } from '../model/types.js';
 import type { KekEnv } from './envelope.js';
 import { allowedProviders, type AllowedProvidersEnv } from '../model/allowed.js';
 import { logError, logEvent } from './redact.js';
-import { resolveKey } from './store.js';
+import { enqueueReverifyJob } from './reverify-queue.js';
+import { getProviderKey, KeyStoreError, openKeyForVerification } from './store.js';
 import { probeKey, recordVerification } from './verify.js';
-import { syncOpenRouterForKey } from './catalog-sync.js';
+import { syncCatalogForKey } from './catalog-sync.js';
 
 /**
  * Whether this provider's verification probe needs a model to name.
  *
- * OpenRouter's is `GET /api/v1/key`, which authenticates without one — and it
+ * Broker verification authenticates without a catalog row — and it
  * has to be, because its catalog rows do not exist until the first sync has
  * run, so requiring a row would make the first key unverifiable forever.
  */
-export const needsProbeModel = (provider: string): boolean => provider !== 'openrouter';
+export const needsProbeModel = (provider: string): boolean => provider !== 'openrouter' && provider !== 'nous_portal';
 
 /** How often the weekly sweep re-probes a key that is already verified. */
 export const REVERIFY_INTERVAL_DAYS = 7;
@@ -69,15 +70,19 @@ export async function runReverifyJob(
     const probeModel = await defaultProbeModel(tx, payload.provider);
     if (probeModel === null && needsProbeModel(payload.provider)) return null;
     try {
-      const resolved = await resolveKey(tx, env, workspaceId, payload.provider);
+      const key = await getProviderKey(tx, workspaceId, payload.key_id);
       // Rotated away between the enqueue and now: this job is about a row that
       // no longer needs an answer, and probing the new key under the old job's
       // count would apply the old key's 403s to it.
-      if (resolved.keyId !== payload.key_id) return null;
-      return { apiKey: resolved.apiKey, keyId: resolved.keyId, probeModel };
-    } catch {
-      // Removed, revoked, or never verified. Not a failure.
-      return null;
+      if (!key || key.revoked_at !== null || key.provider !== payload.provider) return null;
+      const apiKey = await openKeyForVerification(tx, env, workspaceId, payload.key_id);
+      return { apiKey, keyId: payload.key_id, probeModel };
+    } catch (error) {
+      // A removal racing this read is completion: there is no credential left
+      // to probe. Database, KEK and decryption failures are operational errors
+      // and must escape so the durable job retries instead of disappearing.
+      if (error instanceof KeyStoreError && error.reason === 'not_found') return null;
+      throw error;
     }
   });
 
@@ -101,9 +106,9 @@ export async function runReverifyJob(
     // The weekly sweep is also the weekly catalog refresh: OpenRouter adds and
     // retires models continuously, and a price that is a fortnight stale is the
     // thing `pricing_verified_on` exists to make visible rather than tolerable.
-    if (payload.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
+    if ((payload.provider === 'openrouter' || payload.provider === 'nous_portal') && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
       const allowed = allowedProviders(env);
-      await syncOpenRouterForKey(
+      await syncCatalogForKey(
         run,
         options,
         workspaceId,
@@ -137,12 +142,12 @@ export async function enqueueWeeklyReverify(tx: Tx, workspaceId: string): Promis
   );
 
   for (const row of rows) {
-    await tx.query(
-      `INSERT INTO jobs (workspace_id, kind, key, payload)
-       VALUES ($1, 'reverify', $2, $3::jsonb)
-       ON CONFLICT (kind, key) DO UPDATE SET done_at = NULL, next_at = now()`,
-      [workspaceId, `reverify:${row.id}`, JSON.stringify({ key_id: row.id, provider: row.provider })],
-    );
+    await enqueueReverifyJob(tx, {
+      workspaceId,
+      keyId: row.id,
+      provider: row.provider,
+      delaySeconds: 0,
+    });
   }
   return rows.length;
 }

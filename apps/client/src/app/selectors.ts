@@ -36,13 +36,21 @@ export const openInvitations = (state: AppState): InvitationEntity[] =>
 /**
  * "invited" counts the invitations list, not the membership mirror: a row in
  * `members` is a person who has accepted, so the mirror's `invited` status is
- * one the server never writes on this path. The mirror is still counted, so
- * that a status arriving from WorkOS is not silently dropped.
+ * one the server normally never writes on this path. The mirror is still
+ * counted so a transitional WorkOS status is not silently dropped, but the
+ * same email appearing in both sources remains one invitation.
  */
 export function memberCounts(state: AppState): { joined: number; invited: number } {
   const all = members(state);
-  const pendingMembers = all.filter((m) => m.status === 'invited' || m.status === 'expired').length;
-  return { joined: all.filter((m) => m.status === 'active').length, invited: openInvitations(state).length + pendingMembers };
+  const invitedEmails = new Set(
+    openInvitations(state).map((invitation) => invitation.email.trim().toLowerCase()),
+  );
+  for (const member of all) {
+    if (member.status === 'invited' || member.status === 'expired') {
+      invitedEmails.add(member.email.trim().toLowerCase());
+    }
+  }
+  return { joined: all.filter((m) => m.status === 'active').length, invited: invitedEmails.size };
 }
 
 export const catalogRows = (state: AppState): Bootstrap['catalog'] =>
@@ -64,7 +72,7 @@ const SCRIPTED_DEV = __AUTH_MODE__ === 'fake' && !__MOCK__;
 
 /**
  * Whether the composer may send at all, and whose key was rejected. A workspace
- * with no verified key is an empty state ("Add your OpenRouter key in Settings to
+ * with no verified key is an empty state ("Add your Nous Portal key in Settings to
  * start"), not an error: in M1 that is every workspace.
  *
  * `any` is what the composer disables itself on; `banner` is what the shell
@@ -89,6 +97,14 @@ export function hasVerifiedKey(state: AppState): { any: boolean; rejected: strin
 export function requestStatusLabel(request: RequestEntity): string {
   const payload = request.payload as { score?: number; total_minor?: number } | undefined;
   const money = payload?.total_minor ? `$${(payload.total_minor / 100).toLocaleString('en-US')}` : '$1,200';
+  if (request.kind === 'approval' && request.approval) {
+    const projection = request.approval;
+    if (projection.pending_for_viewer) return 'Needs your decision';
+    if (projection.waiting_on_others) return projection.current_reviewer_names.length > 0 ? `Waiting for ${projection.current_reviewer_names.join(', ')}` : 'Waiting on others';
+    if (projection.authorization_status === 'approved' && projection.effect_status === 'unavailable') return 'Approved · Effect unavailable';
+    if (projection.authorization_status === 'approved') return `Approved · Work ${projection.work_status.replaceAll('_', ' ')}`;
+    return projection.authorization_status.replaceAll('_', ' ');
+  }
   switch (request.status) {
     case 'pending':
       return request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? `${money} · Draft` : `${money} · Unsigned v1`;
@@ -100,6 +116,12 @@ export function requestStatusLabel(request: RequestEntity): string {
       return 'Created · Not sent · No money moved';
     case 'drafted':
       return 'Draft saved · Unsigned · Not sent';
+    case 'approved':
+      return 'Approved · Execution separate';
+    case 'changes_requested':
+      return 'Changes requested · New version required';
+    case 'expired':
+      return 'Expired · No authorization';
     default:
       return request.status;
   }

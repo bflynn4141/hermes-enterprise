@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="face" x1="10" y1="7" x2="49" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".45" stop-color="#E9E6F6"/>
+      <stop offset=".72" stop-color="#BDB7D8"/>
+      <stop offset="1" stop-color="#716B96"/>
+    </linearGradient>
+  </defs>
+  <g opacity=".2" transform="translate(0 3)">
+    <path d="M32 9C38 9 42 17 38 24C45 20 53 24 53 31C53 38 45 42 38 38C42 45 38 53 31 53C24 53 20 45 24 38C17 42 9 38 9 31C9 24 17 20 24 24C20 17 24 9 32 9Z" fill="url(#face)"/>
+    <path d="M32 10C36 10 40 15 39 21L32 30 25 23C22 17 25 10 32 10Z" fill="#FFF" opacity=".72"/>
+    <path d="M33 32 48 26C55 34 46 42 39 38L34 49 28 38Z" fill="#9E9ABF" opacity=".38"/>
+    <circle cx="31" cy="31" r="6" fill="#26214C"/>
+    <circle cx="31" cy="30" r="5" fill="#181333"/>
+  </g>
+  <path d="M32 9C38 9 42 17 38 24C45 20 53 24 53 31C53 38 45 42 38 38C42 45 38 53 31 53C24 53 20 45 24 38C17 42 9 38 9 31C9 24 17 20 24 24C20 17 24 9 32 9Z" fill="url(#face)"/>
+  <path d="M32 10C36 10 40 15 39 21L32 30 25 23C22 17 25 10 32 10Z" fill="#FFF" opacity=".72"/>
+  <path d="M33 32 48 26C55 34 46 42 39 38L34 49 28 38Z" fill="#9E9ABF" opacity=".38"/>
+  <circle cx="31" cy="31" r="6" fill="#26214C"/>
+  <circle cx="31" cy="30" r="5" fill="#181333"/>
+</svg>

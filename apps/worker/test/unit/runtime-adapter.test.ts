@@ -4,7 +4,6 @@ import { assertRunLog } from '@hermes/shared';
 import { describe, expect, it } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
-import { ZERO_USAGE } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence } from '../../src/runtime/adapter.js';
 import { HermesClient, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
 import { FakeAgentDb } from './engine/fake-db.js';
@@ -84,8 +83,17 @@ class FakeHermesClient extends HermesClient {
   onStatus: (() => void) | null = null;
   onStop: (() => void) | null = null;
   streamFailure: Error | null = null;
+  capabilityReads = 0;
+  capabilityFailure: Error | null = null;
 
   constructor() { super('https://runtime.invalid', 'test-runtime-key'); }
+
+  override capabilities() {
+    this.capabilityReads += 1;
+    return this.capabilityFailure
+      ? Promise.reject(this.capabilityFailure)
+      : Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+  }
 
   override submit(body: Record<string, unknown>, key: string) {
     this.onSubmit?.();
@@ -142,7 +150,9 @@ describe('official Hermes enterprise projection', () => {
     expect(deltas.map((event) => (event.payload as { delta: string }).delta).join('')).toBe(client.deltas.join(''));
     expect(db.events.filter((event) => event.kind === 'message.final')).toHaveLength(1);
     expect(db.statusChanges.at(-1)?.status).toBe('completed');
-    expect(db.modelCalls).toEqual([{ turn: 0, status: 'ok', keyId: 'key-1', usage: { ...ZERO_USAGE, input_tokens: 37, output_tokens: 9 } }]);
+    // Provider calls are accounted at the model proxy with the key actually
+    // used. The terminal native aggregate must not create a duplicate row.
+    expect(db.modelCalls).toEqual([]);
     expect(client.streamSignal?.aborted).toBe(true);
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
   });
@@ -177,8 +187,21 @@ describe('official Hermes enterprise projection', () => {
     await execute(db, client, new FakeStep());
     expect(client.submissions).toEqual([]);
     expect(client.eventSubscriptions).toBe(0);
+    expect(client.capabilityReads).toBe(2);
     expect(db.messages.get(0)?.text).toBe(client.final.output);
     expect(db.statusChanges.at(-1)?.status).toBe('completed');
+  });
+
+  it('fails closed on replay when the restarted runtime loses durable idempotency', async () => {
+    const db = new FakeRuntimeDb();
+    db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };
+    const client = new FakeHermesClient();
+    client.capabilityFailure = new Error('native durability unavailable');
+    await execute(db, client);
+    expect(client.capabilityReads).toBeGreaterThan(0);
+    expect(client.submissions).toEqual([]);
+    expect(client.statusReads).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
   });
 
   it('uses the snapshotted request on a submit retry even if current context has changed', async () => {
@@ -190,7 +213,7 @@ describe('official Hermes enterprise projection', () => {
     expect(client.submissions[0]?.body).toEqual(original);
   });
 
-  it('recovers terminal output and usage after the non-replayable native stream disconnects', async () => {
+  it('recovers terminal output after the non-replayable native stream disconnects', async () => {
     const client = new FakeHermesClient();
     client.disconnect = true;
     client.final.usage = { input_tokens: 15, output_tokens: 5 };
@@ -199,7 +222,7 @@ describe('official Hermes enterprise projection', () => {
     expect(client.eventSubscriptions).toBe(1);
     expect(client.stops).toEqual([]);
     expect(db.messages.get(0)?.text).toBe(client.final.output);
-    expect(db.modelCalls[0]?.usage).toMatchObject({ input_tokens: 15, output_tokens: 5 });
+    expect(db.modelCalls).toEqual([]);
     expect(db.statusChanges.at(-1)?.status).toBe('completed');
   });
 
@@ -222,7 +245,7 @@ describe('official Hermes enterprise projection', () => {
     expect(readsAfterStop).toBeGreaterThanOrEqual(2);
     expect(db.statusChanges.at(-1)?.status).toBe('stopped');
     expect(db.messages.get(0)).toMatchObject({ status: 'incomplete', text: client.deltas.join('') });
-    expect(db.modelCalls[0]?.status).toBe('stopped');
+    expect(db.modelCalls).toEqual([]);
   });
 
   it('stops a bound native run when Stop was requested before a Workflow replay begins', async () => {
@@ -284,13 +307,13 @@ describe('official Hermes enterprise projection', () => {
     expect(db.carriedGuidance).toEqual([db.guidance[0]!.id]);
   });
 
-  it('records failed native execution with absent usage as zero and never surfaces raw upstream errors', async () => {
+  it('does not duplicate proxy accounting for failed native execution or surface raw upstream errors', async () => {
     const client = new FakeHermesClient();
     client.final = { run_id: NATIVE_ID, status: 'failed', error: 'provider-key-and-private-request-must-not-leak' };
     const { db } = await execute(new FakeRuntimeDb(), client);
     expect(db.statusChanges.at(-1)).toMatchObject({ status: 'error', error: { reason: 'hermes_run_failed' } });
     expect(db.messages.get(0)?.status).toBe('incomplete');
-    expect(db.modelCalls[0]).toMatchObject({ status: 'error', usage: ZERO_USAGE });
+    expect(db.modelCalls).toEqual([]);
     expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges })).not.toContain(client.final.error);
   });
 
@@ -301,7 +324,7 @@ describe('official Hermes enterprise projection', () => {
     client.onStatus = () => { if (client.current.status === 'failed') db.stopFlag = true; };
     await execute(db, client);
     expect(db.statusChanges.at(-1)?.status).toBe('stopped');
-    expect(db.modelCalls[0]?.status).toBe('stopped');
+    expect(db.modelCalls).toEqual([]);
     expect(db.messages.get(0)?.status).toBe('incomplete');
   });
 
@@ -322,7 +345,7 @@ describe('official Hermes enterprise projection', () => {
     client.final.output = '';
     const { db } = await execute(new FakeRuntimeDb(), client);
     expect(db.messages.get(0)).toMatchObject({ text: '', status: 'complete' });
-    expect(db.modelCalls[0]?.usage).toEqual(ZERO_USAGE);
+    expect(db.modelCalls).toEqual([]);
   });
 
   it('stops the native execution if its attempt was superseded before the binding could be saved', async () => {
@@ -352,7 +375,7 @@ describe('official Hermes enterprise projection', () => {
     const originalActiveMs = (await db.loadRun())!.activeMs;
     step.results.delete('hermes-execute');
     await execute(db, client, new FakeStep(step));
-    expect(db.modelCalls).toHaveLength(1);
+    expect(db.modelCalls).toHaveLength(0);
     expect((await db.loadRun())!.activeMs).toBe(originalActiveMs);
     expect(db.events).toEqual(originalEvents);
     expect(db.finalizations).toBe(1);

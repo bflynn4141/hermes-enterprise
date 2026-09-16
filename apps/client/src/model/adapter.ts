@@ -482,12 +482,27 @@ export function createAdapter(options: AdapterOptions): Adapter {
           summary: boot.agent.responsibility ?? '',
           setupStep: boot.agent.setup_step,
         },
+        capabilities: {
+          emailIngress: boot.capabilities.email_ingress,
+          turnAttachments: boot.capabilities.turn_attachments,
+          automatedTriggers: boot.capabilities.automated_triggers,
+        },
         sessions,
         sessionOrder: boot.sessions.map((row) => row.id),
         activeSessionId: boot.sessions[0]?.id ?? null,
-        counts: { inbox: boot.counts.inbox, pendingGrants: boot.counts.pending_grants, createdDocuments: boot.counts.created_documents, decisions: boot.counts.decisions },
+        counts: {
+          inbox: boot.counts.inbox,
+          pendingForMe: boot.counts.pending_for_me ?? boot.counts.inbox,
+          pendingForOthers: boot.counts.pending_for_others ?? 0,
+          pendingGrants: boot.counts.pending_grants,
+          createdDocuments: boot.counts.created_documents,
+          decisions: boot.counts.decisions,
+        },
         settings: { ...boot.workspace.settings },
         cursors: { workspace: BigInt(boot.heads.workspace), session: {} },
+        ...(!state().ready && boot.sessions[0]?.focus_ref
+          ? { ui: { ...state().ui, app: boot.sessions[0].focus_ref, follow: true } }
+          : {}),
         ready: true,
       },
     });
@@ -616,7 +631,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       await rest.sendTurn(workspaceId, routeId, {
         text: trimmed,
         client_turn_id: turnId,
-        attachments: opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const })),
+        attachments: state().capabilities.turnAttachments
+          ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
+          : [],
         mode: session.mode,
         model_id: session.model,
         effort: session.effort,

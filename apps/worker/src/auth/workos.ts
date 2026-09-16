@@ -63,8 +63,8 @@ export interface WorkOSEvent {
 export interface WorkOSPort {
   /**
    * `maxAge: 0` is the step-up: WorkOS documents it as forcing the user to
-   * re-authenticate, and the new session arrives with a new `sid`, which is the
-   * value `auth_sessions` is keyed on.
+   * re-authenticate. The session keeps its `sid` and the token advances
+   * `auth_time`, which is persisted in `auth_sessions`.
    */
   authorizationUrl(options: {
     redirectUri: string;
@@ -78,9 +78,14 @@ export interface WorkOSPort {
   /** The sealed cookie's contents, without a network call. */
   unseal(sealed: string): Promise<{ accessToken: string; user: WorkOSUser } | null>;
   /** Exchanges the refresh token and re-seals. Network. */
-  refresh(sealed: string): Promise<{ sealedSession: string; accessToken: string }>;
+  refresh(sealed: string, organizationId?: string): Promise<{ sealedSession: string; accessToken: string }>;
   logoutUrl(sealed: string, returnTo?: string): Promise<string>;
   createOrganization(name: string): Promise<{ id: string }>;
+  createOrganizationMembership(options: {
+    userId: string;
+    organizationId: string;
+    roleSlug: string;
+  }): Promise<WorkOSMembership>;
   /**
    * Delete the organization. Called only by `WorkspaceDeletion`, after its
    * seven-day sleep: WorkOS is the store of record for who could sign in, so it
@@ -116,6 +121,95 @@ export const WORKOS_EVENT_TYPES = [
 
 export const isWorkOSConfigured = (env: Env): boolean =>
   Boolean(env.WORKOS_API_KEY && env.WORKOS_CLIENT_ID && env.WORKOS_COOKIE_PASSWORD);
+
+const deployed = (env: Env): boolean => env.ENVIRONMENT === 'staging' || env.ENVIRONMENT === 'production';
+
+/**
+ * Deployment-time authentication invariants, also used by `/health`.
+ *
+ * Returning stable field names rather than secret values keeps the function
+ * useful to tests and logs without turning a readiness failure into a secret
+ * disclosure. Development and test may deliberately run fake auth; a deployed
+ * environment may not.
+ */
+export function authConfigurationProblems(env: Env): string[] {
+  const problems: string[] = [];
+  if (env.AUTH_MODE === 'fake') {
+    if (deployed(env)) problems.push('AUTH_MODE');
+    return problems;
+  }
+  if (env.AUTH_MODE !== 'workos') return ['AUTH_MODE'];
+
+  if (!env.WORKOS_API_KEY) problems.push('WORKOS_API_KEY');
+  if (!env.WORKOS_CLIENT_ID) problems.push('WORKOS_CLIENT_ID');
+  if (!env.WORKOS_COOKIE_PASSWORD || env.WORKOS_COOKIE_PASSWORD.length < 32) {
+    problems.push('WORKOS_COOKIE_PASSWORD');
+  }
+
+  const allowed = (env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  let redirect: URL | null = null;
+  if (env.WORKOS_REDIRECT_URI) {
+    try {
+      redirect = new URL(env.WORKOS_REDIRECT_URI);
+      if (
+        redirect.pathname !== '/auth/callback' ||
+        redirect.search ||
+        redirect.hash ||
+        redirect.username ||
+        redirect.password ||
+        (deployed(env) && redirect.protocol !== 'https:')
+      ) {
+        problems.push('WORKOS_REDIRECT_URI');
+      }
+    } catch {
+      problems.push('WORKOS_REDIRECT_URI');
+    }
+  } else if (deployed(env)) {
+    problems.push('WORKOS_REDIRECT_URI');
+  }
+
+  if (deployed(env)) {
+    if (allowed.length === 0) problems.push('ALLOWED_ORIGINS');
+    const normalizedAllowed: string[] = [];
+    for (const value of allowed) {
+      try {
+        const origin = new URL(value);
+        if (origin.protocol !== 'https:' || origin.origin !== value.replace(/\/$/, '')) {
+          problems.push('ALLOWED_ORIGINS');
+          break;
+        }
+        normalizedAllowed.push(origin.origin);
+      } catch {
+        problems.push('ALLOWED_ORIGINS');
+        break;
+      }
+    }
+    if (redirect && !normalizedAllowed.includes(redirect.origin)) problems.push('WORKOS_REDIRECT_URI');
+  }
+
+  if (!env.WORKOS_ISSUER && deployed(env)) problems.push('WORKOS_ISSUER');
+  if (env.WORKOS_ISSUER) {
+    try {
+      const issuer = new URL(env.WORKOS_ISSUER);
+      if (
+        issuer.protocol !== 'https:' ||
+        issuer.search ||
+        issuer.hash ||
+        issuer.username ||
+        issuer.password
+      ) {
+        problems.push('WORKOS_ISSUER');
+      }
+    } catch {
+      problems.push('WORKOS_ISSUER');
+    }
+  }
+
+  return [...new Set(problems)];
+}
 
 /**
  * Terminal or transient?
@@ -215,12 +309,15 @@ class SdkWorkOS implements WorkOSPort {
     return { accessToken: data.accessToken, user: toUser(data.user as SdkUser) };
   }
 
-  async refresh(sealed: string): Promise<{ sealedSession: string; accessToken: string }> {
+  async refresh(sealed: string, organizationId?: string): Promise<{ sealedSession: string; accessToken: string }> {
     const session = this.workos.userManagement.loadSealedSession({
       sessionData: sealed,
       cookiePassword: this.cookiePassword,
     });
-    const result = (await session.refresh({ cookiePassword: this.cookiePassword })) as {
+    const result = (await session.refresh({
+      cookiePassword: this.cookiePassword,
+      ...(organizationId ? { organizationId } : {}),
+    })) as {
       authenticated: boolean;
       sealedSession?: string;
       accessToken?: string;
@@ -245,6 +342,21 @@ class SdkWorkOS implements WorkOSPort {
   async createOrganization(name: string): Promise<{ id: string }> {
     const organization = await this.workos.organizations.createOrganization({ name });
     return { id: organization.id };
+  }
+
+  async createOrganizationMembership(options: {
+    userId: string;
+    organizationId: string;
+    roleSlug: string;
+  }): Promise<WorkOSMembership> {
+    const membership = await this.workos.userManagement.createOrganizationMembership(options);
+    return {
+      id: membership.id,
+      userId: membership.userId,
+      organizationId: membership.organizationId,
+      role: membership.role?.slug ?? options.roleSlug,
+      status: membership.status,
+    };
   }
 
   async deleteOrganization(organizationId: string): Promise<void> {
@@ -343,6 +455,9 @@ export function setWorkOSPortForTests(factory: ((env: Env) => WorkOSPort) | null
 }
 
 export function workosPort(env: Env): WorkOSPort {
+  if (deployed(env) && authConfigurationProblems(env).length > 0) {
+    throw new AuthError('WorkOS authentication is not fully configured for this environment', 'not_configured', 503);
+  }
   if (portOverride) return portOverride(env);
   if (!isWorkOSConfigured(env)) {
     throw new AuthError(

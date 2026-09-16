@@ -16,13 +16,16 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, type StreamEvent } from '@hermes/shared';
-import type { MaskedProviderKey, Ref } from '@hermes/shared';
+import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
+import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
 const MEMBER_USER = mockUuid(101);
 const AGENT = mockUuid(102);
+const MAYA_MEMBER = mockUuid(200);
+const ALEX_MEMBER = mockUuid(201);
 const SESSION_A = mockUuid(2);
 const SESSION_B = mockUuid(20);
 const RUN = mockUuid(3);
@@ -35,6 +38,7 @@ const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
 
 export const MOCK_WORKSPACE_ID = WS;
+export const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
 
 /**
  * Two strings the server owns, copied here exactly.
@@ -75,6 +79,7 @@ interface MockSession {
 }
 
 const iso = (offsetMinutes = 0) => new Date(Date.UTC(2026, 9, 12, 9, 49 + offsetMinutes, 0)).toISOString();
+const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toString(16).padStart(64, '0')}`;
 
 interface MockOptions {
   /** `admin` is the first-run Admin seat; `member` exercises the Member copy. */
@@ -95,29 +100,19 @@ interface MockOptions {
    * then `/?reply=markdown`.
    */
   reply?: 'seeded' | 'markdown';
+  /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
+  scenario?: 'legacy' | 'approvals';
+  /** Preserve the name created by the credential-free onboarding fixture. */
+  workspaceName?: string;
+  /** Browser regression fixture for rejected member and invitation writes. */
+  memberWrites?: 'ok' | 'fail';
+  /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
+  slack?: 'disconnected' | 'connected';
 }
 
-interface MockRequest {
-  id: string;
-  kind: 'application' | 'invoice' | 'agreement';
-  status: string;
-  label: string;
-  subject: string;
-  title: string;
-  session_id: string;
-  run_id: string;
-  created_at: string;
-  version: number;
-  payload: Record<string, unknown>;
-  sources: { id: string; name: string; note: string }[];
-  missing: string[];
-  note: string | null;
-  decision_id: string | null;
-  decided_at: string | null;
-  decided_by_name: string | null;
-}
+type MockRequest = RequestEntity;
 
-function request(id: string, kind: 'application' | 'invoice' | 'agreement', status: string, subject: string, label: string, extra: Record<string, unknown> = {}): MockRequest {
+function request(id: string, kind: 'application' | 'invoice' | 'agreement', status: RequestEntity['status'], subject: string, label: string, extra: Record<string, unknown> = {}): MockRequest {
   return {
     id,
     kind,
@@ -148,7 +143,9 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
 export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
   const empty = options.data === 'empty';
+  const approvalScenario = options.scenario === 'approvals' && !empty;
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
+  let workspaceName = options.workspaceName?.trim() || 'Nous';
   const replyText =
     options.reply === 'markdown'
       ? [
@@ -188,7 +185,7 @@ export function createMockBackend(options: MockOptions = {}) {
     { id: 'youtube', name: 'YouTube', note: 'Illustrative bootcamp sessions and technical walkthroughs.', url: 'https://www.youtube.com/' },
     { id: 'x', name: 'X profile', note: 'Illustrative public writing about field engineering.', url: 'https://x.com/' },
   ];
-  const requests: MockRequest[] = empty
+  const legacyRequests: MockRequest[] = empty
     ? []
     : [
         request(REQ_LEAH, 'application', 'pending', 'Leah Martinez', 'Leah Martinez', {
@@ -213,17 +210,35 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
-        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
+        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', notes: 'Fictional demo invoice. No provider is connected.', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
+  const approvalDemo = createApprovalDemoFixtures({
+    workspaceId: WS,
+    sessionId: SESSION_A,
+    runId: mockUuid(1_030),
+    requesterAgentId: AGENT,
+    mayaUserId: USER,
+    mayaMemberId: MAYA_MEMBER,
+    alexUserId: MEMBER_USER,
+    alexMemberId: ALEX_MEMBER,
+    at: iso,
+  });
+  const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
+  const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
 
-  const members = [
-    { id: mockUuid(200), user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access'], joined_at: iso(-4000), version: 1 },
+  const members: MemberEntity[] = [
+    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
     ...(empty ? [] : [
-      { id: mockUuid(201), user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance'], joined_at: iso(-5000), version: 1 },
-      { id: mockUuid(202), user_id: null, name: 'Lena Fischer', email: 'lena@nous.example', role: 'member' as const, status: 'invited' as const, reviewer_roles: [], joined_at: null, version: 1 },
+      { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance', 'agent_admin'], joined_at: iso(-5000), version: 1 },
     ]),
   ];
+  // Pending invitations live here, not in the accepted-members mirror. Keeping
+  // the mock shaped like the server prevents the Members fixture from teaching
+  // the client two contradictory sources of truth.
+  const invitations: InvitationEntity[] = empty
+    ? []
+    : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }];
 
   const providerKeys: MaskedProviderKey[] =
     keyMode === 'none'
@@ -231,12 +246,12 @@ export function createMockBackend(options: MockOptions = {}) {
       : [
           {
             id: KEY_ID,
-            provider: 'openrouter',
+            provider: 'nous_portal',
             label: 'Program key',
             last4: '9f2c',
             fingerprint_prefix: 'a41b93cd77e0',
             status: keyMode === 'invalid' ? 'invalid' : 'verified',
-            // An OpenRouter key's `verified_models` stays empty: the list is
+            // A Nous Portal key's `verified_models` stays empty: the list is
             // several hundred ids and lives in the catalog, so the row carries
             // a count and a date instead (decision R7).
             verified_models: [],
@@ -253,18 +268,18 @@ export function createMockBackend(options: MockOptions = {}) {
 
   const hasVerifiedKey = providerKeys.some((k) => k.status === 'verified' || k.status === 'verified_scoped');
 
-  // OpenRouter rows only, because that is the only provider the Worker offers
+  // Nous Portal rows only, because that is the only provider the Worker offers
   // and the only one `GET /w/:ws/catalog` returns (decision R12). A mock that
   // still listed DeepSeek and GPT rows would be a fixture teaching the client's
   // own scenarios about a screen the product no longer has.
   const catalog = [
-    { model_id: 'openrouter:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'openrouter', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
-    { model_id: 'openrouter:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'openrouter', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Add your OpenRouter key in Settings to use this model.' },
+    { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 
   /**
    * The same rows as `catalog`, in the shape `GET /w/:ws/catalog` answers, plus
-   * one tool-less OpenRouter row so the model menu's vendor grouping and its
+   * one tool-less Nous Portal row so the model menu's vendor grouping and its
    * tools-required note have something to render in a mock build.
    */
   const catalogEntries = [
@@ -272,7 +287,7 @@ export function createMockBackend(options: MockOptions = {}) {
       model_id: row.model_id,
       provider: row.provider,
       label: row.label,
-      transport: 'openrouter_chat',
+      transport: 'nous_chat',
       effort_map: row.effort === null ? null : Object.fromEntries(row.effort.map((value) => [value, value])),
       default_effort: row.default_effort,
       pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
@@ -286,10 +301,10 @@ export function createMockBackend(options: MockOptions = {}) {
       supports_reasoning: row.effort !== null,
     })),
     {
-      model_id: 'openrouter:meta-llama/llama-4-70b-instruct',
-      provider: 'openrouter',
+      model_id: 'nous:meta-llama/llama-4-70b-instruct',
+      provider: 'nous_portal',
       label: 'Meta: Llama 4 70B Instruct',
-      transport: 'openrouter_chat',
+      transport: 'nous_chat',
       effort_map: null,
       default_effort: null,
       pricing_per_million: { input: 0.27, output: 0.85, input_off_peak: null, output_off_peak: null, cached_input: null },
@@ -305,10 +320,10 @@ export function createMockBackend(options: MockOptions = {}) {
   ];
 
   const sessions: MockSession[] = empty
-    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
+    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
       ];
 
   const messages: Record<string, unknown[]> = {
@@ -322,10 +337,14 @@ export function createMockBackend(options: MockOptions = {}) {
             seq: 2,
             role: 'iris',
             kind: null,
-            heading: 'Four requests are ready',
-            text: replyText,
+            heading: approvalScenario ? 'Approval inbox is ready' : 'Four requests are ready',
+            text: approvalScenario ? 'I prepared ten illustrative approval requests without making any external change. Maya has nine decisions; Alex owns the agent-configuration review. The plan requires Maya first and Alex second.' : replyText,
             blocks: [
               { type: 'card', title: 'Leah Martinez', subtitle: '82 / 100 · Awaiting your review', action: { label: 'Open request', command: { type: 'open_request', id: REQ_LEAH } } },
+              ...(approvalScenario ? [
+                { type: 'receipt', requestId: APPROVAL_DEMO_REQUEST_IDS.run_plan },
+                { type: 'receipt', requestId: APPROVAL_DEMO_REQUEST_IDS.communication },
+              ] : []),
               { type: 'card', title: 'Unblock Noor’s reply', subtitle: 'Add the destination; I’ll prepare the draft. Not an approval.', action: { label: 'Open context', command: { type: 'nav', object: { section: 'agents', view: 'context', field: 'destination' } } } },
               { type: 'sources', title: 'Sources', subtitle: 'Partner criteria.md · Feedback guide.md' },
             ],
@@ -443,7 +462,7 @@ export function createMockBackend(options: MockOptions = {}) {
       : [{ session_id: mockUuid(20), title: 'Partner applications', runs: 3, total_tokens: 351_800, cost_usd_estimate: 0.104, last_call_at: '2026-10-12T16:04:00.000Z' }],
     by_key: empty
       ? []
-      : [{ key_id: mockUuid(21), provider: 'openrouter', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
+      : [{ key_id: mockUuid(21), provider: 'nous_portal', label: 'Program key', last4: 'a1b2', status: 'verified', total_tokens: 666_300, cost_usd_estimate: 0.197, calls: 127 }],
     caps: {
       daily_token_cap: 500_000,
       tokens_today: empty ? 0 : 351_800,
@@ -458,14 +477,16 @@ export function createMockBackend(options: MockOptions = {}) {
   const settingsView = {
     workspace_id: WS,
     role: seat === 'admin' ? 'admin' : 'member',
-    defaults: { model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high' as string | null, runtime: 'cloud' },
+    defaults: { model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium' as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
-    flags: {} as Record<string, unknown>,
+    flags: approvalScenario ? { approval_demo: true } : {} as Record<string, unknown>,
     fetch_url_allowlist: [] as string[],
     notifications: { approvals: true, blocked: true, digest: false },
     deletion: { requested_at: null as string | null, scheduled_at: null as string | null },
   };
+
+  let slackConnected = options.slack === 'connected';
 
   const dataPrivacy = {
     keys: providerKeys.map((key) => ({
@@ -500,6 +521,100 @@ export function createMockBackend(options: MockOptions = {}) {
     },
   };
 
+  const viewerUserId = seat === 'member' ? MEMBER_USER : USER;
+  const viewerMemberId = seat === 'member' ? ALEX_MEMBER : MAYA_MEMBER;
+  const viewerName = seat === 'member' ? 'Alex Rivera' : 'Maya Chen';
+
+  function approvalForViewer(source: ApprovalView): ApprovalView {
+    const current = source.steps.filter((step) => step.status === 'current');
+    const eligible = source.status === 'pending'
+      ? current.filter((step) => step.current_reviewer_member_ids.includes(viewerMemberId)).map((step) => step.step_id)
+      : [];
+    const canDecide = eligible.length > 0;
+    return {
+      ...source,
+      capabilities: source.status === 'changes_requested'
+        ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: seat === 'admin', reason: seat === 'admin' ? 'Submit a revised proposal for review.' : 'Waiting for a revised proposal.' }
+        : source.status !== 'pending'
+          ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: 'Review complete.' }
+          : canDecide
+            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: false, reason: null }
+            : { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: `Waiting for ${current.flatMap((step) => step.current_reviewer_member_ids).map((id) => source.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name).filter(Boolean).join(', ') || 'an eligible reviewer'}.` },
+    };
+  }
+
+  function approvalProjection(view: ApprovalView) {
+    const current = view.steps.filter((step) => step.status === 'current');
+    const names = current
+      .flatMap((step) => step.current_reviewer_member_ids)
+      .map((id) => view.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name)
+      .filter((name): name is string => !!name);
+    const pendingForViewer = view.status === 'pending' && current.some((step) => step.current_reviewer_member_ids.includes(viewerMemberId));
+    return {
+      approval_type: view.payload.approval_type,
+      authorization_status: view.status,
+      authorization_revision: view.payload.authorization.revision,
+      expires_at: view.payload.authorization.expires_at,
+      pending_for_viewer: pendingForViewer,
+      waiting_on_others: view.status === 'pending' && !pendingForViewer,
+      current_reviewer_names: names,
+      effect_status: view.effect.status,
+      work_status: view.work.status,
+    };
+  }
+
+  function requestForViewer(row: MockRequest): MockRequest {
+    const approval = approvalViews.get(row.id);
+    return approval ? { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) } : row;
+  }
+
+  function approvalResult(view: ApprovalView, decision: 'approve' | 'decline' | 'request_changes', note: string | null, idempotencyKey: string): ApprovalView {
+    const current = view.steps.find((step) => step.status === 'current' && step.current_reviewer_member_ids.includes(viewerMemberId));
+    if (!current) return view;
+    const recordedAt = iso(1);
+    view.votes.push({
+      id: mockUuid(1_300 + view.votes.length + [...approvalViews.keys()].indexOf(view.request_id) * 10),
+      step_id: current.step_id,
+      decision,
+      authorization_revision: view.payload.authorization.revision,
+      authorization_hash: view.payload.authorization.hash,
+      reviewer_member_id: viewerMemberId,
+      reviewer_user_id: viewerUserId,
+      reviewer_name: viewerName,
+      note,
+      idempotency_key: idempotencyKey,
+      recorded_at: recordedAt,
+    });
+    current.status = decision === 'approve' ? 'approved' : decision === 'decline' ? 'declined' : 'changes_requested';
+    current.approvals_recorded = decision === 'approve' ? current.quorum : 0;
+    current.current_reviewer_member_ids = [];
+
+    if (decision === 'approve') {
+      const next = view.steps.find((step) => step.status === 'blocked');
+      if (next) {
+        next.status = 'current';
+        const selector = view.payload.policy.steps.find((step) => step.id === next.step_id)?.reviewers[0];
+        next.current_reviewer_member_ids = selector?.kind === 'member' ? [selector.member_id] : [ALEX_MEMBER];
+        view.work = { status: 'waiting', continuation_id: null, reason: `Waiting for ${view.identities.reviewers.find((reviewer) => reviewer.member_id === next.current_reviewer_member_ids[0])?.name ?? 'the next reviewer'}.` };
+      } else {
+        view.status = 'approved';
+        view.finalized_at = recordedAt;
+        const hasEffect = view.effect.kind !== 'none';
+        view.effect = hasEffect
+          ? { ...view.effect, status: 'unavailable', reason: 'Illustrative demo only; no external provider is connected and no effect occurred.' }
+          : { ...view.effect, status: 'not_required', reason: 'No external provider effect is required.' };
+        const status = view.payload.approval_type === 'team_commitment' ? 'admitted' : view.payload.approval_type === 'deliverable' ? 'ready' : 'completed';
+        view.work = { status, continuation_id: null, reason: status === 'admitted' ? 'The bounded task was admitted to the illustrative queue.' : status === 'ready' ? 'The dependent illustrative request is ready.' : 'Authorization recorded; no external work ran in this demo.' };
+      }
+    } else {
+      view.status = decision === 'decline' ? 'declined' : 'changes_requested';
+      view.finalized_at = recordedAt;
+      view.effect = { ...view.effect, status: view.effect.kind === 'none' ? 'not_required' : 'cancelled', reason: decision === 'decline' ? 'Declined before any effect.' : 'Waiting for a revised authorization.' };
+      view.work = { status: decision === 'decline' ? 'cancelled' : 'waiting', continuation_id: null, reason: decision === 'decline' ? 'Declined before work began.' : 'Waiting for a revised proposal.' };
+    }
+    return view;
+  }
+
   let head = 100n;
   const listeners = new Set<(event: StreamEvent) => void>();
   const backlog: StreamEvent[] = [];
@@ -509,6 +624,30 @@ export function createMockBackend(options: MockOptions = {}) {
     head = BigInt(event.id);
     for (const listener of listeners) listener(event);
   }
+
+  const bootstrap = () => ({
+    workspace: {
+      id: WS,
+      name: workspaceName,
+      jurisdiction: 'default',
+      settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
+    },
+    viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
+    agent: { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+    capabilities: { email_ingress: false, turn_attachments: false, automated_triggers: false },
+    heads: { session: head.toString(), workspace: head.toString() },
+    counts: {
+      inbox: requests.filter((r) => r.status === 'pending').length,
+      pending_grants: 0,
+      created_documents: documents.length,
+      decisions: requests.filter((r) => r.status !== 'pending').length,
+      pending_for_me: requests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
+      pending_for_others: requests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
+    },
+    sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
+    requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
+    catalog,
+  });
 
   /** Run one contract scenario on the session socket, paced for a human. */
   function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
@@ -533,32 +672,38 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 
-    if (path === '/auth/session')
+    if (path === '/auth/session') {
+      const user = { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example' };
+      if (!url.searchParams.has('ws')) return json({ user, workspaces: [{ id: WS, name: workspaceName, role: seat }], authenticated_at: iso(0) });
       return json({
-        user: { id: USER, name: seat === 'admin' ? 'Maya Chen' : 'Alex Rivera', email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example', role: seat },
-        workspace: { id: WS, name: 'Nous' },
+        user: { ...user, role: seat },
+        workspace: { id: WS, name: workspaceName },
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
         expires_at: iso(600),
         authenticated_at: iso(0),
       });
+    }
 
-    if (p('/bootstrap'))
-      return json({
-        workspace: {
-          id: WS,
-          name: 'Nous',
-          jurisdiction: 'default',
-          settings: { default_model_id: 'openrouter:anthropic/claude-sonnet-5', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
-        },
-        viewer: { user_id: USER, role: seat, reviewer_roles: seat === 'admin' ? ['access'] : [] },
-        agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
-        heads: { session: head.toString(), workspace: head.toString() },
-        counts: { inbox: requests.filter((r) => r.status === 'pending').length, pending_grants: 0, created_documents: documents.length, decisions: 0 },
-        sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
-        requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
-        catalog,
-      });
+    if (p('/bootstrap')) return json(bootstrap());
+
+    if (path === '/workspaces' && method === 'POST') {
+      const name = String(body.name ?? '').trim();
+      if (name.length < 2 || name.length > 80) return fail(422, 'bad_name', 'A workspace needs a name of 2 to 80 characters');
+      workspaceName = name;
+      try {
+        sessionStorage.setItem(MOCK_WORKSPACE_NAME_KEY, workspaceName);
+      } catch {
+        /* The in-memory response is still complete when storage is unavailable. */
+      }
+      return json(bootstrap(), 201);
+    }
+
+    if (path.startsWith('/invitations/') && path.endsWith('/accept') && method === 'POST') {
+      const token = decodeURIComponent(path.split('/')[2] ?? '');
+      if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
+      return json(bootstrap());
+    }
 
     // There is no `/bootstrap/client` any more: the Worker has no such route,
     // so the client composes the same object out of `/auth/session`,
@@ -582,7 +727,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/sessions') && method === 'GET') return page(sessions);
     if (p('/sessions') && method === 'POST') {
-      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'openrouter:anthropic/claude-sonnet-5', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
+      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
       sessions.push(created);
       messages[created.id] = [];
       return json(created);
@@ -595,7 +740,7 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = sessions.find((s) => s.id === sessionId);
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
-        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Add your OpenRouter key in Settings to start');
+        if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
         runScenario('completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
@@ -633,6 +778,74 @@ export function createMockBackend(options: MockOptions = {}) {
       const id = requestMatch[1]!;
       const rest = requestMatch[2] ?? '';
       const row = requests.find((r) => r.id === id);
+      const approval = approvalViews.get(id);
+      const syncApprovalRow = (): void => {
+        if (!row || !approval) return;
+        row.status = approval.status === 'superseded' ? 'withdrawn' : approval.status;
+        row.version += 1;
+        row.payload = approval.payload as unknown as Record<string, unknown>;
+        row.approval = approvalProjection(approval);
+        row.decided_at = approval.finalized_at;
+        row.decided_by_name = approval.votes.at(-1)?.reviewer_name ?? null;
+      };
+      if (rest === '/approval' && method === 'GET') return approval ? json(approvalForViewer(approval)) : fail(404, 'not_found');
+      if (rest === '/approval/decisions' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        const revision = Number(body.expected_authorization_revision);
+        const authorizationHash = String(body.expected_authorization_hash ?? '');
+        const idempotencyKey = String(body.idempotency_key ?? '');
+        if (approval.votes.some((vote) => vote.idempotency_key === idempotencyKey)) return json(approvalForViewer(approval));
+        if (revision !== approval.payload.authorization.revision || authorizationHash !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const current = approval.steps.find((step) => step.status === 'current' && step.current_reviewer_member_ids.includes(viewerMemberId));
+        if (!current) return fail(403, 'not_eligible', 'The current step belongs to another reviewer');
+        const decision = body.decision === 'decline' ? 'decline' : body.decision === 'request_changes' ? 'request_changes' : 'approve';
+        approvalResult(approval, decision, typeof body.note === 'string' ? body.note : null, idempotencyKey);
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
+      if (rest === '/approval/revisions' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        if (seat !== 'admin' || approval.status !== 'changes_requested') return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
+        if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const proposal = body.proposal as Record<string, unknown> | undefined;
+        if (!proposal || proposal.approval_type !== approval.payload.approval_type) return fail(422, 'invalid_revision', 'The revised approval type must not change');
+        const nextRevision = approval.payload.authorization.revision + 1;
+        approval.payload = {
+          ...proposal,
+          context: approval.payload.context,
+          policy: approval.payload.policy,
+          resource_bindings: approval.payload.resource_bindings,
+          authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + [...approvalViews.keys()].indexOf(id) * 100) },
+        } as ApprovalView['payload'];
+        approval.status = 'pending';
+        approval.finalized_at = null;
+        approval.steps = approval.payload.policy.steps.map((step, index) => ({
+          step_id: step.id,
+          label: step.label,
+          order: step.order,
+          status: index === 0 ? 'current' : 'blocked',
+          approvals_recorded: 0,
+          quorum: step.quorum,
+          current_reviewer_member_ids: index === 0 && step.reviewers[0]?.kind === 'member' ? [step.reviewers[0].member_id] : [],
+        }));
+        approval.effect = approval.effect.kind === 'none'
+          ? { ...approval.effect, status: 'not_required', reason: 'No external provider effect is required.' }
+          : { ...approval.effect, status: 'unavailable', reason: 'Illustrative demo only; no external provider is connected and no effect occurred.' };
+        approval.work = { status: 'waiting', continuation_id: null, reason: 'Waiting for authorization.' };
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
+      if (rest === '/approval/route' && method === 'POST') {
+        if (!approval || !row) return fail(404, 'not_found');
+        if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
+        const step = approval.steps.find((item) => item.step_id === body.step_id && item.status === 'current');
+        const reviewer = approval.identities.reviewers.find((item) => item.member_id === body.reviewer_member_id);
+        if (!step || !step.current_reviewer_member_ids.includes(viewerMemberId) || !reviewer) return fail(403, 'not_eligible', 'This review cannot be routed by the viewer');
+        step.current_reviewer_member_ids = [reviewer.member_id];
+        approval.work = { status: 'waiting', continuation_id: null, reason: `Waiting for ${reviewer.name}.` };
+        syncApprovalRow();
+        return json(approvalForViewer(approval));
+      }
       if (rest === '/decisions' && method === 'POST') {
         if (seat !== 'admin') return fail(403, 'not_admin', 'Admin decision required');
         if (!row) return fail(404, 'not_found');
@@ -657,19 +870,65 @@ export function createMockBackend(options: MockOptions = {}) {
         } as StreamEvent);
         return json({ decision_id: decisionId, request_id: id, resulting_status: resulting, effect_ids: [] });
       }
+      if (rest === '/notes' && method === 'POST') {
+        if (!row) return fail(404, 'not_found');
+        const note = typeof body.body === 'string' ? body.body.trim() : '';
+        if (!note) return fail(422, 'empty_note', 'A note needs a body');
+        row.note = note.slice(0, 4000);
+        row.version += 1;
+        return json(row, 201);
+      }
       if (rest === '/effects') return page([]);
-      if (!rest) return row ? json(row) : fail(404, 'not_found');
+      if (!rest) return row ? json(requestForViewer(row)) : fail(404, 'not_found');
     }
 
-    if (p('/requests')) return page(requests);
+    if (p('/requests')) return page(requests.map(requestForViewer));
     if (p('/documents')) return page(documents);
     const documentMatch = match(new RegExp(`^/w/${WS}/documents/([^/]+)$`));
     if (documentMatch) {
       const row = documents.find((d) => d.id === documentMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/members')) return page(members);
-    if (p('/invitations')) return page(empty ? [] : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }]);
+    if (p('/members') && method === 'GET') return page(members);
+    const memberMatch = match(new RegExp(`^/w/${WS}/members/([^/]+)$`));
+    if (memberMatch) {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Member write fixture failed');
+      const index = members.findIndex((row) => row.id === memberMatch[1]);
+      if (index < 0) return fail(404, 'not_found');
+      const row = members[index]!;
+      if (method === 'PATCH') {
+        row.role = body.role === 'admin' ? 'admin' : 'member';
+        row.version += 1;
+        return json(row);
+      }
+      if (method === 'DELETE') {
+        members.splice(index, 1);
+        return new Response(null, { status: 204 });
+      }
+    }
+    if (p('/invitations') && method === 'GET') return page(invitations);
+    if (p('/invitations') && method === 'POST') {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      const row: InvitationEntity = { id: mockUuid(220 + invitations.length), email: String(body.email ?? ''), role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0), version: 1 };
+      invitations.push(row);
+      return json(row, 201);
+    }
+    const invitationMatch = match(new RegExp(`^/w/${WS}/invitations/([^/]+)/(resend|withdraw)$`));
+    if (invitationMatch) {
+      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      const row = invitations.find((item) => item.id === invitationMatch[1]);
+      if (!row) return fail(404, 'not_found');
+      if (invitationMatch[2] === 'withdraw') {
+        row.status = 'withdrawn';
+        row.version += 1;
+        return new Response(null, { status: 204 });
+      }
+      row.status = 'resent';
+      row.version += 1;
+      const successor: InvitationEntity = { ...row, id: mockUuid(220 + invitations.length), status: 'pending', invited_at: iso(0), version: 1 };
+      invitations.push(successor);
+      return json(successor);
+    }
     if (p('/history')) return page(history);
     if (p('/traces')) return page(traces);
     const traceMatch = match(new RegExp(`^/w/${WS}/traces/([^/]+)$`));
@@ -689,11 +948,40 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/instructions')) return page(instructions);
     if (p('/skills')) return page(skills);
+    if (path.startsWith(`/w/${WS}/integrations/slack`)) {
+      if (method === 'POST' && path.endsWith('/oauth/start')) {
+        return json({ authorize_url: 'https://slack.com/oauth/v2/authorize?client_id=fixture', expires_at: iso(600) }, 201);
+      }
+      if (method === 'DELETE') {
+        slackConnected = false;
+        return json({ status: 'disconnected', remote_revocation: 'not_applicable' });
+      }
+      if (method === 'POST' && path.endsWith('/link-code')) {
+        return json({ command: 'link hmx_fixture_only_not_a_credential', expires_at: iso(600) }, 201);
+      }
+      return json({
+        configured: true,
+        status: slackConnected ? 'connected' : 'disconnected',
+        installation_kind: slackConnected ? 'workspace' : null,
+        team_name: slackConnected ? 'Fixture workspace' : null,
+        enterprise_name: null,
+        connected_at: slackConnected ? iso(0) : null,
+        granted_scopes: slackConnected ? ['app_mentions:read', 'chat:write', 'im:history'] : [],
+        agent: { id: AGENT, name: 'Iris' },
+        can_manage: seat === 'admin',
+        reconnect_required: false,
+        behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
+      });
+    }
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
-      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'openrouter', label: String(body.label ?? 'New key'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status: 'unverified', verified_models: [], synced_model_count: null, models_synced_at: null, added_by: USER, created_at: iso(0), verified_at: null, rotated_at: null, revoked_at: null, replaces_key_id: null };
+      // Explicit fake values let browser tests exercise both outcomes without
+      // putting a real credential on the wire or making a paid provider call.
+      const rejected = body.key === 'nous-invalid-test-key-0000';
+      const status: MaskedProviderKey['status'] = rejected ? 'invalid' : 'verified';
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'nous_portal', label: String(body.label ?? 'Nous Portal'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status, verified_models: [], synced_model_count: rejected ? null : 3, models_synced_at: rejected ? null : iso(0), added_by: USER, created_at: iso(0), verified_at: rejected ? null : iso(0), rotated_at: null, revoked_at: null, replaces_key_id: null };
       providerKeys.push(added);
-      return json({ key: added, verification: { status: 'unverified', reason: 'unavailable' } }, 201);
+      return json({ key: added, verification: { status, reason: rejected ? 'rejected' : 'verified' } }, 201);
     }
     if (path.startsWith(`/w/${WS}/provider-keys/`)) {
       const id = path.split('/')[4];
@@ -755,8 +1043,6 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({ session: { id: SESSION_A, title: 'Partner applications', workspace_name: 'Nous' }, messages: messages[SESSION_A] ?? [], message_cutoff_seq: 2, revoked: false });
     }
     if (path.startsWith(`/w/${WS}/messages/`)) return new Response(null, { status: 204 });
-    if (path === '/workspaces' && method === 'POST') return fail(501, 'not_implemented', 'Workspace creation is not available in mock mode');
-
     return fail(404, 'no_mock_route', `mock backend has no route for ${method} ${path}`);
   };
 

@@ -39,6 +39,11 @@ import {
   type StepConfig,
 } from '../engine/engine.js';
 import type { EmittedEvent } from '../engine/agent-db.js';
+export {
+  runAttemptInstanceId,
+  WORKFLOW_ID_MAX_LENGTH,
+  WORKFLOW_ID_PATTERN,
+} from './instance-id.js';
 
 export interface RunAttemptParams {
   readonly runId: string;
@@ -54,18 +59,6 @@ export interface RunAttemptParams {
    * is one flag rather than two. See decision F6.
    */
   readonly scriptedScript?: string;
-}
-
-/** Cloudflare's documented instance-id pattern. Asserted by a unit test. */
-export const WORKFLOW_ID_PATTERN = /^[a-zA-Z0-9_][a-zA-Z0-9\-_]*$/;
-export const WORKFLOW_ID_MAX_LENGTH = 100;
-
-export function runAttemptInstanceId(runId: string, attempt: number): string {
-  const id = `${runId}-a${attempt}`;
-  if (!WORKFLOW_ID_PATTERN.test(id) || id.length > WORKFLOW_ID_MAX_LENGTH) {
-    throw new Error(`run attempt id is not a valid Workflow instance id: ${id}`);
-  }
-  return id;
 }
 
 /** Step names are checkpoint keys, so they must be deterministic and stable. */

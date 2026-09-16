@@ -10,6 +10,7 @@ import { AnthropicProvider } from './anthropic.js';
 import { DeepSeekProvider } from './deepseek.js';
 import { OpenAiProvider } from './openai.js';
 import { OpenRouterProvider } from './openrouter.js';
+import { NousPortalProvider } from './nous.js';
 import { gatewayRouting, type GatewayConfig } from './gateway.js';
 import type { AdapterOptions, ModelProvider } from './types.js';
 
@@ -22,6 +23,14 @@ export { DeepSeekProvider } from './deepseek.js';
 export { OpenAiProvider } from './openai.js';
 export { OpenRouterProvider, OPENROUTER_BASE, OpenRouterCreditsError } from './openrouter.js';
 export * from './openrouter-catalog.js';
+export { NousPortalProvider, NOUS_PORTAL_BASE, NousPortalCreditsError } from './nous.js';
+export {
+  normaliseNousModels,
+  syncNousPortalCatalog,
+  type NousPortalModel,
+  type SyncRow as NousSyncRow,
+  type SyncResult as NousSyncResult,
+} from './nous-catalog.js';
 export { SCRIPTS, ScriptedProvider, type Script, type ScriptName } from './scripted.js';
 export { readSse } from './sse.js';
 
@@ -35,6 +44,8 @@ export function providerForTransport(transport: Transport, options: AdapterOptio
       return new OpenAiProvider(options);
     case 'openrouter_chat':
       return new OpenRouterProvider(options);
+    case 'nous_chat':
+      return new NousPortalProvider(options);
   }
 }
 
@@ -44,6 +55,7 @@ const VERIFY_TRANSPORT: Readonly<Record<string, Transport>> = {
   deepseek: 'deepseek_chat',
   openai: 'openai_responses',
   openrouter: 'openrouter_chat',
+  nous_portal: 'nous_chat',
 };
 
 export function providerForName(provider: string, options: AdapterOptions = {}): ModelProvider {

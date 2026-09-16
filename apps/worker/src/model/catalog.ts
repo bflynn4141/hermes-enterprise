@@ -47,7 +47,7 @@ const PROVIDER_LABEL: Readonly<Record<string, string>> = {
   openrouter: 'OpenRouter',
 };
 
-/** "OpenRouter", not "openrouter": this string is read by a person. */
+/** Human-readable provider labels used in refusal and setup copy. */
 export const providerLabel = (provider: string): string => PROVIDER_LABEL[provider] ?? provider;
 
 /** Postgres `date` comes back as a Date in UTC; the contract wants `YYYY-MM-DD`. */

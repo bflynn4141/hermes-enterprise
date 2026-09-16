@@ -140,20 +140,78 @@ describe('F1 · the SPA fallback', () => {
 // ---------------------------------------------------------------------------
 
 describe('F2 · the two routes with no tenant in their path', () => {
-  it('reaches POST /workspaces rather than the assets binding', async () => {
+  it('creates the configured agent, saved instructions and one provider-free setup conversation', async () => {
     const fx = await seedWorkspace();
+    const instructions = 'Review partner applications. Ask before admissions or external communication.';
     const response = await call('/workspaces', {
       method: 'POST',
       headers: asWriter(fx.adminId),
-      body: JSON.stringify({ name: 'A brand new workspace' }),
+      body: JSON.stringify({
+        name: 'A brand new workspace',
+        agent: { name: 'Beacon', instructions },
+      }),
     });
     // The point of the test is that the Worker answered at all: before the
     // `run_worker_first` fix the assets binding answered 405 and this route
     // was unreachable. 201 is the success; anything else must at least be the
     // Worker's own JSON.
     expect(response.status).toBe(201);
-    const body = (await response.json()) as { workspace: { id: string; name: string } };
+    const body = (await response.json()) as {
+      workspace: { id: string; name: string };
+      agent: { id: string; name: string; email: string | null };
+      capabilities: { email_ingress: boolean; turn_attachments: boolean; automated_triggers: boolean };
+      sessions: { id: string; title: string }[];
+    };
     expect(body.workspace.name).toBe('A brand new workspace');
+    expect(body.agent).toMatchObject({ name: 'Beacon', email: null });
+    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
+    expect(body.sessions).toHaveLength(1);
+    expect(body.sessions[0]?.title).toBe('Set up Beacon');
+
+    const persisted = await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, body.workspace.id, fx.adminId);
+      const agent = await c.query<{ name: string; instructions_active: string; status: string }>(
+        `SELECT name, instructions_active, status FROM agents WHERE workspace_id = $1`,
+        [body.workspace.id],
+      );
+      const versions = await c.query<{ body: string; status: string; saved_at: Date | null }>(
+        `SELECT body, status, saved_at FROM instruction_versions WHERE workspace_id = $1`,
+        [body.workspace.id],
+      );
+      const messages = await c.query<{ title: string; next_seq: number; focus_ref: Record<string, string>; role: string; kind: string; text: string; runs: number }>(
+        `SELECT s.title, s.next_seq, s.focus_ref, m.role, m.kind, m.text,
+                (SELECT count(*)::int FROM runs r WHERE r.workspace_id = $1) AS runs
+           FROM sessions s
+           JOIN messages m ON m.session_id = s.id
+          WHERE s.workspace_id = $1`,
+        [body.workspace.id],
+      );
+      await c.query('COMMIT');
+      return { agent: agent.rows, versions: versions.rows, messages: messages.rows };
+    });
+    expect(persisted.agent).toEqual([{ name: 'Beacon', instructions_active: instructions, status: 'draft' }]);
+    expect(persisted.versions).toEqual([{ body: instructions, status: 'saved', saved_at: expect.any(Date) }]);
+    expect(persisted.messages).toEqual([{
+      title: 'Set up Beacon',
+      next_seq: 1,
+      focus_ref: { section: 'agents', view: 'setup', step: 'identity' },
+      role: 'iris',
+      kind: 'setup',
+      text: 'Let’s set up the work you want me to repeat. What do you own?',
+      runs: 0,
+    }]);
+  });
+
+  it('rejects missing agent configuration before creating a workspace', async () => {
+    const fx = await seedWorkspace();
+    const response = await call('/workspaces', {
+      method: 'POST',
+      headers: asWriter(fx.adminId),
+      body: JSON.stringify({ name: 'Missing agent configuration' }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ reason: 'bad_instructions' });
   });
 
   it('accepts an invitation for the signed-in user whose email matches', async () => {
@@ -311,7 +369,7 @@ describe('F5 · app.onError', () => {
       // OpenRouter, because it is the only provider a key may name (decision
       // R12) and a refusal on *that* rule would hide the one this test is
       // about: the KEK check happens after the provider check.
-      body: JSON.stringify({ provider: 'openrouter', label: 'test', key: 'fake-provider-key' }),
+      body: JSON.stringify({ provider: 'nous_portal', label: 'test', key: 'fake-provider-key' }),
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'kek_unavailable' });

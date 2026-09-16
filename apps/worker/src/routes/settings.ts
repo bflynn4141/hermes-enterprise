@@ -25,6 +25,7 @@
 // exception is the platform cap, which is ours and is reported as a boolean
 // rather than a number, because telling a tenant our fleet ceiling tells them
 // how to reach it.
+import { DEFAULT_EFFORT, DEFAULT_MODEL_ID } from '@hermes/shared';
 import type { Context } from 'hono';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
@@ -110,8 +111,8 @@ interface SettingsRow {
 }
 
 const DEFAULTS: SettingsRow = {
-  default_model_id: 'deepseek-flash',
-  default_effort: 'high',
+  default_model_id: DEFAULT_MODEL_ID,
+  default_effort: DEFAULT_EFFORT,
   default_runtime: 'cloud',
   daily_token_cap: null,
   max_concurrent_runs: 3,

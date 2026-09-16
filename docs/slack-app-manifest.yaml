@@ -1,0 +1,51 @@
+# Hermes Enterprise Slack app — production HTTP Events API template.
+#
+# Before importing, replace every occurrence of slack-adapter.example.com with
+# the public HTTPS hostname of the implemented Slack adapter. Slack manifests
+# do not interpolate environment variables. The routes and Settings flow exist
+# in the current branch but have not been configured, deployed, or exercised
+# with a real Slack app; see SLACK-INTEGRATION-RESEARCH.md.
+#
+# This is the minimum DM + explicit mention surface. Interactivity and
+# agent_view remain disabled until their handlers and authorization model exist.
+
+display_information:
+  name: Hermes Enterprise
+  description: Talk to your governed Hermes Enterprise agent from Slack.
+  background_color: "#110B30"
+
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: iris
+    always_online: false
+
+  # Later only, after the Agent Sessions lifecycle and stop handling exist:
+  # agent_view:
+  #   agent_description: A governed enterprise agent for team work.
+  #   suggested_prompts: []
+
+oauth_config:
+  redirect_urls:
+    - "https://slack-adapter.example.com/integrations/slack/oauth/callback"
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - im:history
+settings:
+  event_subscriptions:
+    request_url: "https://slack-adapter.example.com/integrations/slack/events"
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: true
+  socket_mode_enabled: false
+  # Slack says token rotation cannot be disabled once enabled. Import this
+  # production template only after refresh-token handling is tested.
+  token_rotation_enabled: true

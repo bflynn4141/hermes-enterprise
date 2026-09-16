@@ -2,10 +2,9 @@
 //
 // The demo's identity step is trimmed — WorkOS owns who you are, and asking
 // again would be theatre. What is left is what the product needs and the
-// database records: a workspace name, the agent's name and instructions, its
-// sources, and the approval list. Each step `PATCH`es `agents` or
-// `workspace_settings`, so progress lives on `agents.setup_step` and a
-// half-finished setup resumes where it stopped rather than restarting.
+// database records: a workspace name and the agent's name and instructions.
+// The create call persists those fields with a saved instruction version and
+// the deterministic setup conversation before the shell opens.
 //
 // The presenter, the intro slides and the "one week later" interstitial are not
 // ported: they were the demo's narration, not the product.
@@ -51,9 +50,9 @@ function Stepper({ step }: { step: StepId }) {
   );
 }
 
-export function Onboarding({ route, token }: { route: 'create-workspace' | 'join-workspace'; token: string | null }) {
+export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspace' | 'join-workspace'; token: string | null; fetchImpl?: typeof fetch }) {
   const auth = createAuth();
-  const rest = createRest({ auth });
+  const rest = createRest({ auth, ...(fetchImpl ? { fetchImpl } : {}) });
   const [step, setStep] = useState<StepId>('workspace');
   const [name, setName] = useState('');
   const [agent, setAgent] = useState('Iris');
@@ -76,17 +75,24 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
     setBusy(true);
     setError(null);
     void rest
-      .createWorkspace({ name: name.trim() })
+      .createWorkspace({
+        name: name.trim(),
+        agent: { name: agent.trim(), instructions: instructions.trim() },
+      })
       .then((boot) => window.location.assign(`/${SHELL_PREFIX}/${boot.workspace.id}`))
       .catch((caught: unknown) => {
         const reason = (caught as { reason?: string }).reason;
         setError(
           reason === 'email_unverified'
             ? 'Verify your email address before creating a workspace. An invitation sent from an unverified address is a phishing primitive, so the server refuses it.'
-            : reason === 'rate_limited'
-              ? 'Three workspaces a day, per person. Try again tomorrow.'
+              : reason === 'rate_limited'
+                ? 'Three workspaces a day, per person. Try again tomorrow.'
               : reason === 'bad_name'
                 ? 'A workspace needs a name of 2 to 80 characters.'
+                : reason === 'bad_agent_name'
+                  ? 'The agent needs a name of 1 to 80 characters.'
+                  : reason === 'bad_instructions'
+                    ? 'Add instructions of up to 8,000 characters.'
                 : 'Could not create the workspace. Try again.',
         );
         setBusy(false);
@@ -155,7 +161,7 @@ export function Onboarding({ route, token }: { route: 'create-workspace' | 'join
           <>
             <h1 className="portal-title">Add context</h1>
             <p className="meta">
-              Sources are added inside the workspace, where the extraction status of each file is visible. Nothing here grants {agent} any authority: reading a file is not permission to act on it.
+              Sources can be stored and reviewed inside the workspace. They are not connected to {agent} runs yet, so setup will continue from your instructions and chat messages.
             </p>
             <div className="portal-footer">
               <button type="button" className="portal-back" onClick={() => setStep('agent')}>

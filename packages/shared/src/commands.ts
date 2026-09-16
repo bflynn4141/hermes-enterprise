@@ -61,6 +61,9 @@ export const HUMAN_ONLY_COMMANDS = [
    */
   'apply_prepared_proposal',
   'request/decide',
+  'approval/decide',
+  'approval/revise',
+  'approval/route',
   'execute_effect',
   'effect/execute',
   'invite',

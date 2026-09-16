@@ -13,6 +13,7 @@ export const SETTINGS_TABS = [
   'Organization',
   'Inbox rules',
   'Agents',
+  'Slack',
   'Provider keys',
   'Usage',
   'Notifications',
@@ -24,11 +25,11 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const EMPTY = {
   chatReady: (_agent: string) => 'What do you need help with?',
   /**
-   * Names OpenRouter, because OpenRouter is the only key this product takes
-   * (decision R12). The generic "a provider key" was honest when there were
+   * Names Nous Portal, because Nous Portal is the only key this product takes
+   * (decision C55). The generic "a provider key" was honest when there were
    * four; with one it is a riddle whose answer is one screen away.
    */
-  noKey: 'Add your OpenRouter key in Settings to start',
+  noKey: 'Connect Nous Portal in Settings to start',
   keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or rotate it`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
@@ -46,9 +47,9 @@ export const EMPTY = {
   libraryUnavailable: 'Not available yet',
   invitations: 'No open invitations',
   noProvider: 'No provider configured',
-  /** A key installed before this deployment narrowed to OpenRouter. */
-  keyNotAllowed: 'No longer usable — only OpenRouter keys can be used',
-  providerKeys: 'Add your OpenRouter key to enable models',
+  /** A key installed before this deployment narrowed to Nous Portal. */
+  keyNotAllowed: 'No longer usable — only Nous Portal keys can be used',
+  providerKeys: 'Connect Nous Portal to enable models',
   attach: 'No documents yet',
   adminOnly: 'Admin decision required',
   shareGone: 'This link is no longer available.',
@@ -109,9 +110,9 @@ export const legacyIrisOpenKey = (workspaceId: string, userId: string) => `herme
  */
 export const PROVIDER_CHOICES: readonly { id: string; label: string; note: string }[] = [
   {
-    id: 'openrouter',
-    label: 'OpenRouter',
-    note: 'One key, every model OpenRouter brokers. Verifying also syncs its model list into the chat model menu.',
+    id: 'nous_portal',
+    label: 'Nous Portal',
+    note: 'One key for the current Nous Portal model catalog. Verification makes one minimal model request, then syncs the model menu.',
   },
 ];
 

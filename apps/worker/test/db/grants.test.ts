@@ -37,6 +37,19 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   agents: ['SELECT'],
   agent_capabilities: ['SELECT'],
   agent_files: ['SELECT'],
+  agent_owners: ['SELECT'],
+  approval_resources: ['SELECT'],
+  approval_policies: ['SELECT'],
+  approval_requests: ['SELECT'],
+  approval_revisions: ['SELECT'],
+  approval_votes: ['SELECT'],
+  approval_routes: ['SELECT'],
+  // The agent may bind a pending continuation to its own live proposal, under
+  // the trigger guard. Admission, budgets and terminal projection remain
+  // app/SECURITY-DEFINER operations.
+  approval_continuations: ['SELECT', 'INSERT'],
+  approval_runtime_budgets: ['SELECT'],
+  approval_model_reservations: ['SELECT'],
   // M3.5. The run engine may quote an uploaded document and may not mark one
   // ready, rename one or make one disappear: a tool that could mark its own
   // source ready would be a tool that could hide a failed extraction.
@@ -89,6 +102,17 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'job_ready', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   // M3.5.
   { table: 'attachments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'agent_owners', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_resources', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_policies', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_requests', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_revisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_votes', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_routes', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_commands', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_continuations', privileges: ['UPDATE', 'DELETE'] },
+  { table: 'approval_runtime_budgets', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_model_reservations', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

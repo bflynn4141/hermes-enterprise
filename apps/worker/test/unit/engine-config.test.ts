@@ -42,6 +42,7 @@ describe('the scripted-provider switch', () => {
   it('is on in development, because a fresh checkout has no provider key', () => {
     expect((config.vars as Record<string, string>).MODEL_SCRIPTED).toBe('1');
     expect((config.vars as Record<string, string>).OPENROUTER_FIXTURE).toBe('1');
+    expect((config.vars as Record<string, string>).NOUS_PORTAL_FIXTURE).toBe('1');
   });
 
   it('is absent from staging and production, in the config and not only in code', () => {
@@ -52,6 +53,7 @@ describe('the scripted-provider switch', () => {
       // that answered `/key` from a canned 200 would mark every string an
       // Admin pasted as a verified key.
       expect(vars?.OPENROUTER_FIXTURE).toBeUndefined();
+      expect(vars?.NOUS_PORTAL_FIXTURE).toBeUndefined();
       // The environment name is what the code checks, so it has to be right.
       expect(vars?.ENVIRONMENT).toBe(name);
     }

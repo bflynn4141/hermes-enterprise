@@ -64,7 +64,7 @@ describe('POST /w/:ws/sessions', () => {
       title: 'Partner applications',
       // The workspace default, which is an OpenRouter id from the seed onwards
       // (decision R13). The row it names is the placeholder 0016 wrote.
-      model_id: 'openrouter:anthropic/claude-sonnet-5',
+      model_id: 'nous:anthropic/claude-sonnet-5',
       effort: 'low',
       runtime: 'local',
       status: 'idle',
@@ -222,19 +222,22 @@ describe('shares', () => {
         method: 'POST',
         body: { audience: 'Finance' },
       })
-    ).json()) as { id: string; url: string; message_cutoff_seq: number };
+    ).json()) as { id: string; url: string; audience: string; message_cutoff_seq: number };
 
     expect(body.message_cutoff_seq).toBe(2);
+    expect(body.audience).toBe('Anyone with the link');
     const token = body.url.split('/').pop() ?? '';
     const stored = await readTenant(fixture.workspaceId, fixture.adminId, async (c) => {
-      const { rows } = await c.query<{ token_hash: string }>(
-        `SELECT token_hash FROM session_shares WHERE id = $1`,
+      const { rows } = await c.query<{ token_hash: string; audience: string }>(
+        `SELECT token_hash, audience FROM session_shares WHERE id = $1`,
         [body.id],
       );
-      return rows[0]?.token_hash ?? '';
+      return rows[0];
     });
-    expect(stored).not.toBe(token);
-    expect(stored).toHaveLength(64);
+    expect(stored?.token_hash).not.toBe(token);
+    expect(stored?.token_hash).toHaveLength(64);
+    // A stale or hostile client cannot put a presentation-only audience back.
+    expect(stored?.audience).toBe('Anyone with the link');
   });
 
   it('lets only the owner share: an existing share does not make a second person one', async () => {

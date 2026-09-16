@@ -2,8 +2,16 @@
 // agent role. Tool effects and traces share one transaction; no grants expand.
 import { PgAgentDb } from '../engine/pg-agent-db.js';
 import type { EngineRunRow } from '../engine/agent-db.js';
+import type { RunErrorInput } from '../engine/agent-db.js';
 import type { ProviderMessage, ToolCall } from '../model/types.js';
 import { RouteError } from '../routes/tenant.js';
+import {
+  RuntimeBudgetError,
+  type RuntimeBudgetContext,
+  type RuntimeBudgetDb,
+  type RuntimeBudgetReservation,
+  type RuntimeUsage,
+} from './budget.js';
 
 export interface RunBinding {
   readonly runtimeKind: string;
@@ -19,7 +27,24 @@ export interface RuntimeCallRecord {
   readonly result: string | null;
   readonly ok: boolean | null;
 }
-export class RuntimeDb extends PgAgentDb {
+export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
+  override async setRunStatus(
+    runId: string,
+    status: string,
+    detail: { waitingFor?: string | null; waitingLabel?: string | null; error?: RunErrorInput | null } = {},
+  ): Promise<void> {
+    await super.setRunStatus(runId, status, detail);
+    if (!['completed', 'stopped', 'error'].includes(status)) return;
+    // Read the status that actually won. `PgAgentDb.setRunStatus` refuses to
+    // resurrect a terminal run, so projecting the requested value here could
+    // otherwise turn a run swept as errored into completed work.
+    const { rows } = await this.runtimeQuery<{ status: string }>(
+      `SELECT status FROM runs WHERE id = $1`, [runId],
+    );
+    const actual = rows[0]?.status;
+    if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
+    await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
+  }
   async binding(runId: string): Promise<RunBinding | null> {
     const { rows } = await this.runtimeQuery<RunBinding>(
       `SELECT runtime_kind AS "runtimeKind", runtime_profile AS "runtimeProfile", runtime_run_id AS "runtimeRunId",
@@ -135,9 +160,132 @@ export class RuntimeDb extends PgAgentDb {
   }
   async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
     const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
-      `SELECT model_id, provider FROM catalog WHERE provider = 'openrouter' AND transport = 'openrouter_chat'
+      `SELECT model_id, provider FROM catalog
+         WHERE (provider, transport) IN (('openrouter', 'openrouter_chat'), ('nous_portal', 'nous_chat'))
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;
+  }
+  async runtimeBudgetForRun(runId: string): Promise<RuntimeBudgetContext | null> {
+    const { rows } = await this.runtimeQuery<{
+      authorization_state: string;
+      expires_at: Date;
+      budget_id: string | null;
+      budget_state: string | null;
+      model_id: string | null;
+      max_output_tokens_per_call: number | null;
+      context_length: number | null;
+      pricing_verified_on: Date | string | null;
+      input_price: string | null;
+      output_price: string | null;
+      cached_input_price: string | null;
+    }>(
+      `SELECT c.state AS authorization_state, c.expires_at,
+              b.id AS budget_id, b.state AS budget_state, b.model_id,
+              b.max_output_tokens_per_call,
+              m.context_length, m.pricing_verified_on,
+              m.pricing_per_million->>'input' AS input_price,
+              m.pricing_per_million->>'output' AS output_price,
+              m.pricing_per_million->>'cached_input' AS cached_input_price
+         FROM approval_continuations c
+         LEFT JOIN approval_runtime_budgets b
+           ON b.continuation_id = c.id AND b.workspace_id = c.workspace_id
+         LEFT JOIN catalog m ON m.model_id = b.model_id
+        WHERE c.admitted_run_id = $1
+        LIMIT 1`,
+      [runId],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const numberOrNull = (value: string | null): number | null => {
+      if (value === null || value.trim() === '') return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+    };
+    const expired = row.expires_at.getTime() <= Date.now();
+    return {
+      budgetId: row.budget_id,
+      authorizationState: expired ? 'expired' : row.authorization_state,
+      state: row.budget_state,
+      modelId: row.model_id,
+      maxOutputTokensPerCall: row.max_output_tokens_per_call,
+      contextLength: row.context_length,
+      pricingVerifiedOn:
+        row.pricing_verified_on instanceof Date
+          ? row.pricing_verified_on.toISOString().slice(0, 10)
+          : row.pricing_verified_on?.slice(0, 10) ?? null,
+      pricing: row.model_id
+        ? {
+            input: numberOrNull(row.input_price),
+            output: numberOrNull(row.output_price),
+            cachedInput: numberOrNull(row.cached_input_price),
+          }
+        : null,
+    };
+  }
+  async reserveRuntimeBudget(input: {
+    runId: string;
+    modelId: string;
+    inputTokenBound: number;
+    outputTokenBound: number;
+    reservedCostUsd: number;
+  }): Promise<RuntimeBudgetReservation> {
+    try {
+      const { rows } = await this.runtimeQuery<{ reservation_id: string; budget_id: string }>(
+        `SELECT reservation_id, budget_id
+           FROM reserve_approval_model_budget($1, $2, $3, $4, $5)`,
+        [input.runId, input.modelId, input.inputTokenBound, input.outputTokenBound, input.reservedCostUsd],
+      );
+      const row = rows[0];
+      if (!row) throw new RuntimeBudgetError('approval_budget_reservation_failed');
+      return { reservationId: row.reservation_id, budgetId: row.budget_id };
+    } catch (error) {
+      if (error instanceof RuntimeBudgetError) throw error;
+      const reason = /approval_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
+      throw new RuntimeBudgetError(reason ?? 'approval_budget_reservation_failed');
+    }
+  }
+  async reconcileRuntimeBudget(input: {
+    reservationId: string;
+    resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled';
+    usage?: RuntimeUsage;
+    actualCostUsd?: number;
+  }): Promise<void> {
+    const usage = input.usage;
+    try {
+      await this.runtimeQuery(
+        `SELECT reconcile_approval_model_budget($1, $2, $3, $4, $5, $6)`,
+        [
+          input.reservationId,
+          input.resolution,
+          usage?.inputTokens ?? null,
+          usage?.outputTokens ?? null,
+          usage?.cachedInputTokens ?? null,
+          input.actualCostUsd ?? null,
+        ],
+      );
+    } catch (error) {
+      const reason = /approval_budget_[a-z_]+/.exec(error instanceof Error ? error.message : String(error))?.[0];
+      throw new RuntimeBudgetError(reason ?? 'approval_budget_reconciliation_failed');
+    }
+  }
+  /**
+   * Keep the hard-budget settlement and its provider-call audit row atomic.
+   * `runtimeTx` makes the nested PgAgentDb methods reuse this transaction, so
+   * either both facts commit or the conservative reservation remains held.
+   */
+  async settleRuntimeModelCall(input: {
+    reservation: {
+      reservationId: string;
+      resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled';
+      usage?: RuntimeUsage;
+      actualCostUsd?: number;
+    } | null;
+    modelCall: Parameters<PgAgentDb['recordModelCall']>[0];
+  }): Promise<void> {
+    await this.runtimeTx(async () => {
+      if (input.reservation) await this.reconcileRuntimeBudget(input.reservation);
+      await this.recordModelCall(input.modelCall);
+    });
   }
   async finalizeRuntime<T>(runId: string, attempt: number, work: () => Promise<T>): Promise<T | null> {
     return this.runtimeTx(async (query) => {

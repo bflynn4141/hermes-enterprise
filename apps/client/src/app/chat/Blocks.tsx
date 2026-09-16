@@ -13,11 +13,12 @@
 import { ApprovalCard } from '@hermes/motion-components';
 import type { Block as BlockType, RequestEntity } from '@hermes/shared';
 import { isModelCommand } from '@hermes/shared';
-import { useAdapter, useAppState, useEntity, useNav } from '../store-context.js';
+import { useAdapter, useEntity, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { BrokenBlock, Button, Skeleton } from '../ui/primitives.js';
 import { requestStatusLabel } from '../selectors.js';
 import type { Message } from '@hermes/shared';
+import { approvalActionLabel, approvalIcon, approvalReviewerLabel, approvalTypeLabel } from '../views/Approval.js';
 
 interface BlockProps {
   block: BlockType;
@@ -187,7 +188,6 @@ export function Block({ block, sessionId, message }: BlockProps) {
  * is a 300 ms skeleton and a fetch, never "Request not found" (spec §4.4.2).
  */
 export function ReceiptBlock({ requestId }: { requestId: string }) {
-  const state = useAppState();
   const nav = useNav();
   const record = useEntity<RequestEntity>('request', requestId || null);
   if (!requestId) return <BrokenBlock reason="The receipt named no request." />;
@@ -195,16 +195,22 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
   if (record.state === 'unavailable') return <BrokenBlock reason="Not available yet" />;
   if (record.state === 'missing' || !record.data) return <BrokenBlock reason="Request not found" />;
   const request = record.data;
-  void state;
+  const action = request.status !== 'pending'
+    ? 'Open request'
+    : request.kind !== 'approval'
+      ? 'Review'
+      : request.approval?.pending_for_viewer
+        ? approvalActionLabel(request)
+        : 'Open request';
   return (
     <div className="chat-card static">
-      <Glass name={KIND_ICON[request.kind] ?? 'context'} size={28} className="card-icon" />
+      <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={28} className="card-icon" />
       <div className="card-body">
         <div className="card-title">{request.label}</div>
-        <div className="card-sub">{requestStatusLabel(request)}</div>
+        <div className="card-sub">{request.kind === 'approval' ? `${approvalTypeLabel(request)} · ${approvalReviewerLabel(request)}` : requestStatusLabel(request)}</div>
       </div>
       <Button onClick={() => nav({ section: 'inbox', view: 'request', id: request.id })}>
-        {request.status === 'pending' ? 'Review' : 'Open receipt'}
+        {action}
         <Icon name="arrow" size={14} />
       </Button>
     </div>

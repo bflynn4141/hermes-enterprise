@@ -37,6 +37,9 @@ import { connect, type Role } from '../db/client.js';
 import type { Health } from '@hermes/shared';
 import { describeConnections, readConnectionMetric } from '../ops/connections.js';
 import { jwksKeyCount } from '../auth/jwks.js';
+import { authConfigurationProblems } from '../auth/workos.js';
+import { HermesClient } from '../runtime/client.js';
+import { runtimeBindings } from '../runtime/config.js';
 
 const WORKER_VERSION = '0.1.0';
 
@@ -144,6 +147,19 @@ async function checkJwks(env: Env): Promise<string> {
   return 'reachable';
 }
 
+async function checkAuthConfiguration(env: Env): Promise<string> {
+  const problems = authConfigurationProblems(env);
+  if (problems.length > 0) throw new Error(`missing or invalid configuration: ${problems.join(', ')}`);
+  return 'configured';
+}
+
+async function checkHermesRuntimes(env: Env): Promise<string> {
+  const bindings = runtimeBindings(env);
+  await Promise.all(bindings.map((binding) =>
+    new HermesClient(binding.baseUrl, binding.apiKey).capabilities()));
+  return 'ready';
+}
+
 /**
  * The memoised answer, per isolate.
  *
@@ -162,7 +178,20 @@ let cached: { at: number; key: string; body: Promise<Health> } | null = null;
  * later caller with a different `Env`. Naming the dependency is cheaper than
  * remembering to clear it.
  */
-const cacheKey = (env: Env): string => `${env.ENVIRONMENT ?? ''}|${env.AUTH_MODE ?? ''}`;
+const cacheKey = (env: Env): string =>
+  [
+    env.ENVIRONMENT ?? '',
+    env.AUTH_MODE ?? '',
+    env.WORKOS_API_KEY ? 'api' : '',
+    env.WORKOS_CLIENT_ID ? 'client' : '',
+    env.WORKOS_COOKIE_PASSWORD?.length ?? 0,
+    env.WORKOS_REDIRECT_URI ?? '',
+    env.WORKOS_ISSUER ?? '',
+    env.ALLOWED_ORIGINS ?? '',
+    env.AGENT_RUNTIME ?? '',
+    env.HERMES_RUNTIME_AGENTS?.length ?? 0,
+    env.HERMES_BRIDGE_SECRET?.length ?? 0,
+  ].join('|');
 
 /** Tests reach for this rather than waiting out `CACHE_MS`. */
 export function resetHealthCacheForTests(): void {
@@ -175,6 +204,8 @@ async function runChecks(c: Context<{ Bindings: Env }>): Promise<Health> {
     timed('postgres:agent', () => checkPostgres(c.env, 'agent')),
     timed('hub:workspace', () => checkHub(c.env)),
     timed('postgres:connections', () => checkConnections(c.env)),
+    timed('auth:config', () => checkAuthConfiguration(c.env)),
+    ...(c.env.AGENT_RUNTIME === 'hermes' ? [timed('hermes:runs', () => checkHermesRuntimes(c.env))] : []),
     ...(c.env.AUTH_MODE === 'workos' ? [timed('workos:jwks', () => checkJwks(c.env))] : []),
   ]);
 

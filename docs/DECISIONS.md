@@ -54,18 +54,20 @@ expression, and the generated SQL becomes reviewable.
 
 ---
 
-## 2. Migrations prove their own idempotence on every run
+## 2. Migration replay is proved on a disposable shadow database
 
-**Decided.** `pnpm db:migrate` applies everything pending, fingerprints the
-schema (columns, constraints, indexes, policies, RLS flags, triggers, grants,
-views), re-applies every migration from the beginning, fingerprints again, and
-fails if the two differ.
+**Decided.** `pnpm db:migrate` validates the immutable ledger and applies only
+pending files. `pnpm db:migrations:verify` creates a randomly named disposable
+database, applies the catalog, fingerprints the schema (columns, constraints,
+indexes, policies, RLS flags, triggers, grants and views), replays the catalog,
+compares the fingerprint and drops the database in `finally`. CI runs both;
+deployments run only the pending-only command.
 
 **Why.** A half-applied deploy has to be recoverable by running the runner
 again. "These statements are idempotent" is easy to believe and easy to get
-wrong — one `CREATE INDEX` without `IF NOT EXISTS` is enough. This turns the
-claim into a check that runs every time rather than a test someone remembers to
-write.
+wrong — one `CREATE INDEX` without `IF NOT EXISTS` is enough. The proof belongs
+off the live target: replaying static catalog DML in production does more than
+apply pending schema and couples a deploy to current data assumptions.
 
 **Note.** Editing a migration that has already been applied is refused, because
 staging and production would then disagree about what `0002` is. While iterating
@@ -551,8 +553,9 @@ yet. Building the mechanism without a route that uses it would leave it
 untested until M4, and the member routes are the other place where an
 unattended laptop is the threat: promoting yourself an accomplice to Admin is
 as consequential as approving one admission. `/auth/login?step_up=1` is the way
-back, asking AuthKit for `max_age: 0`, which yields a new `sid` whose
-`authenticated_at` is now.
+back, asking AuthKit for `max_age: 0`. WorkOS retains the `sid`, advances the
+access token's `auth_time`, and the callback persists that value as
+`authenticated_at`.
 
 **Note.** Whether `max_age: 0` also re-challenges MFA is still **unverified**;
 it needs a live WorkOS environment, and it is listed in the final report as
@@ -4579,3 +4582,92 @@ workspace is retained in `qa/panel/sidebar-after-shell.png`.
 **Would change it if.** User testing shows that the compact type is difficult
 to read at 100% system scaling. The next step would be a user-selectable density
 preference, not another browser-wide transform.
+
+---
+
+## C53. Payment and signature approval capture intent before provider execution
+
+**Decided September 15, 2026.** Invoice and agreement review use three visible
+steps: review the complete document, prepare the payment or signature, and
+confirm the exact authorization. The full document remains available throughout.
+Payment review names the source account, payee, amount, and timing; agreement
+review places the signer's entered name and consent directly in the signature
+block. The final decision stores an audit note describing that authorization.
+
+**Execution boundary.** Approval still creates the document and pending effects.
+It does not manufacture a bank transfer or applied signature. The local demo
+labels its bank connection as a prototype with no funds connected, and both
+flows say that provider execution remains separate. A production connector must
+turn the pending effect into an idempotent provider operation, persist the
+provider reference, reconcile webhooks, and expose failure or reversal without
+changing the human decision already on file.
+
+**Why.** The reviewer needs to see the entire legal or financial artifact and
+the concrete consequence before committing. Keeping the effect separate also
+preserves the existing two-person finance requirement and prevents a document
+approval from silently becoming external execution.
+
+---
+
+## C54. Onboarding previews approval boundaries instead of pretending to configure them
+
+**Decided September 15, 2026.** The final workspace-creation step shows one
+plain flow — Iris prepares, a reviewer decides, then the approved action runs —
+followed by compact cards for the protected outcomes and their initial reviewer
+roles. The groups cover the implemented approval vocabulary: plans and team
+coordination, access and records, external communication, money movement, agent
+and team changes, and shared learning. Payment names Finance explicitly.
+
+This is a read-only policy preview. It has no toggles or workflow canvas because
+a new workspace has only its creator, and the server owns the real policy and
+authorization snapshot. Finance and specialist reviewers are added later when
+the relevant people exist. Motion is intentionally limited to existing control
+feedback; governance text does not animate or delay the create action.
+
+**Why.** Ramp's admin setup first previews the active route, names role-based
+reviewers and separation of duties, and reserves its workflow builder for later
+configuration. GitHub environment approvals keep protected secrets unavailable
+until review. Microsoft recommends that agent admins inspect capabilities,
+data sources and custom actions, and that irreversible actions stay behind
+approval. The onboarding screen therefore teaches the safety model without
+asking a first-time admin to design a policy graph prematurely.
+
+**Evidence.**
+- https://support.ramp.com/setting-up-spend-request-approvals
+- https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments
+- https://learn.microsoft.com/en-us/microsoft-365/copilot/agent-essentials/agent-lifecycle/agent-copilot-studio-requested
+- https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/agent-design-canvas-framework
+
+---
+
+## C55. Nous Portal supplies inference; Hermes Agent remains the runtime
+
+**Decided September 15, 2026.** Workspace model inference uses the Nous Portal
+OpenAI-compatible API at `https://inference-api.nousresearch.com/v1`. Durable
+catalog IDs use `nous:<vendor>/<model>`, and all deployed environments set
+`ALLOWED_PROVIDERS=nous_portal`. The default is
+`nous:anthropic/claude-sonnet-5` with medium effort. Existing OpenRouter code is
+kept for historical records and transport regression tests, but is not offered
+by the current product path.
+
+The official Hermes Agent runtime still owns planning, transcript continuity,
+tool orchestration and execution. Its agent-scoped Worker proxy supplies the
+selected model and resolves the workspace's encrypted Nous Portal key on each
+call. `HERMES_BRIDGE_SECRET` authenticates the runtime to that proxy; it is not
+an inference credential and does not replace the workspace key.
+
+Nous Portal's `/models` route is public, so it cannot validate a credential.
+Key verification therefore sends one minimal one-token chat-completions request
+before syncing the public catalog. The local fixture reproduces both responses
+only in development and is absent from staging and production configuration.
+
+**Why.** One product provider keeps setup and billing legible while still
+offering the Portal catalog. Keeping the runtime and inference credentials
+separate preserves tenant billing, rotation and audit attribution without
+copying workspace secrets into Hermes profiles. A public catalog response alone
+would create false-positive verification for invalid or revoked keys.
+
+**Would change it if.** Nous Portal publishes a free authenticated key-introspection
+endpoint, in which case verification should use it instead of a billed minimal
+completion. Adding another customer-facing provider requires a separate policy,
+catalog and UI decision rather than merely compiling another adapter.

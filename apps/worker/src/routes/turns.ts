@@ -19,6 +19,7 @@ import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { runtimeBinding } from '../runtime/config.js';
+import { approvalContinuationRetryBlock } from '../runtime/continuation.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
@@ -197,7 +198,14 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
-  const input = await jsonBody<{ client_turn_id?: string; text?: string }>(c);
+  const input = await jsonBody<{ client_turn_id?: string; text?: string; attachments?: unknown }>(c);
+  if (input.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length > 0)) {
+    throw new RouteError(
+      'Attachments are not supported for agent turns yet. Remove them and try again.',
+      'attachments_unsupported',
+      422,
+    );
+  }
   // Development only, and gated twice: `MODEL_SCRIPTED=1` is itself refused
   // outside `ENVIRONMENT=development`, so a deployed environment cannot be
   // asked for a scripted failure by header. See decision F6.
@@ -226,7 +234,19 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     const already = existing.rows[0];
     if (already) return { status: 200 as const, run: already, duplicate: true };
 
-    if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') runtimeBinding(c.env, work.workspaceId, session.agent_id);
+    if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
+      const binding = runtimeBinding(c.env, work.workspaceId, session.agent_id);
+      try {
+        await new HermesClient(binding.baseUrl, binding.apiKey).capabilities();
+      } catch (error) {
+        console.error(JSON.stringify({ at: 'runtime.admission', ok: false, error: String(error) }));
+        throw new RouteError(
+          'The official Hermes runtime is not healthy enough to accept this turn.',
+          'runtime_unhealthy',
+          503,
+        );
+      }
+    }
 
     if (isEnginePaused(c.env)) {
       throw new RouteError('the engine is paused for a deploy', 'engine_paused', 409);
@@ -672,6 +692,10 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
       throw new RouteError('the engine is paused for a deploy', 'engine_paused', 409);
     }
     const attempt = run.attempt + 1;
+    const approvalRetryBlock = await approvalContinuationRetryBlock(work.tx, runId, attempt);
+    if (approvalRetryBlock) {
+      throw new RouteError('this approved continuation cannot be retried under its current authorization and budget', approvalRetryBlock, 409);
+    }
     const engineVersion = Number(c.env.ENGINE_VERSION ?? '1') || 1;
     const traceId = crypto.randomUUID();
     const instanceId = runAttemptInstanceId(runId, attempt);

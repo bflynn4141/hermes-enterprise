@@ -181,12 +181,22 @@ export interface UiState {
 export interface AppState {
   workspace: { id: string; name: string; role: 'admin' | 'member'; jurisdiction: string | null };
   user: { id: string; name: string; email: string; role: 'admin' | 'member' };
-  agent: { id: string | null; name: string; email: string; summary: string; setupStep: string | null };
+  agent: { id: string | null; name: string; email: string | null; summary: string; setupStep: string | null };
+  capabilities: { emailIngress: boolean; turnAttachments: boolean; automatedTriggers: boolean };
   entities: EntityCache;
   sessions: Record<string, SessionState>;
   sessionOrder: string[];
   activeSessionId: string | null;
-  counts: { inbox: number; pendingGrants: number; createdDocuments: number; decisions: number };
+  counts: {
+    /** Legacy total, retained for older Workers and History copy. */
+    inbox: number;
+    /** Server-projected request counts. Each counts requests, never votes. */
+    pendingForMe?: number;
+    pendingForOthers?: number;
+    pendingGrants: number;
+    createdDocuments: number;
+    decisions: number;
+  };
   settings: Record<string, unknown>;
   cursors: { session: Record<string, bigint>; workspace: bigint };
   connection: { session: LinkState; workspace: LinkState; authRefreshedAt: number };
@@ -249,12 +259,13 @@ export function initialState(): AppState {
   return {
     workspace: { id: '', name: '', role: 'member', jurisdiction: null },
     user: { id: '', name: '', email: '', role: 'member' },
-    agent: { id: null, name: 'Iris', email: '', summary: '', setupStep: null },
+    agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null },
+    capabilities: { emailIngress: false, turnAttachments: false, automatedTriggers: false },
     entities: emptyEntities(),
     sessions: {},
     sessionOrder: [],
     activeSessionId: null,
-    counts: { inbox: 0, pendingGrants: 0, createdDocuments: 0, decisions: 0 },
+    counts: { inbox: 0, pendingForMe: 0, pendingForOthers: 0, pendingGrants: 0, createdDocuments: 0, decisions: 0 },
     settings: {},
     cursors: { session: {}, workspace: 0n },
     connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0 },
@@ -1144,7 +1155,14 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // the same reason; the id is not known here, so the list is invalidated
       // and refetched the next time the screen asks for it.
       out.push({ type: 'list/invalidate', key: 'history' });
-      out.push({ type: 'counts/set', patch: { inbox: Math.max(0, state.counts.inbox - 1), decisions: state.counts.decisions + 1 } });
+      out.push({
+        type: 'counts/set',
+        patch: {
+          inbox: Math.max(0, state.counts.inbox - 1),
+          pendingForMe: Math.max(0, (state.counts.pendingForMe ?? state.counts.inbox) - 1),
+          decisions: state.counts.decisions + 1,
+        },
+      });
       // A receipt is the one thing in this product a person is asked to check,
       // so it counts on the rail like a message does (decision C33).
       if (state.ui.irisPanel !== 'open') out.push({ type: 'iris/unread', delta: 1 });

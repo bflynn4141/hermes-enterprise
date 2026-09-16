@@ -78,11 +78,11 @@ export function deletionDeps(env: Env): DeletionDeps {
     async deleteOrganization(organizationId: string): Promise<void> {
       const port = optionalWorkosPort(env);
       if (!port) {
-        // `AUTH_MODE=fake`, or a deployment with no WorkOS credentials. The
-        // rows still go; logging the gap is better than failing forever on an
-        // organization that does not exist on our side either.
-        logEvent({ at: 'workspace_deletion.workos', note: 'no WorkOS port configured', organization: organizationId });
-        return;
+        // The row names a real WorkOS organization. Without a port we cannot
+        // prove it was deleted, so this workflow must retry and preserve the
+        // local linkage rather than report a completed deletion while access
+        // can still exist upstream.
+        throw new Error('WorkOS is required to delete the linked organization');
       }
       await port.deleteOrganization(organizationId);
     },

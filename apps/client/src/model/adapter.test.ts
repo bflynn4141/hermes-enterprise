@@ -78,7 +78,8 @@ const bootstrapBody = {
     settings: { default_model_id: 'deepseek-flash', default_effort: 'high', default_runtime: 'cloud', daily_token_cap: null, max_concurrent_runs: 3, timezone: 'UTC', flags: {} },
   },
   viewer: { user_id: USER, role: 'admin', reviewer_roles: [] },
-  agent: { id: AGENT, name: 'Iris', email: 'iris@hermesmail.example', responsibility: 'Partner Program', setup_step: null },
+  agent: { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+  capabilities: { email_ingress: false, turn_attachments: false, automated_triggers: false },
   heads: { session: '0', workspace: '0' },
   counts: { inbox: 1, pending_grants: 0, created_documents: 0, decisions: 0 },
   sessions: [{ id: SESSION, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'deepseek-flash', effort: 'high', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: iso }],
@@ -275,6 +276,23 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it('uses a new workspace setup session as the first app-pane focus', async () => {
+    const focused = {
+      ...bootstrapBody,
+      sessions: bootstrapBody.sessions.map((session) => ({
+        ...session,
+        focus_ref: { section: 'agents' as const, view: 'setup', step: 'identity' },
+      })),
+    };
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => new Response(JSON.stringify(focused), { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+    await adapter.start();
+    expect(state().ui.app).toEqual({ section: 'agents', view: 'setup', step: 'identity' });
+    expect(state().capabilities).toEqual({ emailIngress: false, turnAttachments: false, automatedTriggers: false });
+    adapter.dispose();
+  });
+
   it('opens both sockets and applies session events to the right session', async () => {
     const { adapter, state } = makeAdapter();
     await adapter.start();

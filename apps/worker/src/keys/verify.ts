@@ -18,6 +18,7 @@ import type { KeyStatus } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import { ProviderError, type ModelProvider } from '../model/types.js';
 import { logEvent } from './redact.js';
+import { enqueueReverifyJob } from './reverify-queue.js';
 import { setKeyStatus } from './store.js';
 
 /** How many consecutive 403s before the probe becomes a 1-token call. */
@@ -170,15 +171,13 @@ export async function scheduleReverify(
   provider: string,
   forbiddenCount: number,
 ): Promise<void> {
-  await tx.query(
-    `INSERT INTO jobs (workspace_id, kind, key, payload, next_at)
-     VALUES ($1, 'reverify', $2, $3::jsonb, now() + interval '10 minutes')
-     ON CONFLICT (kind, key) DO UPDATE
-       SET payload = EXCLUDED.payload,
-           done_at = NULL,
-           next_at = LEAST(jobs.next_at, EXCLUDED.next_at)`,
-    [workspaceId, `reverify:${keyId}`, JSON.stringify({ key_id: keyId, provider, forbidden_count: forbiddenCount })],
-  );
+  await enqueueReverifyJob(tx, {
+    workspaceId,
+    keyId,
+    provider,
+    forbiddenCount,
+    delaySeconds: 10 * 60,
+  });
 }
 
 /** How many 403s a pending `reverify` job has already recorded for this key. */

@@ -15,6 +15,60 @@ import uuid
 
 from install import ROOT, REVISION, verify_source
 
+NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/v1/capabilities"})
+
+
+def native_cron_route(path):
+    return (
+        path == "/api/jobs"
+        or path.startswith("/api/jobs/")
+        or path == "/api/cron/fire"
+        or path.startswith("/api/cron/")
+    )
+
+
+def assert_native_cron_empty(load_jobs=None):
+    if load_jobs is None:
+        from cron.jobs import load_jobs
+    jobs = load_jobs()
+    if jobs:
+        raise RuntimeError("Enterprise Hermes profiles must not contain native cron jobs.")
+
+
+def install_native_api_policy():
+    """Remove native cron routes and make native health assert an empty cron store."""
+    from aiohttp import web
+    from gateway.platforms.api_server import APIServerAdapter
+
+    original = APIServerAdapter._http_route_table
+    if getattr(original, "_enterprise_policy", False):
+        return
+
+    def governed_routes(adapter):
+        routes = []
+        for method, path, handler in original(adapter):
+            if native_cron_route(path):
+                continue
+            if path in NATIVE_HEALTH_PATHS:
+                async def guarded(request, _handler=handler):
+                    response = await _handler(request)
+                    if response.status >= 400:
+                        return response
+                    try:
+                        assert_native_cron_empty()
+                    except Exception:
+                        return web.json_response({
+                            "error": "Enterprise native cron policy failed.",
+                            "code": "native_cron_not_empty",
+                        }, status=503)
+                    return response
+                handler = guarded
+            routes.append((method, path, handler))
+        return routes
+
+    governed_routes._enterprise_policy = True
+    APIServerAdapter._http_route_table = governed_routes
+
 
 def validate_profile_path(profile, platform=sys.platform, pid=None):
     # Match gateway.shutdown_watchdog.get_loop_tick_socket_path. execve keeps
@@ -82,6 +136,8 @@ def child(metadata_path):
     from hermes_cli.plugins import discover_plugins
     from hermes_cli.tools_config import _get_platform_tools
     from model_tools import get_tool_definitions
+    assert_native_cron_empty()
+    install_native_api_policy()
     discover_plugins()
     loaded = load_config()
     selected = _get_platform_tools(loaded, "api_server")

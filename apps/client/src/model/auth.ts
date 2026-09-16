@@ -42,12 +42,13 @@ export interface AuthAdapter {
   readonly mode: AuthMode;
   headers(): Record<string, string>;
   signInUrl(returnTo: string): string;
+  signOutUrl(): string;
   /**
    * Where to send the browser for a fresh `authenticated_at`. Never null now
    * that fake mode has a step-up of its own; the type keeps the null so a
    * caller written against the old seam still compiles.
    */
-  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key'): string | null;
+  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key' | 'slack'): string | null;
   devUser(): string | null;
   setDevUser(id: string): void;
 }
@@ -69,11 +70,14 @@ function writeDevUserCookie(id: string): void {
  * The Admin is the default, because a fake-mode client with no header gets a
  * 401 on bootstrap and a sign-in screen that has nothing to sign in to.
  */
-export const DEV_USERS = [
-  { id: 'maya@nous.example', label: 'Admin', name: 'Maya Chen' },
-  { id: 'dana@nous.example', label: 'Member', name: 'Dana Kim' },
-] as const;
-export const DEFAULT_DEV_USER = DEV_USERS[0].id;
+export const DEV_USERS: readonly { id: string; label: string; name: string }[] =
+  __AUTH_MODE__ === 'fake'
+    ? [
+        { id: 'maya@nous.example', label: 'Admin', name: 'Maya Chen' },
+        { id: 'dana@nous.example', label: 'Member', name: 'Dana Kim' },
+      ]
+    : [];
+export const DEFAULT_DEV_USER = __AUTH_MODE__ === 'fake' ? 'maya@nous.example' : '';
 
 /**
  * The Worker collapses any `return_to` that is not a same-origin *path* to
@@ -114,6 +118,9 @@ export function createAuth(mode: AuthMode = __AUTH_MODE__): AuthAdapter {
       // `/auth/login`, not `/auth/signin`: the Worker names it after what it
       // does, and there is no second route to shim through.
       return `/auth/login?return_to=${encodeURIComponent(sameOriginPath(returnTo))}`;
+    },
+    signOutUrl() {
+      return '/auth/logout';
     },
     stepUpUrl(returnTo, reason) {
       // One URL in both modes. In `workos` it asks WorkOS for `max_age: 0`; in

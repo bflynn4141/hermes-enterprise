@@ -60,7 +60,7 @@ export const providerKeyVerifySchema = z
     reason: z.string().max(64),
     /**
      * Present only for a provider whose verification also syncs a model list
-     * (OpenRouter today). `count` is how many catalog rows the sync wrote.
+     * (brokered model gateways). `count` is how many catalog rows the sync wrote.
      */
     synced: z
       .object({ count: z.number().int().nonnegative(), at: z.iso.datetime() })

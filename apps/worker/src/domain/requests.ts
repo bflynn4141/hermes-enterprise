@@ -20,10 +20,11 @@
 //     older than the one an event carried — and a timestamp already has exactly
 //     that property without a column that something has to remember to bump.
 import type { Tx } from '../db/client.js';
+import type { ApprovalListProjection, RequestKind } from '@hermes/shared';
 
 export interface RequestRow {
   id: string;
-  kind: 'application' | 'invoice' | 'agreement';
+  kind: RequestKind;
   status: string;
   label: string;
   payload: Record<string, unknown> | null;
@@ -68,6 +69,8 @@ export function subjectOf(row: Pick<RequestRow, 'kind' | 'payload' | 'label'>): 
       const parties = Array.isArray(payload.parties) ? payload.parties : [];
       return text(asRecord(parties[0]).name) ?? text(row.label);
     }
+    case 'approval':
+      return text(row.label);
     default:
       return text(row.label);
   }
@@ -88,6 +91,8 @@ export function titleOf(row: Pick<RequestRow, 'kind' | 'payload'>): string | nul
       const number = text(payload.number);
       return number ? `Agreement ${number}` : null;
     }
+    case 'approval':
+      return text(payload.summary) ?? text(payload.approval_type);
     default:
       return null;
   }
@@ -101,11 +106,11 @@ interface Source {
 
 /** The evidence list, trimmed to the contract's field set and limits. */
 function sourcesOf(payload: Record<string, unknown>): Source[] {
-  const raw = Array.isArray(payload.sources) ? payload.sources : [];
+  const raw = Array.isArray(payload.sources) ? payload.sources : Array.isArray(payload.evidence) ? payload.evidence : [];
   return raw.slice(0, 20).flatMap((entry): Source[] => {
     const source = asRecord(entry);
     const id = text(source.id);
-    const name = text(source.name);
+    const name = text(source.name) ?? text(source.label);
     if (!id || !name) return [];
     return [{ id: id.slice(0, 64), name: name.slice(0, 200), note: (text(source.note) ?? '').slice(0, 400) }];
   });
@@ -117,7 +122,7 @@ function missingOf(payload: Record<string, unknown>): string[] {
 }
 
 /** The row as `requestEntitySchema` wants it. Parse the result before sending. */
-export function toRequestEntity(row: RequestRow): Record<string, unknown> {
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null): Record<string, unknown> {
   const payload = asRecord(row.payload);
   return {
     id: row.id,
@@ -137,6 +142,7 @@ export function toRequestEntity(row: RequestRow): Record<string, unknown> {
     decision_id: row.decision_id,
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
+    approval,
   };
 }
 

@@ -48,7 +48,8 @@ describe('GET /w/:ws/bootstrap', () => {
     const body = (await response.json()) as {
       workspace: { id: string; settings: { default_model_id: string } };
       viewer: { role: string; reviewer_roles: string[] };
-      agent: { id: string; name: string };
+      agent: { id: string; name: string; email: string | null };
+      capabilities: { email_ingress: boolean; turn_attachments: boolean; automated_triggers: boolean };
       sessions: { id: string; agent_id: string }[];
       counts: Record<string, number>;
       heads: { session: string; workspace: string };
@@ -59,9 +60,10 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.workspace.id).toBe(fx.workspaceId);
     expect(body.viewer.role).toBe('admin');
     expect(body.viewer.reviewer_roles).toEqual(['access', 'finance']);
-    expect(body.agent).toMatchObject({ id: fx.agentId, name: 'Iris' });
+    expect(body.agent).toMatchObject({ id: fx.agentId, name: 'Iris', email: null });
+    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
     expect(body.sessions).toContainEqual(expect.objectContaining({ id: fx.sessionId, agent_id: fx.agentId }));
-    expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0 });
+    expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0, pending_for_me: 0, pending_for_others: 0 });
     expect(body.heads).toEqual({ session: '0', workspace: '0' });
     expect(body.requests).toEqual([]);
 
@@ -71,8 +73,8 @@ describe('GET /w/:ws/bootstrap', () => {
     // are no longer in any payload a client sees (decision R12).
     expect(body.catalog.length).toBeGreaterThanOrEqual(1);
     expect(body.catalog.every((row) => row.enabled === false)).toBe(true);
-    expect(body.catalog.map((row) => row.model_id)).toContain('openrouter:anthropic/claude-sonnet-5');
-    for (const row of body.catalog) expect(row.model_id.startsWith('openrouter:')).toBe(true);
+    expect(body.catalog.map((row) => row.model_id)).toContain('nous:anthropic/claude-sonnet-5');
+    for (const row of body.catalog) expect(row.model_id.startsWith('nous:')).toBe(true);
   });
 
   it('refuses a caller who is not a member, without confirming the workspace exists', async () => {

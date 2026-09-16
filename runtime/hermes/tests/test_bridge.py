@@ -8,7 +8,7 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
-from start import clean_environment, validate_profile_path
+from start import assert_native_cron_empty, clean_environment, native_cron_route, validate_profile_path
 
 RUN_ID = "run_" + "a" * 32
 
@@ -95,6 +95,17 @@ class BridgeTests(unittest.TestCase):
         self.assertLess(len(str(profile / "home/state/gateway.loop-tick.2147483647.sock")), 104)
         with self.assertRaises(ValueError):
             validate_profile_path(profile, "darwin", pid=83824)
+
+    def test_native_cron_store_must_stay_empty(self):
+        assert_native_cron_empty(lambda: [])
+        with self.assertRaisesRegex(RuntimeError, "must not contain"):
+            assert_native_cron_empty(lambda: [{"id": "outside-enterprise-admission"}])
+
+    def test_native_cron_routes_are_identified_for_launcher_filtering(self):
+        for path in ("/api/jobs", "/api/jobs/a", "/api/jobs/a/run", "/api/cron/fire"):
+            self.assertTrue(native_cron_route(path), path)
+        for path in ("/health", "/v1/capabilities", "/v1/runs", "/v1/runs/id/stop"):
+            self.assertFalse(native_cron_route(path), path)
 
 
 if __name__ == "__main__":

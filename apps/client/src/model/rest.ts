@@ -21,14 +21,20 @@ import {
   providerKeyMutationSchema,
   providerKeyRemovedSchema,
   providerKeyVerifySchema,
+  slackConnectionSchema,
+  slackDisconnectSchema,
+  slackLinkCodeSchema,
+  slackOAuthStartSchema,
   runViewSchema,
   guidanceAcceptedSchema,
   queueStateSchema,
   attachmentSchema,
   attachmentDetailSchema,
   attachmentUploadSchema,
+  approvalViewSchema,
   directUploadResultSchema,
   type AttachmentUpload,
+  type ApprovalView,
   type Bootstrap,
   type CatalogPage,
   type EventsPage,
@@ -36,6 +42,7 @@ import {
   type Ref,
   type ReplayStream,
   type RunView,
+  type WorkspaceCreateInput,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -63,6 +70,9 @@ import {
   undeleteResultSchema,
   authWorkspacesSchema,
   type AuthWorkspacesResponse,
+  type DecideApprovalInput,
+  type ReviseApprovalInput,
+  type RouteApprovalInput,
   type UsageRange,
   type AttachmentRef,
   type AuthSessionResponse,
@@ -281,10 +291,20 @@ export function createRest(options: RestOptions) {
     // this product cannot have, so a missing route surfaces as an error.
     decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
+    getApproval: (workspaceId: string, requestId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
+    decideApproval: (workspaceId: string, requestId: string, body: DecideApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/revisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
+    routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
 
     // --- entities ---
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
+    addRequestNote: (workspaceId: string, id: string, body: { body: string }) =>
+      request('POST', `${ws(workspaceId)}/requests/${id}/notes`, requestEntitySchema, body),
     listRequests: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
     listEffects: (workspaceId: string, requestId: string) =>
@@ -339,7 +359,7 @@ export function createRest(options: RestOptions) {
     withdrawInvitation: (workspaceId: string, id: string) => send('POST', `${ws(workspaceId)}/invitations/${id}/withdraw`, {}),
 
     // --- shares, feedback ---
-    share: (workspaceId: string, sessionId: string, audience: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema, { audience }) as Promise<ShareResponse>,
+    share: (workspaceId: string, sessionId: string) => request('POST', `${ws(workspaceId)}/sessions/${sessionId}/shares`, shareResponseSchema) as Promise<ShareResponse>,
     unshare: (workspaceId: string, sessionId: string, shareId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}/shares/${shareId}`),
     sharedSession: (token: string, etag: string | null) =>
       request('GET', `/shared/${token}`, sharedSessionSchema, undefined, etag ? { headers: { 'If-None-Match': etag } } : {}) as Promise<SharedSession>,
@@ -381,15 +401,19 @@ export function createRest(options: RestOptions) {
 
     // --- provider keys (every mutation needs step-up) ---
     providerKeys: (workspaceId: string) => request('GET', `${ws(workspaceId)}/provider-keys`, providerKeyListSchema),
-    addProviderKey: (workspaceId: string, body: { provider: string; label: string; key: string }) =>
+    addProviderKey: (workspaceId: string, body: { provider: string; label?: string; key: string }) =>
       request('POST', `${ws(workspaceId)}/provider-keys`, providerKeyMutationSchema, body),
     verifyProviderKey: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-keys/${id}/verify`, providerKeyVerifySchema, {}),
     rotateProviderKey: (workspaceId: string, id: string, key: string) =>
       request('POST', `${ws(workspaceId)}/provider-keys/${id}/rotate`, providerKeyMutationSchema, { key }),
     removeProviderKey: (workspaceId: string, id: string) => request('DELETE', `${ws(workspaceId)}/provider-keys/${id}`, providerKeyRemovedSchema),
+    slackConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/slack`, slackConnectionSchema),
+    startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
+    createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
+    disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**
-     * One page of the catalog. Since OpenRouter the table is hundreds of rows,
+     * One page of the catalog. Since Nous Portal the table is hundreds of rows,
      * so the model menu asks for the page it is showing and the search runs in
      * SQL rather than over a list the client downloaded.
      */
@@ -428,7 +452,7 @@ export function createRest(options: RestOptions) {
     /** Admin + step-up. Access is revoked now; destruction is seven days away. */
     deleteWorkspace: (workspaceId: string) => request('DELETE', ws(workspaceId), workspaceDeletionSchema),
     undeleteWorkspace: (workspaceId: string) => request('POST', `${ws(workspaceId)}/settings/undelete`, undeleteResultSchema, {}),
-    createWorkspace: (body: { name: string }) => request('POST', '/workspaces', bootstrapSchema, body),
+    createWorkspace: (body: WorkspaceCreateInput) => request('POST', '/workspaces', bootstrapSchema, body),
     /**
      * The whole workspace, from inside the transaction that admitted them —
      * so the shell renders with no second round trip (server decision F2).

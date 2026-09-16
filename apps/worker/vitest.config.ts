@@ -124,9 +124,9 @@ export default defineConfig({
               },
               // `.dev.vars` is a developer's file, and the pool reads it: a
               // machine set up for "real local mode" (README) has
-              // MODEL_SCRIPTED="0" and OPENROUTER_FIXTURE="0" in it, and every
+              // MODEL_SCRIPTED="0" and NOUS_PORTAL_FIXTURE="0" in it, and every
               // worker test that drives a run would then reach for a real
-              // provider on a real key. These three are forced here so the
+              // provider on a real key. These bindings are forced here so the
               // suite's behaviour does not depend on a file it does not own.
               // Same reasoning as `pnpm e2e:live`'s `.dev.vars.test`
               // (decision C37).
@@ -134,6 +134,7 @@ export default defineConfig({
                 AUTH_MODE: 'fake',
                 MODEL_SCRIPTED: '1',
                 OPENROUTER_FIXTURE: '1',
+                NOUS_PORTAL_FIXTURE: '1',
               },
             },
           }),

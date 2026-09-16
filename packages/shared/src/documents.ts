@@ -11,6 +11,7 @@
 // would make 1200.00 and 1199.999999 the same approval.
 import { z } from 'zod';
 import { REQUEST_KINDS, type RequestKind } from './enums.js';
+import { approvalPayloadSchema } from './approvals.js';
 
 const isoDate = z
   .string()
@@ -154,6 +155,7 @@ export const requestPayloadSchema = z.discriminatedUnion('kind', [
   applicationPayloadSchema,
   invoicePayloadSchema,
   agreementPayloadSchema,
+  approvalPayloadSchema,
 ]);
 export type RequestPayload = z.infer<typeof requestPayloadSchema>;
 
@@ -161,6 +163,7 @@ const PAYLOAD_BY_KIND = {
   application: applicationPayloadSchema,
   invoice: invoicePayloadSchema,
   agreement: agreementPayloadSchema,
+  approval: approvalPayloadSchema,
 } as const satisfies Record<RequestKind, unknown>;
 
 /** Validate a proposed payload against the schema for its request kind. */

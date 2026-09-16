@@ -22,6 +22,10 @@ export interface AccessTokenClaims {
   readonly sub: string;
   readonly sid: string;
   readonly iss: string;
+  /** WorkOS user-session tokens name the application with `client_id`, not `aud`. */
+  readonly client_id: string;
+  /** Most recent active authentication; unlike `iat`, refreshes do not advance it. */
+  readonly auth_time: number;
   readonly exp: number;
   readonly iat: number;
   readonly nbf?: number;
@@ -56,6 +60,15 @@ export function jwksUrl(env: Env): string {
   const clientId = env.WORKOS_CLIENT_ID;
   if (!clientId) throw new Error('WORKOS_CLIENT_ID is required to verify an access token');
   return `https://api.workos.com/sso/jwks/${clientId}`;
+}
+
+/**
+ * WorkOS uses its API origin by default and the environment's custom AuthKit
+ * domain when one is configured. Trailing slashes are presentation, not a
+ * different issuer; every other URL component remains exact.
+ */
+export function expectedWorkOSIssuer(env: Env): string {
+  return (env.WORKOS_ISSUER ?? 'https://api.workos.com').replace(/\/+$/, '');
 }
 
 async function loadKeys(url: string): Promise<Map<string, CryptoKey>> {
@@ -150,8 +163,20 @@ export async function verifyAccessToken(env: Env, token: string): Promise<Access
 
   const claims = decode(payloadPart) as AccessTokenClaims;
   const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.iss !== 'string' || claims.iss.replace(/\/+$/, '') !== expectedWorkOSIssuer(env)) {
+    throw new TokenError('unexpected issuer', 'invalid');
+  }
+  if (typeof claims.client_id !== 'string' || claims.client_id !== env.WORKOS_CLIENT_ID) {
+    throw new TokenError('unexpected client_id', 'invalid');
+  }
   if (typeof claims.exp !== 'number') throw new TokenError('no exp', 'invalid');
+  if (typeof claims.iat !== 'number') throw new TokenError('no iat', 'invalid');
+  if (typeof claims.auth_time !== 'number') throw new TokenError('no auth_time', 'invalid');
   if (claims.exp + CLOCK_SKEW_SECONDS < now) throw new TokenError('token expired', 'expired');
+  if (claims.iat - CLOCK_SKEW_SECONDS > now) throw new TokenError('token issued in the future', 'invalid');
+  if (claims.auth_time - CLOCK_SKEW_SECONDS > claims.iat || claims.auth_time <= 0) {
+    throw new TokenError('invalid auth_time', 'invalid');
+  }
   if (typeof claims.nbf === 'number' && claims.nbf - CLOCK_SKEW_SECONDS > now) {
     throw new TokenError('token not yet valid', 'invalid');
   }

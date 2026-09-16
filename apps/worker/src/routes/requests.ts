@@ -28,6 +28,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
 import { loadRequest, toRequestEntity, REQUEST_SELECT, type RequestRow } from '../domain/requests.js';
+import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
 
@@ -80,23 +81,31 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         LIMIT $${values.length}`,
       values,
     );
-    return result.rows;
+    const projections = new Map<string, Awaited<ReturnType<typeof loadApprovalListProjection>>>();
+    for (const row of result.rows) {
+      if (row.kind === 'approval') projections.set(row.id, await loadApprovalListProjection(work.tx, row.id, work.userId));
+    }
+    return { rows: result.rows, projections };
   });
 
   return c.json(
     requestPage.parse({
-      items: rows.map(toRequestEntity),
+      items: rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null)),
       cursor: null,
-      total: rows.length,
+      total: rows.rows.length,
     }),
   );
 }
 
 export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
-  const row = await inWorkspace(c, (work) => loadRequest(work.tx, requestId));
-  if (!row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(row)));
+  const result = await inWorkspace(c, async (work) => {
+    const row = await loadRequest(work.tx, requestId);
+    const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
+    return { row, approval };
+  });
+  if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
+  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval)));
 }
 
 export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -145,9 +154,11 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
        VALUES ($1, $2, $3, 'user', $4)`,
       [work.workspaceId, requestId, body.slice(0, 4000), work.userId],
     );
-    return loadRequest(work.tx, requestId);
+    const row = await loadRequest(work.tx, requestId);
+    const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
+    return { row, approval };
   });
 
-  if (!row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(row)), 201);
+  if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
+  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval)), 201);
 }

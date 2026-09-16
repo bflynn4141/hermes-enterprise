@@ -9,7 +9,10 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 
 /** What a request is about. Each kind has its own terminal statuses. */
-export const REQUEST_KINDS = ['application', 'invoice', 'agreement'] as const;
+export const LEGACY_REQUEST_KINDS = ['application', 'invoice', 'agreement'] as const;
+export type LegacyRequestKind = (typeof LEGACY_REQUEST_KINDS)[number];
+
+export const REQUEST_KINDS = [...LEGACY_REQUEST_KINDS, 'approval'] as const;
 export type RequestKind = (typeof REQUEST_KINDS)[number];
 
 /**
@@ -17,7 +20,17 @@ export type RequestKind = (typeof REQUEST_KINDS)[number];
  * demo's rule that an opposite decision on a resolved request is ignored is
  * enforced here by the status transition table rather than by the caller.
  */
-export const REQUEST_STATUSES = ['pending', 'admitted', 'declined', 'created', 'drafted', 'withdrawn'] as const;
+export const REQUEST_STATUSES = [
+  'pending',
+  'admitted',
+  'declined',
+  'created',
+  'drafted',
+  'withdrawn',
+  'approved',
+  'changes_requested',
+  'expired',
+] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 /** The human verdict. Kind plus decision determines the resulting status. */
@@ -31,7 +44,7 @@ export type Decision = (typeof DECISIONS)[number];
  * `created`, an approved agreement is `drafted`, and nothing is ever sent,
  * paid or signed by this table.
  */
-export const RESULTING_STATUS: Readonly<Record<RequestKind, Readonly<Record<Decision, RequestStatus>>>> = {
+export const RESULTING_STATUS: Readonly<Record<LegacyRequestKind, Readonly<Record<Decision, RequestStatus>>>> = {
   application: { approve: 'admitted', decline: 'declined' },
   invoice: { approve: 'created', decline: 'declined' },
   agreement: { approve: 'drafted', decline: 'declined' },
@@ -133,6 +146,12 @@ export type ActorType = (typeof ACTOR_TYPES)[number];
 export const EVENT_KINDS = [
   'decision.recorded',
   'request.created',
+  'approval.proposed',
+  'approval.vote_recorded',
+  'approval.revised',
+  'approval.routed',
+  'approval.finalized',
+  'approval.expired',
   'effect.assigned',
   'effect.executed',
   'effect.cancelled',
@@ -165,6 +184,9 @@ export const EVENT_KINDS = [
   'provider_key.attested',
   'provider_key.rewrapped',
   'validator.failed',
+  'slack.connected',
+  'slack.disconnected',
+  'slack.credential_rewrapped',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
@@ -181,6 +203,9 @@ export const JOB_KINDS = [
   'evict',
   'workos_sync',
   'token_cap_warning',
+  'slack_ingest',
+  'slack_deliver',
+  'slack_revoke',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

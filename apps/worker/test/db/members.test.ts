@@ -8,9 +8,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
-import { asUser, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS } from './harness.js';
-import { FakeWorkOS } from '../stubs/fake-workos.js';
+import { asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
+import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
 import { pollWorkOSEvents } from '../../src/auth/events-poller.js';
+import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../../src/auth/cookies.js';
 
 let fake: FakeWorkOS;
 
@@ -29,6 +30,35 @@ async function memberIdOf(fixture: Fixture, userId: string): Promise<string> {
   });
   if (!id) throw new Error('no member row');
   return id;
+}
+
+async function asWorkOSAdmin(
+  fixture: Fixture,
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<Response> {
+  const email = await withClient('owner', async (c) => {
+    const result = await c.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [fixture.adminId]);
+    return result.rows[0]!.email;
+  });
+  const workosUserId = `user_${fixture.adminId.replace(/-/g, '').slice(0, 12)}`;
+  const accessToken = await signAccessToken({
+    sub: workosUserId,
+    sid: `session_${fixture.adminId}`,
+  });
+  const sealedSession = seal({
+    accessToken,
+    user: { id: workosUserId, email, emailVerified: true },
+  });
+  const csrf = 'test-csrf-token';
+  const { env } = workosEnv();
+  return call(env, path, {
+    ...options,
+    headers: {
+      cookie: `${SESSION_COOKIE}=${encodeURIComponent(sealedSession)}; ${CSRF_COOKIE}=${csrf}`,
+      [CSRF_HEADER]: csrf,
+    },
+  });
 }
 
 /** The rows a revocation is supposed to touch, in one shape to compare. */
@@ -330,6 +360,56 @@ describe('invitations', () => {
     ).json()) as { items: { id: string; status: string }[] };
 
     expect(list.items.find((row) => row.id === created.id)?.status).toBe('expired');
+  });
+
+  it('does not create a local pending invitation when deployed auth has no WorkOS organization', async () => {
+    const fixture = await seedWorkspace();
+    const email = `unlinked-${randomUUID().slice(0, 8)}@example.test`;
+
+    const response = await asWorkOSAdmin(fixture, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST',
+      body: { email },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'not_configured' });
+    const rows = await readTenant(fixture.workspaceId, fixture.adminId, (c) =>
+      c.query('SELECT id FROM invitations WHERE workspace_id = $1 AND email = $2', [fixture.workspaceId, email]),
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it('does not supersede a pending row when WorkOS cannot deliver its resend', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    const email = `no-resend-${randomUUID().slice(0, 8)}@example.test`;
+    const created = (await (
+      await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+        method: 'POST',
+        body: { email },
+      })
+    ).json()) as { id: string };
+
+    const response = await asWorkOSAdmin(
+      fixture,
+      `/w/${fixture.workspaceId}/invitations/${created.id}/resend`,
+      { method: 'POST' },
+    );
+
+    expect(response.status).toBe(503);
+    const state = await readTenant(fixture.workspaceId, fixture.adminId, async (c) => {
+      const original = await c.query<{ status: string; superseded_by: string | null }>(
+        'SELECT status, superseded_by FROM invitations WHERE id = $1',
+        [created.id],
+      );
+      const count = await c.query<{ count: string }>(
+        'SELECT count(*) AS count FROM invitations WHERE workspace_id = $1 AND email = $2',
+        [fixture.workspaceId, email],
+      );
+      return { original: original.rows[0], count: Number(count.rows[0]?.count ?? '0') };
+    });
+    expect(state.original).toEqual({ status: 'pending', superseded_by: null });
+    expect(state.count).toBe(1);
   });
 });
 

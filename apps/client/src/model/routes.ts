@@ -38,7 +38,7 @@ export function serialiseRef(ref: Ref): string {
   const parts = REF_ORDER.map((k) => encodeURIComponent(ref[k] ?? ''));
   while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
   const filters = new URLSearchParams();
-  for (const key of ['status', 'kind', 'query'] as const) {
+  for (const key of ['status', 'kind', 'reviewer', 'query'] as const) {
     const value = ref.filters?.[key];
     if (value !== undefined) filters.set(key, value);
   }

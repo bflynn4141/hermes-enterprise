@@ -173,10 +173,10 @@ export const userNotificationSettings = pgTable(
 
 export const workspaceSettings = pgTable('workspace_settings', {
   workspaceId: uuid('workspace_id').primaryKey(),
-  // 0016: OpenRouter is the only provider this product offers, and the row the
-  // id names is a placeholder until the first catalog sync (decision R12).
-  defaultModelId: text('default_model_id').notNull().default('openrouter:anthropic/claude-sonnet-5'),
-  defaultEffort: text('default_effort').default('high'),
+  // 0024: Nous Portal is the product provider, and this row is a placeholder
+  // until the first workspace catalog sync.
+  defaultModelId: text('default_model_id').notNull().default('nous:anthropic/claude-sonnet-5'),
+  defaultEffort: text('default_effort').default('medium'),
   defaultRuntime: text('default_runtime').notNull().default('cloud'),
   dailyTokenCap: bigint('daily_token_cap', { mode: 'number' }),
   maxConcurrentRuns: integer('max_concurrent_runs').notNull().default(3),
@@ -198,6 +198,14 @@ export const agents = pgTable('agents', {
   status: text('status').notNull().default('draft'),
   setupStep: text('setup_step'),
   startedAt: ts('started_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const agentOwners = pgTable('agent_owners', {
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').primaryKey(),
+  memberId: uuid('member_id').notNull(),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
@@ -491,6 +499,84 @@ export const modelCalls = pgTable('model_calls', {
 });
 
 // ---------------------------------------------------------------------------
+// Approval continuations and their model-call reservations (0023)
+// ---------------------------------------------------------------------------
+
+export const approvalContinuations = pgTable(
+  'approval_continuations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    authorizationRevision: integer('authorization_revision').notNull(),
+    authorizationHash: text('authorization_hash').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    runtimeProfile: text('runtime_profile').notNull(),
+    sessionId: uuid('session_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    sourceToolCallId: text('source_tool_call_id'),
+    continuationPayload: jsonb('continuation_payload').notNull(),
+    dependencyRequestIds: uuid('dependency_request_ids').array().notNull().default([]),
+    state: text('state').notNull().default('pending_authorization'),
+    expiresAt: ts('expires_at').notNull(),
+    admittedRunId: uuid('admitted_run_id'),
+    blockedReason: text('blocked_reason'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+    admittedAt: ts('admitted_at'),
+  },
+  (t) => [unique('approval_continuations_revision').on(t.requestId, t.authorizationRevision)],
+);
+
+export const approvalRuntimeBudgets = pgTable(
+  'approval_runtime_budgets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    continuationId: uuid('continuation_id').notNull().unique(),
+    requestId: uuid('request_id').notNull(),
+    authorizationRevision: integer('authorization_revision').notNull(),
+    authorizationHash: text('authorization_hash').notNull(),
+    modelId: text('model_id').notNull(),
+    currency: text('currency').notNull().default('USD'),
+    costCapUsd: numeric('cost_cap_usd', { precision: 14, scale: 8 }).notNull(),
+    totalTokenCap: bigint('total_token_cap', { mode: 'number' }).notNull(),
+    callCap: integer('call_cap').notNull(),
+    maxOutputTokensPerCall: integer('max_output_tokens_per_call').notNull(),
+    maxParallelCalls: integer('max_parallel_calls').notNull().default(1),
+    retryCap: integer('retry_cap').notNull().default(0),
+    reservedCostUsd: numeric('reserved_cost_usd', { precision: 14, scale: 8 }).notNull().default('0'),
+    actualCostUsd: numeric('actual_cost_usd', { precision: 14, scale: 8 }).notNull().default('0'),
+    reservedTokens: bigint('reserved_tokens', { mode: 'number' }).notNull().default(0),
+    actualTokens: bigint('actual_tokens', { mode: 'number' }).notNull().default(0),
+    callsReserved: integer('calls_reserved').notNull().default(0),
+    callsReconciled: integer('calls_reconciled').notNull().default(0),
+    state: text('state').notNull().default('active'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('approval_runtime_budgets_revision').on(t.requestId, t.authorizationRevision)],
+);
+
+export const approvalModelReservations = pgTable('approval_model_reservations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  budgetId: uuid('budget_id').notNull(),
+  runId: uuid('run_id').notNull(),
+  modelId: text('model_id').notNull(),
+  inputTokenBound: bigint('input_token_bound', { mode: 'number' }).notNull(),
+  outputTokenBound: integer('output_token_bound').notNull(),
+  reservedCostUsd: numeric('reserved_cost_usd', { precision: 14, scale: 8 }).notNull(),
+  actualInputTokens: bigint('actual_input_tokens', { mode: 'number' }),
+  actualOutputTokens: bigint('actual_output_tokens', { mode: 'number' }),
+  actualCachedInputTokens: bigint('actual_cached_input_tokens', { mode: 'number' }),
+  actualCostUsd: numeric('actual_cost_usd', { precision: 14, scale: 8 }),
+  status: text('status').notNull().default('reserved'),
+  createdAt: now('created_at'),
+  reconciledAt: ts('reconciled_at'),
+});
+
+// ---------------------------------------------------------------------------
 // Requests, decisions, effects, documents
 // ---------------------------------------------------------------------------
 
@@ -549,6 +635,122 @@ export const requestNotes = pgTable('request_notes', {
   authorId: uuid('author_id'),
   runId: uuid('run_id'),
   toolCallId: text('tool_call_id'),
+  createdAt: now('created_at'),
+});
+
+export const approvalResources = pgTable('approval_resources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  resourceKey: text('resource_key').notNull(),
+  kind: text('kind').notNull(),
+  label: text('label').notNull(),
+  ownerMemberId: uuid('owner_member_id').notNull(),
+  version: text('version'),
+  sha256: text('sha256'),
+  executorAvailable: boolean('executor_available').notNull().default(false),
+  active: boolean('active').notNull().default(true),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalPolicies = pgTable('approval_policies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  key: text('key').notNull(),
+  version: integer('version').notNull().default(1),
+  approvalType: text('approval_type').notNull(),
+  requesterAgentId: uuid('requester_agent_id'),
+  targetResourceIds: text('target_resource_ids').array().notNull().default([]),
+  maxBudgetMinor: bigint('max_budget_minor', { mode: 'number' }),
+  priority: integer('priority').notNull().default(0),
+  mode: text('mode').notNull(),
+  preventSelfReview: boolean('prevent_self_review').notNull().default(true),
+  requireDistinctReviewers: boolean('require_distinct_reviewers').notNull().default(true),
+  maxDurationSeconds: integer('max_duration_seconds').notNull().default(604800),
+  steps: jsonb('steps').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalRequests = pgTable('approval_requests', {
+  requestId: uuid('request_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  policyId: uuid('policy_id').notNull(),
+  policyVersion: integer('policy_version').notNull(),
+  authorizationRevision: integer('authorization_revision').notNull().default(1),
+  authorizationHash: text('authorization_hash').notNull(),
+  status: text('status').notNull().default('pending'),
+  expiresAt: ts('expires_at').notNull(),
+  requesterAgentId: uuid('requester_agent_id').notNull(),
+  requesterMemberId: uuid('requester_member_id'),
+  requesterUserId: uuid('requester_user_id'),
+  sourceSessionId: uuid('source_session_id'),
+  sourceRunId: uuid('source_run_id'),
+  proposalIdempotencyKey: text('proposal_idempotency_key').notNull(),
+  proposalIdempotencyHash: text('proposal_idempotency_hash').notNull(),
+  effectKind: text('effect_kind').notNull(),
+  effectStatus: text('effect_status').notNull().default('not_required'),
+  effectReason: text('effect_reason'),
+  workStatus: text('work_status').notNull().default('waiting'),
+  workReason: text('work_reason'),
+  continuationId: uuid('continuation_id'),
+  finalizationJobId: uuid('finalization_job_id'),
+  finalizedAt: ts('finalized_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalRevisions = pgTable('approval_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
+  payload: jsonb('payload').notNull(),
+  status: text('status').notNull().default('pending'),
+  createdByType: text('created_by_type').notNull(),
+  createdByUserId: uuid('created_by_user_id'),
+  createdByAgentId: uuid('created_by_agent_id'),
+  supersededAt: ts('superseded_at'),
+  createdAt: now('created_at'),
+});
+
+export const approvalVotes = pgTable('approval_votes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
+  stepId: text('step_id').notNull(),
+  decision: text('decision').notNull(),
+  reviewerMemberId: uuid('reviewer_member_id').notNull(),
+  reviewerUserId: uuid('reviewer_user_id').notNull(),
+  note: text('note'),
+  idempotencyKey: text('idempotency_key').notNull(),
+  recordedAt: now('recorded_at'),
+});
+
+export const approvalRoutes = pgTable('approval_routes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  stepId: text('step_id').notNull(),
+  reviewerMemberId: uuid('reviewer_member_id').notNull(),
+  routedByMemberId: uuid('routed_by_member_id').notNull(),
+  reason: text('reason').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  createdAt: now('created_at'),
+});
+
+export const approvalCommands = pgTable('approval_commands', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  operation: text('operation').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  commandHash: text('command_hash').notNull(),
   createdAt: now('created_at'),
 });
 
@@ -710,6 +912,126 @@ export const workspaceProviderKeys = pgTable('workspace_provider_keys', {
   updatedAt: now('updated_at'),
 });
 
+// Slack is a transport into an existing agent/profile. The installation is
+// workspace-wide; a linked Slack user is resolved to their active member and
+// established agent binding before a private Hermes session can be opened.
+export const slackOauthStates = pgTable('slack_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull().unique(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const slackInstallations = pgTable('slack_installations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installedBy: uuid('installed_by').notNull(),
+  slackInstallKey: text('slack_install_key').notNull(),
+  slackAppId: text('slack_app_id').notNull(),
+  slackEnterpriseId: text('slack_enterprise_id'),
+  slackEnterpriseName: text('slack_enterprise_name'),
+  slackTeamId: text('slack_team_id'),
+  slackTeamName: text('slack_team_name'),
+  isEnterpriseInstall: boolean('is_enterprise_install').notNull().default(false),
+  slackBotUserId: text('slack_bot_user_id').notNull(),
+  slackAuthedUserId: text('slack_authed_user_id'),
+  grantedScopes: text('granted_scopes').array().notNull().default([]),
+  ciphertext: bytea('ciphertext').notNull(),
+  iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(),
+  tokenExpiresAt: ts('token_expires_at'),
+  status: text('status').notNull().default('connected'),
+  lastErrorCode: text('last_error_code'),
+  remoteRevocationPending: boolean('remote_revocation_pending').notNull().default(false),
+  connectedAt: now('connected_at'),
+  revokedAt: ts('revoked_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const slackInstallationDirectory = pgTable('slack_installation_directory', {
+  slackInstallKey: text('slack_install_key').primaryKey(),
+  targetWorkspaceId: uuid('target_workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull().unique(),
+  updatedAt: now('updated_at'),
+});
+
+export const slackUserLinks = pgTable('slack_user_links', {
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackUserId: text('slack_user_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  linkedBy: uuid('linked_by'),
+  revokedAt: ts('revoked_at'),
+  linkedAt: now('linked_at'),
+}, (t) => [primaryKey({ columns: [t.installationId, t.slackUserId] })]);
+
+export const slackLinkCodes = pgTable('slack_link_codes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  codeDigest: text('code_digest').notNull().unique(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedBySlackUser: text('consumed_by_slack_user'),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const slackConversations = pgTable('slack_conversations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackChannelId: text('slack_channel_id').notNull(),
+  conversationKey: text('conversation_key').notNull(),
+  conversationKind: text('conversation_kind').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  sessionId: uuid('session_id').notNull(),
+  ownerId: uuid('owner_id').notNull(),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const slackEvents = pgTable('slack_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  slackEventId: text('slack_event_id').notNull().unique(),
+  eventType: text('event_type').notNull(),
+  payloadSha256: text('payload_sha256').notNull(),
+  retryNum: integer('retry_num'),
+  status: text('status').notNull().default('received'),
+  runId: uuid('run_id'),
+  errorCode: text('error_code'),
+  receivedAt: now('received_at'),
+  processedAt: ts('processed_at'),
+});
+
+export const slackRunDeliveries = pgTable('slack_run_deliveries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  installationId: uuid('installation_id').notNull(),
+  sourceEventId: uuid('source_event_id').notNull().unique(),
+  runId: uuid('run_id').notNull().unique(),
+  slackChannelId: text('slack_channel_id').notNull(),
+  slackThreadTs: text('slack_thread_ts').notNull(),
+  status: text('status').notNull().default('pending'),
+  slackMessageTs: text('slack_message_ts'),
+  attempts: integer('attempts').notNull().default(0),
+  lastErrorCode: text('last_error_code'),
+  approvalNotifiedAt: ts('approval_notified_at'),
+  approvalClientMsgId: uuid('approval_client_msg_id').notNull().defaultRandom(),
+  deliveredAt: ts('delivered_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
 // ---------------------------------------------------------------------------
 // M2: drafts, and the two platform tables the Cron and the auth callback need
 // ---------------------------------------------------------------------------
@@ -829,6 +1151,7 @@ export const ALL_TABLES = {
   user_notification_settings: userNotificationSettings,
   workspace_settings: workspaceSettings,
   agents,
+  agent_owners: agentOwners,
   agent_capabilities: agentCapabilities,
   agent_files: agentFiles,
   agent_context_fields: agentContextFields,
@@ -844,10 +1167,20 @@ export const ALL_TABLES = {
   run_turns: runTurns,
   run_queue: runQueue,
   model_calls: modelCalls,
+  approval_continuations: approvalContinuations,
+  approval_runtime_budgets: approvalRuntimeBudgets,
+  approval_model_reservations: approvalModelReservations,
   requests,
   decisions,
   effects,
   request_notes: requestNotes,
+  approval_resources: approvalResources,
+  approval_policies: approvalPolicies,
+  approval_requests: approvalRequests,
+  approval_revisions: approvalRevisions,
+  approval_votes: approvalVotes,
+  approval_routes: approvalRoutes,
+  approval_commands: approvalCommands,
   attachments,
   documents,
   stream_events: streamEvents,
@@ -855,6 +1188,14 @@ export const ALL_TABLES = {
   jobs,
   workos_sync: workosSync,
   workspace_provider_keys: workspaceProviderKeys,
+  slack_oauth_states: slackOauthStates,
+  slack_installations: slackInstallations,
+  slack_installation_directory: slackInstallationDirectory,
+  slack_user_links: slackUserLinks,
+  slack_link_codes: slackLinkCodes,
+  slack_conversations: slackConversations,
+  slack_events: slackEvents,
+  slack_run_deliveries: slackRunDeliveries,
   session_drafts: sessionDrafts,
   workspace_directory: workspaceDirectory,
   member_directory: memberDirectory,

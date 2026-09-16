@@ -74,6 +74,12 @@ jobs:
         env:
           GITLEAKS_CONFIG: .gitleaks.toml
 
+      # build.mjs removes the previous dist first. The production defaults use
+      # WorkOS auth and emit no public source maps, so Wrangler validates only
+      # assets produced from the commit being approved.
+      - name: Build a clean production client bundle
+        run: pnpm --filter @hermes/client build
+
       - name: Dry run against the production environment
         run: pnpm --filter @hermes/worker exec wrangler deploy --dry-run --env production
 

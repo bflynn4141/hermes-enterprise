@@ -20,11 +20,32 @@ export interface HermesStatus {
   usage?: HermesEvent['usage'];
   pending_steer?: string;
 }
+export interface HermesCapabilities {
+  durableIdempotency: true;
+  retentionSeconds: number;
+}
 export class HermesApiError extends Error {
   constructor(readonly status: number, readonly operation: string) {
     super(`Hermes ${operation} failed (${status})`);
   }
 }
+export class HermesCapabilitiesError extends Error {
+  constructor() {
+    super('Hermes does not expose the required durable Runs contract');
+  }
+}
+
+const REQUIRED_RUN_ENDPOINTS = {
+  runs: { method: 'POST', path: '/v1/runs' },
+  run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+  run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+  run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+  run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+} as const;
+
+const record = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
 export class HermesClient {
   constructor(private readonly baseUrl: string, private readonly apiKey: string, private readonly send: typeof fetch = (input, init) => fetch(input, init)) {}
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -37,6 +58,30 @@ export class HermesClient {
       throw new HermesApiError(response.status, path.endsWith('/steer') ? 'steer' : path.endsWith('/stop') ? 'stop' : 'request');
     }
     return response;
+  }
+  async capabilities(): Promise<HermesCapabilities> {
+    const body = record(await (await this.request('/v1/capabilities')).json());
+    const auth = record(body?.auth);
+    const runtime = record(body?.runtime);
+    const features = record(body?.features);
+    const idempotency = record(features?.runs_idempotency);
+    const endpoints = record(body?.endpoints);
+    const endpointContract = Object.entries(REQUIRED_RUN_ENDPOINTS).every(([name, expected]) => {
+      const actual = record(endpoints?.[name]);
+      return actual?.method === expected.method && actual.path === expected.path;
+    });
+    const retentionSeconds = idempotency?.retention_seconds;
+    if (body?.object !== 'hermes.api_server.capabilities' || body.platform !== 'hermes-agent' ||
+        auth?.type !== 'bearer' || auth.required !== true || runtime?.mode !== 'server_agent' ||
+        runtime.tool_execution !== 'server' || runtime.split_runtime !== false ||
+        features?.run_submission !== true || features.run_status !== true ||
+        features.run_events_sse !== true || features.run_stop !== true || features.run_steer !== true ||
+        idempotency?.supported !== true || idempotency.durable !== true ||
+        typeof retentionSeconds !== 'number' || !Number.isFinite(retentionSeconds) || retentionSeconds <= 0 ||
+        !endpointContract) {
+      throw new HermesCapabilitiesError();
+    }
+    return { durableIdempotency: true, retentionSeconds };
   }
   async submit(body: Record<string, unknown>, key: string): Promise<string> {
     const { _enterprise_tool_names, ...nativeBody } = body;

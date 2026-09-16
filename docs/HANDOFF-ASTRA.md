@@ -133,6 +133,7 @@ E=staging
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_API_KEY --env $E
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_CLIENT_ID --env $E
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_COOKIE_PASSWORD --env $E
+pnpm --filter @hermes/worker exec wrangler secret put WORKOS_ISSUER --env $E
 pnpm --filter @hermes/worker exec wrangler secret put HUB_TICKET_SECRET --env $E
 pnpm --filter @hermes/worker exec wrangler secret put KEK_V1 --env $E
 pnpm --filter @hermes/worker exec wrangler secret put R2_ACCOUNT_ID --env $E

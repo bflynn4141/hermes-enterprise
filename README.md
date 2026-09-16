@@ -41,12 +41,16 @@ pnpm install
 # Postgres 17 in Docker on 127.0.0.1:5433 (5432 is often taken).
 pnpm db:up
 
-# Creates the three roles, applies every migration, then re-applies them all
-# and asserts the schema fingerprint did not change.
+# Creates the three roles and applies only pending migrations.
 pnpm db:migrate
 
+# Creates a disposable shadow database, replays the full catalog there, checks
+# the schema fingerprint, and drops the database. CI runs this automatically.
+pnpm db:migrations:verify
+
 pnpm typecheck
-pnpm test          # shared unit tests, worker unit tests, workerd tests, database tests
+pnpm test          # shared/client/worker units, workerd tests, database tests
+pnpm test:browser:mock  # credential-free client browser flows; not the live Worker
 ```
 
 ### Two databases, one container
@@ -100,6 +104,11 @@ node scripts/seed-dev.mjs         # one workspace, one Admin, one Member
 npx wrangler dev --local
 ```
 
+The seed prints its credential-free target before connecting. It accepts a
+loopback database or a clearly test-named database such as `hermes_test`; any
+other target is refused unless the exceptional
+`HERMES_SEED_ALLOW_NONLOCAL=1` override is supplied intentionally.
+
 That serves the API *and* the client, from `apps/client/dist`, which the assets
 binding points at. Build it first, with fake auth so the dev account switcher
 survives, and open the workspace:
@@ -151,42 +160,37 @@ own key, the workspace is billed by its own provider, and the product's job is
 to store that key so that nobody — including whoever runs this service — can
 read it by accident.
 
-**OpenRouter is the only provider a workspace can use** (decision R12). One key
-reaches every model OpenRouter brokers, so the product asks for one credential
-rather than four, and `ALLOWED_PROVIDERS=openrouter` — a variable, set in all
-three environments in `wrangler.jsonc` and read in exactly one module,
-`src/model/allowed.ts` — is what enforces it. Installing, verifying or rotating
-a key for any other provider answers `422 provider_not_allowed`, "Only
-OpenRouter keys can be used in this workspace"; the catalog route returns
-OpenRouter rows only, so the four seeded DeepSeek, Anthropic and OpenAI rows are
-in the table and in no payload a client sees; and a session or workspace default
-naming one of them is refused with the same reason. The other three adapters
-stay in the codebase — they are how the per-transport replay rules are tested,
-and `ScriptedProvider` still exercises them — and nothing on the product path
-can reach them.
+**Nous Portal is the product inference provider** (decision C55). One
+workspace key reaches the current model catalog through
+`https://inference-api.nousresearch.com/v1`, and
+`ALLOWED_PROVIDERS=nous_portal` enforces that boundary in every environment.
+Installing, verifying or rotating another provider returns
+`422 provider_not_allowed`; catalog and model selection expose only Nous Portal
+rows. Legacy transport adapters remain compiled for historical records and
+transport-specific tests, but are outside the product path.
 
-A workspace starts on `openrouter:anthropic/claude-sonnet-5`. Its catalog row is
-a placeholder migration 0016 writes, disabled with "Add your OpenRouter key in
-Settings" until a key is verified; verification syncs OpenRouter's list, which
-replaces the placeholder with the real row, and a workspace whose default is a
-model it can no longer run is moved onto Sonnet 5 at the same moment — its
-unarchived sessions with it (decision R13).
+A workspace starts on `nous:anthropic/claude-sonnet-5`. Migration 0024 writes a
+disabled placeholder so the foreign key exists before credentials do. Verifying
+a key makes one minimal one-token chat-completions request, then syncs the public
+Nous Portal `/models` catalog. `/models` cannot verify credentials because it is
+public. The same transaction moves a stale workspace default and its unarchived
+sessions to the current default when necessary.
 
-**How Brian adds his key.** In the client (M5) it is
-Settings > Provider keys > Add: paste the OpenRouter key, Verify. The
-route requires an Admin session and a sign-in from the last five minutes (the
-same step-up the decision route uses), computes a SHA-256 fingerprint and the
-last four characters, encrypts the key, and probes the provider's free
-list-models endpoint. A 401 marks it invalid, a 200 marks it verified and
-records which models it covers, and a 403, 429 or 5xx leaves it unverified with
-a job to try again — because a throttled probe taught us nothing about the key.
-Two 403s in a row means the key is probably scoped rather than broken, so the
-probe becomes a one-token call and the key is marked "verified (scoped)".
+**How an Admin connects it.** In the client, use Settings → Provider keys →
+**Connect Nous Portal**. The route requires an Admin session and a sign-in from
+the last five minutes, computes a SHA-256 fingerprint and last four characters,
+encrypts the key, and performs the minimal verification request. A 401 marks it
+invalid; 403, 429 and 5xx leave it unverified for retry. The browser receives
+only the masked key row.
 
-The client's Provider keys tab does exactly this (`pnpm e2e:live` exercises add,
-verify, rotate and remove against the real routes). The same routes also answer
-over the fake-auth dev server, which is how the flow is checked without a
-browser:
+The Nous Portal inference key and `HERMES_BRIDGE_SECRET` have separate jobs. The
+Portal key pays for model inference and stays encrypted per workspace. The
+bridge secret authenticates an official Hermes Agent runtime process to the
+Worker; it does not grant model access and never appears in workspace Settings.
+
+The live browser suite exercises add, verify, catalog sync, model selection,
+rotation and removal against the real Worker routes with a development-only
+fixture. The same route can be checked without a browser:
 
 ```sh
 cd apps/worker
@@ -201,24 +205,19 @@ npx wrangler dev --local
 WS=11111111-1111-4111-8111-111111111111
 AUTH='x-dev-user: maya@nous.example'
 
-# Add and verify in one call. The response carries the masked row only.
+# Add, verify and sync in one call. The response carries the masked row only.
 curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
   -H "$AUTH" -H 'content-type: application/json' \
-  -d '{"provider":"openrouter","label":"Ops key","key":"<paste the key>"}'
+  -d '{"provider":"nous_portal","label":"Nous Portal","key":"<paste the key>"}'
 
-# Any other provider is refused before the key is stored:
-#   422 {"reason":"provider_not_allowed",
-#        "error":"Only OpenRouter keys can be used in this workspace"}
-
-# What Settings shows: provider, label, last4, fingerprint prefix, status,
-# verified models, who added it, and the dates. Never the key.
+# Settings data: provider, label, last4, fingerprint prefix, status, model count,
+# who added it and the dates. Never the plaintext key.
 curl -s -H "$AUTH" "http://localhost:8787/w/$WS/provider-keys"
 
-# The model menu. One page of rows, with this workspace's answer attached;
-# `?q=`, `?provider=`, `?limit=` and `?after=` narrow it.
-curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog"
+# The model menu catalog. Search, provider, limit and cursor can narrow it.
+curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog?provider=nous_portal&limit=50"
 
-# Re-verify, rotate (a new row that names the one it replaces), remove.
+# Re-verify, rotate and remove.
 curl -sX POST "http://localhost:8787/w/$WS/provider-keys/$KEY_ID/verify" -H "$AUTH"
 curl -sX POST "http://localhost:8787/w/$WS/provider-keys/$KEY_ID/rotate" \
   -H "$AUTH" -H 'content-type: application/json' -d '{"key":"<the new key>"}'
@@ -254,83 +253,37 @@ and `no_key`, `key_unverified` or `key_invalid` for one the workspace could
 reach if it did something. Prices come from the catalog with the date they were
 checked, and the Usage screen says "estimated, billed by your provider".
 
-### OpenRouter
+### Nous Portal
 
-One key, and every model OpenRouter brokers — several hundred, from
-`anthropic/`, `openai/`, `google/`, `meta-llama/` and the rest — appears in the
-chat's model menu.
+Nous Portal provides an OpenAI-compatible inference API and a catalog spanning
+multiple model vendors. Catalog IDs use `nous:<vendor>/<model>` so durable usage
+and audit rows retain the account that paid for inference; the adapter removes
+that prefix at the wire boundary.
 
-**Where Brian pastes his key.** Settings → Provider keys → **Add a key** →
-choose **OpenRouter** → paste it into the Key field → **Add and verify**. As
-with every other provider the route wants an Admin session and a sign-in from
-the last five minutes. The key is encrypted before it is verified, and the only
-thing the response carries back is the masked row.
+Get the key from Nous Portal and paste it only into Settings → Provider keys →
+**Connect Nous Portal**. The key is encrypted before verification. Verification
+calls `POST /v1/chat/completions` with one output token because `GET /v1/models`
+is public and cannot prove a key is valid. After verification, the Worker fetches
+`GET /v1/models` and stores model name, context window, per-million prices, tool
+support and reasoning support. Weekly re-verification refreshes the catalog.
 
-Get the key from <https://openrouter.ai/keys>. Nothing in this repository
-contains one, and nothing ever should: the Settings dialog is the only way in.
+The model menu is searchable and grouped by the vendor segment. It shows price
+and context, pins the company default, disables models without tool support, and
+shows the effort control only when the model supports it.
 
-**What verification checks.** `GET https://openrouter.ai/api/v1/key`, which is
-the endpoint that actually authenticates. Deliberately *not* `/models`: that one
-is public, and it answers 200 to an invalid key, a revoked key, and no key at
-all, so verifying against it would mark any string as working. The statuses are
-the same as every other provider's — 401 is `invalid`, 200 is `verified`, and a
-429 or a 5xx leaves the key `unverified` with a job to try again, because a
-throttled probe taught us nothing.
+`sync_nous_portal_catalog` is a tenant-safe `SECURITY DEFINER` function. Its body
+can only write Nous Portal provider-list rows; it cannot overwrite seeded or
+other-provider rows. The Worker keeps its SELECT-only catalog grant.
 
-**What verification also does.** On success it fetches
-`GET /api/v1/models` and writes those models into the catalog: id, name, context
-window, price per million computed from OpenRouter's per-token figures, whether
-the model takes tools, and whether it takes a reasoning effort. The key row then
-shows **"N models synced · last sync <date>"** instead of a model list, and the
-row carries a **Sync models** button that runs the same thing again. The weekly
-re-verification job refreshes both.
+The development scenario (`apps/client/e2e/live-nous-portal.spec.ts`) uses
+`NOUS_PORTAL_FIXTURE=1` to answer the one-token verification and `/models` from
+a fixed local fixture. Three guards keep it out of deployments: it requires
+`ENVIRONMENT=development`, is opt-in, and staging/production config omits the
+flag. This fixture performs no paid or external model call.
 
-**Where they turn up.** All of them, in the chat's model menu: searchable,
-grouped by vendor prefix, each row showing its price per million and context
-window, with the workspace default pinned as "Company default". A model that
-does not support tool calling is listed and greyed with the reason, because
-every run in this product calls a tool. The effort control appears only for a
-model that takes one.
-
-Two things the sync deliberately does not do. It does not change the workspace
-default — that stays whatever Settings says — and it cannot touch the four
-seeded rows: `sync_openrouter_catalog` is a `SECURITY DEFINER` function whose
-body cannot name a provider other than `openrouter` or update a row whose
-`source` is `seed`, so the Worker keeps its SELECT-only grant on `catalog`.
-
-**Model ids.** An OpenRouter row is `openrouter:anthropic/claude-sonnet-5` —
-the provider's own id behind one prefix. The prefix is what makes
-`model_calls.model_id` say which account was billed months later, and the
-adapter strips it before anything reaches the wire.
-
-**The development seam, and why it exists.** The live scenario
-(`apps/client/e2e/live-openrouter.spec.ts`) adds a key, verifies it, syncs a
-catalog and picks a model out of the menu, with no network call and no real key.
-It can do that because `OPENROUTER_FIXTURE=1` makes the Worker answer
-OpenRouter's `/key` and `/models` from a built-in seven-model fixture
-(`apps/worker/src/model/openrouter-dev.ts`). Three guards: it is refused unless
-`ENVIRONMENT=development`, it is opt-in per deployment through that var, and it
-serves a fixed fixture that no caller can influence. `wrangler.jsonc` sets it in
-the development vars only, and a unit test asserts staging and production never
-set it — the same treatment `MODEL_SCRIPTED` gets, and for the same reason: a
-deployed Worker that answered `/key` from a canned 200 would call every pasted
-string a verified key.
-
-Over the dev server, the same path by hand:
-
-```sh
-WS=11111111-1111-4111-8111-111111111111
-AUTH='x-dev-user: maya@nous.example'
-
-curl -sX POST "http://localhost:8787/w/$WS/provider-keys" \
-  -H "$AUTH" -H 'content-type: application/json' \
-  -d '{"provider":"openrouter","label":"OpenRouter","key":"<paste the key>"}'
-
-# One page of the merged catalog: search, filter and page, so the model menu
-# never downloads three hundred rows to show sixty.
-curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog?q=sonnet&limit=20"
-curl -s -H "$AUTH" "http://localhost:8787/w/$WS/catalog?provider=openrouter&limit=50"
-```
+The legacy OpenRouter adapter and its fixture remain for historical data and
+transport regression tests. They are not offered by current workspace Settings
+or the allowed-provider policy.
 
 **Why not AI Gateway's own BYOK.** It stores keys in Secrets Store (100 per
 account in beta, 20 gateways), its aliases work only on passthrough URLs with no
@@ -517,7 +470,7 @@ Five guards, in this order:
 | `X-Requested-From: inbox` | Which surface of our own client issued it. Not authentication — a custom header also forces a CORS preflight, and it catches *our* mistakes: a replayed POST, a route that copied this one | 403 `wrong_surface` |
 | Double-submit CSRF | The `hermes_csrf` cookie and the `X-CSRF-Token` header agree | 403 `csrf_failed` |
 | An Admin session | Read from `members` inside the transaction, keyed on the workspace in the path. A Member sees "Admin decision required" | 403 `admin_required` |
-| Step-up, five minutes | The caller's `sid` authenticated recently. The access token carries no `auth_time` and its `iat` moves on every refresh, so the answer comes from `auth_sessions.authenticated_at`, written by `/auth/callback` | 401 `reauth_required` |
+| Step-up, five minutes | The caller's WorkOS `auth_time` is recent. WorkOS keeps `sid` stable across reauthentication and advances `auth_time`; `/auth/callback` persists that claim in `auth_sessions.authenticated_at`. Token `iat` is not used because ordinary refreshes advance it too | 401 `reauth_required` |
 
 Then one transaction: lock the request; `INSERT decisions` (UNIQUE on
 `request_id`); `UPDATE requests SET status = <resulting> WHERE id = $1 AND status
@@ -818,7 +771,7 @@ curl -H "x-dev-user: maya@nous.example" \
 
 ### `AUTH_MODE=workos`
 
-Set three secrets in `apps/worker/.dev.vars` (or with `wrangler secret put` for
+Set these values in `apps/worker/.dev.vars` (or with `wrangler secret put` for
 a deployed environment):
 
 | Secret | What it is |
@@ -826,12 +779,16 @@ a deployed environment):
 | `WORKOS_API_KEY` | The environment's secret key, `sk_...` |
 | `WORKOS_CLIENT_ID` | The environment's client id, `client_...` |
 | `WORKOS_COOKIE_PASSWORD` | At least 32 characters, ours to generate. Rotating it signs everyone out, so it happens off-hours |
+| `WORKOS_ISSUER` | Exact `issuer` from this application's OIDC discovery document; required by deployed readiness |
 | `HUB_TICKET_SECRET` | Optional; signs the WebSocket tickets. Falls back to `WORKOS_COOKIE_PASSWORD` |
-| `WORKOS_REDIRECT_URI` | Optional; only when the browser reaches us on a different host than the Worker sees |
+| `WORKOS_REDIRECT_URI` | Exact callback. Explicitly pinned in `wrangler.jsonc` for staging and production |
 
 Then `AUTH_MODE=workos wrangler dev --local`, or deploy: staging and production
 already set `AUTH_MODE=workos` in `wrangler.jsonc`, and a unit test asserts they
 always will.
+
+The complete dashboard setup and live acceptance sequence is in
+[`docs/WORKOS-PRODUCTION-CHECKLIST.md`](docs/WORKOS-PRODUCTION-CHECKLIST.md).
 
 ### What to configure in the WorkOS dashboard
 

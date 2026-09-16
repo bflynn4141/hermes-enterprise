@@ -19,6 +19,7 @@ import {
   draftSchema,
   messageSchema,
   paginatedSchema,
+  SHARE_AUDIENCE,
   sessionSchema,
   shareResponseSchema,
   uuidSchema,
@@ -451,8 +452,6 @@ export async function createShare(c: Context<{ Bindings: Env }>): Promise<Respon
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
-  const input: { audience?: string } = await jsonBody<{ audience?: string }>(c).catch(() => ({}));
-  const audience = (input.audience ?? 'link').slice(0, 80);
   const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
   const tokenHash = await sha256Hex(token);
   const origin = new URL(c.req.url).origin;
@@ -471,7 +470,7 @@ export async function createShare(c: Context<{ Bindings: Env }>): Promise<Respon
       `INSERT INTO session_shares (workspace_id, session_id, created_by, token_hash, audience, message_cutoff_seq)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, created_at`,
-      [work.workspaceId, sessionId, work.userId, tokenHash, audience, cutoffSeq],
+      [work.workspaceId, sessionId, work.userId, tokenHash, SHARE_AUDIENCE, cutoffSeq],
     );
     const row = rows[0];
     if (!row) throw new RouteError('the share was not created', 'create_failed', 409);
@@ -485,7 +484,7 @@ export async function createShare(c: Context<{ Bindings: Env }>): Promise<Respon
     return shareResponseSchema.parse({
       id: row.id,
       url: `${origin}/shared/${token}`,
-      audience,
+      audience: SHARE_AUDIENCE,
       message_cutoff_seq: cutoffSeq,
       created_at: row.created_at.toISOString(),
     });

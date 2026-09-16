@@ -404,7 +404,10 @@ export function Dialog({ open, title, children, actions, onClose }: { open: bool
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector('button')?.focus();
+    const initial = ref.current?.querySelector<HTMLElement>(
+      '[data-dialog-initial-focus="true"], a[href], input:not([disabled]), button:not([disabled]), [tabindex="0"]',
+    );
+    initial?.focus();
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') latest.current();
     };
@@ -432,7 +435,7 @@ export function Dialog({ open, title, children, actions, onClose }: { open: bool
             <div className="col" style={{ gap: 12 }}>
               {children}
             </div>
-            <div className="dialog-actions">{actions}</div>
+            {actions && <div className="dialog-actions">{actions}</div>}
           </div>
         </motion.div>
       )}

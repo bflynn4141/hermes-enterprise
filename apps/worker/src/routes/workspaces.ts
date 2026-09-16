@@ -18,12 +18,13 @@
 //     never decide anything, and the last-Admin trigger would then have nothing
 //     to protect.
 import type { Context } from 'hono';
-import { bootstrapSchema } from '@hermes/shared';
+import { bootstrapSchema, SETUP, workspaceCreateInputSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { getSession, requireCsrf, requireOrigin } from '../auth.js';
+import { AuthError, getSession, requireCsrf, requireOrigin, takeRefreshedCookie } from '../auth.js';
+import { readCookie, SESSION_COOKIE, sessionCookie } from '../auth/cookies.js';
 import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
-import { optionalWorkosPort } from '../auth/workos.js';
+import { workosPort, type WorkOSPort } from '../auth/workos.js';
 import { jsonBody, RouteError } from './tenant.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
@@ -35,21 +36,35 @@ const slugify = (name: string): string =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 40) || 'workspace';
 
+export const FIRST_SETUP_MESSAGE = 'Let’s set up the work you want me to repeat. What do you own?';
+
 export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const session = await getSession(c);
-  const input = await jsonBody<{ name?: string; jurisdiction?: string }>(c);
-  const name = (input.name ?? '').trim();
-  if (name.length < 2 || name.length > 80) {
-    throw new RouteError('a workspace needs a name of 2 to 80 characters', 'bad_name', 422);
+  const parsed = workspaceCreateInputSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) {
+    const path = parsed.error.issues[0]?.path ?? [];
+    if (path[0] === 'name') {
+      throw new RouteError('a workspace needs a name of 2 to 80 characters', 'bad_name', 422);
+    }
+    if (path[0] === 'agent' && path[1] === 'name') {
+      throw new RouteError('the agent needs a name of 1 to 80 characters', 'bad_agent_name', 422);
+    }
+    throw new RouteError('agent instructions are required and may contain up to 8000 characters', 'bad_instructions', 422);
   }
-  const jurisdiction = input.jurisdiction === 'eu' ? 'eu' : 'default';
+  const input = parsed.data;
+  const name = input.name;
+  const jurisdiction = input.jurisdiction ?? 'default';
 
   const client = await connect(c.env, 'app');
   try {
-    const { rows } = await client.query<{ email: string; email_verified: boolean }>(
-      `SELECT email, email_verified FROM users WHERE id = $1`,
+    const { rows } = await client.query<{
+      email: string;
+      email_verified: boolean;
+      workos_user_id: string | null;
+    }>(
+      `SELECT email, email_verified, workos_user_id FROM users WHERE id = $1`,
       [session.userId],
     );
     const user = rows[0];
@@ -64,8 +79,28 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
     // transaction below then fails, an empty organization is left behind in
     // WorkOS: the cheaper of the two orphans, and the reconciliation query in
     // the runbook finds it.
-    const port = optionalWorkosPort(c.env);
-    const organization = port ? await port.createOrganization(name) : null;
+    let port: WorkOSPort | null = null;
+    let organization: { id: string } | null = null;
+    if (c.env.AUTH_MODE === 'workos') {
+      port = workosPort(c.env);
+      if (!user.workos_user_id) {
+        throw new AuthError('the signed-in account is not linked to WorkOS', 'invalid_session');
+      }
+      organization = await port.createOrganization(name);
+      try {
+        await port.createOrganizationMembership({
+          userId: user.workos_user_id,
+          organizationId: organization.id,
+          roleSlug: 'admin',
+        });
+      } catch (error) {
+        // Do not knowingly leave an empty organization behind when the owner
+        // membership itself failed. Cleanup is best effort; the reconciliation
+        // query still catches a delete failure.
+        await port.deleteOrganization(organization.id).catch(() => undefined);
+        throw error;
+      }
+    }
 
     const workspaceId = crypto.randomUUID();
     await client.query('BEGIN');
@@ -95,12 +130,42 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // The agent starts in `draft`: the Setup flow is what moves it to
       // `started`, and an agent that could run before anyone described its
       // responsibility is an agent with no instructions.
+      const createdAgent = await client.query<{ id: string }>(
+        `INSERT INTO agents (workspace_id, name, instructions_active, status)
+         VALUES ($1, $2, $3, 'draft')
+         RETURNING id`,
+        [workspaceId, input.agent.name, input.agent.instructions],
+      );
+      const agentId = createdAgent.rows[0]?.id;
+      if (!agentId) throw new RouteError('the agent was not created', 'create_failed', 409);
       await client.query(
-        `INSERT INTO agents (workspace_id, name, status) VALUES ($1, 'Iris', 'draft')`,
-        [workspaceId],
+        `INSERT INTO instruction_versions
+           (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
+         VALUES ($1, $2, $3, 'saved', $4, '[]'::jsonb, now())`,
+        [workspaceId, agentId, input.agent.instructions, session.userId],
+      );
+
+      // This session and message are product-authored setup state. They do not
+      // create a run, call a model, or require a provider key.
+      const setupSessionId = crypto.randomUUID();
+      const setupTitle = `Set up ${input.agent.name}`;
+      await client.query(
+        `INSERT INTO sessions
+           (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+         SELECT $1, $2, $3, $4, $5, 'work',
+                default_model_id, default_effort, default_runtime, 1, $6::jsonb
+           FROM workspace_settings WHERE workspace_id = $2`,
+        [setupSessionId, workspaceId, session.userId, agentId, setupTitle, JSON.stringify(SETUP('identity'))],
       );
       await client.query(
-        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind) VALUES ($1, 'user', $2, 'workspace.created')`,
+        `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, status)
+         VALUES ($1, $2, 0, 'iris', 'setup', $3, 'complete')`,
+        [workspaceId, setupSessionId, FIRST_SETUP_MESSAGE],
+      );
+      await client.query(
+        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
+         VALUES ($1, 'user', $2, 'workspace.created'),
+                ($1, 'user', $2, 'instruction.saved')`,
         [workspaceId, session.userId],
       );
       // The whole workspace state, from inside the transaction that created
@@ -108,7 +173,31 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // without a window where the workspace exists but reads as empty.
       const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId, allowedProviders(c.env)));
       await client.query('COMMIT');
-      return c.json(body, 201);
+
+      const response = c.json(body, 201);
+      // WorkOS sessions are organization-scoped. Once the admin membership and
+      // local workspace both exist, switch the sealed session to the new
+      // organization. A transient refresh failure does not make a committed
+      // workspace look like a failed POST: local membership already authorizes
+      // the returned bootstrap, and the next explicit sign-in can select it.
+      const sealed = session.refreshedCookie ?? readCookie(c, SESSION_COOKIE);
+      if (port && organization && sealed) {
+        try {
+          const switched = await port.refresh(sealed, organization.id);
+          takeRefreshedCookie(c.req.raw);
+          response.headers.append('Set-Cookie', sessionCookie(c.env, switched.sealedSession));
+        } catch (error) {
+          console.log(
+            JSON.stringify({
+              at: 'workspace.create.session_switch',
+              workspace_id: workspaceId,
+              switched: false,
+              error: error instanceof Error ? error.name : 'unknown',
+            }),
+          );
+        }
+      }
+      return response;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

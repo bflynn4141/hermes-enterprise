@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
 import { refSchema } from './refs.js';
+import { approvalListProjectionSchema } from './approvals.js';
 import { maskedProviderKeySchema, type MaskedProviderKey } from './provider-keys.js';
 import {
   decisionSchema,
@@ -178,6 +179,7 @@ export const requestEntitySchema = z
     decision_id: uuidSchema.nullable().optional(),
     decided_at: z.iso.datetime({ offset: true }).nullable().optional(),
     decided_by_name: z.string().max(120).nullable().optional(),
+    approval: approvalListProjectionSchema.nullable().optional(),
   })
   .strict();
 export type RequestEntity = z.infer<typeof requestEntitySchema>;
@@ -466,6 +468,13 @@ export const decisionResultSchema = z
   .object({ decision_id: uuidSchema, request_id: uuidSchema, resulting_status: requestStatusSchema, effect_ids: z.array(uuidSchema).max(20).default([]) })
   .strict();
 export type DecisionResult = z.infer<typeof decisionResultSchema>;
+
+/**
+ * A session share is a bearer capability: possession of the URL is the whole
+ * authorization check. This label is deliberately shared by the API and UI so
+ * neither can imply workspace- or recipient-bound access that does not exist.
+ */
+export const SHARE_AUDIENCE = 'Anyone with the link';
 
 export const shareResponseSchema = z
   .object({

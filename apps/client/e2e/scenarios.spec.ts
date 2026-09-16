@@ -63,8 +63,128 @@ test.describe('P1 · onboarding', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).not.toContainText('4');
     await expect(page.getByText('What do you need help with?')).toBeVisible();
     // No verified provider key: the composer is greyed and says what to do.
-    await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
+    await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
     await expect(page.getByRole('textbox', { name: /^Message Iris/ })).toBeDisabled();
+  });
+
+  test('the mock create flow reaches the workspace it creates', async ({ page }) => {
+    await page.goto('/onboarding/create');
+    await page.getByLabel('Workspace name').fill('QA Workspace');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Add context' }).click();
+    await page.getByRole('button', { name: 'Set approvals' }).click();
+    await page.getByRole('button', { name: 'Create workspace' }).click();
+
+    await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}/);
+    await expect(page.getByText('QA Workspace').first()).toBeVisible();
+  });
+
+  test('the mock invitation flow accepts a known invitation', async ({ page }) => {
+    await page.goto('/onboarding/join?token=inv_demo');
+    await page.getByRole('button', { name: 'Accept invitation' }).click();
+
+    await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}/);
+    await expect(page.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible();
+  });
+});
+
+test.describe('workspace picker states', () => {
+  const user = { id: '00000000-0000-4000-8000-000000000100', name: 'Maya Chen', email: 'maya@nous.example' };
+  const directory = (workspaces: { id: string; name: string; role: 'admin' | 'member' }[]) => ({
+    user,
+    workspaces,
+    authenticated_at: '2026-10-12T09:49:00.000Z',
+  });
+  const workspace = (index: number, name: string, role: 'admin' | 'member' = 'admin') => ({
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    name,
+    role,
+  });
+
+  test('signed-out and no-membership responses remain distinct', async ({ page }) => {
+    await page.route('**/auth/session', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Signed out', reason: 'signed_out' }) }));
+    await page.goto('/?picker=1');
+    await expect(page.getByRole('heading', { name: 'Sign in to Hermes' })).toBeVisible();
+
+    await page.unroute('**/auth/session');
+    await page.route('**/auth/session', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'No workspace', reason: 'not_found' }) }));
+    await page.reload();
+    await expect(page.getByText('You are not in a workspace yet')).toBeVisible();
+  });
+
+  test('zero, one, and multiple workspace directories render the right choices', async ({ page }) => {
+    let response = directory([]);
+    await page.route('**/auth/session', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) }));
+    await page.goto('/?picker=1');
+    await expect(page.getByText('You are not in a workspace yet')).toBeVisible();
+
+    response = directory([workspace(1, 'Partner Program')]);
+    await page.reload();
+    await expect(page.getByText('Partner Program')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open →' })).toHaveCount(1);
+
+    response = directory([workspace(1, 'Partner Program'), workspace(2, 'Finance Review', 'member')]);
+    await page.reload();
+    await expect(page.getByText('Partner Program')).toBeVisible();
+    await expect(page.getByText('Finance Review')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open →' })).toHaveCount(2);
+  });
+
+  test('a network failure offers an explicit retry', async ({ page }) => {
+    await page.route('**/auth/session', (route) => route.abort('failed'));
+    await page.goto('/?picker=1');
+    await expect(page.getByText('Could not load your workspaces')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+  });
+});
+
+test.describe('members write feedback', () => {
+  test('failed writes stay visible and preserve the pending form', async ({ page }) => {
+    await page.goto('/?memberWrites=fail');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    await app.getByRole('button', { name: 'Resend' }).click();
+    await expect(app.getByRole('alert')).toHaveText('Could not resend that invitation. Try again.');
+    await expect(app.getByText('Invitation resent')).toHaveCount(0);
+
+    await app.getByRole('button', { name: 'Withdraw' }).click();
+    await expect(app.getByRole('alert')).toHaveText('Could not withdraw that invitation. Try again.');
+
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const invite = page.getByRole('dialog', { name: 'Invite member' });
+    const email = invite.getByRole('textbox', { name: 'Work email' });
+    await email.fill('new.member@example.com');
+    await invite.getByRole('button', { name: 'Invite' }).click();
+    await expect(invite.getByRole('alert')).toHaveText('Could not send that invitation. Check the address and try again.');
+    await expect(email).toHaveValue('new.member@example.com');
+    await invite.getByRole('button', { name: 'Cancel' }).click();
+
+    await app.getByRole('tab', { name: 'All members' }).click();
+    const alex = app.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
+    await alex.getByRole('button', { name: 'Manage' }).click();
+    const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
+    await manage.getByRole('menuitemradio', { name: /Member/ }).click();
+    await expect(manage.getByRole('alert')).toHaveText('Could not change this role. Nothing was changed. Try again.');
+    await manage.getByRole('button', { name: 'Remove…' }).click();
+    await manage.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(manage.getByRole('alert')).toHaveText('Could not remove this member. Their access has not changed. Try again.');
+    await expect(manage).toBeVisible();
+  });
+
+  test('a successful invite appears in the Invitations tab', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const invite = page.getByRole('dialog', { name: 'Invite member' });
+    await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
+    await invite.getByRole('button', { name: 'Invite' }).click();
+
+    await expect(invite).toHaveCount(0);
+    await expect(app.getByText('new.member@example.com')).toBeVisible();
+    await expect(app.getByText('Invitation sent')).toBeVisible();
   });
 });
 
@@ -78,6 +198,13 @@ test.describe('P2 · triage', () => {
     // … and the blocker card offers context, not an approval.
     await expect(page.getByText('Unblock Noor’s reply')).toBeVisible();
     await expect(page.getByText('Add the destination; I’ll prepare the draft. Not an approval.')).toBeVisible();
+    // React StrictMode intentionally starts and cancels the bootstrap once in
+    // development. The canceled adapter must not prepend the message window a
+    // second time or leave another hub/poller running behind this transcript.
+    const messageIds = await page.locator('[role="log"] [data-message-id]').evaluateAll((messages) =>
+      messages.map((message) => message.getAttribute('data-message-id')),
+    );
+    expect(new Set(messageIds).size).toBe(messageIds.length);
 
     // Four rows in the app pane's "Needs you" list.
     // Scoped to the list, because the names are also on the recommendation

@@ -310,29 +310,29 @@ test('P11 · add, verify, rotate and remove a provider key against the real rout
   const api = (path: string, data?: unknown) =>
     page.request.fetch(`/w/${fixture.workspaceId}${path}`, { method: data === undefined ? 'DELETE' : 'POST', headers: { origin: ORIGIN }, ...(data === undefined ? {} : { data }) });
 
-  // A key for any other provider is refused before it is stored: OpenRouter is
+  // A key for any other provider is refused before it is stored: Nous Portal is
   // the only provider this deployment offers (decision R12).
   const refused = await api('/provider-keys', { provider: 'deepseek', label: 'P11 deepseek', key: 'sk-fake-key-for-live-verification-p11' });
   expect(refused.status()).toBe(422);
   expect(await refused.json()).toMatchObject({
     reason: 'provider_not_allowed',
-    error: 'Only OpenRouter keys can be used in this workspace',
+    error: 'Only Nous Portal keys can be used in this workspace',
   });
 
-  const added = await api('/provider-keys', { provider: 'openrouter', label: 'P11 key', key: 'sk-or-v1-fake-key-for-live-verification-p11' });
+  const added = await api('/provider-keys', { provider: 'nous_portal', label: 'P11 key', key: 'nous-fake-key-for-live-verification-p11' });
   expect(added.status(), await added.text()).toBe(201);
   const key = (await added.json()).key;
-  // `OPENROUTER_FIXTURE=1` answers the key endpoint, so this one verifies.
+  // `NOUS_PORTAL_FIXTURE=1` answers the key endpoint, so this one verifies.
   expect(key.status).toBe('verified');
   // Only the last four characters are ever shown, and no shape in the contract
   // could carry the key itself.
   expect(key.last4).toHaveLength(4);
-  expect(JSON.stringify(key)).not.toContain('sk-or-v1-fake-key');
+  expect(JSON.stringify(key)).not.toContain('nous-fake-key');
 
   const verified = await api(`/provider-keys/${key.id}/verify`, {});
   expect((await verified.json()).status).toBe('verified');
 
-  const rotated = await api(`/provider-keys/${key.id}/rotate`, { key: 'sk-or-v1-fake-key-for-live-verification-p11-b' });
+  const rotated = await api(`/provider-keys/${key.id}/rotate`, { key: 'nous-fake-key-for-live-verification-p11-b' });
   expect(rotated.ok()).toBe(true);
   const next = (await rotated.json()).key;
   expect(next.replaces_key_id).toBe(key.id);
@@ -344,7 +344,7 @@ test('P11 · add, verify, rotate and remove a provider key against the real rout
   // With every key gone, the shell is back to its empty state rather than to a
   // rejection: nothing here can be verified any more.
   await page.reload();
-  await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible({ timeout: 15_000 });
   await context.close();
 });
 
@@ -358,8 +358,8 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText('Add your OpenRouter key in Settings to start').first()).toBeVisible();
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
   await expect(page.getByText('Nothing needs you yet. Iris works when you message it.')).toBeVisible();
   // Zero renders no badge at all, because the count comes from `v_inbox_count`.
   await expect(page.getByRole('button', { name: /^Inbox/ })).not.toContainText(/[1-9]/);
@@ -369,7 +369,7 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
 
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
   await page.getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(page.getByText('Add your OpenRouter key to enable models')).toBeVisible();
+  await expect(page.getByText('Connect Nous Portal to enable models')).toBeVisible();
   await context.close();
 });
 
@@ -379,7 +379,7 @@ test('P13 · the same fresh workspace, opened by a Member', async ({ browser }) 
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
   await expect(page.getByText('No reviews waiting')).toBeVisible();
   await context.close();

@@ -145,4 +145,14 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   await expect(reduceMotion).toHaveAttribute('aria-checked', before === 'true' ? 'false' : 'true');
   await page.keyboard.press('Escape');
   await expect(account).toBeFocused();
+
+  await page.route('**/auth/logout', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: '<title>Signed out</title>' }),
+  );
+  await account.click();
+  const logout = page.waitForRequest((request) => new URL(request.url()).pathname === '/auth/logout');
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  const request = await logout;
+  expect(request.method()).toBe('GET');
+  expect(new URL(request.url()).pathname).toBe('/auth/logout');
 });

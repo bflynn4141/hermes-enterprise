@@ -14,6 +14,7 @@ import { Ack, Button, Dialog, EmptyState, Panel, Skeleton, Tabs } from '../ui/pr
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
+import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
 
 function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -22,7 +23,7 @@ function AgentHead({ full }: { full?: boolean }) {
       {full && <Glass name="iris" size={32} className="mark" />}
       <div className="col" style={{ gap: 2 }}>
         <h1 className="display-32">{agentName(state)}</h1>
-        {full && <div className="meta">{state.agent.email}</div>}
+        {full && state.agent.email && <div className="meta">{state.agent.email}</div>}
       </div>
       <span className="grow" />
     </div>
@@ -36,10 +37,10 @@ function AgentTabsRow({ value }: { value: string }) {
 }
 
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
-  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : 'Create agreement';
+  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : approvalTypeLabel(request);
   return (
     <div className="list-row">
-      <Glass name={KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
+      <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
       <div className="row-id">
         <span className="t">{request.subject ?? request.label}</span>
         <span className="s">{request.title ?? ''}</span>
@@ -48,7 +49,7 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
         <span className="t">{type}</span>
         <span className="s">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{action} →</Button>
+      <Button onClick={onAction}>{request.kind === 'approval' ? approvalActionLabel(request) : action} →</Button>
     </div>
   );
 }
@@ -59,7 +60,7 @@ export function AgentOverview() {
   const lists = useWorkspaceLists();
   const admin = useIsAdmin();
   const agent = agentName(state);
-  const pending = lists.requests.filter((r) => r.status === 'pending');
+  const pending = lists.requests.filter((request) => request.status === 'pending' && matchesReviewerFilter(request, 'for_me'));
   const destination = rows<ContextField>(state, LIST_KEYS.contextFields, 'context_field').find((field) => field.field === 'destination');
   const blocked = destination ? !destination.value : false;
   if (lists.loading) return <div className="scroll"><div className="app-body"><Skeleton rows={4} /></div></div>;
@@ -75,7 +76,7 @@ export function AgentOverview() {
           subtitle={state.agent.summary || 'Screening · Drafting · Routing'}
           right={
             <div className="col" style={{ alignItems: 'flex-end', gap: 3 }}>
-              <span className="meta">Enabled</span>
+              <span className="meta">{state.capabilities.automatedTriggers ? 'Enabled' : 'Manual only'}</span>
               <Button link onClick={() => nav(TRACES)}>
                 View traces →
               </Button>
@@ -218,9 +219,13 @@ export function AgentContext({ field }: { field: string | null }) {
           </>
         ) : (
           <>
-            <Panel icon="context" title="Program sources" subtitle={`${files.length} selected files`} />
+            <Panel
+              icon="context"
+              title="Stored sources"
+              subtitle={state.capabilities.turnAttachments ? `${files.length} available files` : `${files.length} files · Not connected to agent runs`}
+            />
             {files.length === 0 ? (
-              <EmptyState icon="context" title={EMPTY.context} detail="Add files (pdf, md, txt) to give the agent something to read." />
+              <EmptyState icon="context" title={EMPTY.context} detail="Files can be stored and reviewed here. They are not available to agent runs yet." />
             ) : (
               <div className="col">
                 {files.map((file) => (
@@ -241,7 +246,7 @@ export function AgentContext({ field }: { field: string | null }) {
             <div className="stat-grid">
               <div className="stat">
                 <span className="k">Read</span>
-                <span className="v">Selected sources</span>
+                <span className="v">{state.capabilities.turnAttachments ? 'Selected sources' : 'Chat messages only'}</span>
               </div>
               <div className="stat">
                 <span className="k">Draft</span>
@@ -776,7 +781,7 @@ export function Setup({ step }: { step: string }) {
         <Tabs tabs={tabs} value={step} onChange={goto} label="Setup steps" />
         {step === 'identity' && (
           <>
-            <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email} right={<span className="meta">Loop not started</span>} />
+            <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email ?? 'Email not connected'} right={<span className="meta">Loop not started</span>} />
             <div className="row">
               <Button primary onClick={() => goto('context')}>
                 Continue
@@ -786,7 +791,7 @@ export function Setup({ step }: { step: string }) {
         )}
         {step === 'context' && (
           <>
-            <Panel icon="context" title="Program sources" subtitle={`${lists.agentFiles.length} selected files`} />
+            <Panel icon="context" title="Stored sources" subtitle={`${lists.agentFiles.length} files · Not connected to agent runs`} />
             <div className="col">
               {lists.agentFiles.map((file) => (
                 <div className="list-row compact" key={file.id}>
@@ -811,7 +816,7 @@ export function Setup({ step }: { step: string }) {
             <div className="setup-two" style={{ padding: 0, gap: 24 }}>
               <div className="col grow" style={{ gap: 8 }}>
                 <h3 className="section-title">{agentName(state)} can</h3>
-                {['Read the selected sources', 'Prepare reports and drafts', 'Ask for a decision'].map((title) => (
+                {['Work from chat messages', 'Prepare reports and drafts', 'Ask for a decision'].map((title) => (
                   <div className="col" key={title} style={{ gap: 2, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
                     <span>{title}</span>
                   </div>
@@ -835,7 +840,7 @@ export function Setup({ step }: { step: string }) {
         )}
         {step === 'ready' && (
           <>
-            <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email} right={<span className="meta">Loop not started</span>} />
+            <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email ?? 'Email not connected'} right={<span className="meta">Loop not started</span>} />
             <p style={{ fontSize: 16, lineHeight: '24px' }}>{state.agent.summary}</p>
             <div className="app-footer inline">
               <span className="meta">Every external action still waits for a human.</span>

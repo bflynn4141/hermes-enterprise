@@ -41,12 +41,13 @@ import {
 } from '../keys/store.js';
 import { logEvent } from '../keys/redact.js';
 import { defaultProbeModel, needsProbeModel } from '../keys/reverify.js';
-import { syncOpenRouterForKey } from '../keys/catalog-sync.js';
+import { syncCatalogForKey } from '../keys/catalog-sync.js';
 import { forbiddenCountFor, probeKey, recordVerification, type VerifyInput } from '../keys/verify.js';
 import { CATALOG_PAGE_DEFAULT, CATALOG_PAGE_MAX, loadCatalogPage } from '../model/catalog.js';
 import { adapterOptions, providerForName } from '../model/index.js';
 import { allowedProviders, requireAllowedProvider } from '../model/allowed.js';
 import { openRouterFixtureEnabled, openRouterFixtureFetch } from '../model/openrouter-dev.js';
+import { nousPortalFixtureEnabled, nousPortalFixtureFetch } from '../model/nous-dev.js';
 import type { AdapterOptions } from '../model/types.js';
 import { RouteError, inWorkspace, jsonBody, pathUuid } from './tenant.js';
 
@@ -86,13 +87,8 @@ function readProvider(env: Env, value: unknown): string {
   if (typeof value !== 'string' || !(PROVIDERS as readonly string[]).includes(value)) {
     throw new RouteError('provider must be one of the supported providers', 'unknown_provider', 400);
   }
-  if (value === 'nous_portal') {
-    // In the catalog for completeness; there is no adapter and no key column
-    // value for it, so accepting one would store something unusable.
-    throw new RouteError('that provider does not accept a workspace key', 'unknown_provider', 400);
-  }
-  // Refused before anything is stored, rate-limited or probed: an OpenRouter-only
-  // deployment must not hold a credential it will never spend (decision R12).
+  // Refused before anything is stored, rate-limited or probed: this deployment
+  // must not hold a credential it will never spend (decision C55).
   requireAllowedProvider(env, value);
   return value;
 }
@@ -119,6 +115,9 @@ function readKey(value: unknown): string {
 const readLabel = (value: unknown): string =>
   typeof value === 'string' ? value.trim().slice(0, MAX_LABEL_LENGTH) : '';
 
+/** A first-run client should not need to invent a name for the only provider. */
+const defaultProviderLabel = (provider: string): string => provider === 'nous_portal' ? 'Nous Portal' : provider;
+
 /**
  * Adapter options for one provider.
  *
@@ -131,6 +130,9 @@ function providerAdapterOptions(c: Context<{ Bindings: Env }>, provider: string)
   const base = adapterOptions(c.env);
   if (provider === 'openrouter' && openRouterFixtureEnabled(c.env)) {
     return { ...base, fetch: openRouterFixtureFetch };
+  }
+  if (provider === 'nous_portal' && nousPortalFixtureEnabled(c.env)) {
+    return { ...base, fetch: nousPortalFixtureFetch };
   }
   return base;
 }
@@ -187,12 +189,12 @@ async function probeAndRecord(
     }
   });
 
-  // OpenRouter's list is the workspace's model menu, so verification is also
-  // the moment to fetch it. Outside the transaction above, and allowed to fail
-  // without taking the verification down with it.
+  // Broker catalogs populate the workspace model menu after verification.
+  // Refresh outside the transaction above, and do not take verification down
+  // with a catalog failure.
   let synced: { count: number; at: string } | null = null;
-  if (plan.provider === 'openrouter' && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
-    const result = await syncOpenRouterForKey(
+  if ((plan.provider === 'openrouter' || plan.provider === 'nous_portal') && (outcome.status === 'verified' || outcome.status === 'verified_scoped')) {
+    const result = await syncCatalogForKey(
       (fn) => withTenantTransaction(c.env, 'app', { workspaceId: plan.input.workspaceId, userId }, fn),
       options,
       plan.input.workspaceId,
@@ -220,7 +222,7 @@ export async function addKey(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await jsonBody<AddKeyBody>(c);
   const provider = readProvider(c.env, body.provider);
   const plaintext = readKey(body.key);
-  const label = readLabel(body.label);
+  const label = readLabel(body.label) || defaultProviderLabel(provider);
 
   const prepared = await inWorkspace(c, async (work) => {
     work.requireAdmin('adding a provider key');
@@ -306,7 +308,7 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     const row = await getProviderKey(work.tx, work.workspaceId, keyId);
     if (!row) throw new RouteError('no such key', 'not_found', 404);
     if (row.revoked_at !== null) throw new RouteError('this key is revoked', 'key_revoked', 409);
-    // A key installed before this deployment narrowed to OpenRouter. It stays
+    // A key installed before this deployment narrowed the allowed provider set. It stays
     // in the list, marked "no longer usable", and Remove is the only thing that
     // works on it: re-verifying would spend a probe on a credential no run can
     // use (decision R12).

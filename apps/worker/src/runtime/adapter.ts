@@ -7,7 +7,6 @@ import { buildSystemPrompt } from '../engine/prompt.js';
 import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
-import { ZERO_USAGE } from '../model/types.js';
 import { HermesClient, HermesApiError, terminalHermesStatus } from './client.js';
 
 export interface RuntimePersistence extends AgentDb {
@@ -67,17 +66,24 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       return { ok: true };
     });
     const submitted = await step.do('hermes-submit', CHECKPOINT, async () => {
+      // A Workflow callback may be replaying after either process restarted.
+      // Re-read the live contract before trusting a persisted binding or
+      // replaying the stable idempotency key.
+      await client.capabilities();
       const existing = await db.binding(run.id);
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
       const history = await db.loadHistory(run.id, 100);
       const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
       const previous = await db.loadBootstrapHistory(run);
       const model = await db.loadModel(run.modelId);
-      if (!model || model.provider !== 'openrouter') throw new Error('Hermes requires an allowed OpenRouter model');
+      if (!model || !['openrouter', 'nous_portal'].includes(model.provider)) {
+        throw new Error('Hermes requires a runtime-supported model');
+      }
+      const wireModel = model.model_id.replace(/^(?:openrouter|nous):/, '');
       const proposed: Record<string, unknown> = {
         input: userInput,
         session_id: run.sessionId,
-        model: model.model_id.replace(/^openrouter:/, ''),
+        model: wireModel,
         provider: 'custom',
         instructions: await buildSystemPrompt(db, run, []),
         _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
@@ -95,6 +101,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
     remoteId = submitted.id;
     const id = submitted.id;
     await step.do('hermes-execute', EXECUTION, async () => {
+      // This step is independently retried. Do not let an API server that
+      // restarted into its in-memory fallback look healthy on reconciliation.
+      await client.capabilities();
       const startedAt = Date.now();
       const progress = { runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'active' as const };
       const { stepAttempt } = await db.enterStep(progress);
@@ -184,11 +193,6 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await db.carryGuidance(run.id, (await db.loadGuidance(run.id)).map((row) => row.id));
       await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: parsed.text, blocks: parsed.blocks, status: completed ? 'complete' : 'incomplete', workedMs });
       await db.appendTurn({ runId: run.id, turn: run.maxTurns + run.attempt, seq: 0, toolCallId: `hermes-final-${run.attempt}`, role: 'assistant', providerMessage: { role: 'assistant', content: parsed.text } });
-      const currentKey = await db.resolveCredential('openrouter').catch(() => null);
-      await db.recordModelCall({ runId: run.id, turn: 0, modelId: run.modelId, provider: 'openrouter', keyId: currentKey?.keyId ?? null,
-        usage: { ...ZERO_USAGE, input_tokens: status.usage?.input_tokens ?? 0, output_tokens: status.usage?.output_tokens ?? 0 }, latencyMs: workedMs,
-        status: completed ? 'ok' : stoppedStatus ? 'stopped' : 'error',
-      });
       const activeMs = await db.addActiveMs(run.id, workedMs);
       await db.finishStep({ ...progress, state: finalStatus === 'error' ? 'failed' : 'done' });
       await db.setRunStatus(run.id, finalStatus, { error, waitingFor: null, waitingLabel: null });

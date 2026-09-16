@@ -80,6 +80,12 @@ import {
 } from './routes/turns.js';
 import { createDecision } from './routes/decisions.js';
 import {
+  createApprovalDecision,
+  createApprovalRevision,
+  createApprovalRoute,
+  getApprovalRoute,
+} from './routes/approvals.js';
+import {
   createRequestNote,
   getRequest,
   listRequestDocuments,
@@ -115,6 +121,14 @@ import { PLATFORM_WORKSPACE_ID } from './auth/rate-limit.js';
 import { handleQueue } from './queues/index.js';
 import { sweepOrphanedUploads } from './storage/lifecycle.js';
 import { pollWorkOSEvents } from './auth/events-poller.js';
+import {
+  disconnectSlack,
+  createSlackLinkCode,
+  getSlackConnection,
+  slackOAuthCallback,
+  startSlackOAuth,
+} from './routes/slack.js';
+import { slackEvents } from './routes/slack-events.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -237,6 +251,11 @@ app.post('/workspaces', createWorkspace);
 // Accepting an invitation is the other one: the workspace is what the call is
 // trying to reach, so it cannot be the key the call is authorised under.
 app.post('/invitations/:token/accept', acceptInvitation);
+// Slack calls these two routes without a Hermes browser session. The callback
+// is bound to a short-lived, single-use signed state row; Events API requests
+// are verified against the raw request bytes before JSON parsing.
+app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
+app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
 // authorisation — and the only route in the system that answers without a
 // session. It grants one session, read-only, up to the share's cutoff. See
@@ -253,6 +272,10 @@ app.post('/w/:ws/provider-keys', addKey);
 app.post('/w/:ws/provider-keys/:id/verify', verifyKey);
 app.post('/w/:ws/provider-keys/:id/rotate', rotateKey);
 app.delete('/w/:ws/provider-keys/:id', deleteKey);
+app.get('/w/:ws/integrations/slack', getSlackConnection);
+app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
+app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
+app.delete('/w/:ws/integrations/slack', disconnectSlack);
 
 // Sessions, and everything hanging off one.
 app.get('/w/:ws/sessions', listSessions);
@@ -307,6 +330,10 @@ app.delete('/w/:ws/files/:id', deleteFile);
 app.get('/w/:ws/requests', listRequests);
 app.get('/w/:ws/requests/:id', getRequest);
 app.post('/w/:ws/requests/:id/decisions', createDecision);
+app.get('/w/:ws/requests/:id/approval', getApprovalRoute);
+app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
+app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
+app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
@@ -428,10 +455,10 @@ const handler = {
           } catch (error) {
             console.log(JSON.stringify({ at: 'cron.counters', ok: false, error: String(error) }));
           }
-          // The night's per-workspace work: the uploads backup, the weekly
-          // audit CSV on a Monday, and yesterday's spend as a metric. All three
-          // become `jobs` rows rather than work done here, because this handler
-          // has 30 seconds of CPU (src/ops/nightly.ts).
+          // The night's per-workspace work: the uploads backup, Monday's audit
+          // CSV and provider-key re-verification, and yesterday's spend metric.
+          // Effects become `jobs` rows rather than work done here, because this
+          // handler has 30 seconds of CPU (src/ops/nightly.ts).
           try {
             const queued = await runNightly(env, new Date(event.scheduledTime));
             console.log(JSON.stringify({ at: 'cron.nightly.queued', ...queued }));

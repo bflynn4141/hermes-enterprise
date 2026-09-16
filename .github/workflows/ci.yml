@@ -64,11 +64,14 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Build the client assets
-        run: pnpm --filter @hermes/client build
+      - name: Build the deployable application
+        run: pnpm build
 
-      - name: Migrate, then re-apply to prove idempotence
+      - name: Apply pending migrations to the disposable CI database
         run: pnpm db:migrate
+
+      - name: Verify migration replay in a disposable shadow database
+        run: pnpm db:migrations:verify
 
       - name: Test
         run: pnpm test
@@ -119,6 +122,45 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
       - name: Lint the workflows
         run: ./actionlint -color
+
+  browser:
+    name: mock client browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm --filter @hermes/client exec playwright install --with-deps chromium
+
+      # This is intentionally named mock-client coverage: it proves browser
+      # interaction against the in-process mock adapter, not the Worker,
+      # Postgres, WorkOS or a model provider. It therefore needs no credential.
+      - name: Run mock client browser tests
+        run: pnpm test:browser:mock
+
+      - name: Retain Playwright diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-mock-client-${{ github.run_id }}
+          path: |
+            apps/client/playwright-report
+            apps/client/test-results
+          if-no-files-found: ignore
+          retention-days: 14
 
   wrangler:
     name: wrangler dry run

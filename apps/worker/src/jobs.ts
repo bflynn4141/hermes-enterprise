@@ -11,13 +11,19 @@
 // sockets of someone whose access was removed; `workos_sync` performs the
 // WorkOS-side write after our transaction has already committed ours, so a
 // WorkOS outage can never leave a member active here and deactivated there.
+import { approvalFinalizedHookSchema } from '@hermes/shared';
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
+import { loadApprovalView } from './domain/approvals.js';
 import { runReceiptJob } from './runs/receipt.js';
+import { runAttemptInstanceId } from './runs/instance-id.js';
+import { admitApprovalContinuation } from './runtime/continuation.js';
 import { runBackupUploads } from './storage/backup.js';
 import { runCapWarningJob } from './ops/cap-warning.js';
 import { runEventsExport } from './ops/events-export.js';
+import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
+import type { AdapterOptions } from './model/types.js';
 
 export interface Job {
   readonly id: string;
@@ -32,11 +38,9 @@ export interface Job {
 export const CLAIM_SECONDS = 120;
 
 /**
- * The kinds this milestone knows about. `receipt`, `render` and `reverify` are
- * registered and inert: the rows they would be written by (a decision, a
- * document version, a key re-verification) belong to M4 and to the keys module,
- * and a runner that pretended to do their work would be a lie the Cron tells
- * once a minute.
+ * The kinds this Worker knows how to dispatch. Keeping the registry explicit
+ * makes an unknown kind visible rather than letting a misspelled job retry
+ * forever with no owner.
  */
 export const JOB_KINDS = [
   'publish',
@@ -49,6 +53,15 @@ export const JOB_KINDS = [
   // M5a: the 80 percent cap warning, and the weekly audit-events export.
   'cap_warning',
   'events_export',
+  // A finalized approval may authorize one fresh, revision-bound run. The
+  // durable job is the crash-safe seam between the human decision transaction
+  // and Workflow instance creation.
+  'approval_continue',
+  // Slack Events API ingestion and terminal answer delivery stay behind the
+  // same durable transaction + retry seam as every other side effect.
+  'slack_ingest',
+  'slack_deliver',
+  'slack_revoke',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -103,8 +116,17 @@ export async function finishJob(tx: Tx, jobId: string): Promise<void> {
 }
 
 /** Release a failed job for a later attempt, with backoff. */
-export async function failJob(tx: Tx, jobId: string, error: string, attempts: number): Promise<void> {
-  const backoffSeconds = Math.min(3600, 30 * 2 ** Math.max(0, attempts - 1));
+export async function failJob(
+  tx: Tx,
+  jobId: string,
+  error: string,
+  attempts: number,
+  retryAfterSeconds = 0,
+): Promise<void> {
+  const backoffSeconds = Math.max(
+    Math.min(3600, 30 * 2 ** Math.max(0, attempts - 1)),
+    Math.min(3600, Math.max(0, retryAfterSeconds)),
+  );
   await tx.query(
     `UPDATE jobs
         SET locked_until = NULL,
@@ -310,10 +332,15 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
   };
 
   if (!port) {
-    // Nothing to mirror to: `AUTH_MODE=fake`, or a deployment with no WorkOS
-    // credentials. The row still records that we tried, so a workspace that
-    // later gains credentials has a visible backlog rather than a silence.
-    await mark('done', 'workos not configured');
+    if (env.AUTH_MODE === 'workos' || env.ENVIRONMENT === 'staging' || env.ENVIRONMENT === 'production') {
+      // A production-mode sync is not complete when the system that owns the
+      // organization or invitation was never called. Mark the evidence failed
+      // and throw so the durable job keeps retrying instead of erasing the gap.
+      await mark('failed', 'workos not configured');
+      throw new Error('WorkOS is required for this synchronization job');
+    }
+    // Fake development has deliberately no upstream to mirror to.
+    await mark('done', 'workos disabled in development');
     return;
   }
 
@@ -359,8 +386,62 @@ async function runRender(env: Env, job: Job): Promise<void> {
   });
 }
 
+/**
+ * Admit a human-approved continuation under app-role policy, then create the
+ * Workflow instance only after that transaction commits. A replay either
+ * finds the same admitted run or retries a temporarily blocked admission; it
+ * can never mint a second run for the same revision-bound intent.
+ */
+async function runApprovalContinue(env: Env, job: Job): Promise<void> {
+  const hook = approvalFinalizedHookSchema.parse(job.payload);
+  if (hook.workspace_id !== job.workspace_id) throw new Error('approval_continue_workspace_mismatch');
+
+  const admission = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const current = await loadApprovalView(tx, hook.request_id, null);
+    const result = await admitApprovalContinuation(tx, env, hook, current);
+    if (result.status === 'admitted' && result.message) {
+      await publishEvents(tx, job.workspace_id, [{
+        kind: 'message.appended',
+        sessionId: result.instance.sessionId,
+        traceId: result.instance.traceId,
+        payload: {
+          message_id: result.message.id,
+          session_id: result.instance.sessionId,
+          seq: result.message.seq,
+          role: 'system',
+          kind: 'approval_continuation',
+          text: result.message.text,
+          blocks: [],
+          status: 'complete',
+          run_id: result.runId,
+        },
+      }]);
+    }
+    return result;
+  });
+
+  if (admission.status === 'blocked') throw new Error(`approval_continue_blocked:${admission.reason}`);
+  if (admission.status !== 'admitted' && admission.status !== 'already_admitted') {
+    console.log(JSON.stringify({
+      at: 'job.approval_continue',
+      request_id: hook.request_id,
+      status: admission.status,
+      reason: 'reason' in admission ? admission.reason : 'admission_not_created',
+    }));
+    return;
+  }
+
+  const instanceId = runAttemptInstanceId(admission.runId, admission.instance.attempt);
+  try {
+    await env.RUN_ATTEMPT.create({ id: instanceId, params: admission.instance });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/already exists|duplicate|instance.*id/i.test(message)) throw error;
+  }
+}
+
 /** Dispatch. An unknown kind is done rather than retried forever. */
-export async function runJob(env: Env, job: Job): Promise<void> {
+export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<void> {
   switch (job.kind) {
     case 'publish':
       await runPublish(env, job);
@@ -398,10 +479,39 @@ export async function runJob(env: Env, job: Job): Promise<void> {
       // The weekly CSV of one workspace's audit trail into the backup bucket.
       await runEventsExport(env, job);
       return;
+    case 'approval_continue':
+      await runApprovalContinue(env, job);
+      return;
+    case 'slack_ingest':
+      await (await import('./integrations/slack/ingest.js')).runSlackIngestJob(env, job);
+      return;
+    case 'slack_deliver':
+      await (await import('./integrations/slack/deliver.js')).runSlackDeliverJob(env, job);
+      return;
+    case 'slack_revoke':
+      await (await import('./integrations/slack/revoke.js')).runSlackRevokeJob(env, job);
+      return;
     case 'reverify':
-      // Registered, inert, and honest about it: the work lands with the keys
-      // module.
-      console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'registered placeholder' }));
+      {
+        const payload = (job.payload ?? {}) as Partial<ReverifyPayload>;
+        if (typeof payload.key_id !== 'string' || typeof payload.provider !== 'string') {
+          console.log(JSON.stringify({ at: 'job.reverify', key: job.key, ok: false, note: 'malformed payload' }));
+          return;
+        }
+        const result = await runReverifyJob(
+          (fn) => withWorkspaceTransaction(env, job.workspace_id, fn),
+          env,
+          job.workspace_id,
+          payload as ReverifyPayload,
+          adapterOptions,
+        );
+        // A 403, 429 or provider outage is not completion. `recordVerification`
+        // has preserved the unverified status; throwing here lets the generic
+        // wrapper retain this same job and apply its bounded retry backoff.
+        if ('status' in result && result.status === 'unverified') {
+          throw new Error('provider key re-verification was inconclusive');
+        }
+      }
       return;
     default:
       console.log(JSON.stringify({ at: 'job', kind: job.kind, note: 'unknown kind' }));
@@ -410,16 +520,26 @@ export async function runJob(env: Env, job: Job): Promise<void> {
 }
 
 /** Claim, run, finish or fail. Returns true when the job was run to done. */
-async function claimRunFinish(env: Env, workspaceId: string, jobId: string): Promise<boolean> {
+async function claimRunFinish(
+  env: Env,
+  workspaceId: string,
+  jobId: string,
+  adapterOptions: AdapterOptions = {},
+): Promise<boolean> {
   const job = await withWorkspaceTransaction(env, workspaceId, (tx) => claimJob(tx, jobId));
   if (!job) return false;
   try {
-    await runJob(env, job);
+    await runJob(env, job, adapterOptions);
     await withWorkspaceTransaction(env, workspaceId, (tx) => finishJob(tx, job.id));
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts));
+    const retryAfter = error instanceof Error
+      && 'retryAfterSeconds' in error
+      && typeof error.retryAfterSeconds === 'number'
+      ? error.retryAfterSeconds
+      : 0;
+    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts, retryAfter));
     return false;
   }
 }
@@ -451,6 +571,7 @@ export async function runJobsAfterCommit(env: Env, workspaceId: string, jobIds: 
 export async function drainJobs(
   env: Env,
   limit = 50,
+  adapterOptions: AdapterOptions = {},
 ): Promise<{ claimed: number; done: number; failed: number }> {
   const client = await connect(env, 'app');
   let due: { job_id: string; workspace_id: string }[];
@@ -471,7 +592,7 @@ export async function drainJobs(
   // already claimed by another drainer is neither: a test that drains to a
   // quiet state needs to tell "nothing left" from "nothing I could do".
   for (const row of due) {
-    if (await claimRunFinish(env, row.workspace_id, row.job_id)) done += 1;
+    if (await claimRunFinish(env, row.workspace_id, row.job_id, adapterOptions)) done += 1;
     else failed += 1;
   }
   return { claimed: due.length, done, failed };

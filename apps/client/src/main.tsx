@@ -30,6 +30,15 @@ const store = createStore(initialState());
 
 /** `mockUuid(1)`, inlined so the mock module is not pulled into the main chunk. */
 const MOCK_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
+const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
+
+function readMockWorkspaceName(): string | undefined {
+  try {
+    return sessionStorage.getItem(MOCK_WORKSPACE_NAME_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Mock mode. The adapter is handed a `fetch` and a socket factory instead of
@@ -46,10 +55,39 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       data: params.get('data') === 'empty' ? 'empty' : 'seeded',
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
+      scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
+      workspaceName: readMockWorkspaceName(),
+      memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
+      slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }
   return createAdapter({ store, workspaceId, auth: createAuth() });
+}
+
+/** Onboarding uses the same credential-free backend as the shell in mock mode. */
+function MockOnboarding({ step, token }: { step: 'create-workspace' | 'join-workspace'; token: string | null }) {
+  const [fetchImpl, setFetchImpl] = useState<typeof fetch | null>(null);
+  useEffect(() => {
+    let live = true;
+    void import('./model/mock.js').then((module) => {
+      if (!live) return;
+      const backend = module.createMockBackend({ workspaceName: readMockWorkspaceName() });
+      setFetchImpl(() => backend.fetchImpl);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!fetchImpl)
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140 }}>
+          <Skeleton rows={3} label="Loading onboarding" />
+        </div>
+      </div>
+    );
+  return <Onboarding route={step} token={token} fetchImpl={fetchImpl} />;
 }
 
 function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspace' }> }) {
@@ -57,12 +95,21 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
   const [error, setError] = useState<'signed-out' | 'not-found' | 'failed' | null>(null);
 
   useEffect(() => {
-    let disposed: Adapter | null = null;
+    let live = true;
+    let active: Adapter | null = null;
     void (async () => {
       try {
         const next = await buildAdapter(current.workspaceId);
-        disposed = next;
+        if (!live) {
+          next.dispose();
+          return;
+        }
+        active = next;
         await next.start();
+        if (!live) {
+          next.dispose();
+          return;
+        }
         // The URL is the authority on what to show; bootstrap only supplies the
         // default when it names nothing.
         const hashRef = parseRef(window.location.hash);
@@ -74,12 +121,16 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
         if (hashRef) store.dispatch({ type: 'nav/app', object: hashRef, manual: true });
         setAdapter(next);
       } catch (caught) {
+        if (!live) return;
         if (caught instanceof RestError && caught.status === 401) setError('signed-out');
         else if (caught instanceof RestError && caught.status === 404) setError('not-found');
         else setError('failed');
       }
     })();
-    return () => disposed?.dispose();
+    return () => {
+      live = false;
+      active?.dispose();
+    };
   }, [current.workspaceId, current.sessionId]);
 
   if (error === 'signed-out') return <SignIn returnTo={window.location.href} />;
@@ -198,7 +249,7 @@ function WorkspacePicker() {
         const error = caught as { status?: number };
         // 404 is "signed in, in no workspace": a real answer, and the screen
         // for it is the empty picker with its onboarding action.
-        setState(error.status === 401 ? 'signed-out' : 'ready');
+        setState(error.status === 401 ? 'signed-out' : error.status === 404 ? 'ready' : 'failed');
       });
     return () => {
       live = false;
@@ -206,11 +257,24 @@ function WorkspacePicker() {
   }, []);
 
   if (state === 'signed-out') return <SignIn returnTo={null} />;
-  if (state === 'loading' || state === 'failed')
+  if (state === 'loading')
     return (
       <div className="portal">
         <div className="portal-body" style={{ paddingTop: 140 }}>
           <Skeleton rows={3} label="Finding your workspaces" />
+        </div>
+      </div>
+    );
+  if (state === 'failed')
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140, width: 560 }}>
+          <EmptyState
+            icon="trace"
+            title="Could not load your workspaces"
+            detail="The server did not answer. Check your connection and try again."
+            action={<Button primary onClick={() => window.location.reload()}>Try again</Button>}
+          />
         </div>
       </div>
     );
@@ -251,7 +315,7 @@ function WorkspacePicker() {
 
 function Root() {
   if (route.kind === 'shared') return <SharedRoute token={route.token} />;
-  if (route.kind === 'onboarding') return <Onboarding route={route.step} token={route.token} />;
+  if (route.kind === 'onboarding') return __MOCK__ ? <MockOnboarding step={route.step} token={route.token} /> : <Onboarding route={route.step} token={route.token} />;
   if (route.kind === 'signin' || route.kind === 'callback') {
     // `/auth/callback` lands back inside the workspace; the pending step-up
     // intent is read there and always requires a second click.
@@ -262,6 +326,9 @@ function Root() {
     return <SignIn returnTo={route.kind === 'signin' ? route.returnTo : null} />;
   }
   if (route.kind === 'workspace') return <Bootstrap route={route} />;
+  // Browser tests can exercise the real picker state machine while the rest of
+  // the mock bundle still opens directly into its seeded workspace.
+  if (__MOCK__ && new URL(window.location.href).searchParams.get('picker') === '1') return <WorkspacePicker />;
   // In mock mode the root path is the mock workspace, so the bundle can be
   // opened straight from a file server with no worker and no URL to remember.
   if (__MOCK__) return <Bootstrap route={{ kind: 'workspace', workspaceId: MOCK_WORKSPACE_ID, sessionId: null, app: null }} />;

@@ -33,19 +33,22 @@ export function takeRefreshedCookie(request: Request): string | null {
 /**
  * Freshness, from a row rather than from the token.
  *
- * The WorkOS access token carries no `auth_time` and its `iat` moves on every
- * refresh, so a token cannot answer "when did this person last actually type
- * their password?". `/auth/callback` writes the answer down, keyed by `sid`,
- * and this reads it back. A `sid` we have never seen is recorded as
- * authenticating now, which is true: we are seeing it for the first time.
+ * WorkOS access tokens carry `auth_time`, which advances after a real
+ * reauthentication while `sid` stays stable. The callback and adapter persist
+ * that value; token `iat` is not used because ordinary refreshes advance it.
  */
-async function touchAuthSession(client: Client, sid: string, userId: string): Promise<Date> {
+async function touchAuthSession(
+  client: Client,
+  sid: string,
+  userId: string,
+  firstAuthenticatedAt = new Date(),
+): Promise<Date> {
   const { rows } = await client.query<{ authenticated_at: Date; revoked_at: Date | null }>(
     `INSERT INTO auth_sessions (sid, user_id, authenticated_at)
-     VALUES ($1, $2, now())
+     VALUES ($1, $2, $3)
      ON CONFLICT (sid) DO UPDATE SET last_seen_at = now()
      RETURNING authenticated_at, revoked_at`,
-    [sid, userId],
+    [sid, userId, firstAuthenticatedAt],
   );
   const row = rows[0];
   // `revoked_at` is written by `POST /auth/logout` and by the `user.deleted`
@@ -192,7 +195,12 @@ export const workosAuth: AuthAdapter = {
     const client = await connect(c.env, 'app');
     try {
       const userId = await upsertUser(client, user);
-      const authenticatedAt = await touchAuthSession(client, claims.sid, userId);
+      const authenticatedAt = await touchAuthSession(
+        client,
+        claims.sid,
+        userId,
+        new Date(claims.auth_time * 1000),
+      );
       if (refreshed) {
         refreshedCookies.set(c.req.raw, sessionCookie(c.env, refreshed));
         return { userId, sid: claims.sid, authenticatedAt, refreshedCookie: refreshed };

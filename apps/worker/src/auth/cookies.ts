@@ -47,4 +47,10 @@ export function csrfCookie(env: Env, token: string): string {
   return `${CSRF_COOKIE}=${token}; ${flags.join('; ')}`;
 }
 
+export function clearedCsrfCookie(env: Env): string {
+  const flags = ['Path=/', 'SameSite=Strict', 'Max-Age=0'];
+  if (isSecure(env)) flags.push('Secure');
+  return `${CSRF_COOKIE}=; ${flags.join('; ')}`;
+}
+
 export const newCsrfToken = (): string => crypto.randomUUID().replace(/-/g, '');

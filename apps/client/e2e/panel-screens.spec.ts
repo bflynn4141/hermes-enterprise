@@ -79,9 +79,12 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     go: async (page) => {
       await nav(page, /^Inbox/).click();
       await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
-      await app(page).getByRole('button', { name: 'Approve invoice' }).click();
+      await app(page).getByRole('button', { name: 'Review payment' }).click();
+      await app(page).getByRole('checkbox', { name: /authorize this payment instruction/i }).check();
+      await app(page).getByRole('button', { name: 'Review authorization' }).click();
+      await app(page).getByRole('button', { name: 'Authorize payment' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('What this implies')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByText('Provider actions')).toBeVisible()),
   },
   {
     key: 'history',

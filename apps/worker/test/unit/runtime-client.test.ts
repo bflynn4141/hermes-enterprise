@@ -1,12 +1,33 @@
 // The real transport is exercised against the pinned native Runs API wire
 // format. Response bodies and transport errors must not expose credentials.
 import { describe, expect, it, vi } from 'vitest';
-import { HermesApiError, HermesClient, terminalHermesStatus } from '../../src/runtime/client.js';
+import { HermesApiError, HermesCapabilitiesError, HermesClient, terminalHermesStatus } from '../../src/runtime/client.js';
 
 const RUN_ID = 'run_native-123';
 const SECRET = 'runtime-secret-that-must-stay-server-side';
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json' },
+});
+const capabilities = (durable = true) => ({
+  object: 'hermes.api_server.capabilities',
+  platform: 'hermes-agent',
+  auth: { type: 'bearer', required: true },
+  runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+  features: {
+    run_submission: true,
+    run_status: true,
+    run_events_sse: true,
+    run_stop: true,
+    run_steer: true,
+    runs_idempotency: { supported: true, durable, retention_seconds: 86_400 },
+  },
+  endpoints: {
+    runs: { method: 'POST', path: '/v1/runs' },
+    run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+    run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+    run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+    run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+  },
 });
 
 function transport(response: () => Response) {
@@ -15,6 +36,22 @@ function transport(response: () => Response) {
 }
 
 describe('official Hermes Runs transport', () => {
+  it('requires the authenticated server-agent Runs contract and durable reservations', async () => {
+    const { client, send } = transport(() => json(capabilities()));
+    await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });
+    expect(send.mock.calls[0]?.[0]).toBe('https://runtime.example/v1/capabilities');
+    expect(new Headers(send.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
+  });
+
+  it.each([
+    ['non-durable reservations', (() => capabilities(false))()],
+    ['missing run status endpoint', (() => { const value = capabilities(); delete (value.endpoints as Record<string, unknown>).run_status; return value; })()],
+    ['split client execution', (() => { const value = capabilities(); value.runtime.split_runtime = true; return value; })()],
+  ])('rejects %s before native admission', async (_label, body) => {
+    const { client } = transport(() => json(body));
+    await expect(client.capabilities()).rejects.toEqual(new HermesCapabilitiesError());
+  });
+
   it('submits one authenticated request with the durable idempotency key and no redirect forwarding', async () => {
     const { client, send } = transport(() => json({ run_id: RUN_ID, status: 'started' }, 202));
     const body = { input: 'Review this application.', session_id: 'session-1', provider: 'custom' };

@@ -74,7 +74,10 @@ test('F2 · POST /workspaces creates a workspace the creator can open', async ({
 
   const name = `Created ${new Date().toISOString().slice(11, 19)}`;
   const created = await page.request.post('/workspaces', {
-    data: { name },
+    data: {
+      name,
+      agent: { name: 'Iris', instructions: 'Help me define one repeatable workflow and its review boundaries.' },
+    },
     headers: { origin: ORIGIN },
   });
   // 405 was the old answer: the assets binding replied before the Worker saw
@@ -86,7 +89,7 @@ test('F2 · POST /workspaces creates a workspace the creator can open', async ({
   // The creator is its first Admin, and the workspace opens.
   expect(rows(`SELECT role FROM members WHERE workspace_id = ${q(body.workspace.id)};`)).toEqual(['admin']);
   await page.goto(`/w/${body.workspace.id}`);
-  await expect(page.getByText('Iris is ready. Describe what you need or attach a document.')).toBeVisible({
+  await expect(page.getByText('Let’s set up the work you want me to repeat. What do you own?')).toBeVisible({
     timeout: 15_000,
   });
   await context.close();

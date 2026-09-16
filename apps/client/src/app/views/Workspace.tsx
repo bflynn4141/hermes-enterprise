@@ -13,15 +13,16 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
 import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
-import { catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
+import { LIST_KEYS, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
+import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -155,6 +156,10 @@ export function Members() {
   const [manage, setManage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [manageNotice, setManageNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -166,6 +171,25 @@ export function Members() {
     adapter.invalidateList('invitations');
     adapter.invalidateList('members');
   };
+  const showAck = (message: string): void => {
+    setAck(message);
+    setTimeout(() => setAck(null), 1600);
+  };
+  const runInvitationAction = (action: 'resend' | 'withdraw', row: InvitationEntity): void => {
+    const key = `${action}:${row.id}`;
+    setPending(key);
+    setNotice(null);
+    const request = action === 'resend'
+      ? adapter.rest.resendInvitation(state.workspace.id, row.id)
+      : adapter.rest.withdrawInvitation(state.workspace.id, row.id);
+    void request
+      .then(() => {
+        invitationsChanged();
+        showAck(action === 'resend' ? 'Invitation resent' : 'Invitation withdrawn');
+      })
+      .catch(() => setNotice(action === 'resend' ? 'Could not resend that invitation. Try again.' : 'Could not withdraw that invitation. Try again.'))
+      .finally(() => setPending(null));
+  };
 
   return (
     <div className="scroll">
@@ -176,7 +200,11 @@ export function Members() {
           <span className="meta">
             {counts.joined} joined · {counts.invited} invited
           </span>
-          {admin && <Button onClick={() => setInvite(true)}>Invite member</Button>}
+          {admin && <Button onClick={() => {
+            setNotice(null);
+            setInviteError(null);
+            setInvite(true);
+          }}>Invite member</Button>}
         </div>
         <Tabs
           tabs={[
@@ -184,7 +212,10 @@ export function Members() {
             { id: 'invites', label: 'Invitations' },
           ]}
           value={tab}
-          onChange={setTab}
+          onChange={(next) => {
+            setNotice(null);
+            setTab(next);
+          }}
           label="Member views"
         />
         {tab === 'all' ? (
@@ -210,7 +241,11 @@ export function Members() {
                     <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
                     <Pill tone={statusTone(status)}>{status}</Pill>
                     <span className="meta joined">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
-                    {admin && <Button onClick={() => setManage(member.id)}>Manage</Button>}
+                    {admin && <Button onClick={() => {
+                      setNotice(null);
+                      setManageNotice(null);
+                      setManage(member.id);
+                    }}>Manage</Button>}
                   </div>
                 );
               })}
@@ -238,21 +273,21 @@ export function Members() {
                       {/* One route behind two words: the server resends a
                           pending invitation and an expired one alike. */}
                       <Button
+                        disabled={pending !== null}
                         onClick={() => {
-                          void adapter.rest.resendInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
-                          setAck(row.id);
-                          setTimeout(() => setAck(null), 1600);
+                          runInvitationAction('resend', row);
                         }}
                       >
-                        {row.status === 'expired' ? 'Reinvite' : 'Resend'}
+                        {pending === `resend:${row.id}` ? 'Sending…' : row.status === 'expired' ? 'Reinvite' : 'Resend'}
                       </Button>
                       <Button
                         link
+                        disabled={pending !== null}
                         onClick={() => {
-                          void adapter.rest.withdrawInvitation(state.workspace.id, row.id).then(invitationsChanged).catch(() => undefined);
+                          runInvitationAction('withdraw', row);
                         }}
                       >
-                        Withdraw
+                        {pending === `withdraw:${row.id}` ? 'Withdrawing…' : 'Withdraw'}
                       </Button>
                     </>
                   )}
@@ -262,33 +297,44 @@ export function Members() {
           </div>
         )}
         {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
+        {notice && <p className="meta action-error" role="alert">{notice}</p>}
         <Ack show={!!ack} style={{ right: 0, top: -12, position: 'relative' }}>
-          Saved
+          {ack}
         </Ack>
         <Dialog
           open={invite}
           title="Invite member"
-          onClose={() => setInvite(false)}
+          onClose={() => {
+            if (pending === 'invite') return;
+            setInvite(false);
+            setInviteError(null);
+          }}
           actions={
             <>
-              <Button onClick={() => setInvite(false)}>Cancel</Button>
+              <Button disabled={pending === 'invite'} onClick={() => {
+                setInvite(false);
+                setInviteError(null);
+              }}>Cancel</Button>
               <Button
                 primary
-                disabled={!/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
+                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
                 onClick={() => {
+                  setPending('invite');
+                  setInviteError(null);
                   void adapter.rest
                     .invite(state.workspace.id, { email, role: 'member' })
                     .then(() => {
-                      adapter.invalidateList('invitations');
-                      adapter.invalidateList('members');
+                      invitationsChanged();
+                      setEmail('');
+                      setInvite(false);
+                      setTab('invites');
+                      showAck('Invitation sent');
                     })
-                    .catch(() => undefined);
-                  setEmail('');
-                  setInvite(false);
-                  setTab('invites');
+                    .catch(() => setInviteError('Could not send that invitation. Check the address and try again.'))
+                    .finally(() => setPending(null));
                 }}
               >
-                Invite
+                {pending === 'invite' ? 'Inviting…' : 'Invite'}
               </Button>
             </>
           }
@@ -298,35 +344,51 @@ export function Members() {
             <input type="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           <p className="meta">The invitation is recorded now; the email is sent by the identity provider.</p>
+          {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog
           open={!!person}
           title={person?.name ?? ''}
           onClose={() => {
+            if (pending?.startsWith('member:')) return;
             setManage(null);
             setConfirmRemove(false);
+            setManageNotice(null);
           }}
           actions={
             confirmRemove ? (
               <>
-                <Button onClick={() => setConfirmRemove(false)}>Keep</Button>
+                <Button disabled={pending === `member:remove:${person?.id ?? ''}`} onClick={() => {
+                  setConfirmRemove(false);
+                  setManageNotice(null);
+                }}>Keep</Button>
                 <Button
                   primary
+                  disabled={pending === `member:remove:${person?.id ?? ''}`}
                   onClick={() => {
-                    if (person)
-                      void adapter.rest
-                        .removeMember(state.workspace.id, person.id)
-                        .then(() => adapter.invalidateList('members'))
-                        .catch(() => undefined);
-                    setManage(null);
-                    setConfirmRemove(false);
+                    if (!person) return;
+                    setPending(`member:remove:${person.id}`);
+                    setManageNotice(null);
+                    void adapter.rest
+                      .removeMember(state.workspace.id, person.id)
+                      .then(() => {
+                        adapter.invalidateList('members');
+                        setManage(null);
+                        setConfirmRemove(false);
+                        showAck('Member removed');
+                      })
+                      .catch(() => setManageNotice('Could not remove this member. Their access has not changed. Try again.'))
+                      .finally(() => setPending(null));
                   }}
                 >
-                  Remove
+                  {pending === `member:remove:${person?.id ?? ''}` ? 'Removing…' : 'Remove'}
                 </Button>
               </>
             ) : (
-              <Button onClick={() => setManage(null)}>Done</Button>
+              <Button disabled={pending?.startsWith('member:')} onClick={() => {
+                setManage(null);
+                setManageNotice(null);
+              }}>Done</Button>
             )
           }
         >
@@ -344,15 +406,20 @@ export function Members() {
                   <MenuItem
                     key={role}
                     checked={person?.role === role}
+                    disabled={pending?.startsWith('member:')}
                     sub={role === 'admin' ? 'Manages members, keys and decisions' : 'Works with agents; cannot decide'}
                     onClick={() => {
                       if (!person) return;
+                      setPending(`member:role:${person.id}`);
+                      setManageNotice(null);
                       void adapter.rest
                         .setMemberRole(state.workspace.id, person.id, role)
-                        .then(() => adapter.invalidateList('members'))
-                        .catch(() => undefined);
-                      setAck(person.id);
-                      setTimeout(() => setAck(null), 1600);
+                        .then(() => {
+                          adapter.invalidateList('members');
+                          setManageNotice('Role updated.');
+                        })
+                        .catch(() => setManageNotice('Could not change this role. Nothing was changed. Try again.'))
+                        .finally(() => setPending(null));
                     }}
                   >
                     {role === 'admin' ? 'Admin' : 'Member'}
@@ -361,12 +428,16 @@ export function Members() {
               </div>
               <div className="row">
                 <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
-                <Button link onClick={() => setConfirmRemove(true)}>
+                <Button link disabled={pending?.startsWith('member:')} onClick={() => {
+                  setConfirmRemove(true);
+                  setManageNotice(null);
+                }}>
                   Remove…
                 </Button>
               </div>
             </>
           )}
+          {manageNotice && <p className={`meta${manageNotice === 'Role updated.' ? '' : ' action-error'}`} role={manageNotice === 'Role updated.' ? 'status' : 'alert'}>{manageNotice}</p>}
         </Dialog>
       </div>
     </div>
@@ -440,7 +511,7 @@ function LibraryDocuments() {
   const [query, setQuery] = useState('');
   const match = (text: string): boolean => text.toLowerCase().includes(query.toLowerCase());
   const documents = lists.documents.filter((doc) => match(doc.title));
-  const drafts = lists.requests.filter((request) => request.kind !== 'application' && request.status === 'pending');
+  const drafts = lists.requests.filter((request) => (request.kind === 'invoice' || request.kind === 'agreement') && request.status === 'pending');
 
   return (
     <>
@@ -527,12 +598,158 @@ export function Settings({ view }: { view: string }) {
         {view === 'Organization' && <OrganizationTab />}
         {view === 'Inbox rules' && <InboxRulesTab />}
         {view === 'Agents' && <AgentsTab />}
+        {view === 'Slack' && <SlackTab />}
         {view === 'Provider keys' && <ProviderKeysTab />}
         {view === 'Usage' && <UsageTab />}
         {view === 'Notifications' && <NotificationsTab />}
         {view === 'Data and privacy' && <PrivacyTab />}
       </div>
     </div>
+  );
+}
+
+function SlackTab() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
+  const [connection, setConnection] = useState<SlackConnection | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [linkCommand, setLinkCommand] = useState<string | null>(null);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void adapter.rest.slackConnection(state.workspace.id).then(setConnection).catch(() => {
+      setNotice('Slack status could not be loaded. Try again.');
+    });
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  const stepUp = (): boolean => {
+    const url = adapter.auth.stepUpUrl(window.location.href, 'slack');
+    if (url) {
+      window.location.assign(url);
+      return true;
+    }
+    setNotice('This needs a recent sign-in. Sign in again to continue.');
+    return false;
+  };
+
+  const connect = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const started = await adapter.rest.startSlackOAuth(state.workspace.id);
+      window.location.assign(started.authorize_url);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        stepUp();
+      } else {
+        setNotice(error.reason === 'slack_unavailable'
+          ? 'Slack is not configured for this Hermes deployment.'
+          : error.reason === 'admin_required'
+            ? EMPTY.adminOnly
+            : 'Slack authorization could not be started. Try again.');
+      }
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await adapter.rest.disconnectSlack(state.workspace.id);
+      setDisconnectOpen(false);
+      setNotice(result.remote_revocation === 'pending'
+        ? 'Slack is disconnected in Hermes. Slack-side token revocation is queued and will retry automatically.'
+        : 'Slack is disconnected.');
+      load();
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') stepUp();
+      else setNotice(error.reason === 'admin_required' ? EMPTY.adminOnly : 'Slack could not be disconnected. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createLinkCode = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await adapter.rest.createSlackLinkCode(state.workspace.id);
+      setLinkCommand(result.command);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') stepUp();
+      else setNotice(error.reason === 'agent_unavailable'
+        ? 'Your Hermes agent is not ready yet.'
+        : 'A Slack link code could not be created. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!connection) return <Skeleton rows={5} label="Loading Slack connection" />;
+  const connected = connection.status === 'connected';
+  const destination = connection.enterprise_name ?? connection.team_name ?? 'Slack';
+  return (
+    <>
+      <div className="row">
+        <div>
+          <h2 className="section-title">Slack</h2>
+          <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
+        </div>
+        <span className="grow" />
+        {admin && connection.configured && (
+          <Button primary={!connected} disabled={busy} onClick={connected ? () => setDisconnectOpen(true) : connect}>
+            {connected ? 'Disconnect' : busy ? 'Opening Slack…' : 'Connect Slack'}
+          </Button>
+        )}
+      </div>
+      {notice && <Ack show>{notice}</Ack>}
+      {!connection.configured ? (
+        <EmptyState icon="context" title="Slack is not configured" detail="An operator must set the Slack app credentials before an Admin can connect this workspace." />
+      ) : (
+        <Panel
+          icon="context"
+          title={connected ? `Connected to ${destination}` : connection.status === 'error' ? 'Slack needs to be reconnected' : 'Connect this workspace to Slack'}
+          subtitle={connected
+            ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Your Hermes agent'}`
+            : 'A workspace Admin completes Slack OAuth. No Slack credential is entered into Hermes.'}
+        >
+          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
+          <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
+          {connected && <div className="kv"><span className="grow">Permissions</span><span className="meta">{connection.granted_scopes.join(', ')}</span></div>}
+          {connected && (
+            <div className="col" style={{ gap: 8, marginTop: 12 }}>
+              <div className="row">
+                <div className="grow">
+                  <div className="panel-title">Link your Slack identity</div>
+                  <div className="meta">Create a one-time command, then send it to the app in a direct message. It expires in 10 minutes.</div>
+                </div>
+                <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
+              </div>
+              {linkCommand && <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>}
+            </div>
+          )}
+          {!admin && <p className="meta">A workspace Admin manages this connection.</p>}
+          {admin && connection.status === 'error' && <Button disabled={busy} onClick={connect}>Reconnect Slack</Button>}
+        </Panel>
+      )}
+      <Dialog
+        open={disconnectOpen}
+        title="Disconnect Slack?"
+        onClose={() => setDisconnectOpen(false)}
+        actions={<><Button onClick={() => setDisconnectOpen(false)}>Cancel</Button><Button primary disabled={busy} onClick={disconnect}>Disconnect</Button></>}
+      >
+        <p>New Slack messages will stop reaching Hermes immediately. Existing Hermes sessions and their history stay in Hermes.</p>
+      </Dialog>
+    </>
   );
 }
 
@@ -826,7 +1043,7 @@ function AgentsTab() {
         <Glass name="iris" size={32} className="row-icon" />
         <div className="row-main">
           <span className="t">{state.agent.name}</span>
-          <span className="s">{state.agent.email}</span>
+          <span className="s">{state.agent.email ?? 'Email not connected'}</span>
         </div>
         <Button onClick={() => nav(CTX)}>Manage</Button>
       </div>
@@ -841,7 +1058,7 @@ function AgentsTab() {
         </span>
       </div>
       {catalog.length === 0 ? (
-        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(SETTINGS('Provider keys'))}>Add a key</Button>} />
+        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(SETTINGS('Provider keys'))}>Connect Nous Portal</Button>} />
       ) : (
         <div className="col" role="radiogroup" aria-label="Default model" style={{ gap: 4 }}>
           {catalog.map((row) => (
@@ -936,7 +1153,7 @@ const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verifie
 /**
  * Can this key still be used at all?
  *
- * OpenRouter is the only provider this product offers (decision R12), so a row
+ * Nous Portal is the only provider this product offers (decision C55), so a row
  * for anything else is a key that was installed before that and can no longer
  * pay for a run. It is shown rather than hidden, because a credential that
  * still exists somewhere is a thing its owner should be told about.
@@ -957,21 +1174,116 @@ function ProviderKeysTab() {
   const lists = useWorkspaceLists();
   const [dialog, setDialog] = useState<'add' | 'rotate' | 'remove' | null>(null);
   const [target, setTarget] = useState<MaskedProviderKey | null>(null);
-  const [provider, setProvider] = useState(DEFAULT_PROVIDER);
-  const [label, setLabel] = useState('');
   const [secret, setSecret] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
+  const [connectKeyId, setConnectKeyId] = useState<string | null>(null);
+  const [autoFocusKey, setAutoFocusKey] = useState(false);
   const keys = lists.providerKeys;
 
-  // Every mutation is step-up gated; a 401 `reauth_required` redirects and the
-  // dialog reopens in a confirm state on the way back.
+  const refreshKeys = (): void => adapter.invalidateList(LIST_KEYS.providerKeys);
+
+  const closeConnect = (): void => {
+    setDialog(null);
+    setSecret('');
+    setConnectStatus({ kind: 'idle' });
+    setConnectKeyId(null);
+    setAutoFocusKey(false);
+  };
+
+  // On the way back from a recent-sign-in challenge, reopen the same flow and
+  // wait for a deliberate confirmation. Plaintext is never persisted across
+  // the redirect; an already-stored key can be retried by id without another
+  // paste, while a not-yet-stored key is focused for the Admin to paste again.
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind !== 'provider_key') return;
+    setDialog('add');
+    setAutoFocusKey(!intent.keyId);
+    setConnectStatus(
+      intent.keyId
+        ? { kind: 'pending', message: 'Re-authenticated. Confirm to verify the saved key again; you do not need to paste it again.' }
+        : { kind: 'idle' },
+    );
+    setConnectKeyId(intent.keyId ?? null);
+    adapter.clearStepUp();
+  }, [adapter]);
+
+  const connectFeedback = (status: string, reason: string, keyId: string, modelCount: number | null): void => {
+    setSecret('');
+    refreshKeys();
+    if (status === 'verified' || status === 'verified_scoped') {
+      setConnectStatus({ kind: 'connected', modelCount });
+      return;
+    }
+    setConnectKeyId(keyId);
+    if (status === 'invalid' || reason === 'rejected') {
+      setConnectStatus({ kind: 'invalid', message: 'Nous Portal did not accept this key. Check the key in Nous Portal, then retry verification or close this dialog and rotate it.' });
+      return;
+    }
+    const detail = reason === 'throttled'
+      ? 'Nous Portal asked us to slow down.'
+      : reason === 'forbidden'
+        ? 'Nous Portal did not allow this verification attempt.'
+        : 'Nous Portal could not be reached.';
+    setConnectStatus({ kind: 'pending', message: `The key is encrypted and saved, but it is not verified yet. ${detail} Try verification again; you do not need to paste it again.` });
+  };
+
+  const connect = async (): Promise<void> => {
+    if (!secret.trim()) return;
+    setConnectStatus({ kind: 'connecting' });
+    try {
+      const result = await adapter.rest.addProviderKey(state.workspace.id, { provider: DEFAULT_PROVIDER, key: secret.trim() });
+      connectFeedback(result.verification.status, result.verification.reason, result.key.id, result.key.synced_model_count);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+        setConnectStatus({ kind: 'error', message: 'This needs a recent sign-in. Sign in again to continue.' });
+        return;
+      }
+      const message = error.reason === 'bad_key'
+        ? 'That does not look like a Nous Portal API key. Copy the complete key from Nous Portal and try again.'
+        : error.reason === 'key_exists'
+          ? 'This workspace already has a Nous Portal key. Close this dialog and rotate the existing key instead.'
+          : error.reason === 'not_admin'
+            ? 'A workspace Admin must connect the Nous Portal key.'
+            : 'The key could not be saved. Check your connection and try again.';
+      setConnectStatus({ kind: 'error', message });
+    }
+  };
+
+  const retryConnect = async (): Promise<void> => {
+    if (!connectKeyId) return;
+    setConnectStatus({ kind: 'retrying', message: 'Checking the saved key with Nous Portal…' });
+    try {
+      const result = await adapter.rest.verifyProviderKey(state.workspace.id, connectKeyId);
+      connectFeedback(result.status, result.reason, result.key_id, result.synced?.count ?? null);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', keyId: connectKeyId, returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) {
+          window.location.assign(url);
+          return;
+        }
+      }
+      setConnectStatus({ kind: 'pending', message: 'The key remains encrypted and saved, but verification did not finish. Try again shortly.' });
+    }
+  };
+
+  // Every other key mutation keeps its existing step-up boundary. Refreshing
+  // invalidates the cached list so the next render reads the server's result.
   const guarded = async (run: () => Promise<unknown>, reason: 'provider_key' = 'provider_key'): Promise<void> => {
     try {
       await run();
-      adapter.ensureList('provider-keys', async () => {
-        const page = await adapter.rest.providerKeys(state.workspace.id);
-        return { ids: page.keys.map((k) => k.id), cursor: null, total: page.keys.length, rows: page.keys.map((k) => ({ kind: 'provider_key' as const, id: k.id, data: k, version: 1 })) };
-      });
+      refreshKeys();
       setDialog(null);
       setSecret('');
     } catch (error) {
@@ -988,7 +1300,7 @@ function ProviderKeysTab() {
         setNotice('This needs a recent sign-in. Sign in again to continue.');
         return;
       }
-      setNotice(code === 'provider_rejected' ? `Your ${provider} key was rejected. Re-verify or rotate it` : `Could not reach ${provider}. We'll re-check shortly.`);
+      setNotice(code === 'provider_rejected' ? 'Your Nous Portal key was rejected. Re-verify or rotate it.' : "Could not reach Nous Portal. We'll re-check shortly.");
     }
   };
 
@@ -1008,10 +1320,15 @@ function ProviderKeysTab() {
         <Button
           onClick={() => {
             setDialog('add');
+            setTarget(null);
+            setSecret('');
+            setConnectStatus({ kind: 'idle' });
+            setConnectKeyId(null);
+            setAutoFocusKey(false);
             setNotice(null);
           }}
         >
-          Add a key
+          Connect Nous Portal
         </Button>
       </div>
       {keys.length === 0 ? (
@@ -1030,7 +1347,7 @@ function ProviderKeysTab() {
               <div className="row-main">
                 <span className="t">{usable(key) ? STATUS_LABEL[key.status] ?? key.status : EMPTY.keyNotAllowed}</span>
                 <span className="s">
-                  {/* An OpenRouter key verifies against hundreds of models, so
+                  {/* A Nous Portal key verifies against hundreds of models, so
                       the row says how many were synced and when, rather than
                       listing them (decision R7). */}
                   {syncLabel(key) ?? `${key.verified_models.length} model${key.verified_models.length === 1 ? '' : 's'}`} · {key.fingerprint_prefix} · added {new Date(key.created_at).toLocaleDateString()}
@@ -1044,7 +1361,7 @@ function ProviderKeysTab() {
                   which is the only thing left worth doing to it. */}
               {usable(key) && (
                 <>
-                  {key.provider === 'openrouter' && (
+                  {key.provider === 'nous_portal' && (
                     <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
                   )}
                   <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
@@ -1074,49 +1391,27 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        OpenRouter is the only provider this workspace can use. Plaintext is never echoed; only the last four characters are ever shown. The key is verified against OpenRouter&apos;s own key endpoint, and verifying it syncs that account&apos;s model list into the chat model menu.
+        Nous Portal powers Iris through the Hermes Agent runtime. The key stays encrypted and only its last four characters are shown. Verification makes one minimal model request, then syncs the current catalog.
       </p>
 
       <Dialog
         open={dialog === 'add'}
-        title="Add your OpenRouter key"
-        onClose={() => setDialog(null)}
-        actions={
-          <>
-            <Button onClick={() => setDialog(null)}>Cancel</Button>
-            <Button primary disabled={!secret.trim() || !label.trim()} onClick={() => void guarded(() => adapter.rest.addProviderKey(state.workspace.id, { provider, label: label.trim(), key: secret.trim() }))}>
-              Add and verify
-            </Button>
-          </>
-        }
+        title="Connect Nous Portal"
+        onClose={closeConnect}
       >
-        {/* One provider, so no chooser: a radio group of one is a control that
-            asks a question with a single answer (decision R12). The list is
-            still mapped rather than hard-coded, because that is what a second
-            allowed provider would need and it costs one line. */}
-        <div className="col" role={PROVIDER_CHOICES.length > 1 ? 'radiogroup' : undefined} aria-label="Provider" style={{ gap: 4 }}>
-          {PROVIDER_CHOICES.map((item) =>
-            PROVIDER_CHOICES.length > 1 ? (
-              <MenuItem key={item.id} checked={provider === item.id} sub={item.note} onClick={() => setProvider(item.id)}>
-                {item.label}
-              </MenuItem>
-            ) : (
-              <div className="row-main" key={item.id}>
-                <span className="t">{item.label}</span>
-                <span className="s">{item.note}</span>
-              </div>
-            ),
-          )}
-        </div>
-        <label className="field">
-          <span className="sr-only">Label</span>
-          <input placeholder="Label, e.g. Program key" value={label} onChange={(event) => setLabel(event.target.value)} />
-        </label>
-        <label className="field">
-          <span className="sr-only">Key</span>
-          <input type="password" placeholder="Paste the key" value={secret} onChange={(event) => setSecret(event.target.value)} autoComplete="off" />
-        </label>
-        <p className="meta">The key is encrypted at rest and never returned. You will be asked to re-authenticate first.</p>
+        <ProviderConnect
+          apiKey={secret}
+          onApiKeyChange={(value) => {
+            setSecret(value);
+            if (connectStatus.kind === 'error') setConnectStatus({ kind: 'idle' });
+          }}
+          status={connectStatus}
+          autoFocusKey={autoFocusKey}
+          onConnect={() => void connect()}
+          onRetry={() => void retryConnect()}
+          onCancel={closeConnect}
+          onDone={closeConnect}
+        />
       </Dialog>
 
       <Dialog

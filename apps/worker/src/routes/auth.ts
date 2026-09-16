@@ -2,7 +2,7 @@
 //
 //   GET /auth/login     redirect to the AuthKit hosted UI. `?step_up=1` asks
 //                       for `max_age: 0`, which forces a real re-authentication
-//                       and yields a new `sid`.
+//                       and advances the token's `auth_time`.
 //   GET /auth/callback  exchange the code, seal the session, mirror the user
 //                       and the membership, record `(sid, authenticated_at)`.
 //   GET /auth/session   re-seal, and hand back both stream heads and a hub
@@ -14,8 +14,8 @@
 // reaches the shell before the events poller has run, so if membership only
 // arrived through the poller they would see "workspace not found" for up to a
 // minute after being told they had joined. So the callback mirrors the
-// membership itself, from the authentication response, and falls back to
-// `listOrganizationMemberships` when that response carries no organization.
+// membership itself, but only when AuthKit selected an organization. A callback
+// with no organization lands on the explicit workspace picker.
 import type { Context } from 'hono';
 import { authSessionSchema, authWorkspacesSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
@@ -24,8 +24,8 @@ import { getSession } from '../auth.js';
 import { AuthError } from '../auth/types.js';
 import { upsertUser, takeRefreshedCookie } from '../auth/adapters.js';
 import {
-  CSRF_COOKIE,
   SESSION_COOKIE,
+  clearedCsrfCookie,
   clearedSessionCookie,
   csrfCookie,
   newCsrfToken,
@@ -33,10 +33,14 @@ import {
   sessionCookie,
 } from '../auth/cookies.js';
 import { mintHubTicket } from '../auth/tickets.js';
-import { unverifiedClaims } from '../auth/jwks.js';
+import { unverifiedClaims, verifyAccessToken } from '../auth/jwks.js';
+import {
+  beginAuthTransaction,
+  clearedAuthTransactionCookie,
+  readAuthTransaction,
+} from '../auth/transactions.js';
 import { optionalWorkosPort, workosPort } from '../auth/workos.js';
 import { connect, withTenantTransaction } from '../db/client.js';
-import { withWorkspaceTransaction } from '../jobs.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 
@@ -48,6 +52,7 @@ import { mirrorMembership } from './members.js';
  */
 export function safeReturnPath(raw: string | undefined | null): string {
   if (!raw) return '/';
+  if (raw.length > 2048) return '/';
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/';
   if (/[\u0000-\u001f]/.test(raw)) return '/';
   try {
@@ -104,44 +109,78 @@ export async function login(c: Context<{ Bindings: Env }>): Promise<Response> {
   if (stepUp && c.env.AUTH_MODE === 'fake') return fakeStepUp(c);
   const port = workosPort(c.env);
   const returnTo = safeReturnPath(c.req.query('return_to'));
+  const invitationToken = c.req.query('invitation_token');
+  if (invitationToken && invitationToken.length > 200) {
+    throw new RouteError('the invitation token is too long', 'bad_token', 400);
+  }
+  const transaction = await beginAuthTransaction(c.env, {
+    returnTo,
+    ...(invitationToken ? { invitationToken } : {}),
+  });
   const url = port.authorizationUrl({
     redirectUri: redirectUri(c),
-    state: returnTo,
-    // `max_age: 0` is documented as forcing the user to re-authenticate. The
-    // new session arrives with a new `sid`, and `auth_sessions` records when
-    // that `sid` authenticated, which is what the step-up check compares.
+    state: transaction.state,
+    // `max_age: 0` is documented as forcing the user to re-authenticate. WorkOS
+    // keeps the same session id and advances `auth_time`; the callback records
+    // that claim, which is what the step-up check compares.
     ...(stepUp ? { maxAge: 0 } : {}),
-    ...(c.req.query('invitation_token') ? { invitationToken: c.req.query('invitation_token') as string } : {}),
+    ...(invitationToken ? { invitationToken } : {}),
     screenHint: 'sign-in',
   });
-  return c.redirect(url, 302);
+  const headers = new Headers({ Location: url });
+  headers.append('Set-Cookie', transaction.cookie);
+  return new Response(null, { status: 302, headers });
 }
 
 /** GET /auth/callback */
 export async function callback(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const transaction = await readAuthTransaction(c, c.req.query('state'));
+  if (!transaction) {
+    throw new RouteError('the authentication transaction is missing or expired', 'invalid_state', 400);
+  }
   const code = c.req.query('code');
   if (!code) throw new RouteError('the callback needs a code', 'no_code', 400);
   const port = workosPort(c.env);
 
-  const invitationToken = c.req.query('invitation_token');
   const authentication = await port.authenticateWithCode({
     code,
-    ...(invitationToken ? { invitationToken } : {}),
+    ...(transaction.invitationToken ? { invitationToken: transaction.invitationToken } : {}),
   });
+  const claims = await verifyAccessToken(c.env, authentication.accessToken);
+  if (claims.sub !== authentication.user.id) {
+    throw new AuthError('the access token belongs to a different user', 'invalid_session');
+  }
+  if ((authentication.organizationId ?? null) !== (claims.org_id ?? null)) {
+    throw new AuthError('the access token names a different organization', 'invalid_session');
+  }
 
-  // The membership WorkOS just told us about, or — when the response carries
-  // no organization, which happens for a person who belongs to several — the
-  // list, asked for once.
-  let organizationId = authentication.organizationId;
-  if (!organizationId) {
-    const memberships = await port.listOrganizationMemberships({ userId: authentication.user.id });
-    organizationId = memberships.find((m) => m.status === 'active')?.organizationId ?? null;
+  // No selected organization means exactly that. Choosing the first membership
+  // here made WorkOS's pagination/order decide which tenant a multi-workspace
+  // person opened. The root route already exposes an explicit workspace picker,
+  // so the callback mirrors only the organization AuthKit actually selected.
+  const organizationId = authentication.organizationId ?? claims.org_id ?? null;
+  const selectedMembership = organizationId
+    ? (
+        await port.listOrganizationMemberships({
+          userId: authentication.user.id,
+          organizationId,
+        })
+      ).find(
+        (membership) =>
+          membership.userId === authentication.user.id &&
+          membership.organizationId === organizationId &&
+          membership.status === 'active',
+      ) ?? null
+    : null;
+  if (organizationId && !selectedMembership) {
+    throw new AuthError('the selected organization membership is not active', 'invalid_session');
   }
 
   const client = await connect(c.env, 'app');
   let userId: string;
   let workspaceId: string | null = null;
   try {
+    await client.query('BEGIN');
     userId = await upsertUser(client, authentication.user);
 
     if (organizationId) {
@@ -152,57 +191,49 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
       workspaceId = rows[0]?.workspace_id ?? null;
     }
 
-    // `sid` and when it authenticated. The access token carries no
-    // `auth_time`, and its `iat` moves on every refresh, so freshness has to
-    // come from a row we write here, once, at the moment of authentication.
-    const sid = unverifiedClaims(authentication.accessToken).sid;
-    if (sid) {
-      await client.query(
-        `INSERT INTO auth_sessions (sid, user_id, authenticated_at)
-         VALUES ($1, $2, now())
-         ON CONFLICT (sid) DO UPDATE SET authenticated_at = now(), last_seen_at = now(), revoked_at = NULL`,
-        [sid, userId],
-      );
+    // WorkOS keeps `sid` stable across reauthentication and advances
+    // `auth_time`. Persist that claim rather than token `iat`, which also moves
+    // during ordinary refreshes and therefore cannot prove a fresh challenge.
+    await client.query(
+      `INSERT INTO auth_sessions (sid, user_id, authenticated_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (sid) DO UPDATE
+         SET authenticated_at = EXCLUDED.authenticated_at, last_seen_at = now(), revoked_at = NULL`,
+      [claims.sid, userId, new Date(claims.auth_time * 1000)],
+    );
+
+    if (workspaceId && organizationId && selectedMembership) {
+      // The same mirror the poller writes, so a membership that arrives by
+      // either route produces one shape of row.
+      // This cannot use `withTenantTransaction`, because that helper proves the
+      // caller is already a member and this is the code path that makes them
+      // one. The tenant key still keeps every statement behind row-level
+      // security. User, auth session, invitation acceptance and membership all
+      // commit together, so a failed mirror cannot leave half of a callback.
+      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', workspaceId]);
+      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', userId]);
+      await mirrorMembership(client, {
+        workspaceId,
+        userId,
+        role: selectedMembership.role === 'admin' ? 'admin' : 'member',
+        workosMembershipId: selectedMembership.id,
+        status: 'active',
+        email: authentication.user.email,
+      });
     }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
   } finally {
     await client.end();
   }
 
-  if (workspaceId && organizationId) {
-    const memberships = await port.listOrganizationMemberships({
-      userId: authentication.user.id,
-      organizationId,
-    });
-    const membership = memberships[0];
-    if (membership) {
-      // The same mirror the poller writes, so a membership that arrives by
-      // either route produces one shape of row.
-      // A system transaction rather than a tenant one: `withTenantTransaction`
-      // proves the caller is already a member, and this is the code path that
-      // makes them one. The tenant key is still set, so row-level security
-      // still applies to every statement inside.
-      await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
-        await mirrorMembership(tx, {
-          workspaceId,
-          userId,
-          role: membership.role === 'admin' ? 'admin' : 'member',
-          workosMembershipId: membership.id,
-          status: membership.status === 'active' ? 'active' : 'inactive',
-          email: authentication.user.email,
-        });
-      }).catch((error: unknown) => {
-        // A person whose membership cannot be mirrored still gets a session;
-        // they simply see no workspace until the poller catches up. Failing the
-        // sign-in instead would make a mirror bug look like an auth outage.
-        console.log(JSON.stringify({ at: 'auth.callback', mirror: false, error: String(error) }));
-      });
-    }
-  }
-
   const csrf = newCsrfToken();
-  const headers = new Headers({ Location: safeReturnPath(c.req.query('state')) });
+  const headers = new Headers({ Location: safeReturnPath(transaction.returnTo) });
   headers.append('Set-Cookie', sessionCookie(c.env, authentication.sealedSession));
   headers.append('Set-Cookie', csrfCookie(c.env, csrf));
+  headers.append('Set-Cookie', clearedAuthTransactionCookie(c.env));
   return new Response(null, { status: 302, headers });
 }
 
@@ -243,7 +274,8 @@ export async function logout(c: Context<{ Bindings: Env }>): Promise<Response> {
 
   const headers = new Headers({ Location: location });
   headers.append('Set-Cookie', clearedSessionCookie(c.env));
-  headers.append('Set-Cookie', `${CSRF_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict`);
+  headers.append('Set-Cookie', clearedCsrfCookie(c.env));
+  headers.append('Set-Cookie', clearedAuthTransactionCookie(c.env));
   return new Response(null, { status: 302, headers });
 }
 
@@ -257,9 +289,9 @@ export async function logout(c: Context<{ Bindings: Env }>): Promise<Response> {
  * WebSocket cannot refresh a cookie and so cannot renew its own authorisation.
  *
  * Without `?ws` the route answers for the caller's own workspace. A person
- * belongs to one in the pilot; if they belong to several, the most recently
- * joined is the one the shell opens, and the client asks again by id when the
- * person switches.
+ * belongs to one in the pilot. With no `ws`, the route always returns the
+ * caller's workspace list; the client explicitly chooses one and asks again
+ * by id, even when the list currently contains one entry.
  */
 export async function authSession(c: Context<{ Bindings: Env }>): Promise<Response> {
   const session = await getSession(c);

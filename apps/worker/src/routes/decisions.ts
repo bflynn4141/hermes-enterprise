@@ -15,11 +15,11 @@
 //   3. **Double-submit CSRF.** The cookie and the header must agree.
 //   4. **An Admin session.** Read inside the transaction, from `members`, keyed
 //      on the workspace in the path. A Member gets "Admin decision required".
-//   5. **Step-up.** The `sid` must have authenticated within five minutes
-//      (`auth_sessions.authenticated_at`, written by `/auth/callback`; the
-//      access token carries no `auth_time` and its `iat` moves on refresh, so
-//      the row is the only honest source). Otherwise 401 `reauth_required`, and
-//      the client sends the person through `/auth/login?step_up=1`.
+//   5. **Step-up.** WorkOS `auth_time` must be within five minutes. The callback
+//      persists it in `auth_sessions.authenticated_at`; token `iat` moves on
+//      ordinary refresh and is not evidence of a new challenge. Otherwise 401
+//      `reauth_required`, and the client sends the person through
+//      `/auth/login?step_up=1`.
 //
 // Then one transaction (src/domain/decisions.ts), then the jobs.
 //

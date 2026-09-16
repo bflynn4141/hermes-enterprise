@@ -1,12 +1,13 @@
 name: Deploy staging
 
-# On main, after CI. Staging is deployed automatically because a staging
+# On main, after CI succeeds. Staging is deployed automatically because a staging
 # environment nobody deploys to is a staging environment that does not test
 # anything; production needs a human (see deploy-production.yml).
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-  workflow_dispatch:
 
 # The pipeline is part of the BYOK trust boundary: whoever can deploy can ship
 # code that decrypts every tenant's provider key. So this workflow gets the
@@ -25,6 +26,9 @@ concurrency:
 jobs:
   deploy:
     name: migrate, build, deploy, smoke
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: staging
@@ -33,6 +37,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # A workflow_run executes from the default branch. Pin checkout to
+          # the exact commit whose CI run succeeded, not whatever main points
+          # at by the time this runner starts.
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: pnpm/action-setup@v4
         with:

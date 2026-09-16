@@ -1,7 +1,7 @@
-// Which providers this deployment offers, in one place (decision R12).
+// Which providers this deployment offers, in one place (decision C55).
 //
-// The product is bring-your-own-key, and the key it wants is an OpenRouter one:
-// a single credential that reaches every model OpenRouter brokers. The other
+// The product is bring-your-own-key, and the key it wants is a Nous Portal one:
+// a single credential that reaches the Portal's current model catalog. The other
 // three adapters stay in the codebase — they are how the replay rules are
 // tested, and `ScriptedProvider` still exercises them — but nothing on the
 // product path may reach them while `ALLOWED_PROVIDERS` does not name them.
@@ -29,7 +29,7 @@ export interface AllowedProvidersEnv {
 /**
  * The providers this deployment offers.
  *
- * Unset falls back to `openrouter` rather than to everything: a Worker whose
+ * Unset falls back to `nous_portal` rather than to everything: a Worker whose
  * variable went missing should refuse a DeepSeek key, not quietly accept one.
  */
 export const allowedProviders = (env: AllowedProvidersEnv): Provider[] =>

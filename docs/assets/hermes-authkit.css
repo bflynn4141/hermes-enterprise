@@ -1,0 +1,29 @@
+.ak-Background {
+  background-color: #000030;
+  background-image:
+    radial-gradient(ellipse at 85% 3%, rgba(84, 88, 172, 0.56), transparent 62%),
+    linear-gradient(160deg, #1a135d 0%, #110734 55%, #080416 100%);
+}
+
+.ak-Content {
+  width: min(100%, 420px);
+}
+
+.ak-Card {
+  border: 1px solid rgba(223, 223, 255, 0.18);
+  background:
+    linear-gradient(115deg, rgba(92, 103, 191, 0.24), rgba(45, 34, 116, 0.38) 48%, rgba(17, 10, 52, 0.72)),
+    #151047;
+  box-shadow: 0 24px 64px rgba(0, 0, 24, 0.34);
+  backdrop-filter: blur(18px);
+}
+
+.ak-PrimaryButton {
+  min-height: 44px;
+  box-shadow: 0 10px 28px rgba(0, 0, 242, 0.24);
+}
+
+.ak-TextField,
+.ak-AuthButton {
+  min-height: 44px;
+}

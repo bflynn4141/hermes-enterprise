@@ -5,6 +5,7 @@ import {
   TRANSPORTS,
   openRouterCatalogId,
   openRouterModelId,
+  nousModelId,
   vendorPrefix,
   DEFAULT_ALLOWED_PROVIDERS,
   DEFAULT_MODEL_ID,
@@ -101,25 +102,25 @@ describe('catalog seed', () => {
     expect(CATALOG_SEED.find((r) => r.model_id === SEED_PILOT_MODEL_ID)?.disabled_reason).toBeNull();
   });
 
-  it('points the workspace default at OpenRouter, which no seeded row can be', () => {
-    // Decision R12: the default is an id the catalog only holds because
-    // migration 0016 wrote a placeholder, and the first sync replaces it. It is
+  it('points the workspace default at Nous Portal, which no seeded row can be', () => {
+    // The default is an id the catalog only holds because migration 0017 wrote
+    // a placeholder, and the first sync replaces it. It is
     // deliberately *not* in `CATALOG_SEED`, because a seeded row is one a sync
     // may never overwrite and this one has to be overwritten.
-    expect(DEFAULT_MODEL_ID).toBe('openrouter:anthropic/claude-sonnet-5');
+    expect(DEFAULT_MODEL_ID).toBe('nous:anthropic/claude-sonnet-5');
     expect(CATALOG_SEED.some((r) => r.model_id === DEFAULT_MODEL_ID)).toBe(false);
-    expect(openRouterModelId(DEFAULT_MODEL_ID)).toBe('anthropic/claude-sonnet-5');
+    expect(nousModelId(DEFAULT_MODEL_ID)).toBe('anthropic/claude-sonnet-5');
   });
 
-  it('falls back to OpenRouter when ALLOWED_PROVIDERS is missing or nonsense', () => {
+  it('falls back to Nous Portal when ALLOWED_PROVIDERS is missing or nonsense', () => {
     expect(parseAllowedProviders('openrouter')).toEqual(['openrouter']);
-    expect(parseAllowedProviders(undefined)).toEqual(['openrouter']);
-    expect(parseAllowedProviders('')).toEqual(['openrouter']);
+    expect(parseAllowedProviders(undefined)).toEqual(['nous_portal']);
+    expect(parseAllowedProviders('')).toEqual(['nous_portal']);
     // A typo is not a widening: an unset variable must not mean "everything".
-    expect(parseAllowedProviders('open-router, nonsense')).toEqual(['openrouter']);
+    expect(parseAllowedProviders('open-router, nonsense')).toEqual(['nous_portal']);
     expect(parseAllowedProviders('openrouter, anthropic')).toEqual(['openrouter', 'anthropic']);
-    expect(DEFAULT_ALLOWED_PROVIDERS).toEqual(['openrouter']);
-    expect(PROVIDER_NOT_ALLOWED_COPY).toBe('Only OpenRouter keys can be used in this workspace');
+    expect(DEFAULT_ALLOWED_PROVIDERS).toEqual(['nous_portal']);
+    expect(PROVIDER_NOT_ALLOWED_COPY).toBe('Only Nous Portal connections can be used in this workspace');
   });
 
   it('records when each price was last verified', () => {

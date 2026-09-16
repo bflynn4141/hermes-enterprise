@@ -6,6 +6,7 @@ import { HermesApiError, HermesClient } from '../../src/runtime/client.js';
 describe('official Hermes native Worker transport', () => {
   it('submits and reconciles a native run through the default workerd fetch', async () => {
     const client = new HermesClient('https://runtime-transport.test', 'worker-test-only');
+    await expect(client.capabilities()).resolves.toMatchObject({ durableIdempotency: true });
     const id = await client.submit({ input: 'Review the application.' }, 'worker-stable-key');
     expect(id).toBe('run_workerd');
     expect(await client.status(id)).toMatchObject({ run_id: id, status: 'completed', output: 'Reviewed in workerd.' });

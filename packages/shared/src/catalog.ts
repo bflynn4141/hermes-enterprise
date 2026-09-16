@@ -14,7 +14,7 @@ export const PROVIDERS = ['deepseek', 'anthropic', 'openai', 'nous_portal', 'ope
 export type Provider = (typeof PROVIDERS)[number];
 
 /** How the harness talks to the model, which decides the replay rules. */
-export const TRANSPORTS = ['deepseek_chat', 'anthropic_messages', 'openai_responses', 'openrouter_chat'] as const;
+export const TRANSPORTS = ['deepseek_chat', 'anthropic_messages', 'openai_responses', 'openrouter_chat', 'nous_chat'] as const;
 export type Transport = (typeof TRANSPORTS)[number];
 
 export const catalogRowSchema = z
@@ -118,15 +118,37 @@ export const SEED_PILOT_MODEL_ID = 'deepseek-flash';
 /**
  * The workspace default, from the seed and from `POST /workspaces` onwards.
  *
- * An OpenRouter id, because OpenRouter is the only provider this product
- * offers (decision R12). The row it names does not exist until a key has been
- * verified and the catalog synced — migration 0016 writes a placeholder so the
- * foreign key holds — so a fresh workspace shows it disabled with "Add your
- * OpenRouter key in Settings", which is the honest state rather than a default
- * pointing at a provider nobody can reach.
+ * A Nous Portal id, because Nous Portal is the product inference provider
+ * (decision C55). Migration 0024 writes a disabled placeholder so the foreign
+ * key holds before the first workspace key is verified. Verification replaces
+ * that placeholder with the provider catalog row.
  */
-export const DEFAULT_MODEL_ID = 'openrouter:anthropic/claude-sonnet-5';
-export const DEFAULT_EFFORT = 'high';
+export const DEFAULT_MODEL_ID = 'nous:anthropic/claude-sonnet-5';
+export const DEFAULT_EFFORT = 'medium';
+
+// ---------------------------------------------------------------------------
+// Nous Portal
+// ---------------------------------------------------------------------------
+
+/**
+ * Nous Portal exposes an OpenAI-compatible catalog whose model ids can overlap
+ * with OpenRouter and direct providers. Keep the paying gateway in the durable
+ * catalog id; remove it only at the provider boundary.
+ */
+export const NOUS_PREFIX = 'nous:';
+
+export const nousCatalogId = (providerModelId: string): string => `${NOUS_PREFIX}${providerModelId}`;
+
+export function nousModelId(catalogModelId: string): string | null {
+  return catalogModelId.startsWith(NOUS_PREFIX) ? catalogModelId.slice(NOUS_PREFIX.length) : null;
+}
+
+export const NOUS_EFFORT_MAP: Readonly<Record<string, string>> = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+};
+export const NOUS_DEFAULT_EFFORT = 'medium';
 
 // ---------------------------------------------------------------------------
 // OpenRouter (decision R1)
@@ -155,12 +177,12 @@ export function openRouterModelId(catalogModelId: string): string | null {
 }
 
 /**
- * The vendor a row is grouped under in the model menu: the segment before the
- * first slash of the OpenRouter id (`anthropic`, `openai`, `meta-llama`, …).
- * A row with no slash groups under `other`, which is a real case on OpenRouter.
+ * The vendor a gateway row is grouped under in the model menu: the segment
+ * before the first slash (`anthropic`, `openai`, `meta-llama`, …). A row with
+ * no slash groups under `other`.
  */
 export function vendorPrefix(catalogModelId: string): string {
-  const id = openRouterModelId(catalogModelId);
+  const id = openRouterModelId(catalogModelId) ?? nousModelId(catalogModelId);
   if (id === null) return 'native';
   const slash = id.indexOf('/');
   return slash === -1 ? 'other' : id.slice(0, slash);
@@ -186,11 +208,11 @@ export const OPENROUTER_DEFAULT_EFFORT = 'medium';
 /**
  * The value `ALLOWED_PROVIDERS` holds when nothing sets it.
  *
- * Fail closed, and closed means OpenRouter: a deployment that forgot the
+ * Fail closed, and closed means Nous Portal: a deployment that forgot the
  * variable offers the one provider the product is documented around rather
  * than every adapter that happens to be compiled in.
  */
-export const DEFAULT_ALLOWED_PROVIDERS: readonly Provider[] = ['openrouter'];
+export const DEFAULT_ALLOWED_PROVIDERS: readonly Provider[] = ['nous_portal'];
 
 /**
  * The refusal, in one string.
@@ -199,7 +221,7 @@ export const DEFAULT_ALLOWED_PROVIDERS: readonly Provider[] = ['openrouter'];
  * catalog row all say it, and five copies of a sentence is five sentences that
  * drift. The client never composes it: the server sends it.
  */
-export const PROVIDER_NOT_ALLOWED_COPY = 'Only OpenRouter keys can be used in this workspace';
+export const PROVIDER_NOT_ALLOWED_COPY = 'Only Nous Portal connections can be used in this workspace';
 
 /** Parse an `ALLOWED_PROVIDERS` value. Unset, empty or all-unknown falls back. */
 export function parseAllowedProviders(raw: string | undefined | null): Provider[] {

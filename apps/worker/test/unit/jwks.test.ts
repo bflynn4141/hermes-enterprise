@@ -88,4 +88,44 @@ describe('verifying a WorkOS access token', () => {
 
     await expect(verifyAccessToken(env, forged)).rejects.toBeInstanceOf(TokenError);
   });
+
+  it('refuses a valid signature from the wrong WorkOS issuer', async () => {
+    const keys = await signingKeys();
+    setJwksFetcherForTests(() => Promise.resolve(keys.jwks));
+    const token = await signAccessToken({
+      sub: 'user_1',
+      sid: 'session_1',
+      iss: 'https://attacker.example',
+    });
+
+    await expect(verifyAccessToken(env, token)).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
+  it('refuses a valid WorkOS token minted for a different application', async () => {
+    const keys = await signingKeys();
+    setJwksFetcherForTests(() => Promise.resolve(keys.jwks));
+    const token = await signAccessToken({
+      sub: 'user_1',
+      sid: 'session_1',
+      client_id: 'client_other',
+    });
+
+    await expect(verifyAccessToken(env, token)).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
+  it('requires auth_time and refuses one later than token issuance', async () => {
+    const keys = await signingKeys();
+    setJwksFetcherForTests(() => Promise.resolve(keys.jwks));
+    const now = Math.floor(Date.now() / 1000);
+    const missing = await signAccessToken({ sub: 'user_1', sid: 'session_1', auth_time: null });
+    const future = await signAccessToken({
+      sub: 'user_1',
+      sid: 'session_1',
+      iat: now,
+      auth_time: now + 120,
+    });
+
+    await expect(verifyAccessToken(env, missing)).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(verifyAccessToken(env, future)).rejects.toMatchObject({ kind: 'invalid' });
+  });
 });
