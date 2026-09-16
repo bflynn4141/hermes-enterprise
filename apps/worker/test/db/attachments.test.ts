@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import worker from '../../src/index.js';
 import { ALLOWED_ORIGIN, asUser, makeEnv, readTenant } from './harness.js';
-import { seedWorkspace, type Fixture } from './helpers.js';
+import { seedWorkspace, type Fixture, withClient } from './helpers.js';
 import { FakeQueue, FakeR2, fakeBatch } from '../stubs/fake-r2.js';
 import { handleQueue } from '../../src/queues/index.js';
 import { DLQ_REASON } from '../../src/queues/dlq.js';
@@ -177,7 +177,27 @@ describe('declaring an upload', () => {
         method: 'POST',
         body: { name: 'notes.txt', size: 10, mime: 'text/plain' },
       });
-    for (let i = 0; i < 10; i += 1) expect((await declare()).status).toBe(201);
+
+    // Seed both the active bucket and the next one. This keeps the boundary
+    // assertion deterministic even when CI happens to cross a minute between
+    // arranging the counter and issuing the request.
+    const setNearbyCounts = (count: number): Promise<void> =>
+      withClient('owner', async (client) => {
+        await client.query(
+          `INSERT INTO rate_counters (user_id, workspace_id, action, window_start, count)
+           SELECT $1, $2, 'attachment.create',
+                  to_timestamp(floor(extract(epoch FROM now()) / 60) * 60) + bucket_offset * interval '60 seconds',
+                  $3
+             FROM generate_series(0, 1) AS bucket_offset
+           ON CONFLICT (user_id, action, window_start, workspace_id)
+             DO UPDATE SET count = EXCLUDED.count`,
+          [fx.adminId, fx.workspaceId, count],
+        );
+      });
+
+    await setNearbyCounts(9);
+    expect((await declare()).status).toBe(201);
+    await setNearbyCounts(10);
     const refused = await declare();
     expect(refused.status).toBe(429);
     expect(await refused.json()).toMatchObject({ reason: 'rate_limited' });
