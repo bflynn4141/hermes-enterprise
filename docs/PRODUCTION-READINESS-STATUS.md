@@ -17,6 +17,7 @@ Updated September 15, 2026. Scope: [production-readiness plan](PRODUCTION-READIN
 | WorkOS email + SSO | `01a0a78b-0709-7950-8be9-c7b1599abfdf` | `codex/workos-auth-hardening` · `/Users/gia/Documents/Codex/2026-09-15/hermes-workos-auth` | Auditing existing implementation, then fixing verified gaps |
 | Official Hermes compliance | `01a0a78b-5ebb-7d92-95b4-e9e9493405fc` | `codex/hermes-runtime-compliance` · `/Users/gia/Documents/Codex/2026-09-15/hermes-runtime-compliance` | Read-only source/docs/pin audit while approval runtime work is active |
 | Production placeholder cleanup | `01a0a791-83d8-7211-9549-7820b098d3df` | `codex/production-placeholder-cleanup` · `/Users/gia/Documents/Codex/2026-09-15/hermes-production-cleanup` | Fixing share truthfulness, provider-key re-verification and development seed guards |
+| CI and artifact hardening | `01a0a793-8669-7301-a9c4-12f826e6ed59` | `codex/repository-production-hardening` · `/Users/gia/Documents/Codex/2026-09-15/hermes-repository-hardening` | Fixing test coverage, deployment gates, production assets, secret copies and migration verification |
 
 Three internal read-only subagents completed client, server and repository sweeps. Their deduplicated report is [PRODUCTION-READINESS-FINDINGS.md](PRODUCTION-READINESS-FINDINGS.md). The approval Inbox branch was integrated as `d6eba9d`; the production-placeholder task began from the post-Inbox baseline so it can safely own its narrow files.
 
