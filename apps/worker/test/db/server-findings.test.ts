@@ -166,7 +166,7 @@ describe('F2 · the two routes with no tenant in their path', () => {
     expect(body.agent).toMatchObject({ name: 'Beacon', email: null });
     expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
     expect(body.sessions).toHaveLength(1);
-    expect(body.sessions[0]?.title).toBe('Set up Iris');
+    expect(body.sessions[0]?.title).toBe('Set up Beacon');
 
     const persisted = await withClient('owner', async (c) => {
       await c.query('BEGIN');
@@ -193,7 +193,7 @@ describe('F2 · the two routes with no tenant in their path', () => {
     expect(persisted.agent).toEqual([{ name: 'Beacon', instructions_active: instructions, status: 'draft' }]);
     expect(persisted.versions).toEqual([{ body: instructions, status: 'saved', saved_at: expect.any(Date) }]);
     expect(persisted.messages).toEqual([{
-      title: 'Set up Iris',
+      title: 'Set up Beacon',
       next_seq: 1,
       focus_ref: { section: 'agents', view: 'setup', step: 'identity' },
       role: 'iris',

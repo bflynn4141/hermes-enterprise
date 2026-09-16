@@ -148,13 +148,14 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // This session and message are product-authored setup state. They do not
       // create a run, call a model, or require a provider key.
       const setupSessionId = crypto.randomUUID();
+      const setupTitle = `Set up ${input.agent.name}`;
       await client.query(
         `INSERT INTO sessions
            (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
-         SELECT $1, $2, $3, $4, 'Set up Iris', 'work',
-                default_model_id, default_effort, default_runtime, 1, $5::jsonb
+         SELECT $1, $2, $3, $4, $5, 'work',
+                default_model_id, default_effort, default_runtime, 1, $6::jsonb
            FROM workspace_settings WHERE workspace_id = $2`,
-        [setupSessionId, workspaceId, session.userId, agentId, JSON.stringify(SETUP('identity'))],
+        [setupSessionId, workspaceId, session.userId, agentId, setupTitle, JSON.stringify(SETUP('identity'))],
       );
       await client.query(
         `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, status)
