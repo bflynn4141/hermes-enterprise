@@ -1,6 +1,22 @@
 # Proactive first-run experience
 
-Status: proposed · September 15, 2026
+Status: production substrate in main; guided UX in `codex/proactive-onboarding-preview` · September 15, 2026
+
+## Implementation status
+
+Main now persists the chosen agent name and instructions, creates the saved
+instruction version, and seeds one deterministic setup session and message in
+the workspace transaction. It also reports unavailable email ingress,
+attachments and automated triggers as explicit capability flags. The reusable
+Nous Portal connection flow is shared by Settings and onboarding; **Continue
+with Nous** currently opens the official key page and the person returns to
+paste the key.
+
+The separate preview branch wires the guided Role → Loop → Boundaries → Test
+experience into the real chat and app panes. Its evolving working-agreement
+answers use workspace-scoped browser storage for design evaluation. A reviewed
+server setup endpoint and the safe sample-Inbox creation path are still needed
+before that guided layer should merge to main.
 
 ## Outcome
 
