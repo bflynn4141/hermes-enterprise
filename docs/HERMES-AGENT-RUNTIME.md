@@ -41,8 +41,11 @@ reasoning is required for the activity indicator.
 
 ## Tools and credentials
 
-The official runtime loads a narrow enterprise plugin. It gets runtime run and
-call IDs from native ContextVars, not model arguments. The Worker maps those IDs
+The official runtime loads a narrow enterprise plugin. The plugin also registers
+reviewed, read-only enterprise skills. The Worker returns an agent-scoped
+non-secret skill manifest before startup; selected packages are loaded through
+Hermes's native `skills.auto_load` and configured through `skills.config`. It
+gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
 refused. Old attempts and stopped runs cannot execute tools.
@@ -75,16 +78,21 @@ resolve their location from the current profile binding too. Iris’s dedicated
 state lives under `~/.he-runtime/44444444-4444-4444-8444-444444444444/`; the personal
 `~/.hermes` installation is untouched.
 
-## Deployment limits
+## Staging acceptance and production limits
 
-This change does not deploy a runtime host to staging or production. The staging
-Worker cannot reach a loopback profile on this computer. A hosted deployment
-needs a private authenticated runtime endpoint for each configured profile and
-process/container supervision. Provisioning additional profiles is explicit
-configuration today; this change does not automatically start a runtime for every
-new member. A native run keeps its process while waiting and is bounded by the
-adapter’s 55-minute execution window (60-minute Workflow step timeout). Multi-day
-human waits need a durable suspend/resume lifecycle before hosted rollout. Inbox
+Staging now binds Iris to a managed Hermes Cloud profile through the authenticated
+dashboard connector described below. The acceptance run on September 16, 2026
+used WorkOS, a workspace Nous Portal OAuth grant, DeepSeek V4.1 Flash and the
+official Hermes `0.21.3` runtime. The persisted run was scoped to Iris's agent ID,
+reported `runtime_kind = hermes`, completed in 39 seconds with six governed tool
+calls, and created no requests, decisions, effects or outbound communication.
+The Traces UI displayed it as `Hermes Agent · work` under Iris.
+
+Provisioning additional profiles is still explicit configuration; workspace
+creation does not automatically start a Cloud runtime for every new member. A
+native run keeps its process while waiting and is bounded by the adapter’s
+55-minute execution window (60-minute Workflow step timeout). Multi-day human
+waits need a durable suspend/resume lifecycle before production rollout. Inbox
 proposals do not hold the runtime open while a reviewer decides.
 
 Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
@@ -94,13 +102,158 @@ a job later appears. Automatic memory extraction, background review and learning
 are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before
-opening this execution path to hosted customer data. Shared skills stay governed
-by the enterprise app; this change does not claim full native skill lifecycle
-integration. Hermesmail remains a concept address, not a provisioned mailbox.
+opening this execution path to hosted customer data. Dedicated profiles remove
+the general bundled-skill catalog and can auto-load only reviewed plugin packages;
+the only native skill tool retained is `skill_view`, restricted by the plugin to
+the assigned package because official auto-load is gated on a skills tool. Skill
+listing, creation and self-editing remain disabled. See
+[Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md). Hermesmail remains
+a concept address, not a provisioned mailbox.
+
+Roll out the Worker before restarting a profile with this launcher. The launcher
+loads its agent-scoped skill manifest from the authenticated Worker during
+startup and deliberately fails closed if that endpoint is absent or invalid.
+After the Worker is healthy, restart profiles so the new skill/config snapshot
+takes effect; existing running profiles continue using their prior configuration.
 
 Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server),
 [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),
 and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md).
+
+## Hosted topology decision — September 16, 2026
+
+The local profile is healthy, but it listens on `127.0.0.1`. A Cloudflare
+Worker's loopback belongs to the Worker isolate, not to the developer's Mac, so
+the deployed control plane cannot use the local URL directly. This is a network
+boundary rather than a Hermes failure.
+
+An authenticated Cloudflare Quick Tunnel to the unchanged official runtime was
+verified from a Worker running on Cloudflare's network:
+
+| Probe | Result |
+| --- | --- |
+| `GET /health` through the tunnel | `200`, Hermes Agent `0.21.3` |
+| `GET /v1/capabilities` without a key | `401` |
+| The same capabilities request with `API_SERVER_KEY` | `200`, including the durable Runs endpoints |
+
+The tunnel proved the network diagnosis and adapter contract. It is not the
+selected staging or production topology: the Mac must remain online, Quick
+Tunnel URLs are ephemeral, and the runtime must be restarted in a separate
+staging profile whose `enterprise_url` points back to staging. The temporary
+tunnel and its Worker secrets were removed after the proof.
+
+Hermes Cloud is the selected managed-hosting target. A Medium instance named
+`iris-enterprise-staging` is running in the **Brian Interview Demo** Portal
+organization on Hermes `0.21.3`. The official Cloud MCP exposed five management tools:
+instance lifecycle, Team Gateway, usage, and organization-scoped machine
+credentials in addition to instance reads. Those machine credentials use the
+OAuth client-credentials grant with scope `mcp:manage_agents`; they authorize
+the Cloud management plane, not the agent's `/v1/runs` API.
+
+The live Cloud hostname exposes the authenticated dashboard/Gateway. Its public
+`/api/status` reports the loopback API Server as connected at
+`http://127.0.0.1:8642`, but public `/health` and `/v1/capabilities` requests
+fall through to dashboard HTML. Hermes Desktop reaches this host through a
+human Portal OAuth session and the Gateway WebSocket; that is not a
+server-to-server Runs credential. The Cloud instance therefore needs a narrow
+connector from its authenticated dashboard origin to its loopback Runs API.
+
+Cloudflare remains the Enterprise application control plane: it owns identity,
+approvals, audit data, model credentials, and the reverse tool/model bridge. It
+must not proxy a developer laptop or impersonate the agent runtime. A Cloud
+instance binds to the Worker through the reviewed `enterprise_bridge` plugin.
+The plugin contributes one fixed service-authenticated dashboard endpoint. It
+accepts only capabilities, submit, status, events, stop and steer operations,
+then forwards them to the loopback API Server with the native key. It is not an
+arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
+`transport: "dashboard_connector"` and the separate per-agent control secret.
+The native `API_SERVER_KEY` never leaves Hermes Cloud.
+
+The official image can persist user-managed plugins, skills and configuration
+under its data volume. Hermes Desktop can install an agent plugin into a
+selected Cloud profile from a Git repository, including a private repository
+and an exact commit pin. That makes the Enterprise bridge portable to Cloud,
+but it does not yet make provisioning deterministic. The documented Cloud MCP
+can update environment variables and move an instance to the current official
+image; it does not expose profile import, plugin installation, arbitrary
+configuration writes, a custom image, or a pinned Hermes image digest.
+
+Before production, move the remaining launcher-only policy into the pinned
+Enterprise plugin and profile configuration so the ordinary managed Hermes
+process can enforce it. That policy currently removes native cron routes,
+limits the API Server to the Enterprise bridge plus read-only assigned skills,
+disables unmanaged memory and background features, and verifies the reverse
+provider binding. Cloud bootstrap must then install the pinned plugin, apply the
+profile configuration and secrets, and fail health checks if any step is
+missing. A manual Desktop install is acceptable for the first acceptance test,
+not for fleet provisioning.
+
+The acceptance test for the Cloud instance is:
+
+1. install the Enterprise bridge at its reviewed commit and apply the governed
+   profile configuration without modifying the immutable Hermes source tree;
+2. verify capabilities, submit/events/stop/steer, idempotency, the governed tool
+   set, and the reverse Enterprise tool/model bridge; and
+3. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS`, run
+   one complete staged turn, and stop the test instance before merge.
+
+That staged turn passed on September 16, 2026. The connector's dashboard
+manifest, agent plugin and `plugins.enabled` entry all use the single identifier
+`enterprise_bridge`; its fixed service route is
+`/api/plugins/enterprise_bridge/control`. Keeping one identifier matters because
+Hermes independently gates the agent plugin and dashboard API against the enabled
+set. A mismatched dashboard name can leave the agent tools loaded while silently
+skipping the control endpoint.
+
+Do not substitute an interactive `agent_dashboard:access` session or an
+`mcp:manage_agents` token for `API_SERVER_KEY`. If Cloud does not publish the
+Runs endpoint, request one of these contracts from Nous:
+
+1. a public or private Runs endpoint with a rotatable service credential; or
+2. a Portal service-to-service proxy that preserves the Runs API, agent identity,
+   stop/steer semantics and durable idempotency.
+
+The connector is the current acceptance-test path. For fleet production, ask
+Nous to make the same contract first-class: a per-agent, rotatable service
+credential and public/private Runs endpoint. If that contract remains
+unavailable, the reviewed plugin is a contained compatibility layer; the next
+fallback is the official pinned Docker/runtime image under our own supervisor,
+not a tunnel to a laptop.
+
+## Enterprise bridge architecture decision — September 16, 2026
+
+The Worker remains the right boundary for the current product, but its role is
+narrow: authenticate people and channels, enforce workspace and approval
+policy, keep the durable audit record, and orchestrate calls to Hermes Cloud.
+Hermes Cloud owns model/tool execution. Postgres remains the authoritative
+tenant state. Workflows checkpoint orchestration. Durable Objects fan out live
+events and hold no authoritative business data.
+
+| Option | Decision | Reason |
+| --- | --- | --- |
+| Cloudflare Worker + Workflows + Hermes Cloud | Keep | The Worker handles short policy/database operations, while Workflows support durable steps and waits. The existing code already isolates tenant policy from the runtime. |
+| Put approvals and enterprise policy inside Iris | Reject | The runtime is the executor and can change profile/plugin state. It must not become the authority that decides its own permissions, spending or approvals. |
+| Full Temporal migration | Defer | Temporal is a strong durable-execution platform, but it would add another control plane and rewrite already-tested orchestration without fixing the present Hermes Cloud ingress gap. Revisit only for portability, multi-cloud workers or orchestration requirements Cloudflare cannot meet. |
+| AWS Step Functions migration | Reject for this stack | It adds an AWS control plane and its HTTP tasks have a 60-second hard duration; it does not improve the current Cloud-to-Hermes contract. |
+| Long-lived agent execution inside a Worker request | Reject | Worker requests are not the agent host. Cloudflare can terminate in-flight requests during runtime updates after a grace period, and each isolate has 128 MB memory. Hermes Cloud must own the long-running process. |
+| A separate Fly/Cloud Run proxy | Reserve fallback | Use only if Hermes Cloud cannot load the reviewed connector plugin or provide a native service endpoint. A second proxy service adds secrets, deploys and failure modes while enforcing no policy the Worker does not already own. |
+
+This is not a blanket endorsement of Workers for every future deployment. Move
+the control plane when a measured requirement demands private regional
+networking, customer VPC deployment, a non-JavaScript SDK unavailable at the
+edge, or vendor-neutral durable orchestration. Current platform limits leave
+substantial room: paid Workflows support unlimited wall time per step, waiting
+instances do not consume active concurrency, and completed instance state is
+retained for 30 days. We already persist the durable product audit in Postgres,
+so Workflow retention is operational recovery data rather than the customer
+record.
+
+Primary references: [Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),
+[Cloudflare Workflow limits](https://developers.cloudflare.com/workflows/reference/limits/),
+[Temporal durable execution](https://docs.temporal.io/),
+[AWS Step Functions quotas](https://docs.aws.amazon.com/step-functions/latest/dg/service-quotas.html),
+[Hermes programmatic integration](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration),
+and the [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server).
 
 ## Verified locally — September 15, 2026
 

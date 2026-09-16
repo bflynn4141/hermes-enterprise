@@ -123,10 +123,14 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
         [workspaceId, organization?.id ?? null],
       );
       await client.query(`INSERT INTO workspace_settings (workspace_id) VALUES ($1)`, [workspaceId]);
-      await client.query(
-        `INSERT INTO members (workspace_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')`,
+      const createdMember = await client.query<{ id: string }>(
+        `INSERT INTO members (workspace_id, user_id, role, status)
+         VALUES ($1, $2, 'admin', 'active')
+         RETURNING id`,
         [workspaceId, session.userId],
       );
+      const memberId = createdMember.rows[0]?.id;
+      if (!memberId) throw new RouteError('the workspace member was not created', 'create_failed', 409);
       // The agent starts in `draft`: the Setup flow is what moves it to
       // `started`, and an agent that could run before anyone described its
       // responsibility is an agent with no instructions.
@@ -138,6 +142,10 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       );
       const agentId = createdAgent.rows[0]?.id;
       if (!agentId) throw new RouteError('the agent was not created', 'create_failed', 409);
+      await client.query(
+        `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1, $2, $3)`,
+        [workspaceId, agentId, memberId],
+      );
       await client.query(
         `INSERT INTO instruction_versions
            (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)

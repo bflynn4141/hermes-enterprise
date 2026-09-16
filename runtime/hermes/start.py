@@ -6,11 +6,14 @@ import fcntl
 import json
 import os
 import pathlib
+import re
 import secrets
 import shlex
 import shutil
 import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 
 from install import ROOT, REVISION, verify_source
@@ -87,6 +90,107 @@ def private_write(path, text):
     temporary.replace(path)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("Enterprise skill manifest redirects are not allowed.")
+
+
+_SECRET_CONFIG_KEYS = {
+    "access_key", "api_key", "credential", "credentials", "password",
+    "private_key", "secret", "token",
+}
+
+
+def _validate_skill_config(value, *, depth=0, path="skills.config"):
+    """Bound non-secret config before it reaches config.yaml/model context."""
+    if depth > 6:
+        raise RuntimeError(f"{path} is too deeply nested.")
+    if value is None or isinstance(value, (bool, int, float)):
+        return
+    if isinstance(value, str):
+        if len(value) > 4096:
+            raise RuntimeError(f"{path} is too long.")
+        return
+    if isinstance(value, list):
+        if len(value) > 50:
+            raise RuntimeError(f"{path} has too many values.")
+        for index, item in enumerate(value):
+            _validate_skill_config(item, depth=depth + 1, path=f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        if len(value) > 50:
+            raise RuntimeError(f"{path} has too many fields.")
+        for key, item in value.items():
+            if not isinstance(key, str) or not key or len(key) > 80:
+                raise RuntimeError(f"{path} contains an invalid key.")
+            if key.lower() in _SECRET_CONFIG_KEYS:
+                raise RuntimeError(f"{path}.{key} may not contain credentials.")
+            _validate_skill_config(item, depth=depth + 1, path=f"{path}.{key}")
+        return
+    raise RuntimeError(f"{path} contains an unsupported value.")
+
+
+def load_enterprise_skills(base_url, token, opener=None):
+    """Fetch the agent-scoped, non-secret skill manifest from the Worker."""
+    parsed = urllib.parse.urlsplit(base_url)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
+        raise RuntimeError("Enterprise skill manifest needs HTTPS or loopback HTTP.")
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/skills", method="GET",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/json",
+            "User-Agent": "Hermes-Enterprise-Bridge/1.0",
+        },
+    )
+    transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+    try:
+        response = transport.open(request, timeout=5)
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
+        raise RuntimeError("Enterprise skill manifest could not be loaded.") from error
+    with response:
+        raw = response.read(65537)
+        if getattr(response, "status", 200) != 200 or len(raw) > 65536:
+            raise RuntimeError("Enterprise skill manifest was rejected.")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("Enterprise skill manifest returned invalid JSON.") from error
+    skills = payload.get("skills") if isinstance(payload, dict) else None
+    if not isinstance(skills, list) or len(skills) > 16:
+        raise RuntimeError("Enterprise skill manifest has an invalid skill list.")
+    auto_load, merged_config = [], {}
+    for skill in skills:
+        if not isinstance(skill, dict):
+            raise RuntimeError("Enterprise skill manifest contains an invalid skill.")
+        name, version, config = skill.get("name"), skill.get("version"), skill.get("config")
+        if (not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
+                or not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+                or not isinstance(config, dict) or skill.get("auto_load") is not True):
+            raise RuntimeError("Enterprise skill manifest contains invalid metadata.")
+        _validate_skill_config(config)
+        for key, value in config.items():
+            if key in merged_config and merged_config[key] != value:
+                raise RuntimeError("Enterprise skill configuration conflicts across packages.")
+            merged_config[key] = value
+        if name not in auto_load:
+            auto_load.append(name)
+    return {"auto_load": auto_load, "config": merged_config}
+
+
+def reset_managed_skill_home(profile):
+    """Dedicated Enterprise profiles contain only plugin-packaged skills."""
+    skills = profile / "home" / "skills"
+    if skills.is_symlink():
+        raise RuntimeError("Enterprise skill directory may not be a symlink.")
+    if skills.exists():
+        shutil.rmtree(skills)
+    skills.mkdir(parents=True, mode=0o700)
+    private_write(skills / ".no-bundled-skills", "managed by Hermes Enterprise\n")
+
+
 def clean_environment(source, profile, token, api_key):
     # Nothing from personal provider config, bots, proxies, plugin paths or credentials survives.
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR") if key in os.environ}
@@ -108,19 +212,33 @@ def child(metadata_path):
     from hermes_cli.config import DEFAULT_CONFIG, load_config
     from toolsets import TOOLSETS
 
+    # Official Hermes gates skills.auto_load on the presence of a skills tool.
+    # A dedicated one-tool set keeps only the read-only viewer; the stock
+    # `skills` toolset would also expose discovery and mutation.
+    TOOLSETS["enterprise_skill_reader"] = {
+        "description": "Read the assigned enterprise skill",
+        "tools": ["skill_view"],
+        "includes": [],
+    }
+
     base = metadata["enterprise_url"] + "/internal/runtime/w/" + metadata["workspace_id"] + "/agents/" + metadata["agent_id"]
+    enterprise_skills = load_enterprise_skills(base, os.environ["ENTERPRISE_RUNTIME_TOKEN"])
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),
         "model": {"provider": "custom", "default": metadata["model"],
                   "base_url": base + "/model/v1", "api_mode": "chat_completions",
                   "api_key": "${ENTERPRISE_RUNTIME_TOKEN}"},
-        "agent": {"max_iterations": 12, "disabled_toolsets": sorted(TOOLSETS)},
-        "platform_toolsets": {"api_server": ["enterprise_bridge"]},
+        "agent": {"max_iterations": 12,
+                  # `skills` stays out of platform_toolsets, but cannot be in
+                  # the subtraction list because it owns skill_view too.
+                  "disabled_toolsets": sorted(set(TOOLSETS) - {"enterprise_bridge", "enterprise_skill_reader", "skills"})},
+        "platform_toolsets": {"api_server": ["enterprise_bridge", "enterprise_skill_reader"]},
         "mcp_servers": {},
         "tools": {"tool_search": {"enabled": "off"}},
         "plugins": {"enabled": ["enterprise_bridge"], "entries": {"enterprise_bridge": {"settings": {
             "base_url": base, "native_url": "http://127.0.0.1:" + str(metadata["port"]),
             "request_timeout_seconds": 5, "pending_timeout_seconds": 86400,
+            "allowed_skills": enterprise_skills["auto_load"],
         }}}},
         "gateway": {"multiplex_profiles": False, "api_server": {"max_concurrent_runs": 1},
                     "platforms": {"api_server": {"enabled": True, "extra": {
@@ -128,7 +246,8 @@ def child(metadata_path):
                     }}}},
         "approvals": {"unattended_mode": "deny", "cron_mode": "deny"},
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
-        "skills": {"creation_nudge_interval": 0},
+        "skills": {"creation_nudge_interval": 0, "write_approval": True,
+                   "auto_load": enterprise_skills["auto_load"], "config": enterprise_skills["config"]},
         "auxiliary": {"background_review": {"enabled": False}, "title_generation": {"enabled": False}},
     }
     private_write(profile / "home/config.yaml", json.dumps(config, indent=2) + "\n")
@@ -139,6 +258,11 @@ def child(metadata_path):
     assert_native_cron_empty()
     install_native_api_policy()
     discover_plugins()
+    from hermes_cli.plugins import get_plugin_manager
+    missing_skills = [name for name in enterprise_skills["auto_load"]
+                      if get_plugin_manager().find_plugin_skill(name) is None]
+    if missing_skills:
+        raise SystemExit("Governed skill preflight failed: " + ", ".join(missing_skills))
     loaded = load_config()
     selected = _get_platform_tools(loaded, "api_server")
     definitions = get_tool_definitions(enabled_toolsets=sorted(selected),
@@ -146,9 +270,14 @@ def child(metadata_path):
                                        quiet_mode=True, skip_tool_search_assembly=True)
     from tools.registry import registry
     names = {item["function"]["name"] for item in definitions}
-    if selected != {"enterprise_bridge"} or not names or any(
-            registry.get_entry(name).toolset != "enterprise_bridge" for name in names):
-        raise SystemExit("Governed tool preflight failed: runtime did not expose exactly the enterprise toolset.")
+    if (selected != {"enterprise_bridge", "enterprise_skill_reader"} or "skill_view" not in names
+            or any(registry.get_entry(name).toolset != "enterprise_bridge"
+                   for name in names - {"skill_view"})
+            or any(name in names for name in {"skills_list", "skill_manage"})):
+        raise SystemExit(
+            "Governed tool preflight failed: runtime did not expose enterprise tools plus read-only skill_view "
+            f"(selected={sorted(selected)}, names={sorted(names)})."
+        )
     # Verify the actual native provider resolver; do not print credential-bearing data.
     from hermes_cli.runtime_provider import resolve_runtime_provider
     runtime = resolve_runtime_provider(requested="custom")
@@ -252,6 +381,7 @@ def main():
         private_write(api_key_path, supplied["API_SERVER_KEY"] + "\n")
     elif not api_key_path.exists():
         private_write(api_key_path, secrets.token_hex(32) + "\n")
+    reset_managed_skill_home(profile)
     shutil.copytree(ROOT / "enterprise_bridge", profile / "home/plugins/enterprise_bridge", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     env = clean_environment(source, profile, token, api_key_path.read_text().strip())

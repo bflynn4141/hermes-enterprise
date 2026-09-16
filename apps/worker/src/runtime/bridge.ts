@@ -21,6 +21,7 @@ import {
 } from './budget.js';
 import { requireBridgeAuth } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
+import { runtimeSkillManifests } from './skills.js';
 
 export interface BridgeDb extends AgentDb {
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
@@ -288,6 +289,10 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
     const tools = allowedTools('work', await db.loadToolNames(agentId));
     return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
   } finally { await db.close(); }
+}
+export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { agentId } = await authenticate(c);
+  return c.json({ skills: runtimeSkillManifests(c.env, agentId) });
 }
 async function publish(env: Env, workspaceId: string, result: CallResult): Promise<void> {
   const rows = result.events.map((event) => ({ id: event.id, workspace_id: workspaceId, session_id: event.sessionId, kind: event.kind, payload: event.payload, schema_version: 1, trace_id: event.traceId, at: event.at }));

@@ -1175,6 +1175,12 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       else out.push({ type: 'entity/loading', kind, id: p.entity_id });
       break;
     }
+    case 'member.agent_joined':
+      // The dedicated join event carries durable source ids, while the member
+      // and invitation endpoints remain authoritative for their rendered rows.
+      out.push({ type: 'list/invalidate', key: 'members' });
+      out.push({ type: 'list/invalidate', key: 'invitations' });
+      break;
     case 'resync':
       out.push({ type: 'cache/clear' });
       break;

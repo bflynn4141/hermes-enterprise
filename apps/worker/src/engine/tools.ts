@@ -69,6 +69,8 @@ export type AgentReads = Pick<
   | 'isAwaitingContext'
   | 'readContextField'
   | 'loadFetchAllowlist'
+  | 'listPartnerCandidates'
+  | 'getPartnerCandidate'
 >;
 
 /**
@@ -178,6 +180,12 @@ async function sha256Hex(input: string): Promise<string> {
  */
 export async function subjectKeyFor(payload: unknown): Promise<{ key: string; subject: string }> {
   const record = (payload ?? {}) as Record<string, unknown>;
+  const discovery = (record.discovery ?? {}) as Record<string, unknown>;
+  const candidateId = str(discovery.candidate_id);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateId)) {
+    const discoveredApplicant = (record.applicant ?? {}) as Record<string, unknown>;
+    return { key: `partner-candidate:${candidateId.toLowerCase()}`, subject: str(discoveredApplicant.name).trim() };
+  }
   const applicant = (record.applicant ?? record.payee ?? {}) as Record<string, unknown>;
   const parties = Array.isArray(record.parties) ? (record.parties[0] as Record<string, unknown> | undefined) : undefined;
   const email = str(applicant.email) || str(parties?.email);
@@ -411,6 +419,34 @@ const listMembers: ToolDefinitionEntry = {
   },
 };
 
+const listPartnerCandidates: ToolDefinitionEntry = {
+  name: 'list_partner_candidates',
+  kind: 'read',
+  description: 'List public organization candidates already ingested through an approved source connector. The deterministic priority only orders evidence; it is not an Iris judgment and does not mean anyone applied.',
+  input_schema: OBJECT({
+    minimum_priority: { type: 'integer', minimum: 0, maximum: 100 },
+    limit: { type: 'integer', minimum: 1, maximum: 10 },
+  }),
+  async run(args, ctx) {
+    return {
+      ok: true,
+      data: await ctx.reads.listPartnerCandidates(ctx.run.agentId, num(args.minimum_priority, 0), num(args.limit, 10)),
+    };
+  },
+};
+
+const getPartnerCandidate: ToolDefinitionEntry = {
+  name: 'get_partner_candidate',
+  kind: 'read',
+  description: 'Read one discovered organization with immutable fetched-source artifacts, digests, recency and evidence gaps. Use those artifact ids when proposing an application; never claim the organization applied.',
+  input_schema: OBJECT({ candidate_id: { type: 'string', format: 'uuid' } }, ['candidate_id']),
+  async run(args, ctx) {
+    const candidate = await ctx.reads.getPartnerCandidate(ctx.run.agentId, str(args.candidate_id));
+    if (!candidate) return { ok: false, error: 'No such partner candidate is available to this agent.' };
+    return { ok: true, data: candidate };
+  },
+};
+
 /**
  * The one tool that leaves this system.
  *
@@ -522,6 +558,33 @@ const proposeRequest: ToolDefinitionEntry = {
       // error rather than a run failure: a payload the viewer cannot render is
       // a request the reviewer cannot decide.
       return { ok: false, error: `the payload does not match the ${kind} schema: ${(error as Error).message}` };
+    }
+    if (kind === 'application') {
+      const application = payload as import('@hermes/shared').ApplicationPayload;
+      if (application.discovery) {
+        const candidate = await ctx.reads.getPartnerCandidate(ctx.run.agentId, application.discovery.candidate_id) as {
+          source?: unknown;
+          source_key?: unknown;
+          deterministic_priority?: unknown;
+          source_artifacts?: { id?: unknown }[];
+        } | null;
+        if (!candidate) return { ok: false, error: 'the discovery candidate is not available to this agent' };
+        if (
+          candidate.source !== application.discovery.source
+          || candidate.source_key !== application.discovery.source_key
+          || candidate.deterministic_priority !== application.discovery.deterministic_priority
+        ) {
+          return { ok: false, error: 'the application discovery fields do not match the stored candidate evidence' };
+        }
+        const artifactIds = new Set((candidate.source_artifacts ?? []).flatMap((artifact) => typeof artifact.id === 'string' ? [artifact.id] : []));
+        const cited = application.criteria.flatMap((criterion) => criterion.source_ids);
+        if (application.criteria.some((criterion) => criterion.source_ids.length === 0)) {
+          return { ok: false, error: 'every discovered-candidate criterion must cite at least one stored source artifact id' };
+        }
+        if (cited.some((id) => !artifactIds.has(id)) || application.sources.some((source) => !artifactIds.has(source.id))) {
+          return { ok: false, error: 'the application cites a source id that is not one of the candidate source artifacts' };
+        }
+      }
     }
     // Every string in the payload is model-authored and every one of them is
     // rendered to a human, so the whole tree is checked rather than a list of
@@ -786,6 +849,8 @@ export const TOOLS: readonly ToolDefinitionEntry[] = [
   getWorkspaceContext,
   getHistory,
   listMembers,
+  listPartnerCandidates,
+  getPartnerCandidate,
   fetchUrlTool,
   proposeRequest,
   proposeApproval,
@@ -812,6 +877,8 @@ export const TOOL_SOURCE: Readonly<Record<string, string>> = {
   get_workspace_context: 'workspace.agent_context_fields',
   get_history: 'session.messages',
   list_members: 'workspace.members',
+  list_partner_candidates: 'workspace.partner_candidates',
+  get_partner_candidate: 'workspace.partner_source_artifacts',
   fetch_url: 'web.fetch_url',
   propose_request: 'engine',
   propose_approval: 'engine',

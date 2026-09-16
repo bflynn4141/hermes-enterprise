@@ -47,6 +47,7 @@ export interface FakeRequestRow {
 export class FakeAgentDb implements AgentDb {
   readonly events: EmittedEvent[] = [];
   readonly requests: FakeRequestRow[] = [];
+  readonly partnerCandidates: Record<string, unknown>[] = [];
   readonly notes: { id: string; runId: string; toolCallId: string; body: string }[] = [];
   readonly instructions: { id: string; runId: string; toolCallId: string; body: string }[] = [];
   readonly contextFields = new Map<string, string>();
@@ -226,7 +227,10 @@ export class FakeAgentDb implements AgentDb {
   // -- writes ---------------------------------------------------------------
 
   proposeRequest(input: ProposeRequestInput): Promise<{ requestId: string; created: boolean }> {
-    const existing = this.requests.find((r) => r.runId === input.runId && r.toolCallId === input.toolCallId);
+    const existing = this.requests.find((r) =>
+      r.runId === input.runId && r.toolCallId === input.toolCallId
+      || input.subjectKey.startsWith('partner-candidate:') && r.subjectKey === input.subjectKey,
+    );
     if (existing) return Promise.resolve({ requestId: existing.id, created: false });
     const row: FakeRequestRow = {
       id: this.uuid(),
@@ -323,6 +327,14 @@ export class FakeAgentDb implements AgentDb {
   }
   listMembers(): Promise<unknown[]> {
     return Promise.resolve([{ user_id: 'user-1', role: 'admin' }]);
+  }
+  listPartnerCandidates(_agentId: string | null, minimumPriority: number, limit: number): Promise<unknown[]> {
+    return Promise.resolve(this.partnerCandidates
+      .filter((candidate) => Number(candidate.deterministic_priority ?? 0) >= minimumPriority)
+      .slice(0, limit));
+  }
+  getPartnerCandidate(_agentId: string | null, candidateId: string): Promise<unknown | null> {
+    return Promise.resolve(this.partnerCandidates.find((candidate) => candidate.id === candidateId) ?? null);
   }
   /** What an Admin put in `workspace_settings.flags.fetch_url_allowlist`. */
   fetchAllowlist: string[] = [];

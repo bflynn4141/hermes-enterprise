@@ -60,6 +60,15 @@ export function approvalActionLabel(request: RequestEntity): string {
   return type ? APPROVAL_META[type].action : 'Review request';
 }
 
+export function approvalPrimaryAction(view: ApprovalView): string {
+  if (view.payload.approval_type !== 'team_commitment'
+    || view.payload.context.source.trigger?.kind !== 'member_agent_joined') {
+    return APPROVAL_META[view.payload.approval_type].action;
+  }
+  const currentStep = view.steps.find((step) => step.status === 'current');
+  return currentStep?.step_id === 'receiving-owner' ? 'Accept collaboration' : 'Approve proposal';
+}
+
 export function approvalIcon(request: RequestEntity): string {
   const type = approvalType(request);
   return type ? APPROVAL_META[type].icon : 'context';
@@ -180,6 +189,9 @@ function TeamCommitmentPreview({ view }: { view: ApprovalView }) {
       <section className="approval-lead-block"><span className="approval-kicker">Bounded task</span><h2>{details.workload}</h2></section>
       <div className="approval-facts"><Fact label="Due">{shortDateTime(details.due_at)}</Fact><Fact label="Mandate">Receiving agent only</Fact></div>
       <div className="approval-two-col"><section><span className="approval-kicker">Dependencies</span><CheckList items={details.dependencies} /></section><section><span className="approval-kicker">Acceptance criteria</span><CheckList items={details.acceptance_criteria} /></section></div>
+      {view.payload.context.source.trigger?.kind === 'member_agent_joined' && (
+        <p className="approval-boundary-note">Approval records this proposed collaboration. No agent message or run is sent until a delivery executor exists.</p>
+      )}
     </div>
   );
 }
@@ -507,7 +519,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           <span className="f-sub">{error ?? (resolved ? `${view.work.reason ?? `Work ${view.work.status}`} · ${view.effect.reason ?? `Effect ${view.effect.status}`}` : view.capabilities.reason ?? 'The decision is bound to this version, scope and expiry.')}</span>
         </div>
         {!resolved && canRequestChanges && <Button disabled={busy} onClick={() => setChangeMode((open) => !open)}>Request changes</Button>}
-        {!resolved && canApprove && <Button primary disabled={busy} onClick={() => decide('approve')}>{busy ? 'Recording…' : meta.action}</Button>}
+        {!resolved && canApprove && <Button primary disabled={busy} onClick={() => decide('approve')}>{busy ? 'Recording…' : approvalPrimaryAction(view)}</Button>}
         {!resolved && (canDecline || view.capabilities.can_route) && (
           <span className="approval-more">
             <button ref={menuAnchor} type="button" className="icon-btn" aria-label="More approval actions" aria-expanded={menu} onClick={() => setMenu((open) => !open)}><Icon name="more" /></button>

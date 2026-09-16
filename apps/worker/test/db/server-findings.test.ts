@@ -187,11 +187,19 @@ describe('F2 · the two routes with no tenant in their path', () => {
           WHERE s.workspace_id = $1`,
         [body.workspace.id],
       );
+      const owners = await c.query<{ user_id: string }>(
+        `SELECT m.user_id
+           FROM agent_owners ao
+           JOIN members m ON m.id = ao.member_id AND m.workspace_id = ao.workspace_id
+          WHERE ao.workspace_id = $1 AND ao.agent_id = $2`,
+        [body.workspace.id, body.agent.id],
+      );
       await c.query('COMMIT');
-      return { agent: agent.rows, versions: versions.rows, messages: messages.rows };
+      return { agent: agent.rows, versions: versions.rows, messages: messages.rows, owners: owners.rows };
     });
     expect(persisted.agent).toEqual([{ name: 'Beacon', instructions_active: instructions, status: 'draft' }]);
     expect(persisted.versions).toEqual([{ body: instructions, status: 'saved', saved_at: expect.any(Date) }]);
+    expect(persisted.owners).toEqual([{ user_id: fx.adminId }]);
     expect(persisted.messages).toEqual([{
       title: 'Set up Beacon',
       next_seq: 1,

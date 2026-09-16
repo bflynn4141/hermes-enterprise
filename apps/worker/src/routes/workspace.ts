@@ -75,11 +75,24 @@ export async function loadBootstrap(
 
   const agents = await tx.query<AgentRow>(
     `SELECT id, name, responsibility, setup_step
-       FROM agents
-      WHERE workspace_id = $1
-      ORDER BY created_at
+       FROM agents a
+      WHERE a.workspace_id = $1
+      ORDER BY
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM agent_owners ao JOIN members m ON m.id = ao.member_id
+             WHERE ao.workspace_id = $1 AND ao.agent_id = a.id
+               AND m.user_id = $2 AND m.status = 'active'
+          ) THEN 0
+          WHEN EXISTS (
+            SELECT 1 FROM sessions s
+             WHERE s.workspace_id = $1 AND s.agent_id = a.id AND s.owner_id = $2
+          ) THEN 1
+          ELSE 2
+        END,
+        a.created_at
       LIMIT 1`,
-    [workspaceId],
+    [workspaceId, userId],
   );
   const agent = agents.rows[0];
   if (!agent) throw new Error('workspace has no agent');

@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import re
 import time
 import urllib.error
@@ -10,6 +11,9 @@ import urllib.request
 
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
+CONTROL_ROUTE = "/api/plugins/enterprise_bridge/control"
+CONTROL_PROVIDER = "enterprise-control"
+SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 
 
 class BridgeError(Exception):
@@ -19,6 +23,71 @@ class BridgeError(Exception):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise BridgeError("Enterprise bridge redirects are not allowed.")
+
+
+def assess_control_secret(secret):
+    """Require the same practical floor as Hermes' built-in drain credential."""
+    if len(secret) < 43:
+        return "control secret must contain at least 43 characters"
+    if len(set(secret)) < 16:
+        return "control secret must contain at least 16 distinct characters"
+    return None
+
+
+def register_control_auth(ctx):
+    """Opt one fixed dashboard route into non-interactive service auth.
+
+    The public Hermes Cloud hostname exposes the dashboard gateway, while the
+    native Runs API listens on loopback.  This provider authenticates the
+    Worker's per-agent credential only on the fixed connector route; it never
+    grants bearer access to the rest of the dashboard.
+    """
+    secret = os.environ.get("HERMES_ENTERPRISE_CONTROL_SECRET", "").strip()
+    if not secret:
+        return None
+    reason = assess_control_secret(secret)
+    if reason:
+        raise BridgeError(reason)
+
+    import hmac
+    from hermes_cli.dashboard_auth import DashboardAuthProvider, LoginStart, Session, TokenPrincipal
+    from hermes_cli.dashboard_auth.token_auth import register_token_route
+
+    class EnterpriseControlProvider(DashboardAuthProvider):
+        name = CONTROL_PROVIDER
+        display_name = "Hermes Enterprise control plane"
+        supports_token = True
+        supports_session = False
+
+        def verify_token(self, *, token):
+            if token and hmac.compare_digest(token.encode(), secret.encode()):
+                return TokenPrincipal(
+                    principal="hermes-enterprise-control",
+                    provider=self.name,
+                    scopes=("runs",),
+                )
+            return None
+
+        def start_login(self, *, redirect_uri):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def complete_login(self, *, code, state, code_verifier, redirect_uri):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def verify_session(self, *, access_token):
+            return None
+
+        def refresh_session(self, *, refresh_token):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def revoke_session(self, *, refresh_token):
+            return None
+
+    handle = ctx.register_dashboard_auth_provider(EnterpriseControlProvider())
+    if handle is None:
+        raise BridgeError("Enterprise control authentication could not be registered.")
+    register_token_route(CONTROL_ROUTE)
+    return handle
 
 
 def trusted_identity():
@@ -56,7 +125,7 @@ class Bridge:
         data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + token, "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json", "User-Agent": SERVICE_USER_AGENT,
         })
         try:
             response = self.opener.open(request, timeout=self.request_timeout)
@@ -138,6 +207,10 @@ class Bridge:
 
 
 def register(ctx):
+    # Register the Cloud control surface before tool discovery. If the Worker is
+    # temporarily unavailable, dashboard startup still leaves the route either
+    # strongly authenticated or absent; it never falls open.
+    register_control_auth(ctx)
     bridge = Bridge(
         ctx.get_config("base_url", ""), os.environ.get("ENTERPRISE_RUNTIME_TOKEN", ""),
         ctx.get_config("native_url", "http://127.0.0.1:8642"), os.environ.get("API_SERVER_KEY", ""),
@@ -145,13 +218,31 @@ def register(ctx):
         pending_timeout=ctx.get_config("pending_timeout_seconds", 86400),
     )
     # Install the veto before network discovery; a discovery failure exposes zero tools.
-    allowed = set()
+    assigned_skills = {
+        name for name in ctx.get_config("allowed_skills", [])
+        if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
+    }
+    allowed = {"skill_view"}
 
-    def guard(tool_name, **kwargs):
+    def guard(tool_name, args=None, **kwargs):
+        if tool_name == "skill_view":
+            args = args if isinstance(args, dict) else {}
+            if (args.get("name") in assigned_skills
+                    and not args.get("file_path")
+                    and set(args).issubset({"name", "preprocess"})):
+                return None
+            return {"action": "block", "message": "Only the assigned managed skill can be viewed."}
         if tool_name not in allowed:
             return {"action": "block", "message": "Only governed enterprise tools are enabled in this profile."}
 
     ctx.register_hook("pre_tool_call", guard)
+    skill_path = pathlib.Path(__file__).parent / "skills" / "partner-program-screening" / "SKILL.md"
+    ctx.register_skill(
+        name="partner-program-screening",
+        path=skill_path,
+        description="Screen partner prospects and prepare cited human reviews.",
+        frontmatter={"version": "1.0.0", "metadata": {"hermes": {"category": "enterprise"}}},
+    )
     for schema in bridge.tools():
         name = schema["name"]
         handle = ctx.register_tool(name=name, toolset=TOOLSET, schema=schema,

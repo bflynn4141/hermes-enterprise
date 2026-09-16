@@ -49,6 +49,33 @@ KEK_V1=""
 # secret itself has landed everywhere.
 KEK_CURRENT=""
 
+# --- Nous Portal OAuth -------------------------------------------------------
+# Official Hermes Agent uses the public `hermes-cli` client for device-code
+# inference grants. That client is appropriate for local/staging proof. Use a
+# separately attributable Nous client for production when one is provisioned.
+# When either value is absent, the UI says hosted sign-in is unavailable and
+# offers the existing manual workspace-key fallback. Do not use the dashboard
+# `agent:{id}` client: that token has agent_dashboard:access, not inference:invoke.
+NOUS_PORTAL_OAUTH_ENABLED="0"
+NOUS_PORTAL_OAUTH_CLIENT_ID="hermes-cli"
+# Production is pinned to https://portal.nousresearch.com. Override only for a
+# local integration fixture.
+NOUS_PORTAL_BASE_URL=""
+
+# --- Partner screening public-source connector ------------------------------
+# This policy is non-secret, but lives here locally because it is per agent.
+# Production may set it as a plain Worker var. Queries discover organizations
+# through GitHub's official REST API; the connector never reads public email,
+# discovers individual people, or contacts anyone.
+PARTNER_SCREENING_CONFIG_JSON='{"AGENT_UUID":{"source_purpose":"organization_partner_research","organization_only":true,"no_outreach":true,"role_label":"Potential technical ecosystem partner","search_queries":["developer education in:name,description,readme archived:false"],"intake_urls":[],"keywords":["developer education","agents","open source"],"ranking_weights":{"relevance":40,"activity":25,"adoption":20,"openness":15},"minimum_priority":50,"lookback_days":365,"max_candidates":5,"max_api_requests":12,"minimum_rate_remaining":5}}'
+# Optional. Public-only requests work without it at GitHub's lower IP-based
+# limits. Use a fine-grained token with no repository permissions when set.
+PARTNER_GITHUB_TOKEN=""
+# Reserved connector credentials. Their presence does not enable a connector
+# in this build; the source-readiness endpoint reports that truthfully.
+PARTNER_YOUTUBE_API_KEY=""
+PARTNER_X_BEARER_TOKEN=""
+
 # --- R2 uploads (M3.5) --------------------------------------------------------
 # The bucket itself is a binding (wrangler.jsonc, UPLOADS) and needs no secret.
 # These three exist only so the Worker can sign a presigned PUT, so that 20 MB

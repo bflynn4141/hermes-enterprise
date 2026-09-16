@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { Tx } from '../../src/db/client.js';
 import {
   addProviderKey,
+  addProviderOAuthConnection,
   findByFingerprint,
   listProviderKeys,
   openKeyForVerification,
@@ -19,6 +20,7 @@ import {
   resolveKey,
   rewrapProviderKey,
   rotateProviderKey,
+  setProviderOAuthAccount,
   setKeyStatus,
   KeyStoreError,
 } from '../../src/keys/store.js';
@@ -113,6 +115,42 @@ describe('storing a provider key', () => {
     const resolved = await asTenant(fx, (tx) => resolveKey(tx, ENV_V1, fx.workspaceId, 'anthropic'));
     expect(resolved.apiKey).toBe(KEY_A);
     expect(resolved.keyId).toBe(stored.id);
+  });
+
+  it('keeps the Nous account attribution beside the encrypted workspace grant', async () => {
+    const fx = await seedWorkspace();
+    const stored = await asTenant(fx, async (tx) => {
+      const connection = await addProviderOAuthConnection(tx, ENV_V1, {
+        workspaceId: fx.workspaceId,
+        addedBy: fx.adminId,
+        credential: {
+          access_token: 'short-lived-access',
+          refresh_token: 'rotating-refresh',
+          client_id: 'enterprise-hermes',
+          scope: 'inference:invoke',
+          token_type: 'Bearer',
+          portal_base_url: 'https://portal.nousresearch.com',
+          inference_base_url: 'https://inference-api.nousresearch.com/v1',
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+      });
+      return setProviderOAuthAccount(tx, fx.workspaceId, connection.id, {
+        user_id: 'nous-user-1',
+        email: 'maya@nous.research',
+        organization_id: 'nous-org-1',
+        organization_name: 'Nous Research',
+        organization_slug: 'nous-research',
+        verified_at: new Date().toISOString(),
+      });
+    });
+
+    expect(stored.credential_kind).toBe('oauth_device_code');
+    expect(stored.oauth_account).toMatchObject({
+      email: 'maya@nous.research',
+      organization_name: 'Nous Research',
+    });
+    const listed = await asTenant(fx, (tx) => listProviderKeys(tx, fx.workspaceId));
+    expect(listed[0]?.oauth_account).toEqual(stored.oauth_account);
   });
 
   it('cannot be read as another workspace', async () => {

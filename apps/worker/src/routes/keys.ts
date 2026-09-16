@@ -38,6 +38,7 @@ import {
   openKeyForVerification,
   removeProviderKey,
   rotateProviderKey,
+  resolveKey,
 } from '../keys/store.js';
 import { logEvent } from '../keys/redact.js';
 import { defaultProbeModel, needsProbeModel } from '../keys/reverify.js';
@@ -322,15 +323,25 @@ export async function verifyKey(c: Context<{ Bindings: Env }>): Promise<Response
     // Decrypted here, inside the transaction, because that is the only place
     // the tenant key and the AAD are both in force. The plaintext lives from
     // here until the probe returns and is written nowhere.
-    const apiKey = await openKeyForVerification(work.tx, c.env, work.workspaceId, keyId);
+    const resolved = row.credential_kind === 'oauth_device_code'
+      ? await resolveKey(work.tx, c.env, work.workspaceId, row.provider)
+      : null;
+    const apiKey = resolved
+      ? resolved.apiKey
+      : await openKeyForVerification(work.tx, c.env, work.workspaceId, keyId);
     return {
       provider: row.provider,
       probeModel,
       apiKey,
       userId: work.userId,
       forbiddenCount: await forbiddenCountFor(work.tx, work.workspaceId, keyId),
+      oauthInvalid: resolved?.status === 'invalid' || resolved?.apiKey === '',
     };
   });
+
+  if (prepared.oauthInvalid) {
+    throw new RouteError('the Nous OAuth session must be reconnected', 'key_invalid', 409);
+  }
 
   const verification = await probeAndRecord(
     c,

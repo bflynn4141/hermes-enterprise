@@ -27,6 +27,7 @@ describe('session execution location after a runtime rollout', () => {
       profile: `agent-${agent}`,
       baseUrl: 'https://runtime.example',
       apiKey: 'test',
+      transport: 'native',
     }]);
   });
 

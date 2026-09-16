@@ -6,7 +6,7 @@
 // session, and find-in-session keeps the CSS Custom Highlight implementation
 // and gains "Load earlier to search more", because a find that silently only
 // searches the loaded window is a find that lies.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { SHARE_AUDIENCE } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
@@ -19,7 +19,7 @@ import { TOGGLE_SHORTCUT } from '../panel.js';
 import type { SessionState } from '../../model/store.js';
 import { EMPTY } from '../../model/constants.js';
 
-export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean }) {
+export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean; active: boolean; firstRun?: ReactNode }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const adapter = useAdapter();
@@ -147,7 +147,7 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
         <span className="breadcrumb">
           <span>{session.context?.label ?? state.workspace.name}</span>
           <span>/</span>
-          <span className="current truncate">{session.title}</span>
+          <span className="current truncate">{firstRun ? `Set up ${agent}` : session.title}</span>
         </span>
         {session.share && (
           <span className="share-tag" title={`${SHARE_AUDIENCE} · View only`}>
@@ -250,8 +250,12 @@ export function ChatPane({ narrow, active }: { narrow: boolean; active: boolean 
         </div>
       )}
 
-      <Transcript key={session.id} session={session} find={find ? { query: find, index: findIndex, onCount } : null} />
-      <Composer session={session} />
+      {firstRun ?? (
+        <>
+          <Transcript key={session.id} session={session} find={find ? { query: find, index: findIndex, onCount } : null} />
+          <Composer session={session} />
+        </>
+      )}
 
       <RenameDialog
         open={rename !== null}

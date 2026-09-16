@@ -5,7 +5,7 @@
 // entity has not arrived yet renders the 300 ms skeleton and then either the
 // object or its empty copy — never "Request not found" as a first impression.
 // Follow/pin behaviour is unchanged from the demo.
-import { useMemo, type RefObject } from 'react';
+import { useMemo, type ReactNode, type RefObject } from 'react';
 import { motion } from 'motion/react';
 import type { RequestEntity } from '@hermes/shared';
 import { useAppState, useDispatch } from '../store-context.js';
@@ -52,7 +52,7 @@ function describe(state: AppState): [string, string] {
   return ['', ''];
 }
 
-export function AppPane({ narrow, active, paneRef }: { narrow: boolean; active: boolean; paneRef?: RefObject<HTMLElement | null> }) {
+export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: boolean; active: boolean; paneRef?: RefObject<HTMLElement | null>; firstRun?: ReactNode }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const app = state.ui.app;
@@ -128,8 +128,8 @@ export function AppPane({ narrow, active, paneRef }: { narrow: boolean; active: 
           </>
         )}
       </div>
-      <motion.div key={key} className="object-view" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
-        {view}
+      <motion.div key={key} className={`object-view${firstRun ? ' object-view-first-run' : ''}`} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
+        {firstRun ?? view}
       </motion.div>
     </section>
   );

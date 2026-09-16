@@ -175,6 +175,53 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(count.rows[0]?.count).toBe('0');
   });
 
+  it('uses the configured dashboard connector when admitting a Hermes Cloud turn', async () => {
+    const workspace = await seedWorkspace();
+    const send = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
+      object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+      features: {
+        run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+        runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+      },
+      endpoints: {
+        runs: { method: 'POST', path: '/v1/runs' },
+        run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+        run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+        run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+        run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+      },
+    }));
+    const { env } = envWithWorkflow({
+      MODEL_SCRIPTED: '0',
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [workspace.agentId]: {
+          workspace_id: workspace.workspaceId,
+          base_url: 'https://runtime.example/control',
+          api_key: 'connector-secret',
+          transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `turn-connector-${randomUUID()}`, text: 'Read only.' },
+    });
+
+    // The connector was healthy, so admission reaches the next independent
+    // guard (this fixture intentionally has no provider key).
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'no_key' });
+    expect(send).toHaveBeenCalledWith(
+      'https://runtime.example/control',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(JSON.parse(String(send.mock.calls[0]?.[1]?.body))).toMatchObject({ operation: 'capabilities' });
+  });
+
   it('creates one run, one instance, and names the instance ${run_id}-a1', async () => {
     const workspace = await seedWorkspace();
     const { env, created } = envWithWorkflow();

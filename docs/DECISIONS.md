@@ -4671,3 +4671,32 @@ would create false-positive verification for invalid or revoked keys.
 endpoint, in which case verification should use it instead of a billed minimal
 completion. Adding another customer-facing provider requires a separate policy,
 catalog and UI decision rather than merely compiling another adapter.
+
+---
+
+## C56. Session refresh and runtime transport are resolved at their adapter boundaries
+
+**Decided September 16, 2026.** A successful WorkOS session refresh is unsealed
+again before authentication continues. WorkOS Node 10.13 returns the rotated
+sealed session without a separate access token, so the application reads the new
+JWT from that cookie instead of treating a missing response field as an empty
+token. Transient refresh failures retain the existing cookie; terminal failures
+still sign the user out.
+
+Every Hermes operation also honors the transport on the agent's runtime binding.
+Native profiles use the Runs paths directly; managed Cloud profiles use the one
+fixed dashboard connector envelope for capabilities, submit, status, events,
+steer and Stop. Health, browser admission and execution must use the same binding.
+
+**Why.** The old refresh adapter turned ordinary access-token expiry into `not a
+JWT` after a user had been signed in for several minutes. Separately, health and
+execution honored `dashboard_connector` while the browser turn route silently
+constructed a native client, so health was green but a real turn was rejected.
+Both failures came from reconstructing an upstream contract instead of carrying
+the adapter's authoritative result forward.
+
+**Evidence.** The staging browser session refreshed without another login. A
+real Iris turn then completed through Hermes Cloud with model
+`nous:deepseek/deepseek-v4.1-flash`, native runtime identity and agent-scoped
+traces. Regression coverage asserts the WorkOS refresh response shape and the
+Cloud connector used during turn admission.

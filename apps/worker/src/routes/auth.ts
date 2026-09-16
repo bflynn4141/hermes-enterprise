@@ -43,6 +43,8 @@ import { optionalWorkosPort, workosPort } from '../auth/workos.js';
 import { connect, withTenantTransaction } from '../db/client.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
+import { runJobsAfterCommit } from '../jobs.js';
+import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
 
 /**
  * Only same-origin paths may be used as a post-login destination. Anything
@@ -179,6 +181,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
   const client = await connect(c.env, 'app');
   let userId: string;
   let workspaceId: string | null = null;
+  const jobs: string[] = [];
   try {
     await client.query('BEGIN');
     userId = await upsertUser(client, authentication.user);
@@ -212,7 +215,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
       // commit together, so a failed mirror cannot leave half of a callback.
       await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', workspaceId]);
       await client.query('SELECT set_config($1, $2, true)', ['app.user_id', userId]);
-      await mirrorMembership(client, {
+      const mirrored = await mirrorMembership(client, {
         workspaceId,
         userId,
         role: selectedMembership.role === 'admin' ? 'admin' : 'member',
@@ -220,6 +223,17 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
         status: 'active',
         email: authentication.user.email,
       });
+      if (mirrored.acceptedInvitation) {
+        await coordinateAcceptedMember({
+          tx: client,
+          workspaceId,
+          joiningUserId: userId,
+          joiningMemberId: mirrored.memberId,
+          invitationId: mirrored.acceptedInvitation.id,
+          invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
+          jobs,
+        });
+      }
     }
     await client.query('COMMIT');
   } catch (error) {
@@ -228,6 +242,8 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
   } finally {
     await client.end();
   }
+
+  if (workspaceId && jobs.length > 0) await runJobsAfterCommit(c.env, workspaceId, jobs);
 
   const csrf = newCsrfToken();
   const headers = new Headers({ Location: safeReturnPath(transaction.returnTo) });

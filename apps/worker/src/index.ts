@@ -15,9 +15,10 @@ import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
-import { listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
+import { listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
+import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -129,6 +130,13 @@ import {
   startSlackOAuth,
 } from './routes/slack.js';
 import { slackEvents } from './routes/slack-events.js';
+import { getOnboardingSample, startOnboardingSample } from './routes/onboarding-sample.js';
+import {
+  getPartnerScreening,
+  partnerScreeningSources,
+  startPartnerScreening,
+} from './routes/partner-screening.js';
+import { patchAgent } from './routes/agents.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -234,6 +242,7 @@ app.use('*', async (c, next) => {
 app.get('/health', health);
 // Server-to-server profile credentials; these routes never accept browser auth.
 app.get('/internal/runtime/w/:ws/agents/:agentId/tools', listRuntimeTools);
+app.get('/internal/runtime/w/:ws/agents/:agentId/skills', listRuntimeSkills);
 app.post('/internal/runtime/w/:ws/agents/:agentId/calls', callRuntimeTool);
 app.get('/internal/runtime/w/:ws/agents/:agentId/model/v1/models', runtimeModels);
 app.post('/internal/runtime/w/:ws/agents/:agentId/model/v1/chat/completions', runtimeChatCompletions);
@@ -263,6 +272,19 @@ app.post('/integrations/slack/events', slackEvents);
 app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
+app.patch('/w/:ws/agents/:agentId', patchAgent);
+
+// A durable first-run simulation. It never calls a model, searches the web or
+// reaches an intake system; polling materializes its server-timed stages.
+app.post('/w/:ws/onboarding/sample-runs', startOnboardingSample);
+app.get('/w/:ws/onboarding/sample-runs/:id', getOnboardingSample);
+
+// Live public-source ingestion is separate from the labeled simulation and
+// from Iris's judgment. The connector persists evidence; the bound agent reads
+// it through read-only tools and may propose a pending Inbox request.
+app.get('/w/:ws/partner-screening/agents/:agentId/sources', partnerScreeningSources);
+app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
+app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
 
 // Settings > Provider keys (Admin, step-up) and the catalog the model menu
 // reads (any member). See src/routes/keys.ts for why the two differ.
@@ -276,6 +298,8 @@ app.get('/w/:ws/integrations/slack', getSlackConnection);
 app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
 app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
+app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
+app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
 // Sessions, and everything hanging off one.
 app.get('/w/:ws/sessions', listSessions);

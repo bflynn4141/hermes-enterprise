@@ -159,6 +159,7 @@ export const EVENT_KINDS = [
   'document.versioned',
   'member.invited',
   'member.joined',
+  'agent.joined',
   'member.role_changed',
   'member.removed',
   'instruction.saved',

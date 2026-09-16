@@ -76,6 +76,12 @@ try {
     [AGENT_ID, WORKSPACE_ID],
   );
   await client.query(
+    `INSERT INTO agent_owners (workspace_id, agent_id, member_id)
+     SELECT $1, $2, id FROM members WHERE workspace_id = $1 AND user_id = $3
+     ON CONFLICT (agent_id) DO NOTHING`,
+    [WORKSPACE_ID, AGENT_ID, ADMIN_ID],
+  );
+  await client.query(
     `INSERT INTO sessions (id, workspace_id, owner_id, title, model_id)
      VALUES ($1, $2, $3, 'Partner applications', 'nous:anthropic/claude-sonnet-5')
      ON CONFLICT (id) DO NOTHING`,

@@ -75,6 +75,30 @@ export const providerKeyRemovedSchema = z
   .object({ key: maskedProviderKeySchema, stopped_runs: z.array(uuidSchema).max(200) })
   .strict();
 
+export const providerOAuthStartSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('unavailable'),
+    reason: z.literal('oauth_not_configured'),
+    manual_fallback: z.boolean(),
+  }).strict(),
+  z.object({
+    status: z.literal('pending'),
+    session_id: uuidSchema,
+    verification_uri: z.url(),
+    user_code: z.string().min(1).max(32),
+    expires_at: z.iso.datetime(),
+    poll_after_ms: z.number().int().min(1_000).max(30_000),
+  }).strict(),
+]);
+export type ProviderOAuthStart = z.infer<typeof providerOAuthStartSchema>;
+
+export const providerOAuthPollSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pending'), poll_after_ms: z.number().int().min(1_000).max(30_000) }).strict(),
+  z.object({ status: z.literal('connected'), key: maskedProviderKeySchema, synced: z.object({ count: z.number().int().nonnegative(), at: z.iso.datetime() }).nullable() }).strict(),
+  z.object({ status: z.enum(['expired', 'failed']), reason: z.string().max(64) }).strict(),
+]);
+export type ProviderOAuthPoll = z.infer<typeof providerOAuthPollSchema>;
+
 /** `PUT /w/:ws/attachments/:id/upload` — the dev-only direct route. */
 export const directUploadResultSchema = z.object({ ok: z.boolean(), size: z.number().int().min(0) }).strict();
 

@@ -11,7 +11,10 @@ export type ProviderConnectStatus =
   | { kind: 'connected'; modelCount: number | null }
   | { kind: 'invalid'; message: string }
   | { kind: 'pending'; message: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  | { kind: 'notice'; message: string }
+  | { kind: 'authorizing'; userCode: string; verificationUri: string }
+  | { kind: 'oauth_unavailable'; message: string };
 
 export interface ProviderConnectProps {
   apiKey: string;
@@ -24,6 +27,9 @@ export interface ProviderConnectProps {
   /** Focus the secret field after a recent-sign-in round trip. */
   autoFocusKey?: boolean;
   connectLabel?: string;
+  onOAuthStart?: () => void;
+  /** Keep the API-key flow active after hosted OAuth reports unavailable. */
+  preferManual?: boolean;
 }
 
 /**
@@ -44,10 +50,12 @@ export function ProviderConnect({
   onDone,
   autoFocusKey = false,
   connectLabel = 'Connect and continue',
+  onOAuthStart,
+  preferManual = false,
 }: ProviderConnectProps) {
   const fieldId = useId();
   const helpId = `${fieldId}-help`;
-  const busy = status.kind === 'connecting' || status.kind === 'retrying';
+  const busy = status.kind === 'connecting' || status.kind === 'retrying' || status.kind === 'authorizing';
   const stored = status.kind === 'invalid' || status.kind === 'pending' || status.kind === 'retrying';
 
   if (status.kind === 'connected') {
@@ -67,10 +75,35 @@ export function ProviderConnect({
     );
   }
 
+  if (onOAuthStart && !preferManual && status.kind !== 'oauth_unavailable') {
+    return (
+      <div className="provider-connect" aria-busy={busy}>
+        <div className="provider-connect-oauth-mark" aria-hidden="true"><Icon name="key" size={20} /></div>
+        <div className="col provider-connect-step-copy">
+          <strong>Connect your Nous workspace</strong>
+          <span>Sign in to Nous Portal. Hermes stores a rotating credential for this workspace; teammates never see it.</span>
+        </div>
+        {status.kind === 'authorizing' && (
+          <div className="provider-connect-feedback" role="status">
+            Approve in the Nous Portal tab. If asked, enter <strong>{status.userCode}</strong>.
+            {' '}<a href={status.verificationUri} target="_blank" rel="noopener noreferrer">Open Nous Portal</a>
+          </div>
+        )}
+        {status.kind === 'notice' && <p className="provider-connect-feedback" role="status">{status.message}</p>}
+        {status.kind === 'error' && <p className="provider-connect-feedback is-error" role="alert">{status.message}</p>}
+        <div className="provider-connect-actions">
+          {onCancel && <Button onClick={onCancel}>Cancel</Button>}
+          <Button primary disabled={busy} onClick={onOAuthStart}>{busy ? 'Waiting for approval…' : 'Continue with Nous'}</Button>
+        </div>
+        <p className="provider-connect-admin-note">Workspace Admin only · recent sign-in required</p>
+      </div>
+    );
+  }
+
   return (
     <div className="provider-connect" aria-busy={busy}>
       <p className="provider-connect-intro">
-        Continue with Nous opens the official API key page in a new tab. Create a key there, copy it, then return here. Hermes connects only after you paste and save that key.
+        {status.kind === 'oauth_unavailable' ? status.message : 'Continue with Nous opens the official API key page in a new tab. Create a key there, copy it, then return here. Hermes connects only after you paste and save that key.'}
       </p>
 
       <section className="provider-connect-step" aria-labelledby={`${fieldId}-create-title`}>

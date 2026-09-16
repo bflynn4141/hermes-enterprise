@@ -304,6 +304,10 @@ export interface AgentDb extends AgentWrites {
   getDocumentText(documentId: string, offset: number, maxChars: number): Promise<{ text: string; next_offset: number | null; total_chars: number } | null>;
   getHistory(sessionId: string, limit: number): Promise<unknown[]>;
   listMembers(): Promise<unknown[]>;
+  /** Sanitized public organization candidates ingested by the app-role connector. */
+  listPartnerCandidates(agentId: string | null, minimumPriority: number, limit: number): Promise<unknown[]>;
+  /** One candidate with its immutable source artifacts and deterministic triage formula. */
+  getPartnerCandidate(agentId: string | null, candidateId: string): Promise<unknown | null>;
   /** True when a run is blocked on a human answer for this context key. */
   isAwaitingContext(key: string): Promise<boolean>;
   /**

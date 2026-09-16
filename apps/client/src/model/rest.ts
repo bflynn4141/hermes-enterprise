@@ -25,6 +25,8 @@ import {
   slackDisconnectSchema,
   slackLinkCodeSchema,
   slackOAuthStartSchema,
+  providerOAuthStartSchema,
+  providerOAuthPollSchema,
   runViewSchema,
   guidanceAcceptedSchema,
   queueStateSchema,
@@ -411,6 +413,8 @@ export function createRest(options: RestOptions) {
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
+    startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
+    pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**
      * One page of the catalog. Since Nous Portal the table is hundreds of rows,

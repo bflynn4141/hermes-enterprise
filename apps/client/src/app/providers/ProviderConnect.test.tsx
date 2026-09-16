@@ -61,4 +61,33 @@ describe('ProviderConnect', () => {
     expect(html).toContain('342 models are ready for Iris.');
     expect(html).toContain('>Done</button>');
   });
+
+  it('makes hosted Nous authorization the primary action when available', () => {
+    const html = render({ onOAuthStart: vi.fn() });
+    expect(html).toContain('Connect your Nous workspace');
+    expect(html).toContain('Continue with Nous');
+    expect(html).not.toContain('name="nous-api-key"');
+
+    const waiting = render({ onOAuthStart: vi.fn(), status: { kind: 'authorizing', userCode: 'ABCD-1234', verificationUri: 'https://portal.nousresearch.com/device' } });
+    expect(waiting).toContain('Waiting for approval…');
+    expect(waiting).toContain('ABCD-1234');
+
+    const resumed = render({ onOAuthStart: vi.fn(), status: { kind: 'notice', message: 'Sign-in confirmed. Continue with Nous to approve this workspace.' } });
+    expect(resumed).toContain('role="status"');
+    expect(resumed).toContain('Sign-in confirmed. Continue with Nous');
+  });
+
+  it('shows the manual key only as an honest unconfigured fallback', () => {
+    const html = render({ onOAuthStart: vi.fn(), status: { kind: 'oauth_unavailable', message: 'Hosted sign-in is unavailable.' } });
+    expect(html).toContain('Hosted sign-in is unavailable.');
+    expect(html).toContain('Nous Portal API key');
+
+    const invalidManual = render({
+      onOAuthStart: vi.fn(),
+      preferManual: true,
+      status: { kind: 'invalid', message: 'Nous Portal did not accept this key.' },
+    });
+    expect(invalidManual).toContain('Nous Portal did not accept this key.');
+    expect(invalidManual).toContain('Try verification again');
+  });
 });

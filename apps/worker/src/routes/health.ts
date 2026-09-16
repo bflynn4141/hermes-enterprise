@@ -156,7 +156,7 @@ async function checkAuthConfiguration(env: Env): Promise<string> {
 async function checkHermesRuntimes(env: Env): Promise<string> {
   const bindings = runtimeBindings(env);
   await Promise.all(bindings.map((binding) =>
-    new HermesClient(binding.baseUrl, binding.apiKey).capabilities()));
+    new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities()));
   return 'ready';
 }
 

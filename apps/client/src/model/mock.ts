@@ -263,6 +263,8 @@ export function createMockBackend(options: MockOptions = {}) {
             rotated_at: null,
             revoked_at: null,
             replaces_key_id: null,
+            credential_kind: 'api_key',
+            oauth_expires_at: null,
           },
         ];
 
@@ -973,13 +975,19 @@ export function createMockBackend(options: MockOptions = {}) {
         behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
       });
     }
+    if (p('/provider-connections/nous/start') && method === 'POST') {
+      // The ordinary browser fixture has no hosted OAuth client. Returning the
+      // same typed refusal as an unconfigured deployment exercises the real
+      // manual workspace-key fallback without inventing an OAuth credential.
+      return fail(503, 'oauth_not_configured', 'Hosted Nous sign-in is not configured in this fixture.');
+    }
     if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
     if (p('/provider-keys') && method === 'POST') {
       // Explicit fake values let browser tests exercise both outcomes without
       // putting a real credential on the wire or making a paid provider call.
       const rejected = body.key === 'nous-invalid-test-key-0000';
       const status: MaskedProviderKey['status'] = rejected ? 'invalid' : 'verified';
-      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'nous_portal', label: String(body.label ?? 'Nous Portal'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status, verified_models: [], synced_model_count: rejected ? null : 3, models_synced_at: rejected ? null : iso(0), added_by: USER, created_at: iso(0), verified_at: rejected ? null : iso(0), rotated_at: null, revoked_at: null, replaces_key_id: null };
+      const added: MaskedProviderKey = { id: mockUuid(41), provider: (body.provider as MaskedProviderKey['provider']) ?? 'nous_portal', label: String(body.label ?? 'Nous Portal'), last4: '1234', fingerprint_prefix: 'bb0091fe22aa', status, verified_models: [], synced_model_count: rejected ? null : 3, models_synced_at: rejected ? null : iso(0), added_by: USER, created_at: iso(0), verified_at: rejected ? null : iso(0), rotated_at: null, revoked_at: null, replaces_key_id: null, credential_kind: 'api_key', oauth_expires_at: null };
       providerKeys.push(added);
       return json({ key: added, verification: { status, reason: rejected ? 'rejected' : 'verified' } }, 201);
     }

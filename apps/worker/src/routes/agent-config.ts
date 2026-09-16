@@ -32,6 +32,7 @@ import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 import { requireRequestedFrom, SKILLS_SURFACE } from '../domain/guards.js';
+import { runtimeSkillCards } from '../runtime/skills.js';
 
 const skillPage = paginatedSchema(skillVersionSchema);
 const instructionPage = paginatedSchema(instructionVersionSchema);
@@ -91,7 +92,12 @@ export async function listSkills(c: Context<{ Bindings: Env }>): Promise<Respons
       `${SKILL_SELECT} ORDER BY sv.name, sv.version DESC LIMIT $3`,
       [work.workspaceId, agent, LIST_LIMIT],
     );
-    return rows.map(toSkill);
+    const stored = rows.map(toSkill);
+    const managed = runtimeSkillCards(c.env, agent);
+    return [...managed, ...stored.filter((item) => {
+      const named = item as { name?: unknown };
+      return !managed.some((skill) => skill.name === named.name);
+    })];
   });
   return c.json(skillPage.parse({ items, cursor: null, total: items.length }));
 }

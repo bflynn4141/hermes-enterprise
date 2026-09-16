@@ -20,11 +20,12 @@ import type { Env } from '../env.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
-import { withWorkspaceTransaction } from '../jobs.js';
+import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
+import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
 
 export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -80,6 +81,7 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
     await client.end();
   }
 
+  const jobs: string[] = [];
   const result = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
     const invitation = await tx.query<{ id: string; email: string; role: string }>(
       `SELECT id, email, role FROM invitations
@@ -87,7 +89,8 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
           AND (workos_invitation_id = $2 OR token_hash = $2
                OR ($2 ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
                    AND id = $2::uuid))
-        LIMIT 1`,
+        LIMIT 1
+        FOR UPDATE`,
       [workspaceId, token],
     );
     const invite = invitation.rows[0];
@@ -103,7 +106,7 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
     // The same mirror `/auth/callback` and the events poller write, so a
     // membership that arrives by any of the three routes is one shape of row.
     // It also flips the invitation to `accepted`, keyed on the email.
-    await mirrorMembership(tx, {
+    const mirrored = await mirrorMembership(tx, {
       workspaceId,
       userId: session.userId,
       role: invite.role === 'admin' ? 'admin' : 'member',
@@ -111,17 +114,26 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
       status: 'active',
       email,
     });
-    await tx.query(
-      `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, invitation_id)
-       VALUES ($1, 'user', $2, 'member.joined', $3)`,
-      [workspaceId, session.userId, invite.id],
-    );
+    if (!mirrored.acceptedInvitation) {
+      throw new RouteError('this invitation is not open', 'invitation_unavailable', 404);
+    }
+    await coordinateAcceptedMember({
+      tx,
+      workspaceId,
+      joiningUserId: session.userId,
+      joiningMemberId: mirrored.memberId,
+      invitationId: mirrored.acceptedInvitation.id,
+      invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
+      jobs,
+    });
 
     // The whole workspace, from inside the transaction that admitted them, so
     // the shell renders without a second round trip and without a window in
     // which they are a member of a workspace that reads as missing.
     return bootstrapSchema.parse(await loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)));
   });
+
+  if (jobs.length > 0) await runJobsAfterCommit(c.env, workspaceId, jobs);
 
   return c.json(result, 200);
 }

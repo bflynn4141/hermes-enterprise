@@ -8,6 +8,7 @@ import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
 import { HermesClient, HermesApiError, terminalHermesStatus } from './client.js';
+import type { RuntimeSkillManifest } from './skills.js';
 
 export interface RuntimePersistence extends AgentDb {
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
@@ -24,6 +25,8 @@ export interface RuntimeDeps {
   client: HermesClient;
   profile: string;
   forward(sessionId: string, runId: string, events: readonly EmittedEvent[]): Promise<{stop_requested:boolean}>;
+  /** Exact non-secret managed skill/config versions persisted with the run. */
+  skillSnapshot?: readonly RuntimeSkillManifest[];
   pollMs?: number;
 }
 const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exponential' }, timeout: '1 minute' };
@@ -87,6 +90,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         provider: 'custom',
         instructions: await buildSystemPrompt(db, run, []),
         _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
+        _enterprise_skills: deps.skillSnapshot ?? [],
       };
       if (previous.length) proposed.conversation_history = previous;
       if (run.effort) proposed.model_options = { reasoning_effort: run.effort };

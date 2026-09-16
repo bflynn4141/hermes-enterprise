@@ -311,6 +311,16 @@ export const approvalServerContextSchema = z
         session_id: uuidSchema.nullable(),
         run_id: uuidSchema.nullable(),
         dependent_request_ids: z.array(uuidSchema).max(50).default([]),
+        trigger: z
+          .object({
+            kind: z.literal('member_agent_joined'),
+            invitation_id: uuidSchema,
+            member_id: uuidSchema,
+            agent_id: uuidSchema,
+          })
+          .strict()
+          .nullable()
+          .optional(),
       })
       .strict(),
   })

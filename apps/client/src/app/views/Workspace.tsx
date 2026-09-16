@@ -1167,6 +1167,15 @@ function syncLabel(key: MaskedProviderKey): string | null {
   return `${key.synced_model_count} model${key.synced_model_count === 1 ? '' : 's'} synced · last sync ${when}`;
 }
 
+function providerAccountLabel(key: MaskedProviderKey): string | null {
+  if (key.credential_kind !== 'oauth_device_code') return null;
+  const account = key.oauth_account;
+  if (!account) return 'Nous account details unavailable';
+  const identity = account.email ?? account.user_id ?? 'Nous account';
+  const organization = account.organization_name ?? account.organization_slug;
+  return organization ? `${identity} · ${organization}` : identity;
+}
+
 function ProviderKeysTab() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -1177,6 +1186,7 @@ function ProviderKeysTab() {
   const [secret, setSecret] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [connectStatus, setConnectStatus] = useState<ProviderConnectStatus>({ kind: 'idle' });
+  const [manualProviderFlow, setManualProviderFlow] = useState(false);
   const [connectKeyId, setConnectKeyId] = useState<string | null>(null);
   const [autoFocusKey, setAutoFocusKey] = useState(false);
   const keys = lists.providerKeys;
@@ -1189,6 +1199,7 @@ function ProviderKeysTab() {
     setConnectStatus({ kind: 'idle' });
     setConnectKeyId(null);
     setAutoFocusKey(false);
+    setManualProviderFlow(false);
   };
 
   // On the way back from a recent-sign-in challenge, reopen the same flow and
@@ -1199,9 +1210,13 @@ function ProviderKeysTab() {
     const intent = adapter.pendingStepUp();
     if (intent?.kind !== 'provider_key') return;
     setDialog('add');
+    const hostedOAuth = intent.providerFlow === 'oauth';
+    setManualProviderFlow(!hostedOAuth);
     setAutoFocusKey(!intent.keyId);
     setConnectStatus(
-      intent.keyId
+      hostedOAuth
+        ? { kind: 'notice', message: 'Sign-in confirmed. Continue with Nous to approve this workspace.' }
+        : intent.keyId
         ? { kind: 'pending', message: 'Re-authenticated. Confirm to verify the saved key again; you do not need to paste it again.' }
         : { kind: 'idle' },
     );
@@ -1231,6 +1246,7 @@ function ProviderKeysTab() {
 
   const connect = async (): Promise<void> => {
     if (!secret.trim()) return;
+    setManualProviderFlow(true);
     setConnectStatus({ kind: 'connecting' });
     try {
       const result = await adapter.rest.addProviderKey(state.workspace.id, { provider: DEFAULT_PROVIDER, key: secret.trim() });
@@ -1238,7 +1254,7 @@ function ProviderKeysTab() {
     } catch (caught) {
       const error = caught as { status?: number; reason?: string };
       if (error.status === 401 && error.reason === 'reauth_required') {
-        storeStepUp({ kind: 'provider_key', returnTo: window.location.href });
+        storeStepUp({ kind: 'provider_key', providerFlow: 'api_key', returnTo: window.location.href });
         const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
         if (url) {
           window.location.assign(url);
@@ -1275,6 +1291,54 @@ function ProviderKeysTab() {
         }
       }
       setConnectStatus({ kind: 'pending', message: 'The key remains encrypted and saved, but verification did not finish. Try again shortly.' });
+    }
+  };
+
+  const startOAuth = async (): Promise<void> => {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) popup.opener = null;
+    setManualProviderFlow(false);
+    setConnectStatus({ kind: 'connecting' });
+    try {
+      const started = await adapter.rest.startNousOAuth(state.workspace.id);
+      if (started.status === 'unavailable') {
+        popup?.close();
+        setManualProviderFlow(true);
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
+        return;
+      }
+      if (popup) popup.location.href = started.verification_uri;
+      setConnectStatus({ kind: 'authorizing', userCode: started.user_code, verificationUri: started.verification_uri });
+      let delay = started.poll_after_ms;
+      while (Date.now() < new Date(started.expires_at).getTime()) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        const polled = await adapter.rest.pollNousOAuth(state.workspace.id, started.session_id);
+        if (polled.status === 'pending') { delay = polled.poll_after_ms; continue; }
+        if (polled.status === 'connected') {
+          popup?.close(); refreshKeys();
+          setConnectStatus({ kind: 'connected', modelCount: polled.synced?.count ?? polled.key.synced_model_count });
+          return;
+        }
+        popup?.close();
+        setConnectStatus({ kind: 'error', message: polled.status === 'expired' ? 'Nous sign-in expired. Start again.' : 'Nous could not connect this workspace. Start again.' });
+        return;
+      }
+      popup?.close();
+      setConnectStatus({ kind: 'error', message: 'Nous sign-in expired. Start again.' });
+    } catch (caught) {
+      popup?.close();
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        storeStepUp({ kind: 'provider_key', providerFlow: 'oauth', returnTo: window.location.href });
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) { window.location.assign(url); return; }
+      }
+      if (error.reason === 'oauth_not_configured') {
+        setManualProviderFlow(true);
+        setConnectStatus({ kind: 'oauth_unavailable', message: 'Hosted Nous sign-in is not enabled for this deployment. Use a workspace API key below.' });
+      } else {
+        setConnectStatus({ kind: 'error', message: 'Could not start Nous sign-in. Try again.' });
+      }
     }
   };
 
@@ -1325,6 +1389,7 @@ function ProviderKeysTab() {
             setConnectStatus({ kind: 'idle' });
             setConnectKeyId(null);
             setAutoFocusKey(false);
+            setManualProviderFlow(false);
             setNotice(null);
           }}
         >
@@ -1340,8 +1405,9 @@ function ProviderKeysTab() {
               <Glass name="skill" size={28} className="row-icon" />
               <div className="row-id" style={{ width: 220 }}>
                 <span className="t">{key.label}</span>
-                <span className="s">
-                  {key.provider} · ····{key.last4}
+                <span className="s truncate" title={providerAccountLabel(key) ?? undefined}>
+                  {key.provider} · {key.credential_kind === 'oauth_device_code' ? 'Workspace OAuth' : `····${key.last4}`}
+                  {providerAccountLabel(key) ? ` · ${providerAccountLabel(key)}` : ''}
                 </span>
               </div>
               <div className="row-main">
@@ -1367,15 +1433,17 @@ function ProviderKeysTab() {
                   <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
                 </>
               )}
-              <Button
-                onClick={() => {
-                  setTarget(key);
-                  setDialog('rotate');
-                }}
-                disabled={!usable(key)}
-              >
-                Rotate
-              </Button>
+              {key.credential_kind === 'api_key' && (
+                <Button
+                  onClick={() => {
+                    setTarget(key);
+                    setDialog('rotate');
+                  }}
+                  disabled={!usable(key)}
+                >
+                  Rotate
+                </Button>
+              )}
               <Button
                 quiet
                 onClick={() => {
@@ -1391,7 +1459,7 @@ function ProviderKeysTab() {
       )}
       {notice && <p className="meta">{notice}</p>}
       <p className="meta">
-        Nous Portal powers Iris through the Hermes Agent runtime. The key stays encrypted and only its last four characters are shown. Verification makes one minimal model request, then syncs the current catalog.
+        Nous Portal powers Iris through the Hermes Agent runtime. Workspace OAuth credentials stay encrypted and refresh automatically. Connecting syncs the current model catalog.
       </p>
 
       <Dialog
@@ -1411,6 +1479,8 @@ function ProviderKeysTab() {
           onRetry={() => void retryConnect()}
           onCancel={closeConnect}
           onDone={closeConnect}
+          onOAuthStart={() => void startOAuth()}
+          preferManual={manualProviderFlow}
         />
       </Dialog>
 

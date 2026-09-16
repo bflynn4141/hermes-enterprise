@@ -19,6 +19,30 @@ To reuse an already cloned **pinned official** source tree, pass `--source /abso
 
 The gateway runs in the foreground; run it under the deployment's process supervisor for lasting service. `--port` defaults to `8642`; assign a different port to each additional agent.
 
+## Hermes Cloud connector
+
+Hermes Cloud publishes its authenticated dashboard/Gateway hostname while the
+native API Server remains on loopback. Install this directory as a pinned user
+plugin and enable it to add one machine-authenticated connector route:
+
+```text
+POST /api/plugins/enterprise_bridge/control
+```
+
+Set a unique `HERMES_ENTERPRISE_CONTROL_SECRET` (at least 43 random URL-safe
+characters) on the Cloud instance. The Worker stores that value as the
+per-agent runtime `api_key`, sets the binding's `transport` to
+`dashboard_connector`, and uses the full connector URL as `base_url`. The
+plugin accepts only capabilities, submit, status, events, stop and steer; it
+forwards them to `http://127.0.0.1:8642` with `API_SERVER_KEY`. The native key
+never leaves the Cloud instance, and the connector cannot select another host
+or path.
+
+`ENTERPRISE_RUNTIME_TOKEN` continues to authenticate the reverse tool/model
+bridge from the runtime to the Worker. Keep these three credentials distinct.
+The Cloud profile still needs the same governed plugin settings and toolset
+policy described below; exposing the connector alone does not constrain tools.
+
 The env file has the fields shown in `credentials.env.example`. Provision `ENTERPRISE_RUNTIME_TOKEN` through the enterprise service's per-agent credential mechanism. `API_SERVER_KEY` is the random bearer secret the enterprise adapter uses to call this native runtime. Keep the file mode `0600`. There are **no workspace provider credentials** in this file. `--env-file` parses literal key/value data and never sources shell commands. CLI workspace, agent and URL flags override the corresponding file fields. Alternatively use `--token-file` with `--workspace-id`, `--agent-id` and `--enterprise-url`; the launcher then generates a native API key.
 
 The default dedicated profile is `~/.he-runtime/<agent-uuid>/`, separate from the user's personal `~/.hermes`. It contains its own `home`, `os-home`, working directory, session database, run reservations, API key, and a copy of the plugin. `--state-root` selects another data directory; keep the path short enough for macOS Unix sockets. The launcher checks the actual `<profile>/home/state/gateway.loop-tick.<pid>.sock` suffix with its current PID (preserved by `execve`) and counts UTF-8 bytes against the macOS limit. No personal environment, bot token, provider key, proxy setting, `HERMES_HOME`, session identity or Python user path is inherited. The launcher takes an exclusive per-agent file lock and refuses to repurpose an existing profile for a different workspace/agent/enterprise URL.
@@ -49,7 +73,7 @@ gateway:
     max_concurrent_runs: 1
 ```
 
-The launcher also disables every native built-in toolset, all MCP servers, both built-in memory stores, memory/skill nudges, background review and title generation. Only this plugin is enabled. A plugin pre-tool hook vetoes every name outside its discovered enterprise tools. Startup fails closed unless the resolved tool definitions contain only enterprise tools. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
+The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, all MCP servers, both built-in memory stores, memory/skill nudges, background review and title generation. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise tools. Startup fails closed unless the resolved tool definitions contain only enterprise tools plus that viewer. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
 `API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. The launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds. Native health and capabilities return 503 if the cron store later becomes nonempty. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
 
