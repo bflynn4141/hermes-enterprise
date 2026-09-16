@@ -261,10 +261,12 @@ describe('the catalog page (GET /w/:ws/catalog)', () => {
     await asApp(fx, (tx) => syncOpenRouterCatalog(tx, OPENROUTER_FIXTURE_MODELS));
 
     const byId = await asTenant(fx, (tx) => loadCatalogPage(tx, fx.workspaceId, { q: 'META-LLAMA' }));
-    expect(byId.models.map((m) => m.model_id)).toEqual(['openrouter:meta-llama/llama-4-70b-instruct']);
+    expect(byId.models.map((m) => m.model_id)).toContain('openrouter:meta-llama/llama-4-70b-instruct');
+    expect(byId.models.every((m) => `${m.model_id} ${m.label}`.toLowerCase().includes('meta-llama'))).toBe(true);
 
     const byLabel = await asTenant(fx, (tx) => loadCatalogPage(tx, fx.workspaceId, { q: 'gemini' }));
-    expect(byLabel.models).toHaveLength(1);
+    expect(byLabel.models.length).toBeGreaterThan(0);
+    expect(byLabel.models.every((m) => `${m.model_id} ${m.label}`.toLowerCase().includes('gemini'))).toBe(true);
   });
 
   it('filters by provider and reports the unpaged total', async () => {

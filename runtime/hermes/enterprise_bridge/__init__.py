@@ -146,12 +146,16 @@ def register(ctx):
         pending_timeout=ctx.get_config("pending_timeout_seconds", 86400),
     )
     # Install the veto before network discovery; a discovery failure exposes zero tools.
+    assigned_skills = {
+        name for name in ctx.get_config("allowed_skills", [])
+        if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
+    }
     allowed = {"skill_view"}
 
     def guard(tool_name, args=None, **kwargs):
         if tool_name == "skill_view":
             args = args if isinstance(args, dict) else {}
-            if (args.get("name") == "enterprise_bridge:partner-program-screening"
+            if (args.get("name") in assigned_skills
                     and not args.get("file_path")
                     and set(args).issubset({"name", "preprocess"})):
                 return None

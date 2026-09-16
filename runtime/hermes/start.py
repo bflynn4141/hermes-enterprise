@@ -234,6 +234,7 @@ def child(metadata_path):
         "plugins": {"enabled": ["enterprise_bridge"], "entries": {"enterprise_bridge": {"settings": {
             "base_url": base, "native_url": "http://127.0.0.1:" + str(metadata["port"]),
             "request_timeout_seconds": 5, "pending_timeout_seconds": 86400,
+            "allowed_skills": enterprise_skills["auto_load"],
         }}}},
         "gateway": {"multiplex_profiles": False, "api_server": {"max_concurrent_runs": 1},
                     "platforms": {"api_server": {"enabled": True, "extra": {

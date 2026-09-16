@@ -105,6 +105,12 @@ listing, creation and self-editing remain disabled. See
 [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md). Hermesmail remains
 a concept address, not a provisioned mailbox.
 
+Roll out the Worker before restarting a profile with this launcher. The launcher
+loads its agent-scoped skill manifest from the authenticated Worker during
+startup and deliberately fails closed if that endpoint is absent or invalid.
+After the Worker is healthy, restart profiles so the new skill/config snapshot
+takes effect; existing running profiles continue using their prior configuration.
+
 Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server),
 [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),
 and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md).

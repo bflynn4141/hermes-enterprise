@@ -93,6 +93,7 @@ class BridgeTests(unittest.TestCase):
                 return {
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
+                    "allowed_skills": ["enterprise_bridge:partner-program-screening"],
                 }.get(name, default)
 
             def register_hook(self, _name, callback):
