@@ -476,10 +476,11 @@ pnpm --filter @hermes/worker exec wrangler secret put WORKOS_COOKIE_PASSWORD --e
 pnpm --filter @hermes/worker exec wrangler secret put WORKOS_ISSUER --env $E            # exact OIDC discovery issuer
 pnpm --filter @hermes/worker exec wrangler secret put HUB_TICKET_SECRET --env $E        # set explicitly; see §6
 
-# Nous inference OAuth. The client id is public OAuth metadata, but is kept as
-# an environment binding because Nous provisions it per deployment. Hosted
-# sign-in stays on the manual-key fallback until it is present.
-pnpm --filter @hermes/worker exec wrangler secret put NOUS_PORTAL_OAUTH_CLIENT_ID --env $E
+# Nous inference OAuth. Staging declares Hermes Agent's public `hermes-cli`
+# device client in wrangler.jsonc. Install a separately attributable client id
+# for production when Nous provisions it. This is public OAuth metadata rather
+# than a client secret, but a Worker secret can override the checked-in var.
+pnpm --filter @hermes/worker exec wrangler secret put NOUS_PORTAL_OAUTH_CLIENT_ID --env production
 
 # Envelope encryption. KEK_CURRENT is a var, not a secret (see §4).
 pnpm --filter @hermes/worker exec wrangler secret put KEK_V1 --env $E

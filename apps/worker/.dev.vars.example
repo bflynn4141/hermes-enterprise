@@ -50,12 +50,14 @@ KEK_V1=""
 KEK_CURRENT=""
 
 # --- Nous Portal OAuth -------------------------------------------------------
-# Nous must provision this public/enterprise client id for the deployment.
+# Official Hermes Agent uses the public `hermes-cli` client for device-code
+# inference grants. That client is appropriate for local/staging proof. Use a
+# separately attributable Nous client for production when one is provisioned.
 # When either value is absent, the UI says hosted sign-in is unavailable and
 # offers the existing manual workspace-key fallback. Do not use the dashboard
 # `agent:{id}` client: that token has agent_dashboard:access, not inference:invoke.
 NOUS_PORTAL_OAUTH_ENABLED="0"
-NOUS_PORTAL_OAUTH_CLIENT_ID=""
+NOUS_PORTAL_OAUTH_CLIENT_ID="hermes-cli"
 # Production is pinned to https://portal.nousresearch.com. Override only for a
 # local integration fixture.
 NOUS_PORTAL_BASE_URL=""

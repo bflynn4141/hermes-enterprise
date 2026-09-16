@@ -15,7 +15,8 @@ credential or needing individual Nous accounts.
 The implementation follows the current official Hermes Agent source:
 
 - `POST https://portal.nousresearch.com/api/oauth/device/code`
-- client id provisioned by Nous for this deployment
+- official public device client `hermes-cli`, or a client provisioned by Nous
+  for this deployment
 - scope `inference:invoke`
 - user approval at the returned `verification_uri_complete`
 - polling `POST /api/oauth/token` with
@@ -29,28 +30,39 @@ used. Its `agent_dashboard:access` token cannot authorize model inference.
 
 ## Configuration
 
-Set both variables in an environment only after Nous provisions its client:
+Official Hermes Agent itself uses the public device-code client id
+`hermes-cli`. The Portal currently accepts it with `inference:invoke`, so the
+staging environment uses it for the first end-to-end proof:
 
 ```text
 NOUS_PORTAL_OAUTH_ENABLED=1
-NOUS_PORTAL_OAUTH_CLIENT_ID=<provisioned client id>
+NOUS_PORTAL_OAUTH_CLIENT_ID=hermes-cli
 ```
+
+This is the client **identifier**, not a credential copied from
+`~/.hermes/auth.json`. Running `hermes auth add nous` locally is unnecessary
+and would create a separate local grant. The Enterprise Worker runs the same
+device-code contract directly and stores its own encrypted workspace grant.
+
+Before production, prefer a separately provisioned client id so Nous can
+attribute, support, rate-limit or revoke the Enterprise application without
+coupling it to every Hermes CLI installation. The public client is therefore a
+staging proof path, not the final production ownership boundary.
 
 When either is absent, `POST /w/:ws/provider-connections/nous/start` returns a
 typed `unavailable` result with reason `oauth_not_configured`. The client identifies the deployment limitation and
 reveals the manual workspace-key fallback. It never invents an authorization
 URL or falls back to a dashboard token.
 
-`NOUS_PORTAL_OAUTH_ENABLED=1` is declared for staging and production. The
-provisioned client id must be installed on each Worker before hosted sign-in is
-live:
+`NOUS_PORTAL_OAUTH_ENABLED=1` is declared for staging and production. Staging
+also declares `hermes-cli`. Production remains unavailable until a separately
+provisioned client id is installed:
 
 ```sh
-pnpm --filter @hermes/worker exec wrangler secret put NOUS_PORTAL_OAUTH_CLIENT_ID --env staging
 pnpm --filter @hermes/worker exec wrangler secret put NOUS_PORTAL_OAUTH_CLIENT_ID --env production
 ```
 
-Until Nous provisions that client id, the same screen deliberately exposes the
+Until production has that client id, the same screen deliberately exposes the
 manual workspace-key fallback.
 
 ## Storage and lifecycle

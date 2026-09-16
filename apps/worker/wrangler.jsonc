@@ -184,6 +184,9 @@
         "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
         "WORKOS_REDIRECT_URI": "https://staging.hermes.brianflynn.dev/auth/callback",
         "NOUS_PORTAL_OAUTH_ENABLED": "1",
+        // Official Hermes Agent's public device-code client. It is suitable for
+        // staging proof; production should use a separately attributable client.
+        "NOUS_PORTAL_OAUTH_CLIENT_ID": "hermes-cli",
         "ALLOWED_PROVIDERS": "nous_portal",
         "PLATFORM_MAX_INSTANCES_PER_HOUR": "500",
         "R2_BUCKET": "hermes-uploads-staging"
