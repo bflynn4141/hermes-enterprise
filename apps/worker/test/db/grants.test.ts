@@ -44,6 +44,12 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   approval_revisions: ['SELECT'],
   approval_votes: ['SELECT'],
   approval_routes: ['SELECT'],
+  // The agent may bind a pending continuation to its own live proposal, under
+  // the trigger guard. Admission, budgets and terminal projection remain
+  // app/SECURITY-DEFINER operations.
+  approval_continuations: ['SELECT', 'INSERT'],
+  approval_runtime_budgets: ['SELECT'],
+  approval_model_reservations: ['SELECT'],
   // M3.5. The run engine may quote an uploaded document and may not mark one
   // ready, rename one or make one disappear: a tool that could mark its own
   // source ready would be a tool that could hide a failed extraction.
@@ -104,6 +110,9 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'approval_votes', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_routes', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_commands', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_continuations', privileges: ['UPDATE', 'DELETE'] },
+  { table: 'approval_runtime_budgets', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'approval_model_reservations', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

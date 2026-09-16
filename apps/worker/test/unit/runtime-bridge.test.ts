@@ -17,9 +17,15 @@ class FakeBridgeDb extends FakeAgentDb {
   mapped = true;
   pending = false;
   capabilities: string[] | null = null;
+  inCallLock = false;
+  approvalRanInsideCallLock: boolean | null = null;
   async findRuntimeRun(id: string, agent: string) { return this.mapped && id === remoteId && agent === agentId ? this.loadRun() : null; }
   async mappingPending() { return this.pending; }
-  async withCallLock<T>(_agent: string, fn: () => Promise<T>): Promise<T> { return fn(); }
+  async withCallLock<T>(_agent: string, fn: () => Promise<T>): Promise<T> {
+    this.inCallLock = true;
+    try { return await fn(); }
+    finally { this.inCallLock = false; }
+  }
   async lockRun() {}
   async startRuntimeWait() {}
   async endRuntimeWait() {}
@@ -30,6 +36,10 @@ class FakeBridgeDb extends FakeAgentDb {
     return row && call ? { turn: row.turn, seq: row.seq, call, ok: null, result: this.turns.find((turn) => turn.toolCallId === id)?.providerMessage.content ?? null } : null;
   }
   override loadToolNames() { return this.capabilities ? Promise.resolve(this.capabilities) : super.loadToolNames(); }
+  override proposeApproval(_input: Parameters<FakeAgentDb['proposeApproval']>[0]) {
+    this.approvalRanInsideCallLock = this.inCallLock;
+    return Promise.reject(new Error('fixture policy rejected the proposal'));
+  }
 }
 const call = (name = 'list_requests', args: Record<string, unknown> = {}): RuntimeCall => ({ runtime_run_id: remoteId, tool_call_id: 'native-call-1', name, arguments: args });
 const db = (overrides = {}) => new FakeBridgeDb({ workspaceId, agentId, ...overrides });
@@ -65,6 +75,35 @@ describe('official runtime configuration and authentication', () => {
 });
 
 describe('enterprise runtime tool boundary', () => {
+  it('executes the app-role approval domain outside the agent run-row lock', async () => {
+    const store = db();
+    store.capabilities = ['propose_approval'];
+    const result = await dispatchRuntimeCall(store, workspaceId, agentId, call('propose_approval', {
+      label: 'Reviewed plan',
+      policy_key: 'run-plan-standard',
+      proposal: {
+        kind: 'approval', approval_type: 'run_plan', summary: 'Prepare the reviewed report.',
+        consequence: 'One bounded run may start after human approval.', evidence: [], illustrative: true,
+        details: {
+          goal: 'Prepare the report.',
+          steps: [{ id: 'report', label: 'Prepare report', agent_id: agentId, output: 'Report' }],
+          participating_agents: [{ agent_id: agentId, role: 'Researcher' }],
+          deliverables: ['Report'], schedule: 'Once after approval.',
+          budget: {
+            currency: 'USD', estimated_min_minor: 0, estimated_max_minor: 0, cap_minor: 0,
+            total_token_cap: 1000, call_cap: 1, max_output_tokens_per_call: 100,
+            max_parallel_calls: 1, model_ids: ['openrouter:model-a'], metered_tools: [],
+            retries_included: 0, illustrative: true,
+          },
+        },
+      },
+      continuation: {},
+    }));
+    expect(store.approvalRanInsideCallLock).toBe(false);
+    expect(result.reply).toMatchObject({ ok: false });
+    expect('content' in result.reply ? result.reply.content : '').toContain('fixture policy rejected');
+  });
+
   it('refuses stopped and terminal runs before any tool writes', async () => {
     for (const status of ['stopped', 'stopping', 'completed', 'error']) {
       const store = db({ status });
@@ -136,10 +175,13 @@ describe('workspace model credential proxy', () => {
     activeProfileRun: async () => (await db({ modelId: selected }).loadRun()),
     allowedRuntimeModels: async () => [{ model_id: selected, provider: 'openrouter' }],
     resolveCredential: vi.fn(async () => ({ provider: 'openrouter', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
+    recordModelCall: vi.fn(async () => undefined),
   });
   it('forwards only the selected raw catalog model to fixed OpenRouter with fresh workspace credentials', async () => {
     const store = makeModelDb();
-    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [] }));
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+      choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 2 } },
+    }));
     const value = { model: 'nousresearch/hermes-4', messages: [], models: ['evil/model'], provider: { api_key: 'attacker' }, base_url: 'https://attacker.example', reasoning_effort: 'high' };
     const response = await proxyRuntimeModel(env, store, workspaceId, agentId, value, fetcher);
     expect(response.status).toBe(200);
@@ -149,6 +191,10 @@ describe('workspace model credential proxy', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer workspace-provider-secret');
     expect(JSON.parse(String(init?.body))).toEqual({ model: 'nousresearch/hermes-4', messages: [], reasoning: { effort: 'high' } });
     expect(await response.text()).not.toContain('workspace-provider-secret');
+    expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
+      runId: expect.any(String), turn: null, modelId: selected, provider: 'openrouter', keyId: 'key-1',
+      usage: { input_tokens: 7, output_tokens: 3, cached_input_tokens: 2, reasoning_tokens: 0 }, status: 'ok',
+    }));
   });
   it('refuses another model or workspace before decrypting a key or making a request', async () => {
     const store = makeModelDb(); const fetcher = vi.fn<typeof fetch>();
@@ -163,5 +209,62 @@ describe('workspace model credential proxy', () => {
     expect(response.status).toBe(502);
     expect(await response.text()).not.toContain('workspace-provider-secret');
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('reserves an approved plan before fetch and reconciles final streamed usage', async () => {
+    const store = {
+      ...makeModelDb(),
+      runtimeBudgetForRun: vi.fn(async () => ({
+        budgetId: 'budget-1', authorizationState: 'admitted', state: 'active', modelId: selected,
+        maxOutputTokensPerCall: 100, contextLength: 32_000, pricingVerifiedOn: '2026-09-15',
+        pricing: { input: 1, output: 2, cachedInput: 0.25 },
+      })),
+      reserveRuntimeBudget: vi.fn(async () => ({ reservationId: 'reservation-1', budgetId: 'budget-1' })),
+      reconcileRuntimeBudget: vi.fn(async () => undefined),
+    };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(
+      'data: {"usage":{"prompt_tokens":20,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":4}}}\n\ndata: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } },
+    ));
+    const response = await proxyRuntimeModel(
+      env, store, workspaceId, agentId,
+      { model: 'nousresearch/hermes-4', messages: [{ role: 'user', content: 'bounded' }], max_tokens: 50, stream: true },
+      fetcher,
+    );
+    expect(store.reserveRuntimeBudget).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledOnce();
+    await response.text();
+    expect(store.reconcileRuntimeBudget).toHaveBeenCalledWith({
+      reservationId: 'reservation-1',
+      resolution: 'completed',
+      usage: { inputTokens: 20, outputTokens: 5, cachedInputTokens: 4 },
+      actualCostUsd: 0.000027,
+    });
+    expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
+      keyId: 'key-1', status: 'ok',
+      usage: { input_tokens: 20, output_tokens: 5, cached_input_tokens: 4, reasoning_tokens: 0 },
+    }));
+  });
+  it('fails a budgeted call closed when catalog pricing or output bounds are unavailable', async () => {
+    const store = {
+      ...makeModelDb(),
+      runtimeBudgetForRun: vi.fn(async () => ({
+        budgetId: 'budget-1', authorizationState: 'admitted', state: 'active', modelId: selected,
+        maxOutputTokensPerCall: 100, contextLength: 32_000, pricingVerifiedOn: null,
+        pricing: null,
+      })),
+      reserveRuntimeBudget: vi.fn(),
+      reconcileRuntimeBudget: vi.fn(),
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    const response = await proxyRuntimeModel(
+      env, store, workspaceId, agentId,
+      { model: 'nousresearch/hermes-4', messages: [], max_tokens: 10 },
+      fetcher,
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: 'approval_budget_price_unknown' } });
+    expect(store.resolveCredential).not.toHaveBeenCalled();
+    expect(store.reserveRuntimeBudget).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

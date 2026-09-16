@@ -859,10 +859,12 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     work.tx, row.workspace_id, 'approval_continue',
     `approval-finalized:${row.request_id}:${row.authorization_revision}:${row.authorization_hash}`, hook,
   );
-  if (jobId) await work.tx.query(`UPDATE approval_requests SET finalization_job_id = $2 WHERE request_id = $1`, [row.request_id, jobId]);
-  // Workstream C owns the runner. Do not put this id in work.jobs until that
-  // handler is integrated; otherwise the current unknown-kind dispatcher would
-  // mark the durable signal done without admitting anything.
+  if (jobId) {
+    await work.tx.query(`UPDATE approval_requests SET finalization_job_id = $2 WHERE request_id = $1`, [row.request_id, jobId]);
+    // The handler now exists. Try immediately after commit; the durable row and
+    // minute drain still cover an interrupted request or temporary blocker.
+    work.jobs.push(jobId);
+  }
 }
 
 export async function decideApproval(context: ApprovalHumanContext, requestId: string, rawInput: unknown): Promise<{ view: ApprovalView; duplicate: boolean }> {

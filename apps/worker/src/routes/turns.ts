@@ -19,6 +19,7 @@ import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { runtimeBinding } from '../runtime/config.js';
+import { approvalContinuationRetryBlock } from '../runtime/continuation.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
@@ -672,6 +673,10 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
       throw new RouteError('the engine is paused for a deploy', 'engine_paused', 409);
     }
     const attempt = run.attempt + 1;
+    const approvalRetryBlock = await approvalContinuationRetryBlock(work.tx, runId, attempt);
+    if (approvalRetryBlock) {
+      throw new RouteError('this approved continuation cannot be retried under its current authorization and budget', approvalRetryBlock, 409);
+    }
     const engineVersion = Number(c.env.ENGINE_VERSION ?? '1') || 1;
     const traceId = crypto.randomUUID();
     const instanceId = runAttemptInstanceId(runId, attempt);

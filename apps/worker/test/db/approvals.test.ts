@@ -169,7 +169,7 @@ describe('enterprise approval policy and voting', () => {
     });
     expect(new Set(persisted.votes.map((vote) => vote.reviewer_member_id)).size).toBe(2);
     expect(persisted.jobs).toHaveLength(1);
-    expect(persisted.jobs[0]?.done_at).toBeNull();
+    expect(persisted.jobs[0]?.done_at).not.toBeNull();
   });
 
   it('deduplicates simultaneous identical decisions without double voting', async () => {

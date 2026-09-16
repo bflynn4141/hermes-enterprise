@@ -7,7 +7,6 @@ import { buildSystemPrompt } from '../engine/prompt.js';
 import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
-import { ZERO_USAGE } from '../model/types.js';
 import { HermesClient, HermesApiError, terminalHermesStatus } from './client.js';
 
 export interface RuntimePersistence extends AgentDb {
@@ -184,11 +183,6 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await db.carryGuidance(run.id, (await db.loadGuidance(run.id)).map((row) => row.id));
       await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: parsed.text, blocks: parsed.blocks, status: completed ? 'complete' : 'incomplete', workedMs });
       await db.appendTurn({ runId: run.id, turn: run.maxTurns + run.attempt, seq: 0, toolCallId: `hermes-final-${run.attempt}`, role: 'assistant', providerMessage: { role: 'assistant', content: parsed.text } });
-      const currentKey = await db.resolveCredential('openrouter').catch(() => null);
-      await db.recordModelCall({ runId: run.id, turn: 0, modelId: run.modelId, provider: 'openrouter', keyId: currentKey?.keyId ?? null,
-        usage: { ...ZERO_USAGE, input_tokens: status.usage?.input_tokens ?? 0, output_tokens: status.usage?.output_tokens ?? 0 }, latencyMs: workedMs,
-        status: completed ? 'ok' : stoppedStatus ? 'stopped' : 'error',
-      });
       const activeMs = await db.addActiveMs(run.id, workedMs);
       await db.finishStep({ ...progress, state: finalStatus === 'error' ? 'failed' : 'done' });
       await db.setRunStatus(run.id, finalStatus, { error, waitingFor: null, waitingLabel: null });

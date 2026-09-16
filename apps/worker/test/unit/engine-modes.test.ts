@@ -24,11 +24,11 @@ describe('the mode allowlists', () => {
     expect(names).not.toContain('set_focus');
   });
 
-  it('gives Plan the same tools as Work, and prepares the four that write', () => {
+  it('gives Plan the same tools as Work, and prepares the writes', () => {
     const plan = allowedTools('plan', everyTool).map((t) => t.name);
     const work = allowedTools('work', everyTool).map((t) => t.name);
     expect(plan).toEqual(work);
-    expect([...PREPARED_TOOLS]).toEqual(['propose_request', 'save_review_note', 'set_context_field', 'propose_instruction']);
+    expect([...PREPARED_TOOLS]).toEqual(['propose_request', 'propose_approval', 'save_review_note', 'set_context_field', 'propose_instruction']);
     // `ask_for_context` writes nothing, so Plan runs it for real: a plan that
     // cannot ask the question it needs answered is not a plan.
     expect(PREPARED_TOOLS.has('ask_for_context')).toBe(false);

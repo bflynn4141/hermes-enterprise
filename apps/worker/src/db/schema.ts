@@ -499,6 +499,84 @@ export const modelCalls = pgTable('model_calls', {
 });
 
 // ---------------------------------------------------------------------------
+// Approval continuations and their model-call reservations (0023)
+// ---------------------------------------------------------------------------
+
+export const approvalContinuations = pgTable(
+  'approval_continuations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    authorizationRevision: integer('authorization_revision').notNull(),
+    authorizationHash: text('authorization_hash').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    runtimeProfile: text('runtime_profile').notNull(),
+    sessionId: uuid('session_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    sourceToolCallId: text('source_tool_call_id'),
+    continuationPayload: jsonb('continuation_payload').notNull(),
+    dependencyRequestIds: uuid('dependency_request_ids').array().notNull().default([]),
+    state: text('state').notNull().default('pending_authorization'),
+    expiresAt: ts('expires_at').notNull(),
+    admittedRunId: uuid('admitted_run_id'),
+    blockedReason: text('blocked_reason'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+    admittedAt: ts('admitted_at'),
+  },
+  (t) => [unique('approval_continuations_revision').on(t.requestId, t.authorizationRevision)],
+);
+
+export const approvalRuntimeBudgets = pgTable(
+  'approval_runtime_budgets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    continuationId: uuid('continuation_id').notNull().unique(),
+    requestId: uuid('request_id').notNull(),
+    authorizationRevision: integer('authorization_revision').notNull(),
+    authorizationHash: text('authorization_hash').notNull(),
+    modelId: text('model_id').notNull(),
+    currency: text('currency').notNull().default('USD'),
+    costCapUsd: numeric('cost_cap_usd', { precision: 14, scale: 8 }).notNull(),
+    totalTokenCap: bigint('total_token_cap', { mode: 'number' }).notNull(),
+    callCap: integer('call_cap').notNull(),
+    maxOutputTokensPerCall: integer('max_output_tokens_per_call').notNull(),
+    maxParallelCalls: integer('max_parallel_calls').notNull().default(1),
+    retryCap: integer('retry_cap').notNull().default(0),
+    reservedCostUsd: numeric('reserved_cost_usd', { precision: 14, scale: 8 }).notNull().default('0'),
+    actualCostUsd: numeric('actual_cost_usd', { precision: 14, scale: 8 }).notNull().default('0'),
+    reservedTokens: bigint('reserved_tokens', { mode: 'number' }).notNull().default(0),
+    actualTokens: bigint('actual_tokens', { mode: 'number' }).notNull().default(0),
+    callsReserved: integer('calls_reserved').notNull().default(0),
+    callsReconciled: integer('calls_reconciled').notNull().default(0),
+    state: text('state').notNull().default('active'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('approval_runtime_budgets_revision').on(t.requestId, t.authorizationRevision)],
+);
+
+export const approvalModelReservations = pgTable('approval_model_reservations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  budgetId: uuid('budget_id').notNull(),
+  runId: uuid('run_id').notNull(),
+  modelId: text('model_id').notNull(),
+  inputTokenBound: bigint('input_token_bound', { mode: 'number' }).notNull(),
+  outputTokenBound: integer('output_token_bound').notNull(),
+  reservedCostUsd: numeric('reserved_cost_usd', { precision: 14, scale: 8 }).notNull(),
+  actualInputTokens: bigint('actual_input_tokens', { mode: 'number' }),
+  actualOutputTokens: bigint('actual_output_tokens', { mode: 'number' }),
+  actualCachedInputTokens: bigint('actual_cached_input_tokens', { mode: 'number' }),
+  actualCostUsd: numeric('actual_cost_usd', { precision: 14, scale: 8 }),
+  status: text('status').notNull().default('reserved'),
+  createdAt: now('created_at'),
+  reconciledAt: ts('reconciled_at'),
+});
+
+// ---------------------------------------------------------------------------
 // Requests, decisions, effects, documents
 // ---------------------------------------------------------------------------
 
@@ -969,6 +1047,9 @@ export const ALL_TABLES = {
   run_turns: runTurns,
   run_queue: runQueue,
   model_calls: modelCalls,
+  approval_continuations: approvalContinuations,
+  approval_runtime_budgets: approvalRuntimeBudgets,
+  approval_model_reservations: approvalModelReservations,
   requests,
   decisions,
   effects,

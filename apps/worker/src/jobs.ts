@@ -11,10 +11,14 @@
 // sockets of someone whose access was removed; `workos_sync` performs the
 // WorkOS-side write after our transaction has already committed ours, so a
 // WorkOS outage can never leave a member active here and deactivated there.
+import { approvalFinalizedHookSchema } from '@hermes/shared';
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
+import { loadApprovalView } from './domain/approvals.js';
 import { runReceiptJob } from './runs/receipt.js';
+import { runAttemptInstanceId } from './runs/instance-id.js';
+import { admitApprovalContinuation } from './runtime/continuation.js';
 import { runBackupUploads } from './storage/backup.js';
 import { runCapWarningJob } from './ops/cap-warning.js';
 import { runEventsExport } from './ops/events-export.js';
@@ -49,6 +53,10 @@ export const JOB_KINDS = [
   // M5a: the 80 percent cap warning, and the weekly audit-events export.
   'cap_warning',
   'events_export',
+  // A finalized approval may authorize one fresh, revision-bound run. The
+  // durable job is the crash-safe seam between the human decision transaction
+  // and Workflow instance creation.
+  'approval_continue',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -364,6 +372,60 @@ async function runRender(env: Env, job: Job): Promise<void> {
   });
 }
 
+/**
+ * Admit a human-approved continuation under app-role policy, then create the
+ * Workflow instance only after that transaction commits. A replay either
+ * finds the same admitted run or retries a temporarily blocked admission; it
+ * can never mint a second run for the same revision-bound intent.
+ */
+async function runApprovalContinue(env: Env, job: Job): Promise<void> {
+  const hook = approvalFinalizedHookSchema.parse(job.payload);
+  if (hook.workspace_id !== job.workspace_id) throw new Error('approval_continue_workspace_mismatch');
+
+  const admission = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const current = await loadApprovalView(tx, hook.request_id, null);
+    const result = await admitApprovalContinuation(tx, env, hook, current);
+    if (result.status === 'admitted' && result.message) {
+      await publishEvents(tx, job.workspace_id, [{
+        kind: 'message.appended',
+        sessionId: result.instance.sessionId,
+        traceId: result.instance.traceId,
+        payload: {
+          message_id: result.message.id,
+          session_id: result.instance.sessionId,
+          seq: result.message.seq,
+          role: 'system',
+          kind: 'approval_continuation',
+          text: result.message.text,
+          blocks: [],
+          status: 'complete',
+          run_id: result.runId,
+        },
+      }]);
+    }
+    return result;
+  });
+
+  if (admission.status === 'blocked') throw new Error(`approval_continue_blocked:${admission.reason}`);
+  if (admission.status !== 'admitted' && admission.status !== 'already_admitted') {
+    console.log(JSON.stringify({
+      at: 'job.approval_continue',
+      request_id: hook.request_id,
+      status: admission.status,
+      reason: 'reason' in admission ? admission.reason : 'admission_not_created',
+    }));
+    return;
+  }
+
+  const instanceId = runAttemptInstanceId(admission.runId, admission.instance.attempt);
+  try {
+    await env.RUN_ATTEMPT.create({ id: instanceId, params: admission.instance });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/already exists|duplicate|instance.*id/i.test(message)) throw error;
+  }
+}
+
 /** Dispatch. An unknown kind is done rather than retried forever. */
 export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<void> {
   switch (job.kind) {
@@ -402,6 +464,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'events_export':
       // The weekly CSV of one workspace's audit trail into the backup bucket.
       await runEventsExport(env, job);
+      return;
+    case 'approval_continue':
+      await runApprovalContinue(env, job);
       return;
     case 'reverify':
       {

@@ -7,7 +7,7 @@
 // this one exists because a grant is invisible at the call site, and a method
 // that does not exist cannot be called by accident in a refactor.
 //
-// `AgentWrites` is the surface a *tool* is handed. It is deliberately six
+// `AgentWrites` is the surface a *tool* is handed. It is deliberately narrow
 // methods long, and `test/unit/agent-writes.test.ts` asserts by type that it
 // never grows a decide, execute, invite, role or job method. `AgentDb` adds the
 // reads and the run's own bookkeeping — status, steps, the streaming message,
@@ -18,7 +18,7 @@
 // no INSERT on `jobs` at all (0004: `REVOKE ALL ON jobs FROM agent`), which is
 // why the engine publishes by handing committed rows to the hub itself rather
 // than by enqueuing a `publish` job; see decision 40 in docs/DECISIONS.md.
-import type { RequestKind } from '@hermes/shared';
+import type { ApprovalView, ProposeApprovalInput, RequestKind } from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 
 /** An outbox row, written in the same transaction as the change it describes. */
@@ -43,11 +43,23 @@ export interface ProposeRequestInput {
   readonly runId: string;
   readonly sessionId: string;
   readonly toolCallId: string;
-  readonly kind: RequestKind;
+  readonly kind: Exclude<RequestKind, 'approval'>;
   readonly subject: string;
   readonly subjectKey: string;
   readonly label: string;
   readonly payload: unknown;
+}
+
+export interface ProposeApprovalFromAgentInput {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly toolCallId: string;
+  readonly agentId: string;
+  readonly approval: ProposeApprovalInput;
+  readonly continuation: {
+    readonly targetAgentId: string;
+    readonly targetSessionId: string;
+  } | null;
 }
 
 export interface SaveReviewNoteInput {
@@ -106,6 +118,14 @@ export interface AgentWrites {
   proposeRequest(
     input: ProposeRequestInput,
   ): Promise<{ requestId: string; created: boolean; events?: readonly EmittedEvent[] }>;
+  /**
+   * A typed pending approval proposal. The implementation crosses to the app
+   * role only through the server approval domain; this surface has no decide,
+   * route, revise, policy, reviewer, or finalization operation.
+   */
+  proposeApproval(
+    input: ProposeApprovalFromAgentInput,
+  ): Promise<{ approval: ApprovalView; continuationId: string | null }>;
   saveReviewNote(
     input: SaveReviewNoteInput,
   ): Promise<{ noteId: string; created: boolean; events?: readonly EmittedEvent[] }>;
@@ -268,7 +288,7 @@ export interface AgentDb extends AgentWrites {
   upsertAssistantMessage(input: AssistantMessageInput): Promise<{ messageId: string; seq: number }>;
   recordModelCall(input: {
     runId: string;
-    turn: number;
+    turn: number | null;
     modelId: string;
     provider: string;
     keyId: string | null;
@@ -280,6 +300,7 @@ export interface AgentDb extends AgentWrites {
   /** Tool reads. Everything here is filtered by row-level security already. */
   listRequests(status: string | null, limit: number): Promise<unknown[]>;
   getRequest(requestId: string): Promise<unknown | null>;
+  getApprovalStatus(requestId: string): Promise<ApprovalView>;
   getDocumentText(documentId: string, offset: number, maxChars: number): Promise<{ text: string; next_offset: number | null; total_chars: number } | null>;
   getHistory(sessionId: string, limit: number): Promise<unknown[]>;
   listMembers(): Promise<unknown[]>;

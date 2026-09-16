@@ -35,17 +35,18 @@ describe('the AgentWrites surface', () => {
     expect(noForbiddenWrites).toBe(true);
   });
 
-  it('is exactly the six methods the plan names', () => {
+  it('is exactly the narrow proposal and trace methods the runtime exposes', () => {
     // A compile-time list, checked at run time so the failure names the method.
     const expected: readonly (keyof AgentWrites)[] = [
       'proposeRequest',
+      'proposeApproval',
       'saveReviewNote',
       'setContextField',
       'proposeInstruction',
       'appendTurn',
       'emit',
     ];
-    expect(expected).toHaveLength(6);
+    expect(expected).toHaveLength(7);
   });
 });
 
@@ -63,6 +64,13 @@ describe('the tool registry', () => {
       expect(TOOL_NAMES).not.toContain(forbidden);
       expect(findForbiddenNames([forbidden])).not.toEqual([]);
     }
+  });
+
+  it('keeps enterprise approvals out of the generic request proposal path', () => {
+    const generic = TOOLS.find((tool) => tool.name === 'propose_request');
+    const kinds = ((generic?.input_schema.properties as Record<string, { enum?: string[] }> | undefined)?.kind?.enum) ?? [];
+    expect(kinds).not.toContain('approval');
+    expect(TOOL_NAMES).toContain('propose_approval');
   });
 
   it('keeps the two command registries disjoint', () => {

@@ -20,6 +20,7 @@
 //   * A result over 8 KB is truncated with a marker (plan section 4), because
 //     the alternative is a context window spent on one document.
 import {
+  approvalViewSchema,
   FILE,
   FOCUS_VIEWS,
   findForbiddenNames,
@@ -32,11 +33,13 @@ import {
   plainTextMessage,
   REQ,
   REQUEST_KINDS,
+  proposeApprovalInputSchema,
   setFocusInputSchema,
   viewFocusRef,
   type Ref,
   type RequestKind,
 } from '@hermes/shared';
+import { z } from 'zod';
 import {
   CHARS_PER_TOKEN,
   DOCUMENT_TEXT_MAX_CHARS,
@@ -58,6 +61,7 @@ export type AgentReads = Pick<
   AgentDb,
   | 'listRequests'
   | 'getRequest'
+  | 'getApprovalStatus'
   | 'getDocumentText'
   | 'getHistory'
   | 'listMembers'
@@ -277,6 +281,35 @@ const OBJECT = (properties: Record<string, unknown>, required: string[] = []): R
   additionalProperties: false,
 });
 
+const proposeApprovalToolInputSchema = proposeApprovalInputSchema
+  .omit({ idempotency_key: true })
+  .extend({
+    continuation: z
+      .object({
+        target_agent_id: z.uuid().optional(),
+        target_session_id: z.uuid().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+function approvalStatusData(raw: unknown, at: Date): Record<string, unknown> {
+  const view = approvalViewSchema.parse(raw);
+  const expired = view.status === 'pending' && Date.parse(view.payload.authorization.expires_at) <= at.getTime();
+  return {
+    request_id: view.request_id,
+    approval_type: view.payload.approval_type,
+    summary: view.payload.summary,
+    status: expired ? 'expired' : view.status,
+    authorization: view.payload.authorization,
+    steps: view.steps,
+    effect: view.effect,
+    work: expired ? { ...view.work, status: 'cancelled', reason: 'The authorization expired.' } : view.work,
+    finalized_at: view.finalized_at,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Read tools
 // ---------------------------------------------------------------------------
@@ -305,6 +338,26 @@ const getRequest: ToolDefinitionEntry = {
     const row = await ctx.reads.getRequest(id);
     if (!row) return { ok: false, error: `no request ${id} in this workspace` };
     return { ok: true, data: row, focus: { ref: refFor('request', id), entityType: 'request', entityId: id } };
+  },
+};
+
+const getApprovalStatus: ToolDefinitionEntry = {
+  name: 'get_approval_status',
+  kind: 'read',
+  description: 'Read the current human-authorization and continuation status of one enterprise approval. This cannot vote, route, revise, or finalize it.',
+  input_schema: OBJECT({ request_id: { type: 'string', format: 'uuid' } }, ['request_id']),
+  async run(args, ctx) {
+    const requestId = str(args.request_id);
+    try {
+      const view = await ctx.reads.getApprovalStatus(requestId);
+      return {
+        ok: true,
+        data: approvalStatusData(view, ctx.now()),
+        focus: { ref: refFor('request', requestId), entityType: 'request', entityId: requestId },
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : `no approval ${requestId} in this workspace` };
+    }
   },
 };
 
@@ -449,7 +502,7 @@ const proposeRequest: ToolDefinitionEntry = {
     'Propose a request for a human to decide. It is written in `pending` and nothing in this product can move it out of `pending` except a person using the Inbox.',
   input_schema: OBJECT(
     {
-      kind: { type: 'string', enum: [...REQUEST_KINDS] },
+      kind: { type: 'string', enum: REQUEST_KINDS.filter((kind) => kind !== 'approval') },
       label: { type: 'string', maxLength: 200 },
       payload: { type: 'object', description: 'Must match the document schema for the kind.' },
     },
@@ -458,6 +511,9 @@ const proposeRequest: ToolDefinitionEntry = {
   async run(args, ctx) {
     const kind = str(args.kind) as RequestKind;
     if (!REQUEST_KINDS.includes(kind)) return { ok: false, error: `unknown request kind ${str(args.kind)}`, permanent: true };
+    if (kind === 'approval') {
+      return { ok: false, error: 'enterprise approvals must use propose_approval so policy and authorization are server-derived', permanent: true };
+    }
     let payload: unknown;
     try {
       payload = parseRequestPayload(kind, args.payload);
@@ -498,6 +554,64 @@ const proposeRequest: ToolDefinitionEntry = {
       focus: { ref: refFor('request', requestId), entityType: 'request', entityId: requestId },
       ...(events && events.length > 0 ? { published: events } : {}),
     };
+  },
+};
+
+const proposeApproval: ToolDefinitionEntry = {
+  name: 'propose_approval',
+  kind: 'propose',
+  description:
+    'Propose a typed enterprise approval for humans to review. The server derives requester identity, selects the authoritative policy, and binds the revision. Optional continuation coordinates may start one new bounded run only after final approval; they cannot contain instructions.',
+  input_schema: z.toJSONSchema(proposeApprovalToolInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
+  async run(args, ctx) {
+    const parsed = proposeApprovalToolInputSchema.safeParse(args);
+    if (!parsed.success) return { ok: false, error: `the approval proposal is invalid: ${parsed.error.issues[0]?.message ?? 'invalid input'}` };
+    if (!ctx.run.agentId) return { ok: false, error: 'this run has no proposing agent', permanent: true };
+    const markup = findMarkup(parsed.data);
+    if (markup) return { ok: false, error: `${markup.path}: ${plainTextMessage([markup.finding])}` };
+    if (parsed.data.continuation && parsed.data.proposal.approval_type !== 'run_plan') {
+      return { ok: false, error: 'only a run_plan can request a runtime continuation' };
+    }
+    const targetAgentId = parsed.data.continuation?.target_agent_id ?? ctx.run.agentId;
+    const targetSessionId = parsed.data.continuation?.target_session_id ??
+      (targetAgentId === ctx.run.agentId ? ctx.run.sessionId : null);
+    if (parsed.data.continuation && !targetSessionId) {
+      return { ok: false, error: 'a continuation targeting another agent requires target_session_id' };
+    }
+    try {
+      const result = await ctx.writes.proposeApproval({
+        runId: ctx.run.id,
+        sessionId: ctx.run.sessionId,
+        toolCallId: ctx.toolCallId,
+        agentId: ctx.run.agentId,
+        approval: {
+          label: parsed.data.label,
+          policy_key: parsed.data.policy_key,
+          proposal: parsed.data.proposal,
+          target_agent_ids: parsed.data.target_agent_ids,
+          target_member_ids: parsed.data.target_member_ids,
+          target_resource_ids: parsed.data.target_resource_ids,
+          dependent_request_ids: parsed.data.dependent_request_ids,
+          ...(parsed.data.requested_expires_at ? { requested_expires_at: parsed.data.requested_expires_at } : {}),
+          // The durable tool-call identity, not model-authored text, owns replay.
+          idempotency_key: `approval-tool:${await sha256Hex(`${ctx.run.id}:${ctx.toolCallId}`)}`,
+        },
+        continuation: parsed.data.continuation && targetSessionId
+          ? { targetAgentId, targetSessionId }
+          : null,
+      });
+      return {
+        ok: true,
+        data: {
+          ...approvalStatusData(result.approval, ctx.now()),
+          continuation_id: result.continuationId,
+          awaiting: 'human review under the server-selected policy',
+        },
+        focus: { ref: refFor('request', result.approval.request_id), entityType: 'request', entityId: result.approval.request_id },
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'the approval proposal was rejected' };
+    }
   },
 };
 
@@ -667,12 +781,14 @@ const setFocus: ToolDefinitionEntry = {
 export const TOOLS: readonly ToolDefinitionEntry[] = [
   listRequests,
   getRequest,
+  getApprovalStatus,
   getDocumentText,
   getWorkspaceContext,
   getHistory,
   listMembers,
   fetchUrlTool,
   proposeRequest,
+  proposeApproval,
   saveReviewNote,
   setContextField,
   proposeInstruction,
@@ -691,12 +807,14 @@ export const toolByName = (name: string): ToolDefinitionEntry | undefined => BY_
 export const TOOL_SOURCE: Readonly<Record<string, string>> = {
   list_requests: 'workspace.requests',
   get_request: 'workspace.requests',
+  get_approval_status: 'workspace.approvals',
   get_document_text: 'workspace.documents',
   get_workspace_context: 'workspace.agent_context_fields',
   get_history: 'session.messages',
   list_members: 'workspace.members',
   fetch_url: 'web.fetch_url',
   propose_request: 'engine',
+  propose_approval: 'engine',
   save_review_note: 'engine',
   set_context_field: 'engine',
   propose_instruction: 'engine',
@@ -710,7 +828,9 @@ export const TOOL_SOURCE: Readonly<Record<string, string>> = {
  * Only tools that create or open an object: a `run.focus` from a listing would
  * yank the human's pane away mid-read for no reason they can see.
  */
-export const FOCUS_TOOLS: ReadonlySet<string> = new Set(['get_request', 'get_document_text', 'propose_request', 'set_focus']);
+export const FOCUS_TOOLS: ReadonlySet<string> = new Set([
+  'get_request', 'get_approval_status', 'get_document_text', 'propose_request', 'propose_approval', 'set_focus',
+]);
 
 /**
  * Mode allowlists (plan section 4, Tools).
@@ -749,6 +869,7 @@ export const isMode = (value: string): value is Mode => (MODES as readonly strin
  */
 export const PREPARED_TOOLS: ReadonlySet<string> = new Set([
   'propose_request',
+  'propose_approval',
   'save_review_note',
   'set_context_field',
   'propose_instruction',
@@ -793,10 +914,19 @@ export async function executeTool(
   if (tool.name === 'propose_request') {
     const kind = str(args.kind) as RequestKind;
     if (!REQUEST_KINDS.includes(kind)) return { ok: false, error: `unknown request kind ${str(args.kind)}`, permanent: true };
+    if (kind === 'approval') {
+      return { ok: false, error: 'enterprise approvals must use propose_approval so policy and authorization are server-derived', permanent: true };
+    }
     try {
       parseRequestPayload(kind, args.payload);
     } catch (error) {
       return { ok: false, error: `the payload does not match the ${kind} schema: ${(error as Error).message}` };
+    }
+  }
+  if (tool.name === 'propose_approval') {
+    const parsed = proposeApprovalToolInputSchema.safeParse(args);
+    if (!parsed.success) {
+      return { ok: false, error: `the approval proposal is invalid: ${parsed.error.issues[0]?.message ?? 'invalid input'}` };
     }
   }
   const markup = findMarkup(args);

@@ -10,11 +10,12 @@
 // what makes a step that ran twice produce one row. The `ON CONFLICT` targets
 // name the partial indexes from migration 0002 explicitly, because an untargeted
 // `DO NOTHING` would also swallow a genuine primary-key collision.
-import type { RequestKind } from '@hermes/shared';
+import type { ApprovalView, RequestKind } from '@hermes/shared';
 import type { Client } from 'pg';
 import type { Env } from '../env.js';
-import { connect } from '../db/client.js';
-import { SYSTEM_USER_ID } from '../jobs.js';
+import { connect, type Tx } from '../db/client.js';
+import { loadApprovalView, proposeApproval as proposeEnterpriseApproval } from '../domain/approvals.js';
+import { SYSTEM_USER_ID, withWorkspaceTransaction } from '../jobs.js';
 import { resolveKey } from '../keys/store.js';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 import { estimateCostUsd, loadModel } from '../model/catalog.js';
@@ -28,6 +29,7 @@ import type {
   EngineRunRow,
   GuidanceRow,
   HistoryTurn,
+  ProposeApprovalFromAgentInput,
   ProposeInstructionInput,
   ProposeRequestInput,
   QueueRow,
@@ -36,6 +38,7 @@ import type {
   SetContextFieldInput,
   StepProgress,
 } from './agent-db.js';
+import { persistApprovalContinuation } from '../runtime/continuation-intent.js';
 
 /**
  * The tool names a workspace with no configured capability rows still gets.
@@ -461,7 +464,7 @@ export class PgAgentDb implements AgentDb {
 
   async recordModelCall(input: {
     runId: string;
-    turn: number;
+    turn: number | null;
     modelId: string;
     provider: string;
     keyId: string | null;
@@ -506,6 +509,43 @@ export class PgAgentDb implements AgentDb {
   // -------------------------------------------------------------------------
   // AgentWrites
   // -------------------------------------------------------------------------
+
+  async proposeApproval(
+    input: ProposeApprovalFromAgentInput,
+  ): Promise<{ approval: ApprovalView; continuationId: string | null }> {
+    // This exact operation is intentionally app-role: policy selection,
+    // identity derivation, revision hashing and event/job writes live in the
+    // server approval domain. The tool surface exposes no generic app query
+    // and no human command. The official bridge executes this method outside
+    // its agent-role run-row lock; see runtime/bridge.ts.
+    return withWorkspaceTransaction(this.env, this.workspaceId, async (tx) => {
+      const approval = await proposeEnterpriseApproval(
+        {
+          tx,
+          workspaceId: this.workspaceId,
+          jobs: [],
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          runId: input.runId,
+        },
+        input.approval,
+      );
+      let continuationId: string | null = null;
+      if (input.continuation) {
+        continuationId = (await persistApprovalContinuation(tx, {
+          workspaceId: this.workspaceId,
+          runId: input.runId,
+          toolCallId: input.toolCallId,
+          requesterAgentId: input.agentId,
+          sourceSessionId: input.sessionId,
+          targetAgentId: input.continuation.targetAgentId,
+          targetSessionId: input.continuation.targetSessionId,
+          approval,
+        })).continuationId;
+      }
+      return { approval, continuationId };
+    });
+  }
 
   /**
    * One outbox row, inside a transaction the caller already opened.
@@ -757,6 +797,10 @@ export class PgAgentDb implements AgentDb {
       );
       return { ...row, notes: notes.rows };
     });
+  }
+
+  async getApprovalStatus(requestId: string): Promise<ApprovalView> {
+    return this.tx((query) => loadApprovalView({ query } as unknown as Tx, requestId, null));
   }
 
   async getDocumentText(

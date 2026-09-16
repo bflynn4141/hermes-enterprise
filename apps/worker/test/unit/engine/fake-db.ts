@@ -21,6 +21,7 @@ import type {
   GuidanceRow,
   HistoryTurn,
   ProposeInstructionInput,
+  ProposeApprovalFromAgentInput,
   ProposeRequestInput,
   QueueRow,
   RunErrorInput,
@@ -28,6 +29,7 @@ import type {
   SetContextFieldInput,
   StepProgress,
 } from '../../../src/engine/agent-db.js';
+import type { ApprovalView } from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../../../src/model/types.js';
 import { KeyStoreError } from '../../../src/keys/store.js';
 
@@ -53,7 +55,7 @@ export class FakeAgentDb implements AgentDb {
   readonly turns: HistoryTurn[] = [];
   readonly messages = new Map<number, { id: string; text: string; status: string; blocks: unknown[]; workedMs: number | null }>();
   readonly steps = new Map<string, { stepAttempt: number; state: string }>();
-  readonly modelCalls: { turn: number; status: string; keyId: string | null; usage: Usage }[] = [];
+  readonly modelCalls: { turn: number | null; status: string; keyId: string | null; usage: Usage }[] = [];
   readonly guidance: GuidanceRow[] = [];
   readonly queue: QueueRow[] = [];
   readonly statusChanges: { status: string; error: RunErrorInput | null }[] = [];
@@ -216,7 +218,7 @@ export class FakeAgentDb implements AgentDb {
     });
     return Promise.resolve({ messageId: id, seq: input.turn });
   }
-  recordModelCall(input: { turn: number; status: 'ok' | 'error' | 'stopped'; keyId: string | null; usage: Usage }): Promise<void> {
+  recordModelCall(input: Parameters<AgentDb['recordModelCall']>[0]): Promise<void> {
     this.modelCalls.push({ turn: input.turn, status: input.status, keyId: input.keyId, usage: input.usage });
     return Promise.resolve();
   }
@@ -238,6 +240,9 @@ export class FakeAgentDb implements AgentDb {
     };
     this.requests.push(row);
     return Promise.resolve({ requestId: row.id, created: true });
+  }
+  proposeApproval(_input: ProposeApprovalFromAgentInput): Promise<{ approval: ApprovalView; continuationId: string | null }> {
+    return Promise.reject(new Error('approval fixture not configured'));
   }
   saveReviewNote(input: SaveReviewNoteInput): Promise<{ noteId: string; created: boolean }> {
     const existing = this.notes.find((n) => n.runId === input.runId && n.toolCallId === input.toolCallId);
@@ -306,6 +311,9 @@ export class FakeAgentDb implements AgentDb {
   }
   getRequest(requestId: string): Promise<unknown | null> {
     return Promise.resolve(this.requests.find((r) => r.id === requestId) ?? null);
+  }
+  getApprovalStatus(_requestId: string): Promise<ApprovalView> {
+    return Promise.reject(new Error('approval fixture not configured'));
   }
   getDocumentText(): Promise<{ text: string; next_offset: number | null; total_chars: number } | null> {
     return Promise.resolve({ text: 'extracted text', next_offset: null, total_chars: 14 });
