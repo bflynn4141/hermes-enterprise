@@ -115,6 +115,46 @@ Official references: [Runs API](https://hermes-agent.nousresearch.com/docs/user-
 [profiles](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md),
 and [security](https://github.com/NousResearch/hermes-agent/blob/main/SECURITY.md).
 
+## Hosted topology decision — September 16, 2026
+
+The local profile is healthy, but it listens on `127.0.0.1`. A Cloudflare
+Worker's loopback belongs to the Worker isolate, not to the developer's Mac, so
+the deployed control plane cannot use the local URL directly. This is a network
+boundary rather than a Hermes failure.
+
+An authenticated Cloudflare Quick Tunnel to the unchanged official runtime was
+verified from a Worker running on Cloudflare's network:
+
+| Probe | Result |
+| --- | --- |
+| `GET /health` through the tunnel | `200`, Hermes Agent `0.21.3` |
+| `GET /v1/capabilities` without a key | `401` |
+| The same capabilities request with `API_SERVER_KEY` | `200`, including the durable Runs endpoints |
+
+This makes a tunnel suitable for the staging acceptance test. It is not a
+production runtime host: the Mac must remain online, Quick Tunnel URLs are
+ephemeral, and the runtime must be restarted in a separate staging profile whose
+`enterprise_url` points back to staging. Otherwise native tool and model calls
+return to the local control plane, which does not own the staging run mapping.
+
+Hermes Cloud is the preferred managed-hosting candidate, but its documented
+Portal integration currently covers instance lifecycle and interactive dashboard
+OAuth. The public contract does not document a service credential that an
+Enterprise Worker can use for unattended `POST /v1/runs` calls. Do not substitute
+an interactive `agent_dashboard:access` token for `API_SERVER_KEY`. Adopt Hermes
+Cloud when Nous confirms one of these contracts for an Enterprise-owned instance:
+
+1. a public or private Runs endpoint with a rotatable service credential; or
+2. a Portal service-to-service proxy that preserves the Runs API, agent identity,
+   stop/steer semantics and durable idempotency.
+
+If that contract is unavailable, deploy the official pinned Docker/runtime image
+under our own supervisor with persistent profile storage, HTTPS, an
+`API_SERVER_KEY`, and network access limited to the Enterprise control plane. A
+named Cloudflare Tunnel is acceptable for a short-lived staging pilot; the
+self-hosted runtime or a confirmed Hermes Cloud service contract is required for
+production.
+
 ## Verified locally — September 15, 2026
 
 The previously recorded real-call checks used the workspace’s encrypted
