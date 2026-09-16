@@ -25,7 +25,7 @@ async function send(page: Page, text: string, scenario: string) {
   await page.unroute('**/turns');
 }
 
-test('prompt navigation follows, pins, resumes, resets filters and never creates Inbox rows', async ({ browser }) => {
+test('prompt navigation follows, preserves manual views, resets filters and never creates Inbox rows', async ({ browser }) => {
   const fixture = freshWorkspace('Prompt navigation test');
   const context = await browser.newContext({ extraHTTPHeaders: { 'x-dev-user': fixture.adminEmail } });
   await context.addInitScript((email) => localStorage.setItem('hermes:dev-user', email), fixture.adminEmail);
@@ -44,7 +44,8 @@ test('prompt navigation follows, pins, resumes, resets filters and never creates
   expect(created.status(), await created.text()).toBe(201);
   const { id } = await created.json();
   await page.goto(`/workspace/${fixture.workspaceId}/s/${id}`);
-  await expect(pane(page).getByRole('button', { name: 'Following Iris', exact: true })).toBeVisible();
+  await expect(pane(page).getByText('View pinned', { exact: true })).toHaveCount(0);
+  await expect(pane(page).getByRole('button', { name: 'Follow Iris', exact: true })).toHaveCount(0);
   const requests = async () => (await (await page.request.get(`/w/${fixture.workspaceId}/requests`)).json()).items;
   expect(await requests()).toHaveLength(0);
 
@@ -60,11 +61,10 @@ test('prompt navigation follows, pins, resumes, resets filters and never creates
 
   // Manual filters are part of the pinned view, not disposable local state.
   await pane(page).getByLabel('Search requests').fill('My own search');
-  await expect(pane(page).getByText('View pinned', { exact: true })).toBeVisible();
   await send(page, 'Who is in this workspace?', 'navigation_members');
   await expect(pane(page).getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
   await expect(pane(page).getByLabel('Search requests')).toHaveValue('My own search');
-  await pane(page).getByRole('button', { name: 'Follow Iris', exact: true }).click();
+  await page.getByRole('button', { name: /Prompt-driven views/ }).first().click();
   await expect(pane(page).getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
 
   await send(page, 'What context are you missing?', 'navigation_context');
@@ -79,12 +79,12 @@ test('prompt navigation follows, pins, resumes, resets filters and never creates
   await pane(page).getByLabel('Request type').selectOption('invoice');
   await page.reload();
   await expect(pane(page).getByLabel('Request type')).toHaveValue('invoice');
-  await expect(pane(page).getByText('View pinned', { exact: true })).toBeVisible();
+  await expect(pane(page).getByText('View pinned', { exact: true })).toHaveCount(0);
   await expect(page.locator('.msg-iris').filter({ hasText: 'Iris is focused on' })).toHaveCount(5);
 
   // Small screens keep the conversation visible while the App pane follows in
   // the background. Switching panes reveals the same complete destination.
-  await pane(page).getByRole('button', { name: 'Follow Iris', exact: true }).click();
+  await page.getByRole('button', { name: /Prompt-driven views/ }).first().click();
   await page.setViewportSize({ width: 900, height: 900 });
   await pane(page).getByRole('button', { name: 'Chat', exact: true }).click();
   await send(page, 'Show me pending applications', 'navigation_pending');
