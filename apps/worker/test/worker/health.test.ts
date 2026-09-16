@@ -30,13 +30,19 @@ describe('the Worker in workerd', () => {
     // that says whether that is still true. `auth:config` is present in every
     // environment and proves fake auth is limited to development;
     // `workos:jwks` appears only in AUTH_MODE=workos.
-    expect(body.checks.map((c) => c.name).sort()).toEqual([
+    const expectedChecks = [
       'auth:config',
       'hub:workspace',
       'postgres:agent',
       'postgres:app',
       'postgres:connections',
-    ]);
+    ];
+    // A local checkout may opt into the official Hermes profile through its
+    // untracked .dev.vars. In that mode health must expose the native Runs
+    // capability gate as a separate dependency; the default CI fixture stays
+    // on the legacy runtime and correctly omits it.
+    if (env.AGENT_RUNTIME === 'hermes') expectedChecks.push('hermes:runs');
+    expect(body.checks.map((c) => c.name).sort()).toEqual(expectedChecks.sort());
     // The hub round trip must succeed even when Postgres is unreachable: it is
     // a different dependency, and /health exists to tell them apart.
     expect(body.checks.find((c) => c.name === 'hub:workspace')?.ok).toBe(true);
