@@ -4606,3 +4606,34 @@ changing the human decision already on file.
 the concrete consequence before committing. Keeping the effect separate also
 preserves the existing two-person finance requirement and prevents a document
 approval from silently becoming external execution.
+
+---
+
+## C54. Onboarding previews approval boundaries instead of pretending to configure them
+
+**Decided September 15, 2026.** The final workspace-creation step shows one
+plain flow — Iris prepares, a reviewer decides, then the approved action runs —
+followed by compact cards for the protected outcomes and their initial reviewer
+roles. The groups cover the implemented approval vocabulary: plans and team
+coordination, access and records, external communication, money movement, agent
+and team changes, and shared learning. Payment names Finance explicitly.
+
+This is a read-only policy preview. It has no toggles or workflow canvas because
+a new workspace has only its creator, and the server owns the real policy and
+authorization snapshot. Finance and specialist reviewers are added later when
+the relevant people exist. Motion is intentionally limited to existing control
+feedback; governance text does not animate or delay the create action.
+
+**Why.** Ramp's admin setup first previews the active route, names role-based
+reviewers and separation of duties, and reserves its workflow builder for later
+configuration. GitHub environment approvals keep protected secrets unavailable
+until review. Microsoft recommends that agent admins inspect capabilities,
+data sources and custom actions, and that irreversible actions stay behind
+approval. The onboarding screen therefore teaches the safety model without
+asking a first-time admin to design a policy graph prematurely.
+
+**Evidence.**
+- https://support.ramp.com/setting-up-spend-request-approvals
+- https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments
+- https://learn.microsoft.com/en-us/microsoft-365/copilot/agent-essentials/agent-lifecycle/agent-copilot-studio-requested
+- https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/agent-design-canvas-framework
