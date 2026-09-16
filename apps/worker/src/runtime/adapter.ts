@@ -128,11 +128,17 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const batchMs = deps.batchMs ?? 75;
       const flush = async (force = false) => {
         if (!pending || (!force && Date.now() - flushedAt < batchMs)) return;
-        const delta = pending; pending = ''; flushedAt = Date.now();
+        const delta = pending; pending = '';
         const saved = await db.emit([{ kind: 'message.delta', sessionId: run.sessionId, payload: {
           message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
         } }]);
         await deps.forward(run.sessionId, run.id, saved);
+        // The batching clock measures from delivery, not from the start of a
+        // potentially slow durable write. If persistence itself takes longer
+        // than the window, stamping this before the await makes every already-
+        // buffered native token look overdue and serializes one database write
+        // per token. Stamping it here lets the next burst coalesce normally.
+        flushedAt = Date.now();
       };
       let status = await client.status(id);
       const controller = new AbortController();

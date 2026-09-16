@@ -195,6 +195,31 @@ describe('official Hermes enterprise projection', () => {
     expect(forwardedDeltas).toBe(2);
   });
 
+  it('coalesces an already-buffered burst after a slow durable delta write', async () => {
+    class SlowDeltaDb extends FakeRuntimeDb {
+      override async emit(events: Parameters<FakeRuntimeDb['emit']>[0]) {
+        const saved = await super.emit(events);
+        if (events.some((event) => event.kind === 'message.delta')) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return saved;
+      }
+    }
+
+    const client = new FakeHermesClient();
+    client.deltas = ['One. ', 'Two. ', 'Three.'];
+    const { db } = await execute(
+      new SlowDeltaDb(),
+      client,
+      new FakeStep(),
+      undefined,
+      { pollMs: 100, batchMs: 5 },
+    );
+    const deltas = db.events.filter((event) => event.kind === 'message.delta');
+    expect(deltas).toHaveLength(2);
+    expect(deltas.map((event) => (event.payload as { delta: string }).delta).join('')).toBe(client.deltas.join(''));
+  });
+
   it.each(['eof', 'error'] as const)('flushes a suppressed delta immediately when the native stream ends by %s', async (ending) => {
     class EndingClient extends FakeHermesClient {
       override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
