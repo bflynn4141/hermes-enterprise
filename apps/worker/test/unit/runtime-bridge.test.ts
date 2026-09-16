@@ -46,7 +46,10 @@ const db = (overrides = {}) => new FakeBridgeDb({ workspaceId, agentId, ...overr
 
 describe('official runtime configuration and authentication', () => {
   it('derives a deterministic agent profile and accepts only the scoped HMAC', async () => {
-    expect(runtimeBinding(env, workspaceId, agentId).profile).toBe(`agent-${agentId}`);
+    expect(runtimeBinding(env, workspaceId, agentId)).toMatchObject({
+      profile: `agent-${agentId}`,
+      transport: 'native',
+    });
     const token = await bridgeToken(env, workspaceId, agentId);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     await expect(requireBridgeAuth(env, workspaceId, agentId, `Bearer ${token}`)).resolves.toMatchObject({ workspaceId, agentId });
@@ -67,6 +70,33 @@ describe('official runtime configuration and authentication', () => {
       const changed = { ...env, HERMES_RUNTIME_AGENTS: JSON.stringify({ [agentId]: { workspace_id: workspaceId, base_url, api_key: 'runtime-key' } }) };
       expect(() => runtimeBinding(changed, workspaceId, agentId)).toThrow();
     }
+  });
+  it('accepts only the explicit Cloud dashboard connector transport', () => {
+    const connector = {
+      ...env,
+      ENVIRONMENT: 'production',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agentId]: {
+          workspace_id: workspaceId,
+          base_url: 'https://iris.example/api/plugins/enterprise-bridge/control',
+          api_key: 'runtime-key',
+          transport: 'dashboard_connector',
+        },
+      }),
+    };
+    expect(runtimeBinding(connector, workspaceId, agentId).transport).toBe('dashboard_connector');
+    const invalid = {
+      ...connector,
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agentId]: {
+          workspace_id: workspaceId,
+          base_url: 'https://iris.example/api/plugins/enterprise-bridge/control',
+          api_key: 'runtime-key',
+          transport: 'arbitrary_proxy',
+        },
+      }),
+    };
+    expect(() => runtimeBinding(invalid, workspaceId, agentId)).toThrow();
   });
   it('requires trusted runtime and call identifiers separately from model arguments', () => {
     expect(() => parseRuntimeCall({ name: 'list_requests', arguments: { runtime_run_id: remoteId, tool_call_id: 'call' } })).toThrow();

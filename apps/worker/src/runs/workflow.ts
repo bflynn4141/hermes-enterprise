@@ -347,7 +347,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         const binding = runtimeBinding(this.env, params.workspaceId, run.agentId);
         await runHermesAttempt({
           db,
-          client: new HermesClient(binding.baseUrl, binding.apiKey),
+          client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport),
           profile: binding.profile,
           forward: deps.forward,
           skillSnapshot: runtimeSkillManifests(this.env, run.agentId),

@@ -11,6 +11,8 @@ import urllib.request
 
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
+CONTROL_ROUTE = "/api/plugins/enterprise-bridge/control"
+CONTROL_PROVIDER = "enterprise-control"
 
 
 class BridgeError(Exception):
@@ -20,6 +22,71 @@ class BridgeError(Exception):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise BridgeError("Enterprise bridge redirects are not allowed.")
+
+
+def assess_control_secret(secret):
+    """Require the same practical floor as Hermes' built-in drain credential."""
+    if len(secret) < 43:
+        return "control secret must contain at least 43 characters"
+    if len(set(secret)) < 16:
+        return "control secret must contain at least 16 distinct characters"
+    return None
+
+
+def register_control_auth(ctx):
+    """Opt one fixed dashboard route into non-interactive service auth.
+
+    The public Hermes Cloud hostname exposes the dashboard gateway, while the
+    native Runs API listens on loopback.  This provider authenticates the
+    Worker's per-agent credential only on the fixed connector route; it never
+    grants bearer access to the rest of the dashboard.
+    """
+    secret = os.environ.get("HERMES_ENTERPRISE_CONTROL_SECRET", "").strip()
+    if not secret:
+        return None
+    reason = assess_control_secret(secret)
+    if reason:
+        raise BridgeError(reason)
+
+    import hmac
+    from hermes_cli.dashboard_auth import DashboardAuthProvider, LoginStart, Session, TokenPrincipal
+    from hermes_cli.dashboard_auth.token_auth import register_token_route
+
+    class EnterpriseControlProvider(DashboardAuthProvider):
+        name = CONTROL_PROVIDER
+        display_name = "Hermes Enterprise control plane"
+        supports_token = True
+        supports_session = False
+
+        def verify_token(self, *, token):
+            if token and hmac.compare_digest(token.encode(), secret.encode()):
+                return TokenPrincipal(
+                    principal="hermes-enterprise-control",
+                    provider=self.name,
+                    scopes=("runs",),
+                )
+            return None
+
+        def start_login(self, *, redirect_uri):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def complete_login(self, *, code, state, code_verifier, redirect_uri):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def verify_session(self, *, access_token):
+            return None
+
+        def refresh_session(self, *, refresh_token):
+            raise NotImplementedError("This provider accepts service credentials only.")
+
+        def revoke_session(self, *, refresh_token):
+            return None
+
+    handle = ctx.register_dashboard_auth_provider(EnterpriseControlProvider())
+    if handle is None:
+        raise BridgeError("Enterprise control authentication could not be registered.")
+    register_token_route(CONTROL_ROUTE)
+    return handle
 
 
 def trusted_identity():
@@ -139,6 +206,10 @@ class Bridge:
 
 
 def register(ctx):
+    # Register the Cloud control surface before tool discovery. If the Worker is
+    # temporarily unavailable, dashboard startup still leaves the route either
+    # strongly authenticated or absent; it never falls open.
+    register_control_auth(ctx)
     bridge = Bridge(
         ctx.get_config("base_url", ""), os.environ.get("ENTERPRISE_RUNTIME_TOKEN", ""),
         ctx.get_config("native_url", "http://127.0.0.1:8642"), os.environ.get("API_SERVER_KEY", ""),

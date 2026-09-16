@@ -119,6 +119,19 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
         self.assertEqual(context.hook("skill_manage", {})["action"], "block")
 
+    def test_cloud_control_auth_is_absent_without_a_secret(self):
+        class Context:
+            def register_dashboard_auth_provider(self, _provider):
+                raise AssertionError("provider must not be registered")
+
+        with patch.dict(plugin.os.environ, {}, clear=True):
+            self.assertIsNone(plugin.register_control_auth(Context()))
+
+    def test_cloud_control_secret_strength_fails_closed(self):
+        self.assertIsNotNone(plugin.assess_control_secret("short"))
+        self.assertIsNotNone(plugin.assess_control_secret("a" * 64))
+        self.assertIsNone(plugin.assess_control_secret("0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"))
+
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
             "name": "enterprise_bridge:partner-program-screening", "version": "1.0.0",

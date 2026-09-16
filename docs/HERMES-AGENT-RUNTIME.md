@@ -137,21 +137,32 @@ Tunnel URLs are ephemeral, and the runtime must be restarted in a separate
 staging profile whose `enterprise_url` points back to staging. The temporary
 tunnel and its Worker secrets were removed after the proof.
 
-Hermes Cloud is the selected managed-hosting target. The official Cloud MCP
-was connected to the Portal organization and exposed five management tools:
+Hermes Cloud is the selected managed-hosting target. A Medium instance named
+`iris-enterprise-staging` is running in the **Brian Interview Demo** Portal
+organization on Hermes `0.21.3`. The official Cloud MCP exposed five management tools:
 instance lifecycle, Team Gateway, usage, and organization-scoped machine
 credentials in addition to instance reads. Those machine credentials use the
 OAuth client-credentials grant with scope `mcp:manage_agents`; they authorize
-the Cloud management plane, not the agent's `/v1/runs` API. The organization
-currently has no Cloud instance, so the remaining execution contract cannot be
-verified without provisioning one.
+the Cloud management plane, not the agent's `/v1/runs` API.
+
+The live Cloud hostname exposes the authenticated dashboard/Gateway. Its public
+`/api/status` reports the loopback API Server as connected at
+`http://127.0.0.1:8642`, but public `/health` and `/v1/capabilities` requests
+fall through to dashboard HTML. Hermes Desktop reaches this host through a
+human Portal OAuth session and the Gateway WebSocket; that is not a
+server-to-server Runs credential. The Cloud instance therefore needs a narrow
+connector from its authenticated dashboard origin to its loopback Runs API.
 
 Cloudflare remains the Enterprise application control plane: it owns identity,
 approvals, audit data, model credentials, and the reverse tool/model bridge. It
 must not proxy a developer laptop or impersonate the agent runtime. A Cloud
-instance binds to the Worker exactly like any other hosted runtime because
-`HERMES_RUNTIME_AGENTS` already accepts a per-agent HTTPS base URL and native
-API key.
+instance binds to the Worker through the reviewed `enterprise_bridge` plugin.
+The plugin contributes one fixed service-authenticated dashboard endpoint. It
+accepts only capabilities, submit, status, events, stop and steer operations,
+then forwards them to the loopback API Server with the native key. It is not an
+arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
+`transport: "dashboard_connector"` and the separate per-agent control secret.
+The native `API_SERVER_KEY` never leaves Hermes Cloud.
 
 The official image can persist user-managed plugins, skills and configuration
 under its data volume. Hermes Desktop can install an agent plugin into a
@@ -172,17 +183,13 @@ profile configuration and secrets, and fail health checks if any step is
 missing. A manual Desktop install is acceptable for the first acceptance test,
 not for fleet provisioning.
 
-The acceptance test for a Cloud instance is:
+The acceptance test for the Cloud instance is:
 
-1. create a Medium instance in the Test organization with a dedicated
-   `API_SERVER_KEY` and the official API Server enabled;
-2. determine whether Cloud publishes an authenticated route to that API Server,
-   rather than only the dashboard and Team Gateway;
-3. install the Enterprise bridge at its reviewed commit and apply the governed
+1. install the Enterprise bridge at its reviewed commit and apply the governed
    profile configuration without modifying the immutable Hermes source tree;
-4. verify capabilities, submit/events/stop/steer, idempotency, the governed tool
+2. verify capabilities, submit/events/stop/steer, idempotency, the governed tool
    set, and the reverse Enterprise tool/model bridge; and
-5. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS`, run
+3. store the resulting per-agent Cloud binding in `HERMES_RUNTIME_AGENTS`, run
    one complete staged turn, and stop the test instance before merge.
 
 Do not substitute an interactive `agent_dashboard:access` session or an
@@ -193,11 +200,47 @@ Runs endpoint, request one of these contracts from Nous:
 2. a Portal service-to-service proxy that preserves the Runs API, agent identity,
    stop/steer semantics and durable idempotency.
 
-If that contract is unavailable, deploy the official pinned Docker/runtime image
-under our own supervisor with persistent profile storage, HTTPS, an
-`API_SERVER_KEY`, and network access limited to the Enterprise control plane.
-The self-hosted runtime or a confirmed Hermes Cloud service contract is required
-for production.
+The connector is the current acceptance-test path. For fleet production, ask
+Nous to make the same contract first-class: a per-agent, rotatable service
+credential and public/private Runs endpoint. If that contract remains
+unavailable, the reviewed plugin is a contained compatibility layer; the next
+fallback is the official pinned Docker/runtime image under our own supervisor,
+not a tunnel to a laptop.
+
+## Enterprise bridge architecture decision — September 16, 2026
+
+The Worker remains the right boundary for the current product, but its role is
+narrow: authenticate people and channels, enforce workspace and approval
+policy, keep the durable audit record, and orchestrate calls to Hermes Cloud.
+Hermes Cloud owns model/tool execution. Postgres remains the authoritative
+tenant state. Workflows checkpoint orchestration. Durable Objects fan out live
+events and hold no authoritative business data.
+
+| Option | Decision | Reason |
+| --- | --- | --- |
+| Cloudflare Worker + Workflows + Hermes Cloud | Keep | The Worker handles short policy/database operations, while Workflows support durable steps and waits. The existing code already isolates tenant policy from the runtime. |
+| Put approvals and enterprise policy inside Iris | Reject | The runtime is the executor and can change profile/plugin state. It must not become the authority that decides its own permissions, spending or approvals. |
+| Full Temporal migration | Defer | Temporal is a strong durable-execution platform, but it would add another control plane and rewrite already-tested orchestration without fixing the present Hermes Cloud ingress gap. Revisit only for portability, multi-cloud workers or orchestration requirements Cloudflare cannot meet. |
+| AWS Step Functions migration | Reject for this stack | It adds an AWS control plane and its HTTP tasks have a 60-second hard duration; it does not improve the current Cloud-to-Hermes contract. |
+| Long-lived agent execution inside a Worker request | Reject | Worker requests are not the agent host. Cloudflare can terminate in-flight requests during runtime updates after a grace period, and each isolate has 128 MB memory. Hermes Cloud must own the long-running process. |
+| A separate Fly/Cloud Run proxy | Reserve fallback | Use only if Hermes Cloud cannot load the reviewed connector plugin or provide a native service endpoint. A second proxy service adds secrets, deploys and failure modes while enforcing no policy the Worker does not already own. |
+
+This is not a blanket endorsement of Workers for every future deployment. Move
+the control plane when a measured requirement demands private regional
+networking, customer VPC deployment, a non-JavaScript SDK unavailable at the
+edge, or vendor-neutral durable orchestration. Current platform limits leave
+substantial room: paid Workflows support unlimited wall time per step, waiting
+instances do not consume active concurrency, and completed instance state is
+retained for 30 days. We already persist the durable product audit in Postgres,
+so Workflow retention is operational recovery data rather than the customer
+record.
+
+Primary references: [Cloudflare Worker limits](https://developers.cloudflare.com/workers/platform/limits/),
+[Cloudflare Workflow limits](https://developers.cloudflare.com/workflows/reference/limits/),
+[Temporal durable execution](https://docs.temporal.io/),
+[AWS Step Functions quotas](https://docs.aws.amazon.com/step-functions/latest/dg/service-quotas.html),
+[Hermes programmatic integration](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration),
+and the [Hermes API Server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server).
 
 ## Verified locally — September 15, 2026
 

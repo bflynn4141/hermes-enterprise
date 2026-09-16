@@ -35,7 +35,49 @@ function transport(response: () => Response) {
   return { send, client: new HermesClient('https://runtime.example/', SECRET, send) };
 }
 
+function connectorTransport(response: () => Response) {
+  const send = vi.fn<typeof fetch>(async () => response());
+  return {
+    send,
+    client: new HermesClient(
+      'https://iris.example/api/plugins/enterprise-bridge/control',
+      SECRET,
+      send,
+      'dashboard_connector',
+    ),
+  };
+}
+
 describe('official Hermes Runs transport', () => {
+  it('uses one fixed service-authenticated route for a Hermes Cloud connector', async () => {
+    const { client, send } = connectorTransport(() => json(capabilities()));
+    await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });
+    const [url, init] = send.mock.calls[0]!;
+    expect(url).toBe('https://iris.example/api/plugins/enterprise-bridge/control');
+    expect(init?.method).toBe('POST');
+    expect(init?.redirect).toBe('manual');
+    expect(JSON.parse(String(init?.body))).toEqual({ operation: 'capabilities' });
+    expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
+  });
+
+  it('wraps Cloud submit and control operations without exposing a generic proxy', async () => {
+    const responses = [
+      json({ run_id: RUN_ID, status: 'started' }, 202),
+      json({ run_id: RUN_ID, status: 'completed', output: 'Reviewed.' }),
+      json({ run_id: RUN_ID, status: 'stopping' }),
+    ];
+    const { client, send } = connectorTransport(() => responses.shift()!);
+    await expect(client.submit({ input: 'Review.', _enterprise_tool_names: ['list_requests'] }, 'stable-key')).resolves.toBe(RUN_ID);
+    await expect(client.status(RUN_ID)).resolves.toMatchObject({ status: 'completed' });
+    await expect(client.stop(RUN_ID)).resolves.toBeUndefined();
+    expect(send.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { operation: 'submit', idempotency_key: 'stable-key', body: { input: 'Review.' } },
+      { operation: 'status', run_id: RUN_ID },
+      { operation: 'stop', run_id: RUN_ID },
+    ]);
+    expect(send.mock.calls.every(([url]) => url === 'https://iris.example/api/plugins/enterprise-bridge/control')).toBe(true);
+  });
+
   it('requires the authenticated server-agent Runs contract and durable reservations', async () => {
     const { client, send } = transport(() => json(capabilities()));
     await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });

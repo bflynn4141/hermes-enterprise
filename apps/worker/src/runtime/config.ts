@@ -14,6 +14,7 @@ export interface RuntimeBinding {
   readonly profile: string;
   readonly baseUrl: string;
   readonly apiKey: string;
+  readonly transport: 'native' | 'dashboard_connector';
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const misconfigured = (): never => {
@@ -30,12 +31,21 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
   const row = entry as Record<string, unknown>;
   if (row.workspace_id !== workspaceId) throw new RouteError('This runtime agent is not bound to this workspace.', 'runtime_binding_mismatch', 403);
   if (typeof row.base_url !== 'string' || typeof row.api_key !== 'string' || !row.api_key.trim()) return misconfigured();
+  const transport = row.transport ?? 'native';
+  if (transport !== 'native' && transport !== 'dashboard_connector') return misconfigured();
   let url: URL;
   try { url = new URL(row.base_url); } catch { return misconfigured(); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url.username || url.password || url.search || url.hash ||
       (url.protocol !== 'https:' && !(env.ENVIRONMENT === 'development' && local && url.protocol === 'http:'))) return misconfigured();
-  return { workspaceId, agentId, profile: `agent-${agentId}`, baseUrl: url.toString().replace(/\/$/, ''), apiKey: row.api_key };
+  return {
+    workspaceId,
+    agentId,
+    profile: `agent-${agentId}`,
+    baseUrl: url.toString().replace(/\/$/, ''),
+    apiKey: row.api_key,
+    transport,
+  };
 }
 export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
   if (env.AGENT_RUNTIME !== 'hermes') return [];

@@ -1,5 +1,15 @@
 name: enterprise_bridge
 version: 1.0.0
 description: Governed enterprise tools using trusted Hermes run context
+requires_env:
+  - name: ENTERPRISE_RUNTIME_TOKEN
+    description: Per-agent credential for the Hermes Enterprise reverse bridge.
+    secret: true
+  - name: API_SERVER_KEY
+    description: Loopback Hermes API Server credential.
+    secret: true
+  - name: HERMES_ENTERPRISE_CONTROL_SECRET
+    description: Per-agent credential used by the Enterprise Worker control plane.
+    secret: true
 provides_hooks:
   - pre_tool_call
