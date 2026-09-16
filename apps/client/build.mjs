@@ -64,6 +64,7 @@ const INDEX_HTML = `<!doctype html>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Inter:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/components.css">
 <link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <div id="root"></div>

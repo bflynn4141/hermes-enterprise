@@ -24,6 +24,7 @@ import {
   resolveIrisWidth,
   workAreaFor,
 } from '../model/store.js';
+import { useFirstRunExperience } from './onboarding/FirstRunExperience.js';
 
 export function Shell() {
   const state = useAppState();
@@ -33,6 +34,8 @@ export function Shell() {
   const gridRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<HTMLElement>(null);
   const agent = agentName(state);
+  const firstRunActive = state.ui.app.section === 'agents' && state.ui.app.view === 'setup';
+  const firstRun = useFirstRunExperience(firstRunActive);
 
   useEffect(() => {
     const on = (): void => setWidth(window.innerWidth);
@@ -133,9 +136,9 @@ export function Shell() {
         }}
       >
         <Sidebar />
-        {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} />}
+        {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} firstRun={firstRun?.conversation} />}
         {railShown && <IrisRail shortcut={TOGGLE_SHORTCUT} />}
-        <AppPane narrow={narrow} active={!narrow || pane === 'app'} paneRef={appRef} />
+        <AppPane narrow={narrow} active={!narrow || pane === 'app'} paneRef={appRef} firstRun={firstRun?.agreement} />
         {resizable && (
           <PanelResizer
             left={navWidth + irisWidth}

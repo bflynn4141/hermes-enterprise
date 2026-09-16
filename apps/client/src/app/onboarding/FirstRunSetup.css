@@ -111,6 +111,55 @@
   min-height: 0;
 }
 
+/* Shell integration: the existing Iris and app panes provide the columns. */
+.pane-iris > .first-run-conversation {
+  flex: 1 1 0;
+  border-right: 0;
+}
+
+.object-view-first-run {
+  overflow: hidden;
+  padding: 0;
+}
+
+.first-run-app-surface {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.first-run-app-surface > .first-run-progress {
+  width: 100%;
+  min-height: 58px;
+  padding: 0 clamp(22px, 2.5vw, 38px);
+  border-bottom: 1px solid var(--line-soft);
+  flex: 0 0 auto;
+}
+
+.first-run-app-surface > .first-run-agreement {
+  flex: 1 1 0;
+}
+
+.first-run-provider-slot .provider-connect {
+  gap: 12px;
+}
+
+.first-run-provider-slot .provider-connect-step {
+  padding: 12px;
+}
+
+.first-run-provider-slot .provider-connect-intro,
+.first-run-provider-slot .provider-connect-admin-note {
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.first-run-provider-slot .provider-connect-security {
+  font-size: 9.8px;
+  line-height: 14px;
+}
+
 .first-run-conversation {
   display: flex;
   flex-direction: column;
