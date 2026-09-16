@@ -22,6 +22,12 @@ const workflowDir = join(root, '.github/workflows');
 
 const files = readdirSync(workflowDir).filter((name) => name.endsWith('.yml') || name.endsWith('.yaml'));
 const read = (name: string): string => readFileSync(join(workflowDir, name), 'utf8');
+const rootPackage = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+  scripts: Record<string, string>;
+};
+const clientPackage = JSON.parse(readFileSync(join(root, 'apps/client/package.json'), 'utf8')) as {
+  scripts: Record<string, string>;
+};
 
 /**
  * Indentation-aware enough to answer "which top-level keys are here" and "what
@@ -183,11 +189,20 @@ describe('the workflow files', () => {
       const deploy = jobs(text).get('deploy');
       expect(valueOf(deploy ?? [], 'environment')).toBe('production');
       expect(valueOf(deploy ?? [], 'needs')).toBe('preflight');
+      expect(text.indexOf('@hermes/client build')).toBeLessThan(
+        text.indexOf('wrangler deploy --dry-run --env production'),
+      );
     });
 
-    it('deploy staging from main automatically', () => {
+    it('deploy staging from main only after the exact commit passes CI', () => {
       const text = read('deploy-staging.yml');
+      expect(text).toContain('workflow_run:');
+      expect(text).toContain('workflows: [CI]');
       expect(text).toContain('branches: [main]');
+      expect(text).not.toMatch(/^\s\spush:/m);
+      expect(text).toContain("github.event.workflow_run.event == 'push'");
+      expect(text).toContain("github.event.workflow_run.conclusion == 'success'");
+      expect(text).toContain('github.event.workflow_run.head_sha');
       expect(valueOf(jobs(text).get('deploy') ?? [], 'environment')).toBe('staging');
     });
 
@@ -211,6 +226,34 @@ describe('the workflow files', () => {
       expect(text).toContain('test/db/grants.test.ts');
       expect(text).toContain('--dry-run --env staging');
       expect(text).toContain('--dry-run --env production');
+    });
+
+    it('runs client units and honestly named credential-free mock browser coverage', () => {
+      expect(rootPackage.scripts.test).toContain('@hermes/client test');
+      expect(clientPackage.scripts['test:browser:mock']).toContain('scenarios.spec.ts');
+      expect(clientPackage.scripts['test:browser:mock']).not.toContain('live');
+      expect(text).toContain('name: mock client browser tests');
+      expect(text).toContain('pnpm test:browser:mock');
+      expect(text).toContain('actions/upload-artifact@v4');
+    });
+
+    it('verifies migration replay only in the disposable CI shadow path', () => {
+      expect(text).toContain('pnpm db:migrations:verify');
+      const deployMigration = readFileSync(join(root, 'apps/worker/scripts/migrate.mjs'), 'utf8');
+      const shadowMigration = readFileSync(join(root, 'apps/worker/scripts/verify-migrations.mjs'), 'utf8');
+      expect(deployMigration).not.toContain('force: true');
+      expect(deployMigration).not.toContain('re-applied');
+      expect(shadowMigration).toContain('CREATE DATABASE');
+      expect(shadowMigration).toContain('force: true');
+      expect(shadowMigration).toContain('DROP DATABASE IF EXISTS');
+    });
+
+    it('builds the root deployable in shared, client, worker order', () => {
+      const build = rootPackage.scripts.build ?? '';
+      expect(build).not.toBe('');
+      expect(build.indexOf('@hermes/shared build')).toBeLessThan(build.indexOf('@hermes/client build'));
+      expect(build.indexOf('@hermes/client build')).toBeLessThan(build.indexOf('@hermes/worker build'));
+      expect(text).toContain('run: pnpm build');
     });
 
     it('lints the workflow files', () => {

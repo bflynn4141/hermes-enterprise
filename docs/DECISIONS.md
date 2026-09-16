@@ -54,18 +54,20 @@ expression, and the generated SQL becomes reviewable.
 
 ---
 
-## 2. Migrations prove their own idempotence on every run
+## 2. Migration replay is proved on a disposable shadow database
 
-**Decided.** `pnpm db:migrate` applies everything pending, fingerprints the
-schema (columns, constraints, indexes, policies, RLS flags, triggers, grants,
-views), re-applies every migration from the beginning, fingerprints again, and
-fails if the two differ.
+**Decided.** `pnpm db:migrate` validates the immutable ledger and applies only
+pending files. `pnpm db:migrations:verify` creates a randomly named disposable
+database, applies the catalog, fingerprints the schema (columns, constraints,
+indexes, policies, RLS flags, triggers, grants and views), replays the catalog,
+compares the fingerprint and drops the database in `finally`. CI runs both;
+deployments run only the pending-only command.
 
 **Why.** A half-applied deploy has to be recoverable by running the runner
 again. "These statements are idempotent" is easy to believe and easy to get
-wrong — one `CREATE INDEX` without `IF NOT EXISTS` is enough. This turns the
-claim into a check that runs every time rather than a test someone remembers to
-write.
+wrong — one `CREATE INDEX` without `IF NOT EXISTS` is enough. The proof belongs
+off the live target: replaying static catalog DML in production does more than
+apply pending schema and couples a deploy to current data assumptions.
 
 **Note.** Editing a migration that has already been applied is refused, because
 staging and production would then disagree about what `0002` is. While iterating

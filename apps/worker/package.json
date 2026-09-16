@@ -11,6 +11,7 @@
     "test:unit": "vitest run --project unit",
     "db:roles": "node scripts/roles.mjs",
     "db:migrate": "node scripts/roles.mjs && node scripts/migrate.mjs",
+    "db:migrations:verify": "node scripts/verify-migrations.mjs",
     "db:seed": "node scripts/seed-dev.mjs",
     "db:test": "node scripts/db-test.mjs",
     "cf-typegen": "wrangler types",

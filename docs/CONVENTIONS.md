@@ -72,8 +72,8 @@ Cross-package imports go one way: `apps/*` may import `@hermes/shared`;
 2. Write every statement so it can run twice — `CREATE TABLE IF NOT EXISTS`,
    `CREATE INDEX IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`,
    `DROP POLICY IF EXISTS` before `CREATE POLICY`, `DROP TRIGGER IF EXISTS`
-   before `CREATE TRIGGER`, `INSERT ... ON CONFLICT`. The runner re-applies
-   everything and fails if the schema fingerprint moves.
+   before `CREATE TRIGGER`, `INSERT ... ON CONFLICT`. CI re-applies everything
+   in a disposable shadow database and fails if the schema fingerprint moves.
 3. Follow expand/contract: add the new thing, deploy, backfill, switch readers,
    and only then remove the old thing in a later migration. A code rollback must
    never need a reverse migration.
@@ -84,9 +84,10 @@ Cross-package imports go one way: `apps/*` may import `@hermes/shared`;
    reviewer reads.
 5. Add the table to `src/db/schema.ts` and to `ALL_TABLES`. The drift test fails
    otherwise.
-6. Run `pnpm db:migrate`. While iterating on a migration you have already
-   applied to your local database, `MIGRATE_ALLOW_EDIT=1 pnpm db:migrate`; drop
-   the volume (`pnpm db:down && pnpm db:up`) before you finish.
+6. Run `pnpm db:migrate`, then `pnpm db:migrations:verify`. While iterating on a
+   migration you have already applied to your local database,
+   `MIGRATE_ALLOW_EDIT=1 pnpm db:migrate`; drop the volume
+   (`pnpm db:down && pnpm db:up`) before you finish.
 
 ## Adding an event kind
 
@@ -110,14 +111,20 @@ pnpm test        # everything
 pnpm test:unit   # only the tests that need no database
 ```
 
-Four groups:
+Five groups, plus explicit browser coverage:
 
 | Group | Where | Needs |
 |---|---|---|
 | `packages/shared` | Node | nothing |
+| `apps/client` unit | Node | nothing |
 | `apps/worker` project `unit` | Node | nothing |
 | `apps/worker` project `worker` | workerd, through `@cloudflare/vitest-pool-workers` and the real `wrangler.jsonc` | nothing |
 | `apps/worker` project `db` | Node | Docker Postgres (`pnpm db:up && pnpm db:migrate`) |
+
+`pnpm test:browser:mock` covers selected client flows in Chromium against the
+mock adapter. It is credential-free and deliberately does not claim Worker,
+database, WorkOS or provider coverage; `pnpm e2e:live` is the isolated real
+Worker path.
 
 The `db` project runs one file at a time: the tests share one database, and
 racing them over the same rows would make failures depend on scheduling. Each

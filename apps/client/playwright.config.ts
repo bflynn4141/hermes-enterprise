@@ -23,7 +23,9 @@ export default defineConfig({
   expect: { timeout: 7_000 },
   fullyParallel: false,
   workers: 1,
-  reporter: process.env.CI ? 'list' : [['list']],
+  reporter: process.env.CI
+    ? [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+    : [['list']],
   use: {
     baseURL,
     viewport: { width: 1680, height: 1000 },

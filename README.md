@@ -41,12 +41,16 @@ pnpm install
 # Postgres 17 in Docker on 127.0.0.1:5433 (5432 is often taken).
 pnpm db:up
 
-# Creates the three roles, applies every migration, then re-applies them all
-# and asserts the schema fingerprint did not change.
+# Creates the three roles and applies only pending migrations.
 pnpm db:migrate
 
+# Creates a disposable shadow database, replays the full catalog there, checks
+# the schema fingerprint, and drops the database. CI runs this automatically.
+pnpm db:migrations:verify
+
 pnpm typecheck
-pnpm test          # shared unit tests, worker unit tests, workerd tests, database tests
+pnpm test          # shared/client/worker units, workerd tests, database tests
+pnpm test:browser:mock  # credential-free client browser flows; not the live Worker
 ```
 
 ### Two databases, one container

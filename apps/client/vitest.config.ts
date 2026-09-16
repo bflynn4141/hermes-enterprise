@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // which is what keeps them fast enough to run on every save.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'test/**/*.test.mjs'],
     environment: 'node',
     globals: true,
   },

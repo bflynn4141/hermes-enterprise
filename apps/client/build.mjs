@@ -20,6 +20,7 @@ import fsSync from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shouldEmitSourceMaps } from './scripts/build-policy.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const watch = process.argv.includes('--watch');
@@ -40,7 +41,7 @@ const options = {
   chunkNames: 'chunks/[name]-[hash]',
   target: ['es2022'],
   jsx: 'automatic',
-  sourcemap: true,
+  sourcemap: shouldEmitSourceMaps({ watch, mock, authMode }),
   minify: !watch,
   // `strict` and `erasableSyntaxOnly` mean esbuild only strips types here.
   define: {
@@ -131,6 +132,10 @@ async function emitStatic() {
 }
 
 await checkTokens();
+// A deployable build must describe this commit only. Without the clean, an
+// old chunk or source map can remain in the static-assets directory even when
+// the current esbuild graph no longer emits or references it.
+if (!watch) await fs.rm(dist, { recursive: true, force: true });
 await emitStatic();
 
 if (watch) {
