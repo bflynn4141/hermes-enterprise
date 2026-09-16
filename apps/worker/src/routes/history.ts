@@ -72,11 +72,16 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
       inbox: number;
       documents: number;
     }>(
-      `SELECT COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0) AS decisions,
-              COALESCE((SELECT approved  FROM v_decision_count WHERE workspace_id = $1), 0) AS approved,
-              COALESCE((SELECT declined  FROM v_decision_count WHERE workspace_id = $1), 0) AS declined,
+      `SELECT COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0)
+                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status IN ('approved','declined')) AS decisions,
+              COALESCE((SELECT approved  FROM v_decision_count WHERE workspace_id = $1), 0)
+                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status = 'approved') AS approved,
+              COALESCE((SELECT declined  FROM v_decision_count WHERE workspace_id = $1), 0)
+                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status = 'declined') AS declined,
               COALESCE((SELECT pending   FROM v_pending_grants WHERE workspace_id = $1), 0) AS pending_grants,
-              COALESCE((SELECT pending   FROM v_inbox_count    WHERE workspace_id = $1), 0) AS inbox,
+              (SELECT count(*)::int FROM requests r LEFT JOIN approval_requests ar ON ar.request_id = r.id
+                WHERE r.workspace_id = $1 AND r.status = 'pending'
+                  AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))) AS inbox,
               (SELECT count(*)::int FROM v_created_documents WHERE workspace_id = $1)        AS documents`,
       [work.workspaceId],
     );

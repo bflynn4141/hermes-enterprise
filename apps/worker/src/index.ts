@@ -80,6 +80,12 @@ import {
 } from './routes/turns.js';
 import { createDecision } from './routes/decisions.js';
 import {
+  createApprovalDecision,
+  createApprovalRevision,
+  createApprovalRoute,
+  getApprovalRoute,
+} from './routes/approvals.js';
+import {
   createRequestNote,
   getRequest,
   listRequestDocuments,
@@ -307,6 +313,10 @@ app.delete('/w/:ws/files/:id', deleteFile);
 app.get('/w/:ws/requests', listRequests);
 app.get('/w/:ws/requests/:id', getRequest);
 app.post('/w/:ws/requests/:id/decisions', createDecision);
+app.get('/w/:ws/requests/:id/approval', getApprovalRoute);
+app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
+app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
+app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);

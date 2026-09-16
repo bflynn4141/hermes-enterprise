@@ -19,6 +19,7 @@ import { withTenantTransaction, type Tx } from '../db/client.js';
 import { allowedProviders } from '../model/allowed.js';
 import { runtimeLocation } from '../runtime/config.js';
 import { getSession } from '../auth.js';
+import { loadApprovalListProjection } from '../domain/approvals.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -86,7 +87,10 @@ export async function loadBootstrap(
   // Counts come from the views, never from a stored counter: the demo's rule
   // that 4 -> 0 works in any order is a property of deriving them.
   const counts = await tx.query<{ inbox: number; grants: number; documents: number; decisions: number }>(
-    `SELECT COALESCE((SELECT pending FROM v_inbox_count WHERE workspace_id = $1), 0)     AS inbox,
+    `SELECT (SELECT count(*)::int FROM requests r
+              LEFT JOIN approval_requests ar ON ar.request_id = r.id
+             WHERE r.workspace_id = $1 AND r.status = 'pending'
+               AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))) AS inbox,
             COALESCE((SELECT pending FROM v_pending_grants WHERE workspace_id = $1), 0)  AS grants,
             (SELECT count(*)::int FROM v_created_documents WHERE workspace_id = $1)      AS documents,
             COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0) AS decisions`,
@@ -119,9 +123,25 @@ export async function loadBootstrap(
   );
 
   const requests = await tx.query<{ id: string; kind: string; status: string; label: string }>(
-    `SELECT id, kind, status, label FROM requests
-      WHERE status = 'pending' ORDER BY created_at DESC LIMIT 100`,
+    `SELECT r.id, r.kind, r.status, r.label FROM requests r
+      LEFT JOIN approval_requests ar ON ar.request_id = r.id
+      WHERE r.status = 'pending'
+        AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+      ORDER BY r.created_at DESC LIMIT 100`,
   );
+
+  const approvalIds = await tx.query<{ request_id: string }>(
+    `SELECT request_id FROM approval_requests
+      WHERE workspace_id = $1 AND status = 'pending' AND expires_at > now()`,
+    [workspaceId],
+  );
+  let pendingForMe = 0;
+  let pendingForOthers = 0;
+  for (const approval of approvalIds.rows) {
+    const projection = await loadApprovalListProjection(tx, approval.request_id, userId);
+    if (projection.pending_for_viewer) pendingForMe += 1;
+    else if (projection.waiting_on_others) pendingForOthers += 1;
+  }
 
   // A catalog row is offered only when this workspace holds a verified key for
   // the row's provider. "Add a provider key in Settings to start" is an empty
@@ -206,6 +226,8 @@ export async function loadBootstrap(
       pending_grants: count.grants,
       created_documents: count.documents,
       decisions: count.decisions,
+      pending_for_me: pendingForMe,
+      pending_for_others: pendingForOthers,
     },
     // node-postgres returns a Date for timestamptz; the contract carries an
     // ISO string, because the client compares and sorts cursors as text.

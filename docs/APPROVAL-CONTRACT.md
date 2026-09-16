@@ -4,23 +4,27 @@ This is the shared contract checkpoint for the approval expansion. It is additiv
 
 ## Trust boundary
 
-An agent or runtime calls `proposeApproval(input, context)`. `input` is `ProposeApprovalInput`; it contains a typed proposal, a server-known `policy_key`, requested targets/expiry and an idempotency key. It deliberately cannot contain requester identity, reviewer identities, a policy object, an authorization revision, or an authorization hash.
+An agent or runtime calls `proposeApproval(context, input)`. `input` is `ProposeApprovalInput`; it contains a typed proposal, a server-known `policy_key`, requested targets/expiry and an idempotency key. It deliberately cannot contain requester identity, reviewer identities, a policy object, an authorization revision, or an authorization hash.
 
-The server resolves and validates `context.workspaceId`, `context.agentId`, `context.userId`, `context.sessionId`, and `context.runId` against the active tenant and agent binding. It loads the immutable policy identified by `policy_key`, verifies every named member/authority role in that workspace, chooses an allowed expiry, and computes `sha256:<canonical material fields>`. The stored `ApprovalPayload` is the flattened proposal plus that verified context, policy and authorization binding. Review notes are excluded from the hash and can never authorize work.
+The server resolves and validates `context.workspaceId`, `context.agentId`, `context.userId`, `context.sessionId`, and `context.runId` against the active tenant and agent binding. It selects and snapshots the applicable immutable policy, verifies every named member/authority role in that workspace, chooses an allowed expiry, and computes `sha256:<canonical material fields>`. The stored `ApprovalPayload` is the flattened proposal plus that verified context, policy and authorization binding. Review notes are excluded from the hash and can never authorize work.
+
+`policy_key` is a hint, not authority. The server first selects the applicable policy from approval type, verified requester agent, target resources and approved budget cap; a caller-supplied weaker/different key is rejected. Resource and receiving-agent owners must be mathematically required by the selected quorum, not merely listed among reviewers. A source run must still be `working` or `waiting` and must not have a Stop request when the proposal is created.
 
 Material fields include the type-specific details, evidence references, consequence, target audience/resources, dependent requests, expiry, policy id/version, server-resolved resource versions/content digests and, for a run plan, every model/tool/token/currency limit. A revision recomputes the hash, increments the revision, supersedes old votes and returns the request to review. IDs alone are not immutable evidence: `resource_bindings` records the version and SHA-256 the server actually resolved. A missing digest leaves the associated executor unavailable.
+
+`superseded` belongs to an old revision snapshot only. The top-level request always reflects its current revision (`pending`, `approved`, `declined`, `changes_requested`, `expired`, or `withdrawn`) and therefore does not add a `superseded` request status.
 
 ## Methods and routes
 
 | Domain method | HTTP route | Shared input/output |
 | --- | --- | --- |
-| `proposeApproval(context, input)` | server/runtime integration; optional authenticated `POST /w/:ws/approvals` | `ProposeApprovalInput` → `ApprovalView` |
+| `proposeApproval(context, input)` | server/runtime integration; no public proposal route | `ProposeApprovalInput` → `ApprovalView` |
 | `getApproval(viewer, requestId)` | `GET /w/:ws/requests/:id/approval` | `ApprovalView` |
 | `decideApproval(viewer, requestId, input)` | `POST /w/:ws/requests/:id/approval/decisions` | `DecideApprovalInput` → `ApprovalView` |
 | `reviseApproval(actor, requestId, input)` | `POST /w/:ws/requests/:id/approval/revisions` | `ReviseApprovalInput` → `ApprovalView` |
 | `routeApproval(viewer, requestId, input)` | `POST /w/:ws/requests/:id/approval/route` | `RouteApprovalInput` → `ApprovalView` |
 
-All commands require an idempotency key. Decisions, revisions and routing also require the exact current authorization revision and hash. The server rechecks membership, role eligibility, self-review, current sequential step, quorum, distinct human reviewers, expiry and dependencies inside the same transaction that records the command.
+All commands require an idempotency key. The server stores a canonical command digest: an exact retry returns the original current view, while reusing the key with changed material is a conflict. Decisions, revisions and routing also require the exact current authorization revision and hash. The server rechecks membership, role eligibility, self-review, current sequential step, quorum, distinct human reviewers, expiry and dependencies inside the same transaction that records the command.
 
 `approve`, `decline`, and `request_changes` are approval votes. They do not use the legacy `/decisions` route. A note is annotation only. In a sequential policy only the current step can vote; in a parallel policy all steps can progress. One member can never satisfy two votes in a `require_distinct_reviewers` policy.
 
@@ -28,7 +32,7 @@ Routing selects a currently active member who already satisfies the immutable st
 
 ## Finalization and continuation hook
 
-The server's transition from `pending` to final `approved` writes `approval.finalized` and its `ApprovalFinalizedHook` payload transactionally and exactly once, keyed by `approval-finalized:<request_id>:<authorization_revision>:<authorization_hash>`. The runtime workstream consumes this durable outbox signal; it must still re-read `getApproval` before admission. This hook authorizes only continuation admission. It does not execute mail, access, disclosure, record changes, governance changes or any other provider effect.
+The server's transition from `pending` to final `approved` writes the `approval.finalized` audit event and a jobs-table row with kind `approval_continue` transactionally and exactly once. Its `ApprovalFinalizedHook` payload is keyed by `approval-finalized:<request_id>:<authorization_revision>:<authorization_hash>`. The runtime workstream consumes this durable job; it must still re-read `getApproval` before admission. This hook authorizes only continuation admission. It does not execute mail, access, disclosure, record changes, governance changes or any other provider effect.
 
 The hook carries request/workspace ids, approval type, authorization revision/hash, expiry, verified requester agent/member, source session/run, dependent request ids, resolved resource bindings and the approved run-plan budget (when applicable). `declined`, `changes_requested`, `expired`, `superseded`, and `withdrawn` never emit a finalization hook. They remain queryable authorization states so retries can fail closed. A changed/expired/cancelled request cannot resume even if an earlier hook delivery is replayed.
 

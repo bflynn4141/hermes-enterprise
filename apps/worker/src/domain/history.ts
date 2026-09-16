@@ -52,6 +52,9 @@ export interface HistoryRow {
   document_version: number | null;
   member_name: string | null;
   session_id: string | null;
+  approval_status: string | null;
+  approval_effect_status: string | null;
+  approval_work_status: string | null;
 }
 
 const SELECT = `
@@ -72,7 +75,10 @@ const SELECT = `
          doc.kind          AS document_kind,
          doc.version       AS document_version,
          mu.name           AS member_name,
-         e.session_id
+         e.session_id,
+         ar.status         AS approval_status,
+         ar.effect_status  AS approval_effect_status,
+         ar.work_status    AS approval_work_status
     FROM events e
     LEFT JOIN users actor   ON actor.id = e.actor_user_id
     LEFT JOIN requests r    ON r.id = e.request_id
@@ -80,7 +86,8 @@ const SELECT = `
     LEFT JOIN effects f     ON f.id = e.effect_id
     LEFT JOIN documents doc ON doc.id = e.document_id
     LEFT JOIN members m     ON m.id = e.member_id
-    LEFT JOIN users mu      ON mu.id = m.user_id`;
+    LEFT JOIN users mu      ON mu.id = m.user_id
+    LEFT JOIN approval_requests ar ON ar.request_id = e.request_id`;
 
 /**
  * `before` is the previous page's last `created_at`, which is a timestamptz and
@@ -97,10 +104,11 @@ export async function loadHistory(
   const where: string[] = [];
   const values: unknown[] = [];
 
-  if (tab === 'decisions') where.push(`e.kind = 'decision.recorded'`);
+  if (tab === 'decisions') where.push(`e.kind IN ('decision.recorded', 'approval.vote_recorded', 'approval.finalized')`);
   if (tab === 'blocked') {
     where.push(`(
-      (r.id IS NOT NULL AND r.status = 'pending')
+      (r.id IS NOT NULL AND r.status = 'pending'
+        AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now())))
       OR (f.id IS NOT NULL AND f.status IN ('pending', 'assigned'))
     )`);
   }
@@ -196,9 +204,53 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
           ? `${actor} screened ${subject}’s application`
           : row.request_kind === 'invoice'
             ? `${actor} prepared invoice ${documentNumber(row) ?? subject}`
+            : row.request_kind === 'approval'
+              ? `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`
             : `${actor} prepared agreement ${documentNumber(row) ?? subject}`;
       detail = 'Proposed for review · No decision taken';
       status = row.request_status === 'pending' ? 'Needs review' : 'Reviewed';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.proposed':
+      text = `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`;
+      detail = 'Human authorization pending · No effect executed';
+      status = row.approval_status ?? 'pending';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.vote_recorded':
+      text = `${actor} recorded an approval vote for ${subject}`;
+      detail = 'Human vote recorded · Quorum and current membership rechecked';
+      status = row.approval_status ?? 'pending';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.revised':
+      text = `${actor} submitted a new version of ${subject}`;
+      detail = 'Earlier votes superseded · New authorization hash required';
+      status = row.approval_status ?? 'pending';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.routed':
+      text = `${actor} routed ${subject}`;
+      detail = 'Assignment changed within the immutable review policy';
+      status = row.approval_status ?? 'pending';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.finalized':
+      text = `Required human reviewers authorized ${subject}`;
+      detail = `Authorization approved · Work ${row.approval_work_status ?? 'ready'} · Effect ${row.approval_effect_status ?? 'not required'}`;
+      status = row.approval_status ?? 'approved';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'approval.expired':
+      text = `${subject} expired without authorization`;
+      detail = 'No approval by timeout · Dependent work cancelled';
+      status = 'expired';
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 

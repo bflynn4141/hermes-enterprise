@@ -202,6 +202,14 @@ export const agents = pgTable('agents', {
   updatedAt: now('updated_at'),
 });
 
+export const agentOwners = pgTable('agent_owners', {
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').primaryKey(),
+  memberId: uuid('member_id').notNull(),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
 export const agentCapabilities = pgTable('agent_capabilities', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -552,6 +560,122 @@ export const requestNotes = pgTable('request_notes', {
   createdAt: now('created_at'),
 });
 
+export const approvalResources = pgTable('approval_resources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  resourceKey: text('resource_key').notNull(),
+  kind: text('kind').notNull(),
+  label: text('label').notNull(),
+  ownerMemberId: uuid('owner_member_id').notNull(),
+  version: text('version'),
+  sha256: text('sha256'),
+  executorAvailable: boolean('executor_available').notNull().default(false),
+  active: boolean('active').notNull().default(true),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalPolicies = pgTable('approval_policies', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  key: text('key').notNull(),
+  version: integer('version').notNull().default(1),
+  approvalType: text('approval_type').notNull(),
+  requesterAgentId: uuid('requester_agent_id'),
+  targetResourceIds: text('target_resource_ids').array().notNull().default([]),
+  maxBudgetMinor: bigint('max_budget_minor', { mode: 'number' }),
+  priority: integer('priority').notNull().default(0),
+  mode: text('mode').notNull(),
+  preventSelfReview: boolean('prevent_self_review').notNull().default(true),
+  requireDistinctReviewers: boolean('require_distinct_reviewers').notNull().default(true),
+  maxDurationSeconds: integer('max_duration_seconds').notNull().default(604800),
+  steps: jsonb('steps').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalRequests = pgTable('approval_requests', {
+  requestId: uuid('request_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  policyId: uuid('policy_id').notNull(),
+  policyVersion: integer('policy_version').notNull(),
+  authorizationRevision: integer('authorization_revision').notNull().default(1),
+  authorizationHash: text('authorization_hash').notNull(),
+  status: text('status').notNull().default('pending'),
+  expiresAt: ts('expires_at').notNull(),
+  requesterAgentId: uuid('requester_agent_id').notNull(),
+  requesterMemberId: uuid('requester_member_id'),
+  requesterUserId: uuid('requester_user_id'),
+  sourceSessionId: uuid('source_session_id'),
+  sourceRunId: uuid('source_run_id'),
+  proposalIdempotencyKey: text('proposal_idempotency_key').notNull(),
+  proposalIdempotencyHash: text('proposal_idempotency_hash').notNull(),
+  effectKind: text('effect_kind').notNull(),
+  effectStatus: text('effect_status').notNull().default('not_required'),
+  effectReason: text('effect_reason'),
+  workStatus: text('work_status').notNull().default('waiting'),
+  workReason: text('work_reason'),
+  continuationId: uuid('continuation_id'),
+  finalizationJobId: uuid('finalization_job_id'),
+  finalizedAt: ts('finalized_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const approvalRevisions = pgTable('approval_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
+  payload: jsonb('payload').notNull(),
+  status: text('status').notNull().default('pending'),
+  createdByType: text('created_by_type').notNull(),
+  createdByUserId: uuid('created_by_user_id'),
+  createdByAgentId: uuid('created_by_agent_id'),
+  supersededAt: ts('superseded_at'),
+  createdAt: now('created_at'),
+});
+
+export const approvalVotes = pgTable('approval_votes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
+  stepId: text('step_id').notNull(),
+  decision: text('decision').notNull(),
+  reviewerMemberId: uuid('reviewer_member_id').notNull(),
+  reviewerUserId: uuid('reviewer_user_id').notNull(),
+  note: text('note'),
+  idempotencyKey: text('idempotency_key').notNull(),
+  recordedAt: now('recorded_at'),
+});
+
+export const approvalRoutes = pgTable('approval_routes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  revision: integer('revision').notNull(),
+  stepId: text('step_id').notNull(),
+  reviewerMemberId: uuid('reviewer_member_id').notNull(),
+  routedByMemberId: uuid('routed_by_member_id').notNull(),
+  reason: text('reason').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  createdAt: now('created_at'),
+});
+
+export const approvalCommands = pgTable('approval_commands', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  operation: text('operation').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(),
+  commandHash: text('command_hash').notNull(),
+  createdAt: now('created_at'),
+});
+
 /**
  * An uploaded file, and the account of the object behind it (0009).
  *
@@ -829,6 +953,7 @@ export const ALL_TABLES = {
   user_notification_settings: userNotificationSettings,
   workspace_settings: workspaceSettings,
   agents,
+  agent_owners: agentOwners,
   agent_capabilities: agentCapabilities,
   agent_files: agentFiles,
   agent_context_fields: agentContextFields,
@@ -848,6 +973,13 @@ export const ALL_TABLES = {
   decisions,
   effects,
   request_notes: requestNotes,
+  approval_resources: approvalResources,
+  approval_policies: approvalPolicies,
+  approval_requests: approvalRequests,
+  approval_revisions: approvalRevisions,
+  approval_votes: approvalVotes,
+  approval_routes: approvalRoutes,
+  approval_commands: approvalCommands,
   attachments,
   documents,
   stream_events: streamEvents,
