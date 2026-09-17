@@ -306,6 +306,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   const during = split === messages.length ? [] : messages.slice(split);
   const settled = Boolean(session.run && ['completed', 'stopped', 'error'].includes(session.run.status));
   const currentRunMessages = partitionRunMessages(during, settled, settled ? session.run?.active_ms : null);
+  const streamOwnsAnswer = Boolean(currentRunMessages.answer && session.stream?.runId === currentRunMessages.answer.run_id);
 
   const lastIris = [...messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
@@ -377,7 +378,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 
           {/* A run has one answer, even when tools required several provider
               turns to produce it. */}
-          {currentRunMessages.answer && <IrisMessage message={currentRunMessages.answer} session={session} />}
+          {currentRunMessages.answer && !streamOwnsAnswer && <IrisMessage message={currentRunMessages.answer} session={session} />}
 
           {/* And the text that has not finalised yet. */}
           <RunStream session={session} />

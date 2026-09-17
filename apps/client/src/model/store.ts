@@ -467,6 +467,7 @@ export type Action =
   | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string }
   | { type: 'stream/preview'; sessionId: string; runId: string; turn: number; stepAttempt: number; offset: number; delta: string }
   | { type: 'stream/final'; sessionId: string; message: Message }
+  | { type: 'stream/reveal-complete'; sessionId: string; runId: string }
   | { type: 'entity/upsert'; kind: EntityKind; id: string; version?: number | null; data?: unknown; state?: EntityState }
   | { type: 'entity/loading'; kind: EntityKind; id: string }
   | { type: 'entity/missing'; kind: EntityKind; id: string }
@@ -983,6 +984,7 @@ export function reduce(state: AppState, action: Action): AppState {
           return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt) return s;
+        if (current.status !== 'streaming') return s;
         const durableText = current.durableText + action.delta;
         const text = current.text.startsWith(durableText) ? current.text : durableText;
         return { ...s, stream: { ...current, text, durableText } };
@@ -995,6 +997,7 @@ export function reduce(state: AppState, action: Action): AppState {
           return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt || action.offset > current.text.length) return s;
+        if (current.status !== 'streaming') return s;
         const overlap = Math.min(action.delta.length, current.text.length - action.offset);
         if (current.text.slice(action.offset, action.offset + overlap) !== action.delta.slice(0, overlap)) return s;
         if (overlap === action.delta.length) return s;
@@ -1008,14 +1011,29 @@ export function reduce(state: AppState, action: Action): AppState {
       const next = withSession(state, action.sessionId, (s) => ({
         ...s,
         // A durable final for the previous run may race the next optimistic
-        // turn. Keep that final in history, but do not erase the newer run's
-        // transient preview accumulator.
-        stream: s.stream?.runId === action.message.run_id ? null : s.stream,
+        // turn. Keep that final in history, but do not replace the newer run's
+        // transient preview accumulator. A matching accumulator stays until
+        // the renderer has fluidly consumed the authoritative final text.
+        stream: s.stream?.runId === action.message.run_id
+          ? {
+              ...s.stream,
+              text: action.message.text,
+              durableText: action.message.text,
+              blocks: action.message.blocks,
+              status: action.message.incomplete ? 'incomplete' : 'complete',
+            }
+          : s.stream,
         lastActivity: Date.now(),
         messages: seen ? s.messages.map((m) => (m.id === action.message.id ? action.message : m)) : [...s.messages, action.message],
       }));
       return seen ? next : countUnread(state, next, action.sessionId, action.message.role);
     }
+    case 'stream/reveal-complete':
+      return withSession(state, action.sessionId, (s) =>
+        s.stream?.runId === action.runId && s.stream.status !== 'streaming'
+          ? { ...s, stream: null }
+          : s,
+      );
 
     // --- entity cache ---
     case 'entity/upsert':

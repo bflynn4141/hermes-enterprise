@@ -6,25 +6,28 @@
 // built-in demonstration sequence is off, and `ThinkingState` is given an
 // explicit `stage` rather than being allowed to run its own.
 //
-//   LoadingState   one line while a tool is running: the tool's own label and
-//                  the elapsed timer. No duration is invented, because the
-//                  server does not send one.
-//   ToolChips      inside the collapsed "Done · N steps" disclosure, one chip
-//                  per `tool_call_id`.
+//   LoadingState   one line for the current server-backed phase: reasoning,
+//                  a live tool, or writing. No duration is invented.
+//   ToolChips      exact `tool_call_id` activity, live while the run works and
+//                  inside the collapsed "Done · N steps" disclosure later.
 //   TaskRows       the queue from `run.queue.updated` and a run parked on a
 //                  question. Not a step list (decision C44).
 //   IrisText       the accumulator `message.delta` fills, rendered by the same
 //                  component the finished message uses (decision C41).
 //
-// The order on screen is activity first, answer last (decision C40); a turn
-// that called no tool has no activity block at all (decision C44); and every
-// library component here is handed its rows explicitly — none of them is
+// The order on screen is activity first, answer last (decision C40); settled
+// turns without tool work have no redundant activity block (decision C44);
+// and every library component here is handed its rows explicitly — none is
 // allowed to fall back to the gallery's fixtures (decision C42).
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useReducedMotion } from 'motion/react';
 import { LoadingState, TaskRows, ToolChips } from '@hermes/motion-components';
 import type { Message, RunStep } from '@hermes/shared';
-import { useAdapter } from '../store-context.js';
+import { useAdapter, useAppState, useDispatch } from '../store-context.js';
+import { readableTool } from '../tool-copy.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
+import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
 
 /** Steps that named a tool call, in the order the run reported them. */
 function toolSteps(steps: readonly RunStep[]) {
@@ -65,12 +68,19 @@ export function RunActivity({ session, progress = [] }: { session: SessionState;
   const earlier = steps.filter((step) => (step.step_attempt ?? run.attempt) !== run.attempt);
   const tools = toolSteps(current);
   const earlierTools = toolSteps(earlier);
-  const activeTool = current.find((step) => step.state === 'active' && step.tool_call_id);
+  const activeTool = [...current].reverse().find((step) => step.state === 'active' && step.tool_call_id);
   const answerIsStreaming = Boolean(session.stream?.text.trim());
+  const reasoningComplete = current.some((step) => step.id === 'hermes-reasoning' && step.state === 'done');
   // `run.started` can reach the client one frame before its first provider
-  // step. The run status is already authoritative, so that frame still gets
-  // one thinking indicator instead of an apparently idle transcript.
-  const showWorkingActivity = working && (Boolean(activeTool) || !answerIsStreaming);
+  // step. The run status is authoritative, and the activity stays visible as
+  // the phase moves from reasoning through tools into writing.
+  const showWorkingActivity = working;
+  const phaseLabel = activeTool
+    ? readableTool(activeTool.label, true)
+    : answerIsStreaming
+      ? 'Writing response'
+      : progressLabel(progress) ?? (reasoningComplete ? 'Preparing response' : 'Reasoning through the request');
+  const liveTools = current.filter((step) => step.tool_call_id && step.state !== 'todo');
 
   // TaskRows is for the two things a person can act on: a queued follow-up, and
   // a run parked on a question. It is not a step list.
@@ -111,11 +121,24 @@ export function RunActivity({ session, progress = [] }: { session: SessionState;
       {/* Working, and a tool is running: one line, the tool's own label, the
           library's inline loader. No grid of rows growing under the reader. */}
       {showWorkingActivity && (
-        <LoadingState
-          active
-          label={activeTool ? `${activeTool.label}…` : progressLabel(progress) ?? 'Thinking…'}
-          variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
-        />
+        <>
+          <LoadingState
+            active
+            label={`${phaseLabel}…`}
+            variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
+          />
+          {liveTools.length > 0 && (
+            <div className="live-tool-list" role="list" aria-label="Tool activity">
+              {liveTools.map((step) => (
+                <div className="live-tool-row" data-state={step.state} role="listitem" key={step.id}>
+                  <span className="live-tool-dot" aria-hidden="true" />
+                  <code>{step.label}</code>
+                  <span>{step.state === 'active' ? readableTool(step.label, true) : step.state === 'failed' ? 'Tool failed' : readableTool(step.label, false)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Finished: one muted line, expandable to the tool rows. This is the
@@ -173,14 +196,54 @@ export function RunActivity({ session, progress = [] }: { session: SessionState;
  * gallery's fixtures — which is how a reply to "testing" came to offer "Show
  * the application evidence" and claim three sources.
  */
-export function RunStream({ session }: { session: SessionState }) {
-  if (!session.stream || session.stream.text.length === 0) return null;
+function FluidRunStream({ session, stream }: { session: SessionState; stream: NonNullable<SessionState['stream']> }) {
+  const dispatch = useDispatch();
+  const appReducedMotion = useAppState().ui.reduceMotion;
+  const systemReducedMotion = useReducedMotion() ?? false;
+  const reducedMotion = systemReducedMotion || appReducedMotion;
+  const graphemes = useMemo(() => splitGraphemes(stream.text), [stream.text]);
+  const [visibleText, setVisibleText] = useState(() => (reducedMotion ? stream.text : ''));
+  const final = stream.status !== 'streaming';
+  const completionSent = useRef(false);
+
+  useEffect(() => {
+    if (reducedMotion) {
+      setVisibleText(stream.text);
+      return;
+    }
+    if (visibleText === stream.text) return;
+    const frame = window.requestAnimationFrame(() => {
+      setVisibleText((current) => {
+        const currentGraphemes = splitGraphemes(current);
+        const prefix = commonPrefixLength(currentGraphemes, graphemes);
+        const backlog = graphemes.length - prefix;
+        const count = Math.min(graphemes.length, prefix + revealBatchSize(backlog, final));
+        return graphemes.slice(0, count).join('');
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [final, graphemes, reducedMotion, stream.text, visibleText]);
+
+  const renderedText = reducedMotion ? stream.text : visibleText;
+  useEffect(() => {
+    if (!final || renderedText !== stream.text || completionSent.current) return;
+    completionSent.current = true;
+    dispatch({ type: 'stream/reveal-complete', sessionId: session.id, runId: stream.runId });
+  }, [dispatch, final, renderedText, session.id, stream.runId, stream.text]);
+
+  const showCaret = !final || renderedText !== stream.text;
   return (
     <div className="run-surface hermes-ui" style={{ paddingLeft: 40 }}>
       <div className="stream-text">
-        <IrisText text={session.stream.text} className="lead-text" />
-        {session.stream.status === 'streaming' && <span className="stream-caret" aria-hidden="true" />}
+        <IrisText text={renderedText} className="lead-text" />
+        {showCaret && <span className="stream-caret" aria-hidden="true" />}
       </div>
     </div>
   );
+}
+
+export function RunStream({ session }: { session: SessionState }) {
+  const stream = session.stream;
+  if (!stream || (stream.text.length === 0 && stream.status === 'streaming')) return null;
+  return <FluidRunStream key={`${stream.runId}:${stream.turn}:${stream.stepAttempt}`} session={session} stream={stream} />;
 }

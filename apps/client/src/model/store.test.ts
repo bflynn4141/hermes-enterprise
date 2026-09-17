@@ -427,7 +427,14 @@ describe('streaming text and step_attempt', () => {
     const messages = state.sessions[SESSION_A]!.messages;
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toBe('Leah scores 82 of 100. Customer impact is unverified.');
-    // The accumulator is cleared by the final; the superseded attempt left nothing.
+    // The renderer owns the handoff: it receives the authoritative final text,
+    // then clears the accumulator after the paced reveal catches up.
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({
+      runId: RUN,
+      text: 'Leah scores 82 of 100. Customer impact is unverified.',
+      status: 'complete',
+    });
+    state = reduce(state, { type: 'stream/reveal-complete', sessionId: SESSION_A, runId: RUN });
     expect(state.sessions[SESSION_A]!.stream).toBeNull();
   });
 
@@ -454,7 +461,21 @@ describe('streaming text and step_attempt', () => {
     const messages = state.sessions[SESSION_A]!.messages;
     expect(messages).toHaveLength(1);
     expect(messages[0]!.incomplete).toBe(true);
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({ text: 'Partial answer', status: 'incomplete' });
+    state = reduce(state, { type: 'stream/reveal-complete', sessionId: SESSION_A, runId: RUN });
     expect(state.sessions[SESSION_A]!.stream).toBeNull();
+  });
+
+  it('ignores a late delta after the authoritative final while the reveal catches up', () => {
+    let state = feed(base(), event('message.reset', { run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, message_id: MESSAGE }, 1n));
+    state = feed(state, event('message.delta', { message_id: MESSAGE, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, seq: 0, delta: 'Draft' }, 2n));
+    state = feed(state, event('message.final', {
+      message_id: MESSAGE, session_id: SESSION_A, run_id: RUN, turn: 0,
+      attempt: 1, text: 'Authoritative answer', blocks: [], incomplete: false,
+      worked_ms: 900,
+    }, 3n));
+    state = feed(state, event('message.delta', { message_id: MESSAGE, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, seq: 1, delta: ' stale' }, 4n));
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('Authoritative answer');
   });
 
   it('keeps a newer preview visible when the previous run final arrives late', () => {
@@ -472,6 +493,16 @@ describe('streaming text and step_attempt', () => {
     expect(state.sessions[SESSION_A]!.stream?.runId).toBe(nextRun);
     expect(state.sessions[SESSION_A]!.stream?.text).toBe('New answer');
     expect(state.sessions[SESSION_A]!.messages.at(-1)?.text).toBe('Previous answer');
+  });
+
+  it('a stale reveal completion cannot clear a newer run', () => {
+    const nextRun = mockUuid(27);
+    let state = reduce(base(), {
+      type: 'stream/preview', sessionId: SESSION_A, runId: nextRun,
+      turn: 0, stepAttempt: 1, offset: 0, delta: 'New answer',
+    });
+    state = reduce(state, { type: 'stream/reveal-complete', sessionId: SESSION_A, runId: RUN });
+    expect(state.sessions[SESSION_A]!.stream?.runId).toBe(nextRun);
   });
 
   it('a stopped run keeps its completed steps and returns the active one to todo', () => {

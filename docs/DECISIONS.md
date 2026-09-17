@@ -4905,3 +4905,38 @@ remove the loops and reveal travel. Task and tool text wrap at narrow pane width
 terminal tool states, and failed versus stopped runs. Mock browser coverage
 checks the no-tool card, last-tool visibility in a narrow pane, collapsed Iris
 activity and reduced motion. Activity browser tests now run in the CI mock suite.
+
+---
+
+## C64. Live output is paced from real bytes and activity names observable work
+
+**Decided September 16, 2026.** Native Hermes output remains authoritative,
+but the browser no longer paints each network burst as one visual jump. It
+buffers received text and reveals complete grapheme clusters on animation
+frames. Small backlogs move one or two characters per frame; larger backlogs
+accelerate, and a final response catches up in a short accelerated tail. The
+renderer never invents text, delays persistence or replaces the shared partial
+Markdown parser.
+
+`message.final` now commits the message while retaining its stream accumulator
+until the visual reveal reaches the exact final text. During that handoff the
+committed answer is hidden, preventing a duplicate bubble or an atomic swap.
+Run and attempt keys protect a newer stream from a late final or completion
+event. Reduced motion presents each received buffer immediately.
+
+The activity line follows real phases: reasoning before visible output, the
+human meaning of an active tool, and writing after answer text begins. Exact
+runtime tool identifiers and their active/completed/failed state remain visible
+throughout the working run. Hermes `reasoning.available` records a completed
+reasoning boundary, but its preview text is deliberately not forwarded or
+rendered; observable phase and tool events are useful product status, while a
+provider preview is not a contract for private model reasoning.
+
+**Evidence.** Reducer tests cover authoritative final handoff, retries, stale
+events and incomplete messages. Reveal tests cover grapheme safety and adaptive
+pacing. Runtime tests prove the reasoning boundary is recorded while its text
+is absent from emitted events. Run-surface tests cover reasoning, progress,
+writing and exact live tool activity. Client and Worker suites, workspace
+typecheck, the production client build and Worker dry run pass.
+
+- https://github.com/NousResearch/hermes-agent/blob/5d59366010640c1d6b8f170d8a4ee109db2bbdef/gateway/platforms/api_server_runs.py

@@ -7,6 +7,8 @@ export interface HermesEvent {
   event: string;
   run_id: string;
   delta?: string;
+  /** Runtime-provided reasoning preview. Never a contract for private model thought. */
+  text?: string;
   output?: string;
   /** Tool lifecycle fields emitted by the official Runs SSE contract. */
   tool?: string;

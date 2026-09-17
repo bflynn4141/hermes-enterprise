@@ -1230,6 +1230,20 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 @keyframes stream-caret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .stream-caret { animation: none; } }
 
+/* Live tool calls stay visible while a run moves into its writing phase. The
+   exact runtime identifier is paired with plain-language status copy. */
+.live-tool-list { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; padding-left: 4px; }
+.live-tool-row { display: grid; grid-template-columns: 8px max-content minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: 10.8px; line-height: 15px; }
+.live-tool-row code { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 5px; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--chip-bg); color: var(--body); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; }
+.live-tool-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); opacity: .65; }
+.live-tool-row[data-state="active"] .live-tool-dot { background: var(--accent, #a89fff); box-shadow: 0 0 0 0 rgba(168,159,255,.38); animation: live-tool-pulse 1.4s ease-out infinite; }
+.live-tool-row[data-state="done"] .live-tool-dot { background: var(--success, #77c69d); opacity: .9; }
+.live-tool-row[data-state="failed"] .live-tool-dot { background: var(--danger, #e58b82); opacity: .9; }
+@keyframes live-tool-pulse { 0% { box-shadow: 0 0 0 0 rgba(168,159,255,.38); } 70%, 100% { box-shadow: 0 0 0 6px rgba(168,159,255,0); } }
+@media (prefers-reduced-motion: reduce) { .live-tool-row[data-state="active"] .live-tool-dot { animation: none; } }
+[data-reduced-motion="true"] .live-tool-row[data-state="active"] .live-tool-dot,
+[data-reduced-motion="true"] .stream-caret { animation: none; }
+
 /* ---------------------------------------------------------------------------
    The Markdown subset (decision C39).
 
