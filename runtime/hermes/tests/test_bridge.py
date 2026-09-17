@@ -118,6 +118,19 @@ class BridgeTests(unittest.TestCase):
             bridge.import_people_search(RUN_ID, "call_people", PEOPLE_ARGS, "{}")
         self.assertEqual(request.call_args.kwargs["timeout"], 25.0)
 
+    def test_people_import_reports_only_safe_rejection_metadata(self):
+        bridge = self.bridge()
+        with patch.object(bridge, "request", return_value=(422, {
+            "error": "raw provider body must not be logged",
+            "reason": "partner_source_invalid_response",
+        })):
+            with self.assertRaises(plugin.BridgeError) as raised:
+                bridge.import_people_search(RUN_ID, "call_people", PEOPLE_ARGS, "{}")
+        self.assertEqual(
+            str(raised.exception),
+            "AgentCash People Search evidence import failed (422 partner_source_invalid_response).",
+        )
+
     def test_startup_recovery_replays_only_the_leased_spill_file(self):
         bridge = self.bridge()
         with tempfile.TemporaryDirectory() as directory:

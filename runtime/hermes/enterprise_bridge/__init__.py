@@ -279,7 +279,10 @@ class Bridge:
             }, timeout=25.0,
         )
         if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
-            raise BridgeError("AgentCash People Search evidence import failed.")
+            reason = body.get("reason") if isinstance(body, dict) else None
+            safe_reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z0-9_:-]{1,80}", reason) else None
+            detail = f"{status} {safe_reason}" if safe_reason else str(status)
+            raise BridgeError(f"AgentCash People Search evidence import failed ({detail}).")
         return body
 
     def recover_pending_people_search(self, expected_arguments):
