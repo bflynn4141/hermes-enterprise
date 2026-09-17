@@ -286,6 +286,7 @@ class Bridge:
         """Replay one already-paid spill file; never issues a source request."""
         status, pending = self.request(
             "GET", self.base_url + "/agentcash/people-search/pending", self.token,
+            timeout=25.0,
         )
         if status == 204:
             return None
@@ -463,8 +464,10 @@ def register(ctx):
     if agentcash_arguments is not None and spill_root.is_dir():
         try:
             bridge.recover_pending_people_search(agentcash_arguments)
-        except Exception:
+        except BridgeError as error:
             # The ordinary post-tool observer remains the primary path. A
             # restart recovery failure must not make the governed profile
             # unavailable or risk another paid request.
-            logging.warning("AgentCash pending evidence recovery did not complete.")
+            logging.warning("AgentCash pending evidence recovery did not complete: %s", error)
+        except Exception:
+            logging.warning("AgentCash pending evidence recovery did not complete: unexpected error.")

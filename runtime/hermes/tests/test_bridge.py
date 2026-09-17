@@ -130,9 +130,10 @@ class BridgeTests(unittest.TestCase):
                 "arguments": PEOPLE_ARGS,
             }
             with patch.dict(plugin.os.environ, {"HERMES_HOME": directory}), \
-                    patch.object(bridge, "request", return_value=(200, pending)), \
+                    patch.object(bridge, "request", return_value=(200, pending)) as request, \
                     patch.object(bridge, "import_people_search", return_value={"ok": True}) as imported:
                 self.assertEqual(bridge.recover_pending_people_search(PEOPLE_ARGS), {"ok": True})
+        self.assertEqual(request.call_args.kwargs["timeout"], 25.0)
         imported.assert_called_once_with(RUN_ID, "call_people", PEOPLE_ARGS, '{"people":[]}')
 
     def test_startup_recovery_rejects_a_symlinked_spill_file(self):
