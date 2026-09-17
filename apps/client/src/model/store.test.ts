@@ -284,6 +284,34 @@ describe('sessions', () => {
     expect(state.sessions[SESSION_A]!.messages[0]?.id).toBe(MESSAGE);
   });
 
+  it('does not let a late status from the previous run hide a new optimistic turn', () => {
+    const clientTurnId = mockUuid(25);
+    const state = feed(
+      reduce(base(), {
+        type: 'turn/optimistic',
+        sessionId: SESSION_A,
+        clientTurnId,
+        message: {
+          id: mockUuid(26), session_id: SESSION_A, seq: 1, role: 'user', kind: null,
+          text: 'Second turn.', blocks: [], status: 'complete', run_id: clientTurnId,
+        },
+        run: {
+          id: clientTurnId, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+          attempt: 1, title: null, steps: [], queue: [], guidance: null,
+        },
+      }),
+      event('run.status', {
+        run_id: RUN, attempt: 1, status: 'completed', waiting_for: null,
+        waiting_label: null, active_ms: 1000, error: null,
+      }, 3n),
+    );
+
+    expect(state.sessions[SESSION_A]!.run?.id).toBe(clientTurnId);
+    expect(state.sessions[SESSION_A]!.run?.status).toBe('working');
+    expect(state.sessions[SESSION_A]!.status).toBe('Working');
+    expect(state.sessions[SESSION_A]!.pendingTurn?.clientTurnId).toBe(clientTurnId);
+  });
+
   it('archiving the active session falls back to the next unarchived one', () => {
     const state = reduce(base(), { type: 'session/archive', id: SESSION_A, archived: true });
     expect(state.activeSessionId).toBe(SESSION_B);
@@ -427,6 +455,23 @@ describe('streaming text and step_attempt', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]!.incomplete).toBe(true);
     expect(state.sessions[SESSION_A]!.stream).toBeNull();
+  });
+
+  it('keeps a newer preview visible when the previous run final arrives late', () => {
+    const nextRun = mockUuid(27);
+    let state = reduce(base(), {
+      type: 'stream/preview', sessionId: SESSION_A, runId: nextRun,
+      turn: 0, stepAttempt: 1, offset: 0, delta: 'New answer',
+    });
+    state = feed(state, event('message.final', {
+      message_id: MESSAGE, session_id: SESSION_A, run_id: RUN, turn: 0,
+      attempt: 1, text: 'Previous answer', blocks: [], incomplete: false,
+      worked_ms: 900,
+    }, 4n));
+
+    expect(state.sessions[SESSION_A]!.stream?.runId).toBe(nextRun);
+    expect(state.sessions[SESSION_A]!.stream?.text).toBe('New answer');
+    expect(state.sessions[SESSION_A]!.messages.at(-1)?.text).toBe('Previous answer');
   });
 
   it('a stopped run keeps its completed steps and returns the active one to todo', () => {
