@@ -482,9 +482,21 @@ describe('official Hermes enterprise projection', () => {
 
   it('sends Stop once and waits for the native cancelled status before reporting stopped', async () => {
     const db = new FakeRuntimeDb();
-    const client = new FakeHermesClient();
+    let nativeStopped!: () => void;
+    const stopReceived = new Promise<void>((resolve) => { nativeStopped = resolve; });
+    class StoppableClient extends FakeHermesClient {
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        for (const delta of this.deltas) yield { event: 'message.delta', run_id: NATIVE_ID, delta };
+        // Keep native execution alive until Stop arrives; an already-complete
+        // in-memory fixture is no longer held back by control polling.
+        await stopReceived;
+      }
+    }
+    const client = new StoppableClient();
     let readsAfterStop = 0;
-    client.onStop = () => { client.current = { run_id: NATIVE_ID, status: 'stopping' }; };
+    client.onStop = () => { client.current = { run_id: NATIVE_ID, status: 'stopping' }; nativeStopped(); };
     client.onStatus = () => {
       if (!client.stops.length) return;
       readsAfterStop += 1;
@@ -584,7 +596,7 @@ describe('official Hermes enterprise projection', () => {
 
   it('closes activity and preserves partial output when runtime status becomes unreachable', async () => {
     const client = new FakeHermesClient();
-    client.onStatus = () => { if (client.statusReads > 1) throw new Error('private upstream failure'); };
+    client.onStatus = () => { if (terminalHermesStatus(client.current.status)) throw new Error('private upstream failure'); };
     const { db } = await execute(new FakeRuntimeDb(), client);
     expect(db.statusChanges.at(-1)).toMatchObject({ status: 'error', error: { reason: 'hermes_unavailable' } });
     expect(db.messages.get(0)).toMatchObject({ status: 'incomplete' });

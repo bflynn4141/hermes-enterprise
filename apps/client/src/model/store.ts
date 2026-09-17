@@ -995,6 +995,13 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'stream/preview':
       return withSession(state, action.sessionId, (s) => {
         const current = s.stream;
+        // Best-effort RPCs may finish after the final's reveal was cleared or
+        // after a new run started. They must not resurrect an old accumulator.
+        if (s.run && s.run.id !== action.runId && !['completed', 'stopped', 'error'].includes(s.run.status)) return s;
+        const terminalRun = s.run?.id === action.runId && ['completed', 'stopped', 'error'].includes(s.run.status);
+        const savedFinal = s.messages.some((m) => m.run_id === action.runId && m.role === 'iris' && m.status !== 'streaming');
+        const matchingLiveStream = current?.runId === action.runId && current.turn === action.turn && current.status === 'streaming';
+        if (terminalRun || (savedFinal && !matchingLiveStream)) return s;
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
           if (action.offset !== 0) return s;
           return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', blocks: [], status: 'streaming' } };
