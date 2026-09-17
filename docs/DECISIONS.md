@@ -5054,3 +5054,12 @@ large backlogs preserve exact text and offsets in bounded frames. Client tests
 cover late previews after final/reveal and while a later run is active. Worker
 telemetry records content-free relative delivery timings and counts, and a
 throwing metrics observer cannot change successful completion.
+
+**Live acceptance follow-up.** A real Cloud reply exposed a separate client
+race: periodic semantic reconciliation treated the persisted assistant row's
+`streaming` placeholder as a final answer. That cleared the already-visible
+prefix, so later deltas rebuilt only a suffix until the genuine final arrived.
+Only terminal message rows may enter `stream/final`; the adapter filters
+streaming snapshots and the reducer enforces the same invariant defensively.
+An older in-flight snapshot cannot revive a completed attempt or overwrite a
+retry that has advanced the run's attempt number.

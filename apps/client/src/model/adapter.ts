@@ -272,12 +272,19 @@ export function createAdapter(options: AdapterOptions): Adapter {
       rest.messages(workspaceId, sessionId, null, 100),
     ]);
     if (disposed) return;
+    const latestRun = state().sessions[sessionId]?.run;
+    // A retry can reuse a run id while this snapshot is in flight. Its older
+    // message and status must not overwrite the newer attempt's stream.
+    if (latestRun?.id === runView.run_id && latestRun.attempt !== runView.attempt) return;
 
     for (const message of page.items) {
       const current = state().sessions[sessionId];
       if (!current) return;
       const seen = current.messages.some((item) => item.id === message.id);
       if (message.role === 'iris') {
+        // The message row exists while native deltas are still arriving. Its
+        // placeholder text is not a final answer and may lag the live preview.
+        if (message.status === 'streaming') continue;
         const ownsUnsettledStream = Boolean(message.run_id && current.stream?.runId === message.run_id && current.stream.status === 'streaming');
         if (!seen || ownsUnsettledStream) dispatch({ type: 'stream/final', sessionId, message });
       } else if (!seen && message.role === 'user') {
@@ -291,7 +298,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const run = current?.run;
     if (!current || !run || run.id !== runView.run_id) return;
     const answer = [...current.messages].reverse().find((message) => message.role === 'iris' && message.run_id === run.id);
-    if (run.status !== runView.status) {
+    // A live terminal event can beat a snapshot taken while the run was still
+    // working. Terminal state is monotonic within this same attempt.
+    if (!['completed', 'stopped', 'error'].includes(run.status) && run.status !== runView.status) {
       dispatch({ type: 'run/status', sessionId, runId: run.id, status: runView.status, patch: { active_ms: answer?.worked_ms ?? null } });
     }
     reconciledRuns.add(expectedRunId);
