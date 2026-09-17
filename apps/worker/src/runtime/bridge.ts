@@ -66,6 +66,21 @@ interface AgentCashPeopleImport {
   readonly result: unknown;
 }
 
+type AgentCashPeopleAuthorization = Omit<AgentCashPeopleImport, 'result'>;
+
+function parseAgentCashPeopleAuthorization(value: unknown): AgentCashPeopleAuthorization {
+  if (!object(value) || typeof value.runtime_run_id !== 'string' || !/^run_[0-9a-f]{32}$/.test(value.runtime_run_id) ||
+      typeof value.tool_call_id !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(value.tool_call_id) ||
+      !object(value.arguments)) {
+    throw new RouteError('Invalid AgentCash People Search authorization.', 'bad_body', 400);
+  }
+  return {
+    runtime_run_id: value.runtime_run_id,
+    tool_call_id: value.tool_call_id,
+    arguments: value.arguments,
+  };
+}
+
 function parseAgentCashPeopleImport(value: unknown): AgentCashPeopleImport {
   if (!object(value) || typeof value.runtime_run_id !== 'string' || !/^run_[0-9a-f]{32}$/.test(value.runtime_run_id) ||
       typeof value.tool_call_id !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(value.tool_call_id) ||
@@ -342,6 +357,59 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
   } finally { await db.close(); }
 }
 
+/** Atomically reserve the one paid call before the AgentCash MCP executes it. */
+export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashPeopleAuthorization(await body(c));
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try {
+    run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
+    requireActive(run, workspaceId, agentId);
+  } finally {
+    await runtime.close();
+  }
+  const match = /^partner-screening:([0-9a-f-]{36})$/i.exec(run.clientTurnId);
+  if (!match) throw new RouteError('This native run is not a partner screening run.', 'runtime_run_inactive', 409);
+  const screeningRunId = match[1]!;
+  let created = false;
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    const screening = await tx.query<{
+      status: 'running' | 'completed' | 'failed';
+      source: string;
+      config_snapshot: Record<string, unknown>;
+      api_requests_used: number;
+      agentcash_tool_call_id: string | null;
+    }>(
+      `SELECT status, source, config_snapshot, api_requests_used, agentcash_tool_call_id
+         FROM partner_screening_runs
+        WHERE workspace_id=$1 AND id=$2 AND agent_id=$3
+        FOR UPDATE`,
+      [workspaceId, screeningRunId, agentId],
+    );
+    const row = screening.rows[0];
+    if (!row || row.source !== 'agentcash_people' || row.status !== 'running') {
+      throw new RouteError('No active AgentCash screening run matches this native run.', 'partner_screening_conflict', 409);
+    }
+    const config = partnerAgentConfigSchema.parse(row.config_snapshot);
+    if (canonical(input.arguments) !== canonical(agentCashPeopleSearchArguments(config))) {
+      throw new RouteError('The AgentCash call does not match the stored screening policy.', 'partner_source_policy_mismatch', 422);
+    }
+    if (row.api_requests_used === 1 && row.agentcash_tool_call_id === input.tool_call_id) return;
+    if (row.api_requests_used !== 0 || row.agentcash_tool_call_id) {
+      throw new RouteError('The AgentCash payment allowance for this screening run is already reserved.', 'partner_source_budget_exhausted', 409);
+    }
+    await tx.query(
+      `UPDATE partner_screening_runs
+          SET api_requests_used = 1, agentcash_tool_call_id = $4
+        WHERE workspace_id = $1 AND id = $2 AND agent_id = $3`,
+      [workspaceId, screeningRunId, agentId, input.tool_call_id],
+    );
+    created = true;
+  });
+  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1 }, created ? 201 : 200);
+}
+
 /** Import the exact paid response associated with one trusted native run. */
 export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
@@ -366,8 +434,11 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       source: string;
       config_snapshot: Record<string, unknown>;
       candidates_discovered: number;
+      api_requests_used: number;
+      agentcash_tool_call_id: string | null;
     }>(
-      `SELECT created_by, status, source, config_snapshot, candidates_discovered
+      `SELECT created_by, status, source, config_snapshot, candidates_discovered,
+              api_requests_used, agentcash_tool_call_id
          FROM partner_screening_runs
         WHERE workspace_id=$1 AND id=$2 AND agent_id=$3
         FOR UPDATE`,
@@ -376,6 +447,9 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
     const row = screening.rows[0];
     if (!row || row.source !== 'agentcash_people' || row.status === 'failed') {
       throw new RouteError('No active AgentCash screening run matches this native run.', 'partner_screening_conflict', 409);
+    }
+    if (row.api_requests_used !== 1 || row.agentcash_tool_call_id !== input.tool_call_id) {
+      throw new RouteError('This AgentCash result does not have the matching payment lease.', 'partner_source_payment_not_authorized', 409);
     }
     const config = partnerAgentConfigSchema.parse(row.config_snapshot);
     if (canonical(input.arguments) !== canonical(agentCashPeopleSearchArguments(config))) {
@@ -389,7 +463,7 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
     importedCandidates = result.candidates.length;
     created = true;
     await completePartnerScreening(
-      { tx, workspaceId, userId: row.created_by, requireAdmin: () => undefined },
+      { tx, workspaceId, userId: row.created_by, role: 'admin', requireAdmin: () => undefined },
       { runId: screeningRunId, agentId, result },
     );
   });

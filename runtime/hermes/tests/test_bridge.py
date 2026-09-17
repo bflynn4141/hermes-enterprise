@@ -21,6 +21,29 @@ from start import (
 )
 
 RUN_ID = "run_" + "a" * 32
+PEOPLE_PROGRAM = {
+    "source": "agentcash_people",
+    "max_spend_usd": 0.15,
+    "people_search": {
+        "current_position_seniority_level": ["Founder", "Head"],
+        "person_skills": ["Artificial Intelligence (AI)"],
+        "current_position_titles": [],
+        "person_locations": [],
+    },
+}
+PEOPLE_ARGS = {
+    "url": "https://stableenrich.dev/api/fullenrich/people-search",
+    "method": "POST",
+    "maxAmount": 0.15,
+    "body": {
+        "current_position_seniority_level": ["Founder", "Head"],
+        "person_skills": ["Artificial Intelligence (AI)"],
+        "excludeFields": ["educations", "languages"],
+        "include_employment_history": False,
+        "verbose": False,
+        "offset": 0,
+    },
+}
 
 
 class BridgeTests(unittest.TestCase):
@@ -130,11 +153,12 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash",
-                        "tools": ["get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch"],
-                        "allowed_hosts": ["stableenrich.dev", "stablesocial.dev"],
-                        "max_amount_usd": 0.2,
+                        "tools": ["fetch"],
+                        "allowed_hosts": ["stableenrich.dev"],
+                        "max_amount_usd": 0.15,
                     }],
                 }.get(name, default)
 
@@ -151,21 +175,20 @@ class BridgeTests(unittest.TestCase):
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
-        }), patch.object(plugin.Bridge, "tools", return_value=[]):
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
+                patch.object(plugin.Bridge, "authorize_people_search") as authorized:
             plugin.register(context)
-        self.assertIsNone(context.hook("mcp__agentcash__get_balance", {}))
-        self.assertIsNone(context.hook("mcp__agentcash__discover_api_endpoints", {
-            "url": "https://stableenrich.dev",
-        }))
-        self.assertIsNone(context.hook("mcp__agentcash__fetch", {
-            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.06,
-        }))
-        self.assertIn("host allowlist", context.hook("mcp__agentcash__fetch", {
-            "url": "https://example.com", "maxAmount": 0.01,
-        })["message"])
-        self.assertIn("spend cap", context.hook("mcp__agentcash__fetch", {
-            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.21,
-        })["message"])
+            self.assertIsNone(context.hook("mcp__agentcash__fetch", PEOPLE_ARGS, tool_call_id="call_people"))
+            authorized.assert_called_once_with(RUN_ID, "call_people", PEOPLE_ARGS)
+        self.assertIn("allowlist", context.hook("mcp__agentcash__get_balance", {})["message"])
+        for changed in (
+            {**PEOPLE_ARGS, "url": "https://stableenrich.dev/api/other"},
+            {**PEOPLE_ARGS, "method": "GET"},
+            {**PEOPLE_ARGS, "maxAmount": 0.14},
+            {**PEOPLE_ARGS, "body": {**PEOPLE_ARGS["body"], "offset": 1}},
+        ):
+            self.assertIn("exact approved", context.hook("mcp__agentcash__fetch", changed)["message"])
         self.assertEqual(context.hook("mcp__agentcash__bridge", {})["action"], "block")
 
     def test_successful_people_search_is_imported_by_post_tool_hook(self):
@@ -178,6 +201,7 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash",
                         "tools": ["fetch"],
@@ -201,16 +225,11 @@ class BridgeTests(unittest.TestCase):
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
                 patch.object(plugin.Bridge, "import_people_search") as imported, \
-                patch.object(plugin, "trusted_post_identity", return_value=(RUN_ID, "call_people")):
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")):
             plugin.register(context)
             context.hooks["post_tool_call"](
                 tool_name="mcp__agentcash__fetch",
-                args={
-                    "url": "https://stableenrich.dev/api/fullenrich/people-search",
-                    "method": "POST",
-                    "maxAmount": 0.15,
-                    "body": {"person_skills": ["Artificial Intelligence (AI)"]},
-                },
+                args=PEOPLE_ARGS,
                 result=json.dumps({"people": [], "companies": {}, "metadata": {"total": 0}}),
                 tool_call_id="call_people",
             )
@@ -225,6 +244,7 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash", "tools": ["fetch"],
                         "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.2,
@@ -270,7 +290,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.2.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.3.0",
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 
@@ -351,10 +371,10 @@ class BridgeTests(unittest.TestCase):
         )
         self.assertEqual(servers["agentcash"]["args"], ["--yes", "agentcash@0.17.1"])
         self.assertEqual(servers["agentcash"]["tools"]["include"], [
-            "get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch",
+            "fetch",
         ])
         self.assertEqual(environment, {"AGENTCASH_HOME": "/srv/hermes-agentcash"})
-        self.assertEqual(policies[0]["max_amount_usd"], 0.2)
+        self.assertEqual(policies[0]["max_amount_usd"], 0.15)
         with self.assertRaisesRegex(RuntimeError, "dedicated directory"):
             load_mcp_servers("", {"AGENTCASH_HOME": str(pathlib.Path.home())}, agentcash_enabled=True)
 

@@ -23,6 +23,7 @@ import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../job
 import { optionalWorkosPort, type WorkOSEvent } from './workos.js';
 import { mirrorMembership, revokeAccess, type MemberRow } from '../routes/members.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import { inviteeRuntimeAgentIds } from '../runtime/config.js';
 
 interface MembershipEventData {
   id?: string;
@@ -192,6 +193,8 @@ async function applyEvent(env: Env, event: WorkOSEvent): Promise<boolean> {
         invitationId: mirrored.acceptedInvitation.id,
         invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
         jobs: coordinationJobs,
+        inviteeRuntimeAgentIds: inviteeRuntimeAgentIds(env, workspaceId as string),
+        requireInviteeRuntime: env.AGENT_RUNTIME === 'hermes',
       });
     }
     return coordinationJobs;

@@ -108,6 +108,15 @@ Before each POST/retry, the plugin checks the native run status and stops if it 
 
 MCP was not selected for this bridge: the pinned MCP client constructs HTTP headers from connection config and calls `session.call_tool(tool_name, arguments=args)` with no run-scoped metadata. Static MCP headers do not identify one enterprise run. The native plugin provides the required trusted context without forking the official agent loop.
 
+The sole approved AgentCash MCP call has an additional pre-payment handshake.
+The plugin sends its trusted native run id, tool-call id, and exact Worker-issued
+arguments to `POST .../agentcash/people-search/authorize`. The Worker locks the
+matching screening row and reserves its single request. Replaying the same
+tool-call id is idempotent; a different second id fails before the MCP can pay.
+Only that leased id may use `POST .../agentcash/people-search/import` afterward.
+An uncertain authorization response fails closed, and an uncertain payment is
+never automatically retried.
+
 ## Native Runs API contract at this pin
 
 Send a bearer-authenticated `POST /v1/runs` with `input`, `session_id`, optional `instructions`, `provider: "custom"`, and `model`. Initial acceptance is HTTP 202:

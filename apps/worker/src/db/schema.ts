@@ -710,6 +710,7 @@ export const partnerScreeningRuns = pgTable(
     configSnapshot: jsonb('config_snapshot').notNull(),
     apiRequestsMax: integer('api_requests_max').notNull(),
     apiRequestsUsed: integer('api_requests_used').notNull().default(0),
+    agentCashToolCallId: text('agentcash_tool_call_id'),
     rateLimits: jsonb('rate_limits').notNull().default([]),
     candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
     monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),

@@ -1,5 +1,5 @@
 name: enterprise_bridge
-version: 1.2.0
+version: 1.3.0
 description: Governed enterprise tools using trusted Hermes run context
 requires_env:
   - name: ENTERPRISE_RUNTIME_TOKEN

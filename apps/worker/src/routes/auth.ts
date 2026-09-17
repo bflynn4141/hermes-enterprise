@@ -19,6 +19,7 @@
 import type { Context } from 'hono';
 import { authSessionSchema, authWorkspacesSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
+import { inviteeRuntimeAgentIds } from '../runtime/config.js';
 import { isDevelopment } from '../env.js';
 import { getSession } from '../auth.js';
 import { AuthError } from '../auth/types.js';
@@ -232,6 +233,8 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
           invitationId: mirrored.acceptedInvitation.id,
           invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
           jobs,
+          inviteeRuntimeAgentIds: inviteeRuntimeAgentIds(c.env, workspaceId),
+          requireInviteeRuntime: c.env.AGENT_RUNTIME === 'hermes',
         });
       }
     }

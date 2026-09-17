@@ -26,6 +26,7 @@ import { mirrorMembership } from './members.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import { inviteeRuntimeAgentIds } from '../runtime/config.js';
 
 export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -125,6 +126,8 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
       invitationId: mirrored.acceptedInvitation.id,
       invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
       jobs,
+      inviteeRuntimeAgentIds: inviteeRuntimeAgentIds(c.env, workspaceId),
+      requireInviteeRuntime: c.env.AGENT_RUNTIME === 'hermes',
     });
 
     // The whole workspace, from inside the transaction that admitted them, so

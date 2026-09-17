@@ -40,6 +40,7 @@ function work(tx: Tx, workspaceId: string, userId: string): PartnerScreeningWork
     tx,
     workspaceId,
     userId,
+    role: 'admin',
     requireAdmin: () => undefined,
   };
 }

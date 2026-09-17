@@ -15,6 +15,10 @@ export interface RuntimeBinding {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly transport: 'native' | 'dashboard_connector';
+  /** Fixed profiles cannot be reassigned. Invitee-pool profiles are claimed once at invitation acceptance. */
+  readonly assignment: 'fixed' | 'invitee_pool';
+  /** Deployment attestation that this profile was launched with the bounded AgentCash MCP. */
+  readonly agentCash: boolean;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const misconfigured = (): never => {
@@ -33,6 +37,9 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
   if (typeof row.base_url !== 'string' || typeof row.api_key !== 'string' || !row.api_key.trim()) return misconfigured();
   const transport = row.transport ?? 'native';
   if (transport !== 'native' && transport !== 'dashboard_connector') return misconfigured();
+  const assignment = row.assignment ?? 'fixed';
+  if (assignment !== 'fixed' && assignment !== 'invitee_pool') return misconfigured();
+  if (row.agentcash !== undefined && typeof row.agentcash !== 'boolean') return misconfigured();
   let url: URL;
   try { url = new URL(row.base_url); } catch { return misconfigured(); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -45,6 +52,8 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
     baseUrl: url.toString().replace(/\/$/, ''),
     apiKey: row.api_key,
     transport,
+    assignment,
+    agentCash: row.agentcash === true,
   };
 }
 export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
@@ -60,6 +69,21 @@ export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
     if (typeof workspaceId !== 'string') return misconfigured();
     return runtimeBinding(env, workspaceId, agentId);
   });
+}
+
+/**
+ * Exact, deployment-provisioned capacity that invitation acceptance may claim.
+ * A pool entry is usable only when the operator explicitly attests that its
+ * isolated profile has the bounded AgentCash integration enabled.
+ */
+export function inviteeRuntimeAgentIds(env: RuntimeEnv, workspaceId: string): string[] {
+  if (env.AGENT_RUNTIME !== 'hermes') return [];
+  return runtimeBindings(env)
+    .filter((binding) => binding.workspaceId === workspaceId
+      && binding.assignment === 'invitee_pool'
+      && binding.agentCash)
+    .map((binding) => binding.agentId)
+    .sort();
 }
 /** Existing sessions show the configured execution location after a rollout.
  * Missing configuration still fails turn admission; it must not hide onboarding

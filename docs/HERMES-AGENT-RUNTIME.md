@@ -88,8 +88,14 @@ reported `runtime_kind = hermes`, completed in 39 seconds with six governed tool
 calls, and created no requests, decisions, effects or outbound communication.
 The Traces UI displayed it as `Hermes Agent · work` under Iris.
 
-Provisioning additional profiles is still explicit configuration; workspace
-creation does not automatically start a Cloud runtime for every new member. A
+Provisioning additional profiles is still explicit configuration. Invitation
+acceptance can claim one finite, pre-provisioned profile whose binding is
+marked `assignment: "invitee_pool"` and `agentcash: true`. The agent row uses
+that profile's exact UUID, is owned by the joining member, and opens directly
+into Partner Program setup. If no unused attested pool profile exists, the
+acceptance transaction rolls back with `invitee_runtime_capacity_unavailable`;
+the product never admits a member with an unbound simulated Iris. Workspace
+creation does not automatically start a Cloud runtime. A
 native run keeps its process while waiting and is bounded by the adapter’s
 55-minute execution window (60-minute Workflow step timeout). Multi-day human
 waits need a durable suspend/resume lifecycle before production rollout. Inbox
@@ -100,14 +106,17 @@ native cron remain off by default. For an explicit demo profile,
 `HERMES_NATIVE_CRON_ENABLED=1` retains the official cron REST surface while
 agent self-scheduling stays disabled, and `ENTERPRISE_MCP_SERVERS_JSON` enables
 only named stdio servers with a required tool allowlist. The AgentCash shortcut
-`HERMES_AGENTCASH_MCP_ENABLED=1` pins AgentCash 0.17.1 and exposes only balance,
-discovery, schema inspection and fetch; fetch is limited to StableEnrich and
-StableSocial and requires a per-call `maxAmount` no greater than $0.20. Its
-`AGENTCASH_HOME` should be a dedicated funded directory, not a personal home.
-The Partner Program profile further pins one People Search call to
-`stableenrich.dev/api/fullenrich/people-search` at $0.15. A `post_tool_call`
-hook forwards that response to the run-bound Worker importer; contact data is
-discarded before the result can become Inbox evidence.
+`HERMES_AGENTCASH_MCP_ENABLED=1` pins AgentCash 0.17.1 and exposes only `fetch`.
+The plugin accepts only the Worker-supplied exact People Search URL, POST body,
+and $0.15 cap; balance, discovery, schema inspection, StableSocial, alternate
+paths and changed arguments are unavailable to the model. Its `AGENTCASH_HOME`
+must be a dedicated funded directory, not a personal home. Before the paid
+call, a `pre_tool_call` hook obtains an atomic one-use lease for the exact
+native run and tool-call id. A different or second call is rejected before
+payment. The `post_tool_call` hook forwards the response to the run-bound
+Worker importer; contact data is discarded before the result can become Inbox
+evidence. Members may use this only for the single `onboarding:`-keyed run on
+their own attested pool Iris. Further paid searches remain Admin-authorized.
 Without those gates, the launcher refuses nonempty native cron state, removes
 native cron REST routes before binding, and makes native health fail if a job
 later appears. Automatic memory extraction, background review and learning nudges
@@ -180,6 +189,18 @@ then forwards them to the loopback API Server with the native key. It is not an
 arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
+
+Fixed and invitee capacity live in the same exact binding map. Existing agents
+default to `assignment: "fixed"` and can never be claimed. A spare invitee
+profile must use its final agent UUID as the map key and include:
+
+```json
+{"assignment":"invitee_pool","agentcash":true}
+```
+
+The `agentcash` flag is an operator attestation, not a wallet secret. Set it
+only after the profile has the pinned plugin, `HERMES_AGENTCASH_MCP_ENABLED=1`,
+a dedicated funded `AGENTCASH_HOME`, and a successful governed readiness check.
 
 The official image can persist user-managed plugins, skills and configuration
 under its data volume. Hermes Desktop can install an agent plugin into a

@@ -344,7 +344,7 @@ function TestQuestion({ providerStatus, providerSlot, liveSearchStatus, complete
               ? <p>I found live candidates and saved their public evidence. Connect Nous Portal so I can screen it.</p>
               : liveSearchStatus === 'screening'
                 ? <p>I’m screening the saved public evidence now. Supported candidates will appear in Inbox.</p>
-                : <p>I’m starting with a bounded live search of public GitHub organizations.</p>}
+                : <p>I’m starting with a bounded live search using the approved Partner Program source.</p>}
       </IrisPrompt>
       {!providerReady ? (
         <div className="first-run-provider-slot" data-testid="first-run-provider-slot">

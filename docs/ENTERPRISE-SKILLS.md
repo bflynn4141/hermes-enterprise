@@ -2,7 +2,7 @@
 
 Hermes Enterprise packages reviewed procedures as official Hermes skills while keeping authority, credentials, source access and approvals in the enterprise control plane.
 
-The first package is `enterprise_bridge:partner-program-screening` version `1.1.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare an application request, and stop for human review. Optional AgentCash results remain exploratory until an approved connector stores them as evidence. The skill cannot contact anyone or decide an application by itself.
+The first package is `enterprise_bridge:partner-program-screening` version `1.3.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare an application request, and stop for human review. AgentCash is limited to the exact Worker-configured People Search request and needs a one-use Worker lease before payment; only sanitized imported evidence can support an Inbox proposal. The skill cannot contact anyone or decide an application by itself.
 
 ## Why this matches Hermes
 

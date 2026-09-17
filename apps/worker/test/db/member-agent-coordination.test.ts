@@ -5,6 +5,20 @@ import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
 
+const AGENTCASH_CONFIG = {
+  source: 'agentcash_people', source_purpose: 'person_partner_research', organization_only: false, no_outreach: true,
+  role_label: 'Potential ecosystem lead', search_queries: [], intake_urls: [],
+  keywords: ['artificial intelligence', 'developer relations'],
+  people_search: {
+    current_position_seniority_level: ['Founder', 'Head', 'Director'],
+    person_skills: ['Artificial Intelligence (AI)', 'Developer Relations'],
+    current_position_titles: [], person_locations: [],
+  },
+  ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+  minimum_priority: 40, lookback_days: 365, max_candidates: 5,
+  max_api_requests: 1, minimum_rate_remaining: 0, max_spend_usd: 0.15,
+};
+
 describe('invitation-derived member and agent coordination', () => {
   it('creates one owned agent and a sequential human review without outreach or a run', async () => {
     const fixture = await seedWorkspace();
@@ -36,7 +50,22 @@ describe('invitation-derived member and agent coordination', () => {
       await client.query('COMMIT');
     });
 
-    const { env } = makeEnv();
+    const poolAgentId = randomUUID();
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'invitee-pool-test-secret-longer-than-32-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [poolAgentId]: {
+          workspace_id: fixture.workspaceId,
+          base_url: 'https://invitee-iris.example/api/plugins/enterprise_bridge/control',
+          api_key: 'invitee-runtime-profile-key',
+          transport: 'dashboard_connector',
+          assignment: 'invitee_pool',
+          agentcash: true,
+        },
+      }),
+      PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify(AGENTCASH_CONFIG),
+    });
     const accepted = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, {
       method: 'POST',
       body: {},
@@ -45,8 +74,8 @@ describe('invitation-derived member and agent coordination', () => {
     const bootstrap = await accepted.json() as Bootstrap;
 
     const persisted = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
-      const joiner = await client.query<{ member_id: string; agent_id: string; status: string }>(
-        `SELECT m.id AS member_id, ao.agent_id, a.status
+      const joiner = await client.query<{ member_id: string; agent_id: string; status: string; responsibility: string; setup_step: string; instructions_active: string }>(
+        `SELECT m.id AS member_id, ao.agent_id, a.status, a.responsibility, a.setup_step, a.instructions_active
            FROM members m
            JOIN agent_owners ao ON ao.member_id = m.id AND ao.workspace_id = m.workspace_id
            JOIN agents a ON a.id = ao.agent_id
@@ -59,8 +88,8 @@ describe('invitation-derived member and agent coordination', () => {
           WHERE r.workspace_id = $1 AND r.kind = 'approval'`,
         [fixture.workspaceId],
       );
-      const messages = await client.query<{ owner_id: string; kind: string; text: string }>(
-        `SELECT s.owner_id, m.kind, m.text
+      const messages = await client.query<{ owner_id: string; kind: string; text: string; title: string; focus_ref: Record<string, unknown> | null }>(
+        `SELECT s.owner_id, m.kind, m.text, s.title, s.focus_ref
            FROM messages m JOIN sessions s ON s.id = m.session_id
           WHERE m.workspace_id = $1 ORDER BY m.created_at`,
         [fixture.workspaceId],
@@ -76,6 +105,10 @@ describe('invitation-derived member and agent coordination', () => {
       );
       const runs = await client.query(`SELECT id FROM runs WHERE workspace_id = $1`, [fixture.workspaceId]);
       const effects = await client.query(`SELECT id FROM effects WHERE workspace_id = $1`, [fixture.workspaceId]);
+      const capabilities = await client.query<{ title: string; scope: string; tool_names: string[] }>(
+        `SELECT title, scope, tool_names FROM agent_capabilities WHERE workspace_id = $1 AND agent_id = $2`,
+        [fixture.workspaceId, joiner.rows[0]!.agent_id],
+      );
       return {
         joiner: joiner.rows[0]!,
         requests: requests.rows,
@@ -84,11 +117,24 @@ describe('invitation-derived member and agent coordination', () => {
         streamed: streamed.rows,
         runCount: runs.rowCount,
         effectCount: effects.rowCount,
+        capabilities: capabilities.rows,
       };
     });
 
     expect(bootstrap.agent.id).toBe(persisted.joiner.agent_id);
+    expect(persisted.joiner.agent_id).toBe(poolAgentId);
     expect(persisted.joiner.status).toBe('draft');
+    expect(persisted.joiner).toMatchObject({ responsibility: 'Partner Program', setup_step: 'identity' });
+    expect(persisted.joiner.instructions_active).toContain('one filtered request capped at $0.15');
+    expect(persisted.capabilities).toEqual([expect.objectContaining({
+      title: 'Discover and screen partners', scope: 'Partner Program',
+    })]);
+    const welcome = persisted.messages.find((message) => message.owner_id === joinerId && message.kind === 'welcome');
+    expect(welcome).toMatchObject({
+      title: 'Set up Partner Program Iris',
+      focus_ref: { section: 'agents', view: 'setup', step: 'identity' },
+    });
+    expect(welcome?.text).toContain('AgentCash People Search is attached');
     expect(persisted.requests).toHaveLength(1);
     const request = persisted.requests[0]!;
     expect(request.payload.approval_type).toBe('team_commitment');
@@ -164,5 +210,49 @@ describe('invitation-derived member and agent coordination', () => {
       return { agents: agents.rowCount, approvals: approvals.rowCount, joins: joins.rowCount };
     });
     expect(counts).toEqual({ agents: 1, approvals: 1, joins: 1 });
+  });
+
+  it('rolls invitation acceptance back when no attested invitee runtime is available', async () => {
+    const fixture = await seedWorkspace();
+    const joinerId = randomUUID();
+    const invitationId = randomUUID();
+    const email = `no-capacity-${joinerId.slice(0, 8)}@example.test`;
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await client.query(`INSERT INTO users (id, email, email_verified) VALUES ($1, $2, true)`, [joinerId, email]);
+      await setTenant(client, fixture.workspaceId, fixture.adminId);
+      await client.query(
+        `INSERT INTO invitations (id, workspace_id, email, role, expires_at, invited_by)
+         VALUES ($1, $2, $3, 'member', now() + interval '7 days', $4)`,
+        [invitationId, fixture.workspaceId, email, fixture.adminId],
+      );
+      await client.query('COMMIT');
+    });
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'invitee-pool-test-secret-longer-than-32-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fixture.agentId]: {
+          workspace_id: fixture.workspaceId,
+          base_url: 'https://fixed-iris.example/api/plugins/enterprise_bridge/control',
+          api_key: 'fixed-runtime-profile-key',
+          transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const response = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, { method: 'POST', body: {} });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ reason: 'invitee_runtime_capacity_unavailable' });
+    const persisted = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+      const invitation = await client.query<{ status: string }>(`SELECT status FROM invitations WHERE id = $1`, [invitationId]);
+      const membership = await client.query(`SELECT id FROM members WHERE workspace_id = $1 AND user_id = $2`, [fixture.workspaceId, joinerId]);
+      const ownership = await client.query(
+        `SELECT ao.agent_id FROM agent_owners ao JOIN members m ON m.id = ao.member_id
+          WHERE ao.workspace_id = $1 AND m.user_id = $2`,
+        [fixture.workspaceId, joinerId],
+      );
+      return { invitation: invitation.rows[0]?.status, memberships: membership.rowCount, ownerships: ownership.rowCount };
+    });
+    expect(persisted).toEqual({ invitation: 'pending', memberships: 0, ownerships: 0 });
   });
 });

@@ -57,6 +57,71 @@ const response = (body: unknown, resource: string) => new Response(JSON.stringif
 });
 
 describe('live Partner Program source ingestion and Iris handoff', () => {
+  it('lets a member use only the one approved AgentCash onboarding allowance on their own pool Iris', async () => {
+    const fx = await seedWorkspace();
+    const memberUserId = randomUUID();
+    await bindAgent(fx);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO users (id, email, email_verified, name) VALUES ($1, $2, true, 'Invited Member')`,
+        [memberUserId, `member-${memberUserId.slice(0, 8)}@example.test`],
+      );
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const member = await client.query<{ id: string }>(
+        `INSERT INTO members (workspace_id, user_id, role, status) VALUES ($1, $2, 'member', 'active') RETURNING id`,
+        [fx.workspaceId, memberUserId],
+      );
+      await client.query(
+        `UPDATE agent_owners SET member_id = $3 WHERE workspace_id = $1 AND agent_id = $2`,
+        [fx.workspaceId, fx.agentId, member.rows[0]!.id],
+      );
+      await client.query('COMMIT');
+    });
+    const config = {
+      source: 'agentcash_people', source_purpose: 'person_partner_research', organization_only: false, no_outreach: true,
+      role_label: 'Potential ecosystem lead', search_queries: [], intake_urls: [],
+      keywords: ['artificial intelligence'],
+      people_search: {
+        current_position_seniority_level: ['Founder'], person_skills: ['Artificial Intelligence (AI)'],
+        current_position_titles: [], person_locations: [],
+      },
+      ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+      minimum_priority: 40, lookback_days: 365, max_candidates: 5,
+      max_api_requests: 1, minimum_rate_remaining: 0, max_spend_usd: 0.15,
+    };
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'member-agentcash-test-secret-longer-than-32-characters',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://invitee-iris.example/api/plugins/enterprise_bridge/control',
+          api_key: 'member-runtime-profile-key', transport: 'dashboard_connector',
+          assignment: 'invitee_pool', agentcash: true,
+        },
+      }),
+      PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify(config),
+    });
+    const path = `/w/${fx.workspaceId}/partner-screening/runs`;
+    const key = `onboarding:${randomUUID()}`;
+    const first = await asUser(env, memberUserId, path, {
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: key },
+    });
+    expect(first.status).toBe(201);
+    expect(await first.json()).toMatchObject({ run: { source: 'agentcash_people', status: 'running' } });
+
+    const replay = await asUser(env, memberUserId, path, {
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: key },
+    });
+    expect(replay.status).toBe(200);
+    const second = await asUser(env, memberUserId, path, {
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `onboarding:${randomUUID()}` },
+    });
+    expect(second.status).toBe(403);
+    expect(await second.json()).toMatchObject({ reason: 'partner_onboarding_allowance_used' });
+  });
+
   it('persists source artifacts, exposes them to the bound agent, and deduplicates pending Inbox proposals', async () => {
     const fx = await seedWorkspace();
     await bindAgent(fx);
@@ -329,13 +394,70 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       await client.query('COMMIT');
     });
     const config = partnerAgentConfig(env, fx.agentId).config!;
+    const runtimeAuthorization = { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` };
+    const unleasedImport = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/import`,
+      {
+        method: 'POST', origin: null, headers: runtimeAuthorization,
+        body: {
+          runtime_run_id: nativeRunId,
+          tool_call_id: 'call_people_1',
+          arguments: agentCashPeopleSearchArguments(config),
+          result: '{}',
+        },
+      },
+    );
+    expect(unleasedImport.status).toBe(409);
+    expect(await unleasedImport.json()).toMatchObject({ reason: 'partner_source_payment_not_authorized' });
+    const authorized = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/authorize`,
+      {
+        method: 'POST', origin: null, headers: runtimeAuthorization,
+        body: {
+          runtime_run_id: nativeRunId,
+          tool_call_id: 'call_people_1',
+          arguments: agentCashPeopleSearchArguments(config),
+        },
+      },
+    );
+    expect(authorized.status).toBe(201);
+    expect(await authorized.json()).toMatchObject({ ok: true, reserved_requests: 1 });
+    const authorizedReplay = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/authorize`,
+      {
+        method: 'POST', origin: null, headers: runtimeAuthorization,
+        body: {
+          runtime_run_id: nativeRunId,
+          tool_call_id: 'call_people_1',
+          arguments: agentCashPeopleSearchArguments(config),
+        },
+      },
+    );
+    expect(authorizedReplay.status).toBe(200);
+    const duplicatePayment = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/authorize`,
+      {
+        method: 'POST', origin: null, headers: runtimeAuthorization,
+        body: {
+          runtime_run_id: nativeRunId,
+          tool_call_id: 'call_people_2',
+          arguments: agentCashPeopleSearchArguments(config),
+        },
+      },
+    );
+    expect(duplicatePayment.status).toBe(409);
+    expect(await duplicatePayment.json()).toMatchObject({ reason: 'partner_source_budget_exhausted' });
     const imported = await call(
       env,
       `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/import`,
       {
         method: 'POST',
         origin: null,
-        headers: { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` },
+        headers: runtimeAuthorization,
         body: {
           runtime_run_id: nativeRunId,
           tool_call_id: 'call_people_1',
@@ -358,12 +480,12 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
 
     const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
-      const run = await client.query(`SELECT status, source, monetary_cost_usd FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
+      const run = await client.query(`SELECT status, source, monetary_cost_usd, api_requests_used, agentcash_tool_call_id FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
       const candidates = await client.query(`SELECT source, display_name, profile_url FROM partner_candidates WHERE latest_run_id=$1`, [started.run.id]);
       const artifacts = await client.query<{ body: string }>(`SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts WHERE run_id=$1`, [started.run.id]);
       return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '' };
     });
-    expect(stored.run).toMatchObject({ status: 'completed', source: 'agentcash_people' });
+    expect(stored.run).toMatchObject({ status: 'completed', source: 'agentcash_people', api_requests_used: 1, agentcash_tool_call_id: 'call_people_1' });
     expect(Number(stored.run.monetary_cost_usd)).toBe(0.15);
     expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
     expect(stored.artifacts).not.toContain('must-not-persist');

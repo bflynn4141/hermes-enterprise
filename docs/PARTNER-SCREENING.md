@@ -10,7 +10,7 @@ messaging, application submission, admission, payment, signature, or other
 external write in this flow.
 
 Iris now receives this procedure as the native, read-only Hermes skill
-`enterprise_bridge:partner-program-screening` version `1.2.0`. Its approved
+`enterprise_bridge:partner-program-screening` version `1.3.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
 model credentials remain server-side. The skill is automatically in use when
 this agent has a valid policy. It describes the review workflow but grants no
@@ -51,16 +51,20 @@ Source policy and quota references were checked on 2026-09-16:
 
 ## Trust boundary and data flow
 
-1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. The server reads
-   that agent's non-secret policy from `PARTNER_SCREENING_CONFIG_JSON`.
+1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. A newly invited
+   member receives one onboarding run for their own explicitly configured AgentCash profile; later
+   paid runs require an Admin. The server reads that agent's non-secret policy from
+   `PARTNER_SCREENING_CONFIG_JSON`.
 2. For GitHub, the server calls only fixed `https://api.github.com` endpoints. It has a
    10-second timeout, a 1 MB response cap, a per-run request cap, and a
    configurable minimum remaining-rate reserve. It does not retry a `403` or
    `429` and reports the reset time when GitHub provides it.
-3. For People Search, Iris calls the exact policy-derived AgentCash request in
-   Nous Cloud. The plugin's `post_tool_call` observer forwards the result with
-   trusted native run and tool-call IDs. The authenticated Worker rejects any
-   response that does not map to the matching `partner-screening:<run>` turn.
+3. For People Search, the plugin presents the exact policy-derived AgentCash request to the
+   Worker before payment. The Worker atomically leases that run's only `$0.15` call to the trusted
+   native run and tool-call IDs. Iris then makes that exact request in Nous Cloud. The plugin's
+   `post_tool_call` observer forwards the result with the same IDs; the authenticated Worker rejects
+   unleased, changed, replay-conflicting, or mismatched results. A transport failure after leasing is
+   not automatically retried under a new tool-call ID, preventing accidental duplicate payment.
 4. A successful run commits sanitized source snapshots and candidates. Source
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,

@@ -1,7 +1,7 @@
 ---
 name: partner-program-screening
 description: Screen partner prospects and prepare cited human reviews.
-version: 1.2.0
+version: 1.3.0
 metadata:
   hermes:
     category: enterprise
@@ -60,7 +60,7 @@ Use this skill when reviewing public organization evidence for the configured pa
 
 ## Procedure
 
-1. If the run prompt contains the exact approved `mcp__agentcash__fetch` arguments, call it exactly once. Do not add, remove, or change filters, the URL, or the $0.15 cap. The enterprise post-tool hook imports and sanitizes the successful response.
+1. If the run prompt contains the exact approved `mcp__agentcash__fetch` arguments, call it exactly once. Do not add, remove, or change filters, the URL, or the $0.15 cap. The enterprise pre-tool hook reserves the run's one payment allowance; the post-tool hook imports and sanitizes the successful response.
 2. Call `list_partner_candidates` to see candidates collected under the enterprise's approved source policy. If the AgentCash call succeeded but no stored candidate appears, stop and report that the evidence import needs attention; do not pay for a retry.
 3. Call `get_partner_candidate` for each candidate you may advance. Read the stored artifacts rather than relying on the discovery summary alone.
 4. Treat `deterministic_priority` only as discovery triage. Make an independent assessment using the configured program, role, dimensions, and keywords.

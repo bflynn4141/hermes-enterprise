@@ -34,7 +34,7 @@ export interface TenantWork {
   readonly userId: string;
   readonly session: Session;
   /** 'admin' | 'member', read inside the transaction. */
-  readonly role: string;
+  readonly role: 'admin' | 'member';
   /**
    * Jobs this request queued. They are run after the commit, by the same
    * request, and retried by the Cron if this attempt fails.
@@ -57,7 +57,7 @@ export async function inWorkspace<T>(
     'app',
     { workspaceId, userId: session.userId },
     async (tx) => {
-      const role = (await memberRole(tx, workspaceId, session.userId)) ?? 'member';
+      const role = await memberRole(tx, workspaceId, session.userId) === 'admin' ? 'admin' as const : 'member' as const;
       const work: TenantWork = {
         tx,
         workspaceId,

@@ -16,6 +16,7 @@ import {
   loadPartnerScreeningSnapshot,
 } from '../partner-screening/service.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { runtimeBinding } from '../runtime/config.js';
 
 function sourceFetcher(env: Env): PartnerFetch {
   if (env.PARTNER_SOURCE_FETCHER) {
@@ -52,12 +53,20 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
   const authentication = configured.config.source === 'agentcash_people'
     ? 'wallet' as const
     : c.env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
-  const started = await inWorkspace(c, (work) => beginPartnerScreening(work, {
-    agentId: parsed.data.agent_id,
-    idempotencyKey: parsed.data.idempotency_key,
-    config: configured.config!,
-    authentication,
-  }));
+  const started = await inWorkspace(c, (work) => {
+    let memberOnboardingAllowed = false;
+    if (work.role === 'member' && configured.config!.source === 'agentcash_people') {
+      const binding = runtimeBinding(c.env, work.workspaceId, parsed.data.agent_id);
+      memberOnboardingAllowed = binding.assignment === 'invitee_pool' && binding.agentCash;
+    }
+    return beginPartnerScreening(work, {
+      agentId: parsed.data.agent_id,
+      idempotencyKey: parsed.data.idempotency_key,
+      config: configured.config!,
+      authentication,
+      memberOnboardingAllowed,
+    });
+  });
   if (!started.created && !started.resumed) {
     if (started.run.status === 'completed' || configured.config.source === 'agentcash_people') {
       const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, started.run.id));

@@ -22,7 +22,7 @@ NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/
 MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
-AGENTCASH_TOOLS = ("get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch")
+AGENTCASH_TOOLS = ("fetch",)
 
 
 def native_cron_route(path):
@@ -215,7 +215,7 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
             "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
             "env": {"HOME": "${AGENTCASH_HOME}"},
             "tools": {"include": list(AGENTCASH_TOOLS)},
-            "policy": {"allowed_hosts": ["stableenrich.dev", "stablesocial.dev"], "max_amount_usd": 0.20},
+            "policy": {"allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15},
         }
 
     servers, policies, passthrough = {}, [], {}
@@ -313,6 +313,7 @@ def child(metadata_path):
             "request_timeout_seconds": 5, "pending_timeout_seconds": 86400,
             "allowed_skills": enterprise_skills["auto_load"],
             "mcp_policy": metadata.get("mcp_policy") or [],
+            "partner_program": enterprise_skills["config"].get("partner_program", {}),
         }}}},
         "gateway": {"multiplex_profiles": False, "api_server": {"max_concurrent_runs": 1},
                     "platforms": {"api_server": {"enabled": True, "extra": {

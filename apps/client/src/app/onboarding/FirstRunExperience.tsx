@@ -61,7 +61,7 @@ function providerPhase(status: ProviderConnectStatus, ready: boolean): ProviderS
  * The controller caches in-progress answers in workspace-scoped browser
  * storage, then persists the confirmed agreement before any source call.
  * Provider state is real and comes from the encrypted-key routes. The first
- * search is also real: the Worker persists bounded public GitHub evidence
+ * search is also real: the Worker persists bounded, approved-source evidence
  * before Iris is allowed to read it.
  */
 export function useFirstRunExperience(active: boolean): FirstRunExperience | null {
@@ -77,6 +77,13 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const [providerReady, setProviderReady] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupPersisted, setSetupPersisted] = useState(() => loadState(storageKey).step === 'test');
+  // Bootstrap already projects whether a workspace model is runnable without
+  // exposing provider-key rows. Members use that safe projection; only Admins
+  // may inspect or change the underlying credential.
+  const workspaceProviderReady = useMemo(() => Object.values(app.entities.catalog).some((entry) => {
+    const model = entry.data as { enabled?: boolean; provider?: string } | null;
+    return model?.provider === DEFAULT_PROVIDER && model.enabled === true;
+  }), [app.entities.catalog]);
   const liveSearch = useFirstRunLiveSearch({
     enabled: active && setupPersisted && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
     providerReady,
@@ -103,6 +110,13 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
 
   useEffect(() => {
     if (!active || !app.workspace.id) return;
+    if (app.workspace.role === 'member') {
+      setProviderReady(workspaceProviderReady);
+      setStoredKeyId(null);
+      setManualProviderFlow(false);
+      setConnectStatus(workspaceProviderReady ? { kind: 'connected', modelCount: null } : { kind: 'idle' });
+      return;
+    }
     let live = true;
     void adapter.rest.providerKeys(app.workspace.id).then(({ keys }) => {
       if (!live) return;
@@ -129,7 +143,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     return () => {
       live = false;
     };
-  }, [active, adapter, app.workspace.id]);
+  }, [active, adapter, app.workspace.id, app.workspace.role, workspaceProviderReady]);
 
   const onAction = useCallback((action: FirstRunAction): void => {
     const next = firstRunReducer(state, action);
