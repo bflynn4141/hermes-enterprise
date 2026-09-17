@@ -266,12 +266,32 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
 
   it('lets Cloudflare Cron durably discover candidates and start one idempotent Iris turn', async () => {
     const fx = await seedWorkspace();
+    const memberUserId = randomUUID();
     await bindAgent(fx);
-    await withClient('owner', (client) => client.query(
-      `INSERT INTO workspace_directory (workspace_id, workos_organization_id)
-       VALUES ($1,$2) ON CONFLICT (workspace_id) DO NOTHING`,
-      [fx.workspaceId, `cron-test-${fx.workspaceId}`],
-    ));
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO users (id, email, email_verified, name)
+         VALUES ($1, $2, true, 'Partner Member')`,
+        [memberUserId, `partner-${memberUserId.slice(0, 8)}@example.test`],
+      );
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const member = await client.query<{ id: string }>(
+        `INSERT INTO members (workspace_id, user_id, role, status)
+         VALUES ($1, $2, 'member', 'active') RETURNING id`,
+        [fx.workspaceId, memberUserId],
+      );
+      await client.query(
+        `UPDATE agent_owners SET member_id=$3 WHERE workspace_id=$1 AND agent_id=$2`,
+        [fx.workspaceId, fx.agentId, member.rows[0]!.id],
+      );
+      await client.query(
+        `INSERT INTO workspace_directory (workspace_id, workos_organization_id)
+         VALUES ($1,$2) ON CONFLICT (workspace_id) DO NOTHING`,
+        [fx.workspaceId, `cron-test-${fx.workspaceId}`],
+      );
+      await client.query('COMMIT');
+    });
     const config = {
       [fx.agentId]: {
         source_purpose: 'organization_partner_research', organization_only: true, no_outreach: true,
@@ -319,7 +339,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const first = await enqueueAutomatedPartnerScreening(env, now);
     const replay = await enqueueAutomatedPartnerScreening(env, now);
     expect(first).toMatchObject({
-      enabled: true, candidateAgents: 1, startedAgents: 1, adminOwnedAgents: 1,
+      enabled: true, candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
       configuredAgents: 1, queued: 1,
     });
     expect(replay.queued).toBe(0);
@@ -394,7 +414,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const gated = await enqueueAutomatedPartnerScreening(makeEnv(base).env, now);
     expect(gated).toMatchObject({
       enabled: true, paidEnabled: false,
-      candidateAgents: 1, startedAgents: 1, adminOwnedAgents: 1,
+      candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
       configuredAgents: 1, skippedPaid: 1, queued: 0,
     });
 

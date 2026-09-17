@@ -59,7 +59,8 @@ export interface PartnerScreeningWork {
   readonly tx: Tx;
   readonly workspaceId: string;
   readonly userId: string;
-  readonly role: 'admin' | 'member';
+  /** `system` is admitted only by deployment-controlled background automation. */
+  readonly role: 'admin' | 'member' | 'system';
   requireAdmin(action: string): void;
 }
 
@@ -96,7 +97,7 @@ export async function beginPartnerScreening(
   if (!await boundAgent(work, input.agentId)) {
     throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
   }
-  if (work.role !== 'admin') {
+  if (work.role === 'member') {
     if (!input.memberOnboardingAllowed
         || input.config.source !== 'agentcash_people'
         || !input.idempotencyKey.startsWith('onboarding:')) {

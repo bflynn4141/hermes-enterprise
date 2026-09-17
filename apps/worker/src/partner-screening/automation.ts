@@ -1,6 +1,8 @@
+import { DEFAULT_MODEL_ID } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
+import { allowedProviders } from '../model/allowed.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../runs/submit.js';
 import { partnerAgentConfig, partnerScreeningAgentIds } from './config.js';
@@ -44,7 +46,7 @@ function work(tx: Tx, workspaceId: string, userId: string): PartnerScreeningWork
     tx,
     workspaceId,
     userId,
-    role: 'admin',
+    role: 'system',
     requireAdmin: () => undefined,
   };
 }
@@ -67,7 +69,7 @@ export interface AutomationEnqueueResult {
   readonly workspaces: number;
   readonly candidateAgents: number;
   readonly startedAgents: number;
-  readonly adminOwnedAgents: number;
+  readonly activeOwnedAgents: number;
   readonly configuredAgents: number;
   readonly skippedPaid: number;
   readonly queued: number;
@@ -85,7 +87,7 @@ export async function enqueueAutomatedPartnerScreening(
   if (!automatedTriggersEnabled(env) || (agentIds.length === 0 && !useDefaultPolicy)) {
     return {
       enabled: automatedTriggersEnabled(env), paidEnabled, workspaces: 0,
-      candidateAgents: 0, startedAgents: 0, adminOwnedAgents: 0,
+      candidateAgents: 0, startedAgents: 0, activeOwnedAgents: 0,
       configuredAgents: 0, skippedPaid: 0, queued: 0, bucket: null,
     };
   }
@@ -96,7 +98,7 @@ export async function enqueueAutomatedPartnerScreening(
   let queued = 0;
   let candidateAgents = 0;
   let startedAgents = 0;
-  let adminOwnedAgents = 0;
+  let activeOwnedAgents = 0;
   let configuredAgents = 0;
   let skippedPaid = 0;
   for (const workspaceId of workspaces) {
@@ -109,7 +111,7 @@ export async function enqueueAutomatedPartnerScreening(
                FROM agent_owners ao
                JOIN members m ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
               WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
-                AND m.status='active' AND m.role='admin'
+                AND m.status='active'
               LIMIT 1
            ) owner ON true
           WHERE a.workspace_id=$1 AND ($3::boolean OR a.id=ANY($2::uuid[]))
@@ -121,7 +123,7 @@ export async function enqueueAutomatedPartnerScreening(
         if (candidate.status !== 'started') continue;
         startedAgents += 1;
         if (!candidate.user_id) continue;
-        adminOwnedAgents += 1;
+        activeOwnedAgents += 1;
         const configured = partnerAgentConfig(env, candidate.agent_id).config;
         if (!configured) continue;
         configuredAgents += 1;
@@ -142,7 +144,7 @@ export async function enqueueAutomatedPartnerScreening(
   }
   return {
     enabled: true, paidEnabled, workspaces: workspaces.length,
-    candidateAgents, startedAgents, adminOwnedAgents, configuredAgents, skippedPaid, queued, bucket,
+    candidateAgents, startedAgents, activeOwnedAgents, configuredAgents, skippedPaid, queued, bucket,
   };
 }
 
@@ -234,25 +236,50 @@ async function automationSession(
   ownerId: string,
   agentId: string,
 ): Promise<TurnSession> {
+  const allowed = allowedProviders(env);
   const existing = await tx.query<TurnSession>(
-    `SELECT id, agent_id, owner_id, read_only, mode, model_id, effort
-       FROM sessions
-      WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3
-        AND title=$4 AND archived=false
-      ORDER BY created_at LIMIT 1 FOR UPDATE`,
-    [workspaceId, ownerId, agentId, AUTOMATION_TITLE],
+    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort
+       FROM sessions s
+       JOIN catalog c ON c.model_id=s.model_id
+      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
+        AND s.title=$4 AND NOT s.archived
+        AND c.provider=ANY($5::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
+      ORDER BY s.created_at LIMIT 1 FOR UPDATE OF s`,
+    [workspaceId, ownerId, agentId, AUTOMATION_TITLE, [...allowed]],
   );
   if (existing.rows[0]) return existing.rows[0];
 
   const template = await tx.query<{ model_id: string; effort: string | null; runtime: string }>(
-    `SELECT model_id, effort, runtime FROM sessions
-      WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3
-      ORDER BY last_activity_at DESC NULLS LAST, created_at DESC LIMIT 1`,
-    [workspaceId, ownerId, agentId],
+    `SELECT s.model_id, s.effort, s.runtime
+       FROM sessions s
+       JOIN catalog c ON c.model_id=s.model_id
+      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
+        AND c.provider=ANY($4::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
+      ORDER BY s.last_activity_at DESC NULLS LAST, s.created_at DESC LIMIT 1`,
+    [workspaceId, ownerId, agentId, [...allowed]],
   );
   const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
-    'SELECT default_model_id, default_effort, default_runtime FROM workspace_settings WHERE workspace_id=$1',
-    [workspaceId],
+    `SELECT picked.model_id AS default_model_id,
+            CASE
+              WHEN ws.default_effort IS NOT NULL
+                AND COALESCE(picked.effort_map ? ws.default_effort, false)
+                THEN ws.default_effort
+              ELSE picked.default_effort
+            END AS default_effort,
+            ws.default_runtime
+       FROM workspace_settings ws
+       JOIN LATERAL (
+         SELECT c.model_id, c.effort_map, c.default_effort
+           FROM catalog c
+          WHERE c.provider=ANY($2::text[])
+            AND c.disabled_reason IS NULL AND c.supports_tools
+          ORDER BY (c.model_id=ws.default_model_id) DESC,
+                   (c.model_id=$3) DESC,
+                   c.model_id
+          LIMIT 1
+       ) picked ON true
+      WHERE ws.workspace_id=$1`,
+    [workspaceId, [...allowed], DEFAULT_MODEL_ID],
   );
   const source = template.rows[0] ?? settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
