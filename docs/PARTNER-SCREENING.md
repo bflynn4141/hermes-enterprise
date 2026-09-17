@@ -81,11 +81,11 @@ Source policy and quota references were checked on 2026-09-16:
    delivery effect. Discovered prospects are never represented as applicants.
 
 Cloudflare Cron uses six-hour idempotency buckets. Paid AgentCash runs have a
-second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`; it defaults to
-`0` in every environment. Enabling the general automation trigger therefore
-cannot spend from a runtime wallet. Set the paid switch to `1` only after a
-recurring budget is approved. At the default policy cap, the maximum is $0.15
-per six-hour run for each configured agent.
+second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`. Local and
+production keep it at `0`; staging is `1` under Brian's 2026-09-17 approval for
+the existing Iris demo. At the default policy cap, the maximum is $0.15 per
+six-hour run for each configured agent. A new environment or agent still needs
+its own recurring-budget approval before this switch can authorize spending.
 
 Discovery credentials and model-provider credentials are separate. A
 `PARTNER_GITHUB_TOKEN` can read the configured public source. The workspace's
