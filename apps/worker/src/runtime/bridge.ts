@@ -522,7 +522,16 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       importedCandidates = row.candidates_discovered;
       return;
     }
-    const result = parseAgentCashPeopleSearch(input.result, config);
+    let result;
+    try {
+      result = parseAgentCashPeopleSearch(input.result, config);
+    } catch {
+      throw new RouteError(
+        'AgentCash People Search returned an unsupported response shape.',
+        'partner_source_invalid_response',
+        422,
+      );
+    }
     importedCandidates = result.candidates.length;
     created = true;
     await completePartnerScreening(
