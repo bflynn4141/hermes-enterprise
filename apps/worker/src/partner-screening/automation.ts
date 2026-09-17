@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../runs/submit.js';
 import { partnerAgentConfig, partnerScreeningAgentIds } from './config.js';
 import { discoverGitHubOrganizations, PartnerSourceError, type PartnerFetch } from './github.js';
@@ -22,6 +22,10 @@ export function automatedTriggersEnabled(env: Env): boolean {
   return env.AUTOMATED_TRIGGERS_ENABLED === '1';
 }
 
+export function paidPartnerScreeningEnabled(env: Env): boolean {
+  return env.PARTNER_SCREENING_PAID_AUTOMATION_ENABLED === '1';
+}
+
 export function automationIntervalMinutes(env: Env): number {
   const parsed = Number.parseInt(env.PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES ?? '', 10);
   if (!Number.isFinite(parsed)) return DEFAULT_INTERVAL_MINUTES;
@@ -40,6 +44,7 @@ function work(tx: Tx, workspaceId: string, userId: string): PartnerScreeningWork
     tx,
     workspaceId,
     userId,
+    role: 'admin',
     requireAdmin: () => undefined,
   };
 }
@@ -58,8 +63,10 @@ async function listWorkspaces(env: Env): Promise<string[]> {
 
 export interface AutomationEnqueueResult {
   readonly enabled: boolean;
+  readonly paidEnabled: boolean;
   readonly workspaces: number;
   readonly configuredAgents: number;
+  readonly skippedPaid: number;
   readonly queued: number;
   readonly bucket: string | null;
 }
@@ -71,8 +78,12 @@ export async function enqueueAutomatedPartnerScreening(
 ): Promise<AutomationEnqueueResult> {
   const agentIds = partnerScreeningAgentIds(env);
   const useDefaultPolicy = env.PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS === '1';
+  const paidEnabled = paidPartnerScreeningEnabled(env);
   if (!automatedTriggersEnabled(env) || (agentIds.length === 0 && !useDefaultPolicy)) {
-    return { enabled: automatedTriggersEnabled(env), workspaces: 0, configuredAgents: agentIds.length, queued: 0, bucket: null };
+    return {
+      enabled: automatedTriggersEnabled(env), paidEnabled, workspaces: 0,
+      configuredAgents: agentIds.length, skippedPaid: 0, queued: 0, bucket: null,
+    };
   }
   const interval = automationIntervalMinutes(env);
   const bucketNumber = Math.floor(now.getTime() / (interval * 60_000));
@@ -80,6 +91,7 @@ export async function enqueueAutomatedPartnerScreening(
   const workspaces = await listWorkspaces(env);
   let queued = 0;
   let configuredAgents = 0;
+  let skippedPaid = 0;
   for (const workspaceId of workspaces) {
     await withWorkspaceTransaction(env, workspaceId, async (tx) => {
       const owners = await tx.query<{ agent_id: string; user_id: string }>(
@@ -93,8 +105,13 @@ export async function enqueueAutomatedPartnerScreening(
         [workspaceId, agentIds, useDefaultPolicy],
       );
       for (const owner of owners.rows) {
-        if (!partnerAgentConfig(env, owner.agent_id).config) continue;
+        const configured = partnerAgentConfig(env, owner.agent_id).config;
+        if (!configured) continue;
         configuredAgents += 1;
+        if (configured.source === 'agentcash_people' && !paidEnabled) {
+          skippedPaid += 1;
+          continue;
+        }
         const id = await enqueueJob(
           tx,
           workspaceId,
@@ -106,7 +123,88 @@ export async function enqueueAutomatedPartnerScreening(
       }
     });
   }
-  return { enabled: true, workspaces: workspaces.length, configuredAgents, queued, bucket };
+  return { enabled: true, paidEnabled, workspaces: workspaces.length, configuredAgents, skippedPaid, queued, bucket };
+}
+
+interface DraftPolicyContext {
+  readonly memberId: string;
+  readonly senderAddress: string;
+  readonly policyKey: string;
+}
+
+async function ensurePartnerOutreachDraftPolicy(
+  tx: Tx,
+  workspaceId: string,
+  ownerUserId: string,
+  agentId: string,
+): Promise<DraftPolicyContext> {
+  const owner = await tx.query<{ member_id: string; email: string }>(
+    `SELECT m.id AS member_id, u.email
+       FROM members m
+       JOIN users u ON u.id=m.user_id
+      WHERE m.workspace_id=$1 AND m.user_id=$2 AND m.status='active'
+        AND u.email_verified
+      LIMIT 1`,
+    [workspaceId, ownerUserId],
+  );
+  const row = owner.rows[0];
+  if (!row) throw new Error('partner_outreach_verified_owner_missing');
+
+  const policyKey = `partner-outreach-draft-${agentId}`;
+  const steps = [{
+    id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+    reviewers: [{ kind: 'member', member_id: row.member_id }], quorum: 1,
+  }];
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${workspaceId}:${policyKey}`]);
+  const active = await tx.query<{
+    version: number; approval_type: string; requester_agent_id: string | null;
+    step_count: number; reviewer_member_id: string | null;
+  }>(
+    `SELECT version, approval_type, requester_agent_id,
+            jsonb_array_length(steps)::int AS step_count,
+            steps #>> '{0,reviewers,0,member_id}' AS reviewer_member_id
+       FROM approval_policies
+      WHERE workspace_id=$1 AND key=$2 AND active
+      LIMIT 1`,
+    [workspaceId, policyKey],
+  );
+  const current = active.rows[0];
+  if (current?.approval_type === 'communication'
+      && current.requester_agent_id === agentId
+      && current.step_count === 1
+      && current.reviewer_member_id === row.member_id) {
+    return { memberId: row.member_id, senderAddress: row.email, policyKey };
+  }
+
+  await tx.query(
+    `UPDATE approval_policies SET active=false WHERE workspace_id=$1 AND key=$2 AND active`,
+    [workspaceId, policyKey],
+  );
+  const version = await tx.query<{ version: number }>(
+    `SELECT COALESCE(max(version), 0)::int + 1 AS version
+       FROM approval_policies WHERE workspace_id=$1 AND key=$2`,
+    [workspaceId, policyKey],
+  );
+  await tx.query(
+    `INSERT INTO approval_policies
+       (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
+        prevent_self_review, require_distinct_reviewers, max_duration_seconds, steps, active)
+     VALUES ($1,$2,$3,'communication',$4,1000000,'sequential',false,true,604800,$5::jsonb,true)`,
+    [workspaceId, policyKey, version.rows[0]?.version ?? 1, agentId, JSON.stringify(steps)],
+  );
+  return { memberId: row.member_id, senderAddress: row.email, policyKey };
+}
+
+function outreachDraftInstructions(context: DraftPolicyContext): string {
+  return [
+    'For each prospect whose stored professional evidence supports outreach, prepare a personalized email draft for human review.',
+    `Call propose_approval with policy_key ${JSON.stringify(context.policyKey)}, approval_type communication, illustrative false, target_member_ids [${JSON.stringify(context.memberId)}], and no target agents, resources, dependent requests, continuation, or scheduled_for.`,
+    `Set details.channel to email, details.draft_only to true, and details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
+    'Set one recipient with the candidate name and address null. The governed source intentionally removes contact details; do not search for, infer, or invent an email address.',
+    'Write a concise subject and body grounded in the cited professional evidence. Invite the person to explore or apply to the configured Partner Program without claiming prior interest, approval, benefits, or terms.',
+    'Cite the stored candidate artifacts in proposal.evidence. State in summary and consequence that this is a draft only: approval records reviewed copy and does not send a message.',
+    'Do not use propose_request for a discovered prospect. A prospect has not submitted an application.',
+  ].join(' ');
 }
 
 async function automationSession(
@@ -138,8 +236,11 @@ async function automationSession(
   );
   const source = template.rows[0] ?? settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
-  const runtime = env.AGENT_RUNTIME === 'hermes'
-    ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(runtimeBinding(env, workspaceId, agentId).baseUrl) ? 'local' : 'cloud')
+  const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
+    ? await resolveRuntimeBinding(env, tx, workspaceId, agentId)
+    : null;
+  const runtime = resolvedRuntime
+    ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
     : ('runtime' in source ? source.runtime : source.default_runtime);
   const inserted = await tx.query<TurnSession>(
     `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
@@ -180,6 +281,7 @@ export async function handoffPartnerScreeningToIris(
     const snapshot = await loadPartnerScreeningSnapshot(scoped, screeningRunId);
     if (snapshot.run.agent_id !== agentId ||
         (snapshot.run.source !== 'agentcash_people' && snapshot.handoff.candidate_ids.length === 0)) return;
+    const draftContext = await ensurePartnerOutreachDraftPolicy(tx, workspaceId, ownerUserId, agentId);
     const session = await automationSession(tx, env, workspaceId, ownerUserId, agentId);
     const submitted = await submitTurn({
       tx,
@@ -188,7 +290,7 @@ export async function handoffPartnerScreeningToIris(
       userId: ownerUserId,
       session,
       clientTurnId: `partner-screening:${screeningRunId}`,
-      text: snapshot.handoff.prompt,
+      text: `${snapshot.handoff.prompt}\n\n${outreachDraftInstructions(draftContext)}`,
       jobIds,
     });
     admitted = true;

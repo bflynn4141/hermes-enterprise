@@ -2,7 +2,18 @@ import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
 import { proposeApproval } from './approvals.js';
 
-const JOIN_AGENT_INSTRUCTIONS = `Help your human get oriented in this workspace and prepare bounded proposals for review. Do not contact teammates or their agents. Do not start shared work, disclose information, or make commitments without the responsible humans' approval.`;
+const PARTNER_PROGRAM_INSTRUCTIONS = [
+  'Support this member as Iris for the Partner Program: discover and screen potential ecosystem partners from approved professional evidence.',
+  'AgentCash People Search may be used only through an authorized screening run: one filtered request capped at $0.15, with recurring runs admitted only by the server spend gate.',
+  'Name missing evidence instead of inventing it. A discovered prospect has not applied.',
+  'Prepare cited, draft-only outreach for human review and stop before sending, decisions, access changes, signatures, commitments, or money movement.',
+].join(' ');
+
+const PARTNER_PROGRAM_TOOLS = [
+  'list_requests', 'get_request', 'get_approval_status', 'get_document_text',
+  'propose_request', 'propose_approval', 'save_review_note',
+  'set_context_field', 'propose_instruction', 'ask_for_context', 'set_focus',
+] as const;
 
 interface JoinCoordinationInput {
   readonly tx: Tx;
@@ -12,6 +23,11 @@ interface JoinCoordinationInput {
   readonly invitationId: string;
   readonly invitedByUserId: string | null;
   readonly jobs: string[];
+  /** Hosted deployments create the profile only after the member finishes onboarding. */
+  readonly provisionHermesCloud: boolean;
+  readonly cloudRegion?: string;
+  readonly cloudModel?: string;
+  readonly cloudSize?: string;
 }
 
 export interface JoinCoordinationResult {
@@ -34,11 +50,12 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
   );
   let agentId = owned.rows[0]?.agent_id ?? null;
   if (!agentId) {
+    agentId = crypto.randomUUID();
     const created = await input.tx.query<{ id: string }>(
-      `INSERT INTO agents (workspace_id, name, responsibility, instructions_active, status)
-       VALUES ($1, 'Iris', 'Help this member work safely with their new team.', $2, 'draft')
+      `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
+       VALUES ($1, $2, 'Iris', 'Partner Program', $3, 'draft', 'identity')
        RETURNING id`,
-      [input.workspaceId, JOIN_AGENT_INSTRUCTIONS],
+      [agentId, input.workspaceId, PARTNER_PROGRAM_INSTRUCTIONS],
     );
     agentId = created.rows[0]?.id ?? null;
     if (!agentId) throw new Error('the joining member agent was not created');
@@ -46,11 +63,32 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
       `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1, $2, $3)`,
       [input.workspaceId, agentId, input.joiningMemberId],
     );
+    if (input.provisionHermesCloud) {
+      await input.tx.query(
+        `INSERT INTO agent_provisioning
+           (workspace_id, agent_id, status, instance_name, region, model, size)
+         VALUES ($1,$2,'awaiting_onboarding',$3,$4,$5,$6)
+         ON CONFLICT (agent_id) DO NOTHING`,
+        [
+          input.workspaceId,
+          agentId,
+          `iris-partner-${agentId.slice(0, 8)}`,
+          input.cloudRegion ?? 'sjc',
+          input.cloudModel ?? 'z-ai/glm-5.2',
+          input.cloudSize ?? 'medium',
+        ],
+      );
+    }
+    await input.tx.query(
+      `INSERT INTO agent_capabilities (workspace_id, agent_id, kind, title, scope, tool_names, position)
+       VALUES ($1, $2, 'can', 'Discover and screen partners', 'Partner Program', $3, 0)`,
+      [input.workspaceId, agentId, [...PARTNER_PROGRAM_TOOLS]],
+    );
     await input.tx.query(
       `INSERT INTO instruction_versions
          (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
        VALUES ($1, $2, $3, 'saved', $4, '[]'::jsonb, now())`,
-      [input.workspaceId, agentId, JOIN_AGENT_INSTRUCTIONS, input.joiningUserId],
+      [input.workspaceId, agentId, PARTNER_PROGRAM_INSTRUCTIONS, input.joiningUserId],
     );
   }
 
@@ -62,9 +100,10 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
     const sessionId = crypto.randomUUID();
     await input.tx.query(
       `INSERT INTO sessions
-         (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq)
-       SELECT $1, $2, $3, $4, 'Welcome to the workspace', 'work',
-              default_model_id, default_effort, default_runtime, 1
+         (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+       SELECT $1, $2, $3, $4, 'Set up Partner Program Iris', 'work',
+              default_model_id, default_effort, default_runtime, 1,
+              '{"section":"agents","view":"setup","step":"identity"}'::jsonb
          FROM workspace_settings WHERE workspace_id = $2`,
       [sessionId, input.workspaceId, input.joiningUserId, agentId],
     );
@@ -74,7 +113,9 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
       [
         input.workspaceId,
         sessionId,
-        `You’re in the workspace. I’m Iris, your Hermes agent. I can help you get oriented and prepare proposals, but I won’t contact teammates or their agents without human review.`,
+        input.provisionHermesCloud
+          ? `You’re in the workspace. I’m Iris for the Partner Program. Finish the short working agreement and I’ll provision your isolated Hermes Cloud profile. AgentCash People Search becomes available only after that profile passes its readiness check, and remains limited to one approved $0.15 call per screening run. I will stop before any decision, outreach, or other external action.`
+          : `You’re in the workspace. I’m Iris for the Partner Program. Finish the short working agreement to start screening approved evidence; I will stop before any decision, outreach, or external action.`,
       ],
     );
   }

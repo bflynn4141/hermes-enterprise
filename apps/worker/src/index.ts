@@ -15,7 +15,7 @@ import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
-import { importAgentCashPeopleSearch, listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
+import { authorizeAgentCashPeopleSearch, importAgentCashPeopleSearch, listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
@@ -137,7 +137,7 @@ import {
   partnerScreeningSources,
   startPartnerScreening,
 } from './routes/partner-screening.js';
-import { patchAgent } from './routes/agents.js';
+import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -245,6 +245,7 @@ app.get('/health', health);
 app.get('/internal/runtime/w/:ws/agents/:agentId/tools', listRuntimeTools);
 app.get('/internal/runtime/w/:ws/agents/:agentId/skills', listRuntimeSkills);
 app.post('/internal/runtime/w/:ws/agents/:agentId/calls', callRuntimeTool);
+app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/authorize', authorizeAgentCashPeopleSearch);
 app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/import', importAgentCashPeopleSearch);
 app.get('/internal/runtime/w/:ws/agents/:agentId/model/v1/models', runtimeModels);
 app.post('/internal/runtime/w/:ws/agents/:agentId/model/v1/chat/completions', runtimeChatCompletions);
@@ -275,6 +276,8 @@ app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 app.patch('/w/:ws/agents/:agentId', patchAgent);
+app.get('/w/:ws/agents/:agentId/provisioning', getAgentProvisioning);
+app.post('/w/:ws/agents/:agentId/provisioning/verify', verifyAgentProvisioning);
 
 // Live public-source ingestion persists evidence before Iris sees it. The
 // explicit handoff starts the bound agent against those read-only artifacts;

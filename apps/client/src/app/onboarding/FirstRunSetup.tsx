@@ -21,7 +21,7 @@ import {
 } from './FirstRunSetup.model.js';
 
 export type ProviderStatus = 'disconnected' | 'encrypting' | 'verifying' | 'syncing' | 'ready' | 'error';
-export type LiveSearchStatus = 'idle' | 'searching' | 'awaiting_provider' | 'screening' | 'complete' | 'error';
+export type LiveSearchStatus = 'idle' | 'provisioning' | 'provisioning_error' | 'searching' | 'awaiting_provider' | 'screening' | 'complete' | 'error';
 
 export interface FirstRunSetupProps {
   agentName?: string;
@@ -336,7 +336,11 @@ function TestQuestion({ providerStatus, providerSlot, liveSearchStatus, complete
   return (
     <>
       <IrisPrompt>
-        {liveSearchStatus === 'complete'
+        {liveSearchStatus === 'provisioning'
+          ? <p>Your working agreement is saved. I’m getting Iris ready with Partner Program and AgentCash now.</p>
+          : liveSearchStatus === 'provisioning_error'
+            ? <p>Your onboarding choices are safe. Iris setup did not finish, and we’re retrying it now.</p>
+          : liveSearchStatus === 'complete'
           ? <p>The first live search is complete. I stopped before every decision and external action.</p>
           : liveSearchStatus === 'error'
             ? <p>The live search paused. Any evidence already committed is still visible.</p>
@@ -344,9 +348,24 @@ function TestQuestion({ providerStatus, providerSlot, liveSearchStatus, complete
               ? <p>I found live candidates and saved their public evidence. Connect Nous Portal so I can screen it.</p>
               : liveSearchStatus === 'screening'
                 ? <p>I’m screening the saved public evidence now. Supported candidates will appear in Inbox.</p>
-                : <p>I’m starting with a bounded live search of public GitHub organizations.</p>}
+                : <p>I’m starting with a bounded live search using the approved Partner Program source.</p>}
       </IrisPrompt>
-      {!providerReady ? (
+      {liveSearchStatus === 'provisioning' || liveSearchStatus === 'provisioning_error' ? (
+        <div className="first-run-sample-progress" role="status" aria-live="polite">
+          <span className="first-run-sample-label"><span className="first-run-live-dot" />
+            {liveSearchStatus === 'provisioning'
+              ? 'Getting Iris ready'
+              : 'Setup is retrying'}
+          </span>
+          <ol>
+            <li className="is-complete"><Icon name="check" size={13} />Working agreement</li>
+            <li><span />Private Iris runtime</li>
+            <li><span />Partner profile</li>
+            <li><span />AgentCash wallet</li>
+          </ol>
+        </div>
+      ) : null}
+      {!providerReady && !['provisioning', 'provisioning_error'].includes(liveSearchStatus) ? (
         <div className="first-run-provider-slot" data-testid="first-run-provider-slot">
           {providerSlot ?? <DefaultProviderSlot status={providerStatus} />}
         </div>

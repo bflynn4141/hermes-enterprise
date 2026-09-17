@@ -10,6 +10,9 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { ensureAgentOwner } from '../domain/agent-ownership.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { enqueueJob, runJobsAfterCommit } from '../jobs.js';
+import { resolveProvisioningRuntimeBinding } from '../runtime/config.js';
+import { HermesClient } from '../runtime/client.js';
 
 const roleId = z.enum(['partner-program', 'customer-success', 'customer-onboarding', 'procurement', 'custom']);
 const loopId = z.enum([
@@ -89,7 +92,7 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
   const parsed = patchAgentInput.safeParse(await jsonBody<unknown>(c));
   if (!parsed.success) throw new RouteError('the agent setup change is invalid', 'bad_agent_setup', 422);
 
-  await inWorkspace(c, async (work) => {
+  const outcome = await inWorkspace(c, async (work) => {
     if (!await ensureAgentOwner(work.tx, work.workspaceId, work.userId, agentId)) {
       throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
     }
@@ -99,7 +102,7 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
         `UPDATE agents SET setup_step = $3 WHERE workspace_id = $1 AND id = $2`,
         [work.workspaceId, agentId, parsed.data.setup_step],
       );
-      return;
+      return { kind: 'updated' as const };
     }
 
     const setup = parsed.data.first_run!;
@@ -108,12 +111,21 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
     }
     const body = instructions(setup);
     await work.tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`agent-setup:${agentId}`]);
+    const provisioning = await work.tx.query<{ status: string }>(
+      `SELECT status FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2 FOR UPDATE`,
+      [work.workspaceId, agentId],
+    );
+    const provisioningStatus = provisioning.rows[0]?.status ?? null;
+    const requiresCloud = provisioningStatus !== null && provisioningStatus !== 'ready';
+    const queuesCloud = provisioningStatus === 'awaiting_onboarding';
     await work.tx.query(
       `UPDATE agents
-          SET responsibility = $3, instructions_active = $4, status = 'started',
-              setup_step = NULL, started_at = COALESCE(started_at, now())
+          SET responsibility = $3, instructions_active = $4,
+              status = CASE WHEN $5::boolean THEN 'provisioning' ELSE 'started' END,
+              setup_step = NULL,
+              started_at = CASE WHEN $5::boolean THEN NULL ELSE COALESCE(started_at, now()) END
         WHERE workspace_id = $1 AND id = $2`,
-      [work.workspaceId, agentId, setup.role_label, body],
+      [work.workspaceId, agentId, setup.role_label, body, requiresCloud],
     );
     await work.tx.query(`DELETE FROM agent_capabilities WHERE workspace_id = $1 AND agent_id = $2`, [work.workspaceId, agentId]);
     await work.tx.query(
@@ -135,6 +147,111 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
         [work.workspaceId, agentId, body, work.userId, JSON.stringify([{ kind: 'first_run_setup', role_id: setup.role_id, loop_id: setup.loop_id }])],
       );
     }
+    if (requiresCloud) {
+      let jobId: string | null = null;
+      if (queuesCloud) {
+        await work.tx.query(
+          `UPDATE agent_provisioning
+              SET status='queued', requested_at=COALESCE(requested_at, now()), error_code=NULL, error_detail=NULL
+            WHERE workspace_id=$1 AND agent_id=$2 AND status='awaiting_onboarding'`,
+          [work.workspaceId, agentId],
+        );
+        jobId = await enqueueJob(
+          work.tx, work.workspaceId, 'hermes_cloud_provision', `hermes-cloud:${agentId}`, { agent_id: agentId },
+        );
+      }
+      return { kind: 'queued' as const, workspaceId: work.workspaceId, jobId };
+    }
+    return { kind: 'updated' as const };
   });
-  return c.body(null, 204);
+  if (outcome.kind === 'queued' && outcome.jobId) {
+    c.executionCtx.waitUntil(runJobsAfterCommit(c.env, outcome.workspaceId, [outcome.jobId]));
+  }
+  return outcome.kind === 'queued' ? c.json({ status: 'queued' }, 202) : c.body(null, 204);
+}
+
+/** GET /w/:ws/agents/:agentId/provisioning */
+export async function getAgentProvisioning(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const agentId = pathUuid(c, 'agentId');
+  const body = await inWorkspace(c, async (work) => {
+    if (!await ensureAgentOwner(work.tx, work.workspaceId, work.userId, agentId) && work.role !== 'admin') {
+      throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
+    }
+    const result = await work.tx.query<{
+      status: string; instance_name: string; dashboard_url: string | null;
+      error_code: string | null; error_detail: string | null; ready_at: Date | null;
+    }>(
+      `SELECT status, instance_name, dashboard_url, error_code, error_detail, ready_at
+         FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2`,
+      [work.workspaceId, agentId],
+    );
+    const row = result.rows[0];
+    return row ? {
+      status: row.status,
+      instance_name: row.instance_name,
+      dashboard_url: work.role === 'admin' ? row.dashboard_url : null,
+      error_code: row.error_code,
+      message: row.status === 'awaiting_bootstrap'
+        ? 'Iris is being prepared with the reviewed Partner Program profile and AgentCash connection.'
+        : row.status === 'ready'
+          ? 'Your Partner Program Iris is ready with its governed AgentCash connection.'
+          : row.status === 'failed'
+            ? 'Iris setup did not finish. Your onboarding choices are saved and setup can be retried safely.'
+            : 'Your isolated Hermes Cloud profile is being provisioned.',
+      ready_at: row.ready_at?.toISOString() ?? null,
+    } : null;
+  });
+  return c.json({ provisioning: body });
+}
+
+/** POST /w/:ws/agents/:agentId/provisioning/verify */
+export async function verifyAgentProvisioning(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
+  const agentId = pathUuid(c, 'agentId');
+  try {
+    const binding = await inWorkspace(c, async (work) => {
+      work.requireAdmin('Verifying a Hermes Cloud profile');
+      const resolved = await resolveProvisioningRuntimeBinding(c.env, work.tx, work.workspaceId, agentId);
+      await work.tx.query(
+        `UPDATE agent_provisioning SET status='verifying', error_code=NULL, error_detail=NULL
+          WHERE workspace_id=$1 AND agent_id=$2 AND status IN ('awaiting_bootstrap','failed','verifying')`,
+        [work.workspaceId, agentId],
+      );
+      return resolved;
+    });
+    const client = new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport);
+    const [capabilities, readiness] = await Promise.all([client.capabilities(), client.enterpriseReadiness()]);
+    if (!capabilities.durableIdempotency || readiness.workspaceId !== binding.workspaceId || readiness.agentId !== agentId ||
+        !readiness.agentCashEnabled || !readiness.agentCashWalletPresent || !readiness.nativeCronDisabled) {
+      throw new Error('enterprise_profile_readiness_incomplete');
+    }
+    await inWorkspace(c, async (work) => {
+      work.requireAdmin('Verifying a Hermes Cloud profile');
+      await work.tx.query(
+        `UPDATE agent_runtime_bindings SET ready_at=COALESCE(ready_at, now()) WHERE workspace_id=$1 AND agent_id=$2`,
+        [work.workspaceId, agentId],
+      );
+      await work.tx.query(
+        `UPDATE agent_provisioning SET status='ready', ready_at=COALESCE(ready_at, now()), error_code=NULL, error_detail=NULL
+          WHERE workspace_id=$1 AND agent_id=$2`,
+        [work.workspaceId, agentId],
+      );
+      await work.tx.query(
+        `UPDATE agents SET status='started', started_at=COALESCE(started_at, now()) WHERE workspace_id=$1 AND id=$2`,
+        [work.workspaceId, agentId],
+      );
+    });
+    return c.json({ status: 'ready' });
+  } catch (error) {
+    await inWorkspace(c, async (work) => {
+      work.requireAdmin('Verifying a Hermes Cloud profile');
+      await work.tx.query(
+        `UPDATE agent_provisioning SET status='awaiting_bootstrap', error_code='profile_readiness_incomplete', error_detail=$3
+          WHERE workspace_id=$1 AND agent_id=$2 AND status IN ('awaiting_bootstrap','failed','verifying')`,
+        [work.workspaceId, agentId, (error instanceof Error ? error.message : String(error)).slice(0, 500)],
+      );
+    });
+    throw new RouteError('The Cloud profile has not passed the Enterprise and AgentCash readiness checks.', 'profile_readiness_incomplete', 409);
+  }
 }

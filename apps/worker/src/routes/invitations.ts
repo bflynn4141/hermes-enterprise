@@ -125,6 +125,10 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
       invitationId: mirrored.acceptedInvitation.id,
       invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
       jobs,
+      provisionHermesCloud: c.env.AGENT_RUNTIME === 'hermes',
+      cloudRegion: c.env.HERMES_CLOUD_REGION,
+      cloudModel: c.env.HERMES_CLOUD_MODEL,
+      cloudSize: c.env.HERMES_CLOUD_SIZE,
     });
 
     // The whole workspace, from inside the transaction that admitted them, so

@@ -210,6 +210,44 @@ export const agentOwners = pgTable('agent_owners', {
   updatedAt: now('updated_at'),
 });
 
+export const agentProvisioning = pgTable('agent_provisioning', {
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').primaryKey(),
+  status: text('status').notNull().default('awaiting_onboarding'),
+  cloudAgentId: text('cloud_agent_id'),
+  instanceName: text('instance_name').notNull(),
+  dashboardUrl: text('dashboard_url'),
+  region: text('region').notNull().default('sjc'),
+  model: text('model').notNull().default('z-ai/glm-5.2'),
+  size: text('size').notNull().default('medium'),
+  attempts: integer('attempts').notNull().default(0),
+  errorCode: text('error_code'),
+  errorDetail: text('error_detail'),
+  requestedAt: ts('requested_at'),
+  cloudCreatedAt: ts('cloud_created_at'),
+  readyAt: ts('ready_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const agentRuntimeBindings = pgTable('agent_runtime_bindings', {
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').primaryKey(),
+  profile: text('profile').notNull(),
+  baseUrl: text('base_url'),
+  transport: text('transport').notNull().default('dashboard_connector'),
+  assignment: text('assignment').notNull().default('provisioned'),
+  agentcash: boolean('agentcash').notNull().default(false),
+  ciphertext: bytea('ciphertext').notNull(),
+  iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(),
+  readyAt: ts('ready_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
 export const agentCapabilities = pgTable('agent_capabilities', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -710,6 +748,7 @@ export const partnerScreeningRuns = pgTable(
     configSnapshot: jsonb('config_snapshot').notNull(),
     apiRequestsMax: integer('api_requests_max').notNull(),
     apiRequestsUsed: integer('api_requests_used').notNull().default(0),
+    agentCashToolCallId: text('agentcash_tool_call_id'),
     rateLimits: jsonb('rate_limits').notNull().default([]),
     candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
     monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),
@@ -1331,6 +1370,8 @@ export const ALL_TABLES = {
   workspace_settings: workspaceSettings,
   agents,
   agent_owners: agentOwners,
+  agent_provisioning: agentProvisioning,
+  agent_runtime_bindings: agentRuntimeBindings,
   agent_capabilities: agentCapabilities,
   agent_files: agentFiles,
   agent_context_fields: agentContextFields,

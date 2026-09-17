@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
+from enterprise_bridge.dashboard.plugin_api import NativeControl
 from start import (
     assert_native_cron_empty,
     clean_environment,
@@ -21,12 +22,59 @@ from start import (
 )
 
 RUN_ID = "run_" + "a" * 32
+PEOPLE_PROGRAM = {
+    "source": "agentcash_people",
+    "max_spend_usd": 0.15,
+    "people_search": {
+        "current_position_seniority_level": ["Founder", "Head"],
+        "person_skills": ["Artificial Intelligence (AI)"],
+        "current_position_titles": [],
+        "person_locations": [],
+    },
+}
+PEOPLE_ARGS = {
+    "url": "https://stableenrich.dev/api/fullenrich/people-search",
+    "method": "POST",
+    "maxAmount": 0.15,
+    "body": {
+        "current_position_seniority_level": ["Founder", "Head"],
+        "person_skills": ["Artificial Intelligence (AI)"],
+        "excludeFields": ["educations", "languages"],
+        "include_employment_history": False,
+        "verbose": False,
+        "offset": 0,
+    },
+}
 
 
 class BridgeTests(unittest.TestCase):
     def bridge(self):
         return plugin.Bridge("https://enterprise.example/internal/runtime/w/w/agents/a", "test-token",
                              "http://127.0.0.1:8642", "native-token")
+
+    def test_dashboard_readiness_attests_identity_and_wallet_without_exposing_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wallet = pathlib.Path(directory) / ".agentcash" / "wallet.json"
+            wallet.parent.mkdir()
+            wallet.write_text('{"private":"never-return-this"}')
+            with patch.dict(plugin.os.environ, {}, clear=False), patch.dict(
+                __import__("os").environ,
+                {
+                    "API_SERVER_KEY": "native-token",
+                    "ENTERPRISE_WORKSPACE_ID": "workspace-1",
+                    "ENTERPRISE_AGENT_ID": "agent-1",
+                    "ENTERPRISE_URL": "https://enterprise.example",
+                    "HERMES_AGENTCASH_MCP_ENABLED": "1",
+                    "HERMES_NATIVE_CRON_ENABLED": "0",
+                    "AGENTCASH_HOME": directory,
+                },
+                clear=False,
+            ):
+                status, body = NativeControl().dispatch({"operation": "readiness"})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["agentcash_wallet_present"])
+            self.assertEqual(body["agent_id"], "agent-1")
+            self.assertNotIn("never-return-this", json.dumps(body))
 
     def test_mapping_and_pending_preserve_identical_call(self):
         bridge = self.bridge()
@@ -130,11 +178,12 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash",
-                        "tools": ["get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch"],
-                        "allowed_hosts": ["stableenrich.dev", "stablesocial.dev"],
-                        "max_amount_usd": 0.2,
+                        "tools": ["fetch"],
+                        "allowed_hosts": ["stableenrich.dev"],
+                        "max_amount_usd": 0.15,
                     }],
                 }.get(name, default)
 
@@ -151,21 +200,20 @@ class BridgeTests(unittest.TestCase):
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
-        }), patch.object(plugin.Bridge, "tools", return_value=[]):
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
+                patch.object(plugin.Bridge, "authorize_people_search") as authorized:
             plugin.register(context)
-        self.assertIsNone(context.hook("mcp__agentcash__get_balance", {}))
-        self.assertIsNone(context.hook("mcp__agentcash__discover_api_endpoints", {
-            "url": "https://stableenrich.dev",
-        }))
-        self.assertIsNone(context.hook("mcp__agentcash__fetch", {
-            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.06,
-        }))
-        self.assertIn("host allowlist", context.hook("mcp__agentcash__fetch", {
-            "url": "https://example.com", "maxAmount": 0.01,
-        })["message"])
-        self.assertIn("spend cap", context.hook("mcp__agentcash__fetch", {
-            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.21,
-        })["message"])
+            self.assertIsNone(context.hook("mcp__agentcash__fetch", PEOPLE_ARGS, tool_call_id="call_people"))
+            authorized.assert_called_once_with(RUN_ID, "call_people", PEOPLE_ARGS)
+        self.assertIn("allowlist", context.hook("mcp__agentcash__get_balance", {})["message"])
+        for changed in (
+            {**PEOPLE_ARGS, "url": "https://stableenrich.dev/api/other"},
+            {**PEOPLE_ARGS, "method": "GET"},
+            {**PEOPLE_ARGS, "maxAmount": 0.14},
+            {**PEOPLE_ARGS, "body": {**PEOPLE_ARGS["body"], "offset": 1}},
+        ):
+            self.assertIn("exact approved", context.hook("mcp__agentcash__fetch", changed)["message"])
         self.assertEqual(context.hook("mcp__agentcash__bridge", {})["action"], "block")
 
     def test_successful_people_search_is_imported_by_post_tool_hook(self):
@@ -178,6 +226,7 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash",
                         "tools": ["fetch"],
@@ -201,16 +250,11 @@ class BridgeTests(unittest.TestCase):
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
                 patch.object(plugin.Bridge, "import_people_search") as imported, \
-                patch.object(plugin, "trusted_post_identity", return_value=(RUN_ID, "call_people")):
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")):
             plugin.register(context)
             context.hooks["post_tool_call"](
                 tool_name="mcp__agentcash__fetch",
-                args={
-                    "url": "https://stableenrich.dev/api/fullenrich/people-search",
-                    "method": "POST",
-                    "maxAmount": 0.15,
-                    "body": {"person_skills": ["Artificial Intelligence (AI)"]},
-                },
+                args=PEOPLE_ARGS,
                 result=json.dumps({"people": [], "companies": {}, "metadata": {"total": 0}}),
                 tool_call_id="call_people",
             )
@@ -225,6 +269,7 @@ class BridgeTests(unittest.TestCase):
                     "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
                     "native_url": "http://127.0.0.1:8642",
                     "allowed_skills": [],
+                    "partner_program": PEOPLE_PROGRAM,
                     "mcp_policy": [{
                         "server": "agentcash", "tools": ["fetch"],
                         "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.2,
@@ -270,7 +315,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.2.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.4.0",
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 
@@ -351,10 +396,10 @@ class BridgeTests(unittest.TestCase):
         )
         self.assertEqual(servers["agentcash"]["args"], ["--yes", "agentcash@0.17.1"])
         self.assertEqual(servers["agentcash"]["tools"]["include"], [
-            "get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch",
+            "fetch",
         ])
         self.assertEqual(environment, {"AGENTCASH_HOME": "/srv/hermes-agentcash"})
-        self.assertEqual(policies[0]["max_amount_usd"], 0.2)
+        self.assertEqual(policies[0]["max_amount_usd"], 0.15)
         with self.assertRaisesRegex(RuntimeError, "dedicated directory"):
             load_mcp_servers("", {"AGENTCASH_HOME": str(pathlib.Path.home())}, agentcash_enabled=True)
 

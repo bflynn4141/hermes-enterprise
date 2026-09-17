@@ -7,9 +7,9 @@ import { partnerAgentConfig } from '../partner-screening/config.js';
 export const PARTNER_PROGRAM_SKILL = {
   name: 'enterprise_bridge:partner-program-screening',
   key: 'partner-program-screening',
-  version: '1.2.0',
+  version: '1.4.0',
   title: 'Partner program screening',
-  description: 'Screen public partner prospects and prepare cited applications for human review.',
+  description: 'Screen public partner prospects and prepare cited outreach drafts for human review.',
 } as const;
 
 export interface RuntimeSkillManifest {
@@ -71,7 +71,9 @@ export function runtimeSkillCards(env: Env, agentId: string): readonly [{
     version: `v${PARTNER_PROGRAM_SKILL.version}`,
     shared_by: 'Hermes Enterprise',
     description: PARTNER_PROGRAM_SKILL.description,
-    detail: 'Reviews stored public evidence, names gaps, and prepares pending applications. A human decides; no outreach is allowed.',
+    detail: partnerAgentConfig(env, agentId).config?.source === 'agentcash_people'
+      ? 'AgentCash People Search is attached through one exact, leased $0.15 call. Iris reviews sanitized evidence and prepares draft-only outreach; a human reviews and no message is sent.'
+      : 'Reviews stored public evidence, names gaps, and prepares draft-only outreach. A human reviews and no message is sent.',
     adopted: true,
   }];
 }

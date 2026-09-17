@@ -17,6 +17,23 @@ export interface Env {
   HERMES_RUNTIME_AGENTS?: string;
   /** Signs a bridge credential scoped to one workspace and agent. */
   HERMES_BRIDGE_SECRET?: string;
+  /** Explicit kill switch for paid Hermes Cloud instance creation. */
+  HERMES_CLOUD_AUTOPROVISION_ENABLED?: string;
+  /** Machine credential minted in Nous Portal; exchanged for short-lived MCP tokens. */
+  HERMES_CLOUD_CLIENT_ID?: string;
+  HERMES_CLOUD_CLIENT_SECRET?: string;
+  /** Defaults remain pinned to the official Nous Portal endpoints. */
+  HERMES_CLOUD_TOKEN_URL?: string;
+  HERMES_CLOUD_MCP_URL?: string;
+  HERMES_CLOUD_REGION?: 'iad' | 'sjc' | 'lhr' | 'nrt' | 'syd' | 'gru';
+  HERMES_CLOUD_MODEL?: string;
+  HERMES_CLOUD_SIZE?: string;
+  /** Hard workspace safety cap; defaults to 5 and is clamped to 1..25. */
+  HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE?: string;
+  /** Hard organization safety cap checked against the Portal list before create. */
+  HERMES_CLOUD_MAX_AGENTS?: string;
+  /** Public origin the Cloud profile uses for its reverse enterprise bridge. */
+  HERMES_ENTERPRISE_PUBLIC_URL?: string;
   /**
    * 'fake' reads a seeded user from `x-dev-user`; 'workos' verifies a sealed
    * cookie. M1 ships 'fake' only, behind the same `getSession` interface the
@@ -82,6 +99,8 @@ export interface Env {
   PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS?: string;
   /** Cadence bucket for proactive screening. Defaults to 360 minutes and is clamped to 5..1440. */
   PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
+  /** Separate spend gate for recurring AgentCash discovery. Manual onboarding keeps its one-use allowance. */
+  PARTNER_SCREENING_PAID_AUTOMATION_ENABLED?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket

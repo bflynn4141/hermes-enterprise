@@ -22,11 +22,12 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import type { Env } from '../env.js';
+import type { Tx } from '../db/client.js';
 import { adapterOptions, providerForTransport, SCRIPTS, ScriptedProvider, type Script } from '../model/index.js';
 import type { ModelProvider } from '../model/types.js';
 import type { Transport } from '@hermes/shared';
 import { RuntimeDb } from '../runtime/store.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
 import { runtimeSkillManifests } from '../runtime/skills.js';
@@ -345,7 +346,12 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
       if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
         const run = await db.loadRun(params.runId);
         if (!run?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
-        const binding = runtimeBinding(this.env, params.workspaceId, run.agentId);
+        const binding = await resolveRuntimeBinding(
+          this.env,
+          { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
+          params.workspaceId,
+          run.agentId,
+        );
         checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
         await runHermesAttempt({
           db,

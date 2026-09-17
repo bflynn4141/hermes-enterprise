@@ -1,6 +1,9 @@
 // The official-runtime allowlist and scoped bridge credentials. Neither a model
 // argument nor a runtime URL may select a different enterprise workspace.
 import { RouteError } from '../routes/tenant.js';
+import type { Tx } from '../db/client.js';
+import type { Env } from '../env.js';
+import { openSecret, type StoredEnvelope } from '../keys/envelope.js';
 
 export interface RuntimeEnv {
   readonly ENVIRONMENT: string;
@@ -15,6 +18,10 @@ export interface RuntimeBinding {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly transport: 'native' | 'dashboard_connector';
+  /** Fixed profiles cannot be reassigned. Invitee-pool profiles are claimed once at invitation acceptance. */
+  readonly assignment: 'fixed' | 'invitee_pool' | 'provisioned';
+  /** Deployment attestation that this profile was launched with the bounded AgentCash MCP. */
+  readonly agentCash: boolean;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const misconfigured = (): never => {
@@ -33,6 +40,9 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
   if (typeof row.base_url !== 'string' || typeof row.api_key !== 'string' || !row.api_key.trim()) return misconfigured();
   const transport = row.transport ?? 'native';
   if (transport !== 'native' && transport !== 'dashboard_connector') return misconfigured();
+  const assignment = row.assignment ?? 'fixed';
+  if (assignment !== 'fixed' && assignment !== 'invitee_pool') return misconfigured();
+  if (row.agentcash !== undefined && typeof row.agentcash !== 'boolean') return misconfigured();
   let url: URL;
   try { url = new URL(row.base_url); } catch { return misconfigured(); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -45,6 +55,8 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
     baseUrl: url.toString().replace(/\/$/, ''),
     apiKey: row.api_key,
     transport,
+    assignment,
+    agentCash: row.agentcash === true,
   };
 }
 export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
@@ -60,6 +72,21 @@ export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
     if (typeof workspaceId !== 'string') return misconfigured();
     return runtimeBinding(env, workspaceId, agentId);
   });
+}
+
+/**
+ * Exact, deployment-provisioned capacity that invitation acceptance may claim.
+ * A pool entry is usable only when the operator explicitly attests that its
+ * isolated profile has the bounded AgentCash integration enabled.
+ */
+export function inviteeRuntimeAgentIds(env: RuntimeEnv, workspaceId: string): string[] {
+  if (env.AGENT_RUNTIME !== 'hermes') return [];
+  return runtimeBindings(env)
+    .filter((binding) => binding.workspaceId === workspaceId
+      && binding.assignment === 'invitee_pool'
+      && binding.agentCash)
+    .map((binding) => binding.agentId)
+    .sort();
 }
 /** Existing sessions show the configured execution location after a rollout.
  * Missing configuration still fails turn admission; it must not hide onboarding
@@ -79,6 +106,12 @@ async function signingKey(env: RuntimeEnv): Promise<CryptoKey> {
 }
 export async function bridgeToken(env: RuntimeEnv, workspaceId: string, agentId: string): Promise<string> {
   runtimeBinding(env, workspaceId, agentId);
+  return provisioningBridgeToken(env, workspaceId, agentId);
+}
+
+/** Mint the reverse-bridge token before a new dynamic binding is ready. */
+export async function provisioningBridgeToken(env: RuntimeEnv, workspaceId: string, agentId: string): Promise<string> {
+  if (!UUID.test(workspaceId) || !UUID.test(agentId)) throw new RouteError('Invalid runtime path.', 'bad_id', 400);
   const bytes = await crypto.subtle.sign('HMAC', await signingKey(env), new TextEncoder().encode(`${workspaceId}:${agentId}`));
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -87,6 +120,90 @@ export async function requireBridgeAuth(env: RuntimeEnv, workspaceId: string, ag
   const token = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
   const bytes = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
   const valid = await crypto.subtle.verify('HMAC', await signingKey(env), bytes, new TextEncoder().encode(`${workspaceId}:${agentId}`));
+  if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
+  return binding;
+}
+
+const CONTROL_NAMESPACE = 'hermes/runtime-control/v1';
+type RuntimeBindingQuery = Pick<Tx, 'query'>;
+const envelopeBytes = (value: unknown): Uint8Array => {
+  if (value instanceof Uint8Array) return value;
+  throw new Error('expected runtime credential envelope bytes');
+};
+
+/**
+ * Resolve a ready, dynamically-provisioned binding first, then fall back to
+ * deployment configuration for the original fixed staging profile.
+ */
+async function dynamicRuntimeBinding(
+  env: Env,
+  tx: RuntimeBindingQuery,
+  workspaceId: string,
+  agentId: string,
+  readyOnly: boolean,
+): Promise<RuntimeBinding | null> {
+  if (!UUID.test(workspaceId) || !UUID.test(agentId)) throw new RouteError('Invalid runtime path.', 'bad_id', 400);
+  if (env.AGENT_RUNTIME !== 'hermes' || !env.HERMES_BRIDGE_SECRET || env.HERMES_BRIDGE_SECRET.length < 32) return misconfigured();
+  const dynamic = await tx.query<{
+    profile: string; base_url: string; transport: 'native' | 'dashboard_connector';
+    assignment: 'fixed' | 'invitee_pool' | 'provisioned'; agentcash: boolean;
+    ciphertext: Uint8Array; iv: Uint8Array; wrapped_dek: Uint8Array; wrap_iv: Uint8Array; kek_version: number;
+  }>(
+    `SELECT profile, base_url, transport, assignment, agentcash,
+            ciphertext, iv, wrapped_dek, wrap_iv, kek_version
+       FROM agent_runtime_bindings
+      WHERE workspace_id=$1 AND agent_id=$2 AND base_url IS NOT NULL
+        AND ($3::boolean = false OR ready_at IS NOT NULL)`,
+    [workspaceId, agentId, readyOnly],
+  );
+  const row = dynamic.rows[0];
+  if (!row) return null;
+  const apiKey = await openSecret(env, { workspaceId, keyId: agentId, namespace: CONTROL_NAMESPACE }, {
+    ciphertext: envelopeBytes(row.ciphertext), iv: envelopeBytes(row.iv), wrappedDek: envelopeBytes(row.wrapped_dek),
+    wrapIv: envelopeBytes(row.wrap_iv), kekVersion: row.kek_version,
+  } satisfies StoredEnvelope);
+  let url: URL;
+  try { url = new URL(row.base_url); } catch { return misconfigured(); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return misconfigured();
+  return {
+    workspaceId, agentId, profile: row.profile, baseUrl: url.toString().replace(/\/$/, ''), apiKey,
+    transport: row.transport, assignment: row.assignment, agentCash: row.agentcash,
+  };
+}
+
+export async function resolveRuntimeBinding(
+  env: Env,
+  tx: RuntimeBindingQuery,
+  workspaceId: string,
+  agentId: string,
+): Promise<RuntimeBinding> {
+  return await dynamicRuntimeBinding(env, tx, workspaceId, agentId, true)
+    ?? runtimeBinding(env, workspaceId, agentId);
+}
+
+/** Used only by the explicit Admin readiness check before ready_at is set. */
+export async function resolveProvisioningRuntimeBinding(
+  env: Env,
+  tx: RuntimeBindingQuery,
+  workspaceId: string,
+  agentId: string,
+): Promise<RuntimeBinding> {
+  const binding = await dynamicRuntimeBinding(env, tx, workspaceId, agentId, false);
+  if (!binding) return misconfigured();
+  return binding;
+}
+
+export async function requireResolvedBridgeAuth(
+  env: Env,
+  tx: RuntimeBindingQuery,
+  workspaceId: string,
+  agentId: string,
+  authorization: string | null,
+): Promise<RuntimeBinding> {
+  const binding = await resolveRuntimeBinding(env, tx, workspaceId, agentId);
+  const token = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
+  const candidate = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
+  const valid = await crypto.subtle.verify('HMAC', await signingKey(env), candidate, new TextEncoder().encode(`${workspaceId}:${agentId}`));
   if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
   return binding;
 }

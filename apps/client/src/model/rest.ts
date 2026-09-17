@@ -13,6 +13,7 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  agentProvisioningResponseSchema,
   catalogPageSchema,
   errorBodySchema,
   eventsPageSchema,
@@ -442,6 +443,8 @@ export function createRest(options: RestOptions) {
     patchSettings: (workspaceId: string, patch: Record<string, unknown>) =>
       request('PATCH', `${ws(workspaceId)}/settings`, settingsViewSchema, patch),
     patchAgent: (workspaceId: string, agentId: string, patch: Record<string, unknown>) => optional(() => send('PATCH', `${ws(workspaceId)}/agents/${agentId}`, patch), undefined),
+    agentProvisioning: (workspaceId: string, agentId: string) =>
+      request('GET', `${ws(workspaceId)}/agents/${agentId}/provisioning`, agentProvisioningResponseSchema),
     /**
      * `?range=`, not `?from=&to=&group=`. The client asked for a shape nobody
      * served and parsed the answer against a schema nobody wrote: every call

@@ -495,6 +495,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
           email: boot.agent.email,
           summary: boot.agent.responsibility ?? '',
           setupStep: boot.agent.setup_step,
+          provisioningStatus: boot.agent.provisioning_status ?? null,
         },
         capabilities: {
           emailIngress: boot.capabilities.email_ingress,

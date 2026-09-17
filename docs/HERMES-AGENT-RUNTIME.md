@@ -88,8 +88,27 @@ reported `runtime_kind = hermes`, completed in 39 seconds with six governed tool
 calls, and created no requests, decisions, effects or outbound communication.
 The Traces UI displayed it as `Hermes Agent · work` under Iris.
 
-Provisioning additional profiles is still explicit configuration; workspace
-creation does not automatically start a Cloud runtime for every new member. A
+Invitation acceptance now creates a unique draft Iris and durable provisioning
+record; it never performs a billable Cloud call inside the membership
+transaction. Completing the working agreement changes Iris to `provisioning`
+and enqueues `hermes_cloud_provision`. The job exchanges an organization-scoped
+service credential for a short-lived `mcp:manage_agents` token, adopts an
+existing exact-name instance on retry or creates one, and stores its connector
+credential under the workspace KEK. The profile remains non-runnable until an
+Admin readiness check proves the reviewed Enterprise bridge, exact workspace
+and agent identity, disabled native cron, enabled AgentCash integration, and a
+dedicated wallet file. There is no simulated or generic-Hermes fallback.
+
+The official Cloud MCP still cannot install a plugin or apply arbitrary profile
+configuration. Accordingly, successful just-in-time instance creation ends in
+the internal `awaiting_bootstrap` state. Members see only that Iris is being
+prepared; they are never asked to perform or understand an Admin bootstrap.
+The production-shaped invite path must claim from real, pre-verified warm
+capacity with the Enterprise plugin and AgentCash wallet already present. The
+first staging profile may be bootstrapped manually through the authenticated
+Cloud dashboard; fully automatic pool replenishment requires Nous to expose a
+supported template/plugin bootstrap contract. Workspace creation does not
+automatically start a Cloud runtime. A
 native run keeps its process while waiting and is bounded by the adapter’s
 55-minute execution window (60-minute Workflow step timeout). Multi-day human
 waits need a durable suspend/resume lifecycle before production rollout. Inbox
@@ -100,14 +119,17 @@ native cron remain off by default. For an explicit demo profile,
 `HERMES_NATIVE_CRON_ENABLED=1` retains the official cron REST surface while
 agent self-scheduling stays disabled, and `ENTERPRISE_MCP_SERVERS_JSON` enables
 only named stdio servers with a required tool allowlist. The AgentCash shortcut
-`HERMES_AGENTCASH_MCP_ENABLED=1` pins AgentCash 0.17.1 and exposes only balance,
-discovery, schema inspection and fetch; fetch is limited to StableEnrich and
-StableSocial and requires a per-call `maxAmount` no greater than $0.20. Its
-`AGENTCASH_HOME` should be a dedicated funded directory, not a personal home.
-The Partner Program profile further pins one People Search call to
-`stableenrich.dev/api/fullenrich/people-search` at $0.15. A `post_tool_call`
-hook forwards that response to the run-bound Worker importer; contact data is
-discarded before the result can become Inbox evidence.
+`HERMES_AGENTCASH_MCP_ENABLED=1` pins AgentCash 0.17.1 and exposes only `fetch`.
+The plugin accepts only the Worker-supplied exact People Search URL, POST body,
+and $0.15 cap; balance, discovery, schema inspection, StableSocial, alternate
+paths and changed arguments are unavailable to the model. Its `AGENTCASH_HOME`
+must be a dedicated funded directory, not a personal home. Before the paid
+call, a `pre_tool_call` hook obtains an atomic one-use lease for the exact
+native run and tool-call id. A different or second call is rejected before
+payment. The `post_tool_call` hook forwards the response to the run-bound
+Worker importer; contact data is discarded before the result can become Inbox
+evidence. Members may use this only for the single `onboarding:`-keyed run on
+their own attested pool Iris. Further paid searches remain Admin-authorized.
 Without those gates, the launcher refuses nonempty native cron state, removes
 native cron REST routes before binding, and makes native health fail if a job
 later appears. Automatic memory extraction, background review and learning nudges
@@ -180,6 +202,13 @@ then forwards them to the loopback API Server with the native key. It is not an
 arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
+
+Fixed profiles remain supported in `HERMES_RUNTIME_AGENTS`. Provisioned
+profiles use `agent_runtime_bindings`; the per-profile control secret is
+envelope-encrypted and the row is ignored until `ready_at` is set by the live
+readiness check. `agentcash=true` is set at creation but is not sufficient by
+itself: the connector must also report a dedicated wallet file before the
+binding becomes runnable.
 
 The official image can persist user-managed plugins, skills and configuration
 under its data volume. Hermes Desktop can install an agent plugin into a

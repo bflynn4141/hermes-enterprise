@@ -4,13 +4,13 @@ Hermes can collect public organization evidence from GitHub or public
 professional evidence from AgentCash People Search, save immutable source
 artifacts, and hand the candidates to the bound Iris agent for judgment. Source
 collection never creates an application by itself.
-Iris must inspect the stored evidence and use the normal `propose_request` tool;
-that creates a pending Inbox request for a human reviewer. There is no outreach,
-messaging, application submission, admission, payment, signature, or other
-external write in this flow.
+Iris must inspect the stored evidence and may use `propose_approval` to create a
+personalized, draft-only email in the Inbox. The source connector removes
+contact details, so the draft names the prospect and shows that a verified
+address is still needed. Approval records reviewed copy and never sends it.
 
 Iris now receives this procedure as the native, read-only Hermes skill
-`enterprise_bridge:partner-program-screening` version `1.2.0`. Its approved
+`enterprise_bridge:partner-program-screening` version `1.4.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
 model credentials remain server-side. The skill is automatically in use when
 this agent has a valid policy. It describes the review workflow but grants no
@@ -51,16 +51,20 @@ Source policy and quota references were checked on 2026-09-16:
 
 ## Trust boundary and data flow
 
-1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. The server reads
-   that agent's non-secret policy from `PARTNER_SCREENING_CONFIG_JSON`.
+1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. A newly invited
+   member receives one onboarding run for their own explicitly configured AgentCash profile; later
+   paid runs require an Admin. The server reads that agent's non-secret policy from
+   `PARTNER_SCREENING_CONFIG_JSON`.
 2. For GitHub, the server calls only fixed `https://api.github.com` endpoints. It has a
    10-second timeout, a 1 MB response cap, a per-run request cap, and a
    configurable minimum remaining-rate reserve. It does not retry a `403` or
    `429` and reports the reset time when GitHub provides it.
-3. For People Search, Iris calls the exact policy-derived AgentCash request in
-   Nous Cloud. The plugin's `post_tool_call` observer forwards the result with
-   trusted native run and tool-call IDs. The authenticated Worker rejects any
-   response that does not map to the matching `partner-screening:<run>` turn.
+3. For People Search, the plugin presents the exact policy-derived AgentCash request to the
+   Worker before payment. The Worker atomically leases that run's only `$0.15` call to the trusted
+   native run and tool-call IDs. Iris then makes that exact request in Nous Cloud. The plugin's
+   `post_tool_call` observer forwards the result with the same IDs; the authenticated Worker rejects
+   unleased, changed, replay-conflicting, or mismatched results. A transport failure after leasing is
+   not automatically retried under a new tool-call ID, preventing accidental duplicate payment.
 4. A successful run commits sanitized source snapshots and candidates. Source
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,
@@ -70,10 +74,18 @@ Source policy and quota references were checked on 2026-09-16:
    agent's auto-loaded Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates.
-6. Iris may call `propose_request`. A discovered application is accepted only
-   if its candidate identity, source, priority, and every cited evidence ID
-   match stored rows. A partial unique index on the candidate subject key makes
-   repeat agent runs idempotent: at most one Inbox request exists per candidate.
+6. Before handing work to Iris, the Worker installs an agent-specific
+   communication policy reviewed by the responsible member. Iris may call
+   `propose_approval` only with `draft_only: true`, the verified sender, a null
+   recipient address and stored evidence. The resulting Inbox item has no
+   delivery effect. Discovered prospects are never represented as applicants.
+
+Cloudflare Cron uses six-hour idempotency buckets. Paid AgentCash runs have a
+second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`; it defaults to
+`0` in every environment. Enabling the general automation trigger therefore
+cannot spend from a runtime wallet. Set the paid switch to `1` only after a
+recurring budget is approved. At the default policy cap, the maximum is $0.15
+per six-hour run for each configured agent.
 
 Discovery credentials and model-provider credentials are separate. A
 `PARTNER_GITHUB_TOKEN` can read the configured public source. The workspace's
@@ -100,7 +112,8 @@ limit small: one enriched candidate normally costs two core API calls after the
 search call. The source-matrix route is read-only and reports credentials only
 as `authenticated`, `unauthenticated`, or `not_applicable`.
 
-Start the Worker after applying migration `0028_partner_screening.sql`, then:
+Start the Worker after applying migrations through
+`0034_proactive_partner_outreach.sql`, then:
 
 ```sh
 WS=11111111-1111-4111-8111-111111111111

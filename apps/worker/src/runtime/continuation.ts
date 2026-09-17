@@ -19,7 +19,7 @@ import { isProviderAllowed } from '../model/allowed.js';
 import { checkCaps } from '../model/usage.js';
 import { consumeInstanceCap } from '../ops/instance-cap.js';
 import { runAttemptInstanceId } from '../runs/instance-id.js';
-import { runtimeBinding } from './config.js';
+import { resolveRuntimeBinding } from './config.js';
 import type { ApprovalContinuationIntent } from './continuation-intent.js';
 
 export {
@@ -495,7 +495,7 @@ export async function admitApprovalContinuation(
   }
   let profile: string;
   try {
-    profile = runtimeBinding(env, hook.workspace_id, intent.agent_id).profile;
+    profile = (await resolveRuntimeBinding(env, tx, hook.workspace_id, intent.agent_id)).profile;
   } catch {
     await move(tx, intent.id, 'blocked_profile', 'runtime_profile_not_configured');
     return { status: 'blocked', continuationId: intent.id, reason: 'runtime_profile_not_configured' };

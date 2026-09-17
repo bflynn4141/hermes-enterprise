@@ -199,7 +199,10 @@ export interface UiState {
 export interface AppState {
   workspace: { id: string; name: string; role: 'admin' | 'member'; jurisdiction: string | null };
   user: { id: string; name: string; email: string; role: 'admin' | 'member' };
-  agent: { id: string | null; name: string; email: string | null; summary: string; setupStep: string | null };
+  agent: {
+    id: string | null; name: string; email: string | null; summary: string; setupStep: string | null;
+    provisioningStatus: 'awaiting_onboarding' | 'queued' | 'creating' | 'awaiting_bootstrap' | 'verifying' | 'ready' | 'failed' | null;
+  };
   capabilities: { emailIngress: boolean; turnAttachments: boolean; automatedTriggers: boolean };
   entities: EntityCache;
   sessions: Record<string, SessionState>;
@@ -277,7 +280,7 @@ export function initialState(): AppState {
   return {
     workspace: { id: '', name: '', role: 'member', jurisdiction: null },
     user: { id: '', name: '', email: '', role: 'member' },
-    agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null },
+    agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null },
     capabilities: { emailIngress: false, turnAttachments: false, automatedTriggers: false },
     entities: emptyEntities(),
     sessions: {},

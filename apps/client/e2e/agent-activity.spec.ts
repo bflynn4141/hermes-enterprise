@@ -18,8 +18,12 @@ test('the overview stays live after Iris is collapsed', async ({ page }) => {
   await expect(page.locator('.iris-rail')).toBeVisible();
   await expect(card).toHaveAttribute('data-activity-state', 'working');
   await expect(card.getByRole('status')).toHaveText('Working now');
-  // Read the pair atomically: the tool can finish between two locator checks.
-  await expect(card).toContainText(/get_request\s*→\s*Review(?:ing|ed) a request/);
+  // The mock advances every 220 ms, so a loaded runner can legitimately miss
+  // the first tool after already observing the working state. Any later exact
+  // tool pair proves the collapsed overview kept consuming the same live run.
+  await expect(card).toContainText(
+    /(?:get_request\s*→\s*Review(?:ing|ed) a request|get_document_text\s*→\s*Read(?:ing)? a source document|propose_request\s*→\s*Prepar(?:ing|ed) a review request)/,
+  );
 
   const animation = await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName);
   expect(animation).toBe('activity-pulse');

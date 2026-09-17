@@ -43,7 +43,7 @@ function session(patch: Partial<SessionState> = {}): SessionState {
 function state(value: SessionState): AppState {
   return {
     ...initialState(),
-    agent: { id: AGENT, name: 'Iris', email: 'iris@example.com', summary: 'Partner Program', setupStep: null },
+    agent: { id: AGENT, name: 'Iris', email: 'iris@example.com', summary: 'Partner Program', setupStep: null, provisioningStatus: null },
     sessions: { [value.id]: value },
     sessionOrder: [value.id],
     activeSessionId: value.id,

@@ -61,7 +61,7 @@ function providerPhase(status: ProviderConnectStatus, ready: boolean): ProviderS
  * The controller caches in-progress answers in workspace-scoped browser
  * storage, then persists the confirmed agreement before any source call.
  * Provider state is real and comes from the encrypted-key routes. The first
- * search is also real: the Worker persists bounded public GitHub evidence
+ * search is also real: the Worker persists bounded, approved-source evidence
  * before Iris is allowed to read it.
  */
 export function useFirstRunExperience(active: boolean): FirstRunExperience | null {
@@ -77,8 +77,17 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const [providerReady, setProviderReady] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [setupPersisted, setSetupPersisted] = useState(() => loadState(storageKey).step === 'test');
+  const [provisioningStatus, setProvisioningStatus] = useState(app.agent.provisioningStatus);
+  const provisioningReady = provisioningStatus === null || provisioningStatus === 'ready';
+  // Bootstrap already projects whether a workspace model is runnable without
+  // exposing provider-key rows. Members use that safe projection; only Admins
+  // may inspect or change the underlying credential.
+  const workspaceProviderReady = useMemo(() => Object.values(app.entities.catalog).some((entry) => {
+    const model = entry.data as { enabled?: boolean; provider?: string } | null;
+    return model?.provider === DEFAULT_PROVIDER && model.enabled === true;
+  }), [app.entities.catalog]);
   const liveSearch = useFirstRunLiveSearch({
-    enabled: active && setupPersisted && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
+    enabled: active && setupPersisted && provisioningReady && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
     providerReady,
     rest: adapter.rest,
     agentId: app.agent.id ?? '',
@@ -90,7 +99,21 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     const saved = loadState(storageKey);
     setState(saved);
     setSetupPersisted(saved.step === 'test');
-  }, [storageKey]);
+    setProvisioningStatus(app.agent.provisioningStatus);
+  }, [app.agent.provisioningStatus, storageKey]);
+
+  useEffect(() => {
+    if (!active || !setupPersisted || !app.agent.id || provisioningReady) return;
+    let live = true;
+    const poll = (): void => {
+      void adapter.rest.agentProvisioning(app.workspace.id, app.agent.id!).then(({ provisioning }) => {
+        if (live) setProvisioningStatus(provisioning?.status ?? null);
+      }).catch(() => undefined);
+    };
+    poll();
+    const timer = window.setInterval(poll, 4000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [active, adapter, app.agent.id, app.workspace.id, provisioningReady, setupPersisted]);
 
   useEffect(() => {
     if (!active) return;
@@ -103,6 +126,13 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
 
   useEffect(() => {
     if (!active || !app.workspace.id) return;
+    if (app.workspace.role === 'member') {
+      setProviderReady(workspaceProviderReady);
+      setStoredKeyId(null);
+      setManualProviderFlow(false);
+      setConnectStatus(workspaceProviderReady ? { kind: 'connected', modelCount: null } : { kind: 'idle' });
+      return;
+    }
     let live = true;
     void adapter.rest.providerKeys(app.workspace.id).then(({ keys }) => {
       if (!live) return;
@@ -129,7 +159,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     return () => {
       live = false;
     };
-  }, [active, adapter, app.workspace.id]);
+  }, [active, adapter, app.workspace.id, app.workspace.role, workspaceProviderReady]);
 
   const onAction = useCallback((action: FirstRunAction): void => {
     const next = firstRunReducer(state, action);
@@ -151,6 +181,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
           },
         }).then(() => {
           setSetupPersisted(true);
+          if (app.agent.provisioningStatus) setProvisioningStatus('queued');
         }).catch(() => {
           const rolledBack = { ...next, step: 'boundaries' as const };
           setSetupError('I could not save this setup. Try again.');
@@ -252,6 +283,10 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
 
   const phase = providerPhase(connectStatus, providerReady);
   const liveSearchStatus = useMemo(() => {
+    if (setupPersisted && !provisioningReady) {
+      if (provisioningStatus === 'failed') return 'provisioning_error' as const;
+      return 'provisioning' as const;
+    }
     const byPhase: Record<LiveSearchPhase, 'idle' | 'searching' | 'awaiting_provider' | 'screening' | 'complete' | 'error'> = {
       idle: setupPersisted && state.step === 'test' && state.loopId === 'screen-partners' && app.agent.id ? 'searching' : 'idle',
       searching: 'searching',
@@ -262,7 +297,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
       error: 'error',
     };
     return byPhase[liveSearch.view.phase];
-  }, [app.agent.id, liveSearch.view.phase, setupPersisted, state.loopId, state.step]);
+  }, [app.agent.id, liveSearch.view.phase, provisioningReady, provisioningStatus, setupPersisted, state.loopId, state.step]);
   const completedLiveStages = useMemo(() => {
     const snapshot = liveSearch.view.snapshot;
     const stages: string[] = [];
@@ -307,7 +342,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     agreement: (
       <div className="first-run-app-surface">
         <FirstRunProgress current={state.step} />
-        {state.step === 'test' && state.loopId === 'screen-partners' ? (
+        {state.step === 'test' && state.loopId === 'screen-partners' && provisioningReady ? (
           <FirstRunLiveSearch view={liveSearch.view} onRetry={liveSearch.retry} onOpenInbox={() => nav(INBOX)} />
         ) : <FirstRunWorkingAgreement state={state} />}
       </div>

@@ -232,6 +232,10 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
           invitationId: mirrored.acceptedInvitation.id,
           invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
           jobs,
+          provisionHermesCloud: c.env.AGENT_RUNTIME === 'hermes',
+          cloudRegion: c.env.HERMES_CLOUD_REGION,
+          cloudModel: c.env.HERMES_CLOUD_MODEL,
+          cloudSize: c.env.HERMES_CLOUD_SIZE,
         });
       }
     }

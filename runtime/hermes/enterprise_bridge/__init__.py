@@ -18,6 +18,32 @@ MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
 
 
+def approved_agentcash_arguments(program):
+    """Build the one paid request from Worker-supplied, non-secret policy."""
+    if not isinstance(program, dict) or program.get("source") != "agentcash_people":
+        return None
+    people = program.get("people_search")
+    if not isinstance(people, dict) or program.get("max_spend_usd") != 0.15:
+        return None
+    body = {}
+    for key in ("current_position_seniority_level", "person_skills",
+                "current_position_titles", "person_locations"):
+        value = people.get(key, [])
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return None
+        if value:
+            body[key] = value
+    if not body:
+        return None
+    body.update({
+        "excludeFields": ["educations", "languages"],
+        "include_employment_history": False,
+        "verbose": False,
+        "offset": 0,
+    })
+    return {"url": AGENTCASH_PEOPLE_SEARCH_URL, "method": "POST", "maxAmount": 0.15, "body": body}
+
+
 class BridgeError(Exception):
     """Only safe, fixed messages cross the model-visible boundary."""
 
@@ -107,8 +133,8 @@ def trusted_identity():
     return run_id, call_id
 
 
-def trusted_post_identity(tool_call_id):
-    """Bind an observer callback to the same native run without model input."""
+def trusted_hook_identity(tool_call_id):
+    """Bind a runtime hook callback to the native run without model input."""
     from tools.approval_context import _approval_session_key
     from gateway.session_context import get_session_env
 
@@ -117,7 +143,7 @@ def trusted_post_identity(tool_call_id):
             or not re.fullmatch(r"run_[0-9a-f]{32}", run_id or "")
             or not isinstance(tool_call_id, str) or not tool_call_id
             or len(tool_call_id) > 256):
-        raise BridgeError("AgentCash import requires a trusted native run and tool call.")
+        raise BridgeError("AgentCash requires a trusted native run and tool call.")
     return run_id, tool_call_id
 
 
@@ -238,6 +264,20 @@ class Bridge:
             raise BridgeError("AgentCash People Search evidence import failed.")
         return body
 
+    def authorize_people_search(self, run_id, tool_call_id, arguments):
+        """Reserve the run's only paid request before the wallet is touched."""
+        status, body = self.request(
+            "POST", self.base_url + "/agentcash/people-search/authorize", self.token,
+            {
+                "runtime_run_id": run_id,
+                "tool_call_id": tool_call_id,
+                "arguments": arguments,
+            },
+        )
+        if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
+            raise BridgeError("AgentCash payment authorization was rejected.")
+        return body
+
 
 def register(ctx):
     # Register the Cloud control surface before tool discovery. If the Worker is
@@ -255,6 +295,7 @@ def register(ctx):
         name for name in ctx.get_config("allowed_skills", [])
         if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
     }
+    agentcash_arguments = approved_agentcash_arguments(ctx.get_config("partner_program", {}))
     allowed = {"skill_view"}
     mcp_policy = {}
     for item in ctx.get_config("mcp_policy", []):
@@ -278,6 +319,8 @@ def register(ctx):
         if policy is None:
             return {"action": "block", "message": "This MCP tool is not in the enterprise allowlist."}
         args = args if isinstance(args, dict) else {}
+        if tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments:
+            return {"action": "block", "message": "Only the exact approved AgentCash People Search request is allowed."}
         if "url" in args:
             try:
                 parsed = urllib.parse.urlsplit(args["url"])
@@ -297,7 +340,7 @@ def register(ctx):
                 return {"action": "block", "message": "This MCP request body exceeds the enterprise limit."}
         return None
 
-    def guard(tool_name, args=None, **kwargs):
+    def guard(tool_name, args=None, tool_call_id="", **kwargs):
         if tool_name == "skill_view":
             args = args if isinstance(args, dict) else {}
             if (args.get("name") in assigned_skills
@@ -306,23 +349,28 @@ def register(ctx):
                 return None
             return {"action": "block", "message": "Only the assigned managed skill can be viewed."}
         if tool_name.startswith("mcp__"):
-            return validate_mcp_call(tool_name, args)
+            decision = validate_mcp_call(tool_name, args)
+            if decision is not None:
+                return decision
+            if tool_name == "mcp__agentcash__fetch":
+                try:
+                    run_id, call_id = trusted_hook_identity(tool_call_id)
+                    bridge.authorize_people_search(run_id, call_id, args)
+                except Exception:
+                    return {"action": "block", "message": "AgentCash payment authorization failed closed."}
+            return None
         if tool_name not in allowed:
             return {"action": "block", "message": "Only governed enterprise tools are enabled in this profile."}
 
     def import_agentcash_result(tool_name="", args=None, result=None, tool_call_id="", **_kwargs):
-        # Observer hooks are deliberately exact: only the approved paid People
-        # Search route can become stored Inbox evidence. Other AgentCash calls
-        # remain model-visible exploratory data and are never imported.
+        # Observer hooks are deliberately exact: the pre-hook already blocked
+        # every other AgentCash call and reserved this tool-call id before pay.
         if tool_name != "mcp__agentcash__fetch" or not isinstance(args, dict):
             return None
-        if (args.get("url") != AGENTCASH_PEOPLE_SEARCH_URL
-                or str(args.get("method", "GET")).upper() != "POST"
-                or args.get("maxAmount") != 0.15
-                or not isinstance(args.get("body"), dict)):
+        if args != agentcash_arguments:
             return None
         try:
-            run_id, trusted_call_id = trusted_post_identity(tool_call_id)
+            run_id, trusted_call_id = trusted_hook_identity(tool_call_id)
             bridge.import_people_search(run_id, trusted_call_id, args, result)
         except Exception:
             # post_tool_call is observational and must never mutate the model's
@@ -338,7 +386,7 @@ def register(ctx):
         name="partner-program-screening",
         path=skill_path,
         description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.2.0", "metadata": {"hermes": {"category": "enterprise"}}},
+        frontmatter={"version": "1.4.0", "metadata": {"hermes": {"category": "enterprise"}}},
     )
     for schema in bridge.tools():
         name = schema["name"]

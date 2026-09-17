@@ -59,6 +59,7 @@ export interface PartnerScreeningWork {
   readonly tx: Tx;
   readonly workspaceId: string;
   readonly userId: string;
+  readonly role: 'admin' | 'member';
   requireAdmin(action: string): void;
 }
 
@@ -88,11 +89,37 @@ export async function beginPartnerScreening(
     idempotencyKey: string;
     config: PartnerAgentConfig;
     authentication: 'authenticated' | 'unauthenticated' | 'wallet';
+    /** True only for a member-owned profile explicitly marked as an AgentCash invitee profile. */
+    memberOnboardingAllowed?: boolean;
   },
 ): Promise<{ run: RunRow; created: boolean; resumed: boolean }> {
-  work.requireAdmin('Live partner-source discovery');
   if (!await boundAgent(work, input.agentId)) {
     throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
+  }
+  if (work.role !== 'admin') {
+    if (!input.memberOnboardingAllowed
+        || input.config.source !== 'agentcash_people'
+        || !input.idempotencyKey.startsWith('onboarding:')) {
+      work.requireAdmin('Live partner-source discovery');
+    }
+    await work.tx.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+      [`${work.workspaceId}:${input.agentId}:member-agentcash-onboarding`],
+    );
+    const other = await work.tx.query(
+      `SELECT 1 FROM partner_screening_runs
+        WHERE workspace_id = $1 AND agent_id = $2 AND created_by = $3
+          AND source = 'agentcash_people' AND idempotency_key <> $4
+        LIMIT 1`,
+      [work.workspaceId, input.agentId, work.userId, input.idempotencyKey],
+    );
+    if ((other.rowCount ?? 0) > 0) {
+      throw new RouteError(
+        'The member onboarding allowance has already been used. Ask an Admin to authorize another paid search.',
+        'partner_onboarding_allowance_used',
+        403,
+      );
+    }
   }
   const inserted = await work.tx.query<RunRow>(
     `INSERT INTO partner_screening_runs
@@ -118,12 +145,20 @@ export async function beginPartnerScreening(
   if (!run) throw new RouteError('the idempotency key belongs to another screening run', 'partner_screening_conflict', 409);
   if (run.status === 'running') return { run, created: false, resumed: false };
   if (run.status === 'completed') return { run, created: false, resumed: false };
+  if (run.source === 'agentcash_people' && run.api_requests_used > 0) {
+    throw new RouteError(
+      'This AgentCash run already reserved its payment allowance and cannot be retried automatically.',
+      'partner_source_budget_exhausted',
+      409,
+    );
+  }
 
   const resumed = await work.tx.query<RunRow>(
     `UPDATE partner_screening_runs
         SET status = 'running', error_code = NULL, error_detail = NULL,
             authentication = $3, config_snapshot = $4::jsonb, api_requests_max = $5,
-            api_requests_used = 0, rate_limits = '[]'::jsonb, monetary_cost_usd = 0, completed_at = NULL
+            api_requests_used = 0, agentcash_tool_call_id = NULL,
+            rate_limits = '[]'::jsonb, monetary_cost_usd = 0, completed_at = NULL
       WHERE workspace_id = $1 AND id = $2
       RETURNING *`,
     [work.workspaceId, run.id, input.authentication, JSON.stringify(configSnapshot(input.config)), input.config.max_api_requests],
@@ -301,9 +336,9 @@ export async function loadPartnerScreeningSnapshot(
   );
   const eligibleIds = candidates.rows.filter((candidate) => candidate.deterministic_priority >= minimum).map((candidate) => candidate.id);
   const prompt = run.source === 'agentcash_people' && run.status === 'running'
-    ? `Perform the approved AgentCash People Search exactly once by calling mcp__agentcash__fetch with ${JSON.stringify(agentCashPeopleSearchArguments(partnerAgentConfigSchema.parse(snapshot)))}. The connector imports and sanitizes the successful result before you see it. Then call list_partner_candidates and get_partner_candidate, independently assess only stored professional evidence, and use propose_request with kind application for sufficiently supported prospects. Cite only stored artifact ids, include discovery.candidate_id, state every evidence gap, do not infer sensitive traits, and do not contact anyone or claim the person applied.`
+    ? `Perform the approved AgentCash People Search exactly once by calling mcp__agentcash__fetch with ${JSON.stringify(agentCashPeopleSearchArguments(partnerAgentConfigSchema.parse(snapshot)))}. The connector imports and sanitizes the successful result before you see it. Then call list_partner_candidates and get_partner_candidate and independently assess only stored professional evidence. Cite only stored artifact ids, state every evidence gap, do not infer sensitive traits, and do not contact anyone or claim the person applied. Do not create an application request for a discovered prospect.`
     : eligibleIds.length > 0
-      ? `Use list_partner_candidates and get_partner_candidate to review candidates ${eligibleIds.join(', ')}. Apply your configured Partner Program criteria independently of the deterministic discovery priority. For each sufficiently supported candidate, use propose_request with kind application, cite only stored artifact ids, include discovery.candidate_id, and state every evidence gap. Do not contact anyone or claim the candidate applied.`
+      ? `Use list_partner_candidates and get_partner_candidate to review candidates ${eligibleIds.join(', ')}. Apply your configured Partner Program criteria independently of the deterministic discovery priority. Cite only stored artifact ids and state every evidence gap. Do not contact anyone, claim the candidate applied, or create an application request for a discovered prospect.`
       : 'The connector found no candidate at or above the configured discovery-priority threshold. Review the evidence gaps before changing the source query or ranking policy.';
   return partnerScreeningSnapshotSchema.parse({
     run: {

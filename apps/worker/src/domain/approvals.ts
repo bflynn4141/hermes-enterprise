@@ -145,7 +145,7 @@ async function idempotencyLock(tx: Tx, workspaceId: string, key: string): Promis
 
 async function activeMembers(tx: Tx, workspaceId: string): Promise<MemberRow[]> {
   const { rows } = await tx.query<MemberRow>(
-    `SELECT m.id, m.user_id, u.name, u.email, m.role, m.reviewer_roles
+    `SELECT m.id, m.user_id, COALESCE(u.name, u.email, 'Member') AS name, u.email, m.role, m.reviewer_roles
        FROM members m
        JOIN users u ON u.id = m.user_id
       WHERE m.workspace_id = $1 AND m.status = 'active'`,
@@ -365,7 +365,7 @@ async function resolveResourceBindings(
   if (proposal.approval_type === 'communication') {
     bindings.push({
       kind: 'artifact', id: 'communication-body', version: null,
-      sha256: await sha256({ sender: proposal.details.sender, recipients: proposal.details.recipients, subject: proposal.details.subject, body: proposal.details.body }),
+      sha256: await sha256({ draft_only: proposal.details.draft_only, sender: proposal.details.sender, recipients: proposal.details.recipients, subject: proposal.details.subject, body: proposal.details.body }),
       immutable: true, executor_available: false, reason: NO_EXECUTOR,
     });
     for (const attachment of proposal.details.attachments) {
@@ -434,6 +434,9 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
     proposal.approval_type === 'record_change' ? 'record_change' :
     proposal.approval_type === 'agent_governance' ? 'agent_governance_change' : 'none';
   if (kind === 'none') return { kind, status: 'not_required', reason: null };
+  if (proposal.approval_type === 'communication' && proposal.details.draft_only) {
+    return { kind, status: 'not_required', reason: 'Draft only. Approval records the reviewed copy and does not send it.' };
+  }
   const unbound = bindings.find((binding) => !binding.immutable);
   return { kind, status: 'unavailable', reason: unbound?.reason ?? NO_EXECUTOR };
 }
@@ -579,7 +582,7 @@ async function votesFor(tx: Tx, row: ApprovalRow): Promise<VoteRow[]> {
   const { rows } = await tx.query<VoteRow>(
     `SELECT v.id, v.step_id, v.decision, v.revision AS authorization_revision,
             v.authorization_hash, v.reviewer_member_id, v.reviewer_user_id,
-            u.name AS reviewer_name, v.note, v.idempotency_key, v.recorded_at
+            COALESCE(u.name, u.email, 'Member') AS reviewer_name, v.note, v.idempotency_key, v.recorded_at
        FROM approval_votes v JOIN users u ON u.id = v.reviewer_user_id
       WHERE v.request_id = $1 AND v.revision = $2 AND v.authorization_hash = $3
       ORDER BY v.recorded_at, v.id`,

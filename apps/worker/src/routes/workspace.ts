@@ -42,6 +42,7 @@ interface AgentRow {
   name: string;
   responsibility: string | null;
   setup_step: string | null;
+  provisioning_status: string | null;
 }
 
 export async function loadBootstrap(
@@ -75,8 +76,9 @@ export async function loadBootstrap(
   );
 
   const agents = await tx.query<AgentRow>(
-    `SELECT id, name, responsibility, setup_step
+    `SELECT a.id, a.name, a.responsibility, a.setup_step, p.status AS provisioning_status
        FROM agents a
+       LEFT JOIN agent_provisioning p ON p.workspace_id=a.workspace_id AND p.agent_id=a.id
       WHERE a.workspace_id = $1
       ORDER BY
         CASE
@@ -233,6 +235,7 @@ export async function loadBootstrap(
       email: null,
       responsibility: agent.responsibility,
       setup_step: agent.setup_step,
+      provisioning_status: agent.provisioning_status,
     },
     capabilities: {
       email_ingress: false,

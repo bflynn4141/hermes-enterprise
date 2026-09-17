@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runtimeBindings, runtimeLocation } from '../../src/runtime/config.js';
+import { inviteeRuntimeAgentIds, runtimeBindings, runtimeLocation } from '../../src/runtime/config.js';
 
 const ws = '11111111-1111-4111-8111-111111111111';
 const agent = '44444444-4444-4444-8444-444444444444';
@@ -28,7 +28,23 @@ describe('session execution location after a runtime rollout', () => {
       baseUrl: 'https://runtime.example',
       apiKey: 'test',
       transport: 'native',
+      assignment: 'fixed',
+      agentCash: false,
     }]);
+  });
+
+  it('enumerates only explicitly attested AgentCash invitee capacity for this workspace', () => {
+    const poolAgent = '55555555-5555-4555-8555-555555555555';
+    const otherAgent = '66666666-6666-4666-8666-666666666666';
+    const configured = {
+      ...env('https://runtime.example'),
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agent]: { workspace_id: ws, base_url: 'https://fixed.example', api_key: 'fixed' },
+        [poolAgent]: { workspace_id: ws, base_url: 'https://pool.example', api_key: 'pool', assignment: 'invitee_pool', agentcash: true },
+        [otherAgent]: { workspace_id: ws, base_url: 'https://not-ready.example', api_key: 'other', assignment: 'invitee_pool' },
+      }),
+    };
+    expect(inviteeRuntimeAgentIds(configured, ws)).toEqual([poolAgent]);
   });
 
   it('fails health configuration when Hermes is enabled without a profile', () => {
