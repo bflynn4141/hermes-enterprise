@@ -452,7 +452,29 @@ export const authWorkspacesSchema = z
   .object({
     user: z.object({ id: uuidSchema, name: z.string().max(120), email: z.string().max(200) }).strict(),
     workspaces: z
-      .array(z.object({ id: uuidSchema, name: z.string().max(200), role: memberRoleSchema }).strict())
+      .array(
+        z
+          .object({
+            id: uuidSchema,
+            name: z.string().max(200),
+            role: memberRoleSchema,
+            /** A small, presentation-only sample. Full membership stays on `/members`. */
+            members: z
+              .array(
+                z
+                  .object({
+                    id: uuidSchema,
+                    name: z.string().max(200),
+                    avatar_url: z.url().max(2048).nullable(),
+                  })
+                  .strict(),
+              )
+              .max(4)
+              .default([]),
+            member_count: z.number().int().min(0).max(100_000).default(0),
+          })
+          .strict(),
+      )
       .max(200),
     authenticated_at: z.iso.datetime({ offset: true }),
   })

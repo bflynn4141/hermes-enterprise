@@ -75,17 +75,29 @@ test('every workspace navigation control has a visible result', async ({ page })
   for (const box of boxes) expect(box.height).toBeGreaterThanOrEqual(40);
   for (let index = 1; index < boxes.length; index += 1) expect(boxes[index]!.top - boxes[index - 1]!.bottom).toBeGreaterThanOrEqual(4);
 
+  // Text buttons keep a usable inset, and session state is a dot rather than
+  // a status word crammed into the title.
+  const paddedRows = sidebar.locator('.sidebar-workspace-control, .sidebar-row, button:has(> .account-trigger-marker)');
+  const insets = await paddedRows.evaluateAll((rows) => rows.map((row) => parseFloat(getComputedStyle(row).paddingLeft)));
+  for (const inset of insets) expect(inset).toBeGreaterThanOrEqual(10);
+  const sessionRows = sidebar.locator('.sidebar-row[data-session-row]');
+  await expect(sessionRows).toHaveCount(2);
+  await expect(sessionRows.first()).toHaveAttribute('data-session-status', /.+/);
+  await expect(sessionRows.first()).not.toContainText(/Ready|Working|Waiting|Stopped/);
+  const sessionBoxes = await sessionRows.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+  for (const height of sessionBoxes) expect(height).toBeGreaterThanOrEqual(40);
+
   await sidebar.getByRole('button', { name: 'Search sessions', exact: true }).click();
   const search = sidebar.getByRole('textbox', { name: 'Search session history' });
   await search.fill('Partner');
-  await expect(sidebar.locator('.sidebar-row[title]:not([aria-label])')).toHaveCount(1);
+  await expect(sidebar.locator('.sidebar-row[data-session-row]')).toHaveCount(1);
   await sidebar.getByRole('button', { name: 'Close session search', exact: true }).click();
   await expect(search).not.toBeVisible();
 
   // A recent session and New session both reopen Iris when it was hidden.
   await page.getByRole('button', { name: 'Hide Iris', exact: false }).first().click();
   await expect(page.locator('.pane-iris')).toHaveCount(0);
-  await sidebar.locator('.sidebar-row[title]:not([aria-label])').first().click();
+  await sidebar.locator('.sidebar-row[data-session-row]').first().click();
   await expect(page.locator('.pane-iris')).toBeVisible();
   await page.getByRole('button', { name: 'Hide Iris', exact: false }).first().click();
   await sidebar.getByRole('button', { name: 'New session', exact: true }).click();

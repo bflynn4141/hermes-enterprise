@@ -4801,3 +4801,81 @@ a person most needed to understand a run. Putting the intent selector among
 the persistent controls also caused the send button to jump to another row as
 the Iris pane was resized. One stable composer preserves orientation while
 still making clear whether the next message affects this run or follows it.
+
+---
+
+## C61. Agent activity is a truthful ambient signal, not a decorative loop
+
+**Decided September 16, 2026.** Agent Overview carries one compact activity
+surface that remains visible when the conversation is collapsed. It answers
+three questions without opening chat: whether Iris is working, waiting, stopped
+or idle; which task owns the current state; and, when a tool event exists, the
+exact tool name beside a short human translation. `get_document_text → Reading
+a source document` is intentionally both machine-legible and understandable.
+The full arguments and results remain in the trace.
+
+Live session state wins across the agent's sessions. When no run is live, the
+newest server-sorted trace supplies the last real activity; a fresh workspace
+says `No active work right now`. Only `working` animates. Waiting, stopped and
+idle states are static, and the member's reduced-motion preference disables the
+working mark and pulse as well. No timer cycles through fake steps, and this UI
+does not claim to add background scheduling: actual proactive work still needs
+a real workflow or scheduled run to emit these events.
+
+**Why.** GitHub's agent panel uses live session status and a drill-down session
+log; Replit separates Draft, Active, Queued, Ready and Done, then pairs finished
+work with its work log and test results; Cursor's background-agent surface keeps
+status available outside the main conversation. The shared pattern is ambient
+state first, evidence on demand—not an animated avatar with no operational
+meaning.
+
+**Evidence.** `agent-activity.test.ts` covers live, waiting, recent-trace and
+idle derivation. `agent-activity.spec.ts` proves a real mock run remains visible
+after Iris collapses, pairs a tool with its human wording, keeps idle still and
+removes all activity animation when reduced motion is on.
+
+- https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents
+- https://docs.replit.com/core-concepts/agent/task-system
+- https://docs.cursor.com/background-agent
+
+---
+
+## C62. Workspace identity is carried by artwork and real member presence
+
+**Decided September 16, 2026.** The workspace picker uses a responsive card
+grid rather than administrative list rows. Each workspace gets one of three
+project-owned technical-art illustrations selected by its purpose (interview,
+partner network or finance/analysis), with the workspace name, the viewer's
+role, the real member count and up to four real member avatars or initials. A
+workspace can be opened from the whole card; creating another workspace is a
+quieter dashed card in the same grid.
+
+The visual direction combines the product's existing deep navy, cobalt and
+condensed display face with the more tactile Nous language visible across its
+public research and Portal surfaces: constrained ink colours, technical
+diagrams, halftone grain and archival/manual geometry. The illustrations have
+no embedded text, logos or invented people. They are compressed WebP assets,
+and the build copies the public asset tree into the exact directory served by
+the Worker.
+
+**Data boundary.** `GET /auth/session` without a workspace id now includes a
+presentation-only preview of four active members and a count, selected only
+from workspace ids the authenticated user already belongs to. It omits email,
+reviewer authority and membership metadata; the full records remain on the
+workspace-scoped `/members` route. Initials are the fallback when WorkOS has no
+profile image.
+
+**Motion and access.** Hover raises the card three pixels and slightly enlarges
+its artwork to clarify that the whole surface is interactive. Keyboard focus
+uses the existing visible outline. The global reduced-motion path removes both
+transforms, and the 390 px layout becomes one column without horizontal
+overflow.
+
+**Evidence.** Shared, client and Worker unit suites pass; Chromium covers empty,
+single and multi-workspace directories and their member previews. A rendered
+pass verified the current one-workspace layout, the 390 px layout, artwork load,
+keyboard focus and an empty browser error log.
+
+- https://nousresearch.com/
+- https://portal.nousresearch.com/
+- https://nousresearch.com/wp-content/uploads/2025/08/Hermes_4_Technical_Report.pdf

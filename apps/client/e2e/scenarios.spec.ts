@@ -90,7 +90,7 @@ test.describe('P1 · onboarding', () => {
 
 test.describe('workspace picker states', () => {
   const user = { id: '00000000-0000-4000-8000-000000000100', name: 'Maya Chen', email: 'maya@nous.example' };
-  const directory = (workspaces: { id: string; name: string; role: 'admin' | 'member' }[]) => ({
+  const directory = (workspaces: { id: string; name: string; role: 'admin' | 'member'; members?: { id: string; name: string; avatar_url: string | null }[]; member_count?: number }[]) => ({
     user,
     workspaces,
     authenticated_at: '2026-10-12T09:49:00.000Z',
@@ -99,6 +99,11 @@ test.describe('workspace picker states', () => {
     id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
     name,
     role,
+    members: [
+      { id: user.id, name: user.name, avatar_url: null },
+      { id: `00000000-0000-4000-8001-${String(index).padStart(12, '0')}`, name: index === 1 ? 'Alex Rivera' : 'Noor Patel', avatar_url: null },
+    ],
+    member_count: 2,
   });
 
   test('signed-out and no-membership responses remain distinct', async ({ page }) => {
@@ -121,13 +126,14 @@ test.describe('workspace picker states', () => {
     response = directory([workspace(1, 'Partner Program')]);
     await page.reload();
     await expect(page.getByText('Partner Program')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Open →' })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Open Partner Program' })).toHaveCount(1);
+    await expect(page.getByLabel('Members: Maya Chen, Alex Rivera')).toBeVisible();
 
     response = directory([workspace(1, 'Partner Program'), workspace(2, 'Finance Review', 'member')]);
     await page.reload();
     await expect(page.getByText('Partner Program')).toBeVisible();
     await expect(page.getByText('Finance Review')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Open →' })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: /Open (Partner Program|Finance Review)/ })).toHaveCount(2);
   });
 
   test('a network failure offers an explicit retry', async ({ page }) => {

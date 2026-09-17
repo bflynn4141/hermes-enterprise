@@ -11,14 +11,14 @@
 // below, which also carries the dev account switcher — and that switcher exists
 // only when `__AUTH_MODE__` is `fake`, a build-time constant, so neither it nor
 // the string `x-dev-user` survives into a production bundle (spec §12.8).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SidebarNav } from '@hermes/motion-components';
 import { HISTORY, INBOX, LIB, MEMBERS, OV, SETTINGS, type Ref } from '@hermes/shared';
 import { useAppState, useAdapter, useDispatch, useNav } from './store-context.js';
 import { Glass, Icon } from './ui/icons.js';
 import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
 import { DEV_USERS } from '../model/auth.js';
-import { sessionRowTitle, sessionStatusLabel, visibleSessions, type SessionState } from '../model/store.js';
+import { sessionRowTitle, sessionStatusLabel, visibleSessions } from '../model/store.js';
 import { requestComposerFocus } from './panel.js';
 
 const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
@@ -53,19 +53,27 @@ export function Sidebar() {
       : {}),
   }));
 
-  // The status label belongs on the row — the demo showed it and people steer by
-  // it — and `SidebarNav` renders `label` and nothing else: `prompt` reaches
-  // `onPick` and is never drawn, and there is no slot for a second span. So the
-  // status is part of the label, and `activeTitle` is decorated the same way,
-  // because the library decides which row is current by comparing those two
-  // strings. The library is not ours to edit (decision C35).
-  const rowLabel = (session: SessionState): string => {
-    const status = sessionStatusLabel(session);
-    return status ? `${sessionRowTitle(session)} · ${status}` : sessionRowTitle(session);
-  };
   const sessions = visibleSessions(state);
-  const recents = sessions.map((session) => ({ id: session.id, label: rowLabel(session) }));
+  const recents = sessions.map((session) => ({ id: session.id, label: sessionRowTitle(session) }));
   const active = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+
+  // SidebarNav intentionally accepts plain strings for recent rows. Annotate
+  // those buttons before paint so status stays available to assistive tech and
+  // CSS can render the compact dot without putting "Ready" back in the title.
+  useLayoutEffect(() => {
+    const host = sidebarRef.current;
+    if (!host) return;
+    const rows = host.querySelectorAll<HTMLButtonElement>('button.sidebar-row[data-session-row], button.sidebar-row[title]:not([aria-label])');
+    rows.forEach((row, index) => {
+      const session = sessions[index];
+      if (!session) return;
+      const title = sessionRowTitle(session);
+      const status = sessionStatusLabel(session);
+      row.dataset.sessionRow = 'true';
+      row.dataset.sessionStatus = status.toLowerCase() || 'empty';
+      row.setAttribute('aria-label', status ? `${title}, ${status}` : title);
+    });
+  }, [sessions]);
 
   // SidebarNav owns its disclosure state, but the shell owns the grid column
   // around it. Mirror the component's public data attribute so collapsing the
@@ -107,7 +115,7 @@ export function Sidebar() {
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}
         navItems={navItems}
         activeNav={state.ui.app.section}
-        activeTitle={active ? rowLabel(active) : null}
+        activeTitle={active ? sessionRowTitle(active) : null}
         recents={recents}
         // Name only. The member counts live in the Members header and in the
         // workspace menu; a headcount pinned under your own avatar is a number
