@@ -45,3 +45,25 @@ test('reduced motion presents received text without a character loop', async ({ 
   await expect(stream).toContainText('Leah scores 82 of 100.');
   expect(await stream.locator('.stream-caret').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
 });
+
+test('the live elapsed clock keeps the original run time after switching sessions', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('textbox', { name: 'Message Iris' }).fill('Review the newest partner application');
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  const elapsed = page.locator('.live-run-elapsed');
+  await expect(elapsed).toBeVisible();
+  await expect(page.locator('.live-run-status--authoritative > [role="status"] > .font-mono')).toBeHidden();
+  await expect.poll(async () => Number.parseFloat((await elapsed.textContent()) ?? '0')).toBeGreaterThanOrEqual(0.4);
+  const before = Number.parseFloat((await elapsed.textContent()) ?? '0');
+
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Sessions' }).getByRole('button', { name: /^Provider documents/ }).click();
+  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Sessions' }).getByRole('button', { name: /^Partner applications/ }).click();
+
+  await expect(elapsed).toBeVisible();
+  const after = Number.parseFloat((await elapsed.textContent()) ?? '0');
+  expect(after).toBeGreaterThan(before);
+});

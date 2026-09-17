@@ -4967,3 +4967,31 @@ movement and needs no separate reduced-motion behavior.
 Chromium browser scenarios pass. A native in-app-browser render at constrained
 height confirmed the rail, energy line and focal glow on simultaneous
 conversation and application scroll surfaces.
+
+---
+
+## C66. Live elapsed time belongs to the run, not the mounted component
+
+**Decided September 17, 2026.** The active chat timer derives from the durable
+`run.started` event timestamp. The optimistic turn uses the local send time
+until that authoritative event reconciles it. Navigating to another session and
+back can remount the activity component, but it cannot make the run appear to
+have restarted.
+
+The bundled `LoadingState` stopwatch is intentionally hidden only when the
+server-backed timer is present. Its loader, phase label and reduced-motion
+behavior remain unchanged. The visible replacement is presentation-only for
+assistive technology so a ten-times-per-second clock does not repeatedly
+announce; the changing phase label remains the status announcement.
+
+Runtime readiness and the persisted run binding remain separate fail-closed
+checks. They are independent reads, so the official-runtime adapter starts the
+network health check and database lookup together instead of paying for them
+serially before submission. No model, effort, approval, tool or persistence
+behavior changes.
+
+**Evidence.** A remount regression renders the same run at 3.7 seconds and
+again at 24.1 seconds from its original timestamp. Store coverage verifies the
+event time reaches the cached run. Runtime coverage holds the submission
+readiness check open until the concurrent binding lookup starts, proving the
+calls no longer serialize while both checks still execute.

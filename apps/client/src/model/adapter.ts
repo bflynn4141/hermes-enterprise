@@ -656,6 +656,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         steps: [],
         queue: [],
         guidance: null,
+        started_at: new Date(now()).toISOString(),
       };
       // Paint the person's message and Iris's working state before the first
       // network await. Server events replace both; this state never claims the

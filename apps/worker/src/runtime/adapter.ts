@@ -80,8 +80,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       // A Workflow callback may be replaying after either process restarted.
       // Re-read the live contract before trusting a persisted binding or
       // replaying the stable idempotency key.
-      await client.capabilities();
-      const existing = await db.binding(run.id);
+      const [, existing] = await Promise.all([
+        client.capabilities(),
+        db.binding(run.id),
+      ]);
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
       const history = await db.loadHistory(run.id, 100);
       const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
