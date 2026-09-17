@@ -4879,3 +4879,29 @@ keyboard focus and an empty browser error log.
 - https://nousresearch.com/
 - https://portal.nousresearch.com/
 - https://nousresearch.com/wp-content/uploads/2025/08/Hermes_4_Technical_Report.pdf
+
+---
+
+## C63. Idle activity describes the finished task, not a runtime phase
+
+**Decided September 16, 2026.** The Overview card uses the task/session title
+for a terminal run. The generic Hermes `Thinking` step is execution metadata;
+its completed label must never appear as the last task beside `Idle`. A
+completed response without a tool call says `Response completed · No tool calls`.
+
+When a tool was called, a dedicated wrapping row keeps its name and plain-language
+outcome visible. Native Hermes steps preserve the raw tool identifier, matching
+enterprise bridge steps. Older humanized labels remain intact in history and
+can still receive a readable translation. A failed tool says it failed; an
+unfinished tool on a terminal run never claims success or ongoing execution.
+
+Motion follows real state: the tool indicator pulses only during an active call
+on a working run. Tool/state changes use the existing 160 ms, 4 px reveal;
+completed and waiting calls remain still. App and system reduced-motion settings
+remove the loops and reveal travel. Task and tool text wrap at narrow pane widths.
+
+**Verification.** The observed staging trace was completed with one done
+`Thinking` step and no tool calls. Regression tests reproduce that exact shape,
+terminal tool states, and failed versus stopped runs. Mock browser coverage
+checks the no-tool card, last-tool visibility in a narrow pane, collapsed Iris
+activity and reduced motion. Activity browser tests now run in the CI mock suite.

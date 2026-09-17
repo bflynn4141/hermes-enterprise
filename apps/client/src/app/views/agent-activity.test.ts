@@ -138,4 +138,64 @@ describe('agent activity', () => {
     const activity = agentActivity(state(session()), [trace({ status: 'Awaiting review', needs_you: true, steps: [{ id: 'wait', label: 'Waiting for a human decision', state: 'active' }] })]);
     expect(activity).toMatchObject({ state: 'waiting', status: 'Waiting for you', task: 'Waiting for a human decision' });
   });
+
+  it('shows the completed task instead of the runtime Thinking step while idle', () => {
+    const activity = agentActivity(state(session()), [trace({
+      steps: [{ id: 'hermes', label: 'Thinking', state: 'done', tool_call_id: null }],
+    })]);
+    expect(activity).toMatchObject({
+      state: 'idle', task: 'Screen an application', action: 'Response completed · No tool calls', tool: null,
+    });
+  });
+
+  it('keeps the last real tool visible after a terminal Thinking step', () => {
+    const activity = agentActivity(state(session()), [trace({ steps: [
+      { id: 'call-1', label: 'get_document_text', state: 'done', tool_call_id: 'call-1' },
+      { id: 'hermes', label: 'Thinking', state: 'done' },
+    ] })]);
+    expect(activity).toMatchObject({
+      state: 'idle', task: 'Screen an application',
+      tool: { name: 'get_document_text', summary: 'Read a source document', state: 'complete' },
+    });
+  });
+
+  it('does not claim an unfinished tool succeeded or is still running after a stopped run', () => {
+    const activity = agentActivity(state(session()), [trace({ status: 'stopped', steps: [
+      { id: 'call-1', label: 'get_document_text', state: 'active', tool_call_id: 'call-1' },
+    ] })]);
+    expect(activity.tool).toMatchObject({ state: 'interrupted', summary: 'Stopped before completion' });
+  });
+
+  it('reports a failed tool as failed rather than describing a successful action', () => {
+    const activity = agentActivity(state(session()), [trace({ status: 'error', steps: [
+      { id: 'call-1', label: 'get_document_text', state: 'failed', tool_call_id: 'call-1' },
+    ] })]);
+    expect(activity.tool).toMatchObject({ state: 'failed', summary: 'Tool failed' });
+  });
+
+  it('does not call a tool active when its run is waiting for a person', () => {
+    const activity = agentActivity(state(session()), [trace({ status: 'waiting', steps: [
+      { id: 'call-1', label: 'ask_for_context', state: 'active', tool_call_id: 'call-1' },
+    ] })]);
+    expect(activity.tool).toMatchObject({ state: 'waiting', summary: 'Waiting for a response' });
+  });
+
+  it('distinguishes a runtime failure from an explicit stop', () => {
+    const noTool = agentActivity(state(session()), [trace({ status: 'error', steps: [
+      { id: 'hermes', label: 'Thinking', state: 'active' },
+    ] })]);
+    expect(noTool).toMatchObject({ state: 'stopped', task: 'Screen an application', action: 'Run failed' });
+    const unfinishedTool = agentActivity(state(session()), [trace({ status: 'error', steps: [
+      { id: 'call-1', label: 'get_document_text', state: 'active', tool_call_id: 'call-1' },
+    ] })]);
+    expect(unfinishedTool.tool).toMatchObject({ state: 'interrupted', summary: 'Completion not recorded' });
+  });
+
+  it('uses the last actual call rather than an older unfinished step after completion', () => {
+    const activity = agentActivity(state(session()), [trace({ steps: [
+      { id: 'old', label: 'get_request', state: 'active', tool_call_id: 'old' },
+      { id: 'latest', label: 'get_document_text', state: 'done', tool_call_id: 'latest' },
+    ] })]);
+    expect(activity.tool).toMatchObject({ name: 'get_document_text', state: 'complete' });
+  });
 });

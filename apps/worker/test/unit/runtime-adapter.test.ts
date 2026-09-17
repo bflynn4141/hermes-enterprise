@@ -1,7 +1,7 @@
 // Native Hermes owns execution; these tests prove the enterprise projection
 // survives retries, reconciles status, and keeps Stop honest.
 import { assertRunLog } from '@hermes/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence } from '../../src/runtime/adapter.js';
@@ -164,7 +164,7 @@ describe('official Hermes enterprise projection', () => {
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
   });
 
-  it('projects native Hermes tool activity while the answer is still pending', async () => {
+  it('preserves exact native tool identifiers in live activity and persisted steps', async () => {
     class ToolActivityClient extends FakeHermesClient {
       override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
         this.eventSubscriptions += 1;
@@ -179,17 +179,21 @@ describe('official Hermes enterprise projection', () => {
       }
     }
 
-    const { db } = await execute(new FakeRuntimeDb(), new ToolActivityClient());
+    const db = new FakeRuntimeDb();
+    const enteredSteps = vi.spyOn(db, 'enterStep');
+    await execute(db, new ToolActivityClient());
     const activity = db.events
       .filter((event) => event.kind === 'run.step' && Boolean((event.payload as { tool_call_id?: string | null }).tool_call_id))
       .map((event) => event.payload as { step_id: string; label: string; state: string; tool_call_id: string });
 
     expect(activity).toEqual([
-      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'List partner candidates', state: 'active', tool_call_id: 'hermes-tool-1' }),
-      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'List partner candidates', state: 'done', tool_call_id: 'hermes-tool-1' }),
-      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'Get partner candidate', state: 'active', tool_call_id: 'hermes-tool-2' }),
-      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'Get partner candidate', state: 'done', tool_call_id: 'hermes-tool-2' }),
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'list_partner_candidates', state: 'active', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'list_partner_candidates', state: 'done', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'get_partner_candidate', state: 'active', tool_call_id: 'hermes-tool-2' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'get_partner_candidate', state: 'done', tool_call_id: 'hermes-tool-2' }),
     ]);
+    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'list_partner_candidates', toolCallId: 'hermes-tool-1' }));
+    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'get_partner_candidate', toolCallId: 'hermes-tool-2' }));
     expect(db.steps.get('0:hermes-tool-1')?.state).toBe('done');
     expect(db.steps.get('0:hermes-tool-2')?.state).toBe('done');
   });

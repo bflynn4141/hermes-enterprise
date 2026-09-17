@@ -7,6 +7,7 @@ test('the overview stays live after Iris is collapsed', async ({ page }) => {
   const card = activity(page);
 
   await expect(card.getByRole('status')).toHaveText('Waiting for you');
+  await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
   await expect(card.getByText('propose_request', { exact: true })).toBeVisible();
   await expect(card.getByText('Prepared a review request', { exact: true })).toBeVisible();
 
@@ -44,4 +45,29 @@ test('idle and reduced-motion states remain still', async ({ page }) => {
 
   expect(await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
   expect(await card.locator('.orbit').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  await expect(card.locator('.agent-tool-pair i')).toBeVisible();
+  expect(await card.locator('.agent-tool-pair i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+});
+
+test('a completed no-tool Hermes run never looks like it is still thinking', async ({ page }) => {
+  await page.goto('/?activity=completed');
+  const card = activity(page);
+  await expect(card.getByRole('status')).toHaveText('Idle');
+  await expect(card.getByText('Explain partner screening', { exact: true })).toBeVisible();
+  await expect(card.getByText('Response completed · No tool calls', { exact: true })).toBeVisible();
+  await expect(card.getByText('Thinking', { exact: true })).toHaveCount(0);
+  await expect(card.locator('.agent-tool-pair')).toHaveCount(0);
+  expect(await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+});
+
+test('a completed run keeps its last tool visible when the pane is narrow', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto('/?activity=completed-tool');
+  const card = activity(page);
+  await expect(card.getByRole('status')).toHaveText('Idle');
+  await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
+  await expect(card).toContainText(/get_document_text\s*→\s*Read a source document/);
+  await expect(card.locator('.agent-tool-pair')).toHaveAttribute('data-tool-state', 'complete');
+  expect(await card.locator('.agent-tool-pair i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });

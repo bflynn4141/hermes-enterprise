@@ -6,7 +6,7 @@ export type AgentActivityState = 'working' | 'waiting' | 'stopped' | 'idle';
 export interface AgentActivityTool {
   name: string;
   summary: string;
-  state: 'active' | 'complete' | 'failed';
+  state: 'active' | 'complete' | 'failed' | 'waiting' | 'interrupted';
 }
 
 export interface AgentActivity {
@@ -14,6 +14,7 @@ export interface AgentActivity {
   status: string;
   label: string;
   task: string;
+  action: string | null;
   tool: AgentActivityTool | null;
   traceId: string | null;
   key: string;
@@ -44,28 +45,46 @@ const TOOL_WORDS: Readonly<Record<string, ToolWords>> = {
   propose_instruction: { active: 'Drafting an instruction update', complete: 'Drafted an instruction update' },
   ask_for_context: { active: 'Asking for missing context', complete: 'Asked for missing context' },
   set_focus: { active: 'Opening the relevant record', complete: 'Opened the relevant record' },
+  list_partner_candidates: { active: 'Checking partner candidates', complete: 'Checked partner candidates' },
+  get_partner_candidate: { active: 'Reviewing a partner candidate', complete: 'Reviewed a partner candidate' },
+  web_search: { active: 'Searching the web', complete: 'Searched the web' },
+  web_extract: { active: 'Reading a web page', complete: 'Read a web page' },
+  terminal: { active: 'Running a command', complete: 'Ran a command' },
 };
 
 function readableTool(name: string, active: boolean): string {
-  const known = TOOL_WORDS[name];
+  // Older native traces stored a humanized label. Translate it without
+  // pretending we can reconstruct the original identifier for display.
+  const known = TOOL_WORDS[name.toLowerCase().replace(/\s+/g, '_')];
   if (known) return active ? known.active : known.complete;
   const words = name.replace(/[_-]+/g, ' ').trim();
   if (!words) return active ? 'Using a tool' : 'Used a tool';
   return `${active ? 'Using' : 'Used'} ${words}`;
 }
 
-function toolFromStep(step: TraceEntity['steps'][number] | undefined): AgentActivityTool | null {
+const failedRun = (status: string): boolean => ['error', 'failed'].includes(status.trim().toLowerCase());
+
+function toolFromStep(step: TraceEntity['steps'][number] | undefined, runState: AgentActivityState, runStatus: string): AgentActivityTool | null {
   if (!step?.tool_call_id) return null;
-  const state = step.state === 'active' ? 'active' : step.state === 'failed' ? 'failed' : 'complete';
+  // An orphaned/stopped run can leave a step active. Only the run can say
+  // whether work is still happening; missing completion is never success.
+  const state = step.state === 'failed' ? 'failed'
+    : step.state === 'done' ? 'complete'
+      : runState === 'working' ? 'active'
+        : runState === 'waiting' ? 'waiting' : 'interrupted';
+  const summary = state === 'failed' ? 'Tool failed'
+    : state === 'waiting' ? 'Waiting for a response'
+      : state === 'interrupted' ? (runStatus.trim().toLowerCase() === 'stopped' ? 'Stopped before completion' : 'Completion not recorded')
+        : readableTool(step.label, state === 'active');
   return {
     name: step.label,
-    summary: readableTool(step.label, state === 'active'),
+    summary,
     state,
   };
 }
 
 function latestTool(steps: TraceEntity['steps']): TraceEntity['steps'][number] | undefined {
-  return [...steps].reverse().find((step) => Boolean(step.tool_call_id));
+  return [...steps].reverse().find((step) => step.state !== 'todo' && Boolean(step.tool_call_id));
 }
 
 function liveState(session: SessionState): Exclude<AgentActivityState, 'idle'> | null {
@@ -101,7 +120,8 @@ function activeStep(session: SessionState): TraceEntity['steps'][number] | undef
 function fromLive(session: SessionState, state: Exclude<AgentActivityState, 'idle'>): AgentActivity {
   const run = session.run;
   const current = activeStep(session);
-  const tool = toolFromStep(current?.tool_call_id ? current : latestTool(run?.steps ?? []));
+  const toolStep = state === 'working' && current?.tool_call_id && current.state === 'active' ? current : latestTool(run?.steps ?? []);
+  const tool = toolFromStep(toolStep, state, run?.status ?? session.status);
   const waitingOn = run?.waiting_label?.trim();
   const error = run?.error?.message?.trim();
   const task = state === 'waiting' && waitingOn
@@ -116,9 +136,10 @@ function fromLive(session: SessionState, state: Exclude<AgentActivityState, 'idl
     status,
     label,
     task,
+    action: tool ? null : state === 'working' ? (current?.label || 'Preparing a response') : state === 'waiting' ? 'Waiting for your input' : failedRun(run?.status ?? session.status) ? 'Run failed' : 'Run stopped',
     tool,
     traceId: run?.id ?? null,
-    key: `${state}:${run?.id ?? session.id}:${current?.id ?? ''}:${current?.state ?? ''}`,
+    key: `${state}:${run?.id ?? session.id}:${current?.id ?? ''}:${current?.state ?? ''}:${toolStep?.id ?? ''}:${tool?.state ?? ''}`,
   };
 }
 
@@ -133,15 +154,22 @@ function traceState(trace: TraceEntity): AgentActivityState {
 function fromTrace(trace: TraceEntity): AgentActivity {
   const state = traceState(trace);
   const current = [...trace.steps].reverse().find((step) => step.state === 'active') ?? trace.steps.at(-1);
-  const tool = toolFromStep(current?.tool_call_id ? current : latestTool(trace.steps));
+  const toolStep = state === 'working' && current?.tool_call_id && current.state === 'active' ? current : latestTool(trace.steps);
+  const tool = toolFromStep(toolStep, state, trace.status);
   return {
     state,
     status: state === 'working' ? 'Working now' : state === 'waiting' ? 'Waiting for you' : state === 'stopped' ? 'Needs attention' : 'Idle',
     label: state === 'working' ? 'Current task' : state === 'waiting' ? 'Blocked on' : 'Last task',
-    task: current?.label && !current.tool_call_id ? current.label : trace.name,
+    // Step labels describe execution, not the task. A completed "Thinking"
+    // step must not read as current activity on an idle card.
+    task: state === 'waiting' && current?.label && !current.tool_call_id ? current.label : trace.name,
+    action: tool ? null : state === 'working' ? (current?.label || 'Preparing a response')
+      : state === 'waiting' ? 'Waiting for your input'
+        : state === 'stopped' ? (failedRun(trace.status) ? 'Run failed' : 'Run stopped')
+          : trace.status.toLowerCase() === 'completed' ? 'Response completed · No tool calls' : 'No tool calls recorded',
     tool,
     traceId: trace.id,
-    key: `${state}:${trace.id}:${current?.id ?? ''}:${current?.state ?? ''}`,
+    key: `${state}:${trace.id}:${current?.id ?? ''}:${current?.state ?? ''}:${toolStep?.id ?? ''}:${tool?.state ?? ''}`,
   };
 }
 
@@ -165,6 +193,7 @@ export function agentActivity(state: AppState, traces: readonly TraceEntity[]): 
     status: 'Idle',
     label: 'Current activity',
     task: recent && recent.title !== 'New session' ? `No active work · Last activity in ${recent.title}` : 'No active work right now',
+    action: null,
     tool: null,
     traceId: null,
     key: `idle:${recent?.id ?? 'none'}`,
