@@ -1017,6 +1017,7 @@ export function reduce(state: AppState, action: Action): AppState {
     // path almost every Iris message actually takes — so the rail's badge has to
     // count it, or a collapsed panel would sit at zero through a whole run.
     case 'stream/final': {
+      if (action.message.status === 'streaming') return state;
       const seen = state.sessions[action.sessionId]?.messages.some((m) => m.id === action.message.id) ?? false;
       const next = withSession(state, action.sessionId, (s) => ({
         ...s,

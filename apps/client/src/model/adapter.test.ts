@@ -140,6 +140,64 @@ function makeAdapter(overrides: Record<string, () => Response | Promise<Response
   return { store, adapter, calls, state: (): AppState => store.getState() };
 }
 
+const streamingPlaceholder = {
+  id: mockUuid(9), session_id: SESSION, seq: 1, role: 'iris', kind: null,
+  text: '', blocks: [], status: 'streaming', run_id: RUN, worked_ms: null, at: iso,
+};
+
+async function activeSnapshotFixture(snapshot: () => Response | Promise<Response>) {
+  let visibilityListener: (() => void) | null = null;
+  let armed = false;
+  let snapshotCalls = 0;
+  let runStatus = 'working';
+  const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  const { impl } = makeFetch({
+    [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => {
+      if (!armed) return json({ items: [], cursor: null, total: 0 });
+      snapshotCalls += 1;
+      return snapshot();
+    },
+    [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () => json({ run_id: RUN, status: runStatus, attempt: 1 }),
+  });
+  const store = createStore(initialState());
+  const adapter = createAdapter({
+    store, workspaceId: WS, auth: createAuth('fake'), fetchImpl: impl,
+    socketFactory: (url) => new FakeSocket(url), wsBase: 'ws://test.local',
+    visibility: {
+      hidden: false,
+      addEventListener: (_type, listener) => { visibilityListener = listener; },
+      removeEventListener: () => undefined,
+    },
+  });
+  await adapter.start();
+  const socket = FakeSocket.instances.find((item) => item.url.includes('/hub/session/'))!;
+  socket.open();
+  await vi.advanceTimersByTimeAsync(0);
+  socket.deliver(streamEvent('run.started', {
+    run_id: RUN, session_id: SESSION, attempt: 1, engine_version: 1, client_turn_id: 'snapshot-stream',
+    mode: 'work', model_id: 'deepseek-flash', effort: 'high', title: 'Streaming answer', steps: [],
+  }, 1n));
+  socket.deliver(streamEvent('message.reset', {
+    message_id: streamingPlaceholder.id, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1,
+  }, 2n));
+  socket.deliver({
+    type: 'message.preview', session_id: SESSION, run_id: RUN, turn: 0, attempt: 1,
+    step_attempt: 1, offset: 0, delta: 'First. Second.',
+  });
+  socket.deliver(streamEvent('message.delta', {
+    message_id: streamingPlaceholder.id, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, seq: 0, delta: 'First. ',
+  }, 3n));
+  return {
+    adapter, socket, store,
+    session: () => store.getState().sessions[SESSION]!,
+    arm() { armed = true; },
+    snapshotCalls: () => snapshotCalls,
+    show() { visibilityListener!(); },
+    setRunStatus(status: string) { runStatus = status; },
+    json,
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   FakeSocket.instances = [];
@@ -406,6 +464,92 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it.each(['scheduled', 'visibility'] as const)('preserves live text when a %s snapshot contains an empty streaming placeholder', async (trigger) => {
+    let snapshotMessage = { ...streamingPlaceholder };
+    const h = await activeSnapshotFixture(() => new Response(JSON.stringify({ items: [snapshotMessage], cursor: null, total: 1 }), {
+      headers: { 'content-type': 'application/json' },
+    }));
+    try {
+      expect(h.session().stream).toMatchObject({ status: 'streaming', text: 'First. Second.', durableText: 'First. ' });
+      h.arm();
+      if (trigger === 'visibility') h.show();
+      await vi.advanceTimersByTimeAsync(trigger === 'scheduled' ? 2000 : 0);
+      expect(h.snapshotCalls()).toBeGreaterThan(0);
+      expect(h.session().stream).toMatchObject({ status: 'streaming', text: 'First. Second.', durableText: 'First. ' });
+      expect(h.session().messages.some((message) => message.id === streamingPlaceholder.id && message.status !== 'streaming')).toBe(false);
+
+      h.socket.deliver(streamEvent('message.delta', {
+        message_id: streamingPlaceholder.id, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, seq: 1, delta: 'Second. Third.',
+      }, 4n));
+      expect(h.session().stream).toMatchObject({ status: 'streaming', text: 'First. Second. Third.', durableText: 'First. Second. Third.' });
+      snapshotMessage = { ...streamingPlaceholder, status: 'complete', text: 'First. Second. Third.' };
+      h.setRunStatus('completed');
+      h.socket.deliver(streamEvent('message.final', {
+        message_id: streamingPlaceholder.id, session_id: SESSION, run_id: RUN, turn: 0, attempt: 1,
+        text: snapshotMessage.text, blocks: [], incomplete: false, worked_ms: 2400,
+      }, 5n));
+      h.socket.deliver(streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed', active_ms: 2400 }, 6n));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.session().messages.filter((message) => message.id === streamingPlaceholder.id)).toHaveLength(1);
+      expect(h.session().messages.find((message) => message.id === streamingPlaceholder.id)).toMatchObject({ status: 'complete', text: snapshotMessage.text });
+      expect(h.session().run?.status).toBe('completed');
+    } finally { h.adapter.dispose(); }
+  });
+
+  it('does not let a stale streaming snapshot roll back a final received while the request was in flight', async () => {
+    let releaseSnapshot!: (response: Response) => void;
+    const pendingSnapshot = new Promise<Response>((resolve) => { releaseSnapshot = resolve; });
+    const h = await activeSnapshotFixture(() => pendingSnapshot);
+    try {
+      h.arm();
+      h.show();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.snapshotCalls()).toBe(1);
+      h.socket.deliver(streamEvent('message.final', {
+        message_id: streamingPlaceholder.id, session_id: SESSION, run_id: RUN, turn: 0, attempt: 1,
+        text: 'The genuine final answer.', blocks: [], incomplete: false, worked_ms: 2400,
+      }, 4n));
+      h.socket.deliver(streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed', active_ms: 2400 }, 5n));
+      expect(h.session().run?.status).toBe('completed');
+      releaseSnapshot(h.json({ items: [streamingPlaceholder], cursor: null, total: 1 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.session().messages.filter((message) => message.id === streamingPlaceholder.id)).toHaveLength(1);
+      expect(h.session().messages.find((message) => message.id === streamingPlaceholder.id)).toMatchObject({ status: 'complete', text: 'The genuine final answer.' });
+      expect(h.session().stream).toMatchObject({ status: 'complete', text: 'The genuine final answer.' });
+      expect(h.session().run?.status).toBe('completed');
+    } finally { releaseSnapshot(h.json({ items: [], cursor: null, total: 0 })); h.adapter.dispose(); }
+  });
+
+  it('ignores an old attempt snapshot that resolves after the same run begins a retry', async () => {
+    let releaseSnapshot!: (response: Response) => void;
+    const pendingSnapshot = new Promise<Response>((resolve) => { releaseSnapshot = resolve; });
+    const h = await activeSnapshotFixture(() => pendingSnapshot);
+    try {
+      h.arm();
+      h.show();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.snapshotCalls()).toBe(1);
+      h.socket.deliver(streamEvent('run.started', {
+        run_id: RUN, session_id: SESSION, attempt: 2, engine_version: 1, client_turn_id: 'snapshot-stream',
+        mode: 'work', model_id: 'deepseek-flash', effort: 'high', title: 'Retry', steps: [],
+      }, 4n));
+      h.socket.deliver(streamEvent('message.reset', {
+        message_id: streamingPlaceholder.id, run_id: RUN, turn: 0, attempt: 2, step_attempt: 2,
+      }, 5n));
+      h.socket.deliver({
+        type: 'message.preview', session_id: SESSION, run_id: RUN, turn: 0, attempt: 2,
+        step_attempt: 2, offset: 0, delta: 'New attempt prefix.',
+      });
+      releaseSnapshot(h.json({
+        items: [{ ...streamingPlaceholder, status: 'complete', text: 'Previous attempt answer.' }], cursor: null, total: 1,
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.session().run).toMatchObject({ attempt: 2, status: 'working' });
+      expect(h.session().stream).toMatchObject({ status: 'streaming', stepAttempt: 2, text: 'New attempt prefix.' });
+      expect(h.session().messages.some((message) => message.text === 'Previous attempt answer.')).toBe(false);
+    } finally { releaseSnapshot(h.json({ items: [], cursor: null, total: 0 })); h.adapter.dispose(); }
+  });
+
   it('uses a new workspace setup session as the first app-pane focus', async () => {
     const focused = {
       ...bootstrapBody,

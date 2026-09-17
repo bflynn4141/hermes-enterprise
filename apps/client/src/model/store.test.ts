@@ -400,6 +400,19 @@ describe('the entity cache', () => {
 });
 
 describe('streaming text and step_attempt', () => {
+  it('does not finalize a live reply from a persisted streaming placeholder', () => {
+    let state = reduce(base(), { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1 });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Rain drums steadily' });
+    const before = state;
+    state = reduce(state, { type: 'stream/final', sessionId: SESSION_A, message: {
+      id: MESSAGE, session_id: SESSION_A, seq: 1, role: 'iris', kind: null,
+      text: '', blocks: [], status: 'streaming', run_id: RUN,
+    } });
+    expect(state).toBe(before);
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({ text: 'Rain drums steadily', status: 'streaming' });
+    expect(state.sessions[SESSION_A]!.messages).toHaveLength(0);
+  });
+
   it('shows a preview immediately and reconciles committed overlap without duplication', () => {
     let state = reduce(base(), { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1 });
     state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Hello world' });
