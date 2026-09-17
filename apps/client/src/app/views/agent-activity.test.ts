@@ -24,6 +24,7 @@ function session(patch: Partial<SessionState> = {}): SessionState {
     oldestSeq: null,
     hasEarlier: false,
     draft: { text: '', attachments: [] },
+    pendingTurn: null,
     run: null,
     stream: null,
     focus: null,

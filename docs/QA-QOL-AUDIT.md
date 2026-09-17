@@ -1,12 +1,12 @@
 # Hermes Enterprise QA and quality-of-life audit
 
-September 15, 2026
+September 16, 2026
 
 ## Scope and baseline
 
-- Audited the isolated `codex/hermes-qa-qol` worktree from integrated baseline `75a6ef3359d8d2ca8a8e9b272d8a61544f4f6e08`.
+- Audited the isolated `codex/hermes-qa-qol` worktree and reconciled it with `origin/main` at `0230e29e8d3ed92bb5db0d36d6e5fb3e1b57079c`.
 - Exercised onboarding, the workspace picker, sidebar and pane navigation, Iris transcript/composer, Inbox list/detail and approval flows, Members, Settings, empty/error states, keyboard access, reduced motion, and 1440 px / 900 px layouts.
-- Provider/catalog code, provider-key settings, Hermes runtime integration, authentication architecture, schemas/migrations, deployment configuration, and the Nous Portal migration were not changed.
+- The QA changes leave provider/catalog behavior, provider-key settings, Hermes execution, database migrations, and deployment configuration unchanged. The bare authentication directory response now includes a bounded member preview for workspace cards; workspace authorization and full member records remain unchanged.
 
 ## Findings
 
@@ -36,7 +36,6 @@ September 15, 2026
 ## Remaining limitations
 
 - Mock onboarding validates client transitions and contract shapes; the existing live suite remains authoritative for persistence, invitation identity matching, and authorization.
-- External executor success/failure cannot be validated until the Nous provider migration supplies those integrations. The UI currently and deliberately shows effectful approvals as unavailable; it never claims that an email, access grant, disclosure, publication, record update, or agent configuration change occurred.
+- External action connectors are not configured. The UI deliberately shows effectful approvals as unavailable; it never claims that an email, access grant, disclosure, publication, record update, or agent configuration change occurred.
 - Workspace-directory success with multiple real memberships was not mutated in the shared database; the deterministic browser fixture covers rendering while the live suite remains authoritative for the real route.
 - This was desktop-browser and 900 px responsive emulation, not physical-device testing.
-- Re-run the focused composer, model-menu, Settings, and empty-state walkthrough after the Nous provider migration is integrated; this branch intentionally does not touch that concurrent scope.

@@ -4801,6 +4801,9 @@ a person most needed to understand a run. Putting the intent selector among
 the persistent controls also caused the send button to jump to another row as
 the Iris pane was resized. One stable composer preserves orientation while
 still making clear whether the next message affects this run or follows it.
+
+---
+
 ## C61. Agent activity is a truthful ambient signal, not a decorative loop
 
 **Decided September 16, 2026.** Agent Overview carries one compact activity
@@ -4837,7 +4840,7 @@ removes all activity animation when reduced motion is on.
 
 ---
 
-## C56. Workspace identity is carried by artwork and real member presence
+## C62. Workspace identity is carried by artwork and real member presence
 
 **Decided September 16, 2026.** The workspace picker uses a responsive card
 grid rather than administrative list rows. Each workspace gets one of three
