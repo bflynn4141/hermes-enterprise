@@ -7,7 +7,8 @@ import { buildSystemPrompt } from '../engine/prompt.js';
 import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
-import { HermesClient, HermesApiError, terminalHermesStatus } from './client.js';
+import { HermesClient, HermesApiError, terminalHermesStatus, type HermesStatus } from './client.js';
+import { StreamBuffer } from './stream-buffer.js';
 import type { RuntimeSkillManifest } from './skills.js';
 import type { MessagePreviewFrame } from '@hermes/shared';
 
@@ -35,11 +36,23 @@ export interface RuntimeDeps {
   pollMs?: number;
   /** Test seam for the durable stream coalescing window. */
   batchMs?: number;
+  /** Maximum tail-drain wait after authoritative completion without a native terminal frame. */
+  drainMs?: number;
+  /** Counts and relative timings only; never prompt, response, or tool contents. */
+  onStreamMetrics?(metrics: RuntimeStreamMetrics): void;
+}
+export interface RuntimeStreamMetrics {
+  first_delta_ms: number | null;
+  first_preview_ms: number | null;
+  first_checkpoint_ms: number | null;
+  delta_count: number;
+  delta_characters: number;
+  preview_count: number;
+  stream_end: 'terminal' | 'eof' | 'disconnected' | 'drain_timeout' | 'not_opened';
 }
 const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exponential' }, timeout: '1 minute' };
 // A failed stream is reconciled with native status, never replayed as a new run.
 const EXECUTION: StepConfig = { retries: { limit: 1, delay: 1000, backoff: 'constant' }, timeout: '60 minutes' };
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, input: RunAttemptInput): Promise<void> {
   const { db, client } = deps;
@@ -129,21 +142,38 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         { kind: 'message.reset', payload: { run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, message_id: messageId } },
       ]);
       let text = '';
-      let pending = '';
-      let previewPending = '';
-      let previewOffset = 0;
       let sequence = 0;
-      let flushedAt = 0;
-      let previewFlushedAt = 0;
-      let durableInFlight: Promise<void> | null = null;
-      let durableFailure: unknown = null;
       let stopFromForward = false;
       let nativeToolOrdinal = 0;
       let reasoningRecorded = false;
       const nativeTools: Array<{ tool: string; stepId: string; toolCallId: string; label: string }> = [];
       const pollMs = deps.pollMs ?? 1000;
       const batchMs = deps.batchMs ?? 75;
-      const previewMs = Math.min(batchMs, 75);
+      const drainMs = deps.drainMs ?? 1000;
+      const metrics: RuntimeStreamMetrics = {
+        first_delta_ms: null, first_preview_ms: null, first_checkpoint_ms: null,
+        delta_count: 0, delta_characters: 0, preview_count: 0, stream_end: 'not_opened',
+      };
+      // Tool activity and human controls share one pg client. Queue whole
+      // operations, including multi-query steps, rather than interleave their
+      // transactions. Production delta checkpoints have their own connection.
+      let dbTail = Promise.resolve();
+      let dbPending = 0;
+      let dbFailure: unknown = null;
+      const serialDb = <T>(work: () => Promise<T>): Promise<T> => {
+        if (++dbPending > 256) {
+          dbPending -= 1;
+          dbFailure ??= new Error('Hermes activity exceeded its pending event limit');
+          return Promise.reject(dbFailure);
+        }
+        const task = dbTail.then(() => {
+          if (dbFailure) throw dbFailure;
+          return work();
+        });
+        dbTail = task.then(() => undefined, (error: unknown) => { dbFailure ??= error; })
+          .finally(() => { dbPending -= 1; });
+        return task;
+      };
       const startNativeTool = async (tool: string) => {
         const ordinal = ++nativeToolOrdinal;
         const stepId = `hermes-tool-${ordinal}`;
@@ -195,133 +225,136 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           label: reasoning.label, state: 'done', tool_call_id: null,
         } }]);
       };
-      const flushPreview = async (force = false) => {
-        if (!previewPending || (!force && Date.now() - previewFlushedAt < previewMs)) return;
-        const delta = previewPending;
-        previewPending = '';
-        const offset = previewOffset;
-        previewOffset += delta.length;
-        previewFlushedAt = Date.now();
-        await deps.preview?.({
-          type: 'message.preview', session_id: run.sessionId, run_id: run.id,
-          turn: 0, attempt: run.attempt, step_attempt: stepAttempt, offset, delta,
-        }).catch(() => undefined);
-      };
-      const flush = (force = false) => {
-        if (durableInFlight || !pending || (!force && Date.now() - flushedAt < batchMs)) return;
-        const delta = pending; pending = '';
-        flushedAt = Date.now();
-        const task = (async () => {
-          try {
-            const saved = await (deps.checkpoint ?? ((events: EmitInput[]) => db.emit(events)))([{ kind: 'message.delta', sessionId: run.sessionId, payload: {
-              message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
-            } }]);
-            const reply = await deps.forward(run.sessionId, run.id, saved);
-            stopFromForward ||= reply.stop_requested;
-          } catch (error) {
-            durableFailure ??= error;
-          } finally {
-            durableInFlight = null;
-          }
-        })();
-        durableInFlight = task;
-      };
-      const drainDurable = async () => {
-        while (durableInFlight || pending) {
-          if (durableFailure) throw durableFailure;
-          if (!durableInFlight) flush(true);
-          if (durableInFlight) await durableInFlight;
-        }
-        if (durableFailure) throw durableFailure;
-      };
-      let status = await client.status(id);
+      const previews = new StreamBuffer(Math.min(batchMs, 75), async (delta, offset) => {
+        if (!deps.preview) return;
+        try {
+          await deps.preview({
+            type: 'message.preview', session_id: run.sessionId, run_id: run.id,
+            turn: 0, attempt: run.attempt, step_attempt: stepAttempt, offset, delta,
+          });
+          metrics.first_preview_ms ??= Date.now() - startedAt;
+          metrics.preview_count += 1;
+        } catch { /* Durable checkpoints repair a missed best-effort preview. */ }
+      });
+      const checkpoints = new StreamBuffer(batchMs, async (delta) => {
+        const events: EmitInput[] = [{ kind: 'message.delta', sessionId: run.sessionId, payload: {
+          message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
+        } }];
+        const saved = await (deps.checkpoint ? deps.checkpoint(events) : serialDb(() => db.emit(events)));
+        metrics.first_checkpoint_ms ??= Date.now() - startedAt;
+        const reply = await deps.forward(run.sessionId, run.id, saved);
+        stopFromForward ||= reply.stop_requested;
+      });
+      // A replay of a bound, completed run needs no second native subscriber.
+      // Fresh runs subscribe immediately, without waiting for a status RPC.
+      let status: HermesStatus = existingBinding?.runtimeRunId === id
+        ? await client.status(id)
+        : { run_id: id, status: 'running' };
       const controller = new AbortController();
-      const events = client.events(id, controller.signal)[Symbol.asyncIterator]();
-      let next = terminalHermesStatus(status.status) ? null : events.next().catch(() => null);
+      let reading = !terminalHermesStatus(status.status);
+      let readerFailure: unknown = null;
+      const controlWake: { current: (() => void) | null } = { current: null };
+      const reader = (async () => {
+        if (!reading) return;
+        try {
+          for await (const payload of client.events(id, controller.signal)) {
+            if (controller.signal.aborted) break;
+            // No network or database work is awaited by this sole native
+            // consumer. Its bounded lanes preserve order independently.
+            if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
+              if (text.length + payload.delta.length > 4 * 1024 * 1024) {
+                readerFailure = new Error('Hermes response exceeded its streaming limit');
+                break;
+              }
+              text += payload.delta;
+              visibleText = text;
+              metrics.first_delta_ms ??= Date.now() - startedAt;
+              metrics.delta_count += 1;
+              metrics.delta_characters += payload.delta.length;
+              previews.append(payload.delta);
+              checkpoints.append(payload.delta);
+            }
+            if (payload.event === 'tool.started' && typeof payload.tool === 'string') {
+              const tool = payload.tool;
+              void serialDb(() => startNativeTool(tool)).catch(() => undefined);
+            }
+            if (payload.event === 'tool.completed' && typeof payload.tool === 'string') {
+              const tool = payload.tool;
+              void serialDb(() => finishNativeTool(tool, payload.error === true)).catch(() => undefined);
+            }
+            if (payload.event === 'reasoning.available') {
+              void serialDb(recordReasoningBoundary).catch(() => undefined);
+            }
+            if (['run.completed', 'run.failed', 'run.cancelled'].includes(payload.event)) {
+              metrics.stream_end = 'terminal';
+              break;
+            }
+          }
+          if (metrics.stream_end === 'not_opened') metrics.stream_end = 'eof';
+        } catch {
+          // The pinned native queue cannot replay. Preserve received text and
+          // recover the authoritative result through status, never resubmit.
+          if (!controller.signal.aborted) metrics.stream_end = 'disconnected';
+        } finally {
+          reading = false;
+          previews.flush(true);
+          checkpoints.flush(true);
+          controlWake.current?.();
+        }
+      })();
       let stopped = stopAtStart;
       const sentGuidance = new Map<string, string>();
-      let lastControlCheck = 0;
       const deadline = Date.now() + 55 * 60_000;
       try {
         while (!terminalHermesStatus(status.status)) {
           if (Date.now() >= deadline) throw new Error('Hermes run exceeded its execution time limit');
-          // A short delta that arrives inside the coalescing window still gets
-          // a trailing deadline. Waiting only for the next native frame left
-          // that text parked until the one-second status poll when the model
-          // paused after a token burst.
-          const untilBatch = pending && !durableInFlight ? Math.max(0, batchMs - (Date.now() - flushedAt)) : pollMs;
-          const untilPreview = previewPending ? Math.max(0, previewMs - (Date.now() - previewFlushedAt)) : pollMs;
-          const waitMs = Math.min(pollMs, untilBatch, untilPreview);
-          const wake: Array<Promise<Awaited<NonNullable<typeof next>> | undefined>> = [delay(waitMs).then(() => undefined)];
-          if (next) wake.push(next);
-          const activeWrite = durableInFlight as Promise<void> | null;
-          if (activeWrite) wake.push(activeWrite.then(() => undefined));
-          const event = await Promise.race(wake);
-          if (event === null || event?.done) {
-            // `read1` can surface the last native bytes immediately before EOF
-            // or a disconnect. Publish them now; the status poll is recovery,
-            // not part of the person's text latency budget.
-            await flushPreview(true);
-            flush(true);
-            next = null;
-          }
-          else if (event?.value) {
-            const payload = event.value;
-            if (payload.event === 'tool.started' && typeof payload.tool === 'string') {
-              await startNativeTool(payload.tool);
-            }
-            if (payload.event === 'tool.completed' && typeof payload.tool === 'string') {
-              await finishNativeTool(payload.tool, payload.error === true);
-            }
-            if (payload.event === 'reasoning.available') {
-              await recordReasoningBoundary();
-            }
-            if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
-              text += payload.delta; pending += payload.delta; previewPending += payload.delta;
-              visibleText = text;
-              await flushPreview();
-              flush();
-            }
-            if (payload.event.startsWith('run.') && ['run.completed','run.failed','run.cancelled'].includes(payload.event)) {
-              // A terminal frame often follows the last token in the same TCP
-              // read. Do not hold that token behind a potentially slow status
-              // reconciliation request.
-              await flushPreview(true);
-              flush(true);
-              status = await client.status(id);
-            }
-            next = terminalHermesStatus(status.status) ? null : events.next().catch(() => null);
-          }
-          if (previewPending && Date.now() - previewFlushedAt >= previewMs) await flushPreview(true);
-          if (durableFailure) throw durableFailure;
-          if (!stopped && stopFromForward) {
+          if (readerFailure || dbFailure || checkpoints.failure) throw readerFailure ?? dbFailure ?? checkpoints.failure;
+          if (!stopped && (stopFromForward || await serialDb(() => db.stopRequested(run.id)))) {
             await client.stop(id);
             stopped = true;
           }
-          if (pending && Date.now() - flushedAt >= batchMs) flush(true);
-          if (Date.now() - lastControlCheck >= pollMs) {
-            lastControlCheck = Date.now();
-            if (!stopped && await db.stopRequested(run.id)) {
-              await client.stop(id); stopped = true;
+          if (!stopped) {
+            for (const row of await serialDb(() => db.loadGuidance(run.id))) {
+              if (row.status !== 'queued' || sentGuidance.has(row.id)) continue;
+              if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
             }
-            if (!stopped) {
-              for (const row of await db.loadGuidance(run.id)) {
-                if (row.status !== 'queued' || sentGuidance.has(row.id)) continue;
-                if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
-              }
-            }
-            await flushPreview(true);
-            flush(true);
-            status = await client.status(id);
           }
-          if (!next && !terminalHermesStatus(status.status)) await delay(pollMs);
+          status = await client.status(id);
+          if (terminalHermesStatus(status.status)) break;
+          // EOF wakes an in-progress wait once. A disconnected stream keeps
+          // the bounded status polling cadence rather than spinning on EOF.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => { controlWake.current = null; resolve(); }, pollMs);
+            controlWake.current = () => { clearTimeout(timer); controlWake.current = null; resolve(); };
+          });
+        }
+        // Status may outrun the last SSE frame. Give the independent reader a
+        // bounded tail window; completion must not discard already-sent text.
+        if (reading) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([reader, new Promise<void>((resolve) => { timer = setTimeout(resolve, drainMs); })]);
+          clearTimeout(timer);
+          if (reading) metrics.stream_end = 'drain_timeout';
         }
       } finally {
         controller.abort();
-        // No execution path may let finalization overtake a checkpoint that is
-        // still using the dedicated persistence lane.
-        await flushPreview(true);
-        await drainDurable();
+        // Reader callbacks check abort before touching state. Drain every
+        // already-enqueued operation even on failure before error/final writes
+        // reuse the database. A rejected lane must not short-circuit the others.
+        const previewDrain = (async () => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([previews.drain(), new Promise<void>((resolve) => { timer = setTimeout(resolve, 250); })]);
+          } finally {
+            clearTimeout(timer);
+            previews.discard();
+          }
+        })();
+        const drained = await Promise.allSettled([previewDrain, checkpoints.drain(), dbTail]);
+        try { deps.onStreamMetrics?.({ ...metrics }); } catch { /* Telemetry cannot change run outcome. */ }
+        const rejected = drained.find((result) => result.status === 'rejected');
+        if (rejected?.status === 'rejected') throw rejected.reason;
+        if (readerFailure || dbFailure) throw readerFailure ?? dbFailure;
       }
       terminal = true;
       visibleText = status.output ?? text;

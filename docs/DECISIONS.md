@@ -5023,3 +5023,34 @@ the healthy socket and retries at the bounded cadence.
 disconnect. A second advances the cursor with completed `run.status` while
 withholding the earlier `message.final`, then verifies that the authoritative
 message snapshot restores the response as soon as the tab becomes visible.
+
+---
+
+## C68. Native stream consumption must not await the control plane
+
+**Decided September 17, 2026.** A delayed status check was able to hide an
+entire native streamed response: the same loop stopped reading SSE while it
+awaited status, and a completed status then aborted unread deltas. A controlled
+300 ms status delay reproduced eight available text chunks but zero live
+previews or durable deltas before the full final answer.
+
+One independent native reader now feeds ordered coalescing preview and durable
+checkpoint lanes. Status, Stop, Steer and tool activity cannot stall ingestion.
+Database operations sharing one client remain serialized, while production
+checkpoints use their dedicated connection. Lane sends are single-flight,
+frames respect the wire size limit, and response/activity buffers are bounded.
+
+Authoritative terminal status starts a bounded native tail drain, followed by
+complete durable-write draining before finalization. Preview draining is
+best-effort and limited to 250 ms, with queued sends discarded afterward. A
+late preview cannot resurrect a finished client accumulator. The existing
+final-status recovery remains necessary because the pinned native event queue
+is single-consumer and non-replayable. No reconnect subscriber is added.
+
+**Evidence.** Regression tests hold status, preview, checkpoint and main-client
+database operations independently. Text still arrives during control delays;
+completion cannot overtake durable writes or wait indefinitely for a preview;
+large backlogs preserve exact text and offsets in bounded frames. Client tests
+cover late previews after final/reveal and while a later run is active. Worker
+telemetry records content-free relative delivery timings and counts, and a
+throwing metrics observer cannot change successful completion.

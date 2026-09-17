@@ -506,6 +506,52 @@ describe('streaming text and step_attempt', () => {
     expect(state.sessions[SESSION_A]!.stream?.runId).toBe(nextRun);
   });
 
+  it('a delayed preview cannot resurrect a final reply after reveal completion', () => {
+    let state = feed(base(), event('message.reset', { run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, message_id: MESSAGE }, 1n));
+    state = feed(state, event('message.final', {
+      message_id: MESSAGE, session_id: SESSION_A, run_id: RUN, turn: 0,
+      attempt: 1, text: 'Final answer', blocks: [], incomplete: false, worked_ms: 900,
+    }, 2n));
+    state = reduce(state, { type: 'stream/reveal-complete', sessionId: SESSION_A, runId: RUN });
+    // Even if the terminal run.status was missed, the saved final fences the
+    // abandoned best-effort RPC once it eventually arrives.
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Stale draft' });
+    expect(state.sessions[SESSION_A]!.stream).toBeNull();
+    expect(state.sessions[SESSION_A]!.messages).toHaveLength(1);
+
+    const nextRun = mockUuid(27);
+    state = reduce(state, { type: 'stream/reset', sessionId: SESSION_A, runId: nextRun, turn: 0, stepAttempt: 1 });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: nextRun, turn: 0, stepAttempt: 1, offset: 0, delta: 'New answer' });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Stale draft' });
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({ runId: nextRun, text: 'New answer' });
+  });
+
+  it('accepts previews after an explicit reset for a later turn in the same run', () => {
+    let state = feed(base(), event('message.final', {
+      message_id: MESSAGE, session_id: SESSION_A, run_id: RUN, turn: 0,
+      attempt: 1, text: 'First turn', blocks: [], incomplete: false, worked_ms: 900,
+    }, 1n));
+    state = reduce(state, { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 1, stepAttempt: 1 });
+    state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 1, stepAttempt: 1, offset: 0, delta: 'Second turn' });
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({ turn: 1, text: 'Second turn' });
+  });
+
+  it('cannot replace an active run with an old preview even when its final was missed', () => {
+    const nextRun = mockUuid(27);
+    let state = feed(base(), event('run.started', {
+      run_id: nextRun, session_id: SESSION_A, attempt: 1, engine_version: 1,
+      client_turn_id: mockUuid(28), mode: 'work', model_id: 'deepseek-flash',
+      effort: 'high', title: null, steps: [],
+    }, 1n));
+    const stale = { type: 'stream/preview' as const, sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Stale draft' };
+    state = reduce(state, stale);
+    expect(state.sessions[SESSION_A]!.stream).toBeNull();
+    // A legitimate first preview still initializes without a message.reset.
+    state = reduce(state, { ...stale, runId: nextRun, delta: 'New answer' });
+    state = reduce(state, stale);
+    expect(state.sessions[SESSION_A]!.stream).toMatchObject({ runId: nextRun, text: 'New answer' });
+  });
+
   it('a stopped run keeps its completed steps and returns the active one to todo', () => {
     let state = base();
     for (const streamEvent of mockRunStream('stopped', { workspaceId: WS, sessionId: SESSION_A, runId: RUN })) state = feed(state, streamEvent);

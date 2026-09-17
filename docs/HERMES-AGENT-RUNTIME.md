@@ -39,6 +39,35 @@ The native SSE queue has **no replay**. Reconnection uses native run status and
 final output; browser replay comes from durable enterprise events. No raw model
 reasoning is required for the activity indicator.
 
+### Streaming delivery and completion
+
+The sole native SSE reader never awaits status, human controls, database writes
+or hub delivery. It feeds independent, ordered preview and durable-checkpoint
+lanes. The first chunk is eligible immediately; later chunks coalesce within
+75 ms when a lane is available, with a trailing flush and 32,768-code-unit
+frame limit. Each lane has at most one delivery in flight. Received response
+text is capped at 4 Mi code units; queued tool/activity operations are capped at
+256. Exceeding a bound fails explicitly and preserves received partial output.
+
+Tool activity and control reads serialize whole operations on the main database
+client; production delta checkpoints use their existing dedicated connection.
+Native completion wakes status reconciliation. If status wins the race, the
+reader has a one-second tail-drain window before cancellation. Every received
+durable checkpoint and queued database operation finishes before the final
+transaction. Best-effort previews get at most 250 ms to drain; any queued
+previews are discarded afterward. The client rejects previews that arrive
+after the corresponding final has already been revealed.
+
+The `hermes.stream` structured log contains run/attempt/trace identifiers,
+relative times to first received native delta, delivered preview and committed
+checkpoint, delta/character/preview counts, and the native stream end reason.
+It contains no prompt, response, tool content or hidden reasoning. These are
+Worker boundary timings, not provider time-to-first-token or browser paint
+measurements. A logging failure cannot change the run outcome.
+
+Disconnect recovery still uses authoritative final status. This repair does
+not create a native replay journal or hide model latency with artificial typing.
+
 ## Tools and credentials
 
 The official runtime loads a narrow enterprise plugin. The plugin also registers

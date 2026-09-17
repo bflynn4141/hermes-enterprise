@@ -31,6 +31,7 @@ import { resolveRuntimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
 import { runtimeSkillManifests } from '../runtime/skills.js';
+import { logEvent } from '../keys/redact.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -361,6 +362,10 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           checkpoint: (events) => checkpointDb!.emit(events),
           preview: (frame) =>
             this.env.SESSION_HUB.get(this.env.SESSION_HUB.idFromName(frame.session_id)).preview(frame),
+          onStreamMetrics: (metrics) => logEvent({
+            at: 'hermes.stream', run_id: run.id, attempt: params.attempt,
+            trace_id: params.traceId, ...metrics,
+          }),
           skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
         }, engineStep(step), runInput);
       } else {
