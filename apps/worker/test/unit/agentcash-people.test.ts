@@ -97,6 +97,29 @@ describe('AgentCash People Search connector', () => {
     expect(JSON.stringify(result.artifacts)).not.toContain('+15551234567');
   });
 
+  it('accepts the response and payment metadata blocks persisted by Hermes', () => {
+    const response = JSON.stringify({
+      people: [{
+        id: 'person-2',
+        full_name: 'Public Profile',
+        email: 'private@example.com',
+        skills: ['Artificial Intelligence (AI)'],
+        social_profiles: { professional_network: { url: 'https://www.linkedin.com/in/public-profile' } },
+        employment: { current: { title: 'Founder', seniority: 'Founder' } },
+      }],
+      companies: {},
+      metadata: { total: 1 },
+    });
+    const paymentMetadata = JSON.stringify({ paymentInfo: { price: '$0.15', transaction: '0xreceipt' } });
+
+    const result = parseAgentCashPeopleSearch(`${response}\n${paymentMetadata}`, config, new Date('2026-09-17T22:00:00Z'));
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.displayName).toBe('Public Profile');
+    expect(JSON.stringify(result.artifacts)).not.toContain('private@example.com');
+    expect(JSON.stringify(result.artifacts)).not.toContain('0xreceipt');
+  });
+
   it('rejects a response without a trustworthy professional profile URL', () => {
     expect(() => parseAgentCashPeopleSearch({
       people: [{ id: 'person-1', full_name: 'No Profile' }],

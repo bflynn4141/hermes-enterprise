@@ -104,7 +104,21 @@ export function agentCashPeopleSearchArguments(config: PartnerAgentConfig): {
 function unwrap(value: unknown, depth = 0): unknown {
   if (depth > 5) return value;
   if (typeof value === 'string') {
-    try { return unwrap(JSON.parse(value), depth + 1); } catch { return value; }
+    try { return unwrap(JSON.parse(value), depth + 1); } catch {
+      // Hermes renders MCP text blocks by joining them with newlines. AgentCash
+      // returns the response JSON first and payment metadata second, so an
+      // oversized persisted result is two complete JSON values rather than one.
+      for (const line of value.split(/\r?\n/u)) {
+        if (!line.trim()) continue;
+        try {
+          const candidate = unwrap(JSON.parse(line), depth + 1);
+          if (candidate && typeof candidate === 'object' && Array.isArray((candidate as Record<string, unknown>).people)) {
+            return candidate;
+          }
+        } catch { /* A text MCP block may be non-JSON; keep looking. */ }
+      }
+      return value;
+    }
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const object = value as Record<string, unknown>;
