@@ -7,8 +7,6 @@
 // The server capability contract keeps attachment controls out of the live
 // composer until uploaded content can actually reach the agent runtime.
 //
-// TODO(plan §10b, M4): the chip row becomes `PromptBar`, with Guide / After
-// this as its segmented control and `demo={false}`.
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { SETTINGS } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
@@ -272,6 +270,16 @@ export function Composer({ session }: { session: SessionState }) {
             </Button>
           </div>
         )}
+        {active && !contextKey && (
+          <span className="send-mode" role="radiogroup" aria-label={`How ${agent} handles your next message`}>
+            <button type="button" aria-pressed={sendMode === 'guide'} onClick={() => setSendMode('guide')} title="Steer the current run">
+              Steer
+            </button>
+            <button type="button" aria-pressed={sendMode === 'queue'} onClick={() => setSendMode('queue')} title="Queue a follow-up for after this run">
+              Queue
+            </button>
+          </span>
+        )}
         <div className="attachments">
           {session.context?.label && <Chip icon="context" onClick={() => session.context?.ref && nav(session.context.ref)}>{session.context.label}</Chip>}
           {attachmentsAvailable && session.draft.attachments.map((attachment) => (
@@ -293,7 +301,17 @@ export function Composer({ session }: { session: SessionState }) {
           data-composer="true"
           value={text}
           disabled={blocked || admitting}
-          placeholder={blocked ? EMPTY.noKey : contextKey ? run?.waiting_label ?? 'Answer to continue…' : active ? 'Guide this run or queue a follow-up…' : `Message ${agent}…`}
+          placeholder={
+            blocked
+              ? EMPTY.noKey
+              : contextKey
+                ? run?.waiting_label ?? 'Answer to continue…'
+                : active
+                  ? sendMode === 'queue'
+                    ? 'Queue a follow-up…'
+                    : `Steer ${agent}…`
+                  : `Message ${agent}…`
+          }
           aria-label={`Message ${agent}`}
           onChange={(event) => dispatch({ type: 'session/draft', id: session.id, text: event.target.value })}
           onKeyDown={(event) => {
@@ -314,18 +332,8 @@ export function Composer({ session }: { session: SessionState }) {
             </span>
           )}
           <span className="spacer" />
-          {active && !contextKey && (
-            <span className="send-mode" role="radiogroup" aria-label={`How to send while ${agent} is working`}>
-              <button type="button" aria-pressed={sendMode === 'guide'} onClick={() => setSendMode('guide')} title="Steer the current run">
-                Guide this run
-              </button>
-              <button type="button" aria-pressed={sendMode === 'queue'} onClick={() => setSendMode('queue')} title="Queue a follow-up for after this run">
-                After this
-              </button>
-            </span>
-          )}
           <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <button ref={modeBtn} type="button" className="text-btn" aria-haspopup="menu" aria-expanded={menu === 'mode'} onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>
+            <button ref={modeBtn} type="button" className="text-btn" aria-haspopup="menu" aria-expanded={menu === 'mode'} disabled={active} title={active ? 'Available after this run' : undefined} onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>
               {mode!.label} <Icon name="chevron" size={14} className="composer-selector-chevron" />
             </button>
             <Popover open={menu === 'mode'} onClose={() => setMenu(null)} anchorRef={modeBtn} className="menu" width={270} label="Mode" above align="left">
@@ -348,36 +356,32 @@ export function Composer({ session }: { session: SessionState }) {
               </div>
             </Popover>
           </span>
-          {!active && (
-            <span style={{ position: 'relative', display: 'inline-flex' }}>
-              {/* Named, not just labelled by its own text: the text is the
-                  current model, so "the control that changes the model" had no
-                  stable name for a screen reader or a test to ask for. */}
-              <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}`} aria-expanded={menu === 'model'} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
-                {model?.label ?? EMPTY.noProvider} <Icon name="chevron" size={14} className="composer-selector-chevron" />
-              </button>
-              <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
-            </span>
-          )}
-          {!active && (
-            <span style={{ position: 'relative', display: 'inline-flex' }}>
-              <button ref={runtimeBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'runtime'} onClick={() => setMenu(menu === 'runtime' ? null : 'runtime')}>
-                <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
-                <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <Icon name="chevron" size={14} className="composer-selector-chevron" />
-              </button>
-              <Popover open={menu === 'runtime'} onClose={() => setMenu(null)} anchorRef={runtimeBtn} width={420} label="Runs on" above>
-                <MenuItem icon="cloud" sub={session.runtime === 'cloud' ? state.workspace.name : 'Not configured for Iris'} checked={session.runtime === 'cloud'} disabled={session.runtime !== 'cloud'} onClick={() => setMenu(null)}>
-                  Cloud
-                </MenuItem>
-                <MenuItem icon="device" sub={session.runtime === 'local' ? 'Hermes Agent on this computer' : 'Not configured for this workspace'} checked={session.runtime === 'local'} disabled={session.runtime !== 'local'} onClick={() => setMenu(null)}>
-                  Local
-                </MenuItem>
-                <div className="p-meta" style={{ padding: '0 12px' }}>
-                  Model requests use the workspace's own provider key either way; execution location does not change where the model runs.
-                </div>
-              </Popover>
-            </span>
-          )}
+          <span className="composer-model-control" style={{ position: 'relative', display: 'inline-flex' }}>
+            {/* Named, not just labelled by its own text: the text is the
+                current model, so "the control that changes the model" had no
+                stable name for a screen reader or a test to ask for. */}
+            <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}`} aria-expanded={menu === 'model'} disabled={active} title={active ? 'Model for this run' : undefined} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
+              <span className="composer-model-label">{model?.label ?? EMPTY.noProvider}</span> <Icon name="chevron" size={14} className="composer-selector-chevron" />
+            </button>
+            <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
+          </span>
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <button ref={runtimeBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'runtime'} disabled={active} title={active ? 'Runtime for this run' : undefined} onClick={() => setMenu(menu === 'runtime' ? null : 'runtime')}>
+              <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
+              <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <Icon name="chevron" size={14} className="composer-selector-chevron" />
+            </button>
+            <Popover open={menu === 'runtime'} onClose={() => setMenu(null)} anchorRef={runtimeBtn} width={420} label="Runs on" above>
+              <MenuItem icon="cloud" sub={session.runtime === 'cloud' ? state.workspace.name : 'Not configured for Iris'} checked={session.runtime === 'cloud'} disabled={session.runtime !== 'cloud'} onClick={() => setMenu(null)}>
+                Cloud
+              </MenuItem>
+              <MenuItem icon="device" sub={session.runtime === 'local' ? 'Hermes Agent on this computer' : 'Not configured for this workspace'} checked={session.runtime === 'local'} disabled={session.runtime !== 'local'} onClick={() => setMenu(null)}>
+                Local
+              </MenuItem>
+              <div className="p-meta" style={{ padding: '0 12px' }}>
+                Model requests use the workspace's own provider key either way; execution location does not change where the model runs.
+              </div>
+            </Popover>
+          </span>
           <button type="button" className="send" aria-label={contextKey ? 'Send context answer' : active ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked || admitting} onClick={send}>
             <Icon name="up" />
           </button>

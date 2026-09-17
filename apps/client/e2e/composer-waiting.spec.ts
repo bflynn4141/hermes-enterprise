@@ -1,11 +1,13 @@
 // Run only this file with E2E_BASE_URL=https://composer.test to avoid rebuilding
 // the shared client dist used by a developer's live Worker.
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 import { expect, test, type Page } from '@playwright/test';
 import type { ComposerFixtureOptions } from './composer-fixture.js';
 
 let fixture = '';
+const styles = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
 test.beforeAll(async () => {
   const result = await build({
     entryPoints: [fileURLToPath(new URL('./composer-fixture.tsx', import.meta.url))],
@@ -20,6 +22,7 @@ async function mount(page: Page, options: ComposerFixtureOptions = {}) {
     contentType: 'text/html', body: '<!doctype html><html><body><div id="root"></div></body></html>',
   }));
   await page.goto('https://composer.test/');
+  await page.addStyleTag({ content: styles });
   await page.addScriptTag({ content: fixture });
   await page.evaluate((value) => window.composerFixture.mount(value), options);
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toBeVisible();
@@ -82,14 +85,29 @@ test('a confirmed missing key still blocks a new turn', async ({ page }) => {
 
 test('working runs keep their guidance and follow-up controls', async ({ page }) => {
   await mount(page, { status: 'working' });
+  await expect(page.getByRole('button', { name: 'Model: DeepSeek Flash' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Model: DeepSeek Flash' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Steer', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Queue', exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: 'Message Iris' });
   await input.fill('Focus on references.');
   await page.getByRole('button', { name: 'Send guidance' }).click();
   await expect(input).toHaveValue('');
-  await page.getByRole('button', { name: 'After this', exact: true }).click();
+  await page.getByRole('button', { name: 'Queue', exact: true }).click();
   await input.fill('Then summarize the evidence.');
   await page.getByRole('button', { name: 'Queue follow-up' }).click();
   await expect.poll(() => page.evaluate(() => window.composerFixture.calls.map((call) => call.method))).toEqual(['guide', 'queue']);
+});
+
+test('the send button stays at the composer bottom-right at narrow widths', async ({ page }) => {
+  await page.setViewportSize({ width: 460, height: 760 });
+  await mount(page, { status: 'working' });
+  const composer = await page.locator('.composer').boundingBox();
+  const send = await page.getByRole('button', { name: 'Send guidance' }).boundingBox();
+  expect(composer).not.toBeNull();
+  expect(send).not.toBeNull();
+  expect(Math.abs((send!.x + send!.width) - (composer!.x + composer!.width - 14))).toBeLessThanOrEqual(1);
+  expect(Math.abs((send!.y + send!.height) - (composer!.y + composer!.height - 12))).toBeLessThanOrEqual(1);
 });
 
 test('the existing Local runtime selection remains intact', async ({ page }) => {
