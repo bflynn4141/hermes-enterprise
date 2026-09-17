@@ -276,14 +276,18 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
         [memberUserId, `partner-${memberUserId.slice(0, 8)}@example.test`],
       );
       await setTenant(client, fx.workspaceId, fx.adminId);
-      const member = await client.query<{ id: string }>(
+      await client.query(
         `INSERT INTO members (workspace_id, user_id, role, status)
-         VALUES ($1, $2, 'member', 'active') RETURNING id`,
+         VALUES ($1, $2, 'member', 'active')`,
         [fx.workspaceId, memberUserId],
       );
       await client.query(
-        `UPDATE agent_owners SET member_id=$3 WHERE workspace_id=$1 AND agent_id=$2`,
-        [fx.workspaceId, fx.agentId, member.rows[0]!.id],
+        `DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2`,
+        [fx.workspaceId, fx.agentId],
+      );
+      await client.query(
+        `UPDATE sessions SET owner_id=$3 WHERE workspace_id=$1 AND agent_id=$2`,
+        [fx.workspaceId, fx.agentId, memberUserId],
       );
       await client.query(
         `INSERT INTO workspace_directory (workspace_id, workos_organization_id)

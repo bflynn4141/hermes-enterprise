@@ -108,10 +108,41 @@ export async function enqueueAutomatedPartnerScreening(
            FROM agents a
            LEFT JOIN LATERAL (
              SELECT m.user_id
-               FROM agent_owners ao
-               JOIN members m ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
-              WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
-                AND m.status='active'
+               FROM members m
+              WHERE m.workspace_id=a.workspace_id AND m.status='active'
+                AND (
+                  EXISTS (
+                    SELECT 1 FROM agent_owners ao
+                     WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
+                       AND ao.member_id=m.id
+                  )
+                  OR (
+                    EXISTS (
+                      SELECT 1 FROM sessions own_session
+                       WHERE own_session.workspace_id=a.workspace_id
+                         AND own_session.agent_id=a.id AND own_session.owner_id=m.user_id
+                         AND NOT own_session.archived AND NOT own_session.read_only
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                        FROM sessions other_session
+                        JOIN members other_member
+                          ON other_member.workspace_id=other_session.workspace_id
+                         AND other_member.user_id=other_session.owner_id
+                       WHERE other_session.workspace_id=a.workspace_id
+                         AND other_session.agent_id=a.id
+                         AND NOT other_session.archived AND NOT other_session.read_only
+                         AND other_member.status='active' AND other_member.user_id<>m.user_id
+                    )
+                  )
+                )
+              ORDER BY EXISTS (
+                SELECT 1 FROM agent_owners explicit_owner
+                 WHERE explicit_owner.workspace_id=a.workspace_id
+                   AND explicit_owner.agent_id=a.id AND explicit_owner.member_id=m.id
+              ) DESC,
+              m.joined_at,
+              m.id
               LIMIT 1
            ) owner ON true
           WHERE a.workspace_id=$1 AND ($3::boolean OR a.id=ANY($2::uuid[]))
