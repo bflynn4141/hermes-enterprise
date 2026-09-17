@@ -4780,3 +4780,24 @@ events while the agent works and text deltas while it writes. Forwarding only
 the text stream made a healthy turn appear frozen during model reasoning or
 tool use. Converting actual Hermes lifecycle events preserves auditability and
 keeps the UI honest about what has and has not happened.
+
+---
+
+## C60. A run changes the composer's intent, not its identity
+
+**Decided September 16, 2026.** The composer keeps mode, model, runtime and the
+send button in the same bottom control area before, during and after a run.
+Those selectors become read-only while the current run owns their values, but
+their labels stay visible. The send button is anchored to the lower-right of
+the control area rather than participating in its wrapping layout.
+
+When a run is active, its two possible message intents appear as a compact
+`Steer` / `Queue` switch above the input. The placeholder reflects the selected
+intent. The switch enters with the existing short reveal and becomes immediate
+under reduced motion.
+
+**Why.** Removing the model after Send hid consequential context at the moment
+a person most needed to understand a run. Putting the intent selector among
+the persistent controls also caused the send button to jump to another row as
+the Iris pane was resized. One stable composer preserves orientation while
+still making clear whether the next message affects this run or follows it.

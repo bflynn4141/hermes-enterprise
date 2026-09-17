@@ -43,7 +43,21 @@ window.composerFixture = {
     state.ready = true;
     state.ui.providerKeysLocked = options.keysLocked ?? false;
     const store = createStore(state);
-    store.dispatch({ type: 'session/create', id: sessionId, mode: 'work', runtime: 'local', pending: false });
+    store.dispatch({ type: 'session/create', id: sessionId, mode: 'work', model: 'deepseek-flash', runtime: 'local', pending: false });
+    store.dispatch({
+      type: 'entity/upsert',
+      kind: 'catalog',
+      id: 'deepseek-flash',
+      data: {
+        model_id: 'deepseek-flash',
+        provider: 'deepseek',
+        label: 'DeepSeek Flash',
+        effort: ['low', 'high'],
+        default_effort: 'high',
+        enabled: true,
+        disabled_reason: null,
+      },
+    });
     if (options.status !== 'none') {
       const run: Run = {
         id: runId, session_id: sessionId, agent_id: '11111111-1111-4111-8111-111111111111', status: options.status ?? 'waiting', attempt: 1,
