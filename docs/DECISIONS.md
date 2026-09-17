@@ -4952,6 +4952,10 @@ horizontal overflow. It therefore applies consistently to chat, app panes,
 document viewers, dialogs, editors and tables instead of depending on the
 historical `.scroll` helper.
 
+The sidebar session list clips horizontal overflow because its titles already
+wrap or truncate; the horizontal scrollbar is reserved for surfaces such as
+wide tables and documents where sideways navigation is intentional.
+
 The implementation styles the browser's native scrollbar rather than replacing
 it with JavaScript, preserving wheel, trackpad, keyboard and pointer behavior.
 Chromium and WebKit receive the full layered gradient. Firefox receives the

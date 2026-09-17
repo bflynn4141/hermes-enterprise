@@ -143,6 +143,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .sidebar .sidebar-row:is([data-session-status="waiting"], [data-session-status="stopping"])::after { background: #F3B95F; box-shadow: 0 0 0 3px rgba(243,185,95,.12); }
 .sidebar .sidebar-row:is([data-session-status="stopped"], [data-session-status="error"])::after { background: #F07D86; box-shadow: 0 0 0 3px rgba(240,125,134,.12); }
 .sidebar .sidebar-row[data-session-status="empty"]::after { display: none; }
+/* Sidebar titles wrap or truncate; this list only has a vertical scroll axis. */
+.sidebar .workspace-sidebar-nav .overflow-y-auto { overflow-x: hidden; }
 
 /* ---------- the app pane at full width ----------
    Collapsing Iris hands the app 1544 px at 1840, and a dashboard at 1544 px is
