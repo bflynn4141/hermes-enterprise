@@ -13,6 +13,13 @@
   --nav-w: 240px; --iris-w: 800px;
   --dur-menu: 140ms; --dur-reveal: 160ms; --dur-disclosure: 180ms; --dur-layout: 160ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Native scrollbar primitive: a quiet rail with one luminous point of focus. */
+  --scrollbar-size: 10px;
+  --scrollbar-track: rgba(176, 109, 255, .22);
+  --scrollbar-core: #BD4CFF;
+  --scrollbar-core-strong: #E45BFF;
+  --scrollbar-hot: #FFF9FF;
+  --scrollbar-glow: rgba(207, 69, 255, .9);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -25,6 +32,62 @@ a { color: inherit; }
 h1, h2, h3, h4, p { margin: 0; }
 :focus-visible { outline: 2px solid #c6c6ff; outline-offset: 3px; border-radius: 6px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- design-system scrollbars ----------
+   Keep native scrolling and its input semantics. Firefox supports a solid
+   thumb; Chromium and WebKit add the reference's fine rail and focal glow. */
+@supports (-moz-appearance: none) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-core) transparent;
+  }
+}
+*::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+*::-webkit-scrollbar-track:vertical {
+  background: linear-gradient(90deg,
+    transparent 0 calc(50% - .5px),
+    var(--scrollbar-track) calc(50% - .5px) calc(50% + .5px),
+    transparent calc(50% + .5px) 100%);
+}
+*::-webkit-scrollbar-track:horizontal {
+  background: linear-gradient(180deg,
+    transparent 0 calc(50% - .5px),
+    var(--scrollbar-track) calc(50% - .5px) calc(50% + .5px),
+    transparent calc(50% + .5px) 100%);
+}
+*::-webkit-scrollbar-thumb { border-radius: 999px; }
+*::-webkit-scrollbar-thumb:vertical {
+  background:
+    radial-gradient(circle at 50% 50%,
+      var(--scrollbar-hot) 0 7%,
+      var(--scrollbar-core-strong) 13%,
+      var(--scrollbar-glow) 24%,
+      rgba(156, 65, 255, .42) 43%,
+      transparent 66%) center / 10px 38px no-repeat,
+    linear-gradient(180deg,
+      rgba(116, 61, 240, .08),
+      rgba(143, 66, 255, .48) 28%,
+      var(--scrollbar-core) 50%,
+      rgba(143, 66, 255, .48) 72%,
+      rgba(116, 61, 240, .08)) center / 2px 100% no-repeat;
+}
+*::-webkit-scrollbar-thumb:horizontal {
+  background:
+    radial-gradient(circle at 50% 50%,
+      var(--scrollbar-hot) 0 7%,
+      var(--scrollbar-core-strong) 13%,
+      var(--scrollbar-glow) 24%,
+      rgba(156, 65, 255, .42) 43%,
+      transparent 66%) center / 38px 10px no-repeat,
+    linear-gradient(90deg,
+      rgba(116, 61, 240, .08),
+      rgba(143, 66, 255, .48) 28%,
+      var(--scrollbar-core) 50%,
+      rgba(143, 66, 255, .48) 72%,
+      rgba(116, 61, 240, .08)) center / 100% 2px no-repeat;
+}
+*::-webkit-scrollbar-corner { background: transparent; }
+
 .muted { color: var(--muted); }
 .meta { font-size: 11.2px; line-height: 16px; color: var(--muted); }
 .body-15 { font-size: 12px; line-height: 17.6px; }
@@ -239,10 +302,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .search svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* scroll regions */
-.scroll { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1 1 0; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.28) transparent; }
-.scroll::-webkit-scrollbar { width: 8px; }
-.scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.28); border-radius: 4px; }
-.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1 1 0; }
 
 /* ---------- app pane ---------- */
 .app-body { display: flex; flex-direction: column; gap: 18px; padding: 24px 28px; }

@@ -4940,3 +4940,26 @@ writing and exact live tool activity. Client and Worker suites, workspace
 typecheck, the production client build and Worker dry run pass.
 
 - https://github.com/NousResearch/hermes-agent/blob/5d59366010640c1d6b8f170d8a4ee109db2bbdef/gateway/platforms/api_server_runs.py
+
+---
+
+## C65. The luminous scrollbar is a shared native control
+
+**Decided September 16, 2026.** Every scroll surface uses the same semantic
+scrollbar tokens. The visual keeps the supplied reference's fine purple rail,
+bright focal point and fading energy line, adapted to both vertical and
+horizontal overflow. It therefore applies consistently to chat, app panes,
+document viewers, dialogs, editors and tables instead of depending on the
+historical `.scroll` helper.
+
+The implementation styles the browser's native scrollbar rather than replacing
+it with JavaScript, preserving wheel, trackpad, keyboard and pointer behavior.
+Chromium and WebKit receive the full layered gradient. Firefox receives the
+bright purple core as a deliberate fallback because its scrollbar API does not
+accept gradients. The treatment is static, so it does not imply progress or
+movement and needs no separate reduced-motion behavior.
+
+**Evidence.** Client typecheck, the production build, 224 unit tests and 56
+Chromium browser scenarios pass. A native in-app-browser render at constrained
+height confirmed the rail, energy line and focal glow on simultaneous
+conversation and application scroll surfaces.
