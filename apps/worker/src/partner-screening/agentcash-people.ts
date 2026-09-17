@@ -20,7 +20,9 @@ const personSchema = z.object({
   headline: z.string().max(500).optional(),
   description: z.string().max(2000).optional(),
   location: z.unknown().optional(),
-  skills: z.array(z.string()).max(200).optional(),
+  // FullEnrich can return a long public skill taxonomy. Accept a bounded
+  // provider payload here; persisted evidence remains capped at 50 below.
+  skills: z.array(z.string()).max(500).optional(),
   social_profiles: z.object({ professional_network: professionalNetworkSchema.optional() }).passthrough().optional(),
   employment: z.object({
     current: z.union([currentEmploymentSchema, z.array(currentEmploymentSchema)]).optional(),

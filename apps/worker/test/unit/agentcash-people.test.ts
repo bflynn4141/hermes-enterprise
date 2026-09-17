@@ -103,7 +103,10 @@ describe('AgentCash People Search connector', () => {
         id: 'person-2',
         full_name: 'Public Profile',
         email: 'private@example.com',
-        skills: ['Artificial Intelligence (AI)'],
+        skills: [
+          'Artificial Intelligence (AI)',
+          ...Array.from({ length: 260 }, (_, index) => `Public skill ${index + 1}`),
+        ],
         social_profiles: { professional_network: { url: 'https://www.linkedin.com/in/public-profile' } },
         employment: { current: { title: 'Founder', seniority: 'Founder' } },
       }],
@@ -116,6 +119,7 @@ describe('AgentCash People Search connector', () => {
 
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]?.displayName).toBe('Public Profile');
+    expect(result.artifacts[0]?.content.skills).toHaveLength(50);
     expect(JSON.stringify(result.artifacts)).not.toContain('private@example.com');
     expect(JSON.stringify(result.artifacts)).not.toContain('0xreceipt');
   });
