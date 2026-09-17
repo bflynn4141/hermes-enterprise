@@ -23,6 +23,7 @@ import { runBackupUploads } from './storage/backup.js';
 import { runCapWarningJob } from './ops/cap-warning.js';
 import { runEventsExport } from './ops/events-export.js';
 import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
+import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
 
 export interface Job {
@@ -553,6 +554,13 @@ async function claimRunFinish(
       ? error.retryAfterSeconds
       : 0;
     await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts, retryAfter));
+    logError({
+      at: 'job.failed',
+      kind: job.kind,
+      key: job.key,
+      attempt: job.attempts,
+      error,
+    });
     return false;
   }
 }
