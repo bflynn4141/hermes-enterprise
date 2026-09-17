@@ -4757,3 +4757,26 @@ every visible fragment wait for a cross-region commit coupled perceived model
 speed to database latency. The fast lane preserves the audit and recovery
 contract while letting the UI reflect the runtime as soon as text reaches the
 Worker.
+
+---
+
+## C59. Live chat separates runtime activity from answer text
+
+**Decided September 16, 2026.** The official Hermes Runs stream is the source
+for both parts of a live turn. `message.delta` continues through the transient
+WebSocket preview lane and the durable transcript checkpoints. Native
+`tool.started` and `tool.completed` events are also projected into ordinary
+`run.step` events, so the chat can name the work Hermes is actually doing before
+the answer begins. Tool steps use per-run generated identifiers because the
+native lifecycle payload names the tool but does not expose a stable call id.
+
+Hermes' internal `_thinking` event remains intentionally absent from the Runs
+stream. The Enterprise UI does not fabricate reasoning text or animate a fake
+answer during that interval. A quiet model-only interval is shown as one
+thinking state; real tool activity replaces that label when it arrives.
+
+**Why.** Codex-like responsiveness comes from multiple typed streams: activity
+events while the agent works and text deltas while it writes. Forwarding only
+the text stream made a healthy turn appear frozen during model reasoning or
+tool use. Converting actual Hermes lifecycle events preserves auditability and
+keeps the UI honest about what has and has not happened.
