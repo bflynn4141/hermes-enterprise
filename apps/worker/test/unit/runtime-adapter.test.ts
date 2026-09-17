@@ -418,6 +418,34 @@ describe('official Hermes enterprise projection', () => {
     expect(db.statusChanges.at(-1)?.status).toBe('completed');
   });
 
+  it('checks submission readiness and the persisted binding concurrently', async () => {
+    let releaseReadiness: (() => void) | null = null;
+    class ConcurrentSubmitClient extends FakeHermesClient {
+      override capabilities() {
+        this.capabilityReads += 1;
+        if (this.capabilityReads !== 1) {
+          return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+        }
+        return new Promise<{ durableIdempotency: true; retentionSeconds: number }>((resolve) => {
+          releaseReadiness = () => resolve({ durableIdempotency: true, retentionSeconds: 86_400 });
+        });
+      }
+    }
+
+    class ConcurrentBindingDb extends FakeRuntimeDb {
+      override binding() {
+        releaseReadiness?.();
+        releaseReadiness = null;
+        return super.binding();
+      }
+    }
+
+    const client = new ConcurrentSubmitClient();
+    await execute(new ConcurrentBindingDb(), client);
+    expect(client.capabilityReads).toBe(2);
+    expect(client.statusReads).toBeGreaterThan(0);
+  });
+
   it('fails closed on replay when the restarted runtime loses durable idempotency', async () => {
     const db = new FakeRuntimeDb();
     db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };

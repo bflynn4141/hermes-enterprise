@@ -52,6 +52,7 @@ function run(): Run {
     title: null,
     steps: [{ id: 'provider', label: 'Thinking', state: 'active' }],
     queue: [],
+    started_at: '2026-09-17T19:00:00.000Z',
   };
 }
 
@@ -82,6 +83,15 @@ describe('live run activity', () => {
     const html = render(<RunActivity session={session(run())} />);
     expect(html.match(/Reasoning through the request/g)).toHaveLength(1);
     expect(html).not.toContain('Thinking…');
+  });
+
+  it('derives elapsed time from the run start after the activity remounts', () => {
+    const firstMount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:03.700Z')} />);
+    const remount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:24.100Z')} />);
+
+    expect(firstMount).toContain('3.7s');
+    expect(remount).toContain('24.1s');
+    expect(remount).toContain('live-run-status--authoritative');
   });
 
   it('uses the latest visible progress in that same state', () => {

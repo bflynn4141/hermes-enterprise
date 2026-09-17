@@ -1171,6 +1171,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
           steps: p.steps.map((step) => ({ id: step.id, label: step.label, state: step.state })),
           queue: [],
           guidance: null,
+          started_at: event.at,
         },
       });
       // A run is a trace the moment it starts, and the Traces tab's list is

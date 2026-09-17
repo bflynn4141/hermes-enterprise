@@ -29,6 +29,34 @@ import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
 import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
 
+const systemNow = (): number => Date.now();
+
+export function formatRunElapsed(startedAt: string, now: number): string {
+  const started = Date.parse(startedAt);
+  const elapsedMs = Number.isFinite(started) ? Math.max(0, now - started) : 0;
+  const deciseconds = Math.floor(elapsedMs / 100);
+  const seconds = deciseconds / 10;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(1)}s`;
+}
+
+function RunElapsed({ startedAt, active, now }: { startedAt: string; active: boolean; now: () => number }) {
+  const [current, setCurrent] = useState(() => now());
+
+  useEffect(() => {
+    setCurrent(now());
+    if (!active) return;
+    const timer = window.setInterval(() => setCurrent(now()), 100);
+    return () => window.clearInterval(timer);
+  }, [active, now, startedAt]);
+
+  return (
+    <span className="live-run-elapsed" aria-hidden="true">
+      {formatRunElapsed(startedAt, current)}
+    </span>
+  );
+}
+
 /** Steps that named a tool call, in the order the run reported them. */
 function toolSteps(steps: readonly RunStep[]) {
   return steps
@@ -51,7 +79,7 @@ function progressLabel(messages: readonly Message[]): string | null {
   return text.length > 140 ? `${text.slice(0, 137).trimEnd()}…` : text;
 }
 
-export function RunActivity({ session, progress = [] }: { session: SessionState; progress?: readonly Message[] }) {
+export function RunActivity({ session, progress = [], now = systemNow }: { session: SessionState; progress?: readonly Message[]; now?: () => number }) {
   const adapter = useAdapter();
   const run = session.run;
   if (!run) return null;
@@ -122,11 +150,14 @@ export function RunActivity({ session, progress = [] }: { session: SessionState;
           library's inline loader. No grid of rows growing under the reader. */}
       {showWorkingActivity && (
         <>
-          <LoadingState
-            active
-            label={`${phaseLabel}…`}
-            variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
-          />
+          <div className={run.started_at ? 'live-run-status live-run-status--authoritative' : 'live-run-status'}>
+            <LoadingState
+              active
+              label={`${phaseLabel}…`}
+              variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
+            />
+            {run.started_at && <RunElapsed startedAt={run.started_at} active={working} now={now} />}
+          </div>
           {liveTools.length > 0 && (
             <div className="live-tool-list" role="list" aria-label="Tool activity">
               {liveTools.map((step) => (

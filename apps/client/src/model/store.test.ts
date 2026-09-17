@@ -248,6 +248,7 @@ describe('sessions', () => {
   it('a run in one session never touches another', () => {
     const state = feed(base(), event('run.started', { run_id: RUN, session_id: SESSION_A, attempt: 1, engine_version: 1, client_turn_id: 't1', mode: 'work', model_id: 'deepseek-flash', effort: 'high', title: 'Screen', steps: [] }, 1n));
     expect(state.sessions[SESSION_A]!.run).not.toBeNull();
+    expect(state.sessions[SESSION_A]!.run?.started_at).toBe('2026-10-12T09:49:00.000Z');
     expect(state.sessions[SESSION_B]!.run).toBeNull();
   });
 

@@ -676,7 +676,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
   /** Run one contract scenario on the session socket, paced for a human. */
   function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
-    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n });
+    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date() });
     events.forEach((event, i) => {
       setTimeout(() => publish(event), 220 * (i + 1));
     });

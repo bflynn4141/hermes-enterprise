@@ -143,6 +143,8 @@ export const runSchema = z
     guidance: z.object({ id: uuidSchema, text: z.string().max(4000), status: z.enum(['pending', 'applied']) }).strict().nullable().optional(),
     waiting_for: z.string().max(64).nullable().optional(),
     waiting_label: z.string().max(200).nullable().optional(),
+    /** Authoritative run-start event time; keeps live elapsed time stable across remounts. */
+    started_at: z.iso.datetime({ offset: true }).optional(),
     active_ms: z.number().int().min(0).nullable().optional(),
     error: z
       .object({ class: z.string().max(32), retryable: z.boolean(), reason: z.string().max(64), message: z.string().max(500), step_id: z.string().max(64).nullable().optional() })
