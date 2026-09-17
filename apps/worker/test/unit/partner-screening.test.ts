@@ -161,6 +161,21 @@ describe('GitHub organization discovery', () => {
       reason: 'partner_source_rate_limited', status: 429,
     });
   });
+
+  it('preserves GitHub retry guidance for the durable job scheduler', async () => {
+    const limited: PartnerFetch = async () => new Response('{}', {
+      status: 429,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': '47',
+        'x-ratelimit-resource': 'search',
+        'x-ratelimit-remaining': '0',
+      },
+    });
+    await expect(discoverGitHubOrganizations(config, { fetcher: limited })).rejects.toMatchObject({
+      reason: 'partner_source_rate_limited', status: 429, retryAfterSeconds: 47,
+    });
+  });
 });
 
 describe('deterministic discovery priority', () => {

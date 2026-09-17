@@ -14,6 +14,7 @@ export class PartnerSourceError extends Error {
     message: string,
     readonly reason: string,
     readonly status: 429 | 503 = 503,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'PartnerSourceError';
@@ -84,6 +85,19 @@ function asInt(value: string | null): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function retryAfterSeconds(response: Response, resetEpochSeconds: number | null, now: Date): number | undefined {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter && /^\d+$/.test(retryAfter)) return Number(retryAfter);
+  if (retryAfter) {
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) return Math.max(0, Math.ceil((retryAt - now.getTime()) / 1000));
+  }
+  if (resetEpochSeconds !== null) {
+    return Math.max(0, Math.ceil(resetEpochSeconds - now.getTime() / 1000));
+  }
+  return undefined;
+}
+
 function publicRepository(repo: z.infer<typeof repositorySchema>): PublicRepository {
   return {
     id: repo.id, node_id: repo.node_id, name: repo.name, full_name: repo.full_name, html_url: repo.html_url,
@@ -121,10 +135,14 @@ export class GitHubPublicApi {
     }
     const expected = this.rates.get(this.expectedResource(path));
     if (expected?.remaining !== null && expected?.remaining !== undefined && expected.remaining <= this.options.minimumRateRemaining) {
+      const retryAfter = expected.reset_at
+        ? Math.max(0, Math.ceil((Date.parse(expected.reset_at) - this.options.now().getTime()) / 1000))
+        : undefined;
       throw new PartnerSourceError(
         `GitHub ${expected.resource} rate budget is at its configured reserve; retry after ${expected.reset_at ?? 'the reset window'}.`,
         'partner_source_rate_limited',
         429,
+        Number.isFinite(retryAfter) ? retryAfter : undefined,
       );
     }
     const url = `https://api.github.com${path}`;
@@ -162,6 +180,7 @@ export class GitHubPublicApi {
         `GitHub refused the request due to a rate or abuse limit; retry after ${response.headers.get('retry-after') ?? this.rates.get(resource)?.reset_at ?? 'the reset window'}.`,
         'partner_source_rate_limited',
         429,
+        retryAfterSeconds(response, reset, this.options.now()),
       );
     }
     if (!response.ok) {
