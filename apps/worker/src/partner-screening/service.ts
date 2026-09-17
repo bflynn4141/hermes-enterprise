@@ -71,6 +71,41 @@ async function sha256Hex(value: unknown): Promise<string> {
 }
 
 async function boundAgent(work: PartnerScreeningWork, agentId: string): Promise<boolean> {
+  if (work.role === 'system') {
+    const result = await work.tx.query(
+      `SELECT 1
+         FROM agents a
+         JOIN members m ON m.workspace_id=a.workspace_id
+        WHERE a.workspace_id=$1 AND a.id=$2
+          AND m.user_id=$3 AND m.status='active'
+          AND (
+            EXISTS (
+              SELECT 1 FROM agent_owners ao
+               WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id AND ao.member_id=m.id
+            )
+            OR (
+              EXISTS (
+                SELECT 1 FROM sessions own_session
+                 WHERE own_session.workspace_id=a.workspace_id AND own_session.agent_id=a.id
+                   AND own_session.owner_id=m.user_id
+                   AND NOT own_session.archived AND NOT own_session.read_only
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM sessions other_session
+                  JOIN members other_member
+                    ON other_member.workspace_id=other_session.workspace_id
+                   AND other_member.user_id=other_session.owner_id
+                 WHERE other_session.workspace_id=a.workspace_id AND other_session.agent_id=a.id
+                   AND NOT other_session.archived AND NOT other_session.read_only
+                   AND other_member.status='active' AND other_member.user_id<>m.user_id
+              )
+            )
+          )`,
+      [work.workspaceId, agentId, work.userId],
+    );
+    return result.rowCount === 1;
+  }
   const result = await work.tx.query(
     `SELECT 1
        FROM agents a
