@@ -80,7 +80,8 @@ function render(activity: React.ReactNode): string {
 describe('live run activity', () => {
   it('shows one thinking state before response text arrives', () => {
     const html = render(<RunActivity session={session(run())} />);
-    expect(html.match(/Thinking/g)).toHaveLength(1);
+    expect(html.match(/Reasoning through the request/g)).toHaveLength(1);
+    expect(html).not.toContain('Thinking…');
   });
 
   it('uses the latest visible progress in that same state', () => {
@@ -89,8 +90,25 @@ describe('live run activity', () => {
     expect(html).not.toContain('Thinking…');
   });
 
-  it('hands off to the streaming answer without a second activity row', () => {
+  it('moves the same activity row into writing while the answer streams', () => {
     const html = render(<RunActivity session={session(run(), 'The answer is arriving.')} />);
-    expect(html).toBe('');
+    expect(html.match(/Writing response/g)).toHaveLength(1);
+    expect(html).not.toContain('Thinking…');
+  });
+
+  it('shows exact tool calls with human wording as their lifecycle advances', () => {
+    const value = session({
+      ...run(),
+      steps: [
+        { id: 'provider', label: 'Thinking', state: 'active' },
+        { id: 'tool-1', label: 'list_partner_candidates', state: 'done', tool_call_id: 'tool-1' },
+        { id: 'tool-2', label: 'get_partner_candidate', state: 'active', tool_call_id: 'tool-2' },
+      ],
+    });
+    const html = render(<RunActivity session={value} />);
+    expect(html).toContain('get_partner_candidate');
+    expect(html).toContain('Reviewing a partner candidate');
+    expect(html).toContain('list_partner_candidates');
+    expect(html).toContain('Checked partner candidates');
   });
 });

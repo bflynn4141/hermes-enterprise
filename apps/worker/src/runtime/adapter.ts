@@ -137,6 +137,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       let durableFailure: unknown = null;
       let stopFromForward = false;
       let nativeToolOrdinal = 0;
+      let reasoningRecorded = false;
       const nativeTools: Array<{ tool: string; stepId: string; toolCallId: string; label: string }> = [];
       const pollMs = deps.pollMs ?? 1000;
       const batchMs = deps.batchMs ?? 75;
@@ -177,6 +178,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         while (nativeTools.length > 0) {
           await finishNativeTool(nativeTools[nativeTools.length - 1]!.tool, failed);
         }
+      };
+      const recordReasoningBoundary = async () => {
+        if (reasoningRecorded) return;
+        reasoningRecorded = true;
+        const reasoning = { runId: run.id, turn: 0, stepId: 'hermes-reasoning', label: 'Reasoning', state: 'active' as const };
+        await db.enterStep(reasoning);
+        await db.finishStep({ ...reasoning, state: 'done' });
+        // Hermes calls the accompanying field a preview. Treat the event as a
+        // truthful phase boundary, but never forward its text as hidden model
+        // reasoning. The transcript exposes observable work and tool calls.
+        await emit([{ kind: 'run.step', payload: {
+          run_id: run.id, attempt: run.attempt, turn: 0, step_id: reasoning.stepId,
+          label: reasoning.label, state: 'done', tool_call_id: null,
+        } }]);
       };
       const flushPreview = async (force = false) => {
         if (!previewPending || (!force && Date.now() - previewFlushedAt < previewMs)) return;
@@ -255,6 +270,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             }
             if (payload.event === 'tool.completed' && typeof payload.tool === 'string') {
               await finishNativeTool(payload.tool, payload.error === true);
+            }
+            if (payload.event === 'reasoning.available') {
+              await recordReasoningBoundary();
             }
             if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
               text += payload.delta; pending += payload.delta; previewPending += payload.delta;

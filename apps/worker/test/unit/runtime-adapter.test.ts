@@ -198,6 +198,28 @@ describe('official Hermes enterprise projection', () => {
     expect(db.steps.get('0:hermes-tool-2')?.state).toBe('done');
   });
 
+  it('records a reasoning phase boundary without exposing preview text', async () => {
+    class ReasoningClient extends FakeHermesClient {
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'reasoning.available', run_id: NATIVE_ID, text: 'private intermediate reasoning' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'A user-facing answer.' };
+        this.current = this.final;
+        yield { event: `run.${this.final.status}`, ...this.final };
+      }
+    }
+
+    const { db } = await execute(new FakeRuntimeDb(), new ReasoningClient());
+    const reasoning = db.events
+      .filter((event) => event.kind === 'run.step')
+      .map((event) => event.payload as { step_id: string; label: string; state: string })
+      .find((event) => event.step_id === 'hermes-reasoning');
+    expect(reasoning).toEqual(expect.objectContaining({ label: 'Reasoning', state: 'done' }));
+    expect(db.steps.get('0:hermes-reasoning')?.state).toBe('done');
+    expect(JSON.stringify(db.events)).not.toContain('private intermediate reasoning');
+  });
+
   it('flushes a trailing delta during a native pause instead of waiting for the status poll', async () => {
     class PausingClient extends FakeHermesClient {
       beforeTerminal: (() => void) | null = null;
