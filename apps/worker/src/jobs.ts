@@ -65,12 +65,8 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
-  // Kept as future pool-refiller infrastructure. Invitation acceptance never
-  // queues this JIT provisioning path.
-  'hermes_cloud_provision',
-  // Warm-pool invitation delivery and assignment. Detailed states stay in the
-  // operations tables; members see only getting ready / ready / retrying.
-  'hermes_pool_assign',
+  // Warm-pool invitation expiry and operator capacity alerts. Assignment is
+  // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
   'hermes_capacity_alert',
 ] as const;
@@ -590,12 +586,6 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
-      return;
-    case 'hermes_cloud_provision':
-      await (await import('./hermes-cloud/provisioning.js')).runHermesCloudProvisioningJob(env, job);
-      return;
-    case 'hermes_pool_assign':
-      await (await import('./hermes-cloud/capacity.js')).runHermesPoolAssignmentJob(env, job);
       return;
     case 'hermes_invitation_expire':
       await (await import('./hermes-cloud/capacity.js')).runInvitationExpirationJob(env, job);

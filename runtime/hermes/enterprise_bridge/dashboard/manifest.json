@@ -2,6 +2,6 @@
   "name": "enterprise_bridge",
   "label": "Enterprise bridge",
   "description": "Authenticated Hermes Runs connector for the enterprise control plane.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "api": "plugin_api.py"
 }

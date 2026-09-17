@@ -201,6 +201,19 @@ class Bridge:
                            "parameters": tool["parameters"]})
         return result
 
+    def skills(self):
+        status, body = self.request("GET", self.base_url + "/skills", self.token)
+        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("skills"), list):
+            raise BridgeError("Enterprise skill discovery failed.")
+        result = []
+        for item in body["skills"]:
+            if (not isinstance(item, dict)
+                    or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", str(item.get("name", "")))
+                    or not isinstance(item.get("config", {}), dict)):
+                raise BridgeError("Enterprise skill discovery returned an invalid manifest.")
+            result.append(item)
+        return result
+
     def ensure_running(self, run_id):
         status, body = self.request("GET", self.native_url + "/v1/runs/" + run_id, self.native_token)
         if status != 200 or body.get("status") not in {"running", "waiting_for_approval"}:
@@ -295,10 +308,25 @@ def register(ctx):
         name for name in ctx.get_config("allowed_skills", [])
         if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
     }
-    agentcash_arguments = approved_agentcash_arguments(ctx.get_config("partner_program", {}))
+    partner_program = ctx.get_config("partner_program", {})
+    if not isinstance(partner_program, dict):
+        partner_program = {}
+    if not assigned_skills or (os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1" and not partner_program):
+        for manifest in bridge.skills():
+            assigned_skills.add(manifest["name"])
+            config = manifest.get("config", {})
+            if not partner_program and isinstance(config.get("partner_program"), dict):
+                partner_program = config["partner_program"]
+    agentcash_arguments = approved_agentcash_arguments(partner_program)
     allowed = {"skill_view"}
+    configured_mcp_policy = ctx.get_config("mcp_policy", [])
+    if not configured_mcp_policy and os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1":
+        configured_mcp_policy = [{
+            "server": "agentcash", "tools": ["fetch"],
+            "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15,
+        }]
     mcp_policy = {}
-    for item in ctx.get_config("mcp_policy", []):
+    for item in configured_mcp_policy:
         if not isinstance(item, dict):
             continue
         server = MCP_COMPONENT.sub("_", str(item.get("server", "")))

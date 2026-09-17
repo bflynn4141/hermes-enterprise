@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS hermes_cloud_capacity (
   workspace_id             uuid NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
   cloud_agent_id           text NOT NULL,
   instance_name            text NOT NULL,
+  -- Permanent Enterprise identity baked into the warm instance before any
+  -- invitation is sent. Acceptance assigns this exact Iris; it never mutates
+  -- or restarts the Cloud instance in the member's path.
+  preflight_agent_id       uuid NOT NULL,
   dashboard_url            text,
   connector_url            text NOT NULL UNIQUE,
   state                    text NOT NULL DEFAULT 'available'
@@ -37,6 +41,7 @@ CREATE TABLE IF NOT EXISTS hermes_cloud_capacity (
   updated_at               timestamptz NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, cloud_agent_id),
   UNIQUE (workspace_id, instance_name),
+  UNIQUE (workspace_id, preflight_agent_id),
   CONSTRAINT hermes_cloud_capacity_usable_check CHECK (
     state = 'quarantined'
     OR (agentcash_enabled AND agentcash_wallet_present AND native_cron_disabled)

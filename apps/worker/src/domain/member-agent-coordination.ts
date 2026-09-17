@@ -1,7 +1,8 @@
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
-import { enqueueJob, publishEvents } from '../jobs.js';
-import { consumeReservedCapacity } from '../hermes-cloud/capacity.js';
+import { publishEvents } from '../jobs.js';
+import { consumeReservedCapacity, reservedCapacityAgentId } from '../hermes-cloud/capacity.js';
+import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { proposeApproval } from './approvals.js';
 
 const PARTNER_PROGRAM_INSTRUCTIONS = [
@@ -10,12 +11,6 @@ const PARTNER_PROGRAM_INSTRUCTIONS = [
   'Name missing evidence instead of inventing it. A discovered prospect has not applied.',
   'Prepare cited prospect briefs and draft-only outreach for human review, then stop before sending, decisions, access changes, signatures, commitments, or money movement.',
 ].join(' ');
-
-const PARTNER_PROGRAM_TOOLS = [
-  'list_requests', 'get_request', 'get_approval_status', 'get_document_text',
-  'propose_request', 'propose_approval', 'save_review_note',
-  'set_context_field', 'propose_instruction', 'ask_for_context', 'set_focus',
-] as const;
 
 interface JoinCoordinationInput {
   readonly env: Env;
@@ -165,7 +160,12 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
     return { agentId: owned.rows[0].agent_id, sessionId, created: false };
   }
 
-  const agentId = crypto.randomUUID();
+  // Warm capacity already carries its permanent runtime identity. Reusing it
+  // here makes invitation acceptance an atomic ownership assignment instead
+  // of a Cloud mutation/restart that could strand the new member.
+  const agentId = input.env.AGENT_RUNTIME === 'hermes'
+    ? await reservedCapacityAgentId(input.tx, input.workspaceId, input.invitationId)
+    : crypto.randomUUID();
   await input.tx.query(
     `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
      VALUES ($1,$2,'Iris','Partner Program',$3,'draft','identity')`,
@@ -188,10 +188,6 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
 
   if (input.env.AGENT_RUNTIME === 'hermes') {
     await consumeReservedCapacity(input.env, input.tx, input.workspaceId, input.invitationId, agentId);
-    const assignmentJob = await enqueueJob(
-      input.tx, input.workspaceId, 'hermes_pool_assign', `hermes-pool-assign:${agentId}`, { agent_id: agentId },
-    );
-    if (assignmentJob) input.jobs.push(assignmentJob);
   }
 
   const sessionId = crypto.randomUUID();

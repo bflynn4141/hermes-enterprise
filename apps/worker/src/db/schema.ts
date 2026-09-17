@@ -255,6 +255,7 @@ export const hermesCloudCapacity = pgTable('hermes_cloud_capacity', {
   workspaceId: uuid('workspace_id').notNull(),
   cloudAgentId: text('cloud_agent_id').notNull(),
   instanceName: text('instance_name').notNull(),
+  preflightAgentId: uuid('preflight_agent_id').notNull(),
   dashboardUrl: text('dashboard_url'),
   connectorUrl: text('connector_url').notNull(),
   state: text('state').notNull().default('available'),

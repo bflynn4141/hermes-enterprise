@@ -154,8 +154,7 @@ async function checkAuthConfiguration(env: Env): Promise<string> {
 }
 
 async function checkHermesRuntimes(env: Env): Promise<string> {
-  if (!env.HERMES_BRIDGE_SECRET || env.HERMES_BRIDGE_SECRET.length < 32 ||
-      !env.HERMES_CLOUD_CLIENT_ID?.trim() || !env.HERMES_CLOUD_CLIENT_SECRET?.trim()) {
+  if (!env.HERMES_BRIDGE_SECRET || env.HERMES_BRIDGE_SECRET.length < 32) {
     throw new Error('missing Hermes warm-pool control configuration');
   }
   let publicUrl: URL;
@@ -206,8 +205,6 @@ const cacheKey = (env: Env): string =>
     env.AGENT_RUNTIME ?? '',
     env.HERMES_RUNTIME_AGENTS?.length ?? 0,
     env.HERMES_BRIDGE_SECRET?.length ?? 0,
-    env.HERMES_CLOUD_CLIENT_ID?.length ?? 0,
-    env.HERMES_CLOUD_CLIENT_SECRET?.length ?? 0,
     env.HERMES_ENTERPRISE_PUBLIC_URL ?? '',
   ].join('|');
 

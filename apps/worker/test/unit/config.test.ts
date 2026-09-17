@@ -121,8 +121,8 @@ describe('wrangler.jsonc', () => {
     for (const scope of Object.values(envs)) {
       const vars = scope.vars as Record<string, string>;
       expect(vars.AGENT_RUNTIME).toBe('hermes');
-      expect(vars.HERMES_CLOUD_AUTOPROVISION_ENABLED).toBe('0');
       expect(vars.HERMES_POOL_LOW_CAPACITY_THRESHOLD).toBe('1');
+      expect(vars).not.toHaveProperty('HERMES_CLOUD_AUTOPROVISION_ENABLED');
     }
   });
 
@@ -149,8 +149,6 @@ describe('wrangler.jsonc', () => {
       'WORKOS_COOKIE_PASSWORD',
       'KEK_V1',
       'HERMES_BRIDGE_SECRET',
-      'HERMES_CLOUD_CLIENT_ID',
-      'HERMES_CLOUD_CLIENT_SECRET',
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',

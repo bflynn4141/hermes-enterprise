@@ -30,13 +30,13 @@ async function seedCapacity(fixture: Fixture, env: Env, count = 1): Promise<stri
       const envelope = envelopes[index]!;
       await client.query(
         `INSERT INTO hermes_cloud_capacity
-           (id, workspace_id, cloud_agent_id, instance_name, connector_url,
+           (id, workspace_id, cloud_agent_id, instance_name, preflight_agent_id, connector_url,
             ciphertext, iv, wrapped_dek, wrap_iv, kek_version, plugin_version,
             agentcash_enabled, agentcash_wallet_present, native_cron_disabled,
             readiness_checked_at, last_health_checked_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'1.4.0',true,true,true,now(),now())`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'1.5.0',true,true,true,now(),now())`,
         [id, fixture.workspaceId, `cloud-${id}`, `pool-${id.slice(0, 8)}`,
-         `https://pool-${id}.example.test/api/plugins/enterprise_bridge/control`,
+         id, `https://pool-${id}.example.test/api/plugins/enterprise_bridge/control`,
          Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv), Buffer.from(envelope.wrappedDek),
          Buffer.from(envelope.wrapIv), envelope.kekVersion],
       );
@@ -237,18 +237,11 @@ describe('Hermes Cloud invitation capacity', () => {
   it('allows only a stepped-up Admin to register an already verified instance', async () => {
     const fixture = await seedWorkspace();
     const cloudAgentId = `cloud-register-${randomUUID()}`;
+    const preflightAgentId = randomUUID();
     const connectorUrl = `https://register-${randomUUID()}.example.test/control`;
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
-      if (url.pathname === '/oauth/token') return Response.json({ access_token: 'registration-token-that-is-long-enough' });
-      const body = init?.body ? JSON.parse(String(init.body)) as { id?: number; method?: string; operation?: string; params?: { arguments?: { agent_id?: string } } } : {};
-      if (url.pathname === '/mcp') {
-        if (body.method === 'notifications/initialized') return new Response(null, { status: 204 });
-        if (body.method === 'initialize') return Response.json({ jsonrpc: '2.0', id: body.id, result: {} });
-        return Response.json({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: JSON.stringify({
-          agent: { id: body.params?.arguments?.agent_id, name: 'Registered pool Iris', status: 'RUNNING', health: 'HEALTHY', dashboardUrl: 'https://cloud.example.test/registered' },
-        }) }] } });
-      }
+      const body = init?.body ? JSON.parse(String(init.body)) as { operation?: string } : {};
       if (url.hostname.startsWith('register-')) {
         if (body.operation === 'capabilities') return Response.json({
           object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
@@ -266,20 +259,17 @@ describe('Hermes Cloud invitation capacity', () => {
         });
         if (body.operation === 'readiness') return Response.json({
           object: 'hermes.enterprise_bridge.readiness', version: '1.5.0',
-          workspace_id: fixture.workspaceId, agent_id: fixture.agentId, enterprise_url: 'https://enterprise.example.test',
+          workspace_id: fixture.workspaceId, agent_id: preflightAgentId, enterprise_url: 'https://enterprise.example.test',
           agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
         });
       }
       return new Response('unexpected fetch', { status: 500 });
     });
-    const env = hermesEnv({
-      HERMES_CLOUD_CLIENT_ID: 'cloud-client', HERMES_CLOUD_CLIENT_SECRET: 'cloud-secret',
-      HERMES_CLOUD_TOKEN_URL: 'https://cloud.example.test/oauth/token', HERMES_CLOUD_MCP_URL: 'https://cloud.example.test/mcp',
-    });
+    const env = hermesEnv();
     const input = {
       cloud_agent_id: cloudAgentId, instance_name: `pool-${randomUUID().slice(0, 8)}`,
       connector_url: connectorUrl, control_secret: 'registered-control-secret-longer-than-24',
-      preflight_agent_id: fixture.agentId,
+      preflight_agent_id: preflightAgentId,
     };
     const refused = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/admin/hermes-capacity`, {
       method: 'POST', body: input,
@@ -298,83 +288,15 @@ describe('Hermes Cloud invitation capacity', () => {
     expect(JSON.stringify(response)).not.toContain(input.control_secret);
   });
 
-  it('assigns one reserved instance, verifies it, and makes Iris runnable after onboarding', async () => {
+  it('assigns the pre-bound identity without Cloud mutation and makes Iris runnable after onboarding', async () => {
     const fixture = await seedWorkspace();
     const joinerId = randomUUID();
     const email = `ready-${randomUUID()}@example.test`;
-    let assignedAgentId = '';
-    let assignedWorkspaceId = '';
-    let assignedControlSecret = '';
-    const managementActions: string[] = [];
-    const runtimeOperations: string[] = [];
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
-      if (url.pathname === '/oauth/token') {
-        return Response.json({ access_token: 'cloud-test-access-token-that-is-long-enough' });
-      }
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      if (url.pathname === '/mcp') {
-        if (body.method === 'notifications/initialized') return new Response(null, { status: 204 });
-        if (body.method === 'initialize') {
-          return Response.json({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18' } });
-        }
-        const params = body.params as { arguments?: { action?: string; agent_id?: string; env?: Record<string, string> } };
-        const action = params.arguments?.action ?? '';
-        managementActions.push(action);
-        if (action === 'update') {
-          assignedAgentId = params.arguments?.env?.ENTERPRISE_AGENT_ID ?? '';
-          assignedWorkspaceId = params.arguments?.env?.ENTERPRISE_WORKSPACE_ID ?? '';
-          assignedControlSecret = params.arguments?.env?.HERMES_ENTERPRISE_CONTROL_SECRET ?? '';
-          expect(params.arguments?.env).toMatchObject({
-            HERMES_NATIVE_CRON_ENABLED: '0',
-            HERMES_AGENTCASH_MCP_ENABLED: '1',
-            AGENTCASH_HOME: '/opt/data/agentcash',
-          });
-        }
-        return Response.json({
-          jsonrpc: '2.0', id: body.id,
-          result: { content: [{ type: 'text', text: JSON.stringify({
-            agent: { id: params.arguments?.agent_id, name: 'Ready pool Iris', status: 'RUNNING', health: 'HEALTHY', dashboardUrl: 'https://cloud.example.test/agents/ready' },
-          }) }] },
-        });
-      }
-      if (url.hostname.startsWith('pool-') && url.hostname.endsWith('.example.test')) {
-        const operation = typeof body.operation === 'string' ? body.operation : '';
-        runtimeOperations.push(operation);
-        expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${assignedControlSecret}`);
-        if (operation === 'capabilities') return Response.json({
-          object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
-          auth: { type: 'bearer', required: true },
-          runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
-          features: {
-            run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
-            runs_idempotency: { supported: true, durable: true, retention_seconds: 86400 },
-          },
-          endpoints: {
-            runs: { method: 'POST', path: '/v1/runs' },
-            run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
-            run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
-            run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
-            run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
-          },
-        });
-        if (operation === 'readiness') return Response.json({
-          object: 'hermes.enterprise_bridge.readiness', version: '1.5.0',
-          workspace_id: assignedWorkspaceId, agent_id: assignedAgentId,
-          enterprise_url: 'https://enterprise.example.test',
-          agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
-        });
-      }
-      return new Response('unexpected fetch', { status: 500 });
-    });
-
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', upstream);
     const env = hermesEnv({
       HERMES_BRIDGE_SECRET: 'bridge-secret-longer-than-thirty-two-characters',
       HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example.test',
-      HERMES_CLOUD_CLIENT_ID: 'cloud-client',
-      HERMES_CLOUD_CLIENT_SECRET: 'cloud-secret',
-      HERMES_CLOUD_TOKEN_URL: 'https://cloud.example.test/oauth/token',
-      HERMES_CLOUD_MCP_URL: 'https://cloud.example.test/mcp',
     });
     const [capacityId] = await seedCapacity(fixture, env);
     await withClient('owner', (client) => client.query(
@@ -391,8 +313,7 @@ describe('Hermes Cloud invitation capacity', () => {
       method: 'POST', body: {},
     });
     expect(accepted.status).toBe(200);
-    expect(managementActions).toEqual(['update', 'restart']);
-    expect(runtimeOperations.sort()).toEqual(['capabilities', 'readiness']);
+    expect(upstream).not.toHaveBeenCalled();
 
     const afterAssignment = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
       const ownership = await client.query<{ member_id: string; agent_id: string }>(
@@ -413,6 +334,7 @@ describe('Hermes Cloud invitation capacity', () => {
       );
       return { ownership: ownership.rows[0]!, capacity: capacity.rows[0]!, binding: binding.rows[0]!, provisioning: provisioning.rows[0]! };
     });
+    expect(afterAssignment.ownership.agent_id).toBe(capacityId);
     expect(afterAssignment.capacity).toEqual({ state: 'assigned', assigned_agent_id: afterAssignment.ownership.agent_id, wallet: true });
     expect(afterAssignment.binding).toEqual({ ready: true });
     expect(afterAssignment.provisioning).toEqual({ status: 'ready' });

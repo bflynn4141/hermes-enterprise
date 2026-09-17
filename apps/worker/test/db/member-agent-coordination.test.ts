@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { ApprovalView, Bootstrap } from '@hermes/shared';
 import type { Env } from '../../src/env.js';
-import { POOL_CONTROL_NAMESPACE, runHermesPoolAssignmentJob } from '../../src/hermes-cloud/capacity.js';
+import { POOL_CONTROL_NAMESPACE } from '../../src/hermes-cloud/capacity.js';
 import { sealSecret } from '../../src/keys/envelope.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
@@ -16,9 +16,10 @@ async function seedInvitation(
   joinerId: string,
   invitationId: string,
   withCapacity: boolean,
-): Promise<{ capacityId: string | null }> {
+): Promise<{ capacityId: string | null; preflightAgentId: string | null }> {
   const email = `new-teammate-${joinerId.slice(0, 8)}@example.test`;
   const capacityId = withCapacity ? randomUUID() : null;
+  const preflightAgentId = withCapacity ? randomUUID() : null;
   const envelope = capacityId
     ? await sealSecret(
         env,
@@ -41,20 +42,20 @@ async function seedInvitation(
     if (capacityId && envelope) {
       await client.query(
         `INSERT INTO hermes_cloud_capacity
-           (id, workspace_id, cloud_agent_id, instance_name, connector_url, state,
+           (id, workspace_id, cloud_agent_id, instance_name, preflight_agent_id, connector_url, state,
             reserved_invitation_id, ciphertext, iv, wrapped_dek, wrap_iv, kek_version,
             plugin_version, agentcash_enabled, agentcash_wallet_present, native_cron_disabled,
             readiness_checked_at, last_health_checked_at)
-         VALUES ($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$9,$10,$11,'1.4.0',true,true,true,now(),now())`,
+         VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10,$11,$12,'1.5.0',true,true,true,now(),now())`,
         [capacityId, workspaceId, `cloud-${capacityId}`, `iris-pool-${capacityId.slice(0, 8)}`,
-         `https://reserved-${capacityId}.example.test/api/plugins/enterprise_bridge/control`, invitationId,
+         preflightAgentId, `https://reserved-${capacityId}.example.test/api/plugins/enterprise_bridge/control`, invitationId,
          Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv), Buffer.from(envelope.wrappedDek),
          Buffer.from(envelope.wrapIv), envelope.kekVersion],
       );
     }
     await client.query('COMMIT');
   });
-  return { capacityId };
+  return { capacityId, preflightAgentId };
 }
 
 describe('invitation-derived member and agent coordination', () => {
@@ -133,19 +134,19 @@ describe('invitation-derived member and agent coordination', () => {
     });
 
     expect(bootstrap.agent.id).toBe(persisted.joiner.agent_id);
-    // Bootstrap is committed before the asynchronous assignment attempt runs.
-    expect(bootstrap.agent.provisioning_status).toBe('getting_ready');
+    expect(bootstrap.agent.id).toBe(seeded.preflightAgentId);
+    expect(bootstrap.agent.provisioning_status).toBe('ready');
     expect(persisted.joiner).toMatchObject({ status: 'draft', responsibility: 'Partner Program', setup_step: 'identity' });
     expect(persisted.capacity).toMatchObject({
       id: seeded.capacityId,
-      state: 'assigning',
+      state: 'assigned',
       reserved_invitation_id: invitationId,
       assigned_agent_id: persisted.joiner.agent_id,
       agentcash_enabled: true,
       agentcash_wallet_present: true,
     });
-    expect(persisted.binding).toEqual({ assignment: 'invitee_pool', agentcash: true, ready: false });
-    expect(persisted.provisioning).toEqual({ status: 'failed' });
+    expect(persisted.binding).toEqual({ assignment: 'invitee_pool', agentcash: true, ready: true });
+    expect(persisted.provisioning).toEqual({ status: 'ready' });
     expect(persisted.welcome.text).toContain('Your organization has assigned you Iris');
     expect(persisted.welcome.text).not.toMatch(/Admin bootstrap|Hermes Cloud/i);
     expect(persisted.requests.map((request) => [request.kind, request.label])).toEqual(expect.arrayContaining([
@@ -166,25 +167,10 @@ describe('invitation-derived member and agent coordination', () => {
       { kind: 'member', member_id: persisted.joiner.member_id },
     ]);
     expect(persisted.runCount).toBe(0);
-
-    // Operational failures retry before the instance is quarantined. It never
-    // becomes runnable during those retries.
-    const assignmentJob = {
-      id: randomUUID(), workspace_id: fixture.workspaceId, kind: 'hermes_pool_assign', key: 'test-retry',
-      payload: { agent_id: persisted.joiner.agent_id }, attempts: 2,
-    };
-    await expect(runHermesPoolAssignmentJob(env, assignmentJob)).rejects.toThrow('credentials');
-    await expect(runHermesPoolAssignmentJob(env, { ...assignmentJob, attempts: 3 })).resolves.toBeUndefined();
-    const quarantined = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
-      const capacity = await client.query<{ state: string }>(
-        `SELECT state FROM hermes_cloud_capacity WHERE id=$1`, [seeded.capacityId],
-      );
-      const binding = await client.query<{ ready: boolean }>(
-        `SELECT ready_at IS NOT NULL AS ready FROM agent_runtime_bindings WHERE agent_id=$1`, [persisted.joiner.agent_id],
-      );
-      return { state: capacity.rows[0]?.state, ready: binding.rows[0]?.ready };
-    });
-    expect(quarantined).toEqual({ state: 'quarantined', ready: false });
+    const assignmentJobs = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => (
+      await client.query(`SELECT id FROM jobs WHERE workspace_id=$1 AND kind='hermes_pool_assign'`, [fixture.workspaceId])
+    ).rowCount);
+    expect(assignmentJobs).toBe(0);
   });
 
   it('rejects a legacy invitation with no reservation and rolls membership creation back', async () => {

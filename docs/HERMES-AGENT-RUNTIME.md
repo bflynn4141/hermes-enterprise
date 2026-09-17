@@ -67,9 +67,10 @@ native API.
 
 See [the runtime launcher](../runtime/hermes/README.md) for install, start,
 configuration and source-contract checks. Enable `AGENT_RUNTIME=hermes` and
-provide `HERMES_BRIDGE_SECRET`; use `HERMES_RUNTIME_AGENTS` only for fixed
-profiles. Invitee profiles resolve from encrypted dynamic bindings. Missing
-bindings fail explicitly; there is no silent fallback to a chat loop.
+provide `HERMES_BRIDGE_SECRET`; `HERMES_RUNTIME_AGENTS` contains fixed profiles
+and the permanent identities of unclaimed warm-pool profiles. After acceptance,
+invitee profiles resolve from encrypted dynamic bindings. Missing bindings fail
+explicitly; there is no silent fallback to a chat loop.
 The legacy/scripted path remains available for existing deployments and offline
 contract tests during rollout.
 
@@ -97,22 +98,22 @@ reservation, withdrawal or authoritative expiration releases it, and resend
 transfers it to the successor invitation.
 
 Acceptance creates the member-owned Iris and consumes that exact reservation.
-The assignment job creates an envelope-encrypted dynamic binding, updates the
-reserved Cloud instance with the enterprise workspace and agent IDs, scoped
-runtime token, new control secret, isolated AgentCash home, and disabled native
-cron, then restarts it. The binding becomes runnable only after the connector
-proves the expected identities, durable native capabilities, reviewed plugin,
-AgentCash integration and wallet presence, and cron policy. The first failure
-is retried; repeated readiness failure quarantines the instance and emits an
-internal alert. Members see only `getting ready`, `ready`, or a generic retry
-state. There is no simulated, generic-Hermes, or Admin-bootstrap fallback.
+The instance already has its final enterprise workspace and agent IDs, scoped
+runtime token, connector control secret, isolated AgentCash home, disabled
+native cron, reviewed plugin, and dedicated wallet. Acceptance reuses that
+permanent agent ID and atomically creates an envelope-encrypted dynamic binding
+from the verified capacity record. No Cloud API call, profile mutation, restart,
+retry job, or Admin action occurs in the member path; the returned bootstrap is
+`ready`. There is no simulated, generic-Hermes, or Admin-bootstrap fallback.
 
-The official Cloud MCP still cannot install the reviewed plugin or apply the
-complete governed profile from a service credential. An operator therefore
-prepares and pays for pool instances before registering them as capacity.
-`hermes_cloud_provision` remains future pool-refiller infrastructure and is not
-called by invitation or onboarding. Automated replenishment stays blocked until
-Nous exposes a supported template/plugin bootstrap contract. The application
+The official Cloud management MCP uses an interactive OAuth/PKCE user session;
+it has no separate API key or client secret for an unattended Worker. It also
+cannot install the reviewed private plugin or apply the complete governed
+profile as part of invitation acceptance. An operator therefore prepares and
+pays for pool instances before registering them as capacity. The unsupported
+JIT auto-provisioner was removed rather than retained behind a switch.
+Automated replenishment stays out of scope until Nous exposes a supported
+template/plugin bootstrap and non-interactive management contract. The application
 never creates or funds Cloud instances or AgentCash wallets on the invitation
 path. Workspace creation does not automatically start a Cloud runtime. A
 native run keeps its process while waiting and is bounded by the adapter’s
@@ -184,11 +185,11 @@ tunnel and its Worker secrets were removed after the proof.
 
 Hermes Cloud is the selected managed-hosting target. A Medium instance named
 `iris-enterprise-staging` is running in the **Brian Interview Demo** Portal
-organization on Hermes `0.21.3`. The official Cloud MCP exposed five management tools:
-instance lifecycle, Team Gateway, usage, and organization-scoped machine
-credentials in addition to instance reads. Those machine credentials use the
-OAuth client-credentials grant with scope `mcp:manage_agents`; they authorize
-the Cloud management plane, not the agent's `/v1/runs` API.
+organization on Hermes `0.21.3`. The official Cloud management MCP provides
+instance lifecycle and configuration tools through interactive OAuth/PKCE.
+It does not issue a separate service API key or client secret. This authorizes
+the Cloud management plane, not the agent's `/v1/runs` API, and is intentionally
+absent from the invitation acceptance path.
 
 The live Cloud hostname exposes the authenticated dashboard/Gateway. Its public
 `/api/status` reports the loopback API Server as connected at
@@ -209,36 +210,38 @@ arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
 
-Fixed profiles remain supported in `HERMES_RUNTIME_AGENTS`. Invitee profiles use
-`hermes_cloud_capacity` for reservation and one-time assignment, plus
-`agent_runtime_bindings` for execution. Pool and runtime control secrets are
-envelope-encrypted; a runtime binding is ignored until `ready_at` is set by the
-live assignment check. Database uniqueness prevents one Cloud agent or
-connector from appearing in two pool entries. `agentcash=true` is not
-sufficient by itself: registration and assignment both require the connector
-to attest that its dedicated wallet is present. Assigned capacity is never
-returned to the pool; retirement requires destroying or securely wiping its
-persistent state outside this application.
+Fixed and unclaimed invitee profiles are declared in `HERMES_RUNTIME_AGENTS`.
+Invitee profiles use `hermes_cloud_capacity` for reservation and one-time
+assignment, then `agent_runtime_bindings` for execution. Pool and runtime
+control secrets are envelope-encrypted. Registration is the only readiness
+gate: it verifies the permanent identity, durable connector, plugin, dedicated
+AgentCash wallet, and cron policy before the row can become `available`.
+Acceptance marks the new binding ready in the same transaction. Database
+uniqueness prevents one Cloud agent, permanent agent ID, or connector from
+appearing in two pool entries. Assigned capacity is never returned to the pool;
+retirement requires destroying or securely wiping its persistent state outside
+this application.
 
 ### Registering warm capacity
 
 An operator first configures a paid Cloud instance and dedicated AgentCash
 wallet, installs the reviewed Enterprise bridge, disables native cron, and
-starts the instance with temporary preflight workspace and agent identities.
+starts the instance with its permanent Enterprise workspace and agent identities.
 A recently authenticated workspace Admin then calls
 `POST /w/:workspace/admin/hermes-capacity` with the Cloud agent ID, instance
 name, clean HTTPS connector URL, connector control secret, and preflight agent
-ID. The route checks the Cloud control plane, connector capabilities, exact
+ID. The route checks connector capabilities, exact
 workspace and preflight identities, plugin version, AgentCash enablement,
 wallet presence, and cron policy before inserting `available` capacity. It
 stores the control secret only as a workspace-KEK envelope and rejects duplicate
 Cloud agents or connector URLs. This operation registers existing capacity; it
 does not create an instance or fund a wallet.
 
-Keep `HERMES_CLOUD_AUTOPROVISION_ENABLED=0`. Set `AGENT_RUNTIME=hermes`,
-`HERMES_POOL_LOW_CAPACITY_THRESHOLD`, `HERMES_BRIDGE_SECRET`, the workspace KEK,
-and Hermes Cloud machine credentials in every deployed environment. A dated
-internal warning is emitted when available capacity reaches the threshold.
+Set `AGENT_RUNTIME=hermes`, `HERMES_POOL_LOW_CAPACITY_THRESHOLD`,
+`HERMES_BRIDGE_SECRET`, the workspace KEK, and an exact
+`HERMES_RUNTIME_AGENTS` entry for each fixed or unclaimed pool profile in every
+deployed environment. A dated internal warning is emitted when available
+capacity reaches the threshold.
 
 The official image can persist user-managed plugins, skills and configuration
 under its data volume. Hermes Desktop can install an agent plugin into a
