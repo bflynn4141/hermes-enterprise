@@ -74,6 +74,7 @@ import {
   answerContext,
   createTurn,
   editQueueItem,
+  getRunRoute,
   guideRun,
   queueMessage,
   removeQueueItem,
@@ -322,6 +323,7 @@ app.delete('/w/:ws/messages/:id/feedback', clearMessageFeedback);
 // Workflow instance is created, because `create()` throws on a duplicate id and
 // only `createBatch()` is idempotent.
 app.post('/w/:ws/sessions/:id/turns', createTurn);
+app.get('/w/:ws/sessions/:id/runs/:runId', getRunRoute);
 app.post('/w/:ws/sessions/:id/runs/:runId/stop', stopRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/guide', guideRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/retry', retryRun);

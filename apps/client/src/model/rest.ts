@@ -287,6 +287,8 @@ export function createRest(options: RestOptions) {
     deleteSession: (workspaceId: string, sessionId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}`),
     messages: (workspaceId: string, sessionId: string, before: number | null, limit = 100) =>
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/messages?${before == null ? '' : `before=${before}&`}limit=${limit}`, paginatedSchema(messageSchema)) as Promise<Paginated<z.infer<typeof messageSchema>>>,
+    run: (workspaceId: string, sessionId: string, runId: string) =>
+      request('GET', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}`, runViewSchema) as Promise<RunView>,
 
     // --- decisions and effects: the guarded paths ---
     // The decisions route is M4's and may not exist yet; `optional` is not used

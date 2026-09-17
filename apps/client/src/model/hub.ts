@@ -57,6 +57,12 @@ export interface HubOptions {
    * than one page and `head` is how it knows.
    */
   replay(after: bigint): Promise<{ events: StreamEvent[]; resync: boolean; head?: string }>;
+  /**
+   * Optional semantic check after cursor replay. A later live event can move a
+   * cursor past an earlier missed event, so some consumers also compare their
+   * authoritative resource snapshot with local state.
+   */
+  onReconcile?(): void | Promise<void>;
   onSignedOut(): void;
   onEvicted(): void;
   socketFactory?: SocketFactory;
@@ -76,6 +82,14 @@ export interface HubOptions {
    * fixed fast interval would make an idle tab as expensive as a working one.
    */
   pollMs?: number | (() => number);
+  /**
+   * Low-frequency durable catch-up while the socket is still healthy.
+   *
+   * A `pong` proves the transport is alive, not that every committed batch
+   * reached this browser. Replaying from the durable cursor closes that gap.
+   * A function lets an active run reconcile faster than an idle transcript.
+   */
+  reconcileMs?: number | (() => number);
   /** How many refused handshakes before polling takes over. 0 disables it. */
   pollAfterFailures?: number;
   now?: () => number;
@@ -94,6 +108,8 @@ const POLL_AFTER_FAILURES = 2;
 export interface Hub {
   close(): void;
   extend(ticket: string): void;
+  /** Reconcile the durable stream now, even if the socket is still open. */
+  reconcile(): Promise<void>;
   readonly state: LinkState;
   /** Test seam: advance the internal clock-driven work without real timers. */
   readonly kind: HubKind;
@@ -118,7 +134,10 @@ export function createHub(options: HubOptions): Hub {
   let silenceHandle: unknown = null;
   let reconnectHandle: unknown = null;
   let pollHandle: unknown = null;
+  let reconcileHandle: unknown = null;
   let polling = false;
+  let socketOpen = false;
+  let catchUpInFlight: Promise<void> | null = null;
   let handshakeFailures = 0;
   let everOpened = false;
   let state: LinkState = { status: 'connecting', lastMessageAt: 0, sinceMs: 0 };
@@ -133,6 +152,8 @@ export function createHub(options: HubOptions): Hub {
     if (silenceHandle) clearTimer(silenceHandle);
     pingHandle = null;
     silenceHandle = null;
+    if (reconcileHandle) clearTimer(reconcileHandle);
+    reconcileHandle = null;
   }
 
   function armSilence(): void {
@@ -160,6 +181,7 @@ export function createHub(options: HubOptions): Hub {
   function dropAndReconnect(): void {
     if (closed) return;
     stopTimers();
+    socketOpen = false;
     try {
       socket?.close(4000, 'client_silence');
     } catch {
@@ -193,6 +215,10 @@ export function createHub(options: HubOptions): Hub {
     cursor = id;
     if (options.accept && !options.accept(streamEvent)) return;
     options.onEvent(streamEvent, id);
+    // `reconcileMs` may depend on state changed by this event. In particular,
+    // run.started must replace an idle 30 s audit with the active cadence.
+    // Catch-up itself schedules once after its whole replay is applied.
+    if (!catchUpInFlight) scheduleReconcile();
   }
 
   function intakePreview(frame: MessagePreviewFrame): void {
@@ -218,8 +244,32 @@ export function createHub(options: HubOptions): Hub {
   /** At most this many pages per catch-up, so a very stale cursor cannot spin. */
   const MAX_REPLAY_PAGES = 20;
 
-  async function catchUp(): Promise<void> {
-    setStatus('replaying');
+  function scheduleReconcile(): void {
+    if (closed || polling || !socketOpen || options.reconcileMs === undefined) return;
+    if (reconcileHandle) clearTimer(reconcileHandle);
+    const interval = typeof options.reconcileMs === 'function' ? options.reconcileMs() : options.reconcileMs;
+    if (interval <= 0) return;
+    reconcileHandle = setTimer(() => {
+      reconcileHandle = null;
+      void reconcile();
+    }, interval);
+  }
+
+  async function reconcileSemantics(): Promise<void> {
+    try {
+      await options.onReconcile?.();
+    } catch {
+      // The durable transport remains usable. A later bounded audit retries
+      // the semantic snapshot without converting this into a disconnect.
+    }
+  }
+
+  async function catchUp(required: boolean): Promise<void> {
+    if (required) setStatus('replaying');
+    // Buffer live frames for every replay, not only the initial connection.
+    // Durable events must establish the prefix before a simultaneous socket
+    // batch is applied or a missing range could be hidden by the newer id.
+    buffering = true;
     try {
       // Keep paging while the stream's head is ahead of the cursor. One page
       // is 500 rows; a client that was away for a long run needs several, and
@@ -232,7 +282,7 @@ export function createHub(options: HubOptions): Hub {
           previewBuffer = [];
           buffering = false;
           options.onResync();
-          setStatus('open');
+          if (socketOpen && state.status !== 'open') setStatus('open');
           return;
         }
         // The replay is applied with `buffering` still true for the *buffer*,
@@ -248,10 +298,45 @@ export function createHub(options: HubOptions): Hub {
         if (page.head === undefined || BigInt(page.head) <= cursor) break;
       }
       applyBuffered();
-      setStatus('open');
+      if (socketOpen && state.status !== 'open') setStatus('open');
+      await reconcileSemantics();
     } catch {
-      dropAndReconnect();
+      if (required) {
+        dropAndReconnect();
+      } else {
+        // A transient HTTP failure must not turn a healthy live socket into a
+        // disconnect. Preserve any live events buffered during the audit and
+        // retry on the next bounded reconciliation.
+        applyBuffered();
+        await reconcileSemantics();
+      }
     }
+  }
+
+  function reconcile(): Promise<void> {
+    if (closed) return Promise.resolve();
+    if (polling) return reconcileSemantics();
+    if (!socketOpen) return Promise.resolve();
+    if (catchUpInFlight) return catchUpInFlight;
+    if (reconcileHandle) clearTimer(reconcileHandle);
+    reconcileHandle = null;
+    const task = catchUp(false);
+    catchUpInFlight = task;
+    void task.finally(() => {
+      if (catchUpInFlight === task) catchUpInFlight = null;
+      scheduleReconcile();
+    });
+    return task;
+  }
+
+  function initialCatchUp(): void {
+    if (catchUpInFlight) return;
+    const task = catchUp(true);
+    catchUpInFlight = task;
+    void task.finally(() => {
+      if (catchUpInFlight === task) catchUpInFlight = null;
+      scheduleReconcile();
+    });
   }
 
   /**
@@ -263,7 +348,7 @@ export function createHub(options: HubOptions): Hub {
     if (closed || !polling) return;
     void options
       .replay(cursor)
-      .then((page) => {
+      .then(async (page) => {
         if (closed) return;
         if (page.resync) {
           options.onResync();
@@ -272,6 +357,10 @@ export function createHub(options: HubOptions): Hub {
         state = { ...state, lastMessageAt: now() };
         for (const streamEvent of page.events) intake(streamEvent);
         if (state.status !== 'open') setStatus('open');
+        // Fake-auth development and policy-refused WebSockets intentionally
+        // use polling. Completeness guarantees must not depend on which live
+        // transport the browser was allowed to open.
+        await reconcileSemantics();
       })
       .catch(() => {
         if (!closed) setStatus('reconnecting');
@@ -316,9 +405,10 @@ export function createHub(options: HubOptions): Hub {
       attempts = 0;
       everOpened = true;
       handshakeFailures = 0;
+      socketOpen = true;
       armPing();
       armSilence();
-      void catchUp();
+      initialCatchUp();
     };
 
     ws.onmessage = (event) => {
@@ -358,6 +448,7 @@ export function createHub(options: HubOptions): Hub {
 
     ws.onclose = (event) => {
       stopTimers();
+      socketOpen = false;
       socket = null;
       if (closed) return;
       // A handshake that never became an open socket is a refusal, not a drop.
@@ -404,9 +495,11 @@ export function createHub(options: HubOptions): Hub {
         /* the hub closes the socket if the ticket never arrives */
       }
     },
+    reconcile,
     close() {
       closed = true;
       polling = false;
+      socketOpen = false;
       stopTimers();
       if (pollHandle) clearTimer(pollHandle);
       if (reconnectHandle) clearTimer(reconnectHandle);

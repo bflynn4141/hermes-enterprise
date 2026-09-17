@@ -60,6 +60,8 @@ import { clearStepUp, createAuth, readStepUp, storeStepUp, type AuthAdapter, typ
 import { draftsKey } from './constants.js';
 
 export const AUTH_REFRESH_MS = 4 * 60 * 1000;
+export const SESSION_RECONCILE_ACTIVE_MS = 2_000;
+export const SESSION_RECONCILE_IDLE_MS = 30_000;
 
 export interface AdapterOptions {
   store: Store;
@@ -156,6 +158,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
   let disposed = false;
   const inFlight = new Set<string>();
   const turnIds = new Map<string, string>();
+  const sessionSnapshots = new Map<string, Promise<void>>();
+  const reconciledRuns = new Set<string>();
 
   // -------------------------------------------------------------------------
   // Events
@@ -180,6 +184,17 @@ export function createAdapter(options: AdapterOptions): Adapter {
     }
     // A completed run may have named its session better than its first turn did.
     if (event.kind === 'run.status' && event.payload.status === 'completed' && event.session_id) refineTitle(event.session_id);
+    if (
+      event.kind === 'run.status' &&
+      event.session_id &&
+      sessionHubId === event.session_id &&
+      ['completed', 'stopped', 'error'].includes(event.payload.status)
+    ) {
+      // A terminal status can be the later half of a partially delivered
+      // terminal batch. Force one authoritative snapshot even if an earlier
+      // provider-turn message makes the local transcript look non-empty.
+      void reconcileSessionSnapshot(event.session_id, true);
+    }
   }
 
   function signOut(): void {
@@ -216,6 +231,70 @@ export function createAdapter(options: AdapterOptions): Adapter {
       (session) => session.run && (session.run.status === 'working' || session.run.status === 'stopping'),
     );
     return active ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+  }
+
+  function sessionNeedsSnapshot(sessionId: string): boolean {
+    const session = state().sessions[sessionId];
+    const run = session?.run;
+    if (!session || !run) return false;
+    const hasAnswer = session.messages.some((message) => message.role === 'iris' && message.run_id === run.id);
+    return (
+      run.status === 'working' ||
+      run.status === 'stopping' ||
+      session.stream?.status === 'streaming' ||
+      (run.status === 'waiting' && !hasAnswer) ||
+      (['completed', 'stopped', 'error'].includes(run.status) && !reconciledRuns.has(run.id))
+    );
+  }
+
+  function sessionReconcileCadence(): number {
+    return sessionHubId && sessionNeedsSnapshot(sessionHubId) ? SESSION_RECONCILE_ACTIVE_MS : SESSION_RECONCILE_IDLE_MS;
+  }
+
+  function reconcileSessionSnapshot(sessionId: string, force = false): Promise<void> {
+    const active = sessionSnapshots.get(sessionId);
+    if (active) return active;
+    if (!force && !sessionNeedsSnapshot(sessionId)) return Promise.resolve();
+    const task = reconcileSessionSnapshotOnce(sessionId);
+    sessionSnapshots.set(sessionId, task);
+    const clear = (): void => {
+      if (sessionSnapshots.get(sessionId) === task) sessionSnapshots.delete(sessionId);
+    };
+    void task.then(clear, clear);
+    return task;
+  }
+
+  async function reconcileSessionSnapshotOnce(sessionId: string): Promise<void> {
+    const expectedRunId = state().sessions[sessionId]?.run?.id;
+    if (!expectedRunId) return;
+    const [runView, page] = await Promise.all([
+      rest.run(workspaceId, sessionId, expectedRunId),
+      rest.messages(workspaceId, sessionId, null, 100),
+    ]);
+    if (disposed) return;
+
+    for (const message of page.items) {
+      const current = state().sessions[sessionId];
+      if (!current) return;
+      const seen = current.messages.some((item) => item.id === message.id);
+      if (message.role === 'iris') {
+        const ownsUnsettledStream = Boolean(message.run_id && current.stream?.runId === message.run_id && current.stream.status === 'streaming');
+        if (!seen || ownsUnsettledStream) dispatch({ type: 'stream/final', sessionId, message });
+      } else if (!seen && message.role === 'user') {
+        dispatch({ type: 'message/confirm-turn', sessionId, message });
+      } else if (!seen) {
+        dispatch({ type: 'message/add', sessionId, message });
+      }
+    }
+
+    const current = state().sessions[sessionId];
+    const run = current?.run;
+    if (!current || !run || run.id !== runView.run_id) return;
+    const answer = [...current.messages].reverse().find((message) => message.role === 'iris' && message.run_id === run.id);
+    if (run.status !== runView.status) {
+      dispatch({ type: 'run/status', sessionId, runId: run.id, status: runView.status, patch: { active_ms: answer?.worked_ms ?? null } });
+    }
+    reconciledRuns.add(expectedRunId);
   }
 
   function attachWorkspaceHub(): void {
@@ -291,9 +370,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
         const page = await rest.events(workspaceId, 'session', after);
         return { events: page.events, resync: page.resync, head: page.head };
       },
+      onReconcile: () => reconcileSessionSnapshot(sessionId),
       onSignedOut: signOut,
       onEvicted: evicted,
       pollMs: pollCadence,
+      reconcileMs: sessionReconcileCadence,
       ...(options.socketFactory ? { socketFactory: options.socketFactory } : {}),
       ...(options.setTimer ? { setTimer: options.setTimer } : {}),
       ...(options.clearTimer ? { clearTimer: options.clearTimer } : {}),
@@ -409,6 +490,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       dispatch({ type: 'auth/refreshed', at: now() });
       workspaceHub?.extend(ticket);
       sessionHub?.extend(ticket);
+      // Ticket refresh is also a cheap opportunity to prove the visible
+      // transcript is complete. A healthy WebSocket heartbeat cannot do that.
+      void sessionHub?.reconcile();
       // A client behind the head replays over HTTP even though no socket noticed.
       const head = BigInt(session.stream_heads.workspace);
       if (head > state().cursors.workspace) {
@@ -424,6 +508,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
   const onVisibility = (): void => {
     const doc = options.visibility ?? (typeof document === 'undefined' ? null : document);
     if (!doc || doc.hidden) return;
+    // Browsers may suspend or coalesce socket delivery in a background tab
+    // without closing the connection. Reconcile immediately on return.
+    void sessionHub?.reconcile();
     if (now() - state().connection.authRefreshedAt > AUTH_REFRESH_MS) void refreshAuth();
   };
 
@@ -698,6 +785,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
         status: accepted.status,
         attempt: accepted.attempt,
       });
+      // Admission makes the run durable and the local session active. Audit
+      // now so a missed run.started event cannot leave the idle 30 s cadence
+      // in place for the whole response.
+      if (sessionHubId === id) void sessionHub?.reconcile();
       turnIds.delete(sessionId);
     } catch (error) {
       // The draft comes back so the text is never lost — under whichever id the

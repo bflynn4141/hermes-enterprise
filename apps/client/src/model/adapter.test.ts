@@ -303,6 +303,106 @@ describe('the hub keepalive', () => {
     expect(call).toBe(3);
     hub.close();
   });
+
+  it('recovers a committed terminal batch that a healthy socket never delivered', async () => {
+    const applied: string[] = [];
+    let replayCall = 0;
+    let active = false;
+    const terminal = [
+      streamEvent(
+        'message.final',
+        {
+          message_id: mockUuid(9),
+          session_id: SESSION,
+          run_id: RUN,
+          turn: 0,
+          attempt: 1,
+          text: 'The durable answer.',
+          blocks: [],
+          worked_ms: 2400,
+        },
+        9n,
+      ),
+      streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed', active_ms: 2400 }, 10n),
+    ];
+    const hub = createHub({
+      kind: 'session',
+      url: 'ws://test.local/hub',
+      ticket: 't',
+      after: 7n,
+      onEvent: (event) => {
+        applied.push(event.id);
+        if (event.kind === 'run.started') active = true;
+      },
+      onState: () => undefined,
+      onResync: () => undefined,
+      replay: async () => {
+        replayCall += 1;
+        return replayCall === 1
+          ? { events: [], resync: false, head: '7' }
+          : { events: terminal as never[], resync: false, head: '10' };
+      },
+      onSignedOut: () => undefined,
+      onEvicted: () => undefined,
+      socketFactory: (url) => new FakeSocket(url),
+      reconcileMs: () => (active ? 1_000 : 30_000),
+    });
+    const socket = FakeSocket.instances[0]!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(applied).toEqual([]);
+
+    socket.deliver(
+      streamEvent(
+        'run.started',
+        {
+          run_id: RUN,
+          session_id: SESSION,
+          attempt: 1,
+          engine_version: 1,
+          client_turn_id: 'turn-audit',
+          mode: 'work',
+          model_id: 'deepseek-flash',
+          effort: 'high',
+          title: 'Audit terminal state',
+          steps: [],
+        },
+        8n,
+      ),
+    );
+    // The connection remains open and responsive, but its terminal event
+    // batch is deliberately absent. The durable audit must still self-heal.
+    socket.onmessage?.({ data: 'pong' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(applied).toEqual(['8', '9', '10']);
+    expect(socket.closed).toBeNull();
+    hub.close();
+  });
+
+  it('runs the semantic completeness check in polling fallback too', async () => {
+    let reconciled = 0;
+    const hub = createHub({
+      kind: 'session',
+      url: 'ws://test.local/hub',
+      ticket: 't',
+      after: 0n,
+      onEvent: () => undefined,
+      onState: () => undefined,
+      onResync: () => undefined,
+      replay: async () => ({ events: [], resync: false, head: '0' }),
+      onReconcile: () => {
+        reconciled += 1;
+      },
+      onSignedOut: () => undefined,
+      onEvicted: () => undefined,
+      socketFactory: (url) => new FakeSocket(url),
+      pollAfterFailures: 1,
+    });
+    FakeSocket.instances[0]!.serverClose(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconciled).toBe(1);
+    hub.close();
+  });
 });
 
 describe('the adapter', () => {
@@ -336,6 +436,105 @@ describe('the adapter', () => {
     sessionSocket.deliver(streamEvent('run.started', { run_id: RUN, session_id: SESSION, attempt: 1, engine_version: 1, client_turn_id: 't', mode: 'work', model_id: 'deepseek-flash', effort: 'high', title: 'Screen', steps: [] }, 5n));
     expect(state().sessions[SESSION]!.run?.id).toBe(RUN);
     expect(state().cursors.session[SESSION]).toBe(5n);
+    adapter.dispose();
+  });
+
+  it('reconciles a missed completed response as soon as the tab becomes visible', async () => {
+    let visibilityListener: (() => void) | null = null;
+    let replayCall = 0;
+    let messagesCall = 0;
+    const finalMessage = {
+      id: mockUuid(9),
+      session_id: SESSION,
+      seq: 1,
+      role: 'iris',
+      kind: null,
+      text: 'Recovered after returning to the tab.',
+      blocks: [],
+      status: 'complete',
+      run_id: RUN,
+      worked_ms: 2400,
+      at: iso,
+    };
+    const { impl } = makeFetch({
+      [`GET /w/${WS}/events`]: () => {
+        replayCall += 1;
+        const body =
+          replayCall === 1
+            ? { stream: 'session', after: '0', head: '0', resync: false, events: [] }
+            : {
+                stream: 'session',
+                after: '5',
+                head: '7',
+                resync: false,
+                // The later status arrives, but the earlier message.final is
+                // absent. A tail replay cannot recover an event below cursor 7.
+                events: [streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed', active_ms: 2400 }, 7n)],
+              };
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => {
+        messagesCall += 1;
+        const body = { items: messagesCall === 1 ? [] : [finalMessage], cursor: null, total: null };
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () =>
+        new Response(
+          JSON.stringify({
+            run_id: RUN,
+            status: 'completed',
+            attempt: 1,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    });
+    const store = createStore(initialState());
+    const adapter = createAdapter({
+      store,
+      workspaceId: WS,
+      auth: createAuth('fake'),
+      fetchImpl: impl,
+      socketFactory: (url) => new FakeSocket(url),
+      wsBase: 'ws://test.local',
+      visibility: {
+        hidden: false,
+        addEventListener: (_type, listener) => {
+          visibilityListener = listener;
+        },
+        removeEventListener: () => undefined,
+      },
+    });
+
+    await adapter.start();
+    const sessionSocket = FakeSocket.instances.find((socket) => socket.url.includes('/hub/session/'))!;
+    sessionSocket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    sessionSocket.deliver(
+      streamEvent(
+        'run.started',
+        {
+          run_id: RUN,
+          session_id: SESSION,
+          attempt: 1,
+          engine_version: 1,
+          client_turn_id: 'turn-visible',
+          mode: 'work',
+          model_id: 'deepseek-flash',
+          effort: 'high',
+          title: 'Recover terminal state',
+          steps: [],
+        },
+        5n,
+      ),
+    );
+    expect(store.getState().sessions[SESSION]!.run?.status).toBe('working');
+
+    visibilityListener!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.getState().sessions[SESSION]!.run?.status).toBe('completed');
+    expect(store.getState().sessions[SESSION]!.messages.at(-1)?.text).toBe('Recovered after returning to the tab.');
+    expect(sessionSocket.closed).toBeNull();
     adapter.dispose();
   });
 
