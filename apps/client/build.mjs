@@ -131,6 +131,10 @@ async function emitStatic() {
   await fs.writeFile(path.join(dist, 'index.html'), INDEX_HTML);
   await fs.copyFile(path.join(here, 'src/styles.css'), path.join(dist, 'styles.css'));
   await fs.copyFile(path.join(libRoot, 'dist/components.css'), path.join(dist, 'components.css'));
+  // Product artwork is deliberately kept out of the JS graph. Copying the
+  // public tree here keeps the standalone preview and the Worker's static
+  // assets binding identical instead of relying on a dev-server convention.
+  await fs.cp(path.join(here, 'public'), dist, { recursive: true });
   // Attribution travels with the bundle and is linked from Settings → Data and privacy.
   await fs.copyFile(path.join(libRoot, 'dist/LICENSE.beautiful-ui'), path.join(dist, 'LICENSE.beautiful-ui'));
 }
@@ -157,7 +161,7 @@ if (watch) {
 if (serve) {
   // 4173-4176 are taken by the other prototypes in this tree.
   const port = Number(process.env.PORT ?? 4180);
-  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.map': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.map': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp' };
   http
     .createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');

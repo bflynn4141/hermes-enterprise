@@ -430,12 +430,14 @@ describe('F7 · GET /auth/session without ?ws', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       user: { email: string };
-      workspaces: { id: string; name: string; role: string }[];
+      workspaces: { id: string; name: string; role: string; members: { id: string; name: string; avatar_url: string | null }[]; member_count: number }[];
       authenticated_at: string;
     };
     expect(body.user.email).toBe(await emailOf(fx.memberId));
     expect(body.workspaces.map((w) => w.id)).toContain(fx.workspaceId);
     expect(body.workspaces.find((w) => w.id === fx.workspaceId)?.role).toBe('member');
+    expect(body.workspaces.find((w) => w.id === fx.workspaceId)?.member_count).toBeGreaterThanOrEqual(1);
+    expect(body.workspaces.find((w) => w.id === fx.workspaceId)?.members.some((member) => member.id === fx.memberId)).toBe(true);
     // Stream heads and a hub ticket are per-workspace; no workspace was named,
     // so neither is invented.
     expect(body).not.toHaveProperty('stream_heads');

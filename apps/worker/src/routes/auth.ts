@@ -349,14 +349,58 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
       // to mint: both are per-workspace, and inventing them for a workspace the
       // caller has not chosen would hand out an authorisation nobody asked for.
       // The client picks one and asks again by id.
+      //
+      // The picker also gets four presentation-only member previews. These are
+      // selected strictly from the workspace ids `hermes_user_workspaces`
+      // authorised above; no caller-supplied workspace id participates. The
+      // full member record, email and reviewer authority stay on `/members`.
+      const previews = await client.query<{
+        workspace_id: string;
+        user_id: string;
+        name: string;
+        avatar_url: string | null;
+        member_count: number;
+      }>(
+        `WITH ranked AS (
+           SELECT d.workspace_id, d.user_id, COALESCE(u.name, u.email) AS name, u.avatar_url,
+                  row_number() OVER (
+                    PARTITION BY d.workspace_id
+                    ORDER BY CASE WHEN d.user_id = $2 THEN 0 ELSE 1 END, d.joined_at, d.user_id
+                  ) AS member_rank,
+                  (count(*) OVER (PARTITION BY d.workspace_id))::int AS member_count
+             FROM member_directory d
+             JOIN users u ON u.id = d.user_id AND u.deleted_at IS NULL
+            WHERE d.workspace_id = ANY($1::uuid[])
+         )
+         SELECT workspace_id, user_id, name, avatar_url, member_count
+           FROM ranked
+          WHERE member_rank <= 4
+          ORDER BY workspace_id, member_rank`,
+        [mine.rows.map((row) => row.workspace_id), session.userId],
+      );
+      const previewsByWorkspace = new Map<string, typeof previews.rows>();
+      for (const preview of previews.rows) {
+        const current = previewsByWorkspace.get(preview.workspace_id) ?? [];
+        current.push(preview);
+        previewsByWorkspace.set(preview.workspace_id, current);
+      }
       return c.json(
         authWorkspacesSchema.parse({
           user: { id: user.id, name: user.name ?? user.email, email: user.email },
-          workspaces: mine.rows.map((row) => ({
-            id: row.workspace_id,
-            name: row.name,
-            role: row.role === 'admin' ? 'admin' : 'member',
-          })),
+          workspaces: mine.rows.map((row) => {
+            const members = previewsByWorkspace.get(row.workspace_id) ?? [];
+            return {
+              id: row.workspace_id,
+              name: row.name,
+              role: row.role === 'admin' ? 'admin' : 'member',
+              members: members.map((member) => ({
+                id: member.user_id,
+                name: member.name,
+                avatar_url: member.avatar_url,
+              })),
+              member_count: members[0]?.member_count ?? 0,
+            };
+          }),
           authenticated_at: session.authenticatedAt.toISOString(),
         }),
       );

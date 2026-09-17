@@ -683,7 +683,21 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/auth/session') {
       const user = { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example' };
-      if (!url.searchParams.has('ws')) return json({ user, workspaces: [{ id: WS, name: workspaceName, role: seat }], authenticated_at: iso(0) });
+      if (!url.searchParams.has('ws')) {
+        return json({
+          user,
+          workspaces: [
+            {
+              id: WS,
+              name: workspaceName,
+              role: seat,
+              members: members.map((member) => ({ id: member.user_id, name: member.name, avatar_url: null })).slice(0, 4),
+              member_count: members.length,
+            },
+          ],
+          authenticated_at: iso(0),
+        });
+      }
       return json({
         user: { ...user, role: seat },
         workspace: { id: WS, name: workspaceName },

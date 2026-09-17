@@ -23,7 +23,7 @@ import { StoreProvider, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
 import { Onboarding, SignIn } from './app/onboarding/Onboarding.js';
 import { SharedViewer } from './app/shared/SharedViewer.js';
-import { Button, EmptyState, Skeleton } from './app/ui/primitives.js';
+import { Avatar, Button, EmptyState, Skeleton } from './app/ui/primitives.js';
 
 const route = currentRoute();
 const store = createStore(initialState());
@@ -232,7 +232,15 @@ function App() {
  */
 function WorkspacePicker() {
   const [state, setState] = useState<'loading' | 'signed-out' | 'ready' | 'failed'>('loading');
-  const [workspaces, setWorkspaces] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [workspaces, setWorkspaces] = useState<
+    {
+      id: string;
+      name: string;
+      role: string;
+      members: { id: string; name: string; avatar_url: string | null }[];
+      member_count: number;
+    }[]
+  >([]);
 
   useEffect(() => {
     let live = true;
@@ -241,7 +249,7 @@ function WorkspacePicker() {
       .authWorkspaces()
       .then((session) => {
         if (!live) return;
-        setWorkspaces(session.workspaces.map((row) => ({ id: row.id, name: row.name, role: row.role })));
+        setWorkspaces(session.workspaces);
         setState('ready');
       })
       .catch((caught: unknown) => {
@@ -280,9 +288,12 @@ function WorkspacePicker() {
     );
 
   return (
-    <div className="portal">
-      <div className="portal-body" style={{ paddingTop: 120, width: 560, gap: 20 }}>
-        <h1 style={{ font: '500 32px/35.2px var(--font-display)' }}>Your workspaces</h1>
+    <div className="portal workspace-picker">
+      <main className="workspace-picker-body">
+        <header className="workspace-picker-heading">
+          <h1>Your workspaces</h1>
+          <p>Choose where Hermes should work.</p>
+        </header>
         {workspaces.length === 0 ? (
           <EmptyState
             icon="context"
@@ -291,24 +302,65 @@ function WorkspacePicker() {
             action={<Button primary onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>}
           />
         ) : (
-          <div className="col" role="list">
-            {workspaces.map((workspace) => (
-              <div className="list-row" role="listitem" key={workspace.id}>
-                <div className="row-main">
-                  <span className="t">{workspace.name}</span>
-                  <span className="s">{workspace.role === 'admin' ? 'Admin' : 'Member'}</span>
-                </div>
-                <Button onClick={() => window.location.assign(`/${SHELL_PREFIX}/${workspace.id}`)}>Open →</Button>
-              </div>
-            ))}
+          <div className="workspace-card-grid">
+            {workspaces.map((workspace, index) => {
+              const lowered = workspace.name.toLocaleLowerCase();
+              const artwork = lowered.includes('interview')
+                ? 'interview-signal'
+                : lowered.includes('finance') || lowered.includes('account')
+                  ? 'finance-ledger'
+                  : index % 3 === 2
+                    ? 'finance-ledger'
+                    : 'partner-network';
+              const visibleNames = workspace.members.map((member) => member.name).join(', ');
+              const overflow = Math.max(0, workspace.member_count - workspace.members.length);
+              return (
+                <button
+                  className="workspace-card"
+                  type="button"
+                  key={workspace.id}
+                  onClick={() => window.location.assign(`/${SHELL_PREFIX}/${workspace.id}`)}
+                  aria-label={`Open ${workspace.name}`}
+                >
+                  <span className="workspace-card-art" aria-hidden="true">
+                    <img src={`/assets/workspaces/${artwork}.webp`} alt="" />
+                    <span className="workspace-card-art-shade" />
+                    <span className="workspace-card-index">{String(index + 1).padStart(2, '0')}</span>
+                  </span>
+                  <span className="workspace-card-content">
+                    <span className="workspace-card-copy">
+                      <strong>{workspace.name}</strong>
+                      <span className="workspace-card-meta">
+                        <span>{workspace.role === 'admin' ? 'Admin' : 'Member'}</span>
+                        <i aria-hidden="true" />
+                        <span>{workspace.member_count === 1 ? '1 member' : `${workspace.member_count} members`}</span>
+                      </span>
+                    </span>
+                    <span className="workspace-card-footer">
+                      <span className="workspace-member-stack" aria-label={visibleNames ? `Members: ${visibleNames}` : 'No member previews available'}>
+                        {workspace.members.map((member) => (
+                          <span className="workspace-member" title={member.name} key={member.id}>
+                            <Avatar person={{ name: member.name, avatar: member.avatar_url ?? undefined }} size={32} />
+                          </span>
+                        ))}
+                        {overflow > 0 ? <span className="workspace-member-more" aria-label={`${overflow} more members`}>+{overflow}</span> : null}
+                      </span>
+                      <span className="workspace-card-open">Open <span aria-hidden="true">↗</span></span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+            <button className="workspace-create-card" type="button" onClick={() => window.location.assign('/onboarding/create')}>
+              <span className="workspace-create-icon" aria-hidden="true">+</span>
+              <span>
+                <strong>Create a workspace</strong>
+                <small>Set up a new team and its agents</small>
+              </span>
+            </button>
           </div>
         )}
-        {workspaces.length > 0 ? (
-          <div className="row">
-            <Button onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>
-          </div>
-        ) : null}
-      </div>
+      </main>
     </div>
   );
 }
