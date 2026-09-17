@@ -110,6 +110,23 @@ function teamCommitment(fx: ApprovalFixture): Extract<ApprovalProposal, { approv
   };
 }
 
+function outreachDraft(fx: ApprovalFixture): Extract<ApprovalProposal, { approval_type: 'communication' }> {
+  return {
+    kind: 'approval', approval_type: 'communication', illustrative: false,
+    summary: 'Review a personalized partner invitation draft.',
+    consequence: 'Approval records the reviewed copy only and sends no message.',
+    evidence: [{ id: 'candidate-evidence', kind: 'source', label: 'Stored professional evidence' }],
+    details: {
+      channel: 'email', draft_only: true,
+      sender: { member_id: fx.adminMemberId, address: 'maya@example.test' },
+      recipients: [{ name: 'Taylor Brooks', address: null }],
+      subject: 'Explore the Hermes Partner Program',
+      body: 'Hi Taylor,\n\nYour public work suggests a possible fit. Would you be interested in exploring the Hermes Partner Program?',
+      attachments: [],
+    },
+  };
+}
+
 async function propose(fx: ApprovalFixture, proposal: ApprovalProposal, key: string, policyKey = 'run-plan-low'): Promise<ApprovalView> {
   const e = env();
   return withTenantTransaction(e.env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, (tx) =>
@@ -131,6 +148,33 @@ const decision = (view: ApprovalView, idempotencyKey: string, choice: 'approve' 
 describe('enterprise approval policy and voting', () => {
   let fx: ApprovalFixture;
   beforeEach(async () => { fx = await seedApprovalFixture(); });
+
+  it('stores outreach as a draft-only review with no delivery effect', async () => {
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `INSERT INTO approval_policies
+          (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
+           prevent_self_review, steps)
+         VALUES ($1,'partner-outreach-draft',1,'communication',$2,100,'sequential',false,$3::jsonb)`,
+        [fx.workspaceId, fx.agentId, JSON.stringify([{
+          id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+        }])],
+      );
+      await client.query('COMMIT');
+    });
+    const proposed = await propose(fx, outreachDraft(fx), `proposal:${randomUUID()}`, 'partner-outreach-draft');
+    expect(proposed.payload.approval_type).toBe('communication');
+    if (proposed.payload.approval_type !== 'communication') throw new Error('fixture drift');
+    expect(proposed.payload.details).toMatchObject({
+      draft_only: true, recipients: [{ name: 'Taylor Brooks', address: null }],
+    });
+    expect(proposed.effect).toMatchObject({
+      kind: 'communication', status: 'not_required', reason: expect.stringContaining('does not send'),
+    });
+  });
 
   it('requires two distinct current reviewers and prevents requester self-review', async () => {
     const e = env();

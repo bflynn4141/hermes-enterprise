@@ -2,7 +2,7 @@
 
 Hermes Enterprise packages reviewed procedures as official Hermes skills while keeping authority, credentials, source access and approvals in the enterprise control plane.
 
-The first package is `enterprise_bridge:partner-program-screening` version `1.3.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare an application request, and stop for human review. AgentCash is limited to the exact Worker-configured People Search request and needs a one-use Worker lease before payment; only sanitized imported evidence can support an Inbox proposal. The skill cannot contact anyone or decide an application by itself.
+The first package is `enterprise_bridge:partner-program-screening` version `1.4.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare a draft-only outreach email, and stop for human review. AgentCash is limited to the exact Worker-configured People Search request and needs a one-use Worker lease before payment; only sanitized imported evidence can support an Inbox proposal. The skill cannot contact anyone, invent an address, or decide an application by itself.
 
 ## Why this matches Hermes
 
@@ -30,7 +30,7 @@ dedicated Hermes profile · skills.auto_load
              ↓
 Iris procedure + governed enterprise tools
              ↓
-pending Inbox request · human decision
+pending draft-only Inbox review · human decision
 ```
 
 The runtime fetches `GET /internal/runtime/w/:workspace/agents/:agent/skills` with its agent-scoped bridge credential before it starts. The response names reviewed plugin skills and contains bounded non-secret configuration. The launcher validates the payload, rejects credential-shaped keys, writes `skills.auto_load` and `skills.config`, and fails startup if a named plugin skill is absent.

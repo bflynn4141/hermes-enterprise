@@ -365,7 +365,7 @@ async function resolveResourceBindings(
   if (proposal.approval_type === 'communication') {
     bindings.push({
       kind: 'artifact', id: 'communication-body', version: null,
-      sha256: await sha256({ sender: proposal.details.sender, recipients: proposal.details.recipients, subject: proposal.details.subject, body: proposal.details.body }),
+      sha256: await sha256({ draft_only: proposal.details.draft_only, sender: proposal.details.sender, recipients: proposal.details.recipients, subject: proposal.details.subject, body: proposal.details.body }),
       immutable: true, executor_available: false, reason: NO_EXECUTOR,
     });
     for (const attachment of proposal.details.attachments) {
@@ -434,6 +434,9 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
     proposal.approval_type === 'record_change' ? 'record_change' :
     proposal.approval_type === 'agent_governance' ? 'agent_governance_change' : 'none';
   if (kind === 'none') return { kind, status: 'not_required', reason: null };
+  if (proposal.approval_type === 'communication' && proposal.details.draft_only) {
+    return { kind, status: 'not_required', reason: 'Draft only. Approval records the reviewed copy and does not send it.' };
+  }
   const unbound = bindings.find((binding) => !binding.immutable);
   return { kind, status: 'unavailable', reason: unbound?.reason ?? NO_EXECUTOR };
 }

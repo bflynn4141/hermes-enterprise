@@ -42,7 +42,7 @@ const proposals: ApprovalProposal[] = [
   {
     ...common,
     approval_type: 'communication',
-    details: { channel: 'email', sender: { member_id: M, address: 'maya@example.test' }, recipients: [{ name: 'Prospect', address: 'prospect@example.test' }], subject: 'Introduction', body: 'Reviewed introduction.', attachments: [], scheduled_for: '2026-09-18T09:00:00-07:00' },
+    details: { channel: 'email', draft_only: false, sender: { member_id: M, address: 'maya@example.test' }, recipients: [{ name: 'Prospect', address: 'prospect@example.test' }], subject: 'Introduction', body: 'Reviewed introduction.', attachments: [], scheduled_for: '2026-09-18T09:00:00-07:00' },
   },
   {
     ...common,
@@ -111,6 +111,18 @@ describe('enterprise approval contract', () => {
     if (proposal.approval_type !== 'run_plan') throw new Error('fixture drift');
     proposal.details.budget.estimated_max_minor = 501;
     expect(approvalProposalSchema.safeParse(proposal).success).toBe(false);
+  });
+
+  it('allows a draft-only email before a verified recipient address exists', () => {
+    const communication = structuredClone(proposals.find((proposal) => proposal.approval_type === 'communication')!);
+    if (communication.approval_type !== 'communication') throw new Error('fixture drift');
+    communication.details.draft_only = true;
+    communication.details.recipients[0]!.address = null;
+    delete communication.details.scheduled_for;
+    expect(approvalProposalSchema.parse(communication).details).toMatchObject({ draft_only: true });
+
+    communication.details.draft_only = false;
+    expect(approvalProposalSchema.safeParse(communication).success).toBe(false);
   });
 
   it('requires enforceable run-plan call and token ceilings', () => {

@@ -115,9 +115,10 @@ export const accessDetailsSchema = z
 export const communicationDetailsSchema = z
   .object({
     channel: z.enum(['email', 'message', 'social']),
+    draft_only: z.boolean().default(false),
     sender: z.object({ member_id: uuidSchema, address: z.string().trim().min(1).max(320) }).strict(),
     recipients: z
-      .array(z.object({ name: shortText, address: z.string().trim().min(1).max(320) }).strict())
+      .array(z.object({ name: shortText, address: z.string().trim().min(1).max(320).nullable() }).strict())
       .min(1)
       .max(100),
     subject: z.string().trim().max(500).optional(),
@@ -125,7 +126,15 @@ export const communicationDetailsSchema = z
     attachments: z.array(z.object({ id: identifier, label: shortText }).strict()).max(25).default([]),
     scheduled_for: isoDateTime.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.draft_only && value.recipients.some((recipient) => recipient.address === null)) {
+      context.addIssue({ code: 'custom', path: ['recipients'], message: 'a sendable communication requires every recipient address' });
+    }
+    if (value.draft_only && value.scheduled_for) {
+      context.addIssue({ code: 'custom', path: ['scheduled_for'], message: 'a draft-only communication cannot be scheduled' });
+    }
+  });
 
 export const sharedLearningDetailsSchema = z
   .object({

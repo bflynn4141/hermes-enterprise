@@ -337,11 +337,68 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       const candidates = await client.query(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
       const sessions = await client.query(`SELECT id FROM sessions WHERE agent_id=$1 AND title='Iris · Automated partner screening'`, [fx.agentId]);
       const runs = await client.query(`SELECT id, client_turn_id FROM runs WHERE session_id=$1`, [sessions.rows[0]?.id]);
-      return { screening: screening.rowCount, candidates: candidates.rowCount, sessions: sessions.rowCount, runs: runs.rows };
+      const prompt = await client.query<{ text: string }>(
+        `SELECT text FROM messages WHERE session_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`,
+        [sessions.rows[0]?.id],
+      );
+      const policy = await client.query<{ approval_type: string; requester_agent_id: string }>(
+        `SELECT approval_type, requester_agent_id FROM approval_policies
+          WHERE workspace_id=$1 AND key=$2 AND active`,
+        [fx.workspaceId, `partner-outreach-draft-${fx.agentId}`],
+      );
+      return {
+        screening: screening.rowCount, candidates: candidates.rowCount, sessions: sessions.rowCount,
+        runs: runs.rows, prompt: prompt.rows[0]?.text ?? '', policy: policy.rows,
+      };
     });
     expect(stored).toMatchObject({ screening: 1, candidates: 1, sessions: 1 });
     expect(stored.runs).toHaveLength(1);
     expect(stored.runs[0]?.client_turn_id).toMatch(/^partner-screening:/);
+    expect(stored.prompt).toContain('details.draft_only to true');
+    expect(stored.prompt).toContain('address null');
+    expect(stored.prompt).toContain('Do not use propose_request');
+    expect(stored.policy).toEqual([{ approval_type: 'communication', requester_agent_id: fx.agentId }]);
+  });
+
+  it('requires a separate spend gate before Cron queues AgentCash discovery', async () => {
+    const fx = await seedWorkspace();
+    await bindAgent(fx);
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id)
+       VALUES ($1,$2) ON CONFLICT (workspace_id) DO NOTHING`,
+      [fx.workspaceId, `paid-cron-test-${fx.workspaceId}`],
+    ));
+    const policy = {
+      [fx.agentId]: {
+        source: 'agentcash_people', source_purpose: 'person_partner_research',
+        organization_only: false, no_outreach: true, role_label: 'Potential ecosystem lead',
+        search_queries: [], intake_urls: [], keywords: ['artificial intelligence'],
+        people_search: {
+          current_position_seniority_level: ['Founder'], person_skills: ['Artificial Intelligence (AI)'],
+          current_position_titles: [], person_locations: [],
+        },
+        ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+        minimum_priority: 40, lookback_days: 365, max_candidates: 5,
+        max_api_requests: 1, minimum_rate_remaining: 0, max_spend_usd: 0.15,
+      },
+    };
+    const base = {
+      AUTOMATED_TRIGGERS_ENABLED: '1',
+      PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES: '360',
+      PARTNER_SCREENING_CONFIG_JSON: JSON.stringify(policy),
+    };
+    const now = new Date('2026-09-16T19:00:00Z');
+    const gated = await enqueueAutomatedPartnerScreening(makeEnv(base).env, now);
+    expect(gated).toMatchObject({
+      enabled: true, paidEnabled: false, configuredAgents: 1, skippedPaid: 1, queued: 0,
+    });
+
+    const admitted = await enqueueAutomatedPartnerScreening(makeEnv({
+      ...base, PARTNER_SCREENING_PAID_AUTOMATION_ENABLED: '1',
+    }).env, now);
+    expect(admitted).toMatchObject({
+      enabled: true, paidEnabled: true, configuredAgents: 1, skippedPaid: 0, queued: 1,
+    });
   });
 
   it('imports one run-bound AgentCash People Search response as sanitized Inbox evidence', async () => {

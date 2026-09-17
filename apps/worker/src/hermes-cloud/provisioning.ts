@@ -100,9 +100,10 @@ export async function runHermesCloudProvisioningJob(env: Env, job: Job): Promise
   const agentId = typeof payload.agent_id === 'string' ? payload.agent_id : '';
   if (!UUID.test(agentId)) throw new Error('hermes_cloud_provision payload is invalid');
   if (env.HERMES_CLOUD_AUTOPROVISION_ENABLED !== '1') {
-    const error = new HermesCloudError('Hermes Cloud auto-provisioning is disabled', 'cloud_provisioning_disabled');
-    await markFailure(env, job.workspace_id, agentId, error);
-    throw error;
+    // The switch pauses paid provisioning; it is not an agent failure. Keep
+    // the durable job and provisioning state retryable so enabling the switch
+    // resumes the same request without a manual database repair.
+    throw new HermesCloudError('Hermes Cloud auto-provisioning is disabled', 'cloud_provisioning_disabled');
   }
 
   try {

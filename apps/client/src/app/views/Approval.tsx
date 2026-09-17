@@ -219,11 +219,11 @@ function CommunicationPreview({ view }: { view: ApprovalView }) {
   return (
     <div className="approval-preview">
       <article className="approval-message">
-        <dl><div><dt>From</dt><dd>{details.sender.address}</dd></div><div><dt>To</dt><dd>{details.recipients.map((item) => `${item.name} <${item.address}>`).join(', ')}</dd></div>{details.subject && <div><dt>Subject</dt><dd>{details.subject}</dd></div>}</dl>
+        <dl><div><dt>From</dt><dd>{details.sender.address}</dd></div><div><dt>To</dt><dd>{details.recipients.map((item) => item.address ? `${item.name} <${item.address}>` : `${item.name} · email address needed`).join(', ')}</dd></div>{details.subject && <div><dt>Subject</dt><dd>{details.subject}</dd></div>}</dl>
         <div className="approval-message-body">{details.body}</div>
         {details.attachments.length > 0 && <div className="approval-attachments">{details.attachments.map((item) => <span key={item.id}><Icon name="doc" size={15} /> {item.label}</span>)}</div>}
       </article>
-      <p className="meta">{details.scheduled_for ? `Scheduled for ${shortDateTime(details.scheduled_for)}` : 'Send after approval'} · Sending remains a separate provider effect.</p>
+      <p className="meta">{details.draft_only ? 'Draft only · No message will be sent.' : `${details.scheduled_for ? `Scheduled for ${shortDateTime(details.scheduled_for)}` : 'Send after approval'} · Sending remains a separate provider effect.`}</p>
     </div>
   );
 }

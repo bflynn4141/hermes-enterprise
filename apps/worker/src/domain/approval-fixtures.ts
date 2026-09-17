@@ -62,7 +62,7 @@ function proposals(context: ApprovalProposerContext, options: ApprovalDemoFixtur
     },
     communication: {
       ...common, approval_type: 'communication', summary: 'Approve the exact illustrative introduction.',
-      details: { channel: 'email', sender: { member_id: options.primaryReviewerMemberId, address: 'sender@example.test' }, recipients: [{ name: 'Selected prospect', address: 'prospect@example.test' }], subject: 'Introduction', body: 'This is the complete illustrative message.', attachments: [] },
+      details: { channel: 'email', draft_only: false, sender: { member_id: options.primaryReviewerMemberId, address: 'sender@example.test' }, recipients: [{ name: 'Selected prospect', address: 'prospect@example.test' }], subject: 'Introduction', body: 'This is the complete illustrative message.', attachments: [] },
     },
     shared_learning: {
       ...common, approval_type: 'shared_learning', summary: 'Publish the revised screening checklist.',
