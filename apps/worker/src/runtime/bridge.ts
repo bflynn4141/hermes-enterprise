@@ -422,6 +422,49 @@ export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env 
   return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1 }, created ? 201 : 200);
 }
 
+/**
+ * Return the one paid response that still needs importing for this agent.
+ *
+ * The native profile uses this only during startup recovery. It receives no
+ * new payment authority: the row must already hold the exact one-call lease.
+ */
+export async function pendingAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const pending = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => tx.query<{
+    runtime_run_id: string;
+    agentcash_tool_call_id: string;
+    config_snapshot: Record<string, unknown>;
+  }>(
+    `SELECT r.runtime_run_id, s.agentcash_tool_call_id, s.config_snapshot
+       FROM partner_screening_runs s
+       JOIN runs r
+         ON r.workspace_id=s.workspace_id
+        AND r.agent_id=s.agent_id
+        AND r.client_turn_id='partner-screening:' || s.id::text
+      WHERE s.workspace_id=$1 AND s.agent_id=$2
+        AND s.source='agentcash_people' AND s.status='running'
+        AND s.api_requests_used=1 AND s.agentcash_tool_call_id IS NOT NULL
+        AND r.runtime_kind='hermes' AND r.runtime_run_id IS NOT NULL
+      ORDER BY r.created_at DESC
+      LIMIT 2`,
+    [workspaceId, agentId],
+  ));
+  if (pending.rows.length === 0) return new Response(null, { status: 204 });
+  if (pending.rows.length > 1) {
+    throw new RouteError('More than one AgentCash import is pending for this agent.', 'partner_screening_conflict', 409);
+  }
+  const row = pending.rows[0]!;
+  if (!/^run_[0-9a-f]{32}$/.test(row.runtime_run_id) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(row.agentcash_tool_call_id)) {
+    throw new RouteError('The pending AgentCash import has invalid runtime identity.', 'partner_screening_conflict', 409);
+  }
+  const config = partnerAgentConfigSchema.parse(row.config_snapshot);
+  return c.json({
+    runtime_run_id: row.runtime_run_id,
+    tool_call_id: row.agentcash_tool_call_id,
+    arguments: agentCashPeopleSearchArguments(config),
+  });
+}
+
 /** Import the exact paid response associated with one trusted native run. */
 export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
@@ -430,7 +473,15 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
   let run: EngineRunRow | null = null;
   try {
     run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
-    requireActive(run, workspaceId, agentId);
+    // A paid MCP response is written to durable spill storage before the
+    // model continues. Import may legitimately be retried after the native
+    // run reaches a terminal state (for example after an observer timeout).
+    // The transaction below still requires the exact pre-paid tool-call lease
+    // and exact stored arguments, so this grants no second payment or source
+    // request and remains idempotent after completion.
+    if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId) {
+      throw new RouteError('This runtime run is no longer available.', 'runtime_run_inactive', 409);
+    }
   } finally {
     await runtime.close();
   }

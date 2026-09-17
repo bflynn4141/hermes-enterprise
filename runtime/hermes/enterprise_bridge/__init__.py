@@ -1,6 +1,7 @@
 """A narrow native Hermes plugin. The official AIAgent owns the complete agent loop."""
 
 import json
+import logging
 import os
 import pathlib
 import re
@@ -15,6 +16,7 @@ CONTROL_ROUTE = "/api/plugins/enterprise_bridge/control"
 CONTROL_PROVIDER = "enterprise-control"
 SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
+TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
 
 
@@ -163,14 +165,17 @@ class Bridge:
         self.pending_timeout = max(1.0, float(pending_timeout))
         self.opener = urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({}))
 
-    def request(self, method, url, token, body=None):
+    def request(self, method, url, token, body=None, *, timeout=None):
         data = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + token, "Content-Type": "application/json",
             "Accept": "application/json", "User-Agent": SERVICE_USER_AGENT,
         })
         try:
-            response = self.opener.open(request, timeout=self.request_timeout)
+            response = self.opener.open(
+                request,
+                timeout=self.request_timeout if timeout is None else min(25.0, max(0.1, float(timeout))),
+            )
         except urllib.error.HTTPError as error:
             response = error
         except (OSError, urllib.error.URLError, TimeoutError) as error:
@@ -271,11 +276,42 @@ class Bridge:
                 "tool_call_id": tool_call_id,
                 "arguments": arguments,
                 "result": result,
-            },
+            }, timeout=25.0,
         )
         if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
             raise BridgeError("AgentCash People Search evidence import failed.")
         return body
+
+    def recover_pending_people_search(self, expected_arguments):
+        """Replay one already-paid spill file; never issues a source request."""
+        status, pending = self.request(
+            "GET", self.base_url + "/agentcash/people-search/pending", self.token,
+        )
+        if status == 204:
+            return None
+        if status != 200 or not isinstance(pending, dict):
+            raise BridgeError("AgentCash pending import lookup failed.")
+        run_id = pending.get("runtime_run_id")
+        tool_call_id = pending.get("tool_call_id")
+        arguments = pending.get("arguments")
+        if (not isinstance(run_id, str) or not re.fullmatch(r"run_[0-9a-f]{32}", run_id)
+                or not isinstance(tool_call_id, str) or not TOOL_CALL_ID.fullmatch(tool_call_id)
+                or arguments != expected_arguments):
+            raise BridgeError("AgentCash pending import identity was rejected.")
+        home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")).resolve()
+        spill_dir = (home / "cache" / "spillover").resolve()
+        spill_path = spill_dir / (tool_call_id + ".txt")
+        try:
+            stat = spill_path.lstat()
+        except OSError as error:
+            raise BridgeError("AgentCash pending result is not available in spill storage.") from error
+        if spill_path.is_symlink() or not spill_path.is_file() or stat.st_size > MAX_BODY_BYTES:
+            raise BridgeError("AgentCash pending result failed spill storage validation.")
+        try:
+            result = spill_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise BridgeError("AgentCash pending result could not be read safely.") from error
+        return self.import_people_search(run_id, tool_call_id, arguments, result)
 
     def authorize_people_search(self, run_id, tool_call_id, arguments):
         """Reserve the run's only paid request before the wallet is touched."""
@@ -423,3 +459,12 @@ def register(ctx):
         if handle is None:
             raise BridgeError("An enterprise tool conflicts with another runtime tool.")
         allowed.add(name)
+    spill_root = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")) / "cache" / "spillover"
+    if agentcash_arguments is not None and spill_root.is_dir():
+        try:
+            bridge.recover_pending_people_search(agentcash_arguments)
+        except Exception:
+            # The ordinary post-tool observer remains the primary path. A
+            # restart recovery failure must not make the governed profile
+            # unavailable or risk another paid request.
+            logging.warning("AgentCash pending evidence recovery did not complete.")

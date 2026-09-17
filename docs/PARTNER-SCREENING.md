@@ -62,9 +62,13 @@ Source policy and quota references were checked on 2026-09-16:
 3. For People Search, the plugin presents the exact policy-derived AgentCash request to the
    Worker before payment. The Worker atomically leases that run's only `$0.15` call to the trusted
    native run and tool-call IDs. Iris then makes that exact request in Nous Cloud. The plugin's
-   `post_tool_call` observer forwards the result with the same IDs; the authenticated Worker rejects
-   unleased, changed, replay-conflicting, or mismatched results. A transport failure after leasing is
-   not automatically retried under a new tool-call ID, preventing accidental duplicate payment.
+   `post_tool_call` observer gets a dedicated 25-second import window and forwards the result with
+   the same IDs; the authenticated Worker rejects unleased, changed, replay-conflicting, or mismatched
+   results. Hermes stores large tool responses in a local spill file. If the observer is interrupted,
+   the profile's next startup looks up only its one pending leased call and replays that exact file
+   into the idempotent importer, even when the model run has already ended. A transport failure after
+   leasing never starts another source request or substitutes a new tool-call ID, preventing accidental
+   duplicate payment.
 4. A successful run commits sanitized source snapshots and candidates. Source
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,

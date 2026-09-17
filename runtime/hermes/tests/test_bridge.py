@@ -112,6 +112,49 @@ class BridgeTests(unittest.TestCase):
         self.assertIn("unknown", str(raised.exception))
         self.assertNotIn("DO_NOT_LEAK", str(raised.exception))
 
+    def test_people_import_uses_observer_sized_timeout(self):
+        bridge = self.bridge()
+        with patch.object(bridge, "request", return_value=(201, {"ok": True})) as request:
+            bridge.import_people_search(RUN_ID, "call_people", PEOPLE_ARGS, "{}")
+        self.assertEqual(request.call_args.kwargs["timeout"], 25.0)
+
+    def test_startup_recovery_replays_only_the_leased_spill_file(self):
+        bridge = self.bridge()
+        with tempfile.TemporaryDirectory() as directory:
+            spill = pathlib.Path(directory) / "cache" / "spillover"
+            spill.mkdir(parents=True)
+            (spill / "call_people.txt").write_text('{"people":[]}', encoding="utf-8")
+            pending = {
+                "runtime_run_id": RUN_ID,
+                "tool_call_id": "call_people",
+                "arguments": PEOPLE_ARGS,
+            }
+            with patch.dict(plugin.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(bridge, "request", return_value=(200, pending)), \
+                    patch.object(bridge, "import_people_search", return_value={"ok": True}) as imported:
+                self.assertEqual(bridge.recover_pending_people_search(PEOPLE_ARGS), {"ok": True})
+        imported.assert_called_once_with(RUN_ID, "call_people", PEOPLE_ARGS, '{"people":[]}')
+
+    def test_startup_recovery_rejects_a_symlinked_spill_file(self):
+        bridge = self.bridge()
+        with tempfile.TemporaryDirectory() as directory:
+            spill = pathlib.Path(directory) / "cache" / "spillover"
+            spill.mkdir(parents=True)
+            target = pathlib.Path(directory) / "outside.txt"
+            target.write_text('{"people":[]}', encoding="utf-8")
+            (spill / "call_people.txt").symlink_to(target)
+            pending = {
+                "runtime_run_id": RUN_ID,
+                "tool_call_id": "call_people",
+                "arguments": PEOPLE_ARGS,
+            }
+            with patch.dict(plugin.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(bridge, "request", return_value=(200, pending)), \
+                    patch.object(bridge, "import_people_search") as imported:
+                with self.assertRaises(plugin.BridgeError):
+                    bridge.recover_pending_people_search(PEOPLE_ARGS)
+        imported.assert_not_called()
+
     def test_external_cleartext_and_redirect_are_rejected(self):
         with self.assertRaises(plugin.BridgeError):
             plugin.Bridge("http://enterprise.example", "token", "http://127.0.0.1:1", "token")

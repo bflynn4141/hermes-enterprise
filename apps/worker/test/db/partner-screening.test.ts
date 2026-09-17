@@ -541,6 +541,26 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     );
     expect(duplicatePayment.status).toBe(409);
     expect(await duplicatePayment.json()).toMatchObject({ reason: 'partner_source_budget_exhausted' });
+    const pendingImport = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/pending`,
+      { method: 'GET', origin: null, headers: runtimeAuthorization },
+    );
+    expect(pendingImport.status).toBe(200);
+    expect(await pendingImport.json()).toEqual({
+      runtime_run_id: nativeRunId,
+      tool_call_id: 'call_people_1',
+      arguments: agentCashPeopleSearchArguments(config),
+    });
+    // The observer can outlive the model turn when a large result takes longer
+    // than the normal bridge timeout. Recovery must import the exact leased
+    // result after the native run is terminal without authorizing another call.
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(`UPDATE runs SET status='completed', ended_at=now() WHERE runtime_run_id=$1`, [nativeRunId]);
+      await client.query('COMMIT');
+    });
     const imported = await call(
       env,
       `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/import`,
@@ -568,6 +588,12 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     );
     expect(imported.status).toBe(201);
     expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
+    const noLongerPending = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/pending`,
+      { method: 'GET', origin: null, headers: runtimeAuthorization },
+    );
+    expect(noLongerPending.status).toBe(204);
 
     const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const run = await client.query(`SELECT status, source, monetary_cost_usd, api_requests_used, agentcash_tool_call_id FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
