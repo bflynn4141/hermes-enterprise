@@ -469,8 +469,8 @@
 .first-run-sample-progress li > span { width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 50%; }
 .first-run-sample-progress li.is-complete { color: var(--body); border-color: rgba(149, 145, 231, .42); }
 
-/* The Test step replaces the agreement with the state persisted by the sample
-   run. Motion is limited to new records and changed status content. */
+/* The Test step replaces the agreement with persisted live-search state.
+   Motion is limited to new records and changed status content. */
 .first-run-app-surface > .first-run-live { flex: 1 1 0; min-height: 0; }
 
 .first-run-live {
@@ -585,9 +585,9 @@
 .first-run-live-orbit::before { inset: 6px; border: 1px solid rgba(215, 212, 255, .34); }
 .first-run-live-orbit::after { width: 7px; height: 7px; top: 3px; left: 13px; background: #c6c3ff; box-shadow: 0 0 9px rgba(160, 155, 255, .65); }
 .first-run-live-orbit > span { width: 6px; height: 6px; background: #fff; }
-.first-run-live-summary[data-phase="starting"] .first-run-live-orbit,
-.first-run-live-summary[data-phase="resuming"] .first-run-live-orbit,
-.first-run-live-summary[data-phase="running"] .first-run-live-orbit { animation: first-run-orbit 1.6s linear infinite; }
+.first-run-live-summary[data-phase="searching"] .first-run-live-orbit,
+.first-run-live-summary[data-phase="starting_iris"] .first-run-live-orbit,
+.first-run-live-summary[data-phase="screening"] .first-run-live-orbit { animation: first-run-orbit 1.6s linear infinite; }
 .first-run-live-summary[data-phase="complete"] .first-run-live-orbit::after { top: 13px; left: 13px; background: #8ee5c6; }
 .first-run-live-summary[data-phase="error"] .first-run-live-orbit::after { top: 13px; left: 13px; background: #ef9aa9; }
 
@@ -703,6 +703,7 @@
 .first-run-live-foot > span svg { color: #8ee5c6; }
 .first-run-live-foot > button { min-height: 34px; padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; border-radius: 7px; background: var(--action); color: #fff; font-size: 10px; }
 .first-run-live-foot > button:hover { background: var(--action-hover); }
+.first-run-live-disclosure { margin: 14px 0 0; color: var(--muted); font-size: 9px; line-height: 14px; }
 
 .first-run-agreement {
   overflow-y: auto;

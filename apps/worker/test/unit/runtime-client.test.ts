@@ -99,7 +99,7 @@ describe('official Hermes Runs transport', () => {
     const body = {
       input: 'Review this application.', session_id: 'session-1', provider: 'custom',
       _enterprise_tool_names: ['propose_request'],
-      _enterprise_skills: [{ name: 'enterprise_bridge:partner-program-screening', version: '1.0.0' }],
+      _enterprise_skills: [{ name: 'enterprise_bridge:partner-program-screening', version: '1.1.0' }],
     };
     expect(await client.submit(body, 'enterprise-local-a1')).toBe(RUN_ID);
     expect(send).toHaveBeenCalledOnce();

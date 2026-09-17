@@ -38,7 +38,7 @@ async function mount(page: Page, options: FirstRunFixtureOptions = {}) {
 
 async function reachTest(page: Page) {
   await page.getByRole('button', { name: 'Partner Program' }).click();
-  await page.getByRole('button', { name: 'Screen partner applications' }).click();
+  await page.getByRole('button', { name: 'Discover and screen partners' }).click();
   await page.getByRole('button', { name: 'Use this loop' }).click();
   await page.getByRole('button', { name: 'Yes' }).click();
   await expect(page.getByRole('listitem').filter({ hasText: 'Test' })).toHaveAttribute('aria-current', 'step');
@@ -53,7 +53,7 @@ test('Iris speaks first and the Partner Program answers build a truthful agreeme
   await expect(page.getByText('Which loop should I run first?')).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Working agreement' }).getByText('Support Partner Program')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Screen partner applications' }).click();
+  await page.getByRole('button', { name: 'Discover and screen partners' }).click();
   await expect(page.getByLabel('Proposed work loop')).toContainText('Evidence brief');
   await expect(page.getByRole('complementary', { name: 'Working agreement' }).getByText('Find strong Hermes partners')).toBeVisible();
 
@@ -76,25 +76,21 @@ test('Iris speaks first and the Partner Program answers build a truthful agreeme
   expect(ready?.agreement?.reviews.find((boundary) => boundary.id === 'external-message')?.reviewer).toBe('Workspace admin');
 });
 
-test('provider and sample states only move when their external source moves', async ({ page }) => {
+test('provider and live-search states only move when their external source moves', async ({ page }) => {
   await mount(page);
   await reachTest(page);
 
+  await page.evaluate(() => window.firstRunFixture.setLiveSearchStatus('searching', ['Discovery']));
+  await expect(page.getByText('Searching live public sources')).toBeVisible();
   await page.evaluate(() => window.firstRunFixture.setProviderStatus('ready'));
-  const run = page.getByRole('button', { name: /Run simulated applications/ });
-  await expect(run).toBeVisible();
-  await run.click();
-  expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('run-sample');
-  await expect(page.getByText('Running safe sample')).toHaveCount(0);
+  await page.evaluate(() => window.firstRunFixture.setLiveSearchStatus('screening', ['Discovery', 'Public research']));
+  await expect(page.getByText('Iris is screening live evidence')).toBeVisible();
+  await expect(page.getByLabel('Live search progress').locator('li.is-complete')).toHaveCount(2);
 
-  await page.evaluate(() => window.firstRunFixture.setSampleStatus('running', ['Application', 'Research']));
-  await expect(page.getByText('Screening sample applications')).toBeVisible();
-  await expect(page.getByLabel('Sample progress').locator('li.is-complete')).toHaveCount(2);
-
-  await page.evaluate(() => window.firstRunFixture.setSampleStatus('complete'));
-  await expect(page.getByText('Sample briefs are ready')).toBeVisible();
-  await page.getByRole('button', { name: 'Open sample' }).click();
-  expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('open-sample');
+  await page.evaluate(() => window.firstRunFixture.setLiveSearchStatus('complete'));
+  await expect(page.getByText('Live screening is complete')).toBeVisible();
+  await page.getByRole('button', { name: 'Open Inbox' }).click();
+  expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('open-inbox');
 });
 
 for (const width of [1440, 900]) {
@@ -102,7 +98,7 @@ for (const width of [1440, 900]) {
     await page.setViewportSize({ width, height: 900 });
     await mount(page, { reduceMotion: true });
     await page.getByRole('button', { name: 'Partner Program' }).click();
-    await page.getByRole('button', { name: 'Screen partner applications' }).click();
+    await page.getByRole('button', { name: 'Discover and screen partners' }).click();
 
     const [conversation, agreement, overflow] = await Promise.all([
       page.getByRole('region', { name: 'Conversation with Iris' }).boundingBox(),

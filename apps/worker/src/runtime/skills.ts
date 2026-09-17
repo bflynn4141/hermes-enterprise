@@ -7,7 +7,7 @@ import { partnerAgentConfig } from '../partner-screening/config.js';
 export const PARTNER_PROGRAM_SKILL = {
   name: 'enterprise_bridge:partner-program-screening',
   key: 'partner-program-screening',
-  version: '1.0.0',
+  version: '1.2.0',
   title: 'Partner program screening',
   description: 'Screen public partner prospects and prepare cited applications for human review.',
 } as const;
@@ -34,6 +34,7 @@ export function runtimeSkillManifests(env: Env, agentId: string): readonly Runti
     config: {
       partner_program: {
         program_name: config.program_name,
+        source: config.source,
         role_label: config.role_label,
         source_purpose: config.source_purpose,
         screening_dimensions: ['Track Record', 'Capacity', 'Fit'],
@@ -45,6 +46,8 @@ export function runtimeSkillManifests(env: Env, agentId: string): readonly Runti
         lookback_days: config.lookback_days,
         max_candidates: config.max_candidates,
         organization_only: config.organization_only,
+        people_search: config.people_search,
+        max_spend_usd: config.max_spend_usd,
         no_outreach: config.no_outreach,
         human_review_required: true,
       },

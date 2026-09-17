@@ -179,7 +179,9 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // The whole workspace state, from inside the transaction that created
       // it, so the client can render the shell without a second round trip and
       // without a window where the workspace exists but reads as empty.
-      const body = bootstrapSchema.parse(await loadBootstrap(client, workspaceId, session.userId, allowedProviders(c.env)));
+      const body = bootstrapSchema.parse(await loadBootstrap(
+        client, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+      ));
       await client.query('COMMIT');
 
       const response = c.json(body, 201);

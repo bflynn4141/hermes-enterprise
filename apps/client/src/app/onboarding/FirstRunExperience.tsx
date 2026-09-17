@@ -14,8 +14,8 @@ import {
   type FirstRunState,
   type ProviderStatus,
 } from './FirstRunSetup.js';
-import { FirstRunSampleRun, type SampleRunPhase } from './FirstRunSampleRun.js';
-import { useFirstRunSample } from './useFirstRunSample.js';
+import { FirstRunLiveSearch, type LiveSearchPhase } from './FirstRunLiveSearch.js';
+import { useFirstRunLiveSearch } from './useFirstRunLiveSearch.js';
 import './FirstRunSetup.css';
 
 interface FirstRunExperience {
@@ -58,11 +58,11 @@ function providerPhase(status: ProviderConnectStatus, ready: boolean): ProviderS
  * Preview-branch controller for the guided first run.
  *
  * The durable workspace/agent/session creation contract lives in main. This
- * controller intentionally keeps the evolving UX answers in workspace-scoped
- * browser storage until the setup endpoint proposed in the design note is
- * reviewed. Provider state is real and comes from the existing encrypted-key
- * routes. The labeled first-run applications are simulated by the worker; the
- * client only renders persisted sample-run snapshots and never advances them.
+ * The controller caches in-progress answers in workspace-scoped browser
+ * storage, then persists the confirmed agreement before any source call.
+ * Provider state is real and comes from the encrypted-key routes. The first
+ * search is also real: the Worker persists bounded public GitHub evidence
+ * before Iris is allowed to read it.
  */
 export function useFirstRunExperience(active: boolean): FirstRunExperience | null {
   const app = useAppState();
@@ -76,16 +76,20 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   const [storedKeyId, setStoredKeyId] = useState<string | null>(null);
   const [providerReady, setProviderReady] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const sample = useFirstRunSample({
-    enabled: active && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
+  const [setupPersisted, setSetupPersisted] = useState(() => loadState(storageKey).step === 'test');
+  const liveSearch = useFirstRunLiveSearch({
+    enabled: active && setupPersisted && state.step === 'test' && state.loopId === 'screen-partners' && Boolean(app.agent.id),
+    providerReady,
     rest: adapter.rest,
     agentId: app.agent.id ?? '',
     workspaceId: app.workspace.id,
-    storageKey: `${storageKey}:partner-screening`,
+    storageKey: `${storageKey}:live-partner-screening`,
   });
 
   useEffect(() => {
-    setState(loadState(storageKey));
+    const saved = loadState(storageKey);
+    setState(saved);
+    setSetupPersisted(saved.step === 'test');
   }, [storageKey]);
 
   useEffect(() => {
@@ -137,6 +141,7 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
     setState(next);
     if (action.type === 'reviewers/confirm' && app.agent.id && next.roleId && next.loopId) {
       setSetupError(null);
+      setSetupPersisted(false);
       void adapter.rest.patchAgent(app.workspace.id, app.agent.id, {
           first_run: {
             role_id: next.roleId,
@@ -144,9 +149,13 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
             loop_id: next.loopId,
             reviewers: next.reviewers,
           },
+        }).then(() => {
+          setSetupPersisted(true);
         }).catch(() => {
+          const rolledBack = { ...next, step: 'boundaries' as const };
           setSetupError('I could not save this setup. Try again.');
-          setState((current) => ({ ...current, step: 'boundaries' }));
+          setState(rolledBack);
+          try { window.localStorage.setItem(storageKey, JSON.stringify(rolledBack)); } catch { /* Keep the in-memory rollback. */ }
         });
     }
   }, [adapter, app.agent.id, app.workspace.id, state, storageKey]);
@@ -242,25 +251,26 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
   }, [adapter, app.workspace.id]);
 
   const phase = providerPhase(connectStatus, providerReady);
-  const sampleStatus = useMemo(() => {
-    const byPhase: Record<SampleRunPhase, 'idle' | 'starting' | 'running' | 'complete' | 'error'> = {
-      idle: state.step === 'test' && state.loopId === 'screen-partners' && app.agent.id ? 'starting' : 'idle',
-      starting: 'starting',
-      resuming: 'starting',
-      running: 'running',
+  const liveSearchStatus = useMemo(() => {
+    const byPhase: Record<LiveSearchPhase, 'idle' | 'searching' | 'awaiting_provider' | 'screening' | 'complete' | 'error'> = {
+      idle: setupPersisted && state.step === 'test' && state.loopId === 'screen-partners' && app.agent.id ? 'searching' : 'idle',
+      searching: 'searching',
+      awaiting_provider: 'awaiting_provider',
+      starting_iris: 'screening',
+      screening: 'screening',
       complete: 'complete',
       error: 'error',
     };
-    return byPhase[sample.view.phase];
-  }, [app.agent.id, sample.view.phase, state.loopId, state.step]);
-  const completedSampleStages = useMemo(() => {
-    const applications = sample.view.snapshot?.applications ?? [];
+    return byPhase[liveSearch.view.phase];
+  }, [app.agent.id, liveSearch.view.phase, setupPersisted, state.loopId, state.step]);
+  const completedLiveStages = useMemo(() => {
+    const snapshot = liveSearch.view.snapshot;
     const stages: string[] = [];
-    if (applications.length > 0) stages.push('Application');
-    if (applications.some((item) => item.status === 'researching' || item.status === 'screened' || item.status === 'needs_review')) stages.push('Research');
-    if (applications.some((item) => item.status === 'needs_review')) stages.push('Evidence brief');
+    if (snapshot?.candidates.length) stages.push('Discovery');
+    if (snapshot?.handoff.agent_run) stages.push('Public research');
+    if (snapshot?.candidates.some((item) => item.existing_request_id)) stages.push('Evidence brief');
     return stages;
-  }, [sample.view.snapshot]);
+  }, [liveSearch.view.snapshot]);
   const providerSlot = useMemo(() => (
     <ProviderConnect
       apiKey={apiKey}
@@ -288,17 +298,17 @@ export function useFirstRunExperience(active: boolean): FirstRunExperience | nul
         providerStatus={phase}
         providerSlot={providerSlot}
         setupError={setupError}
-        sampleStatus={sampleStatus}
-        completedSampleStages={completedSampleStages}
-        onRunSample={sample.retry}
-        onOpenSample={() => nav(INBOX)}
+        liveSearchStatus={liveSearchStatus}
+        completedLiveStages={completedLiveStages}
+        onRetryLiveSearch={liveSearch.retry}
+        onOpenInbox={() => nav(INBOX)}
       />
     ),
     agreement: (
       <div className="first-run-app-surface">
         <FirstRunProgress current={state.step} />
         {state.step === 'test' && state.loopId === 'screen-partners' ? (
-          <FirstRunSampleRun view={sample.view} onRetry={sample.retry} onOpenInbox={() => nav(INBOX)} />
+          <FirstRunLiveSearch view={liveSearch.view} onRetry={liveSearch.retry} onOpenInbox={() => nav(INBOX)} />
         ) : <FirstRunWorkingAgreement state={state} />}
       </div>
     ),

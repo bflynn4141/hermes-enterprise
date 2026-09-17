@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { partnerScreeningSnapshotSchema, partnerScreeningStartInputSchema } from '@hermes/shared';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import type { Env } from '../env.js';
+import { handoffPartnerScreeningToIris } from '../partner-screening/automation.js';
 import { partnerAgentConfig, partnerSourceMatrix } from '../partner-screening/config.js';
 import {
   discoverGitHubOrganizations,
@@ -43,12 +44,14 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
   const configured = partnerAgentConfig(c.env, parsed.data.agent_id);
   if (!configured.config) {
     throw new RouteError(
-      `${configured.problem ?? 'Real partner discovery is not configured'} The labeled onboarding simulation remains available separately.`,
+      configured.problem ?? 'Real partner discovery is not configured.',
       'partner_source_not_configured',
       503,
     );
   }
-  const authentication = c.env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' : 'unauthenticated';
+  const authentication = configured.config.source === 'agentcash_people'
+    ? 'wallet' as const
+    : c.env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
   const started = await inWorkspace(c, (work) => beginPartnerScreening(work, {
     agentId: parsed.data.agent_id,
     idempotencyKey: parsed.data.idempotency_key,
@@ -56,11 +59,19 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
     authentication,
   }));
   if (!started.created && !started.resumed) {
-    if (started.run.status === 'completed') {
+    if (started.run.status === 'completed' || configured.config.source === 'agentcash_people') {
       const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, started.run.id));
       return c.json(partnerScreeningSnapshotSchema.parse(snapshot), 200, { 'X-Hermes-Idempotent-Replay': 'true' });
     }
     throw new RouteError('this partner screening run is already in progress', 'partner_screening_in_progress', 409);
+  }
+
+  // AgentCash executes inside Iris's governed Nous Cloud profile. The route
+  // creates the authoritative pending run; the native post-tool hook imports
+  // the paid response back into this exact run before Iris evaluates it.
+  if (configured.config.source === 'agentcash_people') {
+    const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, started.run.id));
+    return c.json(partnerScreeningSnapshotSchema.parse(snapshot), 201, { 'X-Hermes-Idempotent-Replay': 'false' });
   }
 
   try {
@@ -87,6 +98,20 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
 /** GET /w/:ws/partner-screening/runs/:id */
 export async function getPartnerScreening(c: Context<{ Bindings: Env }>): Promise<Response> {
   const runId = pathUuid(c, 'id');
+  const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, runId));
+  return c.json(partnerScreeningSnapshotSchema.parse(snapshot));
+}
+
+/** POST /w/:ws/partner-screening/runs/:id/handoff */
+export async function handoffPartnerScreening(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
+  const runId = pathUuid(c, 'id');
+  const owner = await inWorkspace(c, async (work) => {
+    const snapshot = await loadPartnerScreeningSnapshot(work, runId);
+    return { workspaceId: work.workspaceId, userId: work.userId, agentId: snapshot.run.agent_id };
+  });
+  await handoffPartnerScreeningToIris(c.env, owner.workspaceId, owner.userId, owner.agentId, runId);
   const snapshot = await inWorkspace(c, (work) => loadPartnerScreeningSnapshot(work, runId));
   return c.json(partnerScreeningSnapshotSchema.parse(snapshot));
 }

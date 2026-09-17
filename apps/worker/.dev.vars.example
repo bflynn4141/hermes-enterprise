@@ -68,6 +68,13 @@ NOUS_PORTAL_BASE_URL=""
 # through GitHub's official REST API; the connector never reads public email,
 # discovers individual people, or contacts anyone.
 PARTNER_SCREENING_CONFIG_JSON='{"AGENT_UUID":{"source_purpose":"organization_partner_research","organization_only":true,"no_outreach":true,"role_label":"Potential technical ecosystem partner","search_queries":["developer education in:name,description,readme archived:false"],"intake_urls":[],"keywords":["developer education","agents","open source"],"ranking_weights":{"relevance":40,"activity":25,"adoption":20,"openness":15},"minimum_priority":50,"lookback_days":365,"max_candidates":5,"max_api_requests":12,"minimum_rate_remaining":5}}'
+# Optional fallback for newly-created agents. Development and staging use this
+# bounded policy so onboarding performs one real paid search before Iris screens.
+PARTNER_SCREENING_DEFAULT_CONFIG_JSON='{"source":"agentcash_people","source_purpose":"person_partner_research","organization_only":false,"no_outreach":true,"role_label":"Potential ecosystem lead","search_queries":[],"intake_urls":[],"keywords":["artificial intelligence","developer relations"],"people_search":{"current_position_seniority_level":["Founder","Head","Director"],"person_skills":["Artificial Intelligence (AI)","Developer Relations"],"current_position_titles":[],"person_locations":[]},"ranking_weights":{"relevance":40,"activity":25,"adoption":20,"openness":15},"minimum_priority":40,"lookback_days":365,"max_candidates":5,"max_api_requests":1,"minimum_rate_remaining":0,"max_spend_usd":0.15}'
+# Cloudflare Cron enqueues a durable discovery + Iris handoff once per cadence bucket.
+AUTOMATED_TRIGGERS_ENABLED=1
+PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS=1
+PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES=360
 # Optional. Public-only requests work without it at GitHub's lower IP-based
 # limits. Use a fine-grained token with no repository permissions when set.
 PARTNER_GITHUB_TOKEN=""

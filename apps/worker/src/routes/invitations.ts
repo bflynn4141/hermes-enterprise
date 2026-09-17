@@ -130,7 +130,9 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
     // The whole workspace, from inside the transaction that admitted them, so
     // the shell renders without a second round trip and without a window in
     // which they are a member of a workspace that reads as missing.
-    return bootstrapSchema.parse(await loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)));
+    return bootstrapSchema.parse(await loadBootstrap(
+      tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+    ));
   });
 
   if (jobs.length > 0) await runJobsAfterCommit(c.env, workspaceId, jobs);

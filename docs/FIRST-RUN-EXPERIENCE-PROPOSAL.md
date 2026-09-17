@@ -14,16 +14,15 @@ paste the key.
 
 The separate preview branch wires the guided Role → Loop → Boundaries → Test
 experience into the real chat and app panes. Its evolving working-agreement
-answers use workspace-scoped browser storage for design evaluation. A reviewed
-server setup endpoint and the safe sample-Inbox creation path are still needed
-before that guided layer should merge to main.
+answers use workspace-scoped browser storage for design evaluation. The server
+setup endpoint and live evidence-to-Inbox path are now implemented.
 
 ## Outcome
 
 The first run should feel like the first working session with Iris, not an
 administration wizard. A new owner should leave with one repeatable loop, clear
-human review boundaries, a connected model provider, and one safe practice
-result in the Inbox.
+human review boundaries, a connected model provider, and one evidence-backed
+live result in the Inbox.
 
 The first scenario is Maya configuring Iris for the Hermes Partner Program.
 The design must generalize to other roles without turning the screen into a
@@ -56,7 +55,7 @@ The setup has four phases:
 1. **Role** — what Maya owns.
 2. **Loop** — the repeatable work Iris should run.
 3. **Boundaries** — where Iris stops for a human.
-4. **Test** — connect Nous and run a safe sample.
+4. **Test** — run a bounded live search, connect Nous, and watch Iris screen it.
 
 The step labels live in one compact progress row above the conversation. They
 do not replace the normal shell or create a separate onboarding product.
@@ -90,28 +89,28 @@ After **Partner Program**:
 
 Choices:
 
-- Screen partner applications
+- Discover and screen partners
 - Onboard accepted partners
 - Support active partners
 
-After **Screen partner applications**:
+After **Discover and screen partners**:
 
-> For each application, I can research the applicant, score the evidence, and
-> prepare a recommendation. You decide who joins.
+> I can discover public partner prospects, save the evidence, and prepare a
+> recommendation. You decide what happens next.
 
 Actions: **Use this loop**, **Adjust**.
 
 The right pane becomes a visual loop:
 
 ```text
-Application → Research → Evidence brief → Human review
+Discovery → Public research → Evidence brief → Human review
 ```
 
 ### 3. Boundaries
 
 Show four selected review rows rather than another paragraph:
 
-- Admit or reject an applicant — Maya
+- Advance or dismiss a partner prospect — Maya
 - Assign or change role and benefits — Maya
 - Send an external message — Maya
 - Sign an agreement or pay an invoice — Admin + Finance
@@ -137,15 +136,12 @@ should appear only after those paths reach the runtime. The current attachment
 path does not deliver file contents to Hermes, and the generated HermesMail
 address is not yet a production inbox.
 
-Before the practice run, show the provider card described below. When it is
-connected, Iris says:
-
-> I’m ready. Want to see the loop with a sample application? Nothing will be
-> sent or changed.
-
-The sample produces one Inbox item marked **Sample**. It shows sources, evidence,
-recommendation, and the exact consequence of approval. Finishing it returns to
-the same session with:
+The Test phase begins one bounded live search through the official GitHub API.
+It persists public organization evidence with a five-request ceiling and shows
+the real candidates and request count. If Nous is not connected, the evidence
+remains visible while handoff waits. Once connected, Iris reads only the stored
+artifacts and may create pending Inbox reviews; it still cannot contact anyone
+or make the decision. Finishing returns to the same session with:
 
 > Your loop is ready. Send me a name or profile URL when you want to screen the
 > first applicant.
@@ -231,8 +227,8 @@ application scheduler; native Hermes cron remains disabled by policy.
    use model-authored commands.
 5. Move the manual Nous connection card into the Test phase, default its label,
    link to the official key page, and return structured verification failures.
-6. Run the sample only after the provider is ready. Mark every synthetic object
-   as Sample and prevent external effects.
+6. Start one idempotent live search after setup is durably saved. Wait for the
+   provider before handing stored evidence to Iris, and prevent external effects.
 7. Keep the completed setup session as the first entry in History rather than
    deleting the decisions that configured Iris.
 
@@ -246,8 +242,8 @@ needed until one agent can own multiple independently triggered loops.
   agreement row that was just filled: 160–200 ms, existing ease-out token.
 - On provider connection, show real states only: encrypting → verifying →
   syncing models → ready. Never animate invented progress.
-- The first sample may reveal its four loop stages as they actually complete;
-  no per-token animation.
+- The first live search may reveal its four loop stages as they actually
+  complete; no invented or per-token animation.
 - Reduced motion replaces movement with an immediate update and a short opacity
   change.
 

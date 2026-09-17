@@ -56,7 +56,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
   const [step, setStep] = useState<StepId>('workspace');
   const [name, setName] = useState('');
   const [agent, setAgent] = useState('Iris');
-  const [instructions, setInstructions] = useState('Role\nScreen partner applications against the program criteria.\n\nEvery cycle\nPrepare an evidence report and ask for a decision.\n\nAsk first\nAdmissions, documents, sending, payment and signature.');
+  const [instructions, setInstructions] = useState('Role\nDiscover and screen partner prospects against the program criteria.\n\nEvery cycle\nPrepare an evidence report and ask for a decision.\n\nAsk first\nAdmissions, documents, sending, payment and signature.');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

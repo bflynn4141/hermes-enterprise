@@ -4,7 +4,12 @@ import { toolByName } from '../../src/engine/tools.js';
 import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
 import type { Env } from '../../src/env.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
-import { asUser, makeEnv, readTenant } from './harness.js';
+import { asUser, call, makeEnv, readTenant } from './harness.js';
+import { enqueueAutomatedPartnerScreening } from '../../src/partner-screening/automation.js';
+import { runJob, type Job } from '../../src/jobs.js';
+import { bridgeToken } from '../../src/runtime/config.js';
+import { agentCashPeopleSearchArguments } from '../../src/partner-screening/agentcash-people.js';
+import { partnerAgentConfig } from '../../src/partner-screening/config.js';
 
 async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise<void> {
   await withClient('owner', async (client) => {
@@ -192,5 +197,176 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(afterIris.requests[0]?.status).toBe('pending');
     expect(afterIris.requests[0]?.payload).toMatchObject({ discovery: { candidate_id: snapshot.candidates[0]!.id } });
     expect(afterIris).toMatchObject({ modelCalls: 0, effects: 0 });
+  });
+
+  it('lets Cloudflare Cron durably discover candidates and start one idempotent Iris turn', async () => {
+    const fx = await seedWorkspace();
+    await bindAgent(fx);
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id)
+       VALUES ($1,$2) ON CONFLICT (workspace_id) DO NOTHING`,
+      [fx.workspaceId, `cron-test-${fx.workspaceId}`],
+    ));
+    const config = {
+      [fx.agentId]: {
+        source_purpose: 'organization_partner_research', organization_only: true, no_outreach: true,
+        role_label: 'Potential technical ecosystem partner',
+        search_queries: ['developer education in:name,description,readme archived:false'], intake_urls: [],
+        keywords: ['developer education', 'agents', 'open source'],
+        ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+        minimum_priority: 50, lookback_days: 365, max_candidates: 2,
+        max_api_requests: 6, minimum_rate_remaining: 0,
+      },
+    };
+    const fetcher = {
+      async fetch(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+        if (url.pathname === '/search/repositories') {
+          return response({ total_count: 1, incomplete_results: false, items: [repository()] }, 'search');
+        }
+        if (url.pathname === '/orgs/ExampleOrg') {
+          return response({
+            id: 9, node_id: owner.node_id, login: owner.login, name: 'Example Org',
+            description: 'Developer education and open source agents', html_url: 'https://github.com/ExampleOrg',
+            blog: 'https://example.org', email: null, public_repos: 8, followers: 500,
+            created_at: '2020-01-01T00:00:00Z', updated_at: '2026-09-11T00:00:00Z',
+          }, 'core');
+        }
+        if (url.pathname === '/orgs/ExampleOrg/repos') return response([repository()], 'core');
+        return new Response('{}', { status: 404 });
+      },
+    };
+    const workflows: { id: string; params: unknown }[] = [];
+    const { env } = makeEnv({
+      MODEL_SCRIPTED: '1',
+      AUTOMATED_TRIGGERS_ENABLED: '1',
+      PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES: '360',
+      PARTNER_SCREENING_CONFIG_JSON: JSON.stringify(config),
+      PARTNER_SOURCE_FETCHER: fetcher as unknown as Fetcher,
+      RUN_ATTEMPT: {
+        create: (input: { id: string; params: unknown }) => {
+          workflows.push(input);
+          return Promise.resolve({ id: input.id });
+        },
+      } as unknown as Env['RUN_ATTEMPT'],
+    });
+    const now = new Date('2026-09-16T19:00:00Z');
+    const first = await enqueueAutomatedPartnerScreening(env, now);
+    const replay = await enqueueAutomatedPartnerScreening(env, now);
+    expect(first).toMatchObject({ enabled: true, configuredAgents: 1, queued: 1 });
+    expect(replay.queued).toBe(0);
+
+    const queuedJob = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const result = await client.query<Job>(
+        `SELECT id, workspace_id, kind, key, payload, attempts FROM jobs
+          WHERE workspace_id=$1 AND kind='partner_screening' ORDER BY created_at DESC LIMIT 1`,
+        [fx.workspaceId],
+      );
+      return result.rows[0];
+    });
+    expect(queuedJob).toBeDefined();
+    await runJob(env, queuedJob!);
+    expect(workflows).toHaveLength(1);
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const screening = await client.query(`SELECT id FROM partner_screening_runs WHERE agent_id=$1 AND status='completed'`, [fx.agentId]);
+      const candidates = await client.query(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
+      const sessions = await client.query(`SELECT id FROM sessions WHERE agent_id=$1 AND title='Iris · Automated partner screening'`, [fx.agentId]);
+      const runs = await client.query(`SELECT id, client_turn_id FROM runs WHERE session_id=$1`, [sessions.rows[0]?.id]);
+      return { screening: screening.rowCount, candidates: candidates.rowCount, sessions: sessions.rowCount, runs: runs.rows };
+    });
+    expect(stored).toMatchObject({ screening: 1, candidates: 1, sessions: 1 });
+    expect(stored.runs).toHaveLength(1);
+    expect(stored.runs[0]?.client_turn_id).toMatch(/^partner-screening:/);
+  });
+
+  it('imports one run-bound AgentCash People Search response as sanitized Inbox evidence', async () => {
+    const fx = await seedWorkspace();
+    await bindAgent(fx);
+    const rawConfig = {
+      source: 'agentcash_people',
+      source_purpose: 'person_partner_research', organization_only: false, no_outreach: true,
+      role_label: 'Potential ecosystem lead', search_queries: [], intake_urls: [],
+      keywords: ['artificial intelligence', 'developer relations'],
+      people_search: {
+        current_position_seniority_level: ['Founder', 'Head', 'Director'],
+        person_skills: ['Artificial Intelligence (AI)', 'Developer Relations'],
+        current_position_titles: [], person_locations: [],
+      },
+      ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+      minimum_priority: 40, lookback_days: 365, max_candidates: 5,
+      max_api_requests: 1, minimum_rate_remaining: 0, max_spend_usd: 0.15,
+    };
+    const bridgeSecret = 'agentcash-people-bridge-secret-1234567890';
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: bridgeSecret,
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+      PARTNER_SCREENING_CONFIG_JSON: JSON.stringify({ [fx.agentId]: rawConfig }),
+    });
+    const startedResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/partner-screening/runs`, {
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `agentcash-${randomUUID()}` },
+    });
+    expect(startedResponse.status).toBe(201);
+    const started = await startedResponse.json() as { run: { id: string; status: string; source: string }; candidates: unknown[] };
+    expect(started).toMatchObject({ run: { status: 'running', source: 'agentcash_people' }, candidates: [] });
+
+    const nativeRunId = `run_${'b'.repeat(32)}`;
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::text,'agent-' || $3::text,1)`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, `partner-screening:${started.run.id}`, randomUUID(), nativeRunId],
+      );
+      await client.query('COMMIT');
+    });
+    const config = partnerAgentConfig(env, fx.agentId).config!;
+    const imported = await call(
+      env,
+      `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/import`,
+      {
+        method: 'POST',
+        origin: null,
+        headers: { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` },
+        body: {
+          runtime_run_id: nativeRunId,
+          tool_call_id: 'call_people_1',
+          arguments: agentCashPeopleSearchArguments(config),
+          result: JSON.stringify({
+            people: [{
+              id: 'person-1', full_name: 'Rik Turner', headline: 'Founder, PR for AI',
+              email: 'must-not-persist@example.com', phone_numbers: ['+15551234567'],
+              skills: ['Artificial Intelligence (AI)', 'Developer Relations'],
+              social_profiles: { professional_network: { url: 'https://www.linkedin.com/in/rikturner', handle: 'rikturner' } },
+              employment: { current: { title: 'Founder', seniority: 'Founder', company_id: 'company-1' } },
+            }],
+            companies: { 'company-1': { id: 'company-1', name: 'PR for AI', domain: 'prfor.ai' } },
+            metadata: { total: 1, credits: 1, offset: 0 },
+          }),
+        },
+      },
+    );
+    expect(imported.status).toBe(201);
+    expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
+
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const run = await client.query(`SELECT status, source, monetary_cost_usd FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
+      const candidates = await client.query(`SELECT source, display_name, profile_url FROM partner_candidates WHERE latest_run_id=$1`, [started.run.id]);
+      const artifacts = await client.query<{ body: string }>(`SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts WHERE run_id=$1`, [started.run.id]);
+      return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '' };
+    });
+    expect(stored.run).toMatchObject({ status: 'completed', source: 'agentcash_people' });
+    expect(Number(stored.run.monetary_cost_usd)).toBe(0.15);
+    expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
+    expect(stored.artifacts).not.toContain('must-not-persist');
+    expect(stored.artifacts).not.toContain('+15551234567');
   });
 });

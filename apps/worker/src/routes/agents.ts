@@ -8,6 +8,7 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
+import { ensureAgentOwner } from '../domain/agent-ownership.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
 
 const roleId = z.enum(['partner-program', 'customer-success', 'customer-onboarding', 'procurement', 'custom']);
@@ -35,7 +36,7 @@ const patchAgentInput = z.object({
 });
 
 const LOOP_LABELS: Readonly<Record<z.infer<typeof loopId>, string>> = {
-  'screen-partners': 'Screen partner applications',
+  'screen-partners': 'Discover and screen partners',
   'onboard-partners': 'Onboard accepted partners',
   'support-partners': 'Support active partners',
   'triage-accounts': 'Triage account risks',
@@ -89,15 +90,9 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
   if (!parsed.success) throw new RouteError('the agent setup change is invalid', 'bad_agent_setup', 422);
 
   await inWorkspace(c, async (work) => {
-    const owned = await work.tx.query(
-      `SELECT 1
-         FROM agent_owners ao
-         JOIN members m ON m.workspace_id = ao.workspace_id AND m.id = ao.member_id
-        WHERE ao.workspace_id = $1 AND ao.agent_id = $2
-          AND m.user_id = $3 AND m.status = 'active'`,
-      [work.workspaceId, agentId, work.userId],
-    );
-    if (!owned.rowCount) throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
+    if (!await ensureAgentOwner(work.tx, work.workspaceId, work.userId, agentId)) {
+      throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
+    }
 
     if (parsed.data.setup_step !== undefined && !parsed.data.first_run) {
       await work.tx.query(

@@ -37,8 +37,9 @@ Everything except `pnpm install` works offline.
 
 The opt-in Partner Program source connector and Iris review handoff are
 documented in [`docs/PARTNER-SCREENING.md`](docs/PARTNER-SCREENING.md). It keeps
-live GitHub evidence, deterministic source triage, Iris judgment, and the
-clearly labeled onboarding simulation separate.
+live GitHub evidence, deterministic source triage, Iris judgment, and human
+review separate. The Partner Program onboarding now begins with a bounded live
+search rather than fabricated candidates.
 
 Enterprise-packaged Hermes skills, including the managed Partner Program
 screening procedure, are documented in

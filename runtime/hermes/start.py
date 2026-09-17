@@ -19,6 +19,10 @@ import uuid
 from install import ROOT, REVISION, verify_source
 
 NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/v1/capabilities"})
+MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
+AGENTCASH_TOOLS = ("get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch")
 
 
 def native_cron_route(path):
@@ -191,7 +195,72 @@ def reset_managed_skill_home(profile):
     private_write(skills / ".no-bundled-skills", "managed by Hermes Enterprise\n")
 
 
-def clean_environment(source, profile, token, api_key):
+def load_mcp_servers(raw, supplied, agentcash_enabled=False):
+    """Validate explicit stdio MCP definitions without persisting secret values."""
+    try:
+        document = json.loads(raw) if raw else {}
+    except ValueError as error:
+        raise RuntimeError("ENTERPRISE_MCP_SERVERS_JSON is not valid JSON.") from error
+    if not isinstance(document, dict) or len(document) > 8:
+        raise RuntimeError("Enterprise MCP config must contain at most eight named servers.")
+    if agentcash_enabled:
+        if "agentcash" in document:
+            raise RuntimeError("The built-in AgentCash demo conflicts with an MCP server named agentcash.")
+        if not supplied.get("AGENTCASH_HOME"):
+            raise RuntimeError("AGENTCASH_HOME is required for the AgentCash demo MCP.")
+        agentcash_home = pathlib.Path(supplied["AGENTCASH_HOME"]).expanduser().resolve()
+        if agentcash_home == pathlib.Path.home().resolve() or agentcash_home == pathlib.Path(agentcash_home.anchor):
+            raise RuntimeError("AGENTCASH_HOME must be a dedicated directory, not a personal home or filesystem root.")
+        document["agentcash"] = {
+            "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
+            "env": {"HOME": "${AGENTCASH_HOME}"},
+            "tools": {"include": list(AGENTCASH_TOOLS)},
+            "policy": {"allowed_hosts": ["stableenrich.dev", "stablesocial.dev"], "max_amount_usd": 0.20},
+        }
+
+    servers, policies, passthrough = {}, [], {}
+    for name, entry in document.items():
+        if not isinstance(name, str) or not MCP_NAME.fullmatch(name) or not isinstance(entry, dict):
+            raise RuntimeError("Enterprise MCP names and entries are invalid.")
+        command, args = entry.get("command"), entry.get("args", [])
+        if not isinstance(command, str) or not command.strip() or len(command) > 512:
+            raise RuntimeError(f"MCP server {name} has an invalid command.")
+        if pathlib.Path(command).name.lower() in {"bash", "sh", "zsh", "dash", "fish", "cmd", "powershell", "pwsh"}:
+            raise RuntimeError(f"MCP server {name} may not use a shell interpreter.")
+        if (not isinstance(args, list) or len(args) > 24
+                or any(not isinstance(value, str) or len(value) > 512 for value in args)):
+            raise RuntimeError(f"MCP server {name} has invalid arguments.")
+        tools = entry.get("tools")
+        include = tools.get("include") if isinstance(tools, dict) else None
+        if (not isinstance(include, list) or not include or len(include) > 24
+                or any(not isinstance(value, str) or not MCP_NAME.fullmatch(value) for value in include)):
+            raise RuntimeError(f"MCP server {name} requires a bounded tools.include allowlist.")
+        configured_env = entry.get("env", {})
+        if not isinstance(configured_env, dict) or len(configured_env) > 16:
+            raise RuntimeError(f"MCP server {name} has invalid environment configuration.")
+        for target, reference in configured_env.items():
+            match = ENV_REF.fullmatch(reference) if isinstance(reference, str) else None
+            if (not isinstance(target, str) or not MCP_NAME.fullmatch(target) or not match
+                    or match.group(1) in MCP_SECRET_DENYLIST or match.group(1) not in supplied):
+                raise RuntimeError(f"MCP server {name} environment values must reference supplied, scoped variables.")
+            passthrough[match.group(1)] = supplied[match.group(1)]
+        policy = entry.get("policy", {})
+        if not isinstance(policy, dict):
+            raise RuntimeError(f"MCP server {name} has an invalid policy.")
+        hosts = policy.get("allowed_hosts", [])
+        maximum = policy.get("max_amount_usd", 0)
+        if (not isinstance(hosts, list) or len(hosts) > 16
+                or any(not isinstance(host, str) or not re.fullmatch(r"[a-z0-9.-]{1,253}", host) for host in hosts)
+                or not isinstance(maximum, (int, float)) or maximum < 0 or maximum > 1):
+            raise RuntimeError(f"MCP server {name} has an invalid host or spend policy.")
+        servers[name] = {"command": command, "args": args, "env": configured_env,
+                         "tools": {"include": include}}
+        policies.append({"server": name, "tools": include, "allowed_hosts": hosts,
+                         "max_amount_usd": float(maximum)})
+    return servers, policies, passthrough
+
+
+def clean_environment(source, profile, token, api_key, extra=None):
     # Nothing from personal provider config, bots, proxies, plugin paths or credentials survives.
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR") if key in os.environ}
     env.update({
@@ -200,6 +269,7 @@ def clean_environment(source, profile, token, api_key):
         "ENTERPRISE_RUNTIME_TOKEN": token, "API_SERVER_KEY": api_key,
         "API_SERVER_ENABLED": "true", "API_SERVER_HOST": "127.0.0.1",
     })
+    env.update(extra or {})
     return env
 
 
@@ -223,6 +293,9 @@ def child(metadata_path):
 
     base = metadata["enterprise_url"] + "/internal/runtime/w/" + metadata["workspace_id"] + "/agents/" + metadata["agent_id"]
     enterprise_skills = load_enterprise_skills(base, os.environ["ENTERPRISE_RUNTIME_TOKEN"])
+    mcp_servers = metadata.get("mcp_servers") or {}
+    mcp_toolsets = ["mcp-" + name for name in sorted(mcp_servers)]
+    platform_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),
         "model": {"provider": "custom", "default": metadata["model"],
@@ -232,19 +305,21 @@ def child(metadata_path):
                   # `skills` stays out of platform_toolsets, but cannot be in
                   # the subtraction list because it owns skill_view too.
                   "disabled_toolsets": sorted(set(TOOLSETS) - {"enterprise_bridge", "enterprise_skill_reader", "skills"})},
-        "platform_toolsets": {"api_server": ["enterprise_bridge", "enterprise_skill_reader"]},
-        "mcp_servers": {},
+        "platform_toolsets": {"api_server": platform_toolsets},
+        "mcp_servers": mcp_servers,
         "tools": {"tool_search": {"enabled": "off"}},
         "plugins": {"enabled": ["enterprise_bridge"], "entries": {"enterprise_bridge": {"settings": {
             "base_url": base, "native_url": "http://127.0.0.1:" + str(metadata["port"]),
             "request_timeout_seconds": 5, "pending_timeout_seconds": 86400,
             "allowed_skills": enterprise_skills["auto_load"],
+            "mcp_policy": metadata.get("mcp_policy") or [],
         }}}},
         "gateway": {"multiplex_profiles": False, "api_server": {"max_concurrent_runs": 1},
                     "platforms": {"api_server": {"enabled": True, "extra": {
                         "host": "127.0.0.1", "port": metadata["port"], "key": "${API_SERVER_KEY}",
                     }}}},
         "approvals": {"unattended_mode": "deny", "cron_mode": "deny"},
+        "cron": {"allow_agent_scheduling": False},
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
         "skills": {"creation_nudge_interval": 0, "write_approval": True,
                    "auto_load": enterprise_skills["auto_load"], "config": enterprise_skills["config"]},
@@ -255,8 +330,9 @@ def child(metadata_path):
     from hermes_cli.plugins import discover_plugins
     from hermes_cli.tools_config import _get_platform_tools
     from model_tools import get_tool_definitions
-    assert_native_cron_empty()
-    install_native_api_policy()
+    if not metadata.get("native_cron_enabled"):
+        assert_native_cron_empty()
+        install_native_api_policy()
     discover_plugins()
     from hermes_cli.plugins import get_plugin_manager
     missing_skills = [name for name in enterprise_skills["auto_load"]
@@ -270,9 +346,10 @@ def child(metadata_path):
                                        quiet_mode=True, skip_tool_search_assembly=True)
     from tools.registry import registry
     names = {item["function"]["name"] for item in definitions}
-    if (selected != {"enterprise_bridge", "enterprise_skill_reader"} or "skill_view" not in names
+    static_names = {name for name in names if not name.startswith("mcp__")}
+    if (selected != set(platform_toolsets) or "skill_view" not in static_names
             or any(registry.get_entry(name).toolset != "enterprise_bridge"
-                   for name in names - {"skill_view"})
+                   for name in static_names - {"skill_view"})
             or any(name in names for name in {"skills_list", "skill_manage"})):
         raise SystemExit(
             "Governed tool preflight failed: runtime did not expose enterprise tools plus read-only skill_view "
@@ -285,7 +362,9 @@ def child(metadata_path):
             or runtime.get("api_key") != os.environ["ENTERPRISE_RUNTIME_TOKEN"]
             or runtime.get("api_mode") != "chat_completions"):
         raise SystemExit("Enterprise model proxy preflight failed.")
-    print(f"Verified official Hermes {REVISION[:12]}: {len(names)} governed tools; isolated agent {metadata['agent_id']}", flush=True)
+    print(f"Verified official Hermes {REVISION[:12]}: {len(names)} governed tools; "
+          f"native_cron={bool(metadata.get('native_cron_enabled'))}; mcp={sorted(mcp_servers)}; "
+          f"isolated agent {metadata['agent_id']}", flush=True)
     if metadata.get("verify_only"):
         return
     from hermes_cli.main import main
@@ -346,6 +425,13 @@ def main():
     token = args.token_file.read_text().strip() if args.token_file else supplied.get("ENTERPRISE_RUNTIME_TOKEN", "")
     if len(token) < 16 or any(ch.isspace() for ch in token):
         parser.error("token-file must contain only a provisioned runtime bearer token")
+    try:
+        mcp_servers, mcp_policy, mcp_environment = load_mcp_servers(
+            supplied.get("ENTERPRISE_MCP_SERVERS_JSON", ""), supplied,
+            supplied.get("HERMES_AGENTCASH_MCP_ENABLED") == "1",
+        )
+    except RuntimeError as error:
+        parser.error(str(error))
     state_root = args.state_root.expanduser().resolve()
     personal_home = (pathlib.Path.home() / ".hermes").resolve()
     if state_root == personal_home or personal_home in state_root.parents:
@@ -368,7 +454,9 @@ def main():
     metadata = {"agent_id": agent_id, "workspace_id": args.workspace_id,
                 "enterprise_url": args.enterprise_url.rstrip("/"), "model": args.model,
                 "port": args.port, "source": str(source), "revision": REVISION,
-                "verify_only": args.verify_only}
+                "verify_only": args.verify_only,
+                "native_cron_enabled": supplied.get("HERMES_NATIVE_CRON_ENABLED") == "1",
+                "mcp_servers": mcp_servers, "mcp_policy": mcp_policy}
     if metadata_path.exists():
         previous = json.loads(metadata_path.read_text())
         if any(previous.get(key) != metadata[key] for key in ("agent_id", "workspace_id", "enterprise_url")):
@@ -384,7 +472,7 @@ def main():
     reset_managed_skill_home(profile)
     shutil.copytree(ROOT / "enterprise_bridge", profile / "home/plugins/enterprise_bridge", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    env = clean_environment(source, profile, token, api_key_path.read_text().strip())
+    env = clean_environment(source, profile, token, api_key_path.read_text().strip(), mcp_environment)
     print("Native API key file: " + str(api_key_path), flush=True)
     print("Native API URL: http://127.0.0.1:" + str(args.port), flush=True)
     os.execve(str(args.python.absolute()), [str(args.python.absolute()), str(ROOT / "start.py"), "_child", str(metadata_path)], env)

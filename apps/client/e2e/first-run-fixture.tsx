@@ -4,19 +4,19 @@ import { useEffect, useState } from 'react';
 import {
   FirstRunSetup,
   type FirstRunState,
+  type LiveSearchStatus,
   type ProviderStatus,
-  type SampleStatus,
   type WorkingAgreement,
 } from '../src/app/onboarding/FirstRunSetup.js';
 
 export interface FirstRunFixtureOptions {
   reduceMotion?: boolean;
   providerStatus?: ProviderStatus;
-  sampleStatus?: SampleStatus;
+  liveSearchStatus?: LiveSearchStatus;
 }
 
 interface FixtureCall {
-  method: 'state' | 'ready' | 'run-sample' | 'open-sample';
+  method: 'state' | 'ready' | 'retry-live-search' | 'open-inbox';
   step?: FirstRunState['step'];
   agreement?: WorkingAgreement;
 }
@@ -27,21 +27,21 @@ declare global {
       calls: FixtureCall[];
       mount(options?: FirstRunFixtureOptions): void;
       setProviderStatus(status: ProviderStatus): void;
-      setSampleStatus(status: SampleStatus, completed?: readonly string[]): void;
+      setLiveSearchStatus(status: LiveSearchStatus, completed?: readonly string[]): void;
     };
   }
 }
 
 function Harness({ options }: { options: FirstRunFixtureOptions }) {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>(options.providerStatus ?? 'disconnected');
-  const [sampleStatus, setSampleStatus] = useState<SampleStatus>(options.sampleStatus ?? 'idle');
+  const [liveSearchStatus, setLiveSearchStatus] = useState<LiveSearchStatus>(options.liveSearchStatus ?? 'idle');
   const [completed, setCompleted] = useState<readonly string[]>([]);
 
   useEffect(() => {
     window.firstRunFixture.setProviderStatus = setProviderStatus;
-    window.firstRunFixture.setSampleStatus = (status, stages = []) => {
+    window.firstRunFixture.setLiveSearchStatus = (status, stages = []) => {
       setCompleted(stages);
-      setSampleStatus(status);
+      setLiveSearchStatus(status);
     };
   }, []);
 
@@ -49,12 +49,12 @@ function Harness({ options }: { options: FirstRunFixtureOptions }) {
     <HermesMotionProvider reducedMotion={options.reduceMotion}>
       <FirstRunSetup
         providerStatus={providerStatus}
-        sampleStatus={sampleStatus}
-        completedSampleStages={completed}
+        liveSearchStatus={liveSearchStatus}
+        completedLiveStages={completed}
         onStateChange={(state, agreement) => window.firstRunFixture.calls.push({ method: 'state', step: state.step, agreement })}
         onReadyForTest={(state, agreement) => window.firstRunFixture.calls.push({ method: 'ready', step: state.step, agreement })}
-        onRunSample={() => window.firstRunFixture.calls.push({ method: 'run-sample' })}
-        onOpenSample={() => window.firstRunFixture.calls.push({ method: 'open-sample' })}
+        onRetryLiveSearch={() => window.firstRunFixture.calls.push({ method: 'retry-live-search' })}
+        onOpenInbox={() => window.firstRunFixture.calls.push({ method: 'open-inbox' })}
       />
     </HermesMotionProvider>
   );
@@ -68,5 +68,5 @@ window.firstRunFixture = {
     root.render(<Harness options={options} />);
   },
   setProviderStatus() {},
-  setSampleStatus() {},
+  setLiveSearchStatus() {},
 };

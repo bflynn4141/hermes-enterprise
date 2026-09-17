@@ -49,7 +49,7 @@ The default dedicated profile is `~/.he-runtime/<agent-uuid>/`, separate from th
 
 When relocating an existing profile, first stop its gateway and verify the process exited, then move the **whole agent UUID directory** to the new state root. This preserves transcript databases, run idempotency reservations and API credentials. Restart with the same enterprise credentials; do not start a fresh empty directory while the previous profile is still running. The initial development profile used `~/.hermes-enterprise`; its longer prefix exceeded the watchdog socket limit on macOS.
 
-Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. It also refuses a profile whose native cron store is nonempty. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
+Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. By default it also refuses a profile whose native cron store is nonempty. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
 
 ## Supported configuration and scope
 
@@ -63,7 +63,7 @@ model:
   api_mode: chat_completions
   api_key: ${ENTERPRISE_RUNTIME_TOKEN}
 platform_toolsets:
-  api_server: [enterprise_bridge]
+  api_server: [enterprise_bridge, enterprise_skill_reader]
 tools:
   tool_search:
     enabled: off
@@ -73,9 +73,9 @@ gateway:
     max_concurrent_runs: 1
 ```
 
-The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, all MCP servers, both built-in memory stores, memory/skill nudges, background review and title generation. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise tools. Startup fails closed unless the resolved tool definitions contain only enterprise tools plus that viewer. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
+The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, both built-in memory stores, memory/skill nudges, background review and title generation. MCP is empty by default. `ENTERPRISE_MCP_SERVERS_JSON` may add explicitly named stdio servers, but every one needs a bounded `tools.include` list and env values may only reference scoped variables from the credentials file. `HERMES_AGENTCASH_MCP_ENABLED=1` is the demo shortcut documented in that file. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise or configured MCP tools. Startup fails closed unless the resolved static tool definitions contain only enterprise tools plus that viewer. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
-`API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. The launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds. Native health and capabilities return 503 if the cron store later becomes nonempty. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
+`API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. By default the launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds, and health returns 503 if the cron store later becomes nonempty. `HERMES_NATIVE_CRON_ENABLED=1` retains those authenticated routes, while `cron.allow_agent_scheduling` remains false; Cloudflare stays the owner of business triggers. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
 
 ## Tool bridge protocol
 

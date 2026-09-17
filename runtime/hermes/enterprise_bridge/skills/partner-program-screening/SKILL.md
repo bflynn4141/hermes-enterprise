@@ -1,12 +1,12 @@
 ---
 name: partner-program-screening
 description: Screen partner prospects and prepare cited human reviews.
-version: 1.0.0
+version: 1.2.0
 metadata:
   hermes:
     category: enterprise
     tags: [partners, screening, approvals]
-    requires_tools: [list_partner_candidates, get_partner_candidate, propose_request]
+    requires_tools: [mcp__agentcash__fetch, list_partner_candidates, get_partner_candidate, propose_request]
     config:
       - key: partner_program.program_name
         description: Enterprise partner program name
@@ -60,16 +60,17 @@ Use this skill when reviewing public organization evidence for the configured pa
 
 ## Procedure
 
-1. Call `list_partner_candidates` to see candidates collected under the enterprise's approved source policy.
-2. Call `get_partner_candidate` for each candidate you may advance. Read the stored artifacts rather than relying on the discovery summary alone.
-3. Treat `deterministic_priority` only as discovery triage. Make an independent assessment using the configured program, role, dimensions, and keywords.
-4. Separate three things in the review:
+1. If the run prompt contains the exact approved `mcp__agentcash__fetch` arguments, call it exactly once. Do not add, remove, or change filters, the URL, or the $0.15 cap. The enterprise post-tool hook imports and sanitizes the successful response.
+2. Call `list_partner_candidates` to see candidates collected under the enterprise's approved source policy. If the AgentCash call succeeded but no stored candidate appears, stop and report that the evidence import needs attention; do not pay for a retry.
+3. Call `get_partner_candidate` for each candidate you may advance. Read the stored artifacts rather than relying on the discovery summary alone.
+4. Treat `deterministic_priority` only as discovery triage. Make an independent assessment using the configured program, role, dimensions, and keywords.
+5. Separate three things in the review:
    - **Evidence:** claims directly supported by cited artifact IDs.
    - **Inference:** a restrained conclusion drawn from that evidence.
    - **Gap:** anything the public evidence cannot establish, including interest, availability, consent, capacity, or commercial fit.
-5. Use `propose_request` with `kind: application` only when the evidence is sufficient for human review. Preserve the candidate ID, source, priority, and exact stored evidence IDs required by the tool schema.
-6. State the proposed role and explain Track Record, Capacity, and Fit concisely. Never convert an unknown into a positive claim.
-7. Stop after preparing the pending application. A human decides whether the organization advances.
+6. Use `propose_request` with `kind: application` only when the evidence is sufficient for human review. Preserve the candidate ID, source, priority, and exact stored evidence IDs required by the tool schema.
+7. State the proposed role and explain Track Record, Capacity, and Fit concisely. Never convert an unknown into a positive claim.
+8. Stop after preparing the pending application. A human decides whether the prospect advances.
 
 ## Boundaries
 
@@ -77,6 +78,9 @@ Use this skill when reviewing public organization evidence for the configured pa
 - Do not admit a partner, assign a role, promise benefits, approve terms, spend money, or sign anything.
 - Do not use sources or credentials outside the governed enterprise tools.
 - Do not cite a URL unless its stored artifact ID appears in the candidate record.
+- AgentCash results are not Inbox evidence until the approved connector imports
+  and stores them. Do not infer sensitive traits or make an automated decision
+  about a person. Never expose, store, or use contact details for this flow.
 - Do not lower the configured evidence threshold to fill a quota.
 
 ## Verification

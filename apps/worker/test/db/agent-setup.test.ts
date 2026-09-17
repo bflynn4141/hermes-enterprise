@@ -17,6 +17,25 @@ async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise
 }
 
 describe('durable first-run agent setup', () => {
+  it('repairs legacy ownership when the active member already owns a writable session for Iris', async () => {
+    const fx = await seedWorkspace();
+    const { env } = makeEnv();
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${fx.agentId}`, {
+      method: 'PATCH',
+      body: { setup_step: 'context' },
+    });
+    expect(response.status).toBe(204);
+
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => client.query<{ user_id: string }>(
+      `SELECT m.user_id
+         FROM agent_owners ao
+         JOIN members m ON m.workspace_id = ao.workspace_id AND m.id = ao.member_id
+        WHERE ao.workspace_id = $1 AND ao.agent_id = $2`,
+      [fx.workspaceId, fx.agentId],
+    ));
+    expect(stored.rows).toEqual([{ user_id: fx.adminId }]);
+  });
+
   it('stores the repeatable loop, starts the owned agent, and grants only proposal/read tools', async () => {
     const fx = await seedWorkspace();
     await bindAgent(fx);
@@ -50,7 +69,7 @@ describe('durable first-run agent setup', () => {
       return { agent: agent.rows[0], tools: capabilities.rows.flatMap((row) => row.tool_names) };
     });
     expect(stored.agent).toMatchObject({ status: 'started', responsibility: 'Partner Program', started: true });
-    expect(stored.agent?.instructions_active).toContain('Screen partner applications');
+    expect(stored.agent?.instructions_active).toContain('Discover and screen partners');
     expect(stored.tools).toEqual(expect.arrayContaining(['list_requests', 'propose_request', 'ask_for_context']));
     expect(stored.tools).not.toContain('send_email');
   });

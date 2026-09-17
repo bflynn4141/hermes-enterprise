@@ -712,6 +712,7 @@ export const partnerScreeningRuns = pgTable(
     apiRequestsUsed: integer('api_requests_used').notNull().default(0),
     rateLimits: jsonb('rate_limits').notNull().default([]),
     candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
+    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),
     errorCode: text('error_code'),
     errorDetail: text('error_detail'),
     startedAt: now('started_at'),

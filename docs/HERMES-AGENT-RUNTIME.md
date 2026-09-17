@@ -95,10 +95,22 @@ native run keeps its process while waiting and is bounded by the adapter’s
 waits need a durable suspend/resume lifecycle before production rollout. Inbox
 proposals do not hold the runtime open while a reviewer decides.
 
-Native shell, filesystem, browser, arbitrary MCP, delegation and cron tools are
-not enabled. The launcher additionally refuses nonempty native cron state,
-removes native cron REST routes before binding, and makes native health fail if
-a job later appears. Automatic memory extraction, background review and learning nudges
+Native shell, filesystem, browser and delegation tools are not enabled. MCP and
+native cron remain off by default. For an explicit demo profile,
+`HERMES_NATIVE_CRON_ENABLED=1` retains the official cron REST surface while
+agent self-scheduling stays disabled, and `ENTERPRISE_MCP_SERVERS_JSON` enables
+only named stdio servers with a required tool allowlist. The AgentCash shortcut
+`HERMES_AGENTCASH_MCP_ENABLED=1` pins AgentCash 0.17.1 and exposes only balance,
+discovery, schema inspection and fetch; fetch is limited to StableEnrich and
+StableSocial and requires a per-call `maxAmount` no greater than $0.20. Its
+`AGENTCASH_HOME` should be a dedicated funded directory, not a personal home.
+The Partner Program profile further pins one People Search call to
+`stableenrich.dev/api/fullenrich/people-search` at $0.15. A `post_tool_call`
+hook forwards that response to the run-bound Worker importer; contact data is
+discarded before the result can become Inbox evidence.
+Without those gates, the launcher refuses nonempty native cron state, removes
+native cron REST routes before binding, and makes native health fail if a job
+later appears. Automatic memory extraction, background review and learning nudges
 are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before

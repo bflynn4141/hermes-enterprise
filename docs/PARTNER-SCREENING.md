@@ -1,15 +1,16 @@
 # Partner screening: live sources and Iris review
 
-Hermes can collect public organization evidence from the official GitHub REST
-API, save immutable source artifacts, and hand the candidates to the bound Iris
-agent for judgment. Source collection never creates an application by itself.
+Hermes can collect public organization evidence from GitHub or public
+professional evidence from AgentCash People Search, save immutable source
+artifacts, and hand the candidates to the bound Iris agent for judgment. Source
+collection never creates an application by itself.
 Iris must inspect the stored evidence and use the normal `propose_request` tool;
 that creates a pending Inbox request for a human reviewer. There is no outreach,
 messaging, application submission, admission, payment, signature, or other
 external write in this flow.
 
 Iris now receives this procedure as the native, read-only Hermes skill
-`enterprise_bridge:partner-program-screening` version `1.0.0`. Its approved
+`enterprise_bridge:partner-program-screening` version `1.2.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
 model credentials remain server-side. The skill is automatically in use when
 this agent has a valid policy. It describes the review workflow but grants no
@@ -27,6 +28,7 @@ activity cannot establish them.
 | Source | State in this build | Authentication and cost | Policy boundary |
 |---|---|---|---|
 | GitHub | Live through `api.github.com` | Works anonymously at 60 core requests/hour, with search limited to 10 requests/minute. `PARTNER_GITHUB_TOKEN` raises the primary core allowance to 5,000/hour and authenticated search to 30/minute. GitHub does not charge per REST request. | Organization and repository records only. The connector drops user-owned search results and public email, and cannot contact anyone. GitHub prohibits using the service for spam, including unsolicited recruiting. |
+| AgentCash People Search | Live through `stableenrich.dev/api/fullenrich/people-search` inside Iris's Nous Cloud profile | One request per run, capped at $0.15. The endpoint is free when it returns no match. The dedicated AgentCash wallet pays; no source API key is needed. | The model cannot select the URL, filters, or spend cap. The Worker accepts a response only from the native run that owns the screening job, removes contact data, and stores public professional fields. Results are prospects, never applicants, until a human reviews them. |
 | Explicit GitHub URL intake | Live through the same connector | Same GitHub limits. URLs must be `https://github.com/<organization>` or one repository beneath it. | A URL is an input hint; the saved evidence is still fetched from the official API. The profile call must prove the owner is an organization. |
 | YouTube | Not implemented | A Google Cloud project and `PARTNER_YOUTUBE_API_KEY` would be required. `search.list` currently costs one unit and has a separate default search quota of 100 calls/day. A credential alone does not mark this source live. | Build and policy review of a dedicated connector are still required. No YouTube request is made here. |
 | X | Not implemented | Requires an approved developer account, project/app and `PARTNER_X_BEARER_TOKEN`. X charges from prepaid credits per API usage. A credential alone does not mark this source live. | A dedicated connector and a workspace budget must be approved first. No X request is made here. |
@@ -49,21 +51,26 @@ Source policy and quota references were checked on 2026-09-16:
 
 ## Trust boundary and data flow
 
-1. An Admin starts a run for an agent with an idempotency key. The server reads
+1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. The server reads
    that agent's non-secret policy from `PARTNER_SCREENING_CONFIG_JSON`.
-2. The server calls only fixed `https://api.github.com` endpoints. It has a
+2. For GitHub, the server calls only fixed `https://api.github.com` endpoints. It has a
    10-second timeout, a 1 MB response cap, a per-run request cap, and a
    configurable minimum remaining-rate reserve. It does not retry a `403` or
    `429` and reports the reset time when GitHub provides it.
-3. A successful run commits sanitized source snapshots and candidates. Source
+3. For People Search, Iris calls the exact policy-derived AgentCash request in
+   Nous Cloud. The plugin's `post_tool_call` observer forwards the result with
+   trusted native run and tool-call IDs. The authenticated Worker rejects any
+   response that does not map to the matching `partner-screening:<run>` turn.
+4. A successful run commits sanitized source snapshots and candidates. Source
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,
    confidence, and gaps are preserved.
-4. The response gives the user a deliberate `ask_iris_to_screen` prompt. The
+5. Onboarding calls the explicit handoff route after the provider is connected.
+   Cloudflare Cron performs the same idempotent handoff automatically. The
    agent's auto-loaded Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates.
-5. Iris may call `propose_request`. A discovered application is accepted only
+6. Iris may call `propose_request`. A discovered application is accepted only
    if its candidate identity, source, priority, and every cited evidence ID
    match stored rows. A partial unique index on the candidate subject key makes
    repeat agent runs idempotent: at most one Inbox request exists per candidate.
@@ -117,13 +124,36 @@ For a deployment, set `PARTNER_SCREENING_CONFIG_JSON` as a Worker variable and
 store `PARTNER_GITHUB_TOKEN` as a Worker secret. Do not put the token inside the
 JSON policy. Run the migration before enabling the route.
 
-## What is live and what is simulated
+### Proactive demo
 
-With a valid agent policy, GitHub discovery is live and saves the API response
-evidence used for each triage score. Tests use contract-shaped fixtures and do
-not claim to have discovered a real candidate. The existing onboarding sample
-route remains at `/w/:workspace/onboarding/sample-runs`; it is still labeled as
-simulation and its data never appears as live partner evidence.
+`AUTOMATED_TRIGGERS_ENABLED=1` makes the existing every-minute Cloudflare Cron
+admit one durable screening job per configured, started, admin-owned agent and
+cadence bucket. `PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES` defaults to 360
+and is clamped to 5–1440. In staging,
+`PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS=1` applies the bounded onboarding
+policy to started admin-owned agents without an agent-specific override. The
+durable job creates/reuses an `Iris · Automated partner
+screening` session, and submits the stored handoff prompt with a stable turn id.
+Retries therefore reuse the screening run and Iris turn rather than paying or
+proposing twice. Staging enables this gate; production leaves it off.
+
+Cloudflare is the business-trigger scheduler. Native Hermes cron may be exposed
+for a demo profile, but it should not schedule this same screening flow; doing so
+would create two scheduler owners even though downstream ids are defensive.
+
+## Live onboarding
+
+With a valid policy, Partner Program onboarding starts a real connector run,
+shows its request and monetary ceiling, and hands the work to Iris once Nous
+Portal is connected. Development and staging default to one AgentCash People
+Search call capped at $0.15 and at most five stored prospects. The old sample
+route and fictional applicant UI are no longer exposed.
+
+Development and staging may set `PARTNER_SCREENING_DEFAULT_CONFIG_JSON` so a
+newly-created agent can run this first search before it has an agent-specific
+policy. The staging default is capped at five prospects and one $0.15 request.
+Production has no default and therefore fails closed until an approved policy
+is configured.
 
 This repository does not contain actual source credentials, the user's search
 queries, the user's scoring policy, or deployment configuration. Until those

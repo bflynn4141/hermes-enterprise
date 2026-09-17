@@ -23,7 +23,7 @@ export const partnerPriorityCriterionSchema = z
 export const partnerCandidateSummarySchema = z
   .object({
     id: uuidSchema,
-    source: z.literal('github'),
+    source: z.enum(['github', 'agentcash_people']),
     source_key: z.string().min(1).max(200),
     display_name: z.string().min(1).max(200),
     profile_url: z.url().max(2048),
@@ -55,8 +55,8 @@ export const partnerScreeningSnapshotSchema = z
         agent_id: uuidSchema,
         status: z.enum(['running', 'completed', 'failed']),
         mode: z.literal('live'),
-        source: z.literal('github'),
-        authentication: z.enum(['authenticated', 'unauthenticated']),
+        source: z.enum(['github', 'agentcash_people']),
+        authentication: z.enum(['authenticated', 'unauthenticated', 'wallet']),
         started_at: z.iso.datetime({ offset: true }),
         completed_at: z.iso.datetime({ offset: true }).nullable(),
         error_code: z.string().max(100).nullable(),
@@ -67,7 +67,7 @@ export const partnerScreeningSnapshotSchema = z
       .object({
         api_requests_used: z.number().int().min(0),
         api_requests_max: z.number().int().min(1).max(30),
-        monetary_cost_usd: z.literal(0),
+        monetary_cost_usd: z.number().min(0).max(0.2),
       })
       .strict(),
     rate_limits: z.array(rateLimitSchema).max(10),
@@ -85,11 +85,17 @@ export const partnerScreeningSnapshotSchema = z
         kind: z.literal('ask_iris_to_screen'),
         prompt: z.string().min(1).max(2000),
         candidate_ids: z.array(uuidSchema).max(10),
+        agent_run: z.object({
+          id: uuidSchema,
+          session_id: uuidSchema,
+          status: z.enum(['working', 'waiting', 'stopping', 'stopped', 'error', 'completed']),
+        }).strict().nullable(),
       })
       .strict(),
-    disclosure: z.literal(
+    disclosure: z.enum([
       'Public organization evidence was fetched through the official GitHub REST API. No person was contacted and no application, admission, message, payment, signature, or external write was performed.',
-    ),
+      'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.',
+    ]),
   })
   .strict();
 export type PartnerScreeningSnapshot = z.infer<typeof partnerScreeningSnapshotSchema>;
@@ -100,16 +106,17 @@ export const partnerSourceMatrixSchema = z
     configured: z.boolean(),
     sources: z.array(
       z.object({
-        id: z.enum(['github', 'youtube', 'x', 'linkedin']),
+        id: z.enum(['github', 'agentcash_people', 'youtube', 'x', 'linkedin']),
         state: z.enum(['live', 'unconfigured', 'unsupported_policy']),
         authentication: z.enum(['authenticated', 'unauthenticated', 'not_applicable']),
         note: z.string().max(500),
       }).strict(),
-    ).length(4),
-    simulation_fallback: z
+    ).length(5),
+    onboarding_live_search: z
       .object({
-        available: z.literal(true),
-        endpoint: z.string().min(1).max(200),
+        available: z.boolean(),
+        endpoint: z.literal('/w/:workspace/partner-screening/runs'),
+        source: z.enum(['github', 'agentcash_people']),
         disclosure: z.string().min(1).max(500),
       })
       .strict(),

@@ -62,6 +62,9 @@ export const JOB_KINDS = [
   'slack_ingest',
   'slack_deliver',
   'slack_revoke',
+  // Cloudflare Cron admits a configured discovery run; this durable job owns
+  // the external fetch, evidence commit, and idempotent Iris handoff.
+  'partner_screening',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -490,6 +493,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'slack_revoke':
       await (await import('./integrations/slack/revoke.js')).runSlackRevokeJob(env, job);
+      return;
+    case 'partner_screening':
+      await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
       return;
     case 'reverify':
       {

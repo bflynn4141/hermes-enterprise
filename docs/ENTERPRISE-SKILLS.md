@@ -2,7 +2,7 @@
 
 Hermes Enterprise packages reviewed procedures as official Hermes skills while keeping authority, credentials, source access and approvals in the enterprise control plane.
 
-The first package is `enterprise_bridge:partner-program-screening` version `1.0.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare an application request, and stop for human review. It cannot discover sources, contact anyone or decide an application by itself.
+The first package is `enterprise_bridge:partner-program-screening` version `1.1.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program policy. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, prepare an application request, and stop for human review. Optional AgentCash results remain exploratory until an approved connector stores them as evidence. The skill cannot contact anyone or decide an application by itself.
 
 ## Why this matches Hermes
 
@@ -50,7 +50,7 @@ The procedure and authority deliberately remain separate:
 
 ## Partner Program configuration
 
-The current slice derives skill settings from `PARTNER_SCREENING_CONFIG_JSON`, including program name, role, keywords, approved discovery queries, triage weights, evidence threshold and candidate limit. The manifest also fixes `no_outreach: true` and `human_review_required: true`. `PARTNER_GITHUB_TOKEN` and the Nous inference credential are never returned by the skill endpoint or written into the profile's skill config.
+The current slice derives skill settings from `PARTNER_SCREENING_CONFIG_JSON`, including source, program name, role, keywords, bounded People Search filters, spend cap, triage weights, evidence threshold and candidate limit. The manifest also fixes `no_outreach: true` and `human_review_required: true`. Wallet material, `PARTNER_GITHUB_TOKEN`, and the Nous inference credential are never returned by the skill endpoint or written into the profile's skill config.
 
 The skill appears as **In use** on the Agent and Library skill surfaces whenever the bound agent has a valid policy. The same version is auto-loaded in the native runtime.
 

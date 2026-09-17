@@ -61,7 +61,7 @@ def main():
             elif self.path.endswith("/skills"):
                 self.reply(200, {"skills": [{
                     "name": "enterprise_bridge:partner-program-screening",
-                    "version": "1.0.0",
+                    "version": "1.1.0",
                     "auto_load": True,
                     "config": {"partner_program": {
                         "program_name": "Hermes Partner Program",

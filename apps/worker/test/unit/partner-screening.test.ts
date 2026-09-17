@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
-import { partnerAgentConfig, partnerSourceMatrix, type PartnerAgentConfig } from '../../src/partner-screening/config.js';
+import { partnerAgentConfig, partnerScreeningAgentIds, partnerSourceMatrix, type PartnerAgentConfig } from '../../src/partner-screening/config.js';
+import { automationIntervalMinutes, automatedTriggersEnabled } from '../../src/partner-screening/automation.js';
 import {
   discoverGitHubOrganizations,
   organizationFromIntakeUrl,
@@ -11,6 +12,7 @@ import { deterministicDiscoveryPriority, type PublicOrganization, type PublicRep
 const AGENT_ID = '11111111-1111-4111-8111-111111111111';
 
 const config: PartnerAgentConfig = {
+  source: 'github',
   program_name: 'Hermes Partner Program',
   source_purpose: 'organization_partner_research',
   organization_only: true,
@@ -25,6 +27,7 @@ const config: PartnerAgentConfig = {
   max_candidates: 2,
   max_api_requests: 6,
   minimum_rate_remaining: 0,
+  max_spend_usd: 0,
 };
 
 const owner = { login: 'ExampleOrg', node_id: 'ORG_node_1', type: 'Organization' };
@@ -87,7 +90,15 @@ describe('partner screening source configuration', () => {
       expect.objectContaining({ id: 'x', state: 'unconfigured' }),
       expect.objectContaining({ id: 'linkedin', state: 'unsupported_policy' }),
     ]));
+    expect(matrix.onboarding_live_search).toMatchObject({ available: true, source: 'github' });
     expect(JSON.stringify(matrix)).not.toContain('configured-but-never-returned');
+  });
+
+  it('uses a bounded default policy for a new onboarding agent without scheduling it', () => {
+    const env = { PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify({ ...config, max_candidates: 2, max_api_requests: 5 }) } as Env;
+    expect(partnerAgentConfig(env, AGENT_ID).config).toMatchObject({ max_candidates: 2, max_api_requests: 5 });
+    expect(partnerSourceMatrix(env, AGENT_ID).onboarding_live_search.available).toBe(true);
+    expect(partnerScreeningAgentIds(env)).toEqual([]);
   });
 
   it('rejects malformed weights and individual/social URLs', () => {
@@ -97,6 +108,19 @@ describe('partner screening source configuration', () => {
     expect(organizationFromIntakeUrl('https://github.com/ExampleOrg/repository')).toBe('ExampleOrg');
     expect(organizationFromIntakeUrl('https://github.com/topics/agents')).toBeNull();
     expect(organizationFromIntakeUrl('https://linkedin.com/in/person')).toBeNull();
+  });
+
+  it('requires an explicit automation gate and clamps the scheduler cadence', () => {
+    const env = {
+      AUTOMATED_TRIGGERS_ENABLED: '1',
+      PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES: '2',
+      PARTNER_SCREENING_CONFIG_JSON: JSON.stringify({ [AGENT_ID]: config }),
+    } as Env;
+    expect(automatedTriggersEnabled(env)).toBe(true);
+    expect(automationIntervalMinutes(env)).toBe(5);
+    expect(partnerScreeningAgentIds(env)).toEqual([AGENT_ID]);
+    expect(automationIntervalMinutes({ PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES: '9999' } as Env)).toBe(1_440);
+    expect(automatedTriggersEnabled({ AUTOMATED_TRIGGERS_ENABLED: 'true' } as Env)).toBe(false);
   });
 });
 

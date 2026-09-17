@@ -21,7 +21,7 @@ import {
 } from './FirstRunSetup.model.js';
 
 export type ProviderStatus = 'disconnected' | 'encrypting' | 'verifying' | 'syncing' | 'ready' | 'error';
-export type SampleStatus = 'idle' | 'starting' | 'running' | 'complete' | 'error';
+export type LiveSearchStatus = 'idle' | 'searching' | 'awaiting_provider' | 'screening' | 'complete' | 'error';
 
 export interface FirstRunSetupProps {
   agentName?: string;
@@ -31,14 +31,14 @@ export interface FirstRunSetupProps {
   providerStatus?: ProviderStatus;
   providerSlot?: ReactNode;
   setupError?: string | null;
-  sampleStatus?: SampleStatus;
-  completedSampleStages?: readonly string[];
+  liveSearchStatus?: LiveSearchStatus;
+  completedLiveStages?: readonly string[];
   onAgreementChange?: (agreement: WorkingAgreement) => void;
   onStateChange?: (state: FirstRunState, agreement: WorkingAgreement) => void;
   onReadyForTest?: (state: FirstRunState, agreement: WorkingAgreement) => void;
   onAction?: (action: FirstRunAction) => void;
-  onRunSample?: () => void;
-  onOpenSample?: () => void;
+  onRetryLiveSearch?: () => void;
+  onOpenInbox?: () => void;
 }
 
 const STEP_LABELS: Record<FirstRunStep, string> = { role: 'Role', loop: 'Loop', boundaries: 'Boundaries', test: 'Test' };
@@ -52,14 +52,14 @@ export function FirstRunSetup({
   providerStatus = 'disconnected',
   providerSlot,
   setupError,
-  sampleStatus = 'idle',
-  completedSampleStages = [],
+  liveSearchStatus = 'idle',
+  completedLiveStages = [],
   onAgreementChange,
   onStateChange,
   onReadyForTest,
   onAction,
-  onRunSample,
-  onOpenSample,
+  onRetryLiveSearch,
+  onOpenInbox,
 }: FirstRunSetupProps) {
   const [internalState, internalDispatch] = useReducer(firstRunReducer, initialState ?? createFirstRunState());
   const state = controlledState ?? internalState;
@@ -101,10 +101,10 @@ export function FirstRunSetup({
           providerStatus={providerStatus}
           providerSlot={providerSlot}
           setupError={setupError}
-          sampleStatus={sampleStatus}
-          completedSampleStages={completedSampleStages}
-          onRunSample={onRunSample}
-          onOpenSample={onOpenSample}
+          liveSearchStatus={liveSearchStatus}
+          completedLiveStages={completedLiveStages}
+          onRetryLiveSearch={onRetryLiveSearch}
+          onOpenInbox={onOpenInbox}
         />
         <FirstRunWorkingAgreement state={state} agreement={agreement} />
       </div>
@@ -120,10 +120,10 @@ export interface FirstRunConversationProps {
   providerStatus?: ProviderStatus;
   providerSlot?: ReactNode;
   setupError?: string | null;
-  sampleStatus?: SampleStatus;
-  completedSampleStages?: readonly string[];
-  onRunSample?: () => void;
-  onOpenSample?: () => void;
+  liveSearchStatus?: LiveSearchStatus;
+  completedLiveStages?: readonly string[];
+  onRetryLiveSearch?: () => void;
+  onOpenInbox?: () => void;
 }
 
 export function FirstRunConversation({
@@ -134,10 +134,10 @@ export function FirstRunConversation({
   providerStatus = 'disconnected',
   providerSlot,
   setupError,
-  sampleStatus = 'idle',
-  completedSampleStages = [],
-  onRunSample,
-  onOpenSample,
+  liveSearchStatus = 'idle',
+  completedLiveStages = [],
+  onRetryLiveSearch,
+  onOpenInbox,
 }: FirstRunConversationProps) {
   const reduceMotion = useReducedMotion() ?? false;
   const [customRole, setCustomRole] = useState('');
@@ -153,7 +153,7 @@ export function FirstRunConversation({
         <ConversationHistory state={state} agentName={agentName} ownerName={ownerName} />
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
-            key={`${state.step}:${state.loopId ?? ''}:${state.editingReviewers}:${providerStatus}:${sampleStatus}`}
+            key={`${state.step}:${state.loopId ?? ''}:${state.editingReviewers}:${providerStatus}:${liveSearchStatus}`}
             className="first-run-current"
             initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -173,11 +173,11 @@ export function FirstRunConversation({
               <TestQuestion
                 providerStatus={providerStatus}
                 providerSlot={providerSlot}
-                sampleStatus={sampleStatus}
-                completedSampleStages={completedSampleStages}
+                liveSearchStatus={liveSearchStatus}
+                completedLiveStages={completedLiveStages}
                 stages={loop?.stages ?? []}
-                onRunSample={onRunSample}
-                onOpenSample={onOpenSample}
+                onRetryLiveSearch={onRetryLiveSearch}
+                onOpenInbox={onOpenInbox}
                 onBack={() => onAction({ type: 'step/back' })}
               />
             ) : null}
@@ -274,7 +274,7 @@ function LoopQuestion({ state, onSelect, onConfirm, onAdjust, onBack }: { state:
     return (
       <>
         <IrisPrompt>
-          <p>For each {state.loopId === 'screen-partners' ? 'application' : 'item'}, I can research the evidence and prepare a recommendation. You decide what happens next.</p>
+          <p>For each {state.loopId === 'screen-partners' ? 'partner prospect' : 'item'}, I can research the evidence and prepare a recommendation. You decide what happens next.</p>
         </IrisPrompt>
         <div className="first-run-loop-preview" aria-label="Proposed work loop">
           {loop.stages.map((stage, index) => <span key={stage}>{stage}{index < loop.stages.length - 1 ? <Icon name="arrow" size={14} /> : null}</span>)}
@@ -331,43 +331,38 @@ function BoundaryQuestion({ state, error, onEdit, onChange, onConfirm, onBack }:
   );
 }
 
-function TestQuestion({ providerStatus, providerSlot, sampleStatus, completedSampleStages, stages, onRunSample, onOpenSample, onBack }: { providerStatus: ProviderStatus; providerSlot?: ReactNode; sampleStatus: SampleStatus; completedSampleStages: readonly string[]; stages: readonly string[]; onRunSample?: () => void; onOpenSample?: () => void; onBack: () => void }) {
+function TestQuestion({ providerStatus, providerSlot, liveSearchStatus, completedLiveStages, stages, onRetryLiveSearch, onOpenInbox, onBack }: { providerStatus: ProviderStatus; providerSlot?: ReactNode; liveSearchStatus: LiveSearchStatus; completedLiveStages: readonly string[]; stages: readonly string[]; onRetryLiveSearch?: () => void; onOpenInbox?: () => void; onBack: () => void }) {
   const providerReady = providerStatus === 'ready';
   return (
     <>
       <IrisPrompt>
-        {sampleStatus === 'complete'
-          ? <p>The sample applications are ready. I stopped before every decision and external action.</p>
-          : sampleStatus === 'error'
-            ? <p>The sample run paused. Its last saved state is still visible.</p>
-            : sampleStatus === 'starting' || sampleStatus === 'running'
-              ? <p>I’m showing you the loop with simulated applications. Watch the app as each saved state arrives.</p>
-              : <p>Let’s see the loop with simulated applications. Nothing will be sent or changed.</p>}
+        {liveSearchStatus === 'complete'
+          ? <p>The first live search is complete. I stopped before every decision and external action.</p>
+          : liveSearchStatus === 'error'
+            ? <p>The live search paused. Any evidence already committed is still visible.</p>
+            : liveSearchStatus === 'awaiting_provider'
+              ? <p>I found live candidates and saved their public evidence. Connect Nous Portal so I can screen it.</p>
+              : liveSearchStatus === 'screening'
+                ? <p>I’m screening the saved public evidence now. Supported candidates will appear in Inbox.</p>
+                : <p>I’m starting with a bounded live search of public GitHub organizations.</p>}
       </IrisPrompt>
       {!providerReady ? (
         <div className="first-run-provider-slot" data-testid="first-run-provider-slot">
           {providerSlot ?? <DefaultProviderSlot status={providerStatus} />}
         </div>
       ) : null}
-      {sampleStatus === 'idle' && onRunSample ? (
-        <button type="button" className="first-run-sample" onClick={onRunSample}>
-          <Glass name="admission" size={32} />
-          <span><strong>Run simulated applications</strong><small>No provider, web search, messages, or decisions</small></span>
-          <Icon name="arrow" size={16} />
-        </button>
-      ) : null}
-      {(sampleStatus === 'starting' || sampleStatus === 'running') ? <SampleProgress starting={sampleStatus === 'starting'} stages={stages} completed={completedSampleStages} /> : null}
-      {sampleStatus === 'complete' ? (
+      {(liveSearchStatus === 'searching' || liveSearchStatus === 'awaiting_provider' || liveSearchStatus === 'screening') ? <LiveSearchProgress status={liveSearchStatus} stages={stages} completed={completedLiveStages} /> : null}
+      {liveSearchStatus === 'complete' ? (
         <div className="first-run-sample-complete" role="status">
           <span><Icon name="check" size={17} /></span>
-          <div><strong>Sample briefs are ready</strong><p>The approval consequences are waiting in Inbox.</p></div>
-          <button type="button" onClick={onOpenSample} disabled={!onOpenSample}>Open sample</button>
+          <div><strong>Live screening is complete</strong><p>Supported candidates are waiting for human review in Inbox.</p></div>
+          <button type="button" onClick={onOpenInbox} disabled={!onOpenInbox}>Open Inbox</button>
         </div>
       ) : null}
-      {sampleStatus === 'error' ? (
+      {liveSearchStatus === 'error' ? (
         <div className="first-run-error" role="alert">
-          <span>The sample could not finish. Nothing was sent or changed.</span>
-          {onRunSample ? <button type="button" onClick={onRunSample}>Retry</button> : null}
+          <span>The live search could not finish. No one was contacted and no decision was made.</span>
+          {onRetryLiveSearch ? <button type="button" onClick={onRetryLiveSearch}>Retry</button> : null}
         </div>
       ) : null}
       <button type="button" className="first-run-back" onClick={onBack}><Icon name="arrow" size={14} />Back</button>
@@ -389,10 +384,10 @@ function DefaultProviderSlot({ status }: { status: ProviderStatus }) {
   );
 }
 
-function SampleProgress({ starting, stages, completed }: { starting: boolean; stages: readonly string[]; completed: readonly string[] }) {
+function LiveSearchProgress({ status, stages, completed }: { status: LiveSearchStatus; stages: readonly string[]; completed: readonly string[] }) {
   return (
-    <div className="first-run-sample-progress" aria-label="Sample progress" aria-live="off">
-      <span className="first-run-sample-label"><span className="first-run-live-dot" />{starting ? 'Starting simulated run' : 'Screening sample applications'}</span>
+    <div className="first-run-sample-progress" aria-label="Live search progress" aria-live="off">
+      <span className="first-run-sample-label"><span className="first-run-live-dot" />{status === 'searching' ? 'Searching live public sources' : status === 'awaiting_provider' ? 'Waiting for Nous Portal' : 'Iris is screening live evidence'}</span>
       <ol>
         {stages.map((stage) => {
           const done = completed.includes(stage);

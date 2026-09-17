@@ -22,6 +22,10 @@ import {
 import { requireBridgeAuth } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { runtimeSkillManifests } from './skills.js';
+import { withWorkspaceTransaction } from '../jobs.js';
+import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
+import { partnerAgentConfigSchema } from '../partner-screening/config.js';
+import { completePartnerScreening } from '../partner-screening/service.js';
 
 export interface BridgeDb extends AgentDb {
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
@@ -53,6 +57,27 @@ export function parseRuntimeCall(value: unknown): RuntimeCall {
     throw new RouteError('Invalid runtime tool call.', 'bad_body', 400);
   }
   return { runtime_run_id: value.runtime_run_id, tool_call_id: value.tool_call_id, name: value.name, arguments: value.arguments };
+}
+
+interface AgentCashPeopleImport {
+  readonly runtime_run_id: string;
+  readonly tool_call_id: string;
+  readonly arguments: Record<string, unknown>;
+  readonly result: unknown;
+}
+
+function parseAgentCashPeopleImport(value: unknown): AgentCashPeopleImport {
+  if (!object(value) || typeof value.runtime_run_id !== 'string' || !/^run_[0-9a-f]{32}$/.test(value.runtime_run_id) ||
+      typeof value.tool_call_id !== 'string' || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(value.tool_call_id) ||
+      !object(value.arguments) || !('result' in value)) {
+    throw new RouteError('Invalid AgentCash People Search import.', 'bad_body', 400);
+  }
+  return {
+    runtime_run_id: value.runtime_run_id,
+    tool_call_id: value.tool_call_id,
+    arguments: value.arguments,
+    result: value.result,
+  };
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -315,6 +340,60 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
     await publish(c.env, workspaceId, result);
     return c.json(result.reply, 'status' in result.reply ? 202 : 200);
   } finally { await db.close(); }
+}
+
+/** Import the exact paid response associated with one trusted native run. */
+export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashPeopleImport(await body(c));
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try {
+    run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
+    requireActive(run, workspaceId, agentId);
+  } finally {
+    await runtime.close();
+  }
+  const match = /^partner-screening:([0-9a-f-]{36})$/i.exec(run.clientTurnId);
+  if (!match) throw new RouteError('This native run is not a partner screening run.', 'runtime_run_inactive', 409);
+  const screeningRunId = match[1]!;
+  let importedCandidates = 0;
+  let created = false;
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    const screening = await tx.query<{
+      created_by: string;
+      status: 'running' | 'completed' | 'failed';
+      source: string;
+      config_snapshot: Record<string, unknown>;
+      candidates_discovered: number;
+    }>(
+      `SELECT created_by, status, source, config_snapshot, candidates_discovered
+         FROM partner_screening_runs
+        WHERE workspace_id=$1 AND id=$2 AND agent_id=$3
+        FOR UPDATE`,
+      [workspaceId, screeningRunId, agentId],
+    );
+    const row = screening.rows[0];
+    if (!row || row.source !== 'agentcash_people' || row.status === 'failed') {
+      throw new RouteError('No active AgentCash screening run matches this native run.', 'partner_screening_conflict', 409);
+    }
+    const config = partnerAgentConfigSchema.parse(row.config_snapshot);
+    if (canonical(input.arguments) !== canonical(agentCashPeopleSearchArguments(config))) {
+      throw new RouteError('The AgentCash call does not match the stored screening policy.', 'partner_source_policy_mismatch', 422);
+    }
+    if (row.status === 'completed') {
+      importedCandidates = row.candidates_discovered;
+      return;
+    }
+    const result = parseAgentCashPeopleSearch(input.result, config);
+    importedCandidates = result.candidates.length;
+    created = true;
+    await completePartnerScreening(
+      { tx, workspaceId, userId: row.created_by, requireAdmin: () => undefined },
+      { runId: screeningRunId, agentId, result },
+    );
+  });
+  return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }
 function modelError(reason: string, status: number): Response {
   return Response.json({ error: { message: reason, type: 'runtime_bridge_error', code: reason } }, { status });

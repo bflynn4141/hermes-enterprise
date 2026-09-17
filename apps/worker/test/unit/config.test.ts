@@ -94,6 +94,29 @@ describe('wrangler.jsonc', () => {
     }
   });
 
+  it('enables proactive screening only in development and staging for the demo', () => {
+    expect((config.vars as Record<string, string>).AUTOMATED_TRIGGERS_ENABLED).toBe('1');
+    expect((envs.staging!.vars as Record<string, string>).AUTOMATED_TRIGGERS_ENABLED).toBe('1');
+    expect((envs.production!.vars as Record<string, string>).AUTOMATED_TRIGGERS_ENABLED).toBe('0');
+    expect((config.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS).toBe('1');
+    expect((envs.staging!.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS).toBe('1');
+    expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS).toBe('0');
+    for (const scope of [config, ...Object.values(envs)]) {
+      expect((scope.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES).toBe('360');
+    }
+  });
+
+  it('allows a bounded live onboarding search only in development and staging', () => {
+    for (const scope of [config, envs.staging!]) {
+      const raw = (scope.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON;
+      expect(raw).toBeTruthy();
+      if (!raw) throw new Error('missing onboarding policy');
+      const policy = JSON.parse(raw) as { source: string; max_candidates: number; max_api_requests: number; organization_only: boolean; no_outreach: boolean; max_spend_usd: number };
+      expect(policy).toMatchObject({ source: 'agentcash_people', max_candidates: 5, max_api_requests: 1, organization_only: false, no_outreach: true, max_spend_usd: 0.15 });
+    }
+    expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON).toBeUndefined();
+  });
+
   it('binds both Hyperdrive configs everywhere, one per database role', () => {
     for (const scope of [config, ...Object.values(envs)]) {
       const bindings = (scope.hyperdrive as { binding: string }[]).map((h) => h.binding).sort();

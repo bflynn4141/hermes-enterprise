@@ -14,6 +14,7 @@ from start import (
     assert_native_cron_empty,
     clean_environment,
     load_enterprise_skills,
+    load_mcp_servers,
     native_cron_route,
     reset_managed_skill_home,
     validate_profile_path,
@@ -119,6 +120,141 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
         self.assertEqual(context.hook("skill_manage", {})["action"], "block")
 
+    def test_plugin_allows_only_bounded_agentcash_calls(self):
+        class Context:
+            def __init__(self):
+                self.hook = None
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                    "allowed_skills": [],
+                    "mcp_policy": [{
+                        "server": "agentcash",
+                        "tools": ["get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch"],
+                        "allowed_hosts": ["stableenrich.dev", "stablesocial.dev"],
+                        "max_amount_usd": 0.2,
+                    }],
+                }.get(name, default)
+
+            def register_hook(self, _name, callback):
+                self.hook = callback
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]):
+            plugin.register(context)
+        self.assertIsNone(context.hook("mcp__agentcash__get_balance", {}))
+        self.assertIsNone(context.hook("mcp__agentcash__discover_api_endpoints", {
+            "url": "https://stableenrich.dev",
+        }))
+        self.assertIsNone(context.hook("mcp__agentcash__fetch", {
+            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.06,
+        }))
+        self.assertIn("host allowlist", context.hook("mcp__agentcash__fetch", {
+            "url": "https://example.com", "maxAmount": 0.01,
+        })["message"])
+        self.assertIn("spend cap", context.hook("mcp__agentcash__fetch", {
+            "url": "https://stablesocial.dev/api/search", "maxAmount": 0.21,
+        })["message"])
+        self.assertEqual(context.hook("mcp__agentcash__bridge", {})["action"], "block")
+
+    def test_successful_people_search_is_imported_by_post_tool_hook(self):
+        class Context:
+            def __init__(self):
+                self.hooks = {}
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                    "allowed_skills": [],
+                    "mcp_policy": [{
+                        "server": "agentcash",
+                        "tools": ["fetch"],
+                        "allowed_hosts": ["stableenrich.dev"],
+                        "max_amount_usd": 0.2,
+                    }],
+                }.get(name, default)
+
+            def register_hook(self, name, callback):
+                self.hooks[name] = callback
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "import_people_search") as imported, \
+                patch.object(plugin, "trusted_post_identity", return_value=(RUN_ID, "call_people")):
+            plugin.register(context)
+            context.hooks["post_tool_call"](
+                tool_name="mcp__agentcash__fetch",
+                args={
+                    "url": "https://stableenrich.dev/api/fullenrich/people-search",
+                    "method": "POST",
+                    "maxAmount": 0.15,
+                    "body": {"person_skills": ["Artificial Intelligence (AI)"]},
+                },
+                result=json.dumps({"people": [], "companies": {}, "metadata": {"total": 0}}),
+                tool_call_id="call_people",
+            )
+        imported.assert_called_once()
+
+    def test_post_tool_hook_ignores_other_agentcash_fetches(self):
+        class Context:
+            hooks = {}
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                    "allowed_skills": [],
+                    "mcp_policy": [{
+                        "server": "agentcash", "tools": ["fetch"],
+                        "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.2,
+                    }],
+                }.get(name, default)
+
+            def register_hook(self, name, callback):
+                self.hooks[name] = callback
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "import_people_search") as imported:
+            plugin.register(context)
+            context.hooks["post_tool_call"](
+                tool_name="mcp__agentcash__fetch",
+                args={"url": "https://stableenrich.dev/api/exa/search", "method": "POST", "maxAmount": 0.15},
+                result="{}",
+                tool_call_id="call_other",
+            )
+        imported.assert_not_called()
+
     def test_cloud_control_auth_is_absent_without_a_secret(self):
         class Context:
             def register_dashboard_auth_provider(self, _provider):
@@ -134,7 +270,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.0.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.2.0",
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 
@@ -189,6 +325,38 @@ class BridgeTests(unittest.TestCase):
             self.assertNotIn(name, env)
         self.assertEqual(env["HOME"], "/isolated/os-home")
         self.assertEqual(env["HERMES_HOME"], "/isolated/home")
+
+    def test_mcp_config_is_explicit_allowlisted_and_secret_values_are_not_persisted(self):
+        raw = json.dumps({"lookup": {
+            "command": "/opt/lookup-mcp", "args": ["serve"],
+            "env": {"LOOKUP_TOKEN": "${SCOPED_LOOKUP_TOKEN}"},
+            "tools": {"include": ["find_person"]},
+            "policy": {"allowed_hosts": [], "max_amount_usd": 0},
+        }})
+        servers, policies, environment = load_mcp_servers(raw, {"SCOPED_LOOKUP_TOKEN": "secret-value"})
+        self.assertEqual(servers["lookup"]["env"], {"LOOKUP_TOKEN": "${SCOPED_LOOKUP_TOKEN}"})
+        self.assertEqual(environment, {"SCOPED_LOOKUP_TOKEN": "secret-value"})
+        self.assertNotIn("secret-value", json.dumps({"servers": servers, "policies": policies}))
+        with self.assertRaisesRegex(RuntimeError, "tools.include"):
+            load_mcp_servers(json.dumps({"wide": {"command": "tool", "tools": {"include": []}}}), {})
+        with self.assertRaisesRegex(RuntimeError, "scoped variables"):
+            load_mcp_servers(json.dumps({"leaky": {
+                "command": "tool", "env": {"TOKEN": "literal-secret"},
+                "tools": {"include": ["read"]},
+            }}), {})
+
+    def test_agentcash_demo_is_pinned_and_uses_a_dedicated_home_reference(self):
+        servers, policies, environment = load_mcp_servers(
+            "", {"AGENTCASH_HOME": "/srv/hermes-agentcash"}, agentcash_enabled=True,
+        )
+        self.assertEqual(servers["agentcash"]["args"], ["--yes", "agentcash@0.17.1"])
+        self.assertEqual(servers["agentcash"]["tools"]["include"], [
+            "get_balance", "discover_api_endpoints", "check_endpoint_schema", "fetch",
+        ])
+        self.assertEqual(environment, {"AGENTCASH_HOME": "/srv/hermes-agentcash"})
+        self.assertEqual(policies[0]["max_amount_usd"], 0.2)
+        with self.assertRaisesRegex(RuntimeError, "dedicated directory"):
+            load_mcp_servers("", {"AGENTCASH_HOME": str(pathlib.Path.home())}, agentcash_enabled=True)
 
     def test_watchdog_guard_uses_real_socket_suffix_and_launch_pid(self):
         agent_id = "44444444-4444-4444-8444-444444444444"

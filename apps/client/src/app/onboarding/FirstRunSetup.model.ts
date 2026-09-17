@@ -68,7 +68,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
 
 export const LOOP_OPTIONS: Record<Exclude<RoleId, 'custom'>, readonly LoopOption[]> = {
   'partner-program': [
-    { id: 'screen-partners', label: 'Screen partner applications', goal: 'Find strong Hermes partners', stages: ['Application', 'Research', 'Evidence brief', 'Human review'], done: 'A cited brief is waiting for the right reviewer' },
+    { id: 'screen-partners', label: 'Discover and screen partners', goal: 'Find strong Hermes partners', stages: ['Discovery', 'Public research', 'Evidence brief', 'Human review'], done: 'A cited brief is waiting for the right reviewer' },
     { id: 'onboard-partners', label: 'Onboard accepted partners', goal: 'Give accepted partners a clear start', stages: ['Acceptance', 'Checklist', 'Materials', 'Human review'], done: 'An onboarding plan is waiting for its owner' },
     { id: 'support-partners', label: 'Support active partners', goal: 'Resolve partner needs with context', stages: ['Request', 'Research', 'Proposed response', 'Human review'], done: 'A grounded response is waiting for review' },
   ],
@@ -87,7 +87,7 @@ export const LOOP_OPTIONS: Record<Exclude<RoleId, 'custom'>, readonly LoopOption
 };
 
 export const DEFAULT_BOUNDARIES: readonly ReviewBoundary[] = [
-  { id: 'admission', label: 'Admit or reject an applicant', reviewer: 'You' },
+  { id: 'admission', label: 'Advance or dismiss a partner prospect', reviewer: 'You' },
   { id: 'role-benefits', label: 'Assign or change role and benefits', reviewer: 'You' },
   { id: 'external-message', label: 'Send an external message', reviewer: 'You' },
   { id: 'agreement-money', label: 'Sign an agreement or pay an invoice', reviewer: 'Admin + Finance' },

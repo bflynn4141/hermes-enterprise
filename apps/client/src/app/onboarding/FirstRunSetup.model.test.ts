@@ -22,17 +22,17 @@ describe('first-run setup state', () => {
     const agreement = workingAgreement(state);
 
     expect(state.step).toBe('test');
-    expect(selectedLoop(state)?.label).toBe('Screen partner applications');
+    expect(selectedLoop(state)?.label).toBe('Discover and screen partners');
     expect(agreement).toMatchObject({
       goal: 'Find strong Hermes partners',
       trigger: 'A person, company, or profile URL is submitted',
       inputs: 'Program criteria and public evidence',
-      stages: ['Application', 'Research', 'Evidence brief', 'Human review'],
+      stages: ['Discovery', 'Public research', 'Evidence brief', 'Human review'],
       done: 'A cited brief is waiting for the right reviewer',
       readyForTest: true,
     });
     expect(agreement.reviews.map((boundary) => boundary.label)).toEqual([
-      'Admit or reject an applicant',
+      'Advance or dismiss a partner prospect',
       'Assign or change role and benefits',
       'Send an external message',
       'Sign an agreement or pay an invoice',

@@ -15,7 +15,7 @@ import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
-import { listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
+import { importAgentCashPeopleSearch, listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
@@ -118,6 +118,7 @@ import { sweepRuns } from './runs/sweep.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
 import { drainJobs, withWorkspaceTransaction } from './jobs.js';
+import { enqueueAutomatedPartnerScreening } from './partner-screening/automation.js';
 import { PLATFORM_WORKSPACE_ID } from './auth/rate-limit.js';
 import { handleQueue } from './queues/index.js';
 import { sweepOrphanedUploads } from './storage/lifecycle.js';
@@ -130,9 +131,9 @@ import {
   startSlackOAuth,
 } from './routes/slack.js';
 import { slackEvents } from './routes/slack-events.js';
-import { getOnboardingSample, startOnboardingSample } from './routes/onboarding-sample.js';
 import {
   getPartnerScreening,
+  handoffPartnerScreening,
   partnerScreeningSources,
   startPartnerScreening,
 } from './routes/partner-screening.js';
@@ -244,6 +245,7 @@ app.get('/health', health);
 app.get('/internal/runtime/w/:ws/agents/:agentId/tools', listRuntimeTools);
 app.get('/internal/runtime/w/:ws/agents/:agentId/skills', listRuntimeSkills);
 app.post('/internal/runtime/w/:ws/agents/:agentId/calls', callRuntimeTool);
+app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/import', importAgentCashPeopleSearch);
 app.get('/internal/runtime/w/:ws/agents/:agentId/model/v1/models', runtimeModels);
 app.post('/internal/runtime/w/:ws/agents/:agentId/model/v1/chat/completions', runtimeChatCompletions);
 
@@ -274,17 +276,13 @@ app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 app.patch('/w/:ws/agents/:agentId', patchAgent);
 
-// A durable first-run simulation. It never calls a model, searches the web or
-// reaches an intake system; polling materializes its server-timed stages.
-app.post('/w/:ws/onboarding/sample-runs', startOnboardingSample);
-app.get('/w/:ws/onboarding/sample-runs/:id', getOnboardingSample);
-
-// Live public-source ingestion is separate from the labeled simulation and
-// from Iris's judgment. The connector persists evidence; the bound agent reads
-// it through read-only tools and may propose a pending Inbox request.
+// Live public-source ingestion persists evidence before Iris sees it. The
+// explicit handoff starts the bound agent against those read-only artifacts;
+// any resulting application remains pending for a human in Inbox.
 app.get('/w/:ws/partner-screening/agents/:agentId/sources', partnerScreeningSources);
 app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
 app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
+app.post('/w/:ws/partner-screening/runs/:id/handoff', handoffPartnerScreening);
 
 // Settings > Provider keys (Admin, step-up) and the catalog the model menu
 // reads (any member). See src/routes/keys.ts for why the two differ.
@@ -527,6 +525,15 @@ const handler = {
           console.log(JSON.stringify({ at: 'cron.orphans', ...swept }));
         } catch (error) {
           console.log(JSON.stringify({ at: 'cron.orphans', ok: false, error: String(error) }));
+        }
+        // Admission is separate from draining: the same minute may enqueue a
+        // job after this pass, and the next minute will claim it. The durable
+        // idempotency key makes overlapping Cron invocations harmless.
+        try {
+          const automated = await enqueueAutomatedPartnerScreening(env, new Date(event.scheduledTime));
+          console.log(JSON.stringify({ at: 'cron.partner_screening', ...automated }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.partner_screening', ok: false, error: String(error) }));
         }
       })(),
     );

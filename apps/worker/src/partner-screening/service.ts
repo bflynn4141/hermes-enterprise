@@ -1,19 +1,48 @@
 import { partnerScreeningSnapshotSchema, type PartnerScreeningSnapshot } from '@hermes/shared';
-import type { TenantWork } from '../routes/tenant.js';
+import type { Tx } from '../db/client.js';
 import { RouteError } from '../routes/tenant.js';
-import { configSnapshot, type PartnerAgentConfig } from './config.js';
-import type { GitHubDiscoveryResult, SourceArtifactInput } from './github.js';
+import { agentCashPeopleSearchArguments } from './agentcash-people.js';
+import { configSnapshot, partnerAgentConfigSchema, type PartnerAgentConfig } from './config.js';
+import type { DiscoveryPriority } from './score.js';
 
 export const LIVE_DISCLOSURE =
   'Public organization evidence was fetched through the official GitHub REST API. No person was contacted and no application, admission, message, payment, signature, or external write was performed.' as const;
+export const AGENTCASH_DISCLOSURE =
+  'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.' as const;
 export const PRIORITY_NOTE = 'This is connector-side triage, not an Iris or Hermes decision.' as const;
+
+export type PartnerScreeningSource = 'github' | 'agentcash_people';
+
+interface PartnerArtifactInput {
+  readonly key: string;
+  readonly kind: 'search_result' | 'organization_profile' | 'repository_snapshot' | 'person_profile';
+  readonly url: string;
+  readonly sourceUpdatedAt: string | null;
+  readonly fetchedAt: string;
+  readonly content: Record<string, unknown>;
+}
+
+export interface PartnerDiscoveryResult {
+  readonly candidates: readonly {
+    readonly sourceKey: string;
+    readonly displayName: string;
+    readonly profileUrl: string;
+    readonly priority: DiscoveryPriority;
+    readonly artifacts: readonly PartnerArtifactInput[];
+  }[];
+  readonly artifacts: readonly PartnerArtifactInput[];
+  readonly apiRequestsUsed: number;
+  readonly rateLimits: readonly unknown[];
+  readonly monetaryCostUsd?: number;
+}
 
 interface RunRow {
   id: string;
   agent_id: string;
   created_by: string;
   status: 'running' | 'completed' | 'failed';
-  authentication: 'authenticated' | 'unauthenticated';
+  source: PartnerScreeningSource;
+  authentication: 'authenticated' | 'unauthenticated' | 'wallet';
   config_snapshot: Record<string, unknown>;
   api_requests_max: number;
   api_requests_used: number;
@@ -22,6 +51,15 @@ interface RunRow {
   error_detail: string | null;
   started_at: Date;
   completed_at: Date | null;
+  monetary_cost_usd: string | number;
+}
+
+/** The narrow authority discovery needs, shared by an authenticated route and the scheduler. */
+export interface PartnerScreeningWork {
+  readonly tx: Tx;
+  readonly workspaceId: string;
+  readonly userId: string;
+  requireAdmin(action: string): void;
 }
 
 async function sha256Hex(value: unknown): Promise<string> {
@@ -30,7 +68,7 @@ async function sha256Hex(value: unknown): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function boundAgent(work: TenantWork, agentId: string): Promise<boolean> {
+async function boundAgent(work: PartnerScreeningWork, agentId: string): Promise<boolean> {
   const result = await work.tx.query(
     `SELECT 1
        FROM agents a
@@ -44,12 +82,12 @@ async function boundAgent(work: TenantWork, agentId: string): Promise<boolean> {
 }
 
 export async function beginPartnerScreening(
-  work: TenantWork,
+  work: PartnerScreeningWork,
   input: {
     agentId: string;
     idempotencyKey: string;
     config: PartnerAgentConfig;
-    authentication: 'authenticated' | 'unauthenticated';
+    authentication: 'authenticated' | 'unauthenticated' | 'wallet';
   },
 ): Promise<{ run: RunRow; created: boolean; resumed: boolean }> {
   work.requireAdmin('Live partner-source discovery');
@@ -60,12 +98,12 @@ export async function beginPartnerScreening(
     `INSERT INTO partner_screening_runs
        (workspace_id, agent_id, created_by, idempotency_key, source, authentication,
         config_snapshot, api_requests_max)
-     VALUES ($1,$2,$3,$4,'github',$5,$6::jsonb,$7)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
      ON CONFLICT (workspace_id, agent_id, idempotency_key) DO NOTHING
      RETURNING *`,
     [
       work.workspaceId, input.agentId, work.userId, input.idempotencyKey,
-      input.authentication, JSON.stringify(configSnapshot(input.config)), input.config.max_api_requests,
+      input.config.source, input.authentication, JSON.stringify(configSnapshot(input.config)), input.config.max_api_requests,
     ],
   );
   if (inserted.rows[0]) return { run: inserted.rows[0], created: true, resumed: false };
@@ -85,7 +123,7 @@ export async function beginPartnerScreening(
     `UPDATE partner_screening_runs
         SET status = 'running', error_code = NULL, error_detail = NULL,
             authentication = $3, config_snapshot = $4::jsonb, api_requests_max = $5,
-            api_requests_used = 0, rate_limits = '[]'::jsonb, completed_at = NULL
+            api_requests_used = 0, rate_limits = '[]'::jsonb, monetary_cost_usd = 0, completed_at = NULL
       WHERE workspace_id = $1 AND id = $2
       RETURNING *`,
     [work.workspaceId, run.id, input.authentication, JSON.stringify(configSnapshot(input.config)), input.config.max_api_requests],
@@ -94,20 +132,21 @@ export async function beginPartnerScreening(
 }
 
 async function insertArtifact(
-  work: TenantWork,
+  work: PartnerScreeningWork,
   runId: string,
-  artifact: SourceArtifactInput,
+  source: PartnerScreeningSource,
+  artifact: PartnerArtifactInput,
 ): Promise<string> {
   const digest = await sha256Hex(artifact.content);
   const inserted = await work.tx.query<{ id: string }>(
     `INSERT INTO partner_source_artifacts
        (workspace_id, run_id, source, artifact_key, kind, source_url,
         source_updated_at, fetched_at, sha256, content)
-     VALUES ($1,$2,'github',$3,$4,$5,$6,$7,$8,$9::jsonb)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
      ON CONFLICT (run_id, artifact_key) DO NOTHING
      RETURNING id`,
     [
-      work.workspaceId, runId, artifact.key, artifact.kind, artifact.url,
+      work.workspaceId, runId, source, artifact.key, artifact.kind, artifact.url,
       artifact.sourceUpdatedAt, artifact.fetchedAt, digest, JSON.stringify(artifact.content),
     ],
   );
@@ -121,8 +160,8 @@ async function insertArtifact(
 }
 
 export async function completePartnerScreening(
-  work: TenantWork,
-  input: { runId: string; agentId: string; result: GitHubDiscoveryResult; completedAt?: Date },
+  work: PartnerScreeningWork,
+  input: { runId: string; agentId: string; result: PartnerDiscoveryResult; completedAt?: Date },
 ): Promise<void> {
   const run = await work.tx.query<RunRow>(
     `SELECT * FROM partner_screening_runs
@@ -131,12 +170,13 @@ export async function completePartnerScreening(
     [work.workspaceId, input.runId, input.agentId, work.userId],
   );
   if (!run.rows[0]) throw new RouteError('no such partner screening run', 'unknown_partner_screening_run', 404);
-  if (run.rows[0].status === 'completed') return;
-  if (run.rows[0].status !== 'running') throw new RouteError('partner screening run is not active', 'partner_screening_conflict', 409);
+  const activeRun = run.rows[0];
+  if (activeRun.status === 'completed') return;
+  if (activeRun.status !== 'running') throw new RouteError('partner screening run is not active', 'partner_screening_conflict', 409);
 
   const artifactIds = new Map<string, string>();
   for (const artifact of input.result.artifacts) {
-    artifactIds.set(artifact.key, await insertArtifact(work, input.runId, artifact));
+    artifactIds.set(artifact.key, await insertArtifact(work, input.runId, activeRun.source, artifact));
   }
 
   const seenAt = input.completedAt ?? new Date();
@@ -154,7 +194,7 @@ export async function completePartnerScreening(
          (workspace_id, agent_id, source, source_key, display_name, profile_url,
           deterministic_priority, priority_breakdown, confidence, evidence_gaps,
           source_updated_at, latest_run_id, first_seen_at, last_seen_at)
-       VALUES ($1,$2,'github',$3,$4,$5,$6,$7::jsonb,$8,$9::text[],$10,$11,$12,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::text[],$11,$12,$13,$13)
        ON CONFLICT (workspace_id, agent_id, source, source_key) DO UPDATE SET
          display_name = EXCLUDED.display_name,
          profile_url = EXCLUDED.profile_url,
@@ -167,7 +207,7 @@ export async function completePartnerScreening(
          last_seen_at = EXCLUDED.last_seen_at
        RETURNING id`,
       [
-        work.workspaceId, input.agentId, candidate.sourceKey, candidate.displayName,
+        work.workspaceId, input.agentId, activeRun.source, candidate.sourceKey, candidate.displayName,
         candidate.profileUrl, candidate.priority.total, JSON.stringify(breakdown),
         candidate.priority.confidence, [...candidate.priority.gaps], candidate.priority.sourceUpdatedAt,
         input.runId, seenAt,
@@ -192,17 +232,18 @@ export async function completePartnerScreening(
   await work.tx.query(
     `UPDATE partner_screening_runs
         SET status = 'completed', api_requests_used = $3, rate_limits = $4::jsonb,
-            candidates_discovered = $5, completed_at = $6
+            candidates_discovered = $5, monetary_cost_usd = $6, completed_at = $7
       WHERE workspace_id = $1 AND id = $2`,
     [
       work.workspaceId, input.runId, input.result.apiRequestsUsed,
-      JSON.stringify(input.result.rateLimits), input.result.candidates.length, seenAt,
+      JSON.stringify(input.result.rateLimits), input.result.candidates.length,
+      input.result.monetaryCostUsd ?? 0, seenAt,
     ],
   );
 }
 
 export async function failPartnerScreening(
-  work: TenantWork,
+  work: PartnerScreeningWork,
   runId: string,
   errorCode: string,
   errorDetail: string,
@@ -216,7 +257,7 @@ export async function failPartnerScreening(
 }
 
 export async function loadPartnerScreeningSnapshot(
-  work: TenantWork,
+  work: PartnerScreeningWork,
   runId: string,
 ): Promise<PartnerScreeningSnapshot> {
   const runResult = await work.tx.query<RunRow>(
@@ -249,13 +290,24 @@ export async function loadPartnerScreeningSnapshot(
   const weights = snapshot.ranking_weights && typeof snapshot.ranking_weights === 'object'
     ? snapshot.ranking_weights as Record<string, number>
     : {};
+  const agentRunResult = await work.tx.query<{ id: string; session_id: string; status: 'working' | 'waiting' | 'stopping' | 'stopped' | 'error' | 'completed' }>(
+    `SELECT r.id, r.session_id, r.status
+       FROM runs r
+       JOIN sessions s ON s.workspace_id = r.workspace_id AND s.id = r.session_id
+      WHERE r.workspace_id = $1 AND r.agent_id = $2 AND s.owner_id = $3
+        AND r.client_turn_id = $4
+      ORDER BY r.created_at DESC LIMIT 1`,
+    [work.workspaceId, run.agent_id, work.userId, `partner-screening:${run.id}`],
+  );
   const eligibleIds = candidates.rows.filter((candidate) => candidate.deterministic_priority >= minimum).map((candidate) => candidate.id);
-  const prompt = eligibleIds.length > 0
-    ? `Use list_partner_candidates and get_partner_candidate to review candidates ${eligibleIds.join(', ')}. Apply your configured Partner Program criteria independently of the deterministic discovery priority. For each sufficiently supported candidate, use propose_request with kind application, cite only stored artifact ids, include discovery.candidate_id, and state every evidence gap. Do not contact anyone or claim the organization applied.`
-    : 'The connector found no candidate at or above the configured discovery-priority threshold. Review the evidence gaps before changing the source query or ranking policy.';
+  const prompt = run.source === 'agentcash_people' && run.status === 'running'
+    ? `Perform the approved AgentCash People Search exactly once by calling mcp__agentcash__fetch with ${JSON.stringify(agentCashPeopleSearchArguments(partnerAgentConfigSchema.parse(snapshot)))}. The connector imports and sanitizes the successful result before you see it. Then call list_partner_candidates and get_partner_candidate, independently assess only stored professional evidence, and use propose_request with kind application for sufficiently supported prospects. Cite only stored artifact ids, include discovery.candidate_id, state every evidence gap, do not infer sensitive traits, and do not contact anyone or claim the person applied.`
+    : eligibleIds.length > 0
+      ? `Use list_partner_candidates and get_partner_candidate to review candidates ${eligibleIds.join(', ')}. Apply your configured Partner Program criteria independently of the deterministic discovery priority. For each sufficiently supported candidate, use propose_request with kind application, cite only stored artifact ids, include discovery.candidate_id, and state every evidence gap. Do not contact anyone or claim the candidate applied.`
+      : 'The connector found no candidate at or above the configured discovery-priority threshold. Review the evidence gaps before changing the source query or ranking policy.';
   return partnerScreeningSnapshotSchema.parse({
     run: {
-      id: run.id, agent_id: run.agent_id, status: run.status, mode: 'live', source: 'github',
+      id: run.id, agent_id: run.agent_id, status: run.status, mode: 'live', source: run.source,
       authentication: run.authentication, started_at: run.started_at.toISOString(),
       completed_at: run.completed_at?.toISOString() ?? null,
       error_code: run.error_code, error_detail: run.error_detail,
@@ -263,7 +315,7 @@ export async function loadPartnerScreeningSnapshot(
     budget: {
       api_requests_used: run.api_requests_used,
       api_requests_max: run.api_requests_max,
-      monetary_cost_usd: 0,
+      monetary_cost_usd: Number(run.monetary_cost_usd),
     },
     rate_limits: Array.isArray(run.rate_limits) ? run.rate_limits : [],
     ranking: {
@@ -271,14 +323,17 @@ export async function loadPartnerScreeningSnapshot(
       weights, minimum_priority: minimum,
     },
     candidates: candidates.rows.map((candidate) => ({
-      id: candidate.id, source: 'github', source_key: candidate.source_key,
+      id: candidate.id, source: run.source, source_key: candidate.source_key,
       display_name: candidate.display_name, profile_url: candidate.profile_url,
       deterministic_priority: candidate.deterministic_priority, priority_max: 100,
       confidence: candidate.confidence, evidence_gaps: candidate.evidence_gaps,
       source_updated_at: candidate.source_updated_at?.toISOString() ?? null,
       last_seen_at: candidate.last_seen_at.toISOString(), existing_request_id: candidate.existing_request_id,
     })),
-    handoff: { kind: 'ask_iris_to_screen', prompt, candidate_ids: eligibleIds },
-    disclosure: LIVE_DISCLOSURE,
+    handoff: {
+      kind: 'ask_iris_to_screen', prompt, candidate_ids: eligibleIds,
+      agent_run: agentRunResult.rows[0] ?? null,
+    },
+    disclosure: run.source === 'agentcash_people' ? AGENTCASH_DISCLOSURE : LIVE_DISCLOSURE,
   });
 }

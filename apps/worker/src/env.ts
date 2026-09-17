@@ -67,6 +67,8 @@ export interface Env {
   NOUS_PORTAL_BASE_URL?: string;
   /** Non-secret, per-agent GitHub queries and deterministic ranking policy. */
   PARTNER_SCREENING_CONFIG_JSON?: string;
+  /** Optional bounded policy used by a newly-created agent's first live onboarding search. */
+  PARTNER_SCREENING_DEFAULT_CONFIG_JSON?: string;
   /** Source credentials are separate from model/provider credentials. */
   PARTNER_GITHUB_TOKEN?: string;
   /** Reserved for future approved connectors; this build reports but does not use them. */
@@ -74,6 +76,12 @@ export interface Env {
   PARTNER_X_BEARER_TOKEN?: string;
   /** Test-only fetch injection; production uses global fetch against api.github.com. */
   PARTNER_SOURCE_FETCHER?: Fetcher;
+  /** '1' lets the minute Cloudflare Cron enqueue configured proactive screening runs. */
+  AUTOMATED_TRIGGERS_ENABLED?: string;
+  /** Demo gate: apply the bounded default policy to every started admin-owned agent. */
+  PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS?: string;
+  /** Cadence bucket for proactive screening. Defaults to 360 minutes and is clamped to 5..1440. */
+  PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket

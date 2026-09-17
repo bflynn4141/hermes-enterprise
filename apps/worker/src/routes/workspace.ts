@@ -50,6 +50,7 @@ export async function loadBootstrap(
   userId: string,
   /** This deployment's providers; rows of any other are not sent (R12). */
   allowed: readonly string[],
+  automatedTriggers = false,
 ): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
@@ -236,7 +237,7 @@ export async function loadBootstrap(
     capabilities: {
       email_ingress: false,
       turn_attachments: false,
-      automated_triggers: false,
+      automated_triggers: automatedTriggers,
     },
     heads: { session: head.session_head, workspace: head.workspace_head },
     counts: {
@@ -265,7 +266,9 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
     c.env,
     'app',
     { workspaceId, userId: session.userId },
-    (tx) => loadBootstrap(tx, workspaceId, session.userId, allowedProviders(c.env)),
+    (tx) => loadBootstrap(
+      tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+    ),
   );
   return c.json({ ...body, sessions: body.sessions.map((row) => ({ ...row,
     runtime: runtimeLocation(c.env, workspaceId, row.agent_id, row.runtime ?? 'cloud'),
