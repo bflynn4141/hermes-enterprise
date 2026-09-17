@@ -221,22 +221,21 @@ test.describe('P2 · triage', () => {
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
-    // Nothing the agent said moved the pane off Overview.
-    await expect(appPane.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appPane.getByText('View pinned', { exact: true })).toHaveCount(0);
-    await expect(appPane.getByRole('button', { name: 'Follow Iris', exact: true })).toHaveCount(0);
+    // Following: nothing the agent said moved the pane off Overview.
+    await expect(appPane.getByText('Iris / Overview')).toBeVisible();
+    await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
 
     // The Inbox badge agrees with the list.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('4');
   });
 
-  test('manual navigation keeps the compact header free of follow controls', async ({ page }) => {
+  test('a manual navigation pins the view, and Follow returns it', async ({ page }) => {
     await page.goto(SEEDED);
     const appPane = page.getByRole('region', { name: 'Application' });
     await appPane.getByRole('tab', { name: 'Skills' }).click();
-    await expect(appPane.getByRole('tab', { name: 'Skills' })).toHaveAttribute('aria-selected', 'true');
-    await expect(appPane.getByText('View pinned', { exact: true })).toHaveCount(0);
-    await expect(appPane.getByRole('button', { name: 'Follow Iris', exact: true })).toHaveCount(0);
+    await expect(appPane.getByText('View pinned')).toBeVisible();
+    await appPane.getByRole('button', { name: /^Follow / }).click();
+    await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
   });
 });
 
@@ -247,12 +246,11 @@ test.describe('P3 · review and admit', () => {
 
     await appPane.getByRole('button', { name: /^Review/ }).first().click();
 
-    // The evidence remains visible without the redundant missing-evidence card.
+    // The evidence, including what is missing — which is the point of the pane.
     await expect(appPane.getByRole('heading', { name: 'Leah Martinez' })).toBeVisible();
     await expect(appPane.getByLabel('82 out of 100')).toBeVisible();
-    await expect(appPane.getByRole('region', { name: 'Screening' })).toBeVisible();
-    await expect(appPane.getByText('Missing evidence', { exact: true })).toHaveCount(0);
-    await expect(appPane.getByText(/Independent verification of demo claims/)).toHaveCount(0);
+    await expect(appPane.getByText('Missing evidence')).toBeVisible();
+    await expect(appPane.getByText(/Customer impact/)).toBeVisible();
 
     // The footer says exactly what admitting does and does not do.
     await expect(appPane.getByText('Admit Leah to the Partner Program.')).toBeVisible();

@@ -64,7 +64,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, /^Inbox/).click();
       await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').first().click();
     },
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Leah Martinez' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByText('Missing evidence')).toBeVisible()),
   },
   {
     key: 'document-viewer',

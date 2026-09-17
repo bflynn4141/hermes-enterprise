@@ -560,6 +560,14 @@ function ApplicationView({ request }: { request: RequestEntity }) {
               </section>
             )}
 
+            {request.missing.length > 0 && (
+              <div className="panel missing-panel plain" style={{ backgroundImage: 'var(--panel)' }}>
+                <div className="col" style={{ gap: 6 }}>
+                  <span className="k">Missing evidence</span>
+                  <span className="v">{request.missing.join(' · ')}</span>
+                </div>
+              </div>
+            )}
             {benefits.length > 0 && <p className="meta">Proposed benefits · {benefits.join(' · ')}</p>}
             {request.note && (
               <div className="note-block">

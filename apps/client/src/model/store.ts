@@ -563,7 +563,7 @@ function upsertEntity(state: AppState, kind: EntityKind, id: string, version: nu
 /**
  * The ref is the complete view, including list filters. Keep the older tab
  * fields in sync for existing callers, but never let yesterday's tab override
- * a new focus (or a manual view restored by re-selecting its conversation).
+ * a new focus (or a pinned view restored with Follow Iris).
  */
 function uiForRef(ui: UiState, app: Ref): UiState {
   const historyView = app.view ?? 'decisions';

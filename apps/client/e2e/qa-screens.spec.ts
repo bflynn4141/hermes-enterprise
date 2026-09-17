@@ -37,7 +37,7 @@ test('every main screen renders', async ({ page }) => {
 
   // 5. Request review (an application).
   await reviewList.getByRole('listitem').first().click();
-  await expect(appPane.getByRole('heading', { name: 'Leah Martinez' })).toBeVisible();
+  await expect(appPane.getByText('Missing evidence')).toBeVisible();
   await page.screenshot(shot('05-request-review'));
 
   // 6. The document viewer (the invoice request).
