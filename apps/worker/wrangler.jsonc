@@ -205,7 +205,9 @@
         "AUTOMATED_TRIGGERS_ENABLED": "1",
         "PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS": "1",
         "PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES": "360",
-        "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
+        // Brian approved the bounded recurring staging budget on 2026-09-17:
+        // one fixed People Search request per six-hour run, capped at $0.15.
+        "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "1",
         "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
         "HERMES_POOL_LOW_CAPACITY_THRESHOLD": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
