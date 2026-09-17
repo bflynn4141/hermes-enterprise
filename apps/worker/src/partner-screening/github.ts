@@ -34,8 +34,8 @@ const searchSchema = z.object({
   total_count: z.number().int().min(0), incomplete_results: z.boolean(), items: z.array(repositorySchema),
 }).passthrough();
 const organizationSchema = z.object({
-  id: z.number().int(), node_id: z.string(), login: z.string(), name: z.string().nullable(),
-  description: z.string().nullable(), html_url: z.url(), blog: z.string().nullable(),
+  id: z.number().int(), node_id: z.string(), login: z.string(), name: z.string().nullable().default(null),
+  description: z.string().nullable(), html_url: z.url(), blog: z.string().nullable().default(null),
   public_repos: z.number().int().min(0), followers: z.number().int().min(0),
   created_at: z.string(), updated_at: z.string(),
 }).passthrough();
