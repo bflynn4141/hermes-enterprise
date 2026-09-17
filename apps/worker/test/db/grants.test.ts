@@ -38,6 +38,8 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   agent_capabilities: ['SELECT'],
   agent_files: ['SELECT'],
   agent_owners: ['SELECT'],
+  agent_provisioning: ['SELECT'],
+  agent_runtime_bindings: ['SELECT'],
   approval_resources: ['SELECT'],
   approval_policies: ['SELECT'],
   approval_requests: ['SELECT'],
@@ -109,6 +111,8 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   // M3.5.
   { table: 'attachments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_owners', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'agent_provisioning', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'agent_runtime_bindings', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_resources', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_policies', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_requests', privileges: ['INSERT', 'UPDATE', 'DELETE'] },

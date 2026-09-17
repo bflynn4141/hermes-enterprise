@@ -8,7 +8,7 @@ import { maybeQueueCapWarning } from '../ops/cap-warning.js';
 import { requireInstanceCapacity } from '../ops/instance-cap.js';
 import { loadModel, providerLabel } from '../model/catalog.js';
 import { requireAllowedProvider } from '../model/allowed.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 import { HermesClient } from '../runtime/client.js';
 import { DEFAULT_MAX_TURNS } from '../engine/constants.js';
 import { RouteError } from '../routes/tenant.js';
@@ -93,7 +93,7 @@ export async function submitTurn(input: {
   if (already) return { status: 200, run: already, duplicate: true };
 
   if (env.AGENT_RUNTIME === 'hermes' && env.MODEL_SCRIPTED !== '1') {
-    const binding = runtimeBinding(env, workspaceId, session.agent_id);
+    const binding = await resolveRuntimeBinding(env, tx, workspaceId, session.agent_id);
     try {
       await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities();
     } catch (error) {

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
 import re
 import urllib.error
 import urllib.request
@@ -93,6 +94,19 @@ class NativeControl:
 
     def dispatch(self, payload: dict[str, Any]):
         operation = payload.get("operation")
+        if operation == "readiness":
+            agentcash_home = os.environ.get("AGENTCASH_HOME", "").strip()
+            wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
+            return 200, {
+                "object": "hermes.enterprise_bridge.readiness",
+                "version": "1.4.0",
+                "workspace_id": os.environ.get("ENTERPRISE_WORKSPACE_ID", ""),
+                "agent_id": os.environ.get("ENTERPRISE_AGENT_ID", ""),
+                "enterprise_url": os.environ.get("ENTERPRISE_URL", ""),
+                "agentcash_enabled": os.environ.get("HERMES_AGENTCASH_MCP_ENABLED", "") == "1",
+                "agentcash_wallet_present": bool(wallet_path and wallet_path.is_file()),
+                "native_cron_disabled": os.environ.get("HERMES_NATIVE_CRON_ENABLED", "") != "1",
+            }
         if operation == "capabilities":
             return self._request("GET", "/v1/capabilities")
         if operation == "submit":

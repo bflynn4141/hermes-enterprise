@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
+from enterprise_bridge.dashboard.plugin_api import NativeControl
 from start import (
     assert_native_cron_empty,
     clean_environment,
@@ -50,6 +51,30 @@ class BridgeTests(unittest.TestCase):
     def bridge(self):
         return plugin.Bridge("https://enterprise.example/internal/runtime/w/w/agents/a", "test-token",
                              "http://127.0.0.1:8642", "native-token")
+
+    def test_dashboard_readiness_attests_identity_and_wallet_without_exposing_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wallet = pathlib.Path(directory) / ".agentcash" / "wallet.json"
+            wallet.parent.mkdir()
+            wallet.write_text('{"private":"never-return-this"}')
+            with patch.dict(plugin.os.environ, {}, clear=False), patch.dict(
+                __import__("os").environ,
+                {
+                    "API_SERVER_KEY": "native-token",
+                    "ENTERPRISE_WORKSPACE_ID": "workspace-1",
+                    "ENTERPRISE_AGENT_ID": "agent-1",
+                    "ENTERPRISE_URL": "https://enterprise.example",
+                    "HERMES_AGENTCASH_MCP_ENABLED": "1",
+                    "HERMES_NATIVE_CRON_ENABLED": "0",
+                    "AGENTCASH_HOME": directory,
+                },
+                clear=False,
+            ):
+                status, body = NativeControl().dispatch({"operation": "readiness"})
+            self.assertEqual(status, 200)
+            self.assertTrue(body["agentcash_wallet_present"])
+            self.assertEqual(body["agent_id"], "agent-1")
+            self.assertNotIn("never-return-this", json.dumps(body))
 
     def test_mapping_and_pending_preserve_identical_call(self):
         bridge = self.bridge()

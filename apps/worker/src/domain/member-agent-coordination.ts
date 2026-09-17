@@ -1,6 +1,5 @@
 import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
-import { RouteError } from '../routes/tenant.js';
 import { proposeApproval } from './approvals.js';
 
 const PARTNER_PROGRAM_INSTRUCTIONS = [
@@ -24,10 +23,11 @@ interface JoinCoordinationInput {
   readonly invitationId: string;
   readonly invitedByUserId: string | null;
   readonly jobs: string[];
-  /** Exact pre-provisioned profile ids; empty means no safe hosted capacity. */
-  readonly inviteeRuntimeAgentIds: readonly string[];
-  /** Hosted deployments fail acceptance instead of creating an unusable draft. */
-  readonly requireInviteeRuntime: boolean;
+  /** Hosted deployments create the profile only after the member finishes onboarding. */
+  readonly provisionHermesCloud: boolean;
+  readonly cloudRegion?: string;
+  readonly cloudModel?: string;
+  readonly cloudSize?: string;
 }
 
 export interface JoinCoordinationResult {
@@ -50,29 +50,7 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
   );
   let agentId = owned.rows[0]?.agent_id ?? null;
   if (!agentId) {
-    await input.tx.query(
-      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-      [`${input.workspaceId}:invitee-runtime-pool`],
-    );
-    if (input.requireInviteeRuntime) {
-      const claimed = input.inviteeRuntimeAgentIds.length === 0
-        ? { rows: [] as { id: string }[] }
-        : await input.tx.query<{ id: string }>(
-          `SELECT id FROM agents WHERE workspace_id = $1 AND id = ANY($2::uuid[])`,
-          [input.workspaceId, [...input.inviteeRuntimeAgentIds]],
-        );
-      const claimedIds = new Set(claimed.rows.map((row) => row.id));
-      agentId = input.inviteeRuntimeAgentIds.find((id) => !claimedIds.has(id)) ?? null;
-      if (!agentId) {
-        throw new RouteError(
-          'No ready Partner Program Iris is available for this invitation. Ask an Admin to add invitee runtime capacity, then retry.',
-          'invitee_runtime_capacity_unavailable',
-          503,
-        );
-      }
-    } else {
-      agentId = crypto.randomUUID();
-    }
+    agentId = crypto.randomUUID();
     const created = await input.tx.query<{ id: string }>(
       `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
        VALUES ($1, $2, 'Iris', 'Partner Program', $3, 'draft', 'identity')
@@ -85,6 +63,22 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
       `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1, $2, $3)`,
       [input.workspaceId, agentId, input.joiningMemberId],
     );
+    if (input.provisionHermesCloud) {
+      await input.tx.query(
+        `INSERT INTO agent_provisioning
+           (workspace_id, agent_id, status, instance_name, region, model, size)
+         VALUES ($1,$2,'awaiting_onboarding',$3,$4,$5,$6)
+         ON CONFLICT (agent_id) DO NOTHING`,
+        [
+          input.workspaceId,
+          agentId,
+          `iris-partner-${agentId.slice(0, 8)}`,
+          input.cloudRegion ?? 'sjc',
+          input.cloudModel ?? 'z-ai/glm-5.2',
+          input.cloudSize ?? 'medium',
+        ],
+      );
+    }
     await input.tx.query(
       `INSERT INTO agent_capabilities (workspace_id, agent_id, kind, title, scope, tool_names, position)
        VALUES ($1, $2, 'can', 'Discover and screen partners', 'Partner Program', $3, 0)`,
@@ -119,8 +113,8 @@ async function provisionJoiningAgent(input: JoinCoordinationInput): Promise<{ ag
       [
         input.workspaceId,
         sessionId,
-        input.requireInviteeRuntime
-          ? `You’re in the workspace. I’m Iris, your real Hermes Partner Program agent. My isolated AgentCash People Search is attached and limited to one approved $0.15 call per screening run. Finish the short working agreement, then you can explicitly start a live search; I will stop before any decision, outreach, or other external action.`
+        input.provisionHermesCloud
+          ? `You’re in the workspace. I’m Iris for the Partner Program. Finish the short working agreement and I’ll provision your isolated Hermes Cloud profile. AgentCash People Search becomes available only after that profile passes its readiness check, and remains limited to one approved $0.15 call per screening run. I will stop before any decision, outreach, or other external action.`
           : `You’re in the workspace. I’m Iris for the Partner Program. Finish the short working agreement to start screening approved evidence; I will stop before any decision, outreach, or external action.`,
       ],
     );

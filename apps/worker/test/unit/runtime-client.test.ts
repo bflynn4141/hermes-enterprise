@@ -49,6 +49,19 @@ function connectorTransport(response: () => Response) {
 }
 
 describe('official Hermes Runs transport', () => {
+  it('reads the Enterprise and AgentCash readiness attestation through the fixed connector', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.4.0',
+      workspace_id: '11111111-1111-4111-8111-111111111111',
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      enterprise_url: 'https://staging.example', agentcash_enabled: true,
+      agentcash_wallet_present: true, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).resolves.toMatchObject({
+      version: '1.4.0', agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
+    });
+  });
+
   it('uses one fixed service-authenticated route for a Hermes Cloud connector', async () => {
     const { client, send } = connectorTransport(() => json(capabilities()));
     await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });

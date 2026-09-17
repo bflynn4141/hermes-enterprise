@@ -19,7 +19,7 @@ import {
   type RuntimeBudgetDb,
   type RuntimeBudgetReservation,
 } from './budget.js';
-import { requireBridgeAuth } from './config.js';
+import { requireResolvedBridgeAuth } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { runtimeSkillManifests } from './skills.js';
 import { withWorkspaceTransaction } from '../jobs.js';
@@ -313,7 +313,8 @@ export async function dispatchRuntimeCall(
 async function authenticate(c: Context<{ Bindings: Env }>): Promise<{ workspaceId: string; agentId: string }> {
   const workspaceId = pathUuid(c, 'ws');
   const agentId = pathUuid(c, 'agentId');
-  await requireBridgeAuth(c.env, workspaceId, agentId, c.req.header('Authorization') ?? null);
+  await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+    requireResolvedBridgeAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
   return { workspaceId, agentId };
 }
 async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {

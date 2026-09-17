@@ -93,6 +93,20 @@ test('provider and live-search states only move when their external source moves
   expect(await page.evaluate(() => window.firstRunFixture.calls.at(-1)?.method)).toBe('open-inbox');
 });
 
+test('Iris setup hides infrastructure details and provider controls', async ({ page }) => {
+  await mount(page);
+  await reachTest(page);
+
+  await page.evaluate(() => window.firstRunFixture.setLiveSearchStatus('provisioning'));
+  await expect(page.getByText('I’m getting Iris ready with Partner Program and AgentCash now.')).toBeVisible();
+  await expect(page.getByText('Getting Iris ready', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('first-run-provider-slot')).toHaveCount(0);
+
+  await page.evaluate(() => window.firstRunFixture.setLiveSearchStatus('provisioning_error'));
+  await expect(page.getByText('Your onboarding choices are safe. Iris setup did not finish, and we’re retrying it now.')).toBeVisible();
+  await expect(page.getByText('Setup is retrying')).toBeVisible();
+});
+
 for (const width of [1440, 900]) {
   test(`the split setup remains usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

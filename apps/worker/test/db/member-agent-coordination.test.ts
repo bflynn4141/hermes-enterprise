@@ -50,18 +50,15 @@ describe('invitation-derived member and agent coordination', () => {
       await client.query('COMMIT');
     });
 
-    const poolAgentId = randomUUID();
     const { env } = makeEnv({
       AGENT_RUNTIME: 'hermes',
       HERMES_BRIDGE_SECRET: 'invitee-pool-test-secret-longer-than-32-characters',
       HERMES_RUNTIME_AGENTS: JSON.stringify({
-        [poolAgentId]: {
+        [fixture.agentId]: {
           workspace_id: fixture.workspaceId,
-          base_url: 'https://invitee-iris.example/api/plugins/enterprise_bridge/control',
-          api_key: 'invitee-runtime-profile-key',
+          base_url: 'https://fixed-iris.example/api/plugins/enterprise_bridge/control',
+          api_key: 'fixed-runtime-profile-key',
           transport: 'dashboard_connector',
-          assignment: 'invitee_pool',
-          agentcash: true,
         },
       }),
       PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify(AGENTCASH_CONFIG),
@@ -109,6 +106,10 @@ describe('invitation-derived member and agent coordination', () => {
         `SELECT title, scope, tool_names FROM agent_capabilities WHERE workspace_id = $1 AND agent_id = $2`,
         [fixture.workspaceId, joiner.rows[0]!.agent_id],
       );
+      const provisioning = await client.query<{ status: string; instance_name: string }>(
+        `SELECT status, instance_name FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2`,
+        [fixture.workspaceId, joiner.rows[0]!.agent_id],
+      );
       return {
         joiner: joiner.rows[0]!,
         requests: requests.rows,
@@ -118,14 +119,18 @@ describe('invitation-derived member and agent coordination', () => {
         runCount: runs.rowCount,
         effectCount: effects.rowCount,
         capabilities: capabilities.rows,
+        provisioning: provisioning.rows[0],
       };
     });
 
     expect(bootstrap.agent.id).toBe(persisted.joiner.agent_id);
-    expect(persisted.joiner.agent_id).toBe(poolAgentId);
+    expect(persisted.joiner.agent_id).not.toBe(fixture.agentId);
     expect(persisted.joiner.status).toBe('draft');
     expect(persisted.joiner).toMatchObject({ responsibility: 'Partner Program', setup_step: 'identity' });
     expect(persisted.joiner.instructions_active).toContain('one filtered request capped at $0.15');
+    expect(persisted.provisioning).toMatchObject({ status: 'awaiting_onboarding' });
+    expect(persisted.provisioning?.instance_name).toBe(`iris-partner-${persisted.joiner.agent_id.slice(0, 8)}`);
+    expect(bootstrap.agent.provisioning_status).toBe('awaiting_onboarding');
     expect(persisted.capabilities).toEqual([expect.objectContaining({
       title: 'Discover and screen partners', scope: 'Partner Program',
     })]);
@@ -134,7 +139,8 @@ describe('invitation-derived member and agent coordination', () => {
       title: 'Set up Partner Program Iris',
       focus_ref: { section: 'agents', view: 'setup', step: 'identity' },
     });
-    expect(welcome?.text).toContain('AgentCash People Search is attached');
+    expect(welcome?.text).toContain('provision your isolated Hermes Cloud profile');
+    expect(welcome?.text).toContain('AgentCash People Search becomes available only after');
     expect(persisted.requests).toHaveLength(1);
     const request = persisted.requests[0]!;
     expect(request.payload.approval_type).toBe('team_commitment');
@@ -212,7 +218,7 @@ describe('invitation-derived member and agent coordination', () => {
     expect(counts).toEqual({ agents: 1, approvals: 1, joins: 1 });
   });
 
-  it('rolls invitation acceptance back when no attested invitee runtime is available', async () => {
+  it('accepts an invitation without pre-provisioned capacity and defers Cloud creation until onboarding', async () => {
     const fixture = await seedWorkspace();
     const joinerId = randomUUID();
     const invitationId = randomUUID();
@@ -241,8 +247,7 @@ describe('invitation-derived member and agent coordination', () => {
       }),
     });
     const response = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, { method: 'POST', body: {} });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ reason: 'invitee_runtime_capacity_unavailable' });
+    expect(response.status).toBe(200);
     const persisted = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
       const invitation = await client.query<{ status: string }>(`SELECT status FROM invitations WHERE id = $1`, [invitationId]);
       const membership = await client.query(`SELECT id FROM members WHERE workspace_id = $1 AND user_id = $2`, [fixture.workspaceId, joinerId]);
@@ -251,8 +256,20 @@ describe('invitation-derived member and agent coordination', () => {
           WHERE ao.workspace_id = $1 AND m.user_id = $2`,
         [fixture.workspaceId, joinerId],
       );
-      return { invitation: invitation.rows[0]?.status, memberships: membership.rowCount, ownerships: ownership.rowCount };
+      const provisioning = await client.query<{ status: string }>(
+        `SELECT p.status FROM agent_provisioning p
+          JOIN agent_owners ao ON ao.agent_id=p.agent_id AND ao.workspace_id=p.workspace_id
+          JOIN members m ON m.id=ao.member_id
+         WHERE p.workspace_id=$1 AND m.user_id=$2`,
+        [fixture.workspaceId, joinerId],
+      );
+      return {
+        invitation: invitation.rows[0]?.status,
+        memberships: membership.rowCount,
+        ownerships: ownership.rowCount,
+        provisioning: provisioning.rows[0]?.status,
+      };
     });
-    expect(persisted).toEqual({ invitation: 'pending', memberships: 0, ownerships: 0 });
+    expect(persisted).toEqual({ invitation: 'accepted', memberships: 1, ownerships: 1, provisioning: 'awaiting_onboarding' });
   });
 });

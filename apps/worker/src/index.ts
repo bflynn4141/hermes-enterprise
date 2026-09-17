@@ -137,7 +137,7 @@ import {
   partnerScreeningSources,
   startPartnerScreening,
 } from './routes/partner-screening.js';
-import { patchAgent } from './routes/agents.js';
+import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -276,6 +276,8 @@ app.get('/shared/:token', sharedSession);
 app.get('/w/:ws/bootstrap', bootstrap);
 app.get('/w/:ws/events', events);
 app.patch('/w/:ws/agents/:agentId', patchAgent);
+app.get('/w/:ws/agents/:agentId/provisioning', getAgentProvisioning);
+app.post('/w/:ws/agents/:agentId/provisioning/verify', verifyAgentProvisioning);
 
 // Live public-source ingestion persists evidence before Iris sees it. The
 // explicit handoff starts the bound agent against those read-only artifacts;

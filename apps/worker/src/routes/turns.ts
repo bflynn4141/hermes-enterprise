@@ -18,7 +18,7 @@ import type { Context } from 'hono';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 import { approvalContinuationRetryBlock } from '../runtime/continuation.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
@@ -235,7 +235,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     if (already) return { status: 200 as const, run: already, duplicate: true };
 
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
-      const binding = runtimeBinding(c.env, work.workspaceId, session.agent_id);
+      const binding = await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, session.agent_id);
       try {
         await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities();
       } catch (error) {
@@ -465,7 +465,9 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
     );
     const native = await work.tx.query<{ runtime_run_id: string | null }>(
       `SELECT runtime_run_id FROM runs WHERE id = $1 AND runtime_kind = 'hermes' AND runtime_attempt = attempt`, [runId]);
-    return { run: { ...run, status: 'stopping' }, alreadyDone: false, nativeId: native.rows[0]?.runtime_run_id ?? null };
+    const nativeId = native.rows[0]?.runtime_run_id ?? null;
+    const binding = nativeId ? await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, run.agent_id) : null;
+    return { run: { ...run, status: 'stopping' }, alreadyDone: false, nativeId, binding };
   });
 
   if (!result.alreadyDone) {
@@ -473,8 +475,7 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
       // Reach the native interruption flag immediately. The persisted Stop is
       // still authoritative if this request is lost; Workflow polling retries.
       try {
-        const binding = runtimeBinding(c.env, c.req.param('ws') ?? '', result.run.agent_id);
-        await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).stop(result.nativeId);
+        if (result.binding) await new HermesClient(result.binding.baseUrl, result.binding.apiKey, undefined, result.binding.transport).stop(result.nativeId);
       } catch { /* The committed flag prevents further enterprise tool calls. */ }
     }
     // The hub's copy is a cache with one reader: the engine reads it from every

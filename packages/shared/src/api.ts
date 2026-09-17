@@ -8,6 +8,20 @@ import { streamEventSchema, streamIdSchema, uuidSchema } from './events.js';
 import { memberRoleSchema, requestKindSchema, requestStatusSchema, sessionModeSchema } from './enums.js';
 import { refSchema } from './refs.js';
 
+export const agentProvisioningStatusSchema = z.enum([
+  'awaiting_onboarding', 'queued', 'creating', 'awaiting_bootstrap', 'verifying', 'ready', 'failed',
+]);
+export const agentProvisioningSchema = z.object({
+  status: agentProvisioningStatusSchema,
+  instance_name: z.string().max(64),
+  dashboard_url: z.url().nullable(),
+  error_code: z.string().max(120).nullable(),
+  message: z.string().max(500),
+  ready_at: z.iso.datetime({ offset: true }).nullable(),
+}).strict();
+export const agentProvisioningResponseSchema = z.object({ provisioning: agentProvisioningSchema.nullable() }).strict();
+export type AgentProvisioning = z.infer<typeof agentProvisioningSchema>;
+
 export const healthSchema = z
   .object({
     status: z.enum(['ok', 'degraded', 'error']),
@@ -76,6 +90,7 @@ export const bootstrapSchema = z
         email: z.string().max(200).nullable(),
         responsibility: z.string().max(2000).nullable(),
         setup_step: z.string().max(32).nullable(),
+        provisioning_status: agentProvisioningStatusSchema.nullable().optional(),
       })
       .strict(),
     capabilities: z

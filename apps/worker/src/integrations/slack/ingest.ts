@@ -1,7 +1,7 @@
 import type { Env } from '../../env.js';
 import type { Tx } from '../../db/client.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../../jobs.js';
-import { runtimeBinding } from '../../runtime/config.js';
+import { resolveRuntimeBinding } from '../../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../../runs/submit.js';
 import { loadSlackInstallationById } from './store.js';
 import { resolveSlackAccessToken } from './store.js';
@@ -55,8 +55,11 @@ async function sessionForEvent(
     );
     const defaults = settings.rows[0];
     if (!defaults) throw new Error('workspace_settings_missing');
-    const runtime = env.AGENT_RUNTIME === 'hermes'
-      ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(runtimeBinding(env, workspaceId, principal.agent_id).baseUrl) ? 'local' : 'cloud')
+    const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
+      ? await resolveRuntimeBinding(env, tx, workspaceId, principal.agent_id)
+      : null;
+    const runtime = resolvedRuntime
+      ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
       : defaults.default_runtime;
     const title = kind === 'direct_message' ? `Slack · ${principal.agent_name}` : `Slack thread · ${input.channel_id}`;
     const created = await tx.query<{ id: string }>(

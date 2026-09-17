@@ -88,14 +88,27 @@ reported `runtime_kind = hermes`, completed in 39 seconds with six governed tool
 calls, and created no requests, decisions, effects or outbound communication.
 The Traces UI displayed it as `Hermes Agent · work` under Iris.
 
-Provisioning additional profiles is still explicit configuration. Invitation
-acceptance can claim one finite, pre-provisioned profile whose binding is
-marked `assignment: "invitee_pool"` and `agentcash: true`. The agent row uses
-that profile's exact UUID, is owned by the joining member, and opens directly
-into Partner Program setup. If no unused attested pool profile exists, the
-acceptance transaction rolls back with `invitee_runtime_capacity_unavailable`;
-the product never admits a member with an unbound simulated Iris. Workspace
-creation does not automatically start a Cloud runtime. A
+Invitation acceptance now creates a unique draft Iris and durable provisioning
+record; it never performs a billable Cloud call inside the membership
+transaction. Completing the working agreement changes Iris to `provisioning`
+and enqueues `hermes_cloud_provision`. The job exchanges an organization-scoped
+service credential for a short-lived `mcp:manage_agents` token, adopts an
+existing exact-name instance on retry or creates one, and stores its connector
+credential under the workspace KEK. The profile remains non-runnable until an
+Admin readiness check proves the reviewed Enterprise bridge, exact workspace
+and agent identity, disabled native cron, enabled AgentCash integration, and a
+dedicated wallet file. There is no simulated or generic-Hermes fallback.
+
+The official Cloud MCP still cannot install a plugin or apply arbitrary profile
+configuration. Accordingly, successful just-in-time instance creation ends in
+the internal `awaiting_bootstrap` state. Members see only that Iris is being
+prepared; they are never asked to perform or understand an Admin bootstrap.
+The production-shaped invite path must claim from real, pre-verified warm
+capacity with the Enterprise plugin and AgentCash wallet already present. The
+first staging profile may be bootstrapped manually through the authenticated
+Cloud dashboard; fully automatic pool replenishment requires Nous to expose a
+supported template/plugin bootstrap contract. Workspace creation does not
+automatically start a Cloud runtime. A
 native run keeps its process while waiting and is bounded by the adapter’s
 55-minute execution window (60-minute Workflow step timeout). Multi-day human
 waits need a durable suspend/resume lifecycle before production rollout. Inbox
@@ -190,17 +203,12 @@ arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
 
-Fixed and invitee capacity live in the same exact binding map. Existing agents
-default to `assignment: "fixed"` and can never be claimed. A spare invitee
-profile must use its final agent UUID as the map key and include:
-
-```json
-{"assignment":"invitee_pool","agentcash":true}
-```
-
-The `agentcash` flag is an operator attestation, not a wallet secret. Set it
-only after the profile has the pinned plugin, `HERMES_AGENTCASH_MCP_ENABLED=1`,
-a dedicated funded `AGENTCASH_HOME`, and a successful governed readiness check.
+Fixed profiles remain supported in `HERMES_RUNTIME_AGENTS`. Provisioned
+profiles use `agent_runtime_bindings`; the per-profile control secret is
+envelope-encrypted and the row is ignored until `ready_at` is set by the live
+readiness check. `agentcash=true` is set at creation but is not sufficient by
+itself: the connector must also report a dedicated wallet file before the
+binding becomes runnable.
 
 The official image can persist user-managed plugins, skills and configuration
 under its data volume. Hermes Desktop can install an agent plugin into a

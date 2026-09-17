@@ -16,7 +16,7 @@ import {
   loadPartnerScreeningSnapshot,
 } from '../partner-screening/service.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 
 function sourceFetcher(env: Env): PartnerFetch {
   if (env.PARTNER_SOURCE_FETCHER) {
@@ -53,11 +53,11 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
   const authentication = configured.config.source === 'agentcash_people'
     ? 'wallet' as const
     : c.env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
-  const started = await inWorkspace(c, (work) => {
+  const started = await inWorkspace(c, async (work) => {
     let memberOnboardingAllowed = false;
     if (work.role === 'member' && configured.config!.source === 'agentcash_people') {
-      const binding = runtimeBinding(c.env, work.workspaceId, parsed.data.agent_id);
-      memberOnboardingAllowed = binding.assignment === 'invitee_pool' && binding.agentCash;
+      const binding = await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, parsed.data.agent_id);
+      memberOnboardingAllowed = ['invitee_pool', 'provisioned'].includes(binding.assignment) && binding.agentCash;
     }
     return beginPartnerScreening(work, {
       agentId: parsed.data.agent_id,

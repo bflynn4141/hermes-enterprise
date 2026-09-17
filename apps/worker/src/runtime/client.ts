@@ -30,6 +30,16 @@ export interface HermesCapabilities {
   durableIdempotency: true;
   retentionSeconds: number;
 }
+export interface HermesEnterpriseReadiness {
+  object: 'hermes.enterprise_bridge.readiness';
+  version: string;
+  workspaceId: string;
+  agentId: string;
+  enterpriseUrl: string;
+  agentCashEnabled: boolean;
+  agentCashWalletPresent: boolean;
+  nativeCronDisabled: boolean;
+}
 export type HermesTransport = 'native' | 'dashboard_connector';
 export class HermesApiError extends Error {
   constructor(readonly status: number, readonly operation: string) {
@@ -115,6 +125,23 @@ export class HermesClient {
       throw new HermesCapabilitiesError();
     }
     return { durableIdempotency: true, retentionSeconds };
+  }
+  async enterpriseReadiness(): Promise<HermesEnterpriseReadiness> {
+    if (this.transport !== 'dashboard_connector') throw new HermesCapabilitiesError();
+    const response = await this.connector('readiness');
+    const body = record(await response.json());
+    if (body?.object !== 'hermes.enterprise_bridge.readiness' || typeof body.version !== 'string' ||
+        typeof body.workspace_id !== 'string' || typeof body.agent_id !== 'string' ||
+        typeof body.enterprise_url !== 'string' || typeof body.agentcash_enabled !== 'boolean' ||
+        typeof body.agentcash_wallet_present !== 'boolean' || typeof body.native_cron_disabled !== 'boolean') {
+      throw new HermesCapabilitiesError();
+    }
+    return {
+      object: 'hermes.enterprise_bridge.readiness', version: body.version,
+      workspaceId: body.workspace_id, agentId: body.agent_id, enterpriseUrl: body.enterprise_url,
+      agentCashEnabled: body.agentcash_enabled, agentCashWalletPresent: body.agentcash_wallet_present,
+      nativeCronDisabled: body.native_cron_disabled,
+    };
   }
   async submit(body: Record<string, unknown>, key: string): Promise<string> {
     // Audit-only fields stay in the Worker's immutable runtime request. The

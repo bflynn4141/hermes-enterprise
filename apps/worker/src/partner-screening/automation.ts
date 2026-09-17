@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
-import { runtimeBinding } from '../runtime/config.js';
+import { resolveRuntimeBinding } from '../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../runs/submit.js';
 import { partnerAgentConfig, partnerScreeningAgentIds } from './config.js';
 import { discoverGitHubOrganizations, PartnerSourceError, type PartnerFetch } from './github.js';
@@ -139,8 +139,11 @@ async function automationSession(
   );
   const source = template.rows[0] ?? settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
-  const runtime = env.AGENT_RUNTIME === 'hermes'
-    ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(runtimeBinding(env, workspaceId, agentId).baseUrl) ? 'local' : 'cloud')
+  const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
+    ? await resolveRuntimeBinding(env, tx, workspaceId, agentId)
+    : null;
+  const runtime = resolvedRuntime
+    ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
     : ('runtime' in source ? source.runtime : source.default_runtime);
   const inserted = await tx.query<TurnSession>(
     `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)

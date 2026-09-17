@@ -65,6 +65,10 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
+  // First-run completion creates one isolated Hermes Cloud instance. The job
+  // is idempotent by stable instance name and stops at explicit bootstrap
+  // verification rather than presenting a generic Hermes profile as ready.
+  'hermes_cloud_provision',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -496,6 +500,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
+      return;
+    case 'hermes_cloud_provision':
+      await (await import('./hermes-cloud/provisioning.js')).runHermesCloudProvisioningJob(env, job);
       return;
     case 'reverify':
       {
