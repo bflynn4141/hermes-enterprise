@@ -1,17 +1,17 @@
 import type { PartnerAgentConfig } from './config.js';
 
 export interface PublicOrganization {
-  readonly id: number;
+  readonly id: number | null;
   readonly node_id: string;
   readonly login: string;
   readonly name: string | null;
   readonly description: string | null;
   readonly html_url: string;
   readonly blog: string | null;
-  readonly public_repos: number;
-  readonly followers: number;
-  readonly created_at: string;
-  readonly updated_at: string;
+  readonly public_repos: number | null;
+  readonly followers: number | null;
+  readonly created_at: string | null;
+  readonly updated_at: string | null;
 }
 
 export interface PublicRepository {
@@ -79,7 +79,7 @@ export function deterministicDiscoveryPriority(
   organization: PublicOrganization,
   repositories: readonly PublicRepository[],
   config: PartnerAgentConfig,
-  options: { now: Date; searchIncomplete: boolean; explicitOnly: boolean },
+  options: { now: Date; searchIncomplete: boolean; explicitOnly: boolean; limitedEvidence?: boolean },
 ): DiscoveryPriority {
   const orgText = [organization.login, organization.name, organization.description]
     .filter((value): value is string => Boolean(value))
@@ -148,11 +148,12 @@ export function deterministicDiscoveryPriority(
   else if (ageDays > config.lookback_days) gaps.push(`Latest public push is older than the configured ${config.lookback_days}-day lookback.`);
   if (options.searchIncomplete) gaps.push('GitHub marked at least one search result set incomplete.');
   if (options.explicitOnly) gaps.push('This organization came from explicit URL intake; no search-result relevance was independently established.');
+  if (options.limitedEvidence) gaps.push('Unauthenticated GitHub screening intentionally uses repository-search evidence only; organization profile and full repository-list enrichment were not requested.');
   gaps.push('Public metadata cannot establish capacity, commercial interest, availability, or consent to partner.');
 
   const sourceTimes = [validTime(organization.updated_at), ...repositories.map((repo) => validTime(repo.updated_at))]
     .filter((value): value is number => value !== null);
-  const confidence: DiscoveryPriority['confidence'] = repositories.length === 0
+  const confidence: DiscoveryPriority['confidence'] = repositories.length === 0 || options.limitedEvidence
     ? 'low'
     : options.searchIncomplete || matches.length === 0
       ? 'medium'

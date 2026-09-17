@@ -146,6 +146,27 @@ describe('GitHub organization discovery', () => {
     expect(seen.every((request) => new URL(request.url).hostname === 'api.github.com')).toBe(true);
   });
 
+  it('uses truthful search-only evidence when an unauthenticated core quota is shared', async () => {
+    const seen: Request[] = [];
+    const result = await discoverGitHubOrganizations(config, {
+      fetcher: scriptedFetch(seen), now: () => new Date('2026-09-15T00:00:00Z'),
+    });
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0]?.url ?? '').pathname).toBe('/search/repositories');
+    expect(result.apiRequestsUsed).toBe(1);
+    expect(result.candidates[0]).toMatchObject({
+      sourceKey: owner.node_id,
+      displayName: owner.login,
+      priority: {
+        confidence: 'low',
+        gaps: expect.arrayContaining([expect.stringContaining('repository-search evidence')]),
+      },
+    });
+    expect(result.candidates[0]?.artifacts.map((artifact) => artifact.kind)).toEqual([
+      'organization_profile', 'repository_snapshot',
+    ]);
+  });
+
   it('stops before another request when the provider reaches the configured reserve', async () => {
     const limited: PartnerFetch = async (input) => {
       const url = new URL(String(input));
