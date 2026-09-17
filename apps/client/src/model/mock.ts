@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity } from '@hermes/shared';
+import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
@@ -82,6 +82,8 @@ const iso = (offsetMinutes = 0) => new Date(Date.UTC(2026, 9, 12, 9, 49 + offset
 const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toString(16).padStart(64, '0')}`;
 
 interface MockOptions {
+  /** Terminal Hermes traces for the activity-card regression, never live data. */
+  activity?: 'completed' | 'completed-tool';
   /** `admin` is the first-run Admin seat; `member` exercises the Member copy. */
   seat?: 'admin' | 'member';
   /** `empty` renders every empty state; `seeded` is the October 12 workspace. */
@@ -397,7 +399,7 @@ export function createMockBackend(options: MockOptions = {}) {
         { id: 'ev-2', kind: 'request.created', at: iso(-5), actor_name: 'Iris', actor_type: 'agent' as const, text: 'Iris prepared Robin’s invoice draft', detail: 'Delivery statement matched to the fee schedule.', status: 'Needs review', ref: { section: 'inbox', view: 'request', id: REQ_INVOICE }, request_id: REQ_INVOICE },
       ];
 
-  const traces = empty
+  const traces: TraceEntity[] = empty
     ? []
     : [
         {
@@ -427,6 +429,20 @@ export function createMockBackend(options: MockOptions = {}) {
           version: 1,
         },
       ];
+
+  if (options.activity) {
+    traces.splice(0, traces.length, {
+      id: TRACE_LEAH, run_id: RUN, agent_id: AGENT,
+      name: 'Explain partner screening', type: 'Hermes Agent · work',
+      status: 'completed', sub: '8s worked', needs_you: false,
+      ref: { section: 'agents', view: 'trace', id: TRACE_LEAH },
+      steps: [
+        ...(options.activity === 'completed-tool' ? [{ id: 'read', label: 'get_document_text', state: 'done' as const, tool_call_id: 'mock-document' }] : []),
+        { id: 'hermes', label: 'Thinking', state: 'done', tool_call_id: null },
+      ],
+      allowed_tools: [], version: 1,
+    });
+  }
 
   /**
    * The usage report, in the shape `GET /w/:ws/usage?range=` actually answers.

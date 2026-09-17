@@ -51,6 +51,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
     const { createMockBackend } = await import('./model/mock.js');
     const params = new URL(window.location.href).searchParams;
     const backend = createMockBackend({
+      activity: params.get('activity') === 'completed-tool' ? 'completed-tool' : params.get('activity') === 'completed' ? 'completed' : undefined,
       seat: params.get('seat') === 'member' ? 'member' : 'admin',
       data: params.get('data') === 'empty' ? 'empty' : 'seeded',
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',

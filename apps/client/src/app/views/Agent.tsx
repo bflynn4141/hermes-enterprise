@@ -96,12 +96,17 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
           <span className="agent-activity-label">{activity.label}</span>
           <span className="agent-activity-task">{activity.task}</span>
           {activity.tool && (
-            <span className="agent-tool-pair" data-tool-state={activity.tool.state}>
-              <code>{activity.tool.name}</code>
-              <span aria-hidden="true">→</span>
-              <span>{activity.tool.summary}</span>
-            </span>
+            <>
+              <span className="agent-activity-label">{activity.tool.state === 'active' ? 'Tool running' : 'Last tool'}</span>
+              <span className="agent-tool-pair" data-tool-state={activity.tool.state}>
+                <i aria-hidden="true" />
+                <code>{activity.tool.name}</code>
+                <span aria-hidden="true">→</span>
+                <span>{activity.tool.summary}</span>
+              </span>
+            </>
           )}
+          {activity.action && <span className="agent-activity-action">{activity.action}</span>}
         </motion.div>
       </div>
     </section>

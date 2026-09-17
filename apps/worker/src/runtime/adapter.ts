@@ -40,10 +40,6 @@ const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exp
 // A failed stream is reconciled with native status, never replayed as a new run.
 const EXECUTION: StepConfig = { retries: { limit: 1, delay: 1000, backoff: 'constant' }, timeout: '60 minutes' };
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const nativeToolLabel = (tool: string): string => {
-  const readable = tool.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').slice(0, 159);
-  return readable ? readable[0]!.toUpperCase() + readable.slice(1) : 'Using a tool';
-};
 
 export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, input: RunAttemptInput): Promise<void> {
   const { db, client } = deps;
@@ -149,7 +145,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         const ordinal = ++nativeToolOrdinal;
         const stepId = `hermes-tool-${ordinal}`;
         const toolCallId = stepId;
-        const label = nativeToolLabel(tool);
+        // Keep the same exact tool identity as bridge-backed steps. The client
+        // pairs it with human wording without changing the trace's identifier.
+        const label = tool;
         nativeTools.push({ tool, stepId, toolCallId, label });
         await db.enterStep({ runId: run.id, turn: 0, stepId, label, state: 'active', toolCallId });
         await emit([{ kind: 'run.step', payload: {
