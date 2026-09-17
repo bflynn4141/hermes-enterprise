@@ -1,7 +1,6 @@
 import {
   createFirstRunState,
   firstRunReducer,
-  selectedLoop,
   workingAgreement,
   type FirstRunAction,
   type FirstRunState,
@@ -11,57 +10,40 @@ function run(...actions: FirstRunAction[]): FirstRunState {
   return actions.reduce(firstRunReducer, createFirstRunState());
 }
 
-describe('first-run setup state', () => {
-  it('builds the Partner Program loop without inventing criteria or external actions', () => {
+describe('invited Partner Program activation', () => {
+  it('offers one fixed workflow and stores real partner criteria', () => {
     const state = run(
-      { type: 'role/select', id: 'partner-program', label: 'Partner Program' },
-      { type: 'loop/select', id: 'screen-partners' },
-      { type: 'loop/confirm' },
+      { type: 'intro/continue' },
+      { type: 'criteria/change', value: 'Developer-tool founders using open models in North America.' },
+      { type: 'criteria/confirm' },
       { type: 'reviewers/confirm' },
     );
-    const agreement = workingAgreement(state);
-
-    expect(state.step).toBe('test');
-    expect(selectedLoop(state)?.label).toBe('Discover and screen partners');
-    expect(agreement).toMatchObject({
-      goal: 'Find strong Hermes partners',
-      trigger: 'A person, company, or profile URL is submitted',
-      inputs: 'Program criteria and public evidence',
+    expect(state.step).toBe('ready');
+    expect(workingAgreement(state)).toMatchObject({
+      goal: 'Find strong Partner Program prospects',
+      inputs: 'Developer-tool founders using open models in North America.',
       stages: ['Discovery', 'Public research', 'Evidence brief', 'Human review'],
-      done: 'A cited brief is waiting for the right reviewer',
-      readyForTest: true,
+      readyForWork: true,
     });
-    expect(agreement.reviews.map((boundary) => boundary.label)).toEqual([
-      'Advance or dismiss a partner prospect',
-      'Assign or change role and benefits',
-      'Send an external message',
-      'Sign an agreement or pay an invoice',
-    ]);
   });
 
-  it('keeps reviewer edits in the typed state passed to persistence', () => {
+  it('keeps reviewer edits in the agreement sent to persistence', () => {
     const state = run(
-      { type: 'role/select', id: 'partner-program', label: 'Partner Program' },
-      { type: 'loop/select', id: 'screen-partners' },
-      { type: 'loop/confirm' },
+      { type: 'intro/continue' },
+      { type: 'criteria/confirm' },
       { type: 'reviewers/edit' },
       { type: 'reviewers/change', id: 'external-message', reviewer: 'Workspace admin' },
       { type: 'reviewers/confirm' },
     );
-
-    expect(state.reviewers['external-message']).toBe('Workspace admin');
-    expect(workingAgreement(state).reviews.find((boundary) => boundary.id === 'external-message')?.reviewer).toBe('Workspace admin');
+    expect(workingAgreement(state).reviews.find((row) => row.id === 'external-message')?.reviewer).toBe('Workspace admin');
   });
 
-  it('clears dependent answers when the role changes', () => {
-    const partner = run(
-      { type: 'role/select', id: 'partner-program', label: 'Partner Program' },
-      { type: 'loop/select', id: 'screen-partners' },
-      { type: 'loop/confirm' },
+  it('does not advance with empty criteria', () => {
+    const state = run(
+      { type: 'intro/continue' },
+      { type: 'criteria/change', value: 'short' },
+      { type: 'criteria/confirm' },
     );
-    const changed = firstRunReducer(partner, { type: 'role/select', id: 'procurement', label: 'Procurement' });
-
-    expect(changed).toMatchObject({ step: 'loop', roleId: 'procurement', roleLabel: 'Procurement', loopId: null, loopConfirmed: false });
-    expect(workingAgreement(changed).reviews).toEqual([]);
+    expect(state.step).toBe('criteria');
   });
 });

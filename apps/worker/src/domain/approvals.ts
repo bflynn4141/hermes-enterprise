@@ -482,14 +482,14 @@ async function requesterContext(
   return { userId, memberId, sessionId: context.sessionId ?? null, runId: context.runId ?? null };
 }
 
-async function validateJoinSource(context: ApprovalProposerContext): Promise<void> {
+async function validateJoinSource(context: ApprovalProposerContext, proposal: ApprovalProposal): Promise<void> {
   const trigger = context.sourceTrigger;
   if (!trigger) return;
   if (!context.userId || !context.sessionId || context.runId) {
     throw new RouteError('a member join proposal requires a human-owned source session and no source run', 'invalid_join_source', 422);
   }
-  const { rows } = await context.tx.query<{ invited_by: string | null; proposer_role: string | null }>(
-    `SELECT i.invited_by,
+  const { rows } = await context.tx.query<{ invited_by: string | null; accepted_by: string | null; proposer_role: string | null }>(
+    `SELECT i.invited_by, i.accepted_by,
             (SELECT role FROM members
               WHERE workspace_id = $1 AND user_id = $6 AND status = 'active') AS proposer_role
        FROM invitations i
@@ -502,6 +502,13 @@ async function validateJoinSource(context: ApprovalProposerContext): Promise<voi
   );
   const row = rows[0];
   if (!row) throw new RouteError('the member join source is not backed by an accepted invitation and agent owner', 'invalid_join_source', 422);
+  if (proposal.approval_type === 'run_plan') {
+    const agents = proposal.details.participating_agents.map((agent) => agent.agent_id);
+    if (row.accepted_by !== context.userId || agents.length !== 1 || agents[0] !== trigger.agent_id) {
+      throw new RouteError('the member join plan must be requested by the joining member for their assigned agent', 'invalid_join_target', 422);
+    }
+    return;
+  }
   if (row.invited_by ? row.invited_by !== context.userId : row.proposer_role !== 'admin') {
     throw new RouteError('only the inviter or an active admin can sponsor join coordination', 'invalid_join_sponsor', 403);
   }
@@ -756,11 +763,15 @@ async function publishRequestChanged(
 
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
   const input = proposeApprovalInputSchema.parse(rawInput);
-  await validateJoinSource(context);
+  await validateJoinSource(context, input.proposal);
   if (context.sourceTrigger) {
-    if (input.proposal.approval_type !== 'team_commitment'
-      || input.proposal.details.recipient_agent_id !== context.sourceTrigger.agent_id
-      || input.proposal.details.receiving_owner_member_id !== context.sourceTrigger.member_id) {
+    const validTeamCommitment = input.proposal.approval_type === 'team_commitment'
+      && input.proposal.details.recipient_agent_id === context.sourceTrigger.agent_id
+      && input.proposal.details.receiving_owner_member_id === context.sourceTrigger.member_id;
+    const validPartnerPlan = input.proposal.approval_type === 'run_plan'
+      && input.proposal.details.participating_agents.length === 1
+      && input.proposal.details.participating_agents[0]?.agent_id === context.sourceTrigger.agent_id;
+    if (!validTeamCommitment && !validPartnerPlan) {
       throw new RouteError('the join trigger must propose coordination with the newly owned agent', 'invalid_join_target', 422);
     }
   }
@@ -907,6 +918,28 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     run_plan_budget: payload.approval_type === 'run_plan' ? payload.details.budget : null,
     resource_bindings: payload.resource_bindings, finalized_at: finalizedAt,
   };
+  const starter = await work.tx.query<{ tool_call_id: string | null }>(
+    `SELECT tool_call_id FROM requests WHERE workspace_id=$1 AND id=$2`,
+    [row.workspace_id, row.request_id],
+  );
+  if (starter.rows[0]?.tool_call_id?.startsWith('partner-first-search:') && row.requester_user_id) {
+    const searchJob = await enqueueJob(
+      work.tx,
+      row.workspace_id,
+      'partner_screening',
+      `partner-screening:approved:${row.request_id}`,
+      {
+        agent_id: row.requester_agent_id,
+        owner_user_id: row.requester_user_id,
+        bucket: `approved:${row.request_id}`,
+      },
+    );
+    if (searchJob) {
+      await work.tx.query(`UPDATE approval_requests SET finalization_job_id=$2 WHERE request_id=$1`, [row.request_id, searchJob]);
+      work.jobs.push(searchJob);
+    }
+    return;
+  }
   const jobId = await enqueueJob(
     work.tx, row.workspace_id, 'approval_continue',
     `approval-finalized:${row.request_id}:${row.authorization_revision}:${row.authorization_hash}`, hook,

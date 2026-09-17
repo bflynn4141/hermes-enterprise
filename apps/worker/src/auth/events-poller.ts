@@ -185,17 +185,13 @@ async function applyEvent(env: Env, event: WorkOSEvent): Promise<boolean> {
     const coordinationJobs: string[] = [];
     if (mirrored.acceptedInvitation) {
       await coordinateAcceptedMember({
+        env,
         tx,
         workspaceId: workspaceId as string,
         joiningUserId: userId as string,
         joiningMemberId: mirrored.memberId,
         invitationId: mirrored.acceptedInvitation.id,
-        invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
         jobs: coordinationJobs,
-        provisionHermesCloud: env.AGENT_RUNTIME === 'hermes',
-        cloudRegion: env.HERMES_CLOUD_REGION,
-        cloudModel: env.HERMES_CLOUD_MODEL,
-        cloudSize: env.HERMES_CLOUD_SIZE,
       });
     }
     return coordinationJobs;

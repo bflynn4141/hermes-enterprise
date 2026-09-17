@@ -107,15 +107,23 @@ describe('wrangler.jsonc', () => {
     }
   });
 
-  it('allows a bounded live onboarding search only in development and staging', () => {
-    for (const scope of [config, envs.staging!]) {
+  it('keeps the first member-approved search bounded in every environment', () => {
+    for (const scope of [config, ...Object.values(envs)]) {
       const raw = (scope.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON;
       expect(raw).toBeTruthy();
       if (!raw) throw new Error('missing onboarding policy');
       const policy = JSON.parse(raw) as { source: string; max_candidates: number; max_api_requests: number; organization_only: boolean; no_outreach: boolean; max_spend_usd: number };
       expect(policy).toMatchObject({ source: 'agentcash_people', max_candidates: 5, max_api_requests: 1, organization_only: false, no_outreach: true, max_spend_usd: 0.15 });
     }
-    expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_DEFAULT_CONFIG_JSON).toBeUndefined();
+  });
+
+  it('makes verified warm capacity a deployed invitation invariant', () => {
+    for (const scope of Object.values(envs)) {
+      const vars = scope.vars as Record<string, string>;
+      expect(vars.AGENT_RUNTIME).toBe('hermes');
+      expect(vars.HERMES_POOL_LOW_CAPACITY_THRESHOLD).toBe('1');
+      expect(vars).not.toHaveProperty('HERMES_CLOUD_AUTOPROVISION_ENABLED');
+    }
   });
 
   it('binds both Hyperdrive configs everywhere, one per database role', () => {
@@ -140,6 +148,7 @@ describe('wrangler.jsonc', () => {
       'WORKOS_API_KEY',
       'WORKOS_COOKIE_PASSWORD',
       'KEK_V1',
+      'HERMES_BRIDGE_SECRET',
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',

@@ -99,7 +99,7 @@ class NativeControl:
             wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
             return 200, {
                 "object": "hermes.enterprise_bridge.readiness",
-                "version": "1.4.0",
+                "version": "1.5.0",
                 "workspace_id": os.environ.get("ENTERPRISE_WORKSPACE_ID", ""),
                 "agent_id": os.environ.get("ENTERPRISE_AGENT_ID", ""),
                 "enterprise_url": os.environ.get("ENTERPRISE_URL", ""),

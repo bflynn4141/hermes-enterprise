@@ -47,6 +47,7 @@ import {
   resendInvitation,
   withdrawInvitation,
 } from './routes/members.js';
+import { registerHermesCapacity } from './routes/hermes-capacity.js';
 import {
   archiveSession,
   clearMessageFeedback,
@@ -404,6 +405,7 @@ app.delete('/w/:ws/members/:id', removeMember);
 app.post('/w/:ws/invitations', createInvitation);
 app.post('/w/:ws/invitations/:id/resend', resendInvitation);
 app.post('/w/:ws/invitations/:id/withdraw', withdrawInvitation);
+app.post('/w/:ws/admin/hermes-capacity', registerHermesCapacity);
 
 // The Agent tab's own surfaces: the runs a person can read back, the skills the
 // agent has adopted, its instruction versions, and the context fields a human

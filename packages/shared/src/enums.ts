@@ -12,7 +12,7 @@ import { z } from 'zod';
 export const LEGACY_REQUEST_KINDS = ['application', 'invoice', 'agreement'] as const;
 export type LegacyRequestKind = (typeof LEGACY_REQUEST_KINDS)[number];
 
-export const REQUEST_KINDS = [...LEGACY_REQUEST_KINDS, 'approval'] as const;
+export const REQUEST_KINDS = [...LEGACY_REQUEST_KINDS, 'task', 'approval'] as const;
 export type RequestKind = (typeof REQUEST_KINDS)[number];
 
 /**

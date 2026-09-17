@@ -9,13 +9,10 @@ import { memberRoleSchema, requestKindSchema, requestStatusSchema, sessionModeSc
 import { refSchema } from './refs.js';
 
 export const agentProvisioningStatusSchema = z.enum([
-  'awaiting_onboarding', 'queued', 'creating', 'awaiting_bootstrap', 'verifying', 'ready', 'failed',
+  'getting_ready', 'ready', 'retrying',
 ]);
 export const agentProvisioningSchema = z.object({
   status: agentProvisioningStatusSchema,
-  instance_name: z.string().max(64),
-  dashboard_url: z.url().nullable(),
-  error_code: z.string().max(120).nullable(),
   message: z.string().max(500),
   ready_at: z.iso.datetime({ offset: true }).nullable(),
 }).strict();

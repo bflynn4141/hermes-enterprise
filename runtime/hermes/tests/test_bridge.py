@@ -168,6 +168,48 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
         self.assertEqual(context.hook("skill_manage", {})["action"], "block")
 
+    def test_warm_profile_discovers_its_managed_skill_and_agentcash_policy(self):
+        class Context:
+            def __init__(self):
+                self.skills = []
+                self.hook = None
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                }.get(name, default)
+
+            def register_hook(self, _name, callback):
+                self.hook = callback
+
+            def register_skill(self, **kwargs):
+                self.skills.append(kwargs)
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        manifest = {
+            "name": "enterprise_bridge:partner-program-screening",
+            "version": "1.4.0",
+            "auto_load": True,
+            "config": {"partner_program": PEOPLE_PROGRAM},
+        }
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+            "HERMES_AGENTCASH_MCP_ENABLED": "1",
+        }), patch.object(plugin.Bridge, "skills", return_value=[manifest]), \
+                patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
+                patch.object(plugin.Bridge, "authorize_people_search"):
+            plugin.register(context)
+            self.assertEqual([skill["name"] for skill in context.skills], ["partner-program-screening"])
+            self.assertIsNone(context.hook("skill_view", {"name": manifest["name"]}))
+            self.assertIsNone(context.hook("mcp__agentcash__fetch", PEOPLE_ARGS, tool_call_id="unused"))
+
     def test_plugin_allows_only_bounded_agentcash_calls(self):
         class Context:
             def __init__(self):
@@ -201,6 +243,7 @@ class BridgeTests(unittest.TestCase):
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "skills", return_value=[]), \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
                 patch.object(plugin.Bridge, "authorize_people_search") as authorized:
             plugin.register(context)
@@ -249,6 +292,7 @@ class BridgeTests(unittest.TestCase):
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "skills", return_value=[]), \
                 patch.object(plugin.Bridge, "import_people_search") as imported, \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")):
             plugin.register(context)
@@ -290,6 +334,7 @@ class BridgeTests(unittest.TestCase):
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "skills", return_value=[]), \
                 patch.object(plugin.Bridge, "import_people_search") as imported:
             plugin.register(context)
             context.hooks["post_tool_call"](

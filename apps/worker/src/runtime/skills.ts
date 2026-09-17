@@ -12,6 +12,12 @@ export const PARTNER_PROGRAM_SKILL = {
   description: 'Screen public partner prospects and prepare cited outreach drafts for human review.',
 } as const;
 
+export const PARTNER_PROGRAM_TOOLS = [
+  'list_requests', 'get_request', 'get_approval_status', 'get_document_text',
+  'propose_request', 'propose_approval', 'save_review_note',
+  'set_context_field', 'propose_instruction', 'ask_for_context', 'set_focus',
+] as const;
+
 export interface RuntimeSkillManifest {
   readonly name: string;
   readonly version: string;

@@ -4,19 +4,17 @@ import { useEffect, useState } from 'react';
 import {
   FirstRunSetup,
   type FirstRunState,
-  type LiveSearchStatus,
-  type ProviderStatus,
+  type IrisReadyStatus,
   type WorkingAgreement,
 } from '../src/app/onboarding/FirstRunSetup.js';
 
 export interface FirstRunFixtureOptions {
   reduceMotion?: boolean;
-  providerStatus?: ProviderStatus;
-  liveSearchStatus?: LiveSearchStatus;
+  irisStatus?: IrisReadyStatus;
 }
 
 interface FixtureCall {
-  method: 'state' | 'ready' | 'retry-live-search' | 'open-inbox';
+  method: 'state' | 'open-inbox';
   step?: FirstRunState['step'];
   agreement?: WorkingAgreement;
 }
@@ -26,47 +24,24 @@ declare global {
     firstRunFixture: {
       calls: FixtureCall[];
       mount(options?: FirstRunFixtureOptions): void;
-      setProviderStatus(status: ProviderStatus): void;
-      setLiveSearchStatus(status: LiveSearchStatus, completed?: readonly string[]): void;
+      setIrisStatus(status: IrisReadyStatus): void;
     };
   }
 }
 
 function Harness({ options }: { options: FirstRunFixtureOptions }) {
-  const [providerStatus, setProviderStatus] = useState<ProviderStatus>(options.providerStatus ?? 'disconnected');
-  const [liveSearchStatus, setLiveSearchStatus] = useState<LiveSearchStatus>(options.liveSearchStatus ?? 'idle');
-  const [completed, setCompleted] = useState<readonly string[]>([]);
-
-  useEffect(() => {
-    window.firstRunFixture.setProviderStatus = setProviderStatus;
-    window.firstRunFixture.setLiveSearchStatus = (status, stages = []) => {
-      setCompleted(stages);
-      setLiveSearchStatus(status);
-    };
-  }, []);
-
-  return (
-    <HermesMotionProvider reducedMotion={options.reduceMotion}>
-      <FirstRunSetup
-        providerStatus={providerStatus}
-        liveSearchStatus={liveSearchStatus}
-        completedLiveStages={completed}
-        onStateChange={(state, agreement) => window.firstRunFixture.calls.push({ method: 'state', step: state.step, agreement })}
-        onReadyForTest={(state, agreement) => window.firstRunFixture.calls.push({ method: 'ready', step: state.step, agreement })}
-        onRetryLiveSearch={() => window.firstRunFixture.calls.push({ method: 'retry-live-search' })}
-        onOpenInbox={() => window.firstRunFixture.calls.push({ method: 'open-inbox' })}
-      />
-    </HermesMotionProvider>
-  );
+  const [irisStatus, setIrisStatus] = useState<IrisReadyStatus>(options.irisStatus ?? 'ready');
+  useEffect(() => { window.firstRunFixture.setIrisStatus = setIrisStatus; }, []);
+  return <HermesMotionProvider reducedMotion={options.reduceMotion}>
+    <FirstRunSetup irisStatus={irisStatus}
+      onStateChange={(state, agreement) => window.firstRunFixture.calls.push({ method: 'state', step: state.step, agreement })}
+      onOpenInbox={() => window.firstRunFixture.calls.push({ method: 'open-inbox' })} />
+  </HermesMotionProvider>;
 }
 
 const root = createRoot(document.getElementById('root')!);
 window.firstRunFixture = {
   calls: [],
-  mount(options = {}) {
-    this.calls = [];
-    root.render(<Harness options={options} />);
-  },
-  setProviderStatus() {},
-  setLiveSearchStatus() {},
+  mount(options = {}) { this.calls = []; root.render(<Harness options={options} />); },
+  setIrisStatus() {},
 };

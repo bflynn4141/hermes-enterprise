@@ -66,10 +66,10 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
-  // First-run completion creates one isolated Hermes Cloud instance. The job
-  // is idempotent by stable instance name and stops at explicit bootstrap
-  // verification rather than presenting a generic Hermes profile as ready.
-  'hermes_cloud_provision',
+  // Warm-pool invitation expiry and operator capacity alerts. Assignment is
+  // synchronous because every slot is already configured and verified.
+  'hermes_invitation_expire',
+  'hermes_capacity_alert',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -327,6 +327,11 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     workos_membership_id?: string | null;
     workos_invitation_id?: string | null;
     role?: string;
+    invitation_id?: string;
+    previous_workos_invitation_id?: string | null;
+    organization_id?: string;
+    email?: string;
+    inviter_user_id?: string;
   };
   const port = optionalWorkosPort(env);
   const mark = async (status: 'done' | 'failed', error?: string): Promise<void> => {
@@ -353,6 +358,87 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
   }
 
   switch (payload.action) {
+    case 'send_invitation':
+    case 'resend_invitation': {
+      if (!payload.invitation_id || !payload.organization_id || !payload.email || !payload.role) {
+        throw new Error('WorkOS invitation delivery payload is incomplete');
+      }
+      // A delivery job may have been delayed behind an outage. Reconcile local
+      // expiry before making the external call so an invitation cannot be sent
+      // after the reservation that guaranteed its Iris should have expired.
+      const { expireInvitationReservations } = await import('./hermes-cloud/capacity.js');
+      const deliverable = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+        await expireInvitationReservations(tx, job.workspace_id);
+        const invitation = await tx.query<{ status: string; workos_invitation_id: string | null }>(
+          `SELECT status, workos_invitation_id FROM invitations
+            WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+          [job.workspace_id, payload.invitation_id],
+        );
+        const row = invitation.rows[0];
+        if (!row || row.status !== 'pending') return { deliver: false, done: true };
+        if (row.workos_invitation_id) {
+          await tx.query(
+            `UPDATE invitations SET delivery_status='delivered', delivery_error=NULL WHERE id=$1`,
+            [payload.invitation_id],
+          );
+          return { deliver: false, done: true };
+        }
+        if (env.AGENT_RUNTIME === 'hermes') {
+          const capacity = await tx.query(
+            `SELECT 1 FROM hermes_cloud_capacity
+              WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'`,
+            [job.workspace_id, payload.invitation_id],
+          );
+          if (capacity.rowCount !== 1) throw new Error('invitation delivery refused without reserved Iris capacity');
+        }
+        await tx.query(
+          `UPDATE invitations SET delivery_status='sending', delivery_error=NULL WHERE id=$1`,
+          [payload.invitation_id],
+        );
+        return { deliver: true, done: false };
+      });
+      if (deliverable.deliver) {
+        try {
+          const sent = payload.action === 'resend_invitation' && payload.previous_workos_invitation_id
+            ? await port.resendInvitation(payload.previous_workos_invitation_id)
+            : await port.sendInvitation({
+                email: payload.email,
+                organizationId: payload.organization_id,
+                roleSlug: payload.role,
+                inviterUserId: payload.inviter_user_id,
+                expiresInDays: 7,
+              });
+          await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+            await tx.query(
+              `UPDATE invitations
+                  SET workos_invitation_id=$3, expires_at=$4, delivery_status='delivered', delivery_error=NULL
+                WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+              [job.workspace_id, payload.invitation_id, sent.id, sent.expiresAt],
+            );
+            const expiryKey = `invitation-expire:${payload.invitation_id}`;
+            await tx.query(
+              `UPDATE jobs SET next_at=$3 WHERE workspace_id=$1 AND kind='hermes_invitation_expire' AND key=$2 AND done_at IS NULL`,
+              [job.workspace_id, expiryKey, sent.expiresAt],
+            );
+            await tx.query(
+              `UPDATE job_ready r SET next_at=$3
+                FROM jobs j
+               WHERE r.job_id=j.id AND j.workspace_id=$1 AND j.kind='hermes_invitation_expire' AND j.key=$2`,
+              [job.workspace_id, expiryKey, sent.expiresAt],
+            );
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+            [job.workspace_id, payload.invitation_id, detail.slice(0, 500)],
+          ));
+          throw error;
+        }
+      }
+      break;
+    }
     case 'deactivate_membership':
       if (payload.workos_membership_id) {
         await port.deactivateOrganizationMembership(payload.workos_membership_id);
@@ -502,8 +588,11 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
       return;
-    case 'hermes_cloud_provision':
-      await (await import('./hermes-cloud/provisioning.js')).runHermesCloudProvisioningJob(env, job);
+    case 'hermes_invitation_expire':
+      await (await import('./hermes-cloud/capacity.js')).runInvitationExpirationJob(env, job);
+      return;
+    case 'hermes_capacity_alert':
+      (await import('./hermes-cloud/capacity.js')).runCapacityAlertJob(job);
       return;
     case 'reverify':
       {

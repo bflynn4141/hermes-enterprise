@@ -53,6 +53,7 @@ describe('GET /health', () => {
     const { env } = makeEnv({
       AGENT_RUNTIME: 'hermes',
       HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example',
       HERMES_RUNTIME_AGENTS: JSON.stringify({
         [agentId]: { workspace_id: workspaceId, base_url: 'https://runtime.example', api_key: 'native-secret' },
       }),
@@ -85,6 +86,7 @@ describe('GET /health', () => {
     const { env } = makeEnv({
       AGENT_RUNTIME: 'hermes',
       HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example',
       HERMES_RUNTIME_AGENTS: JSON.stringify({
         [agentId]: { workspace_id: workspaceId, base_url: 'https://runtime.example', api_key: 'native-secret' },
       }),
@@ -94,6 +96,30 @@ describe('GET /health', () => {
 
     expect(response.status).toBe(503);
     expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: false, detail: 'failed' });
+  });
+
+  it('accepts pre-bound warm-pool configuration without Cloud management credentials', async () => {
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example',
+      HERMES_RUNTIME_AGENTS: undefined,
+    } as Partial<Env>);
+    const body = (await (await call(env, '/health')).json()) as HealthBody;
+
+    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: true, detail: 'configured' });
+  });
+
+  it('fails readiness when the bridge signing secret is missing', async () => {
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes',
+      HERMES_BRIDGE_SECRET: undefined,
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example',
+      HERMES_RUNTIME_AGENTS: undefined,
+    } as Partial<Env>);
+    const body = (await (await call(env, '/health')).json()) as HealthBody;
+
+    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: false, detail: 'misconfigured' });
   });
 
   it('reports the connection count with its denominator', async () => {

@@ -76,7 +76,11 @@ export async function loadBootstrap(
   );
 
   const agents = await tx.query<AgentRow>(
-    `SELECT a.id, a.name, a.responsibility, a.setup_step, p.status AS provisioning_status
+    `SELECT a.id, a.name, a.responsibility, a.setup_step,
+            CASE WHEN p.status='ready' THEN 'ready'
+                 WHEN p.status='failed' THEN 'retrying'
+                 WHEN p.status IS NULL THEN NULL
+                 ELSE 'getting_ready' END AS provisioning_status
        FROM agents a
        LEFT JOIN agent_provisioning p ON p.workspace_id=a.workspace_id AND p.agent_id=a.id
       WHERE a.workspace_id = $1

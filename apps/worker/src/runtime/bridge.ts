@@ -19,9 +19,9 @@ import {
   type RuntimeBudgetDb,
   type RuntimeBudgetReservation,
 } from './budget.js';
-import { requireResolvedBridgeAuth } from './config.js';
+import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
-import { runtimeSkillManifests } from './skills.js';
+import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import { partnerAgentConfigSchema } from '../partner-screening/config.js';
@@ -310,12 +310,16 @@ export async function dispatchRuntimeCall(
     return { run, events, reply: { ok: outcome.ok, content } };
   });
 }
-async function authenticate(c: Context<{ Bindings: Env }>): Promise<{ workspaceId: string; agentId: string }> {
+async function authenticate(c: Context<{ Bindings: Env }>): Promise<{
+  workspaceId: string;
+  agentId: string;
+  binding: RuntimeBinding;
+}> {
   const workspaceId = pathUuid(c, 'ws');
   const agentId = pathUuid(c, 'agentId');
-  await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+  const binding = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
     requireResolvedBridgeAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
-  return { workspaceId, agentId };
+  return { workspaceId, agentId, binding };
 }
 async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   if (Number(c.req.header('Content-Length') ?? 0) > 1_048_576) throw new RouteError('Runtime body too large.', 'bad_body', 400);
@@ -324,10 +328,17 @@ async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   try { return JSON.parse(text); } catch { throw new RouteError('Invalid JSON body.', 'bad_body', 400); }
 }
 export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { workspaceId, agentId } = await authenticate(c);
+  const { workspaceId, agentId, binding } = await authenticate(c);
   const db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
   try {
-    const tools = allowedTools('work', await db.loadToolNames(agentId));
+    const configured = await db.loadToolNames(agentId);
+    // A warm profile must discover the exact schemas before its future owner
+    // exists. Calls still fail closed because no run or agent capability row
+    // exists until the reserved invitation is accepted.
+    const names = configured.length === 0 && binding.assignment === 'invitee_pool'
+      ? [...PARTNER_PROGRAM_TOOLS]
+      : configured;
+    const tools = allowedTools('work', names);
     return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
   } finally { await db.close(); }
 }

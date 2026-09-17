@@ -72,12 +72,6 @@
     // Bounded live onboarding search. Iris makes one paid AgentCash People
     // Search call, capped at $0.15, and the Worker strips contact data.
     "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
-    "HERMES_CLOUD_AUTOPROVISION_ENABLED": "0",
-    "HERMES_CLOUD_REGION": "sjc",
-    "HERMES_CLOUD_MODEL": "z-ai/glm-5.2",
-    "HERMES_CLOUD_SIZE": "medium",
-    "HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE": "5",
-    "HERMES_CLOUD_MAX_AGENTS": "10",
     "HERMES_ENTERPRISE_PUBLIC_URL": "https://localhost.invalid",
     "R2_BUCKET": "hermes-uploads"
   },
@@ -197,6 +191,9 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
+        // Production-demo invariant: an invitation is deliverable only after a
+        // verified warm-pool Iris has been reserved for it.
+        "AGENT_RUNTIME": "hermes",
         "ALLOWED_ORIGINS": "https://staging.hermes.brianflynn.dev",
         "WORKOS_REDIRECT_URI": "https://staging.hermes.brianflynn.dev/auth/callback",
         "NOUS_PORTAL_OAUTH_ENABLED": "1",
@@ -210,12 +207,7 @@
         "PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES": "360",
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
         "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
-        "HERMES_CLOUD_AUTOPROVISION_ENABLED": "0",
-        "HERMES_CLOUD_REGION": "sjc",
-        "HERMES_CLOUD_MODEL": "z-ai/glm-5.2",
-        "HERMES_CLOUD_SIZE": "medium",
-        "HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE": "5",
-        "HERMES_CLOUD_MAX_AGENTS": "10",
+        "HERMES_POOL_LOW_CAPACITY_THRESHOLD": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         "R2_BUCKET": "hermes-uploads-staging"
       },
@@ -294,6 +286,9 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
+        // Keep the production invitation path fail-closed: no verified,
+        // reserved Iris means no invitation is sent.
+        "AGENT_RUNTIME": "hermes",
         "ALLOWED_ORIGINS": "https://app.hermes.brianflynn.dev",
         "WORKOS_REDIRECT_URI": "https://app.hermes.brianflynn.dev/auth/callback",
         "NOUS_PORTAL_OAUTH_ENABLED": "1",
@@ -303,12 +298,10 @@
         "PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS": "0",
         "PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES": "360",
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
-        "HERMES_CLOUD_AUTOPROVISION_ENABLED": "0",
-        "HERMES_CLOUD_REGION": "sjc",
-        "HERMES_CLOUD_MODEL": "z-ai/glm-5.2",
-        "HERMES_CLOUD_SIZE": "medium",
-        "HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE": "5",
-        "HERMES_CLOUD_MAX_AGENTS": "10",
+        // Available only through the member-owned approval created at
+        // acceptance. Background automation remains disabled above.
+        "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
+        "HERMES_POOL_LOW_CAPACITY_THRESHOLD": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://app.hermes.brianflynn.dev",
         "R2_BUCKET": "hermes-uploads-production"
       },

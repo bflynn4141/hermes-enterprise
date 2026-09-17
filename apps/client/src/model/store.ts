@@ -201,7 +201,7 @@ export interface AppState {
   user: { id: string; name: string; email: string; role: 'admin' | 'member' };
   agent: {
     id: string | null; name: string; email: string | null; summary: string; setupStep: string | null;
-    provisioningStatus: 'awaiting_onboarding' | 'queued' | 'creating' | 'awaiting_bootstrap' | 'verifying' | 'ready' | 'failed' | null;
+    provisioningStatus: 'getting_ready' | 'ready' | 'retrying' | null;
   };
   capabilities: { emailIngress: boolean; turnAttachments: boolean; automatedTriggers: boolean };
   entities: EntityCache;

@@ -47,6 +47,7 @@ describe('durable first-run agent setup', () => {
           role_id: 'partner-program',
           role_label: 'Partner Program',
           loop_id: 'screen-partners',
+          partner_criteria: 'AI developer platforms in North America with active ecosystem teams.',
           reviewers: {
             admission: 'You',
             'role-benefits': 'You',
@@ -74,7 +75,7 @@ describe('durable first-run agent setup', () => {
     expect(stored.tools).not.toContain('send_email');
   });
 
-  it('queues Cloud provisioning after onboarding and does not mark Iris started early', async () => {
+  it('saves onboarding while the reserved instance assignment completes without provisioning a new instance', async () => {
     const fx = await seedWorkspace();
     await bindAgent(fx);
     await withClient('owner', async (client) => {
@@ -93,6 +94,7 @@ describe('durable first-run agent setup', () => {
       body: {
         first_run: {
           role_id: 'partner-program', role_label: 'Partner Program', loop_id: 'screen-partners',
+          partner_criteria: 'AI developer platforms in North America with active ecosystem teams.',
           reviewers: {
             admission: 'You', 'role-benefits': 'You', 'external-message': 'You', 'agreement-money': 'Admin + Finance',
           },
@@ -100,7 +102,7 @@ describe('durable first-run agent setup', () => {
       },
     });
     expect(response.status).toBe(202);
-    await expect(response.json()).resolves.toEqual({ status: 'queued' });
+    await expect(response.json()).resolves.toEqual({ status: 'getting_ready' });
     const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const agent = await client.query<{ status: string; started: boolean }>(
         `SELECT status, started_at IS NOT NULL AS started FROM agents WHERE id=$1`, [fx.agentId],
@@ -109,43 +111,45 @@ describe('durable first-run agent setup', () => {
         `SELECT status FROM agent_provisioning WHERE agent_id=$1`, [fx.agentId],
       );
       const jobs = await client.query<{ kind: string; payload: { agent_id: string } }>(
-        `SELECT kind, payload FROM jobs WHERE workspace_id=$1 AND key=$2`, [fx.workspaceId, `hermes-cloud:${fx.agentId}`],
+        `SELECT kind, payload FROM jobs WHERE workspace_id=$1 AND kind='hermes_cloud_provision'`, [fx.workspaceId],
       );
       return { agent: agent.rows[0], provisioning: provisioning.rows[0], jobs: jobs.rows };
     });
     expect(stored.agent).toEqual({ status: 'provisioning', started: false });
-    expect(stored.provisioning).toEqual({ status: 'queued' });
-    expect(stored.jobs).toEqual([{ kind: 'hermes_cloud_provision', payload: { agent_id: fx.agentId } }]);
+    expect(stored.provisioning).toEqual({ status: 'awaiting_onboarding' });
+    expect(stored.jobs).toEqual([]);
 
     await withClient('owner', async (client) => {
       await client.query('BEGIN');
       await setTenant(client, fx.workspaceId, fx.adminId);
       await client.query(
-        `UPDATE agent_provisioning SET status='awaiting_bootstrap' WHERE workspace_id=$1 AND agent_id=$2`,
+        `UPDATE agent_provisioning SET status='verifying' WHERE workspace_id=$1 AND agent_id=$2`,
         [fx.workspaceId, fx.agentId],
       );
       await client.query('COMMIT');
     });
-    const repeatedWhileBootstrapping = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${fx.agentId}`, {
+    const repeatedWhileAssigning = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${fx.agentId}`, {
       method: 'PATCH',
       body: {
         first_run: {
           role_id: 'partner-program', role_label: 'Partner Program', loop_id: 'screen-partners',
+          partner_criteria: 'AI developer platforms in North America with active ecosystem teams.',
           reviewers: {
             admission: 'You', 'role-benefits': 'You', 'external-message': 'You', 'agreement-money': 'Admin + Finance',
           },
         },
       },
     });
-    expect(repeatedWhileBootstrapping.status).toBe(202);
-    const bootstrapStatus = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+    expect(repeatedWhileAssigning.status).toBe(202);
+    await expect(repeatedWhileAssigning.json()).resolves.toEqual({ status: 'getting_ready' });
+    const assigningStatus = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const provisioning = await client.query<{ status: string }>(
         `SELECT status FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2`, [fx.workspaceId, fx.agentId],
       );
-      const jobs = await client.query(`SELECT id FROM jobs WHERE workspace_id=$1 AND key=$2`, [fx.workspaceId, `hermes-cloud:${fx.agentId}`]);
+      const jobs = await client.query(`SELECT id FROM jobs WHERE workspace_id=$1 AND kind='hermes_cloud_provision'`, [fx.workspaceId]);
       return { status: provisioning.rows[0]?.status, jobs: jobs.rowCount };
     });
-    expect(bootstrapStatus).toEqual({ status: 'awaiting_bootstrap', jobs: 1 });
+    expect(assigningStatus).toEqual({ status: 'verifying', jobs: 0 });
 
     await withClient('owner', async (client) => {
       await client.query('BEGIN');
@@ -158,6 +162,7 @@ describe('durable first-run agent setup', () => {
       body: {
         first_run: {
           role_id: 'partner-program', role_label: 'Partner Program', loop_id: 'screen-partners',
+          partner_criteria: 'AI developer platforms in North America with active ecosystem teams.',
           reviewers: {
             admission: 'You', 'role-benefits': 'You', 'external-message': 'You', 'agreement-money': 'Admin + Finance',
           },
