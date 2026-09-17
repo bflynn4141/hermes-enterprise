@@ -318,7 +318,10 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const now = new Date('2026-09-16T19:00:00Z');
     const first = await enqueueAutomatedPartnerScreening(env, now);
     const replay = await enqueueAutomatedPartnerScreening(env, now);
-    expect(first).toMatchObject({ enabled: true, configuredAgents: 1, queued: 1 });
+    expect(first).toMatchObject({
+      enabled: true, candidateAgents: 1, startedAgents: 1, adminOwnedAgents: 1,
+      configuredAgents: 1, queued: 1,
+    });
     expect(replay.queued).toBe(0);
 
     const queuedJob = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
@@ -390,7 +393,9 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const now = new Date('2026-09-16T19:00:00Z');
     const gated = await enqueueAutomatedPartnerScreening(makeEnv(base).env, now);
     expect(gated).toMatchObject({
-      enabled: true, paidEnabled: false, configuredAgents: 1, skippedPaid: 1, queued: 0,
+      enabled: true, paidEnabled: false,
+      candidateAgents: 1, startedAgents: 1, adminOwnedAgents: 1,
+      configuredAgents: 1, skippedPaid: 1, queued: 0,
     });
 
     const admitted = await enqueueAutomatedPartnerScreening(makeEnv({

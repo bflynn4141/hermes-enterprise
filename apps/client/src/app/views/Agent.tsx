@@ -148,7 +148,7 @@ export function AgentOverview() {
           {pending.length === 0 && (
             <EmptyState
               icon="admission"
-              title={EMPTY.overview(agent)}
+              title={EMPTY.overview(agent, state.capabilities.automatedTriggers)}
               detail={state.counts.decisions ? `${state.counts.decisions} decisions are in History · ${state.counts.pendingGrants} access grants pending` : undefined}
               action={
                 state.counts.decisions ? (

@@ -33,7 +33,9 @@ export const EMPTY = {
   keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or rotate it`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
-  overview: (agent: string) => `Nothing needs you yet. ${agent} works when you message it.`,
+  overview: (agent: string, automated = false) => automated
+    ? `${agent} checks for partner prospects automatically. Nothing needs your review yet.`
+    : `Nothing needs you yet. ${agent} works when you message it.`,
   inbox: 'No reviews waiting',
   inboxResolved: 'No decisions yet',
   requestMissing: 'Request not found',
