@@ -65,6 +65,9 @@ export interface AutomationEnqueueResult {
   readonly enabled: boolean;
   readonly paidEnabled: boolean;
   readonly workspaces: number;
+  readonly candidateAgents: number;
+  readonly startedAgents: number;
+  readonly adminOwnedAgents: number;
   readonly configuredAgents: number;
   readonly skippedPaid: number;
   readonly queued: number;
@@ -82,7 +85,8 @@ export async function enqueueAutomatedPartnerScreening(
   if (!automatedTriggersEnabled(env) || (agentIds.length === 0 && !useDefaultPolicy)) {
     return {
       enabled: automatedTriggersEnabled(env), paidEnabled, workspaces: 0,
-      configuredAgents: agentIds.length, skippedPaid: 0, queued: 0, bucket: null,
+      candidateAgents: 0, startedAgents: 0, adminOwnedAgents: 0,
+      configuredAgents: 0, skippedPaid: 0, queued: 0, bucket: null,
     };
   }
   const interval = automationIntervalMinutes(env);
@@ -90,22 +94,35 @@ export async function enqueueAutomatedPartnerScreening(
   const bucket = `${interval}m-${bucketNumber}`;
   const workspaces = await listWorkspaces(env);
   let queued = 0;
+  let candidateAgents = 0;
+  let startedAgents = 0;
+  let adminOwnedAgents = 0;
   let configuredAgents = 0;
   let skippedPaid = 0;
   for (const workspaceId of workspaces) {
     await withWorkspaceTransaction(env, workspaceId, async (tx) => {
-      const owners = await tx.query<{ agent_id: string; user_id: string }>(
-        `SELECT a.id AS agent_id, m.user_id
+      const candidates = await tx.query<{ agent_id: string; status: string; user_id: string | null }>(
+        `SELECT a.id AS agent_id, a.status, owner.user_id
            FROM agents a
-           JOIN agent_owners ao ON ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
-           JOIN members m ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+           LEFT JOIN LATERAL (
+             SELECT m.user_id
+               FROM agent_owners ao
+               JOIN members m ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+              WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
+                AND m.status='active' AND m.role='admin'
+              LIMIT 1
+           ) owner ON true
           WHERE a.workspace_id=$1 AND ($3::boolean OR a.id=ANY($2::uuid[]))
-            AND a.status='started' AND m.status='active' AND m.role='admin'
           ORDER BY a.id`,
         [workspaceId, agentIds, useDefaultPolicy],
       );
-      for (const owner of owners.rows) {
-        const configured = partnerAgentConfig(env, owner.agent_id).config;
+      for (const candidate of candidates.rows) {
+        candidateAgents += 1;
+        if (candidate.status !== 'started') continue;
+        startedAgents += 1;
+        if (!candidate.user_id) continue;
+        adminOwnedAgents += 1;
+        const configured = partnerAgentConfig(env, candidate.agent_id).config;
         if (!configured) continue;
         configuredAgents += 1;
         if (configured.source === 'agentcash_people' && !paidEnabled) {
@@ -116,14 +133,17 @@ export async function enqueueAutomatedPartnerScreening(
           tx,
           workspaceId,
           'partner_screening',
-          `partner-screening:auto:${workspaceId}:${owner.agent_id}:${bucket}`,
-          { agent_id: owner.agent_id, owner_user_id: owner.user_id, bucket },
+          `partner-screening:auto:${workspaceId}:${candidate.agent_id}:${bucket}`,
+          { agent_id: candidate.agent_id, owner_user_id: candidate.user_id, bucket },
         );
         if (id) queued += 1;
       }
     });
   }
-  return { enabled: true, paidEnabled, workspaces: workspaces.length, configuredAgents, skippedPaid, queued, bucket };
+  return {
+    enabled: true, paidEnabled, workspaces: workspaces.length,
+    candidateAgents, startedAgents, adminOwnedAgents, configuredAgents, skippedPaid, queued, bucket,
+  };
 }
 
 interface DraftPolicyContext {
