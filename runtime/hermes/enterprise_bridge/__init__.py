@@ -279,13 +279,17 @@ class Bridge:
             }, timeout=25.0,
         )
         if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
-            raise BridgeError("AgentCash People Search evidence import failed.")
+            reason = body.get("reason") if isinstance(body, dict) else None
+            safe_reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z0-9_:-]{1,80}", reason) else None
+            detail = f"{status} {safe_reason}" if safe_reason else str(status)
+            raise BridgeError(f"AgentCash People Search evidence import failed ({detail}).")
         return body
 
     def recover_pending_people_search(self, expected_arguments):
         """Replay one already-paid spill file; never issues a source request."""
         status, pending = self.request(
             "GET", self.base_url + "/agentcash/people-search/pending", self.token,
+            timeout=25.0,
         )
         if status == 204:
             return None
@@ -463,8 +467,10 @@ def register(ctx):
     if agentcash_arguments is not None and spill_root.is_dir():
         try:
             bridge.recover_pending_people_search(agentcash_arguments)
-        except Exception:
+        except BridgeError as error:
             # The ordinary post-tool observer remains the primary path. A
             # restart recovery failure must not make the governed profile
             # unavailable or risk another paid request.
-            logging.warning("AgentCash pending evidence recovery did not complete.")
+            logging.warning("AgentCash pending evidence recovery did not complete: %s", error)
+        except Exception:
+            logging.warning("AgentCash pending evidence recovery did not complete: unexpected error.")
