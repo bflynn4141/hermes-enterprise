@@ -454,7 +454,7 @@ export type Action =
   | { type: 'message/prepend'; sessionId: string; messages: Message[]; hasEarlier: boolean }
   | { type: 'run/start'; sessionId: string; run: Run; clientTurnId?: string }
   | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number; toolCallId?: string | null }
-  | { type: 'run/status'; sessionId: string; status: Run['status']; patch?: Partial<Run> }
+  | { type: 'run/status'; sessionId: string; runId: string; status: Run['status']; patch?: Partial<Run> }
   | { type: 'run/guide'; sessionId: string; text: string; id: string }
   | { type: 'run/guide-apply'; sessionId: string }
   | { type: 'run/guide-remove'; sessionId: string }
@@ -941,7 +941,15 @@ export function reduce(state: AppState, action: Action): AppState {
         return { ...run, steps };
       });
     case 'run/status':
-      return withSession(state, action.sessionId, (s) => (s.run ? { ...s, status: action.status, run: { ...s.run, status: action.status, ...(action.patch ?? {}) } } : s));
+      // A prior run can finish while the next turn's optimistic state is
+      // already painted. Status belongs to the run named by the event; letting
+      // a late completion mutate whichever run is current removes Thinking
+      // from the new turn and leaves only its user bubble on screen.
+      return withSession(state, action.sessionId, (s) =>
+        s.run?.id === action.runId
+          ? { ...s, status: action.status, run: { ...s.run, status: action.status, ...(action.patch ?? {}) } }
+          : s,
+      );
     case 'run/guide':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: { id: action.id, text: action.text, status: 'pending' } }));
     case 'run/guide-apply':
@@ -999,7 +1007,10 @@ export function reduce(state: AppState, action: Action): AppState {
       const seen = state.sessions[action.sessionId]?.messages.some((m) => m.id === action.message.id) ?? false;
       const next = withSession(state, action.sessionId, (s) => ({
         ...s,
-        stream: null,
+        // A durable final for the previous run may race the next optimistic
+        // turn. Keep that final in history, but do not erase the newer run's
+        // transient preview accumulator.
+        stream: s.stream?.runId === action.message.run_id ? null : s.stream,
         lastActivity: Date.now(),
         messages: seen ? s.messages.map((m) => (m.id === action.message.id ? action.message : m)) : [...s.messages, action.message],
       }));
@@ -1175,6 +1186,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
         out.push({
           type: 'run/status',
           sessionId,
+          runId: p.run_id,
           status: p.status,
           patch: {
             waiting_for: p.waiting_for ?? null,
