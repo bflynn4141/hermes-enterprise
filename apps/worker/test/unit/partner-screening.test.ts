@@ -65,9 +65,9 @@ function scriptedFetch(seen: Request[]): PartnerFetch {
       // Public email can exist in the upstream shape. The connector must not
       // retain it in its sanitized organization artifact.
       return json({
-        id: 9, node_id: owner.node_id, login: owner.login, name: 'Example Org',
+        id: 9, node_id: owner.node_id, login: owner.login,
         description: 'Developer education and open source agents', html_url: 'https://github.com/ExampleOrg',
-        blog: 'https://example.org', email: 'not-retained@example.org', public_repos: 8, followers: 500,
+        email: 'not-retained@example.org', public_repos: 8, followers: 500,
         created_at: '2020-01-01T00:00:00Z', updated_at: '2026-09-11T00:00:00Z',
       }, 'core');
     }
@@ -132,7 +132,7 @@ describe('GitHub organization discovery', () => {
     });
     expect(result.apiRequestsUsed).toBe(3);
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ sourceKey: owner.node_id, displayName: 'Example Org' });
+    expect(result.candidates[0]).toMatchObject({ sourceKey: owner.node_id, displayName: owner.login });
     expect(result.candidates[0]?.priority.total).toBeGreaterThanOrEqual(config.minimum_priority);
     expect(result.artifacts.map((artifact) => artifact.kind)).toEqual([
       'search_result', 'organization_profile', 'repository_snapshot',
