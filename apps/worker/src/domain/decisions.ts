@@ -147,6 +147,9 @@ export async function recordDecision(
   if (request.kind === 'approval') {
     throw new RouteError('approval requests use the approval decision route', 'approval_route_required', 409);
   }
+  if (request.kind === 'task') {
+    throw new RouteError('tasks are completed through their named workflow', 'task_route_required', 409);
+  }
 
   const resulting = RESULTING_STATUS[request.kind][decision];
 

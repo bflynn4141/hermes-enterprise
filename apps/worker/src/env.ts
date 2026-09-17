@@ -32,6 +32,8 @@ export interface Env {
   HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE?: string;
   /** Hard organization safety cap checked against the Portal list before create. */
   HERMES_CLOUD_MAX_AGENTS?: string;
+  /** Emit an internal warning when verified, unreserved capacity reaches this count. */
+  HERMES_POOL_LOW_CAPACITY_THRESHOLD?: string;
   /** Public origin the Cloud profile uses for its reverse enterprise bridge. */
   HERMES_ENTERPRISE_PUBLIC_URL?: string;
   /**

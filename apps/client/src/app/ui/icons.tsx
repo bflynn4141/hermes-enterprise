@@ -79,4 +79,4 @@ export function Icon({ name, size = 18, className, style, strokeWidth = 1.5, tit
   );
 }
 
-export const KIND_ICON: Record<string, string> = { application: 'admission', invoice: 'invoice', agreement: 'agreement', approval: 'context' };
+export const KIND_ICON: Record<string, string> = { application: 'admission', invoice: 'invoice', agreement: 'agreement', task: 'context', approval: 'context' };

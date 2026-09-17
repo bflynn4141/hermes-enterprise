@@ -111,9 +111,10 @@ MODEL_GATEWAY_MODE="off"
 ENGINE_PAUSED="0"
 
 # Official Hermes runtime. Fixed profiles may remain in the deployment map.
-# Newly invited members get a durable provisioning row after onboarding; the
-# machine credential creates one isolated Cloud instance and is stored only as
-# Worker secrets. Keep the kill switch off until both secrets are installed.
+# Production-demo invitations reserve an already-paid, already-verified Cloud
+# instance before delivery. Cloud credentials update and restart that reserved
+# instance during assignment; they do not create or fund one on the invite path.
+# Keep auto-provisioning off: it is future pool-refiller infrastructure only.
 # AGENT_RUNTIME="hermes"
 # HERMES_RUNTIME_AGENTS='{"FIXED_AGENT_UUID":{"workspace_id":"WORKSPACE_UUID","base_url":"http://127.0.0.1:8642","api_key":"","assignment":"fixed"}}'
 HERMES_BRIDGE_SECRET=""
@@ -125,4 +126,5 @@ HERMES_CLOUD_MODEL="z-ai/glm-5.2"
 HERMES_CLOUD_SIZE="medium"
 HERMES_CLOUD_MAX_AGENTS_PER_WORKSPACE="5"
 HERMES_CLOUD_MAX_AGENTS="10"
+HERMES_POOL_LOW_CAPACITY_THRESHOLD="1"
 HERMES_ENTERPRISE_PUBLIC_URL="https://staging.example.com"

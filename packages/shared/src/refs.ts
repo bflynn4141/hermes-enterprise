@@ -13,7 +13,7 @@ export type RefSection = (typeof REF_SECTIONS)[number];
 /** A view selection, not a database mutation or an arbitrary route. */
 export const inboxFiltersSchema = z.object({
   status: z.enum(['pending', 'resolved']).optional(),
-  kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement', 'approval']).optional(),
+  kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement', 'task', 'approval']).optional(),
   reviewer: z.enum(['for_me', 'waiting', 'all']).optional(),
   query: z.string().max(200).optional(),
 }).strict();

@@ -13,7 +13,7 @@
 //     decision.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
+import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
@@ -76,6 +76,7 @@ function SourceMark({ source, size = 26 }: { source: ApplicantSource; size?: num
 function requestType(request: RequestEntity): string {
   if (request.kind === 'application') return 'Application';
   if (request.kind === 'invoice') return 'Invoice';
+  if (request.kind === 'task') return 'Setup task';
   if (request.kind === 'approval') return approvalTypeLabel(request);
   return 'Signature';
 }
@@ -93,6 +94,7 @@ function requestPreview(request: RequestEntity): string {
     return [payee, amount].filter(Boolean).join(' · ');
   }
   if (request.kind === 'approval') return approvalPreview(request);
+  if (request.kind === 'task') return text(payload.description) ?? 'Continue Partner Program setup';
   const parties = Array.isArray(payload.parties)
     ? payload.parties.map((party) => text(record(party).name)).filter((party): party is string => !!party)
     : [];
@@ -104,6 +106,7 @@ function requestAction(request: RequestEntity): string {
   if (request.kind === 'application') return 'Review applicant';
   if (request.kind === 'invoice') return 'Review invoice';
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
+  if (request.kind === 'task') return 'Work with Iris';
   return 'Review for signature';
 }
 
@@ -194,6 +197,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <option value="documents">Documents</option>
               <option value="invoice">Invoices</option>
               <option value="agreement">Signatures</option>
+              <option value="task">Tasks</option>
               <option value="approval">Approvals</option>
             </select>
           </div>
@@ -307,8 +311,25 @@ function RequestDetail({ id }: { id: string | null }) {
   }
   const request = entity.data;
   if (request.kind === 'approval') return <ApprovalRequest request={request} />;
+  if (request.kind === 'task') return <TaskView request={request} />;
   if (request.status !== 'pending') return <Receipt request={request} />;
   return request.kind === 'application' ? <ApplicationView request={request} /> : <DocumentView request={request} />;
+}
+
+function TaskView({ request }: { request: RequestEntity }) {
+  const nav = useNav();
+  const dispatch = useDispatch();
+  const payload = record(request.payload);
+  const openIris = (): void => {
+    const sessionId = text(payload.session_id);
+    if (sessionId) dispatch({ type: 'session/select', id: sessionId });
+    nav(CTX);
+  };
+  return <div className="scroll"><div className="app-body">
+    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{request.label}</h1><p className="meta">Partner Program Iris</p></div></div>
+    <Panel selected icon="context" title="Define the evidence Iris should look for" subtitle={text(payload.description) ?? 'Add target industries, stages, geographies, signals, exclusions, and source material.'} />
+    <div className="app-footer" style={{ marginInline: -28 }}><div className="col grow" style={{ gap: 3 }}><span className="f-title">No search starts from this task</span><span className="f-sub">The separate $0.15 approval in Inbox is the only action that can start the paid search.</span></div><Button onClick={openIris}>{text(payload.action_label) ?? 'Work with Iris'}</Button></div>
+  </div></div>;
 }
 
 /** Shared decision footer. The only place in the client that calls `decide`. */

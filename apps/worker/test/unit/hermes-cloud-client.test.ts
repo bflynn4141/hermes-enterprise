@@ -73,4 +73,38 @@ describe('Hermes Cloud machine client', () => {
     await expect(new HermesCloudClient({ ...seeded, HERMES_CLOUD_CLIENT_ID: 'id', HERMES_CLOUD_CLIENT_SECRET: 'secret' }, routed).listAgents())
       .resolves.toEqual([expect.objectContaining({ id: 'a', health: 'HEALTHY' })]);
   });
+
+  it('updates environment and restarts an existing pool instance without creating one', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const send = vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).includes('/api/oauth/token')) {
+        return Response.json({ access_token: 'short-lived-management-token-assign' });
+      }
+      const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params?: Record<string, unknown> };
+      calls.push(body);
+      if (body.method === 'initialize') return rpc(body.id!, {});
+      if (body.method === 'notifications/initialized') return new Response(null, { status: 202 });
+      const action = (body.params as { arguments?: { action?: string } })?.arguments?.action;
+      return tool(body.id!, { agent: {
+        id: 'cloud-pool-1', name: 'partner-pool-1', status: 'RUNNING', health: 'HEALTHY', dashboardUrl: null,
+        action,
+      } });
+    });
+    const client = new HermesCloudClient(env, send);
+    const assigned = {
+      ENTERPRISE_WORKSPACE_ID: '11111111-1111-4111-8111-111111111111',
+      ENTERPRISE_AGENT_ID: '22222222-2222-4222-8222-222222222222',
+      HERMES_NATIVE_CRON_ENABLED: '0',
+    };
+
+    await expect(client.updateAgentEnvironment('cloud-pool-1', assigned)).resolves.toMatchObject({ id: 'cloud-pool-1' });
+    await expect(client.restartAgent('cloud-pool-1')).resolves.toMatchObject({ health: 'HEALTHY' });
+
+    const tools = calls.filter((call) => call.method === 'tools/call');
+    expect(tools).toEqual([
+      expect.objectContaining({ params: { name: 'agent', arguments: { action: 'update', agent_id: 'cloud-pool-1', env: assigned } } }),
+      expect.objectContaining({ params: { name: 'agent', arguments: { action: 'restart', agent_id: 'cloud-pool-1' } } }),
+    ]);
+    expect(JSON.stringify(tools)).not.toContain('create');
+  });
 });

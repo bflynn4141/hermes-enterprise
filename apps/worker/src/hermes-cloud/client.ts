@@ -201,4 +201,18 @@ export class HermesCloudClient {
     if (!agent) throw new HermesCloudError('Hermes Cloud did not return the created agent', 'cloud_agent_invalid');
     return agent;
   }
+
+  async updateAgentEnvironment(agentId: string, env: Record<string, string>): Promise<CloudAgent> {
+    const payload = await this.tool('agent', { action: 'update', agent_id: agentId, env });
+    const agent = cloudAgent(payload.agent);
+    if (!agent) throw new HermesCloudError('Hermes Cloud did not return the updated agent', 'cloud_agent_invalid');
+    return agent;
+  }
+
+  async restartAgent(agentId: string): Promise<CloudAgent> {
+    const payload = await this.tool('agent', { action: 'restart', agent_id: agentId });
+    const agent = cloudAgent(payload.agent);
+    if (!agent) throw new HermesCloudError('Hermes Cloud did not return the restarted agent', 'cloud_agent_invalid');
+    return agent;
+  }
 }

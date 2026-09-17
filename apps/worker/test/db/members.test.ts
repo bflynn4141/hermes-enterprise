@@ -263,22 +263,23 @@ describe('invitations', () => {
     expect(members).toBe(1);
   });
 
-  it('refuses a second live invitation to the same address', async () => {
+  it('returns the same live invitation for a duplicate request', async () => {
     const fixture = await seedWorkspace();
     const { env } = makeEnv();
     const email = `dup-${randomUUID().slice(0, 8)}@example.test`;
-    await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+    const first = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
       method: 'POST',
       body: { email },
     });
+    const firstBody = await first.json() as { id: string };
 
     const second = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
       method: 'POST',
       body: { email },
     });
 
-    expect(second.status).toBe(409);
-    expect(await second.json()).toMatchObject({ reason: 'already_invited' });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ id: firstBody.id, status: 'pending' });
   });
 
   it('resends as a new row, leaving the old one marked resent and pointing at it', async () => {

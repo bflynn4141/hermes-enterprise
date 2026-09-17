@@ -156,17 +156,20 @@ would create two scheduler owners even though downstream ids are defensive.
 
 ## Live onboarding
 
-With a valid policy, Partner Program onboarding starts a real connector run,
-shows its request and monetary ceiling, and hands the work to Iris once Nous
-Portal is connected. Development and staging default to one AgentCash People
-Search call capped at $0.15 and at most five stored prospects. The old sample
-route and fictional applicant UI are no longer exposed.
+Partner Program onboarding records the member's working agreement; it never
+creates Cloud infrastructure or starts a paid search. Invitation acceptance
+persists an Inbox task for the partner criteria and a separate member-owned
+approval for the first AgentCash People Search. Only the member's explicit
+approval can enqueue that search after Iris is ready and Nous Portal is
+connected. The reviewed allowance is one request, at most five stored
+prospects, no outreach, and no more than $0.15. The old sample route and
+fictional applicant UI are not exposed.
 
-Development and staging may set `PARTNER_SCREENING_DEFAULT_CONFIG_JSON` so a
-newly-created agent can run this first search before it has an agent-specific
-policy. The staging default is capped at five prospects and one $0.15 request.
-Production has no default and therefore fails closed until an approved policy
-is configured.
+All environments carry the same bounded
+`PARTNER_SCREENING_DEFAULT_CONFIG_JSON` so the accepted starter approval has an
+executable policy. Production background automation remains disabled; the
+presence of this policy is not authorization to spend. Missing or malformed
+policy, a second call, or a request above the monetary cap fails closed.
 
 This repository does not contain actual source credentials, the user's search
 queries, the user's scoring policy, or deployment configuration. Until those

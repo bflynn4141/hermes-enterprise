@@ -38,7 +38,7 @@ function AgentTabsRow({ value }: { value: string }) {
 }
 
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
-  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : approvalTypeLabel(request);
+  const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
   return (
     <div className="list-row">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />

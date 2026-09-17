@@ -107,7 +107,7 @@ export function requestStatusLabel(request: RequestEntity): string {
   }
   switch (request.status) {
     case 'pending':
-      return request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? `${money} · Draft` : `${money} · Unsigned v1`;
+      return request.kind === 'task' ? 'Ready to continue' : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? `${money} · Draft` : `${money} · Unsigned v1`;
     case 'declined':
       return 'Declined · No message sent';
     case 'admitted':

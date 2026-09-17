@@ -160,6 +160,16 @@ export const applicationPayloadSchema = z
 
 export type ApplicationPayload = z.infer<typeof applicationPayloadSchema>;
 
+export const taskPayloadSchema = z.object({
+  kind: z.literal('task'),
+  task_type: z.literal('partner_criteria_setup'),
+  description: z.string().trim().min(1).max(4000),
+  action_label: z.string().trim().min(1).max(120),
+  agent_id: z.uuid(),
+  session_id: z.uuid(),
+}).strict();
+export type TaskPayload = z.infer<typeof taskPayloadSchema>;
+
 export const documentPayloadSchema = z.discriminatedUnion('kind', [
   invoicePayloadSchema,
   agreementPayloadSchema,
@@ -170,6 +180,7 @@ export const requestPayloadSchema = z.discriminatedUnion('kind', [
   applicationPayloadSchema,
   invoicePayloadSchema,
   agreementPayloadSchema,
+  taskPayloadSchema,
   approvalPayloadSchema,
 ]);
 export type RequestPayload = z.infer<typeof requestPayloadSchema>;
@@ -178,6 +189,7 @@ const PAYLOAD_BY_KIND = {
   application: applicationPayloadSchema,
   invoice: invoicePayloadSchema,
   agreement: agreementPayloadSchema,
+  task: taskPayloadSchema,
   approval: approvalPayloadSchema,
 } as const satisfies Record<RequestKind, unknown>;
 

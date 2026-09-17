@@ -538,7 +538,7 @@ const proposeRequest: ToolDefinitionEntry = {
     'Propose a request for a human to decide. It is written in `pending` and nothing in this product can move it out of `pending` except a person using the Inbox.',
   input_schema: OBJECT(
     {
-      kind: { type: 'string', enum: REQUEST_KINDS.filter((kind) => kind !== 'approval') },
+      kind: { type: 'string', enum: REQUEST_KINDS.filter((kind) => kind !== 'approval' && kind !== 'task') },
       label: { type: 'string', maxLength: 200 },
       payload: { type: 'object', description: 'Must match the document schema for the kind.' },
     },
@@ -547,7 +547,7 @@ const proposeRequest: ToolDefinitionEntry = {
   async run(args, ctx) {
     const kind = str(args.kind) as RequestKind;
     if (!REQUEST_KINDS.includes(kind)) return { ok: false, error: `unknown request kind ${str(args.kind)}`, permanent: true };
-    if (kind === 'approval') {
+    if (kind === 'approval' || kind === 'task') {
       return { ok: false, error: 'enterprise approvals must use propose_approval so policy and authorization are server-derived', permanent: true };
     }
     let payload: unknown;
@@ -981,7 +981,7 @@ export async function executeTool(
   if (tool.name === 'propose_request') {
     const kind = str(args.kind) as RequestKind;
     if (!REQUEST_KINDS.includes(kind)) return { ok: false, error: `unknown request kind ${str(args.kind)}`, permanent: true };
-    if (kind === 'approval') {
+    if (kind === 'approval' || kind === 'task') {
       return { ok: false, error: 'enterprise approvals must use propose_approval so policy and authorization are server-derived', permanent: true };
     }
     try {

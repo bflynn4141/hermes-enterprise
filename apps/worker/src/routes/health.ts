@@ -154,6 +154,21 @@ async function checkAuthConfiguration(env: Env): Promise<string> {
 }
 
 async function checkHermesRuntimes(env: Env): Promise<string> {
+  if (!env.HERMES_BRIDGE_SECRET || env.HERMES_BRIDGE_SECRET.length < 32 ||
+      !env.HERMES_CLOUD_CLIENT_ID?.trim() || !env.HERMES_CLOUD_CLIENT_SECRET?.trim()) {
+    throw new Error('missing Hermes warm-pool control configuration');
+  }
+  let publicUrl: URL;
+  try { publicUrl = new URL(env.HERMES_ENTERPRISE_PUBLIC_URL ?? ''); }
+  catch { throw new Error('missing Hermes Enterprise public URL'); }
+  if (publicUrl.protocol !== 'https:' || publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash) {
+    throw new Error('invalid Hermes Enterprise public URL');
+  }
+
+  // Warm-pool invitees use encrypted database bindings, not the original
+  // deployment map. Keep probing any fixed profiles that still exist, but do
+  // not make a legacy map a prerequisite for the new dynamic architecture.
+  if (!env.HERMES_RUNTIME_AGENTS?.trim()) return 'configured';
   const bindings = runtimeBindings(env);
   await Promise.all(bindings.map((binding) =>
     new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities()));
@@ -191,6 +206,9 @@ const cacheKey = (env: Env): string =>
     env.AGENT_RUNTIME ?? '',
     env.HERMES_RUNTIME_AGENTS?.length ?? 0,
     env.HERMES_BRIDGE_SECRET?.length ?? 0,
+    env.HERMES_CLOUD_CLIENT_ID?.length ?? 0,
+    env.HERMES_CLOUD_CLIENT_SECRET?.length ?? 0,
+    env.HERMES_ENTERPRISE_PUBLIC_URL ?? '',
   ].join('|');
 
 /** Tests reach for this rather than waiting out `CACHE_MS`. */

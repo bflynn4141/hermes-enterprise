@@ -118,17 +118,13 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
       throw new RouteError('this invitation is not open', 'invitation_unavailable', 404);
     }
     await coordinateAcceptedMember({
+      env: c.env,
       tx,
       workspaceId,
       joiningUserId: session.userId,
       joiningMemberId: mirrored.memberId,
       invitationId: mirrored.acceptedInvitation.id,
-      invitedByUserId: mirrored.acceptedInvitation.invitedByUserId,
       jobs,
-      provisionHermesCloud: c.env.AGENT_RUNTIME === 'hermes',
-      cloudRegion: c.env.HERMES_CLOUD_REGION,
-      cloudModel: c.env.HERMES_CLOUD_MODEL,
-      cloudSize: c.env.HERMES_CLOUD_SIZE,
     });
 
     // The whole workspace, from inside the transaction that admitted them, so
