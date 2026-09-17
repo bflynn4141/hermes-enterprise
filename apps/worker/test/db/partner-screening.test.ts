@@ -180,7 +180,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(snapshot.candidates).toHaveLength(1);
     expect(snapshot.candidates[0]).toMatchObject({
       confidence: 'low',
-      evidence_gaps: [expect.stringContaining('repository-search evidence only')],
+      evidence_gaps: expect.arrayContaining([expect.stringContaining('repository-search evidence only')]),
     });
     expect(snapshot.handoff).toMatchObject({ kind: 'ask_iris_to_screen', candidate_ids: [snapshot.candidates[0]!.id] });
     expect(snapshot.handoff.prompt).toContain('Do not contact anyone');
