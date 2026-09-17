@@ -278,18 +278,27 @@ test('P10 · dropping the connection mid-run replays to the same transcript', as
   //   2. A double: the same message applied twice, because an event at or
   //      below the cursor was not dropped.
   //
-  // Asserting on rendered *ids* rather than on text is what makes this stable:
-  // two messages can legitimately share an opening phrase, and one message can
-  // legitimately render its text inside more than one node.
-  const renderedIds = await page.locator('[data-message-id]').evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute('data-message-id') ?? ''),
-  );
+  // Asserting the final provider turn's rendered *id* rather than only its text
+  // makes this stable. Earlier provider turns are deliberately collapsed into
+  // the activity surface (decision C63), so they must not be required as
+  // transcript message nodes.
   const persistedIds = rows(
     `SELECT id::text FROM messages WHERE session_id = '${sessionId}' AND role = 'iris' AND status = 'complete' ORDER BY seq;`,
   );
   expect(persistedIds.length).toBeGreaterThan(0);
-  for (const id of persistedIds) expect(renderedIds, `message ${id} is missing from the transcript`).toContain(id);
-  expect(new Set(renderedIds).size, 'a message was applied twice').toBe(renderedIds.length);
+  const persistedAnswerId = persistedIds.at(-1)!;
+  // The final text is intentionally revealed through the stream accumulator
+  // before the committed message node replaces it. Wait for that short visual
+  // handoff; text visibility alone is not proof that `data-message-id` exists.
+  await expect(
+    page.locator(`[data-message-id="${persistedAnswerId}"]`),
+    `message ${persistedAnswerId} is missing from the transcript`,
+  ).toHaveCount(1);
+  const settledRenderedIds = await page.locator('[data-message-id]').evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('data-message-id') ?? ''),
+  );
+  expect(settledRenderedIds).toContain(persistedAnswerId);
+  expect(new Set(settledRenderedIds).size, 'a message was applied twice').toBe(settledRenderedIds.length);
   await context.close();
 });
 

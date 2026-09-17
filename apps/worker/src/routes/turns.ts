@@ -114,6 +114,25 @@ const runView = (run: { id: string; status: string; attempt: number }): Record<s
   attempt: run.attempt,
 });
 
+/** GET /w/:ws/sessions/:id/runs/:runId — authoritative reconciliation. */
+export async function getRunRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const sessionId = pathUuid(c, 'id');
+  const runId = pathUuid(c, 'runId');
+  const body = await inWorkspace(c, async (work) => {
+    const { rows } = await work.tx.query<{ id: string; status: string; attempt: number }>(
+      `SELECT r.id, r.status, r.attempt
+         FROM runs r
+         JOIN sessions s ON s.workspace_id = r.workspace_id AND s.id = r.session_id
+        WHERE r.workspace_id = $1 AND s.owner_id = $2 AND r.session_id = $3 AND r.id = $4`,
+      [work.workspaceId, work.userId, sessionId, runId],
+    );
+    const run = rows[0];
+    if (!run) throw new RouteError('no such run', 'unknown_run', 404);
+    return runView(run);
+  });
+  return c.json(body);
+}
+
 /**
  * Create the Workflow instance for a run that already has a row.
  *

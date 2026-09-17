@@ -4995,3 +4995,31 @@ again at 24.1 seconds from its original timestamp. Store coverage verifies the
 event time reaches the cached run. Runtime coverage holds the submission
 readiness check open until the concurrent binding lookup starts, proving the
 calls no longer serialize while both checks still execute.
+
+---
+
+## C67. A healthy WebSocket does not prove the transcript is complete
+
+**Decided September 17, 2026.** The session hub periodically reconciles even
+while WebSocket heartbeats remain healthy. It checks every two seconds while
+the visible session has unresolved run or stream state and every thirty seconds
+while idle. Returning to a visible tab and refreshing the hub ticket trigger
+the same catch-up immediately.
+
+The WebSocket remains the low-latency path. Durable replay is the completeness
+check because a browser or best-effort forwarder can miss a committed terminal
+batch without closing the transport. Replay and simultaneous live events use
+the existing replay-first buffer order. The active session also compares its
+authoritative run row and latest persisted messages with local state: a later
+live event may legitimately advance the cursor past an earlier missed event,
+which cursor replay alone cannot recover. The run read preserves the exact
+terminal state instead of inferring completed from an idle session. Receiving
+a terminal status forces this snapshot once, because that status may be the
+later half of a partially delivered batch. A failed background check preserves
+the healthy socket and retries at the bounded cadence.
+
+**Evidence.** One transport regression keeps the socket open with a valid
+`pong`, withholds the terminal batch, and verifies bounded replay without a
+disconnect. A second advances the cursor with completed `run.status` while
+withholding the earlier `message.final`, then verifies that the authoritative
+message snapshot restores the response as soon as the tab becomes visible.
