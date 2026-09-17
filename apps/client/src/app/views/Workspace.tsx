@@ -2,8 +2,8 @@
 //
 // History reads `events` rows — the demo's fabricated local event log is gone,
 // along with `eventTime()` and `uid('evt')`. Members read the WorkOS mirror.
-// Settings carries Provider keys and Usage, plus the one control in the product
-// with no undo behind a confirmation and a step-up.
+// Settings carries Provider keys, Usage and the data-and-privacy page, and the
+// one control in the product with no undo behind a confirmation and a step-up.
 //
 // Three library components are adopted here (plan 10b): `FilterTable` over
 // History, `InsightCards` over the usage report and `FineTuneCard` over the
@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -588,21 +588,21 @@ function SavedDocument({ id }: { id: string }) {
 
 export function Settings({ view }: { view: string }) {
   const nav = useNav();
-  const activeView = SETTINGS_TABS.find((tab) => tab === view) ?? 'Notifications';
   return (
     <div className="scroll">
       <div className="app-body" style={{ minHeight: '100%' }}>
         <div className="row" style={{ height: 42 }}>
           <h1 className="display-32">Settings</h1>
         </div>
-        <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={activeView} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
-        {activeView === 'Organization' && <OrganizationTab />}
-        {activeView === 'Inbox rules' && <InboxRulesTab />}
-        {activeView === 'Agents' && <AgentsTab />}
-        {activeView === 'Slack' && <SlackTab />}
-        {activeView === 'Provider keys' && <ProviderKeysTab />}
-        {activeView === 'Usage' && <UsageTab />}
-        {activeView === 'Notifications' && <NotificationsTab />}
+        <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={view} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
+        {view === 'Organization' && <OrganizationTab />}
+        {view === 'Inbox rules' && <InboxRulesTab />}
+        {view === 'Agents' && <AgentsTab />}
+        {view === 'Slack' && <SlackTab />}
+        {view === 'Provider keys' && <ProviderKeysTab />}
+        {view === 'Usage' && <UsageTab />}
+        {view === 'Notifications' && <NotificationsTab />}
+        {view === 'Data and privacy' && <PrivacyTab />}
       </div>
     </div>
   );
@@ -1853,6 +1853,232 @@ function NotificationsTab() {
           Saved
         </Ack>
       </div>
+    </>
+  );
+}
+
+/**
+ * Data and privacy.
+ *
+ * Every fact on this screen is the server's. The retention table, the erasure
+ * timing, the residency lines and the per-provider warnings all come from
+ * `GET /w/:ws/settings/data-privacy`, because a client that paraphrased them
+ * would be a client making a data-protection claim nobody reviewed. The one
+ * control is the attestation, and it is Admin plus step-up: whoever writes it
+ * is asserting to a future auditor that a zero-retention arrangement or a DPA
+ * exists.
+ */
+function PrivacyTab() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
+  const [privacy, setPrivacy] = useState<DataPrivacy | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [target, setTarget] = useState<DataPrivacy['keys'][number] | null>(null);
+  const [kind, setKind] = useState('zdr');
+  const [reference, setReference] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [reauthed, setReauthed] = useState(false);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void adapter.rest
+      .dataPrivacy(state.workspace.id)
+      .then((next) => {
+        setPrivacy(next);
+        setFailed(false);
+      })
+      .catch(() => setFailed(true));
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  // On the way back from a step-up the pane says so and waits for a second,
+  // deliberate click. The intent is read, never replayed.
+  useEffect(() => {
+    const intent = adapter.pendingStepUp();
+    if (intent?.kind === 'provider_key') {
+      setReauthed(true);
+      adapter.clearStepUp();
+    }
+  }, [adapter]);
+
+  const record = (): void => {
+    if (!target) return;
+    setNotice(null);
+    void adapter.rest
+      .setAttestation(state.workspace.id, target.key_id, { kind, reference: reference.trim() })
+      .then(() => {
+        setTarget(null);
+        setReference('');
+        setReauthed(false);
+        load();
+      })
+      .catch((caught: unknown) => {
+        const error = caught as { status?: number; reason?: string };
+        if (error.status === 401 && error.reason === 'reauth_required') {
+          storeStepUp({ kind: 'provider_key', keyId: target.key_id, returnTo: window.location.href });
+          const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+          if (url) window.location.assign(url);
+          else setNotice('This needs a recent sign-in. Sign in again to continue.');
+          return;
+        }
+        setNotice(error.reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record that attestation. Try again.');
+      });
+  };
+
+  return (
+    <>
+      {[
+        ['Private to this workspace', 'Context, agent history and shared skills stay in your organization'],
+        ['Model training', 'Off'],
+        ['Shared Intelligence', 'Human review required'],
+        ['Jurisdiction', state.workspace.jurisdiction ?? 'default'],
+      ].map(([key, value]) => (
+        <div className="kv" key={key}>
+          <span className="grow">{key}</span>
+          <span className="meta" style={{ textAlign: 'right', maxWidth: 380 }}>
+            {value}
+          </span>
+        </div>
+      ))}
+
+      {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
+      {!privacy && !failed && <Skeleton rows={4} label="Loading retention facts" />}
+
+      {privacy && (
+        <>
+          <h2 className="section-title">Processors</h2>
+          {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
+          {privacy.keys.map((key) => (
+            <div className="col" key={key.key_id} style={{ gap: 8, padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+              <div className="row">
+                <div className="row-main">
+                  <span className="t">
+                    {key.label} · {key.provider}
+                  </span>
+                  <span className="s">
+                    ····{key.last4} · {key.status}
+                    {key.verified_at ? ` · verified ${new Date(key.verified_at).toLocaleDateString()}` : ' · never verified'}
+                  </span>
+                </div>
+                <span className="meta">{key.attested ? `Attested · ${String(key.attestation?.kind ?? '')}` : 'No attestation'}</span>
+                {admin && (
+                  <Button
+                    onClick={() => {
+                      setTarget(key);
+                      setKind(String(key.attestation?.kind ?? 'zdr'));
+                      setReference(String(key.attestation?.reference ?? ''));
+                      setNotice(null);
+                    }}
+                  >
+                    {key.attested ? 'Update attestation' : 'Record attestation'}
+                  </Button>
+                )}
+              </div>
+              <span className="meta">{key.real_data_allowed ? 'Real applicant data is allowed on this key: an Admin has recorded an attestation and the provider carries no jurisdiction warning.' : 'Real applicant data is not allowed on this key. Use synthetic or consented data.'}</span>
+              {key.warnings.map((warning) => (
+                <p className="meta" key={warning} style={{ maxWidth: 720 }}>
+                  {warning}
+                </p>
+              ))}
+            </div>
+          ))}
+
+          <h2 className="section-title">What is kept, and for how long</h2>
+          <div className="col">
+            {privacy.retention.map((fact) => (
+              <div className="kv" key={fact.store}>
+                <span className="grow">{fact.store}</span>
+                <span className="meta" style={{ textAlign: 'right', maxWidth: 420 }}>
+                  {fact.retention} · {fact.erasure}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <h2 className="section-title">Erasure</h2>
+          <p style={{ maxWidth: 760 }}>{privacy.erasure.copy}</p>
+          <div className="stat-grid">
+            <div className="stat">
+              <span className="k">Tombstone</span>
+              <span className="v">{privacy.erasure.tombstone}</span>
+            </div>
+            <div className="stat">
+              <span className="k">Point-in-time history</span>
+              <span className="v">{privacy.erasure.point_in_time_history_days} days</span>
+            </div>
+            <div className="stat">
+              <span className="k">Backup copy</span>
+              <span className="v">{privacy.erasure.backup_retention_days} days</span>
+            </div>
+            <div className="stat">
+              <span className="k">Complete after</span>
+              <span className="v">{privacy.erasure.complete_after_days} days</span>
+            </div>
+          </div>
+
+          <h2 className="section-title">Where the data sits</h2>
+          {(
+            [
+              ['Identity provider', privacy.residency.identity_provider],
+              ['Database', privacy.residency.database],
+              ['Objects', privacy.residency.objects],
+              ['Processing', privacy.residency.processing],
+            ] as const
+          ).map(([label, value]) => (
+            <div className="kv" key={label}>
+              <span className="grow">{label}</span>
+              <span className="meta" style={{ textAlign: 'right', maxWidth: 480 }}>
+                {value}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
+
+      <h2 className="section-title">Attribution</h2>
+      <div className="kv">
+        <span className="grow">Interface components</span>
+        <span className="meta">
+          <a href="/LICENSE.beautiful-ui">Beautiful UI · MIT</a>
+        </span>
+      </div>
+
+      <Dialog
+        open={!!target}
+        title={`Attestation for ${target?.label ?? ''}`}
+        onClose={() => setTarget(null)}
+        actions={
+          <>
+            <Button onClick={() => setTarget(null)}>Cancel</Button>
+            <Button primary onClick={record}>
+              {reauthed ? 'Confirm and record' : 'Record'}
+            </Button>
+          </>
+        }
+      >
+        {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
+        <div className="col" role="radiogroup" aria-label="Attestation kind" style={{ gap: 4 }}>
+          {(
+            [
+              ['zdr', 'Zero data retention agreed with this provider'],
+              ['dpa', 'A data-processing agreement is signed'],
+              ['synthetic_only', 'This key is for synthetic data only'],
+              ['none', 'Nothing is claimed'],
+            ] as const
+          ).map(([value, sub]) => (
+            <MenuItem key={value} checked={kind === value} sub={sub} onClick={() => setKind(value)}>
+              {value}
+            </MenuItem>
+          ))}
+        </div>
+        <label className="field">
+          <span className="sr-only">Reference</span>
+          <input placeholder="Contract or ticket reference" value={reference} onChange={(event) => setReference(event.target.value)} />
+        </label>
+        <p className="meta">Recorded against your name and the time. It is a statement about retention, not about jurisdiction: a provider&apos;s storage warning is not answered by it.</p>
+        {notice && <p className="meta" role="alert">{notice}</p>}
+      </Dialog>
     </>
   );
 }

@@ -17,6 +17,7 @@ export const SETTINGS_TABS = [
   'Provider keys',
   'Usage',
   'Notifications',
+  'Data and privacy',
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 

@@ -152,7 +152,8 @@ test('live · the main screens', async ({ browser }) => {
   await settle(page);
   await shot(page, '13-settings');
 
-  // The two dynamic Settings tabs: Usage after a real run and the caps card.
+  // The three Settings tabs M5a wired: Usage after a real run, the caps card,
+  // and the data-and-privacy page with the server's own retention facts on it.
   await page.getByRole('tab', { name: 'Usage' }).click();
   await expect(page.getByText('Estimated, billed by your provider', { exact: false })).toBeVisible({ timeout: 20_000 });
   await settle(page);
@@ -234,6 +235,9 @@ test('live · settings, with a verified provider key', async ({ browser }) => {
   // The masked row, the status pill, and the synced-model count.
   await shot(page, '15-provider-keys-verified');
 
+  await page.getByRole('tab', { name: 'Data and privacy' }).click();
+  await settle(page);
+  await shot(page, '16-settings-privacy');
   await context.close();
 });
 
