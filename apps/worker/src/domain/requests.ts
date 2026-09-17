@@ -124,13 +124,15 @@ function missingOf(payload: Record<string, unknown>): string[] {
 /** The row as `requestEntitySchema` wants it. Parse the result before sending. */
 export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null): Record<string, unknown> {
   const payload = asRecord(row.payload);
+  const subject = subjectOf(row);
+  const title = titleOf(row);
   return {
     id: row.id,
     kind: row.kind,
     status: row.status,
     label: row.label.slice(0, 200),
-    subject: subjectOf(row),
-    title: titleOf(row),
+    subject: subject?.slice(0, 200) ?? null,
+    title: title?.slice(0, 200) ?? null,
     session_id: row.session_id,
     run_id: row.run_id,
     created_at: row.created_at.toISOString(),
