@@ -168,7 +168,7 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
         consequence: 'Approval authorizes this exact message; provider sending remains a separate effect.',
         evidence: [{ id: 'invite-source', kind: 'document', label: 'Pilot invite copy', ref: 'invite-copy:v2' }],
         details: {
-          channel: 'email', sender: { member_id: context.mayaMemberId, address: 'maya@nous.example' },
+          channel: 'email', draft_only: false, sender: { member_id: context.mayaMemberId, address: 'maya@nous.example' },
           recipients: [{ name: 'Taylor Brooks', address: 'taylor@example.invalid' }],
           subject: 'Invitation to the illustrative partner pilot',
           body: 'Hi Taylor,\n\nWe would like to invite your team to a fictional two-week partner onboarding pilot. Please review the attached outline. No message will be sent from this demo.\n\nMaya',

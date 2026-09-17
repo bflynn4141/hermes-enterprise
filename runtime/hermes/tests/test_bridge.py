@@ -315,7 +315,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.3.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.4.0",
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 

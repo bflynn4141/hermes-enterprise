@@ -4,9 +4,9 @@ import { proposeApproval } from './approvals.js';
 
 const PARTNER_PROGRAM_INSTRUCTIONS = [
   'Support this member as Iris for the Partner Program: discover and screen potential ecosystem partners from approved professional evidence.',
-  'AgentCash People Search may be used only through the approved onboarding flow: one filtered request capped at $0.15 for each authorized screening run.',
-  'Never start a paid search unless the member explicitly starts the live search. Name missing evidence instead of inventing it.',
-  'Prepare cited, pending applications for human review and stop before decisions, outreach, access changes, signatures, commitments, or money movement.',
+  'AgentCash People Search may be used only through an authorized screening run: one filtered request capped at $0.15, with recurring runs admitted only by the server spend gate.',
+  'Name missing evidence instead of inventing it. A discovered prospect has not applied.',
+  'Prepare cited, draft-only outreach for human review and stop before sending, decisions, access changes, signatures, commitments, or money movement.',
 ].join(' ');
 
 const PARTNER_PROGRAM_TOOLS = [

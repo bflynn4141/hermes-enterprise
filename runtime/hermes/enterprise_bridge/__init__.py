@@ -386,7 +386,7 @@ def register(ctx):
         name="partner-program-screening",
         path=skill_path,
         description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.3.0", "metadata": {"hermes": {"category": "enterprise"}}},
+        frontmatter={"version": "1.4.0", "metadata": {"hermes": {"category": "enterprise"}}},
     )
     for schema in bridge.tools():
         name = schema["name"]

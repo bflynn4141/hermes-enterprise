@@ -103,6 +103,7 @@ describe('wrangler.jsonc', () => {
     expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS).toBe('0');
     for (const scope of [config, ...Object.values(envs)]) {
       expect((scope.vars as Record<string, string>).PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES).toBe('360');
+      expect((scope.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('0');
     }
   });
 

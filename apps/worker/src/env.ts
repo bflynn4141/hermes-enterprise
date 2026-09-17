@@ -99,6 +99,8 @@ export interface Env {
   PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS?: string;
   /** Cadence bucket for proactive screening. Defaults to 360 minutes and is clamped to 5..1440. */
   PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
+  /** Separate spend gate for recurring AgentCash discovery. Manual onboarding keeps its one-use allowance. */
+  PARTNER_SCREENING_PAID_AUTOMATION_ENABLED?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
