@@ -172,23 +172,27 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(started.status).toBe(201);
     const snapshot = await started.json() as {
       run: { id: string; mode: string; authentication: string };
-      candidates: { id: string; deterministic_priority: number }[];
+      candidates: { id: string; deterministic_priority: number; confidence: string; evidence_gaps: string[] }[];
       handoff: { kind: string; candidate_ids: string[]; prompt: string };
       disclosure: string;
     };
     expect(snapshot.run).toMatchObject({ mode: 'live', authentication: 'unauthenticated' });
     expect(snapshot.candidates).toHaveLength(1);
+    expect(snapshot.candidates[0]).toMatchObject({
+      confidence: 'low',
+      evidence_gaps: [expect.stringContaining('repository-search evidence only')],
+    });
     expect(snapshot.handoff).toMatchObject({ kind: 'ask_iris_to_screen', candidate_ids: [snapshot.candidates[0]!.id] });
     expect(snapshot.handoff.prompt).toContain('Do not contact anyone');
     expect(snapshot.disclosure).toContain('No person was contacted');
-    expect(calls).toBe(3);
+    expect(calls).toBe(1);
 
     const replay = await asUser(env, fx.adminId, path, {
       method: 'POST', body: { agent_id: fx.agentId, idempotency_key: idempotencyKey },
     });
     expect(replay.status).toBe(200);
     expect(replay.headers.get('x-hermes-idempotent-replay')).toBe('true');
-    expect(calls).toBe(3);
+    expect(calls).toBe(1);
 
     const beforeIris = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const requests = await client.query(`SELECT id FROM requests WHERE subject_key LIKE 'partner-candidate:%'`);
