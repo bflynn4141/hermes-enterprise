@@ -240,7 +240,10 @@ export async function discoverGitHubOrganizations(
     now,
   });
   const artifacts: SourceArtifactInput[] = [];
-  const organizations = new Map<string, { matched: PublicRepository[]; explicit: boolean; incomplete: boolean }>();
+  const organizations = new Map<string, {
+    matched: PublicRepository[]; explicit: boolean; incomplete: boolean;
+    nodeId: string | null; searchUrl: string | null; fetchedAt: string | null;
+  }>();
 
   for (let index = 0; index < config.search_queries.length; index += 1) {
     const query = config.search_queries[index] ?? '';
@@ -253,16 +256,25 @@ export async function discoverGitHubOrganizations(
     });
     for (const repo of parsed.data.items) {
       if (repo.owner.type !== 'Organization') continue;
-      const existing = organizations.get(repo.owner.login) ?? { matched: [], explicit: false, incomplete: false };
+      const existing = organizations.get(repo.owner.login) ?? {
+        matched: [], explicit: false, incomplete: false,
+        nodeId: repo.owner.node_id, searchUrl: response.url, fetchedAt: response.fetchedAt,
+      };
       existing.matched.push(publicRepository(repo));
       existing.incomplete ||= parsed.data.incomplete_results;
+      existing.nodeId ??= repo.owner.node_id;
+      existing.searchUrl ??= response.url;
+      existing.fetchedAt ??= response.fetchedAt;
       organizations.set(repo.owner.login, existing);
     }
   }
   for (const rawUrl of config.intake_urls) {
     const login = organizationFromIntakeUrl(rawUrl);
     if (!login) throw new PartnerSourceError(`Explicit intake URL is not a supported GitHub organization or repository URL: ${rawUrl}`, 'partner_source_bad_intake');
-    const existing = organizations.get(login) ?? { matched: [], explicit: true, incomplete: false };
+    const existing = organizations.get(login) ?? {
+      matched: [], explicit: true, incomplete: false,
+      nodeId: null, searchUrl: null, fetchedAt: null,
+    };
     existing.explicit = true;
     organizations.set(login, existing);
   }
@@ -275,6 +287,47 @@ export async function discoverGitHubOrganizations(
     .slice(0, config.max_candidates);
   const candidates: DiscoveredOrganization[] = [];
   for (const [login, discovery] of shortlist) {
+    // GitHub's unauthenticated core quota is shared by Cloudflare egress and
+    // can be nearly empty even when the independent search quota is healthy.
+    // Search results already contain bounded public repository evidence, so an
+    // unauthenticated run deliberately stores that narrower evidence without
+    // depending on shared core capacity. Authenticated runs retain the
+    // higher-confidence profile + repository-list path below.
+    if (!options.token?.trim() && discovery.matched.length > 0 && discovery.nodeId && discovery.searchUrl && discovery.fetchedAt) {
+      const organization: PublicOrganization = {
+        id: null, node_id: discovery.nodeId, login, name: null, description: null,
+        html_url: `https://github.com/${encodeURIComponent(login)}`, blog: null,
+        public_repos: null, followers: null, created_at: null, updated_at: null,
+      };
+      const organizationArtifact: SourceArtifactInput = {
+        key: `org:${discovery.nodeId}`, kind: 'organization_profile', url: discovery.searchUrl,
+        sourceUpdatedAt: null, fetchedAt: discovery.fetchedAt,
+        content: {
+          evidence_scope: 'repository_search_owner', login, node_id: discovery.nodeId,
+          html_url: organization.html_url,
+        },
+      };
+      const repositoryArtifact: SourceArtifactInput = {
+        key: `repos:${discovery.nodeId}`, kind: 'repository_snapshot', url: discovery.searchUrl,
+        sourceUpdatedAt: discovery.matched.map((repo) => repo.updated_at).sort().at(-1) ?? null,
+        fetchedAt: discovery.fetchedAt,
+        content: {
+          evidence_scope: 'matched_repository_search_results', organization_login: login,
+          repositories: discovery.matched.map((repo) => ({ ...repo })),
+        },
+      };
+      artifacts.push(organizationArtifact, repositoryArtifact);
+      candidates.push({
+        sourceKey: discovery.nodeId,
+        displayName: login,
+        profileUrl: organization.html_url,
+        priority: deterministicDiscoveryPriority(organization, discovery.matched, config, {
+          now: now(), searchIncomplete: discovery.incomplete, explicitOnly: false, limitedEvidence: true,
+        }),
+        artifacts: [organizationArtifact, repositoryArtifact],
+      });
+      continue;
+    }
     const profileResponse = await client.json(`/orgs/${encodeURIComponent(login)}`);
     const profile = organizationSchema.safeParse(profileResponse.data);
     if (!profile.success) throw new PartnerSourceError('GitHub organization response did not match the documented schema.', 'partner_source_invalid_response');
