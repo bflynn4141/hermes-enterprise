@@ -164,6 +164,36 @@ describe('official Hermes enterprise projection', () => {
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
   });
 
+  it('projects native Hermes tool activity while the answer is still pending', async () => {
+    class ToolActivityClient extends FakeHermesClient {
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'list_partner_candidates' };
+        yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'list_partner_candidates' };
+        yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'get_partner_candidate' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'I found one candidate.' };
+        yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'get_partner_candidate', error: false };
+        this.current = this.final;
+        yield { event: `run.${this.final.status}`, ...this.final };
+      }
+    }
+
+    const { db } = await execute(new FakeRuntimeDb(), new ToolActivityClient());
+    const activity = db.events
+      .filter((event) => event.kind === 'run.step' && Boolean((event.payload as { tool_call_id?: string | null }).tool_call_id))
+      .map((event) => event.payload as { step_id: string; label: string; state: string; tool_call_id: string });
+
+    expect(activity).toEqual([
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'List partner candidates', state: 'active', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'List partner candidates', state: 'done', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'Get partner candidate', state: 'active', tool_call_id: 'hermes-tool-2' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'Get partner candidate', state: 'done', tool_call_id: 'hermes-tool-2' }),
+    ]);
+    expect(db.steps.get('0:hermes-tool-1')?.state).toBe('done');
+    expect(db.steps.get('0:hermes-tool-2')?.state).toBe('done');
+  });
+
   it('flushes a trailing delta during a native pause instead of waiting for the status poll', async () => {
     class PausingClient extends FakeHermesClient {
       beforeTerminal: (() => void) | null = null;

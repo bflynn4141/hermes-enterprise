@@ -40,6 +40,10 @@ const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exp
 // A failed stream is reconciled with native status, never replayed as a new run.
 const EXECUTION: StepConfig = { retries: { limit: 1, delay: 1000, backoff: 'constant' }, timeout: '60 minutes' };
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const nativeToolLabel = (tool: string): string => {
+  const readable = tool.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').slice(0, 159);
+  return readable ? readable[0]!.toUpperCase() + readable.slice(1) : 'Using a tool';
+};
 
 export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, input: RunAttemptInput): Promise<void> {
   const { db, client } = deps;
@@ -53,6 +57,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   let terminal = false;
   let currentMessageId: string | null = null;
   let visibleText = '';
+  const nativeToolControl: { close: ((failed: boolean) => Promise<void>) | null } = { close: null };
   try {
     const existingBinding = await db.binding(run.id);
     if (existingBinding?.runtimeAttempt === run.attempt && ['completed', 'error', 'stopped'].includes(run.status)) return;
@@ -135,9 +140,46 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       let durableInFlight: Promise<void> | null = null;
       let durableFailure: unknown = null;
       let stopFromForward = false;
+      let nativeToolOrdinal = 0;
+      const nativeTools: Array<{ tool: string; stepId: string; toolCallId: string; label: string }> = [];
       const pollMs = deps.pollMs ?? 1000;
       const batchMs = deps.batchMs ?? 75;
       const previewMs = Math.min(batchMs, 75);
+      const startNativeTool = async (tool: string) => {
+        const ordinal = ++nativeToolOrdinal;
+        const stepId = `hermes-tool-${ordinal}`;
+        const toolCallId = stepId;
+        const label = nativeToolLabel(tool);
+        nativeTools.push({ tool, stepId, toolCallId, label });
+        await db.enterStep({ runId: run.id, turn: 0, stepId, label, state: 'active', toolCallId });
+        await emit([{ kind: 'run.step', payload: {
+          run_id: run.id, attempt: run.attempt, turn: 0, step_id: stepId,
+          label, state: 'active', tool_call_id: toolCallId,
+        } }]);
+      };
+      const finishNativeTool = async (tool: string, failed = false) => {
+        let index = -1;
+        for (let candidate = nativeTools.length - 1; candidate >= 0; candidate -= 1) {
+          if (nativeTools[candidate]?.tool === tool) { index = candidate; break; }
+        }
+        if (index < 0) {
+          await startNativeTool(tool);
+          index = nativeTools.length - 1;
+        }
+        const activity = nativeTools[index]!;
+        nativeTools.splice(index, 1);
+        const state = failed ? 'failed' as const : 'done' as const;
+        await db.finishStep({ runId: run.id, turn: 0, stepId: activity.stepId, label: activity.label, state, toolCallId: activity.toolCallId });
+        await emit([{ kind: 'run.step', payload: {
+          run_id: run.id, attempt: run.attempt, turn: 0, step_id: activity.stepId,
+          label: activity.label, state, tool_call_id: activity.toolCallId,
+        } }]);
+      };
+      nativeToolControl.close = async (failed: boolean) => {
+        while (nativeTools.length > 0) {
+          await finishNativeTool(nativeTools[nativeTools.length - 1]!.tool, failed);
+        }
+      };
       const flushPreview = async (force = false) => {
         if (!previewPending || (!force && Date.now() - previewFlushedAt < previewMs)) return;
         const delta = previewPending;
@@ -210,6 +252,12 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           }
           else if (event?.value) {
             const payload = event.value;
+            if (payload.event === 'tool.started' && typeof payload.tool === 'string') {
+              await startNativeTool(payload.tool);
+            }
+            if (payload.event === 'tool.completed' && typeof payload.tool === 'string') {
+              await finishNativeTool(payload.tool, payload.error === true);
+            }
             if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
               text += payload.delta; pending += payload.delta; previewPending += payload.delta;
               visibleText = text;
@@ -268,6 +316,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       // after the person's Stop is still stopped work, not a retry prompt.
       const stoppedStatus = status.status === 'cancelled' || (!completed && (stopped || await db.stopRequested(run.id)));
       const finalStatus = completed ? 'completed' : stoppedStatus ? 'stopped' : 'error';
+      await nativeToolControl.close(finalStatus !== 'completed');
       const error: RunErrorInput | null = finalStatus === 'error' ? {
         class: 'transient', retryable: true, reason: 'hermes_run_failed', message: 'Hermes could not finish this run. Retry to continue.',
       } : null;
@@ -296,6 +345,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
     });
   } catch (error) {
     if (remoteId && !terminal) await client.stop(remoteId).catch(() => undefined);
+    await nativeToolControl.close?.(true).catch(() => undefined);
     const detail: RunErrorInput = { class: 'transient', retryable: true, reason: 'hermes_unavailable', message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.' };
     // Close the visible activity and preserve partial output even when the
     // runtime disappears. A stale attempt may not overwrite its successor.

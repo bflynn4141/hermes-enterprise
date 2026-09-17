@@ -8,7 +8,11 @@ export interface HermesEvent {
   run_id: string;
   delta?: string;
   output?: string;
-  error?: string;
+  /** Tool lifecycle fields emitted by the official Runs SSE contract. */
+  tool?: string;
+  preview?: string;
+  duration?: number;
+  error?: string | boolean;
   usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
 }
 export interface HermesStatus {
