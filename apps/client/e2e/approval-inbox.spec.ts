@@ -7,7 +7,7 @@ const APPROVAL_CASES = [
   { type: 'team_commitment', subject: 'Assign the onboarding synthesis', label: 'Team commitment', marker: 'Bounded task', action: 'Accept task', effect: 'not required', work: 'admitted' },
   { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'unavailable', work: 'completed' },
   { type: 'communication', subject: 'Send pilot invitation', label: 'Communication', marker: 'Illustrative pilot outline.pdf', action: 'Approve send', effect: 'unavailable', work: 'completed' },
-  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Publish skill', effect: 'unavailable', work: 'completed' },
+  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Approve publication', effect: 'unavailable', work: 'completed' },
   { type: 'deliverable', subject: 'Accept onboarding recommendation', label: 'Deliverable', marker: 'Smallest credible onboarding pilot', action: 'Accept result', effect: 'not required', work: 'ready' },
   { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'unavailable', work: 'completed' },
   { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'unavailable', work: 'completed' },
@@ -28,6 +28,74 @@ async function openRequest(app: ReturnType<Page['getByRole']>, name: RegExp) {
 }
 
 test.describe('enterprise approval inbox', () => {
+  test('a long outreach draft leads with the decision and readable copy, then records no send', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 900, height: 850 });
+    await page.goto(`${APPROVALS}&communicationDraft=1`);
+    await page.getByRole('button', { name: /^Inbox/ }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await openRequest(app, /Review the partner pilot outreach draft/);
+    await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
+    await expect(app.getByText('Taylor Brooks · email address needed')).toBeVisible();
+    await expect(app.getByText('Review copy only · Nothing is sent')).toBeVisible();
+    await expect(app.locator('.approval-message-body')).toContainText('Hi Taylor,');
+    const body = await app.locator('.approval-message-body').boundingBox();
+    const footer = await app.locator('.approval-footer').boundingBox();
+    expect(body!.y).toBeLessThan(footer!.y - 80);
+    await expect(app.locator('details').filter({ hasText: 'Request details' }).first()).not.toHaveAttribute('open');
+    await app.locator('summary').filter({ hasText: /^Evidence/ }).click();
+    await app.locator('summary').filter({ hasText: 'Illustrative partner source' }).click();
+    await expect(app.getByText('Stored source facts')).toBeVisible();
+    await expect(app.getByText('Fictional Partner Cooperative')).toBeVisible();
+    await expect(app.getByRole('link', { name: 'Open original source' })).toHaveAttribute('href', 'https://example.invalid/illustrative-pilot');
+    await app.getByRole('button', { name: 'Approve draft' }).click();
+    await expect(app.locator('.approval-result-track').getByText('not required', { exact: true })).toBeVisible();
+    await expect(app.locator('.approval-result-track').getByText('approved', { exact: true })).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
+  });
+
+  test('revising a draft changes the actual email and requires a fresh decision', async ({ page }) => {
+    await page.goto(`${APPROVALS}&communicationDraft=1`);
+    await page.getByRole('button', { name: /^Inbox/ }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await openRequest(app, /Review the partner pilot outreach draft/);
+    await app.getByRole('button', { name: 'Request changes' }).click();
+    await app.getByLabel('What needs to change').fill('Make the invitation more concise.');
+    await app.getByRole('button', { name: 'Send back for changes' }).click();
+    await app.getByRole('button', { name: 'Revise draft' }).click();
+    await app.getByLabel('Revised email subject').fill('A smaller partner pilot');
+    await app.getByLabel('Revised email body').fill('Hi Taylor,\n\nWould a one-week pilot fit your team?\n\nMaya');
+    await app.getByLabel('Revised proposal summary').fill('A concise invitation to a one-week partner pilot.');
+    await app.getByLabel('What changed', { exact: true }).fill('Shortened the invitation and reduced its scope.');
+    await app.getByRole('button', { name: 'Submit v2' }).click();
+    await expect(app.locator('.approval-message')).toContainText('A smaller partner pilot');
+    await expect(app.locator('.approval-message-body')).toContainText('Would a one-week pilot fit your team?');
+    await expect(app.getByLabel('Required approvals')).toContainText('0/1 approved');
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
+    await app.getByRole('button', { name: 'Approve draft' }).click();
+    await expect(app.locator('.approval-footer')).toContainText('authorization v2');
+    await expect(app.locator('.approval-result-track')).toContainText('not required');
+  });
+
+  test('an authorized pending draft can be revised at phone width without approving old text', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${APPROVALS}&communicationDraft=1`);
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await page.getByRole('button', { name: /^Inbox/ }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await openRequest(app, /Review the partner pilot outreach draft/);
+    await app.getByRole('button', { name: 'More approval actions' }).click();
+    await page.getByRole('menuitem', { name: 'Revise draft' }).click();
+    await expect(app.getByLabel('Revised email body')).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
+    await app.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
+    const bounds = await app.locator('.pane-switch').boundingBox();
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  });
+
   test('the opt-in fixture exposes every approval type while preserving legacy requests', async ({ page }) => {
     const app = await openInbox(page);
     await expect(app.getByText('Illustrative demo')).toBeVisible();
@@ -59,7 +127,7 @@ test.describe('enterprise approval inbox', () => {
     await app.getByLabel('Reviewer').selectOption('all');
     for (const approval of APPROVAL_CASES) {
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-      await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
+      await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
       await expect(app.getByText(approval.marker).or(app.getByLabel(approval.marker)).first()).toBeVisible();
       await app.getByRole('button', { name: 'Back to Inbox' }).click();
     }
@@ -73,7 +141,7 @@ test.describe('enterprise approval inbox', () => {
       await app.getByRole('button', { name: approval.action }).click();
 
       if (approval.type === 'run_plan') {
-        await expect(app.locator('.approval-footer')).toContainText('Waiting for Alex Rivera');
+        await expect(app.locator('.approval-decision-header')).toContainText('Waiting for Alex Rivera');
         await expect(app.getByText('Decision and result')).toHaveCount(0);
         return;
       }
@@ -98,14 +166,14 @@ test.describe('enterprise approval inbox', () => {
 
       for (const approval of APPROVAL_CASES) {
         await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-        await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
+        await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
         await expect(app.getByText(approval.marker).or(app.getByLabel(approval.marker)).first()).toBeVisible();
         if (approval.action) {
           await expect(app.getByRole('button', { name: 'Request changes' })).toBeVisible();
           await expect(app.getByRole('button', { name: approval.action })).toBeVisible();
           await expect(app.getByRole('button', { name: 'More approval actions' })).toBeVisible();
         } else {
-          await expect(app.locator('.approval-footer')).toContainText('Waiting for Alex Rivera');
+          await expect(app.locator('.approval-decision-header')).toContainText('Waiting for Alex Rivera');
           await expect(app.getByRole('button', { name: 'Request changes' })).toHaveCount(0);
           await expect(app.getByRole('button', { name: 'More approval actions' })).toHaveCount(0);
         }
@@ -141,15 +209,15 @@ test.describe('enterprise approval inbox', () => {
     const app = await openInbox(page);
     await openRequest(app, /Launch partner research sprint/);
 
-    await expect(app.getByRole('heading', { name: 'Launch partner research sprint' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
     const limits = app.getByLabel('Enforced run limits');
     await expect(limits.getByText('25,000')).toBeVisible();
     await expect(limits.getByText('8', { exact: true })).toBeVisible();
     await expect(limits.getByText('5,000', { exact: true })).toBeVisible();
     await expect(limits.getByText('2', { exact: true })).toBeVisible();
     await expect(app.getByText('Illustrative scenario. Names, prices, sources and effects shown here are fictional')).toBeVisible();
-    await expect(app.getByText('Workspace owner', { exact: true })).toBeVisible();
-    await expect(app.getByText('Budget reviewer', { exact: true })).toBeVisible();
+    await expect(app.getByLabel('Required approvals').getByText('Workspace owner', { exact: true })).toBeVisible();
+    await expect(app.getByLabel('Required approvals').getByText('Budget reviewer', { exact: true })).toBeVisible();
 
     await app.getByRole('button', { name: 'Approve plan' }).click();
     await expect(app.getByText('Waiting for Alex Rivera').first()).toBeVisible();
@@ -187,7 +255,7 @@ test.describe('enterprise approval inbox', () => {
     await app.getByLabel('Revised proposal summary').fill('Grant Rowan read-only access to the illustrative source index for 24 hours.');
     await app.getByLabel('What changed').fill('Narrowed the named resource in the reviewed summary.');
     await app.getByRole('button', { name: 'Submit v2' }).click();
-    await expect(app.getByText('v2', { exact: true })).toBeVisible();
+    await expect(app.locator('summary').filter({ hasText: 'Temporary access · v2' })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Allow access' })).toBeVisible();
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
@@ -202,17 +270,17 @@ test.describe('enterprise approval inbox', () => {
     // Approval receipt cards resolve the same request id as Inbox rows.
     await expect(page.getByText('Research sprint plan')).toBeVisible();
     await page.getByRole('button', { name: 'Approve plan' }).click();
-    await expect(app.getByRole('heading', { name: 'Launch partner research sprint' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
     await openRequest(app, /Leah Martinez/);
     await expect(app.getByLabel('82 out of 100')).toBeVisible();
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
     await openRequest(app, /Invoice/);
-    await expect(app.getByText('Partner workshop · Oct 8')).toBeVisible();
+    await expect(app.getByText('Partner workshop · Oct 8', { exact: true })).toBeVisible();
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
     await openRequest(app, /Signature/);
-    await expect(app.getByText('One partner workshop on Oct 22–23')).toBeVisible();
+    await expect(app.locator('.legacy-context').getByText('One partner workshop on Oct 22–23')).toBeVisible();
   });
 
   test('the review flow remains keyboard reachable and contained on a narrow reduced-motion viewport', async ({ page }) => {
@@ -221,7 +289,7 @@ test.describe('enterprise approval inbox', () => {
     const app = await openInbox(page);
     await app.locator('.inbox-item').filter({ hasText: /Accept onboarding recommendation/ }).focus();
     await page.keyboard.press('Enter');
-    await expect(app.getByRole('heading', { name: 'Accept onboarding recommendation' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Accept result' })).toBeVisible();
     const layout = await page.evaluate(() => ({
       documentWidth: document.documentElement.scrollWidth,

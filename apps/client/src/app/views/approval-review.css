@@ -1,0 +1,43 @@
+.approval-decision-header { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 0; }
+.approval-decision-header h1 { margin: 0; font: 500 22px/28px var(--font-display); }
+.approval-decision-header p { margin: 0; font-size: 13px; line-height: 19px; }
+.approval-decision-header .meta { color: var(--muted); font-size: 11px; line-height: 16px; }
+.approval-thresholds { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; line-height: 18px; }
+.approval-thresholds strong { font-weight: 500; }
+.approval-thresholds [data-state="blocked"] { color: var(--muted); }
+.approval-eligibility { color: #E7C27D; }
+.approval-disclosure { border-top: 1px solid var(--line); font-size: 12px; line-height: 18px; min-width: 0; }
+.approval-disclosure > summary { padding: 14px 0; cursor: pointer; font-weight: 500; }
+.approval-disclosure > summary > span { color: var(--muted); font-weight: 400; margin-left: 8px; }
+.approval-disclosure > summary:focus-visible { outline: 2px solid #A7A4FF; outline-offset: 4px; border-radius: 3px; }
+.approval-disclosure > :not(summary) { padding-bottom: 16px; }
+.approval-request-details { display: flex; flex-direction: column; gap: 12px; overflow-wrap: anywhere; }
+.approval-request-details p { margin: 0; }
+.approval-vote { display: block; margin-top: 5px; }
+.approval-vote > span { display: block; white-space: pre-wrap; }
+.approval-evidence small { overflow-wrap: anywhere; }
+.approval-evidence-reference { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
+.approval-evidence-reference summary { cursor: pointer; }
+.approval-evidence-reference p { margin: 10px 0 0; }
+.approval-stored-evidence { padding: 14px 0 0; }
+.approval-stored-evidence dl { display: grid; gap: 10px; }
+.approval-stored-evidence dt { color: var(--muted); font-size: 11px; }
+.approval-stored-evidence dd { margin: 3px 0 0; white-space: pre-wrap; }
+.approval-shell .approval-footer .f-title { font-size: 12px; line-height: 18px; }
+.approval-shell .approval-message { padding: 22px; }
+.approval-shell .approval-message-body { font-size: 14px; line-height: 22px; }
+.approval-shell .approval-message dd { font-size: 12px; line-height: 18px; }
+.approval-shell .approval-message dt { font-size: 11px; line-height: 18px; }
+.approval-inline-form.approval-draft-revision { grid-template-columns: minmax(0,1fr) minmax(0,1fr); max-height: 55vh; overflow-y: auto; }
+.approval-draft-revision .approval-revision-body { grid-column: 1 / -1; }
+.approval-draft-revision .approval-revision-body textarea { min-height: 100px; max-height: 200px; }
+@media (max-width: 760px) {
+  .request-pane-header { gap: 8px; padding-inline: 18px; }
+  .request-pane-header .pane-switch { flex-shrink: 0; }
+  .request-pane-header > span.follow-btn { display: none; }
+  .request-pane-header > button.follow-btn { font-size: 0; padding: 5px; min-width: 24px; flex-shrink: 0; }
+  .request-pane-header > button.follow-btn::after { content: '↩'; font-size: 15px; }
+  .request-pane-header .breadcrumb { min-width: 0; }
+  .approval-shell .approval-message { padding: 16px; }
+  .approval-disclosure > summary > span { display: block; margin: 3px 0 0 16px; }
+}

@@ -12,6 +12,8 @@
 // redirect — the pane re-renders and waits for a second click (spec §6).
 import {
   isModelCommand,
+  requestReviewBinding,
+  type RequestEntity,
   validateModelBlocks,
   type Block,
   type BlockCommand,
@@ -1030,12 +1032,21 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
   async function decide(requestId: string, decision: 'approve' | 'decline', note?: string): Promise<DecisionResult | 'reauth_required'> {
     try {
-      const result = await rest.decide(workspaceId, requestId, note ? { decision, note } : { decision });
+      const reviewed = entityData<RequestEntity>(state(), 'request', requestId);
+      const binding = reviewed && (reviewed.kind === 'invoice' || reviewed.kind === 'agreement')
+        ? await requestReviewBinding(reviewed) : {};
+      const result = await rest.decide(workspaceId, requestId, { decision, ...(note ? { note } : {}), ...binding });
       // The event carries `resulting_status` only; the review pane needs the
       // whole row, so the cached one is refetched rather than patched here.
       ensure('request', requestId, true);
       return result;
     } catch (error) {
+      if (error instanceof RestError && ['stale_request', 'review_binding_required'].includes(error.reason ?? '')) {
+        // Refresh the reviewed entity, then surface the conflict. Never replay a decision.
+        await rest.getRequest(workspaceId, requestId).then((updated) => {
+          dispatch({ type: 'entity/upsert', kind: 'request', id: updated.id, version: updated.version, data: updated });
+        }).catch(() => ensure('request', requestId, true));
+      }
       if (error instanceof RestError && error.reauthRequired) {
         storeStepUp({ kind: 'decision', requestId, decision, ...(note ? { note } : {}), returnTo: typeof window === 'undefined' ? '/' : window.location.href });
         // A mode with nowhere to send the browser leaves the intent stored and

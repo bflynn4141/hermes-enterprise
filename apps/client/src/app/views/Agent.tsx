@@ -14,7 +14,7 @@ import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
-import { approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
+import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from '../approval-copy.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
 import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
 
@@ -86,7 +86,7 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
         <span className="t">{type}</span>
         <span className="s">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{request.kind === 'approval' ? approvalActionLabel(request) : action} →</Button>
+      <Button onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
     </div>
   );
 }

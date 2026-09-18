@@ -21,6 +21,7 @@ import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
 import './legacy-documents.css';
+import { requestActionLabel } from '../approval-copy.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 import {
@@ -118,21 +119,21 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 function approvalThreshold(request: RequestEntity): string | null {
+  if (request.kind === 'task') return null;
   const requirement = request.decision_summary?.approval_requirement;
   if (!requirement) return null;
   if (request.status !== 'pending') return `${requirement.completed_steps}/${requirement.total_steps} steps complete`;
-  const current = requirement.current[0];
-  if (current) return `${current.approvals_recorded}/${current.quorum} ${current.label}`;
+  if (requirement.current.length) return requirement.current.map((step) => `${step.approvals_recorded}/${step.quorum} ${step.label}`).join(' · ');
   return requirement.remaining_approvals === 1 ? '1 approval required' : `${requirement.remaining_approvals} approvals required`;
 }
 
 function requestAction(request: RequestEntity): string {
   if (request.status !== 'pending') return requestStatusLabel(request);
   if (request.kind === 'application') return 'Review applicant';
-  if (request.kind === 'invoice') return 'Review invoice';
+  if (request.kind === 'invoice' || request.kind === 'agreement') return requestActionLabel(request);
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
   if (request.kind === 'task') return 'Work with Iris';
-  return 'Review for signature';
+  return 'Review request';
 }
 
 function shortDate(value: string): string {
@@ -747,7 +748,7 @@ export function DocumentView({
   const readonly = Boolean(readOnly || resolved);
   const status = declined ? 'Declined' : saved ? isInvoice ? 'Saved in Library' : 'Saved unsigned' : request.status === 'withdrawn' ? 'Withdrawn' : 'Draft awaiting approval';
   const consequence = isInvoice ? 'Saves the invoice in Library. No payment or email is sent.' : 'Saves an unsigned agreement in Library. Nothing is signed or sent.';
-  const decisionLabel = isInvoice ? 'Approve invoice draft' : 'Approve agreement draft';
+  const decisionLabel = requestActionLabel(request);
 
   return (
     <div className={`legacy-document-view${embedded ? ' embedded-document-view' : ''}`}>

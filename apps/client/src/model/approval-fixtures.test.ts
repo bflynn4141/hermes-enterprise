@@ -6,8 +6,9 @@ const REQUESTER_AGENT = mockUuid(42);
 const MAYA_MEMBER = mockUuid(43);
 const RECIPIENT_AGENT = mockUuid(1_020);
 
-function fixtures() {
+function fixtures(communicationDraft = false) {
   return createApprovalDemoFixtures({
+    communicationDraft,
     workspaceId: mockUuid(1),
     sessionId: mockUuid(2),
     runId: mockUuid(3),
@@ -47,6 +48,14 @@ const expectedEffects: Record<ApprovalType, string> = {
 };
 
 describe('approval demo fixtures', () => {
+  it('models draft-only communication without a send effect or scheduled send', () => {
+    const view = [...fixtures(true).views.values()].find((item) => item.payload.approval_type === 'communication')!;
+    expect(() => approvalViewSchema.parse(view)).not.toThrow();
+    expect(view.effect).toMatchObject({ kind: 'none', status: 'not_required' });
+    if (view.payload.approval_type !== 'communication') throw new Error('Expected communication');
+    expect(view.payload.details.scheduled_for).toBeUndefined();
+    expect(view.payload.details.recipients[0]?.address).toBeNull();
+  });
   it('creates one schema-valid view for every approval type', () => {
     const demo = fixtures();
     const views = [...demo.views.values()];

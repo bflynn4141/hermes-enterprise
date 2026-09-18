@@ -13,6 +13,8 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  approvalEvidenceViewSchema,
+  type ApprovalEvidenceView,
   agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
   catalogPageSchema,
@@ -300,10 +302,12 @@ export function createRest(options: RestOptions) {
     // The decisions route is M4's and may not exist yet; `optional` is not used
     // here on purpose. A decision that silently did nothing is the one failure
     // this product cannot have, so a missing route surfaces as an error.
-    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
+    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string; expected_version?: number; expected_payload_hash?: `sha256:${string}` }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
     getApproval: (workspaceId: string, requestId: string) =>
       request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
+    getApprovalEvidence: (workspaceId: string, requestId: string, evidenceId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/approval/evidence/${encodeURIComponent(evidenceId)}`, approvalEvidenceViewSchema) as Promise<ApprovalEvidenceView>,
     decideApproval: (workspaceId: string, requestId: string, body: DecideApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>

@@ -217,7 +217,7 @@ test.describe('P2 · triage', () => {
     // card above it now — two places, deliberately, and one of them is the
     // list this assertion is about.
     const needsYou = appPane.getByRole('list', { name: 'Requests that need you' });
-    await expect(needsYou.getByRole('button', { name: /^Review/ })).toHaveCount(4);
+    await expect(needsYou.getByRole('button', { name: /^(Review|Approve .* draft)/ })).toHaveCount(4);
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
