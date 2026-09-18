@@ -78,8 +78,6 @@
     "R2_BUCKET": "hermes-uploads"
   },
 
-  "ai": { "binding": "AI" },
-
   // Uploads, the `.txt` next to each one, and from M4 the rendered documents.
   // The binding is how the Worker reads and writes; the presigned PUT the
   // browser uses is signed with the S3 credentials in .dev.vars, and needs the
