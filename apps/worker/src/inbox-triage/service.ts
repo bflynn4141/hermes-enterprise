@@ -147,8 +147,18 @@ export function scoreTriage(state: Record<string, unknown>, signals: Signals): {
   return { score, band, reasons: [...new Set(reasons.filter(Boolean))].slice(0, 8), confidence: Math.min(1, Math.max(0, signals.evidence_sufficiency / 3)) };
 }
 
-export async function enqueueRequestTriage(tx: Tx, workspaceId: string, requestId: string, requestVersion: number): Promise<string | null> {
-  const key = `request-triage:${requestId}:${requestVersion}`;
+export async function enqueueRequestTriage(
+  tx: Tx,
+  workspaceId: string,
+  requestId: string,
+  requestVersion: number,
+  rubricVersion = '1',
+): Promise<string | null> {
+  // A request revision may need a fresh assessment when either the rubric or
+  // model changes. Keeping both in the durable idempotency key lets that new
+  // work coexist with an older job that is still backing off, while repeated
+  // reads under the same configuration still collapse to one job.
+  const key = `request-triage:${requestId}:${requestVersion}:${rubricVersion}:${JEV_MODEL_ID}`;
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO jobs (workspace_id,kind,key,payload)
      VALUES ($1,'request_triage',$2,$3::jsonb)

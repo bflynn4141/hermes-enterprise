@@ -66,6 +66,30 @@ describe('GET /w/:ws/requests', () => {
     expect(jobs.every((job) => job.attempts === 0)).toBe(true);
   });
 
+  it('queues fresh triage work when the rubric changes without duplicating the same configuration', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    e.INBOX_TRIAGE_MODE = 'shadow';
+    await seedRequest(fx, 'application', { label: 'Candidate' });
+
+    await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?status=pending`);
+    e.INBOX_TRIAGE_RUBRIC_VERSION = '2';
+    await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?status=pending`);
+    await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?status=pending`);
+
+    const keys = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const { rows } = await client.query<{ key: string }>(
+        `SELECT key FROM jobs WHERE kind = 'request_triage' ORDER BY key`,
+      );
+      return rows.map((row) => row.key);
+    });
+    expect(keys).toHaveLength(2);
+    expect(keys).toEqual(expect.arrayContaining([
+      expect.stringContaining(':1:jev-latest'),
+      expect.stringContaining(':2:jev-latest'),
+    ]));
+  });
+
   it('carries the payload, its sources and what the model could not find', async () => {
     const fx = await seedWorkspace();
     const { env: e } = env();
