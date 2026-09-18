@@ -21,6 +21,7 @@
 // crashes". Every function here is a no-op without it and returns false so a
 // caller can tell.
 import type { Env } from '../env.js';
+import type { RuntimeLatency } from '../runtime/latency.js';
 
 /**
  * Cloudflare's shape: up to 20 blobs (strings), 20 doubles (numbers), one
@@ -44,6 +45,7 @@ export const METRICS = [
   'spend.daily',
   'instance.created',
   'hermes.stream',
+  'hermes.latency',
   'hermes.terminal_failure',
 ] as const;
 export type Metric = (typeof METRICS)[number];
@@ -207,6 +209,17 @@ export const recordHermesStream = (
       fields.deltaCount,
       fields.deltaCharacters,
     ],
+  });
+
+/** Separate series keeps the existing stream metric column layout stable. */
+export const recordHermesLatency = (
+  env: Env,
+  workspaceId: string,
+  fields: RuntimeLatency & { runId: string; modelId: string; releaseRing: 'canary' | 'stable' },
+): boolean =>
+  writePoint(env, 'hermes.latency', workspaceId, {
+    blobs: [fields.runId, fields.modelId, fields.releaseRing, fields.phase],
+    doubles: [fields.duration_ms, fields.elapsed_ms, fields.turn_elapsed_ms ?? -1],
   });
 
 /** Safe, versioned terminal classification only; provider prose is forbidden. */

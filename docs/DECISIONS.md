@@ -5213,6 +5213,26 @@ fleet promotion and prevents an accidental binding swap from admitting it.
 
 ---
 
+## C74. Reduce fresh-run overhead and measure Iris time before streaming
+
+**Decided September 18, 2026.** Fresh native submission may pass its recent
+capability check once to the first execute callback, in memory and for no more
+than five seconds. Persisted bindings, checkpoint replay, retry and expired or
+rolled-back clocks still reattest. Admission remains independent. The launcher
+declares five-minute prompt caching for exact allowed Claude models behind the
+governed custom proxy, including per-run overrides.
+
+Startup and provider-first-content measurements are separate from full provider
+duration and existing stream metrics. They carry only timing, identifiers and
+usage counts. Neither caching eligibility nor passing fixture tests proves
+live cache hits or a real-world latency improvement. Model and effort selection
+remain explicit because reducing reasoning can change quality.
+
+See [IRIS-LATENCY.md](IRIS-LATENCY.md) for evidence, tests, clock definitions,
+Cloud profile rollout requirements and the pending live benchmark.
+
+---
+
 ## C72. Runtime provider failures retain safe, actionable status classes
 
 **Decided September 17, 2026.** The agent-scoped model bridge preserves the

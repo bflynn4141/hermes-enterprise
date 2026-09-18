@@ -245,6 +245,8 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(created).toHaveLength(1);
     expect(created[0]?.id).toBe(runAttemptInstanceId(body.run_id, 1));
     expect(created[0]?.params).toMatchObject({ runId: body.run_id, attempt: 1, engineVersion: 1 });
+    expect(created[0]?.params.receivedAt).toEqual(expect.any(Number));
+    expect(created[0]!.params.receivedAt as number).toBeLessThanOrEqual(Date.now());
   });
 
   it('returns the existing run on a duplicate POST and creates no second instance', async () => {

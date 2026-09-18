@@ -12,6 +12,7 @@ import { scrubEvent, sentryOptions, type SentryEventLike } from '../../src/ops/s
 import {
   METRICS,
   analyticsAvailable,
+  recordHermesLatency,
   recordHermesStream,
   recordHermesTerminalFailure,
   recordProviderLatency,
@@ -195,10 +196,24 @@ describe('Analytics Engine', () => {
       'instance.subrequests',
       'spend.daily',
       'hermes.stream',
+      'hermes.latency',
       'hermes.terminal_failure',
     ]) {
       expect(METRICS).toContain(metric);
     }
+  });
+
+  it('keeps startup latency separate from stream timing and represents unavailable turn time explicitly', () => {
+    const written: Record<string, unknown>[] = [];
+    const e = env({
+      ANALYTICS: { writeDataPoint: (point: Record<string, unknown>) => written.push(point) },
+    } as unknown as Partial<Env>);
+    recordHermesLatency(e, 'ws-1', {
+      runId: 'run-1', modelId: 'nous:example/model', releaseRing: 'stable',
+      phase: 'first_delta', duration_ms: 750, elapsed_ms: 750, turn_elapsed_ms: null,
+    });
+    expect(written[0]?.blobs).toEqual(['hermes.latency', 'ws-1', 'run-1', 'nous:example/model', 'stable', 'first_delta']);
+    expect(written[0]?.doubles).toEqual([750, 750, -1]);
   });
 });
 

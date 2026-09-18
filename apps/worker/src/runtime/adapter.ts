@@ -19,6 +19,7 @@ import { StreamBuffer } from './stream-buffer.js';
 import type { RuntimeSkillManifest } from './skills.js';
 import { classifyHermesFailure } from './errors.js';
 import type { MessagePreviewFrame } from '@hermes/shared';
+import { runtimeLatency, type RuntimeLatency } from './latency.js';
 
 export interface RuntimePersistence extends AgentDb {
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
@@ -48,6 +49,11 @@ export interface RuntimeDeps {
   drainMs?: number;
   /** Counts and relative timings only; never prompt, response, or tool contents. */
   onStreamMetrics?(metrics: RuntimeStreamMetrics): void;
+  /** Current Workflow invocation entry, not a replayed checkpoint timestamp. */
+  startedAt?: number;
+  /** Server-received turn timestamp, when available. Never supplied by a client. */
+  receivedAt?: number;
+  onLatency?(measurement: RuntimeLatency): void;
   /** Safe terminal classification only; the native provider error never crosses this seam. */
   onTerminalFailure?(failure: RuntimeTerminalFailure): void;
 }
@@ -77,8 +83,10 @@ export interface RuntimeTerminalFailure {
 const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exponential' }, timeout: '1 minute' };
 // A failed stream is reconciled with native status, never replayed as a new run.
 const EXECUTION: StepConfig = { retries: { limit: 1, delay: 1000, backoff: 'constant' }, timeout: '60 minutes' };
+const FRESH_CAPABILITIES_MS = 5_000;
 
 export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, input: RunAttemptInput): Promise<void> {
+  const latency = runtimeLatency(deps.startedAt ?? Date.now(), deps.receivedAt, deps.onLatency);
   const { db, client } = deps;
   const run = await db.loadRun(input.runId);
   if (!run || run.attempt !== input.attempt || !run.agentId) throw new Error('Hermes run has no current agent binding');
@@ -91,6 +99,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   let currentMessageId: string | null = null;
   let visibleText = '';
   const nativeToolControl: { close: ((failed: boolean) => Promise<void>) | null } = { close: null };
+  // A one-use in-memory handoff only. Checkpoint replay cannot recreate it;
+  // resumed/retried execution and a slow submission still reattest live.
+  let freshSubmissionCheckedAt: number | null = null;
   try {
     const existingBinding = await db.binding(run.id);
     if (existingBinding?.runtimeAttempt === run.attempt && ['completed', 'error', 'stopped'].includes(run.status)) return;
@@ -117,11 +128,15 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       // A Workflow callback may be replaying after either process restarted.
       // Re-read the live contract before trusting a persisted binding or
       // replaying the stable idempotency key.
-      const [, existing] = await Promise.all([
-        client.capabilities(),
+      const [checkedAt, existing] = await Promise.all([
+        latency.measure('submit_capabilities', async () => {
+          await client.capabilities();
+          return Date.now();
+        }),
         db.binding(run.id),
       ]);
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
+      const preparationStartedAt = Date.now();
       const history = await db.loadHistory(run.id, 100);
       const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
       const previous = await db.loadBootstrapHistory(run);
@@ -142,19 +157,25 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       if (previous.length) proposed.conversation_history = previous;
       if (run.effort) proposed.model_options = { reasoning_effort: run.effort };
       const body = await db.snapshotRequest(run.id, run.attempt, proposed);
-      const id = await client.submit(body, `enterprise-${run.id}-a${run.attempt}`);
-      if (!await db.bindRun(run.id, run.attempt, id, run.sessionId, deps.profile)) {
+      latency.mark('submit_preparation', preparationStartedAt);
+      const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
+      if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, run.sessionId, deps.profile))) {
         await client.stop(id);
         throw new Error('Hermes run attempt was superseded');
       }
+      freshSubmissionCheckedAt = checkedAt;
       return { id };
     });
     remoteId = submitted.id;
     const id = submitted.id;
     await step.do('hermes-execute', EXECUTION, async () => {
-      // This step is independently retried. Do not let an API server that
-      // restarted into its in-memory fallback look healthy on reconciliation.
-      await client.capabilities();
+      const checkedAt = freshSubmissionCheckedAt;
+      freshSubmissionCheckedAt = null;
+      const age = checkedAt === null ? null : Date.now() - checkedAt;
+      if (age === null || age < 0 || age > FRESH_CAPABILITIES_MS) {
+        // Independent retry/reconciliation must not trust a pre-restart check.
+        await latency.measure('execute_capabilities', () => client.capabilities());
+      }
       const startedAt = Date.now();
       const progress = { runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'active' as const };
       const { stepAttempt } = await db.enterStep(progress);
@@ -256,6 +277,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             type: 'message.preview', session_id: run.sessionId, run_id: run.id,
             turn: 0, attempt: run.attempt, step_attempt: stepAttempt, offset, delta,
           });
+          if (metrics.first_preview_ms === null) latency.mark('first_preview');
           metrics.first_preview_ms ??= Date.now() - startedAt;
           metrics.preview_count += 1;
         } catch { /* Durable checkpoints repair a missed best-effort preview. */ }
@@ -265,6 +287,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           message_id: messageId, run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, seq: sequence++, delta,
         } }];
         const saved = await (deps.checkpoint ? deps.checkpoint(events) : serialDb(() => db.emit(events)));
+        if (metrics.first_checkpoint_ms === null) latency.mark('first_checkpoint');
         metrics.first_checkpoint_ms ??= Date.now() - startedAt;
         const reply = await deps.forward(run.sessionId, run.id, saved);
         stopFromForward ||= reply.stop_requested;
@@ -280,18 +303,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const controlWake: { current: (() => void) | null } = { current: null };
       const reader = (async () => {
         if (!reading) return;
+        latency.mark('stream_subscribe_started');
         try {
           for await (const payload of client.events(id, controller.signal)) {
             if (controller.signal.aborted) break;
             // No network or database work is awaited by this sole native
             // consumer. Its bounded lanes preserve order independently.
-            if (payload.event === 'message.delta' && typeof payload.delta === 'string') {
+            if (payload.event === 'message.delta' && typeof payload.delta === 'string' && payload.delta.length > 0) {
               if (text.length + payload.delta.length > 4 * 1024 * 1024) {
                 readerFailure = new Error('Hermes response exceeded its streaming limit');
                 break;
               }
               text += payload.delta;
               visibleText = text;
+              if (metrics.first_delta_ms === null) latency.mark('first_delta');
               metrics.first_delta_ms ??= Date.now() - startedAt;
               metrics.delta_count += 1;
               metrics.delta_characters += payload.delta.length;

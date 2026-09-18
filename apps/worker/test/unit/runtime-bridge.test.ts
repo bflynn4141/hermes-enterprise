@@ -218,6 +218,82 @@ describe('workspace model credential proxy', () => {
     resolveCredential: vi.fn(async () => ({ provider: 'nous_portal', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
     recordModelCall: vi.fn(async () => undefined),
   });
+  it('measures preparation, headers and first observed text without buffering or logging content', async () => {
+    let clock = 1000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const store = {
+        ...makeModelDb(),
+        activeProfileRun: async () => { clock = 1100; return db({ modelId: selected }).loadRun(); },
+        allowedRuntimeModels: async () => { clock = 1120; return [{ model_id: selected, provider: 'nous_portal' }]; },
+        resolveCredential: vi.fn(async () => {
+          clock = 1150;
+          return { provider: 'nous_portal', apiKey: 'workspace-provider-secret', keyId: 'key-1' };
+        }),
+      };
+      let upstream!: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({ start(controller) { upstream = controller; } });
+      const fetcher = vi.fn<typeof fetch>(async () => {
+        clock = 1200;
+        return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+      });
+      const lifecycle = { defer: vi.fn(), settled: vi.fn(async () => undefined) };
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId, {
+        model: 'nousresearch/hermes-4', messages: [{ role: 'user', content: 'private prompt' }], stream: true,
+      }, fetcher, lifecycle);
+      const reader = response.body!.getReader();
+      const encoder = new TextEncoder();
+      const push = async (at: number, data: string) => {
+        clock = at;
+        const bytes = encoder.encode(data);
+        upstream.enqueue(bytes);
+        expect(await reader.read()).toEqual({ done: false, value: bytes });
+        expect(store.recordModelCall).not.toHaveBeenCalled();
+      };
+      await push(1210, ': keepalive\n\n');
+      await push(1230, 'data: {"choices":[{"delta":{"content":""}}]}\n\n');
+      await push(1300, 'data: {"choices":[{"delta":{"reasoning":"private reasoning"}}]}\n\n');
+      await push(1500, 'data: {"choices":[{"delta":{"content":"private response"}}]}\n\n');
+      expect(lifecycle.settled).not.toHaveBeenCalled();
+      await push(1900, 'data: {"usage":{"prompt_tokens":20,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":12}}}\n\n');
+      clock = 2000;
+      upstream.close();
+      expect(await reader.read()).toEqual({ done: true, value: undefined });
+      expect(lifecycle.settled).toHaveBeenCalledOnce();
+      expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({ latencyMs: 850, status: 'ok' }));
+      const events = logs.mock.calls.map(([value]) => JSON.parse(String(value)) as Record<string, unknown>);
+      expect(events.map((event) => event.phase)).toEqual(['headers', 'first_reasoning', 'first_content', 'settled']);
+      expect(events.at(-1)).toMatchObject({
+        at: 'runtime.provider_timing', workspace_id: workspaceId, provider: 'nous_portal', model_id: selected,
+        streamed: true, status: 'ok', proxy_prepare_ms: 150, provider_headers_ms: 50,
+        provider_first_byte_observed_ms: 60, provider_first_frame_observed_ms: 80,
+        provider_first_reasoning_observed_ms: 150, provider_first_content_observed_ms: 350,
+        provider_total_ms: 850, input_tokens: 20, output_tokens: 5, cached_input_tokens: 12,
+      });
+      const serialized = JSON.stringify(events);
+      for (const privateValue of ['workspace-provider-secret', 'private prompt', 'private reasoning', 'private response']) {
+        expect(serialized).not.toContain(privateValue);
+      }
+    } finally { now.mockRestore(); logs.mockRestore(); }
+  });
+
+  it('keeps accounting and delivery working if the timing log sink throws', async () => {
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => { throw new Error('logging unavailable'); });
+    try {
+      const store = makeModelDb();
+      const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+        choices: [{ message: { content: 'hello' } }], usage: { prompt_tokens: 7, completion_tokens: 3 },
+      }));
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId, {
+        model: 'nousresearch/hermes-4', messages: [],
+      }, fetcher);
+      expect(await response.json()).toMatchObject({ choices: [{ message: { content: 'hello' } }] });
+      expect(logs).toHaveBeenCalled();
+      expect(store.recordModelCall).toHaveBeenCalledOnce();
+    } finally { logs.mockRestore(); }
+  });
+
   it('forwards only the selected raw catalog model to fixed Nous Portal with fresh workspace credentials', async () => {
     const store = makeModelDb();
     const fetcher = vi.fn<typeof fetch>(async () => Response.json({
@@ -243,6 +319,22 @@ describe('workspace model credential proxy', () => {
     expect((await proxyRuntimeModel(env, store, crypto.randomUUID(), agentId, { model: 'nousresearch/hermes-4', messages: [] }, fetcher)).status).toBe(409);
     expect(store.resolveCredential).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('preserves explicit prompt-cache breakpoints and accounts for authoritative cache hits', async () => {
+    const store = makeModelDb();
+    const messages = [{ role: 'system', content: [{ type: 'text', text: 'Stable enterprise context', cache_control: { type: 'ephemeral', ttl: '1h' } }] }];
+    const tools = [{ type: 'function', function: { name: 'list_requests', parameters: { type: 'object' } }, cache_control: { type: 'ephemeral' } }];
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+      choices: [], usage: { prompt_tokens: 1000, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 900 } },
+    }));
+    const response = await proxyRuntimeModel(env, store, workspaceId, agentId, {
+      model: 'nousresearch/hermes-4', messages, tools,
+    }, fetcher);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ messages, tools });
+    await response.text();
+    expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
+      usage: { input_tokens: 1000, output_tokens: 3, cached_input_tokens: 900, reasoning_tokens: 0 },
+    }));
   });
   it('refuses provider redirects without forwarding their body or secret to another origin', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('workspace-provider-secret', { status: 307, headers: { Location: 'https://attacker.example' } }));

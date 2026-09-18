@@ -73,6 +73,36 @@ gateway:
     max_concurrent_runs: 1
 ```
 
+At startup the launcher also reads the authenticated model manifest once and
+declares `providers.enterprise.models.<exact Claude model ID>.prompt_caching:
+true` for the governed custom proxy. This includes allowed per-run Claude
+overrides when the configured default is another model. The policy uses the
+five-minute cache tier and does not change model, effort, routing, or tool
+permissions. An unavailable manifest falls back to the configured model only;
+new catalog models are discovered on the next profile restart.
+
+Stock Hermes Cloud profiles that do not use this launcher need the equivalent
+configuration applied to their existing profile before restarting:
+
+```yaml
+providers:
+  enterprise:
+    api: <same enterprise model base_url as above>
+    key_env: ENTERPRISE_RUNTIME_TOKEN
+    transport: chat_completions
+    discover_models: false
+    models:
+      anthropic/claude-sonnet-5: # example: use exact allowed wire model IDs
+        prompt_caching: true
+prompt_caching:
+  cache_ttl: 5m
+```
+
+Retain the rest of the profile, including credentials and the selected model.
+This makes requests eligible for caching; a real cache hit must be established
+from provider-reported `cached_input_tokens`, not inferred from the presence of
+cache markers. See [Iris latency verification](../../docs/IRIS-LATENCY.md).
+
 The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, both built-in memory stores, memory/skill nudges, background review and title generation. MCP is empty by default. `ENTERPRISE_MCP_SERVERS_JSON` may add explicitly named stdio servers, but every one needs a bounded `tools.include` list and env values may only reference scoped variables from the credentials file. `HERMES_AGENTCASH_MCP_ENABLED=1` is the demo shortcut documented in that file. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise or configured MCP tools. Startup fails closed unless the resolved static tool definitions contain only enterprise tools plus that viewer. Native `agent.max_iterations` is 12; the enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
 `API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. By default the launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds, and health returns 503 if the cron store later becomes nonempty. `HERMES_NATIVE_CRON_ENABLED=1` retains those authenticated routes, while `cron.allow_agent_scheduling` remains false; Cloudflare stays the owner of business triggers. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.

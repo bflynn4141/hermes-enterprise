@@ -76,7 +76,10 @@ def main():
                     }},
                 }]})
             elif self.path.endswith("/models"):
-                self.reply(200, {"object": "list", "data": [{"id": "test/fixture", "object": "model"}]})
+                self.reply(200, {"object": "list", "data": [
+                    {"id": "test/fixture", "object": "model"},
+                    {"id": "anthropic/claude-sonnet-5", "object": "model"},
+                ]})
             else:
                 self.reply(404, {})
 
@@ -110,7 +113,11 @@ def main():
                     return
             catalog_names.update(t["function"]["name"] for t in body.get("tools", []))
             messages = body["messages"]
-            if messages[-1]["role"] == "tool":
+            cache_fixture = "CACHE_FIXTURE" in str(messages[-1].get("content"))
+            if cache_fixture:
+                delta = {"role": "assistant", "content": "Cache fixture complete."}
+                finish = "stop"
+            elif messages[-1]["role"] == "tool":
                 delta = {"role": "assistant", "content": "Fixture complete."}
                 finish = "stop"
             else:
@@ -122,10 +129,16 @@ def main():
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                for change, reason in ((delta, None), ({}, finish)):
+                changes = (
+                    (({"role": "assistant", "content": "Cache "}, None),
+                     ({"content": "fixture "}, None), ({"content": "complete."}, None), ({}, finish))
+                    if cache_fixture else ((delta, None), ({}, finish))
+                )
+                for change, reason in changes:
                     chunk = {"id": "fixture", "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": "test/fixture", "choices": [{"index": 0, "delta": change, "finish_reason": reason}]}
                     self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                    self.wfile.flush()
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             else:
@@ -241,6 +254,39 @@ def main():
                 "Partner Program Screening" in str(message.get("content", ""))
                 for call in model_calls for message in call.get("messages", [])
             ), "Managed Partner Program skill was not auto-loaded into model context"
+
+            # The profile default is non-Claude. An allowed per-run Claude
+            # override still needs the proxy-scoped cache policy from /models.
+            assert all('"cache_control"' not in json.dumps(call) for call in model_calls), "Non-Claude requests acquired cache markers"
+            cached_system_prefixes = []
+            for turn in (1, 2):
+                first_call = len(model_calls)
+                cache_body = {**body, "input": f"CACHE_FIXTURE_{turn}", "session_id": "cache-fixture",
+                              "model": "anthropic/claude-sonnet-5"}
+                cache_code, cache_run = request("POST", "/v1/runs", cache_body, f"fixture-cache-{turn}")
+                assert cache_code == 202, cache_run
+                cache_result = settle(cache_run["run_id"])
+                assert cache_result["status"] == "completed" and cache_result["output"] == "Cache fixture complete.", cache_result
+                calls = model_calls[first_call:]
+                assert calls and all(call["stream"] for call in calls), calls
+                system_parts = [part for call in calls for message in call["messages"]
+                                if message["role"] == "system" and isinstance(message.get("content"), list)
+                                for part in message["content"] if part.get("cache_control") == {"type": "ephemeral"}]
+                assert system_parts, "Allowed Claude override did not receive 5-minute prompt cache markers"
+                cached_system_prefixes.append({part["text"] for part in system_parts})
+                cache_wire = request("GET", "/v1/runs/" + cache_run["run_id"] + "/events")[1]
+                cache_events = [json.loads(line[6:]) for line in cache_wire.splitlines() if line.startswith("data: ")]
+                deltas = [event["delta"] for event in cache_events if event["event"] == "message.delta"]
+                assert len(deltas) >= 2 and "".join(deltas) == "Cache fixture complete.", cache_events
+            assert cached_system_prefixes[0] & cached_system_prefixes[1], "Follow-up turn changed every cached system prefix"
+            for uncached_model in ("test/fixture", "anthropic/claude-unlisted"):
+                first_call = len(model_calls)
+                uncached_body = {**body, "input": "CACHE_FIXTURE_UNCACHED", "model": uncached_model,
+                                 "session_id": "uncached-" + uncached_model.replace("/", "-")}
+                code, uncached = request("POST", "/v1/runs", uncached_body, "fixture-uncached-" + uncached_model)
+                assert code == 202 and settle(uncached["run_id"])["status"] == "completed", uncached
+                assert model_calls[first_call:] and all('"cache_control"' not in json.dumps(call) for call in model_calls[first_call:]), \
+                    "Unknown or non-Claude model acquired cache markers"
             for marker, expected in (
                     ("FAULT_AUTH", ("provider_auth", "auth", False)),
                     ("FAULT_QUOTA", ("provider_quota", "quota", False)),
@@ -306,7 +352,7 @@ def main():
             jobs_file.write_text(json.dumps({"jobs": [{"id": "forbidden-fixture", "enabled": False}]}))
             assert request("GET", "/health")[0] == 503, "native health ignored a nonempty cron store"
             print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model.")
-            print("Verified the versioned failure matrix, structured restart interruption, durable replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
+            print("Verified the versioned failure matrix, structured restart interruption, durable replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, scoped Claude prompt caching across turns and model overrides, incremental cached-model output, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

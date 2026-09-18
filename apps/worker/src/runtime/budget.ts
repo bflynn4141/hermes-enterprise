@@ -208,14 +208,23 @@ function usageFrom(value: unknown): ParsedProviderUsage | null {
   };
 }
 
+export type ProviderStreamObservation = 'first_byte' | 'first_frame' | 'first_reasoning' | 'first_content';
+export type ProviderStreamObserver = (observation: ProviderStreamObservation) => void;
+
+const hasVisibleText = (value: unknown): boolean => typeof value === 'string' && value.trim().length > 0;
+
 /** Parse OpenRouter's final streaming chunk or a non-stream JSON response. */
 export class ProviderUsageParser {
   private readonly decoder = new TextDecoder();
   private lineBuffer = '';
   private jsonBuffer = '';
   private latest: ParsedProviderUsage | null = null;
+  private readonly observed = new Set<ProviderStreamObservation>();
+
+  constructor(private readonly observe?: ProviderStreamObserver) {}
 
   push(chunk: Uint8Array): void {
+    if (chunk.byteLength > 0) this.notify('first_byte');
     const text = this.decoder.decode(chunk, { stream: true });
     // Non-stream replies are bounded by the approved output limit. The extra
     // cap prevents a malformed provider from turning accounting into a second
@@ -236,7 +245,9 @@ export class ProviderUsageParser {
     if (this.lineBuffer) this.readLine(this.lineBuffer);
     if (this.latest) return this.latest;
     try {
-      return usageFrom(JSON.parse(this.jsonBuffer));
+      const value: unknown = JSON.parse(this.jsonBuffer);
+      this.observeContent(value);
+      return usageFrom(value);
     } catch {
       return null;
     }
@@ -246,12 +257,43 @@ export class ProviderUsageParser {
     const match = /^data:\s*(.+)$/.exec(line.trim());
     if (!match || match[1] === '[DONE]') return;
     try {
-      const found = usageFrom(JSON.parse(match[1] ?? ''));
+      const value: unknown = JSON.parse(match[1] ?? '');
+      if (object(value)) this.notify('first_frame');
+      this.observeContent(value);
+      const found = usageFrom(value);
       if (found) this.latest = found;
     } catch {
       // A partial/malformed data line is not trusted usage. The reservation is
       // retained as unresolved if no later authoritative usage arrives.
     }
+  }
+
+  private observeContent(value: unknown): void {
+    if (!this.observe || (this.observed.has('first_reasoning') && this.observed.has('first_content'))) return;
+    if (!object(value) || !Array.isArray(value.choices)) return;
+    for (const choice of value.choices) {
+      if (!object(choice)) continue;
+      const delta = object(choice.delta) ? choice.delta : object(choice.message) ? choice.message : null;
+      if (!delta) continue;
+      // Role, usage, tool arguments, reasoning signatures and empty chunks are
+      // not user-visible text. Inspect only text presence; never retain or emit it.
+      if (hasVisibleText(delta.reasoning) || hasVisibleText(delta.reasoning_content) ||
+          (Array.isArray(delta.reasoning_details) && delta.reasoning_details.some((part) =>
+            object(part) && part.type === 'reasoning.text' && hasVisibleText(part.text)))) {
+        this.notify('first_reasoning');
+      }
+      if (hasVisibleText(delta.content) ||
+          (Array.isArray(delta.content) && delta.content.some((part) =>
+            object(part) && part.type === 'text' && hasVisibleText(part.text)))) {
+        this.notify('first_content');
+      }
+    }
+  }
+
+  private notify(observation: ProviderStreamObservation): void {
+    if (!this.observe || this.observed.has(observation)) return;
+    this.observed.add(observation);
+    try { this.observe(observation); } catch { /* Telemetry cannot interrupt delivery or accounting. */ }
   }
 }
 
@@ -262,6 +304,7 @@ export class ProviderUsageParser {
 export function meterRuntimeResponse(
   response: Response,
   settle: (usage: ParsedProviderUsage | null) => Promise<void>,
+  observe?: ProviderStreamObserver,
 ): Response {
   const body = response.body;
   if (!body) {
@@ -269,7 +312,7 @@ export function meterRuntimeResponse(
     return response;
   }
   const reader = body.getReader();
-  const parser = new ProviderUsageParser();
+  const parser = new ProviderUsageParser(observe);
   let settled = false;
   const settleOnce = async (usage: ParsedProviderUsage | null): Promise<void> => {
     if (settled) return;
