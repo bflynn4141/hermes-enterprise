@@ -946,7 +946,28 @@ export async function pendingAgentCashContacts(c: Context<{ Bindings: Env }>): P
 }
 
 function modelError(reason: string, status: number): Response {
-  return Response.json({ error: { message: reason, type: 'runtime_bridge_error', code: reason } }, { status });
+  return Response.json(
+    { error: { message: reason, type: 'runtime_bridge_error', code: reason } },
+    { status, headers: { 'Cache-Control': 'no-store' } },
+  );
+}
+
+/**
+ * Translate a trusted provider status into a fixed runtime code.
+ *
+ * Provider response bodies remain outside the Enterprise trust boundary: they
+ * may contain request fragments or vendor diagnostics. Hermes still receives
+ * enough information to distinguish reconnecting a credential, adding quota,
+ * switching a stale model, waiting for a rate limit, and retrying capacity.
+ */
+function runtimeProviderError(response: Response): { readonly reason: string; readonly status: number } {
+  const status = response.status >= 400 && response.status < 600 ? response.status : 502;
+  if (status === 401 || status === 403) return { reason: 'runtime_provider_auth', status };
+  if (status === 402) return { reason: 'runtime_provider_quota', status };
+  if (status === 408 || status === 429) return { reason: 'runtime_provider_rate_limited', status };
+  if (status === 404) return { reason: 'runtime_model_unavailable', status };
+  if (status >= 500) return { reason: 'runtime_provider_unavailable', status };
+  return { reason: 'runtime_provider_rejected', status };
 }
 
 interface RuntimeProviderConfig {
@@ -1121,9 +1142,14 @@ export async function proxyRuntimeModel(
     throw error;
   }
   if (!response.ok) {
+    const failure = runtimeProviderError(response);
     try { await response.body?.cancel(); } catch { /* Rejection accounting must still settle. */ }
     await settle(null, 'error', reservation ? 'rejected' : null);
-    return modelError('runtime_provider_rejected', response.status >= 400 && response.status < 600 ? response.status : 502);
+    console.warn(JSON.stringify({
+      at: 'runtime.model_rejected', provider: selected.provider,
+      modelId: selected.model_id, status: failure.status, reason: failure.reason,
+    }));
+    return modelError(failure.reason, failure.status);
   }
   lifecycle?.defer();
   const safeResponse = new Response(response.body, {
