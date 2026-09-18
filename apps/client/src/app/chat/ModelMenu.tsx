@@ -56,6 +56,16 @@ export function contextLabel(length: number | null): string | null {
   return `${length} ctx`;
 }
 
+/**
+ * Nous Portal exposes the free StepFun route as a distinct model id. Keep that
+ * distinction visible anywhere two otherwise-identical labels can be picked.
+ * Non-free Portal ids consume the workspace's paid Portal capacity.
+ */
+export function modelRouteLabel(row: { readonly model_id: string; readonly provider: string }): 'Free route' | 'Paid route' | null {
+  if (row.provider !== 'nous_portal') return null;
+  return row.model_id.endsWith(':free') ? 'Free route' : 'Paid route';
+}
+
 export interface ModelGroup {
   readonly vendor: string;
   readonly rows: CatalogEntry[];
@@ -245,14 +255,17 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
                 key={row.model_id}
                 checked={selected === row.model_id}
                 disabled={!row.enabled}
-                title={row.enabled ? undefined : row.disabled_reason ?? undefined}
+                title={row.enabled ? row.model_id : row.disabled_reason ?? undefined}
                 sub={subtitle(row)}
                 right={
-                  row.model_id === companyDefault ? (
-                    <span className="model-pin" title="The workspace default, set in Settings">
-                      Company default
-                    </span>
-                  ) : undefined
+                  <span className="model-tags">
+                    {modelRouteLabel(row) && <span className="model-route">{modelRouteLabel(row)}</span>}
+                    {row.model_id === companyDefault && (
+                      <span className="model-pin" title="The workspace default, set in Settings">
+                        Company default
+                      </span>
+                    )}
+                  </span>
                 }
                 onClick={() => pick(row)}
               >

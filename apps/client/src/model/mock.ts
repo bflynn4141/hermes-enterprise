@@ -286,6 +286,8 @@ export function createMockBackend(options: MockOptions = {}) {
     { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
     ...(options.recovery ? [{ model_id: RECOVERY_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: 'low', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' }] : []),
     { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    { model_id: 'nous:stepfun/step-3.7-flash', label: 'StepFun: Step 3.7 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    { model_id: 'nous:stepfun/step-3.7-flash:free', label: 'StepFun: Step 3.7 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 
   /**
@@ -301,7 +303,9 @@ export function createMockBackend(options: MockOptions = {}) {
       transport: 'nous_chat',
       effort_map: row.effort === null ? null : Object.fromEntries(row.effort.map((value) => [value, value])),
       default_effort: row.default_effort,
-      pricing_per_million: { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
+      pricing_per_million: row.model_id.endsWith(':free')
+        ? { input: 0, output: 0, input_off_peak: null, output_off_peak: null, cached_input: null }
+        : { input: 3, output: 15, input_off_peak: null, output_off_peak: null, cached_input: 0.3 },
       pricing_verified_on: '2026-09-15',
       enabled: row.enabled,
       disabled_code: row.enabled ? null : 'no_key',

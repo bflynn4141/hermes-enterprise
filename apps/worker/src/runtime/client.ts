@@ -99,6 +99,28 @@ export class HermesClient {
     }
     return response;
   }
+  private async connectorEvents(id: string, signal: AbortSignal): Promise<Response> {
+    const url = new URL(this.baseUrl.replace(/\/$/, ''));
+    url.searchParams.set('run_id', id);
+    const response = await this.send(url.toString(), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        Accept: 'text/event-stream',
+        // Streaming is latency-sensitive and already compact. An intermediary
+        // must not wait for a compression threshold before exposing a delta.
+        'Accept-Encoding': 'identity',
+        'Cache-Control': 'no-cache',
+      },
+      redirect: 'manual',
+      signal,
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new HermesApiError(response.status, 'request');
+    }
+    return response;
+  }
   async capabilities(): Promise<HermesCapabilities> {
     const response = this.transport === 'dashboard_connector'
       ? await this.connector('capabilities')
@@ -182,7 +204,7 @@ export class HermesClient {
   }
   async *events(id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
     const response = this.transport === 'dashboard_connector'
-      ? await this.connector('events', { run_id: id }, signal)
+      ? await this.connectorEvents(id, signal)
       : await this.request(`/v1/runs/${encodeURIComponent(id)}/events`, { signal });
     for await (const frame of readSse(response, 'hermes')) {
       if (!frame.data || frame.data === '[DONE]') continue;

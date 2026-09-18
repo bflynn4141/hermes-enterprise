@@ -20,9 +20,15 @@ from typing import Any
 try:
     from fastapi import APIRouter, Request
     from fastapi.responses import JSONResponse, StreamingResponse
+    FASTAPI_AVAILABLE = True
 except Exception:  # Unit tests exercise the transport helper without FastAPI.
+    FASTAPI_AVAILABLE = False
+
     class APIRouter:  # type: ignore[no-redef]
         def post(self, *_args: Any, **_kwargs: Any):
+            return lambda function: function
+
+        def get(self, *_args: Any, **_kwargs: Any):
             return lambda function: function
 
     class Request:  # type: ignore[no-redef]
@@ -33,15 +39,27 @@ except Exception:  # Unit tests exercise the transport helper without FastAPI.
             self.content, self.status_code = content, status_code
 
     class StreamingResponse:  # type: ignore[no-redef]
-        def __init__(self, content: Any, status_code: int = 200, media_type: str = ""):
-            self.content, self.status_code, self.media_type = content, status_code, media_type
+        def __init__(
+            self,
+            content: Any,
+            status_code: int = 200,
+            media_type: str = "",
+            headers: dict[str, str] | None = None,
+        ):
+            self.content, self.status_code, self.media_type, self.headers = content, status_code, media_type, headers or {}
 
 
 router = APIRouter()
 
+CONNECTOR_VERSION = "1.6.1"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
+SSE_CONNECTED = b": enterprise-bridge-connected\n\n"
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -99,7 +117,7 @@ class NativeControl:
             wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
             return 200, {
                 "object": "hermes.enterprise_bridge.readiness",
-                "version": "1.6.0",
+                "version": CONNECTOR_VERSION,
                 "workspace_id": os.environ.get("ENTERPRISE_WORKSPACE_ID", ""),
                 "agent_id": os.environ.get("ENTERPRISE_AGENT_ID", ""),
                 "enterprise_url": os.environ.get("ENTERPRISE_URL", ""),
@@ -146,20 +164,78 @@ class NativeControl:
             return error
 
 
-def _stream_native(response):
+def _sse_boundary(buffer: bytes) -> tuple[int, int] | None:
+    """Return the first complete SSE-frame boundary in ``buffer``."""
+    lf = buffer.find(b"\n\n")
+    crlf = buffer.find(b"\r\n\r\n")
+    if lf < 0 and crlf < 0:
+        return None
+    if crlf >= 0 and (lf < 0 or crlf < lf):
+        return crlf, 4
+    return lf, 2
+
+
+async def _stream_native(response):
+    """Relay native SSE one complete frame at a time without blocking ASGI."""
     try:
+        # Commit the streaming response before the model's first token. This is
+        # a valid SSE comment, ignored by the Worker parser, and prevents an
+        # otherwise silent POST/GET response from being mistaken for a small
+        # bufferable payload by the dashboard edge.
+        yield SSE_CONNECTED
+
         # ``HTTPResponse.read(size)`` waits for the requested byte count or
         # EOF, which turns a short model response into one burst after the run
         # finishes. ``read1`` returns the bytes already available from the
         # socket, preserving the native SSE frame cadence through Hermes Cloud.
-        read_available = getattr(response, "read1", response.read)
+        read_available = getattr(response, "read1", None) or response.read
+        buffered = b""
         while True:
-            chunk = read_available(8192)
+            chunk = await asyncio.to_thread(read_available, 8192)
             if not chunk:
                 break
-            yield chunk
+            buffered += chunk
+            boundary = _sse_boundary(buffered)
+            while boundary is not None:
+                index, length = boundary
+                end = index + length
+                yield buffered[:end]
+                buffered = buffered[end:]
+                boundary = _sse_boundary(buffered)
+        if buffered:
+            # Match the native parser's tolerance for a final SSE frame without
+            # a trailing blank line. The Worker still validates the JSON body.
+            yield buffered
     finally:
         response.close()
+
+
+async def _event_stream(control: NativeControl, run_id: Any):
+    response = await asyncio.to_thread(control.open_events, run_id)
+    if response.code >= 400:
+        raw_error = await asyncio.to_thread(response.read, MAX_BODY_BYTES + 1)
+        response.close()
+        try:
+            body = json.loads(raw_error)
+        except (ValueError, UnicodeDecodeError):
+            body = {"error": "native events request failed"}
+        return JSONResponse(body, status_code=response.code)
+    return StreamingResponse(
+        _stream_native(response),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
+
+
+@router.get("/control")
+async def enterprise_events(run_id: str):
+    """Use a conventional GET response for the long-lived SSE operation."""
+    try:
+        return await _event_stream(NativeControl(), run_id)
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "enterprise connector failed closed"}, status_code=502)
 
 
 @router.post("/control")
@@ -180,23 +256,9 @@ async def enterprise_control(request: Request):
     try:
         control = NativeControl()
         if payload.get("operation") == "events":
-            response = await asyncio.to_thread(control.open_events, payload.get("run_id"))
-            if response.code >= 400:
-                raw_error = await asyncio.to_thread(response.read, MAX_BODY_BYTES + 1)
-                response.close()
-                try:
-                    body = json.loads(raw_error)
-                except (ValueError, UnicodeDecodeError):
-                    body = {"error": "native events request failed"}
-                return JSONResponse(body, status_code=response.code)
-            return StreamingResponse(
-                _stream_native(response),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            # Kept for one release so already-running Workers can drain. New
+            # Workers use GET on this same authenticated path for SSE.
+            return await _event_stream(control, payload.get("run_id"))
         status, body = await asyncio.to_thread(control.dispatch, payload)
         return JSONResponse(body, status_code=status)
     except ValueError as error:

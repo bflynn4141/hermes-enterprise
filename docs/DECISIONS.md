@@ -5296,3 +5296,39 @@ tool contents, raw identifiers and error messages never reach request bodies,
 negative signals attach to the same event, disabled mode does no work, and
 vendor failures resolve without throwing. The Worker typecheck and dry-run
 bundle verify Cloudflare compatibility without the vendor SDK.
+
+---
+
+## C75. Cloud response text uses a primed GET SSE hop and names its paid/free route
+
+**Decided September 18, 2026.** The Hermes Cloud connector keeps one exact
+machine-authenticated `/api/plugins/enterprise_bridge/control` path. Short
+control operations continue to use POST envelopes. A run's event subscription
+uses GET with only a validated `run_id`, sends a valid SSE comment immediately,
+and writes each complete native SSE frame separately. The Worker requests
+identity encoding and consumes the same native event contract as before. The
+older POST events envelope remains for a one-release drain window.
+
+The model selector now labels Nous Portal entries as `Paid route` or `Free
+route` and exposes the exact model id on the control. Two StepFun routes with
+the same human label can no longer be mistaken for one another. The route id is
+preserved exactly when Enterprise removes the `nous:` catalog namespace for the
+official Hermes runtime; there is no implicit fallback and no default-model
+change in this repair.
+
+**Why.** Staging proved that native output, durable final state and reload
+persistence were correct, but a long answer remained absent in the browser
+until the run ended. The existing component and Worker streaming tests could
+not distinguish a provider that delivered late from an HTTP intermediary that
+buffered the dashboard's POST response. A conventional primed GET SSE response
+removes that avoidable ambiguity. It cannot manufacture tokens before an
+upstream provider emits them, so first-delta telemetry remains the authority
+for separating provider latency from transport latency.
+
+**Evidence.** A delayed-native-chunk ASGI test proves the first delta leaves the
+connector before terminal EOF. Worker tests prove GET, authentication,
+no-compression request headers, keepalive tolerance, and exact paid/free runtime
+model ids. Browser tests prove visible text grows before completion, the final
+handoff has no blank frame, and committed output survives session navigation
+and reload. Model-menu unit and browser tests cover the two same-label StepFun
+routes and the selected exact id.

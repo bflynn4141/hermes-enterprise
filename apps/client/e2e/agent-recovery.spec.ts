@@ -2,17 +2,34 @@ import { expect, test } from '@playwright/test';
 
 test('an explicit recovery model stays separate from the ordinary workspace default', async ({ page }) => {
   await page.goto('/?data=empty&key=verified');
-  await page.getByRole('button', { name: 'Model: Anthropic: Claude Sonnet 5', exact: true }).click();
+  await page.getByRole('button', { name: 'Model: Anthropic: Claude Sonnet 5 · Paid route', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'medium', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByText('DeepSeek V4.1 Flash', { exact: true })).toHaveCount(0);
 
   await page.goto('/?recovery=retryable');
-  await page.getByRole('button', { name: 'Model: DeepSeek V4.1 Flash', exact: true }).click();
+  await page.getByRole('button', { name: 'Model: DeepSeek V4.1 Flash · Paid route', exact: true }).click();
   await expect(page.getByRole('radio', { name: 'low', exact: true })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByRole('radio', { name: 'max', exact: true })).toBeVisible();
   await expect(page.getByRole('radio', { name: 'medium', exact: true })).toHaveCount(0);
   await expect(page.locator('.menu-item').filter({ hasText: 'Anthropic: Claude Sonnet 5' })).toContainText('Company default');
   await expect(page.locator('.menu-item').filter({ hasText: 'DeepSeek V4.1 Flash' })).not.toContainText('Company default');
+});
+
+test('paid and free StepFun routes stay visibly distinct and preserve the exact route id', async ({ page }) => {
+  await page.goto('/?data=empty&key=verified');
+  await page.getByRole('button', { name: 'Model: Anthropic: Claude Sonnet 5 · Paid route', exact: true }).click();
+  const menu = page.getByRole('dialog', { name: 'Model' });
+  await menu.getByRole('textbox', { name: 'Search models' }).fill('step-3.7-flash');
+
+  const paid = menu.locator('.menu-item[title="nous:stepfun/step-3.7-flash"]');
+  const free = menu.locator('.menu-item[title="nous:stepfun/step-3.7-flash:free"]');
+  await expect(paid).toContainText('Paid route');
+  await expect(free).toContainText('Free route');
+  await free.click();
+
+  const selected = page.getByRole('button', { name: 'Model: StepFun: Step 3.7 Flash · Free route', exact: true });
+  await expect(selected).toBeVisible();
+  await expect(selected).toHaveAttribute('title', 'nous:stepfun/step-3.7-flash:free');
 });
 
 test('a no-output failure can be retried from Overview without using chat', async ({ page }) => {

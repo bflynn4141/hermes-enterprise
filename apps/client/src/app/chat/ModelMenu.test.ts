@@ -7,7 +7,7 @@
 // a per-million price and a context window read to a person.
 import { describe, expect, it } from 'vitest';
 import type { CatalogEntry } from '@hermes/shared';
-import { contextLabel, groupByVendor, priceLabel } from './ModelMenu.js';
+import { contextLabel, groupByVendor, modelRouteLabel, priceLabel } from './ModelMenu.js';
 
 const entry = (model_id: string, over: Partial<CatalogEntry> = {}): CatalogEntry => ({
   model_id,
@@ -91,5 +91,18 @@ describe('the price and context copy', () => {
     expect(contextLabel(131_072)).toBe('131K ctx');
     expect(contextLabel(512)).toBe('512 ctx');
     expect(contextLabel(null)).toBeNull();
+  });
+});
+
+describe('the effective Nous Portal route', () => {
+  it('keeps otherwise-identical paid and free StepFun routes distinguishable', () => {
+    const paid = entry('nous:stepfun/step-3.7-flash');
+    const free = entry('nous:stepfun/step-3.7-flash:free');
+    expect(modelRouteLabel(paid)).toBe('Paid route');
+    expect(modelRouteLabel(free)).toBe('Free route');
+  });
+
+  it('does not invent a paid/free route for a direct provider', () => {
+    expect(modelRouteLabel(entry('deepseek-flash', { provider: 'deepseek' }))).toBeNull();
   });
 });
