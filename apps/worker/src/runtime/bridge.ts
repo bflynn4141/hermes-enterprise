@@ -25,6 +25,10 @@ import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
+  AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  parseAgentCashCreatorSearch,
+} from '../partner-screening/agentcash-creators.js';
+import {
   AGENTCASH_CONTACT_ENRICH_URL,
   AGENTCASH_EMAIL_VERIFY_URL,
   agentCashContactEnrichmentArguments,
@@ -106,6 +110,8 @@ function parseAgentCashPeopleImport(value: unknown): AgentCashPeopleImport {
 }
 const parseAgentCashContactAuthorization = parseAgentCashPeopleAuthorization;
 const parseAgentCashContactImport = parseAgentCashPeopleImport;
+const parseAgentCashCreatorAuthorization = parseAgentCashPeopleAuthorization;
+const parseAgentCashCreatorImport = parseAgentCashPeopleImport;
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (object(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
@@ -554,6 +560,163 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
   return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }
 
+function creatorPromptAuthorized(prompt: string | null): boolean {
+  const normalized = (prompt ?? '').toLowerCase();
+  return normalized.includes('hermes')
+    && (normalized.includes('youtube') || normalized.includes('linkedin'))
+    && (normalized.includes('consult') || normalized.includes('influenc') || normalized.includes('creator'));
+}
+
+function creatorRunKey(runtimeRunId: string): string {
+  return `creator:${runtimeRunId}`;
+}
+
+/** Reserve one fixed $0.01 public creator search only from an explicitly matching user turn. */
+export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashCreatorAuthorization(await body(c));
+  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+    throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
+  }
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try {
+    run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
+    requireActive(run, workspaceId, agentId);
+  } finally { await runtime.close(); }
+
+  let screeningRunId = '';
+  let created = false;
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-creators:${run.id}`]);
+    const context = await tx.query<{ owner_id: string; prompt: string | null }>(
+      `SELECT s.owner_id, user_turn.provider_message::text AS prompt
+         FROM runs r
+         JOIN sessions s ON s.workspace_id=r.workspace_id AND s.id=r.session_id
+         LEFT JOIN LATERAL (
+           SELECT provider_message FROM run_turns
+            WHERE run_id=r.id AND role='user'
+            ORDER BY turn DESC, seq DESC LIMIT 1
+         ) user_turn ON true
+        WHERE r.workspace_id=$1 AND r.id=$2 AND r.agent_id=$3`,
+      [workspaceId, run.id, agentId],
+    );
+    const authorized = context.rows[0];
+    if (!authorized || !creatorPromptAuthorized(authorized.prompt)) {
+      throw new RouteError('This run does not contain an explicit Hermes creator-search request.', 'partner_creator_search_not_authorized', 403);
+    }
+    const key = creatorRunKey(input.runtime_run_id);
+    const inserted = await tx.query<{ id: string }>(
+      `INSERT INTO partner_screening_runs
+         (workspace_id, agent_id, created_by, idempotency_key, source, authentication,
+          config_snapshot, api_requests_max, api_requests_used, agentcash_tool_call_id)
+       VALUES ($1,$2,$3,$4,'agentcash_creators','wallet',$5::jsonb,1,1,$6)
+       ON CONFLICT (workspace_id, agent_id, idempotency_key) DO NOTHING
+       RETURNING id`,
+      [workspaceId, agentId, authorized.owner_id, key, JSON.stringify({
+        runtime_run_id: input.runtime_run_id,
+        query_kind: 'hermes_creator_consultants',
+        minimum_priority: 0,
+        ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+        max_candidates: 5,
+        max_api_requests: 1,
+        max_spend_usd: 0.01,
+      }), input.tool_call_id],
+    );
+    if (inserted.rows[0]) {
+      screeningRunId = inserted.rows[0].id;
+      created = true;
+      return;
+    }
+    const existing = await tx.query<{ id: string; status: string; api_requests_used: number; agentcash_tool_call_id: string | null }>(
+      `SELECT id, status, api_requests_used, agentcash_tool_call_id
+         FROM partner_screening_runs
+        WHERE workspace_id=$1 AND agent_id=$2 AND idempotency_key=$3
+        FOR UPDATE`,
+      [workspaceId, agentId, key],
+    );
+    const row = existing.rows[0];
+    if (!row || row.status !== 'running' || row.api_requests_used !== 1 || row.agentcash_tool_call_id !== input.tool_call_id) {
+      throw new RouteError('This run already used its creator-search allowance.', 'partner_source_budget_exhausted', 409);
+    }
+    screeningRunId = row.id;
+  });
+  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1, max_spend_usd: 0.01 }, created ? 201 : 200);
+}
+
+/** Return a paid creator response that still needs import after a gateway restart. */
+export async function pendingAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const pending = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => tx.query<{
+    runtime_run_id: string; agentcash_tool_call_id: string;
+  }>(
+    `SELECT config_snapshot->>'runtime_run_id' AS runtime_run_id, agentcash_tool_call_id
+       FROM partner_screening_runs
+      WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_creators'
+        AND status='running' AND api_requests_used=1 AND agentcash_tool_call_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 2`,
+    [workspaceId, agentId],
+  ));
+  if (pending.rows.length === 0) return new Response(null, { status: 204 });
+  if (pending.rows.length > 1) throw new RouteError('More than one creator import is pending.', 'partner_screening_conflict', 409);
+  const row = pending.rows[0]!;
+  if (!/^run_[0-9a-f]{32}$/.test(row.runtime_run_id) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(row.agentcash_tool_call_id)) {
+    throw new RouteError('The pending creator import has invalid runtime identity.', 'partner_screening_conflict', 409);
+  }
+  return c.json({ runtime_run_id: row.runtime_run_id, tool_call_id: row.agentcash_tool_call_id, arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS });
+}
+
+/** Import one exact creator-search response as bounded public evidence. */
+export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashCreatorImport(await body(c));
+  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+    throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
+  }
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try { run = await runtime.findRuntimeRun(input.runtime_run_id, agentId); } finally { await runtime.close(); }
+  if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId) {
+    throw new RouteError('This runtime run is no longer available.', 'runtime_run_inactive', 409);
+  }
+
+  let importedCandidates = 0;
+  let created = false;
+  let screeningRunId = '';
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    const screening = await tx.query<{
+      id: string; created_by: string; status: 'running' | 'completed' | 'failed';
+      api_requests_used: number; agentcash_tool_call_id: string | null; candidates_discovered: number;
+    }>(
+      `SELECT id, created_by, status, api_requests_used, agentcash_tool_call_id, candidates_discovered
+         FROM partner_screening_runs
+        WHERE workspace_id=$1 AND agent_id=$2 AND idempotency_key=$3 AND source='agentcash_creators'
+        FOR UPDATE`,
+      [workspaceId, agentId, creatorRunKey(input.runtime_run_id)],
+    );
+    const row = screening.rows[0];
+    if (!row || row.status === 'failed' || row.api_requests_used !== 1 || row.agentcash_tool_call_id !== input.tool_call_id) {
+      throw new RouteError('This creator result does not have the matching payment lease.', 'partner_source_payment_not_authorized', 409);
+    }
+    screeningRunId = row.id;
+    if (row.status === 'completed') {
+      importedCandidates = row.candidates_discovered;
+      return;
+    }
+    let result;
+    try { result = parseAgentCashCreatorSearch(input.result); } catch {
+      throw new RouteError('AgentCash creator search returned an unsupported response shape.', 'partner_source_invalid_response', 422);
+    }
+    importedCandidates = result.candidates.length;
+    created = true;
+    await completePartnerScreening(
+      { tx, workspaceId, userId: row.created_by, role: 'admin', requireAdmin: () => undefined },
+      { runId: row.id, agentId, result },
+    );
+  });
+  return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
+}
+
 interface ContactLeaseRow {
   id: string;
   candidate_id: string;
@@ -639,7 +802,8 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
       if (!candidateId) throw new RouteError('The contact request does not identify one stored candidate.', 'partner_contact_policy_mismatch', 422);
       const candidate = await tx.query<{ id: string; profile_url: string }>(
         `SELECT id, profile_url FROM partner_candidates
-          WHERE workspace_id=$1 AND agent_id=$2 AND id=$3 AND source='agentcash_people'
+          WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
+            AND source IN ('agentcash_people', 'agentcash_creators')
           FOR SHARE`,
         [workspaceId, agentId, candidateId],
       );

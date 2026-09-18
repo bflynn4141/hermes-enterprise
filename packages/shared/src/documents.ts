@@ -148,7 +148,7 @@ export const applicationPayloadSchema = z
     discovery: z
       .object({
         candidate_id: z.uuid(),
-        source: z.enum(['github', 'agentcash_people']),
+        source: z.enum(['github', 'agentcash_people', 'agentcash_creators']),
         source_key: z.string().min(1).max(200),
         discovered_at: z.iso.datetime({ offset: true }),
         deterministic_priority: z.number().int().min(0).max(100),

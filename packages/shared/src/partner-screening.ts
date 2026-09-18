@@ -23,7 +23,7 @@ export const partnerPriorityCriterionSchema = z
 export const partnerCandidateSummarySchema = z
   .object({
     id: uuidSchema,
-    source: z.enum(['github', 'agentcash_people']),
+    source: z.enum(['github', 'agentcash_people', 'agentcash_creators']),
     source_key: z.string().min(1).max(200),
     display_name: z.string().min(1).max(200),
     profile_url: z.url().max(2048),
@@ -55,7 +55,7 @@ export const partnerScreeningSnapshotSchema = z
         agent_id: uuidSchema,
         status: z.enum(['running', 'completed', 'failed']),
         mode: z.literal('live'),
-        source: z.enum(['github', 'agentcash_people']),
+        source: z.enum(['github', 'agentcash_people', 'agentcash_creators']),
         authentication: z.enum(['authenticated', 'unauthenticated', 'wallet']),
         started_at: z.iso.datetime({ offset: true }),
         completed_at: z.iso.datetime({ offset: true }).nullable(),
@@ -95,6 +95,7 @@ export const partnerScreeningSnapshotSchema = z
     disclosure: z.enum([
       'Public organization evidence was fetched through the official GitHub REST API. No person was contacted and no application, admission, message, payment, signature, or external write was performed.',
       'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.',
+      'Public LinkedIn and YouTube creator evidence was fetched through one explicitly requested AgentCash search. Influence scale and contactability remain evidence gaps; no person was contacted and no message was sent.',
     ]),
   })
   .strict();
@@ -108,7 +109,7 @@ export const partnerSourceMatrixSchema = z
       z.object({
         id: z.enum(['github', 'agentcash_people', 'youtube', 'x', 'linkedin']),
         state: z.enum(['live', 'unconfigured', 'unsupported_policy']),
-        authentication: z.enum(['authenticated', 'unauthenticated', 'not_applicable']),
+        authentication: z.enum(['authenticated', 'unauthenticated', 'wallet', 'not_applicable']),
         note: z.string().max(500),
       }).strict(),
     ).length(5),

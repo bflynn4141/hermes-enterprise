@@ -9,13 +9,15 @@ export const LIVE_DISCLOSURE =
   'Public organization evidence was fetched through the official GitHub REST API. No person was contacted and no application, admission, message, payment, signature, or external write was performed.' as const;
 export const AGENTCASH_DISCLOSURE =
   'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.' as const;
+export const AGENTCASH_CREATOR_DISCLOSURE =
+  'Public LinkedIn and YouTube creator evidence was fetched through one explicitly requested AgentCash search. Influence scale and contactability remain evidence gaps; no person was contacted and no message was sent.' as const;
 export const PRIORITY_NOTE = 'This is connector-side triage, not an Iris or Hermes decision.' as const;
 
-export type PartnerScreeningSource = 'github' | 'agentcash_people';
+export type PartnerScreeningSource = 'github' | 'agentcash_people' | 'agentcash_creators';
 
 interface PartnerArtifactInput {
   readonly key: string;
-  readonly kind: 'search_result' | 'organization_profile' | 'repository_snapshot' | 'person_profile';
+  readonly kind: 'search_result' | 'organization_profile' | 'repository_snapshot' | 'person_profile' | 'creator_profile' | 'creator_content';
   readonly url: string;
   readonly sourceUpdatedAt: string | null;
   readonly fetchedAt: string;
@@ -405,6 +407,8 @@ export async function loadPartnerScreeningSnapshot(
       kind: 'ask_iris_to_screen', prompt, candidate_ids: eligibleIds,
       agent_run: agentRunResult.rows[0] ?? null,
     },
-    disclosure: run.source === 'agentcash_people' ? AGENTCASH_DISCLOSURE : LIVE_DISCLOSURE,
+    disclosure: run.source === 'agentcash_people'
+      ? AGENTCASH_DISCLOSURE
+      : run.source === 'agentcash_creators' ? AGENTCASH_CREATOR_DISCLOSURE : LIVE_DISCLOSURE,
   });
 }
