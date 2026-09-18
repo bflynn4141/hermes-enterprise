@@ -290,18 +290,18 @@ describe('native streaming independent of control and delivery latency', () => {
     const h = harness({ db });
     h.deps.checkpoint = (events) => checkpointDb.emit(events);
     const task = h.start();
-    h.send({ event: 'tool.started', tool: 'list_partner_candidates' });
+    h.send({ event: 'tool.started', tool: 'skill_view' });
     try {
       await db.queryHeld.promise;
-      h.send({ event: 'tool.started', tool: 'get_partner_candidate' });
+      h.send({ event: 'tool.started', tool: 'mcp__fixture__read' });
       h.send({ event: 'message.delta', delta: 'First. Second.' });
       await vi.advanceTimersByTimeAsync(20);
       expect(db.overlaps).toEqual([]);
       expect(previewText(h.previews)).toBe('First. Second.');
       expect(deltaText(h.forwarded)).toBe('First. Second.');
       db.queryRelease.resolve();
-      h.send({ event: 'tool.completed', tool: 'get_partner_candidate' });
-      h.send({ event: 'tool.completed', tool: 'list_partner_candidates' });
+      h.send({ event: 'tool.completed', tool: 'mcp__fixture__read' });
+      h.send({ event: 'tool.completed', tool: 'skill_view' });
       h.complete();
       await vi.advanceTimersByTimeAsync(100);
       await task;

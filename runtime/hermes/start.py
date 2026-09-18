@@ -273,6 +273,20 @@ def clean_environment(source, profile, token, api_key, extra=None):
     return env
 
 
+def managed_agent_config(toolset_names):
+    """Keep retries durable and visible in Enterprise instead of sleeping inside one native run."""
+    return {
+        "max_iterations": 12,
+        # The Worker persists provider Retry-After and owns bounded recovery.
+        # A native retry can otherwise leave the product saying Working for up
+        # to ten minutes with no new output or recoverable enterprise state.
+        "api_max_retries": 1,
+        # `skills` stays out of platform_toolsets, but cannot be in the
+        # subtraction list because it owns skill_view too.
+        "disabled_toolsets": sorted(set(toolset_names) - {"enterprise_bridge", "enterprise_skill_reader", "skills"}),
+    }
+
+
 def child(metadata_path):
     metadata = json.loads(pathlib.Path(metadata_path).read_text())
     source, profile = pathlib.Path(metadata["source"]), pathlib.Path(metadata_path).parent
@@ -301,10 +315,7 @@ def child(metadata_path):
         "model": {"provider": "custom", "default": metadata["model"],
                   "base_url": base + "/model/v1", "api_mode": "chat_completions",
                   "api_key": "${ENTERPRISE_RUNTIME_TOKEN}"},
-        "agent": {"max_iterations": 12,
-                  # `skills` stays out of platform_toolsets, but cannot be in
-                  # the subtraction list because it owns skill_view too.
-                  "disabled_toolsets": sorted(set(TOOLSETS) - {"enterprise_bridge", "enterprise_skill_reader", "skills"})},
+        "agent": managed_agent_config(TOOLSETS),
         "platform_toolsets": {"api_server": platform_toolsets},
         "mcp_servers": mcp_servers,
         "tools": {"tool_search": {"enabled": "off"}},

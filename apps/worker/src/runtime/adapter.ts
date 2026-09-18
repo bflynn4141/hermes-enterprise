@@ -182,6 +182,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       let stopFromForward = false;
       let nativeToolOrdinal = 0;
       let reasoningRecorded = false;
+      const enterpriseToolNames = new Set(
+        allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
+      );
       const nativeTools: Array<{ tool: string; stepId: string; toolCallId: string; label: string }> = [];
       const pollMs = deps.pollMs ?? 1000;
       const batchMs = deps.batchMs ?? 75;
@@ -316,11 +319,18 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             }
             if (payload.event === 'tool.started' && typeof payload.tool === 'string') {
               const tool = payload.tool;
-              void serialDb(() => startNativeTool(tool)).catch(() => undefined);
+              // The governed bridge records the exact durable call id, arguments
+              // and result. Native lifecycle frames have only a tool name, so
+              // projecting both creates a duplicate step for the same call.
+              if (!enterpriseToolNames.has(tool)) {
+                void serialDb(() => startNativeTool(tool)).catch(() => undefined);
+              }
             }
             if (payload.event === 'tool.completed' && typeof payload.tool === 'string') {
               const tool = payload.tool;
-              void serialDb(() => finishNativeTool(tool, payload.error === true)).catch(() => undefined);
+              if (!enterpriseToolNames.has(tool)) {
+                void serialDb(() => finishNativeTool(tool, payload.error === true)).catch(() => undefined);
+              }
             }
             if (payload.event === 'reasoning.available') {
               void serialDb(recordReasoningBoundary).catch(() => undefined);
