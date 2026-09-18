@@ -82,6 +82,7 @@ function requestType(request: RequestEntity): string {
 }
 
 function requestPreview(request: RequestEntity): string {
+  if (request.decision_summary?.primary) return request.decision_summary.primary;
   const payload = record(request.payload);
   if (request.kind === 'application') {
     const maximum = typeof payload.score_max === 'number' ? payload.score_max : 100;
@@ -99,6 +100,29 @@ function requestPreview(request: RequestEntity): string {
     ? payload.parties.map((party) => text(record(party).name)).filter((party): party is string => !!party)
     : [];
   return `${parties.slice(0, 2).join(' ↔ ') || request.subject || 'Agreement'} · ${text(payload.version_label) ?? 'Unsigned'}`;
+}
+
+const PRIORITY_ORDER = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
+const REASON_LABELS: Record<string, string> = {
+  expires_within_4h: 'Expires soon',
+  expires_within_24h: 'Due today',
+  sensitive_authorization: 'Sensitive access',
+  human_triage_recommended: 'Needs context',
+  deadline: 'Deadline',
+  impact: 'Material impact',
+  blocker: 'Blocking work',
+  risk: 'Risk',
+  goal: 'Goal relevance',
+  routine: 'Routine',
+};
+
+function approvalThreshold(request: RequestEntity): string | null {
+  const requirement = request.decision_summary?.approval_requirement;
+  if (!requirement) return null;
+  if (request.status !== 'pending') return `${requirement.completed_steps}/${requirement.total_steps} steps complete`;
+  const current = requirement.current[0];
+  if (current) return `${current.approvals_recorded}/${current.quorum} ${current.label}`;
+  return requirement.remaining_approvals === 1 ? '1 approval required' : `${requirement.remaining_approvals} approvals required`;
 }
 
 function requestAction(request: RequestEntity): string {
@@ -140,18 +164,26 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
   const activeTab = selected
     ? selected.status === 'pending' ? 'needs-review' : 'resolved'
     : tab;
+  const sort = filters?.sort ?? (activeTab === 'resolved' ? 'recent' : 'priority');
   const setFilters = (patch: NonNullable<Ref['filters']>): void => {
     nav({ section: 'inbox', view: 'list', filters: { ...filters, ...patch } });
   };
 
   const list = useMemo(
-    () =>
-      lists.requests
+    () => {
+      const visible = lists.requests
         .filter((request) => (activeTab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
         .filter((request) => activeTab === 'resolved' || matchesReviewerFilter(request, reviewer))
         .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind === 'invoice' || request.kind === 'agreement' : request.kind === kind))
-        .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase())),
-    [lists.requests, activeTab, kind, query, reviewer],
+        .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+      return visible.sort((a, b) => sort === 'recent'
+        ? Date.parse(b.created_at) - Date.parse(a.created_at)
+        : PRIORITY_ORDER[a.triage?.band ?? 'assessing'] - PRIORITY_ORDER[b.triage?.band ?? 'assessing']
+          || Number(Boolean(b.approval?.pending_for_viewer)) - Number(Boolean(a.approval?.pending_for_viewer))
+          || (b.triage?.score ?? -1) - (a.triage?.score ?? -1)
+          || Date.parse(a.created_at) - Date.parse(b.created_at));
+    },
+    [lists.requests, activeTab, kind, query, reviewer, sort],
   );
   const listLabel = activeTab === 'resolved' ? 'Resolved requests' : 'Requests needing review';
   const backRef: Ref = { section: 'inbox', view: 'list', filters };
@@ -176,6 +208,10 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
         {activeTab !== 'rules' && (
           <div className="inbox-tools">
             {approvalDemo && <span className="approval-demo-tools"><span className="pill illustrative">Illustrative demo</span><Button link onClick={() => window.location.reload()} aria-label="Reset approval demo">Reset</Button></span>}
+            <span className="inbox-sort" role="group" aria-label="Sort requests">
+              <button type="button" aria-pressed={sort === 'priority'} onClick={() => setFilters({ sort: 'priority' })}>Priority</button>
+              <button type="button" aria-pressed={sort === 'recent'} onClick={() => setFilters({ sort: 'recent' })}>Recent</button>
+            </span>
             <label className="search grow">
               <Icon name="search" />
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
@@ -246,10 +282,21 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                         <span className="inbox-item-date">{shortDate(request.created_at)}</span>
                       </span>
                       <span className="inbox-item-preview">{requestPreview(request)}</span>
+                      <span className="inbox-item-signals">
+                        {request.triage?.status === 'complete' ? (
+                          <span className={`priority-chip priority-${request.triage.band}`}>{request.triage.band}</span>
+                        ) : (!request.triage || request.triage.status === 'pending') && activeTab === 'needs-review' && sort === 'priority' ? (
+                          <motion.span className="priority-chip priority-assessing" aria-label="Assessing priority" animate={reducedMotion ? undefined : { opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.5, repeat: Infinity }}>Assessing</motion.span>
+                        ) : activeTab === 'needs-review' && sort === 'priority' ? (
+                          <span className="priority-chip priority-assessing">Unranked</span>
+                        ) : null}
+                        {request.triage?.reason_codes.slice(0, 2).map((reason) => <span className="reason-chip" key={reason}>{REASON_LABELS[reason] ?? titleCaseLabel(reason)}</span>)}
+                      </span>
                       <span className="inbox-item-meta">
                         <span>{requestType(request)}</span>
                         <span aria-hidden="true">·</span>
                         <span>{requestAction(request)}</span>
+                        {approvalThreshold(request) && <><span aria-hidden="true">·</span><span>{approvalThreshold(request)}</span></>}
                       </span>
                     </span>
                   </motion.button>

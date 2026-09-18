@@ -40,8 +40,8 @@ function request(id: number, subject: string, kind: RequestEntity['kind'], statu
 }
 
 const requests = [
-  request(101, 'Ada pending', 'application', 'pending'),
-  request(102, 'Leah pending', 'application', 'pending'),
+  { ...request(101, 'Ada pending', 'application', 'pending'), triage: { status: 'complete' as const, band: 'urgent' as const, score: 91, confidence: .9, reason_codes: ['deadline'], assessed_at: '2026-09-15T12:01:00.000Z', rubric_version: '1', model_id: 'typesafe/jev' } },
+  { ...request(102, 'Leah pending', 'application', 'pending'), created_at: '2026-09-15T13:00:00.000Z', triage: { status: 'complete' as const, band: 'normal' as const, score: 45, confidence: .8, reason_codes: ['goal'], assessed_at: '2026-09-15T13:01:00.000Z', rubric_version: '1', model_id: 'typesafe/jev' } },
   request(103, 'Ada admitted', 'application', 'admitted'),
   request(104, 'Acme invoice', 'invoice', 'pending'),
   request(105, 'Acme agreement', 'agreement', 'pending'),
@@ -62,6 +62,18 @@ function render(ref: Ref, selectedId?: string): string {
 }
 
 describe('the Inbox renders the focused view', () => {
+  it('defaults pending work to Priority and supports Recent ordering', () => {
+    const priority = render({ section: 'inbox', view: 'list', filters: { status: 'pending', reviewer: 'all' } });
+    expect(priority).toContain('aria-pressed="true">Priority');
+    expect(priority.indexOf('Ada pending')).toBeLessThan(priority.indexOf('Leah pending'));
+    expect(priority).toContain('>urgent<');
+    expect(priority).toContain('Deadline');
+
+    const recent = render({ section: 'inbox', view: 'list', filters: { status: 'pending', reviewer: 'all', sort: 'recent' } });
+    expect(recent).toContain('aria-pressed="true">Recent');
+    expect(recent.indexOf('Leah pending')).toBeLessThan(recent.indexOf('Ada pending'));
+  });
+
   it('shows pending applications and the supplied case-insensitive search', () => {
     const html = render({ section: 'inbox', view: 'list', filters: { status: 'pending', kind: 'application', query: 'aDa' } });
     expect(html).toContain('Ada pending');

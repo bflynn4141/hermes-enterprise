@@ -161,6 +161,45 @@ export type Run = z.infer<typeof runSchema>;
 
 export const requestSourceSchema = z.object({ id: z.string().max(64), name: z.string().max(200), note: z.string().max(400) }).strict();
 
+export const requestPriorityBandSchema = z.enum(['urgent', 'high', 'normal', 'low', 'assessing']);
+export const requestTriageSchema = z.object({
+  status: z.enum(['pending', 'complete', 'abstained', 'failed', 'unavailable']),
+  band: requestPriorityBandSchema,
+  score: z.number().min(0).max(100).nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  reason_codes: z.array(z.string().max(64)).max(8),
+  assessed_at: z.iso.datetime({ offset: true }).nullable(),
+  rubric_version: z.string().max(32),
+  model_id: z.string().max(100),
+}).strict();
+export type RequestTriage = z.infer<typeof requestTriageSchema>;
+
+export const requestDecisionSummarySchema = z.object({
+  action: z.string().max(100),
+  primary: z.string().max(280),
+  facts: z.array(z.object({
+    label: z.string().max(80),
+    value: z.string().max(200),
+    emphasis: z.enum(['default', 'attention', 'risk']),
+  }).strict()).max(4),
+  consequence: z.string().max(500).nullable(),
+  approval_requirement: z.object({
+    mode: z.enum(['single', 'sequential', 'parallel']),
+    completed_steps: z.number().int().min(0),
+    total_steps: z.number().int().min(1),
+    remaining_approvals: z.number().int().min(0),
+    current: z.array(z.object({
+      label: z.string().max(200),
+      approvals_recorded: z.number().int().min(0),
+      quorum: z.number().int().min(1),
+    }).strict()).max(25),
+    pending_for_viewer: z.boolean(),
+    waiting_on_others: z.boolean(),
+    expires_at: z.iso.datetime({ offset: true }).nullable(),
+  }).strict(),
+}).strict();
+export type RequestDecisionSummary = z.infer<typeof requestDecisionSummarySchema>;
+
 export const requestEntitySchema = z
   .object({
     id: uuidSchema,
@@ -182,6 +221,8 @@ export const requestEntitySchema = z
     decided_at: z.iso.datetime({ offset: true }).nullable().optional(),
     decided_by_name: z.string().max(120).nullable().optional(),
     approval: approvalListProjectionSchema.nullable().optional(),
+    decision_summary: requestDecisionSummarySchema.optional(),
+    triage: requestTriageSchema.optional(),
   })
   .strict();
 export type RequestEntity = z.infer<typeof requestEntitySchema>;

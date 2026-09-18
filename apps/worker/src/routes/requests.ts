@@ -31,6 +31,8 @@ import { loadRequest, toRequestEntity, REQUEST_SELECT, type RequestRow } from '.
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
+import { enqueueRequestTriage } from '../inbox-triage/service.js';
+import { runJobsAfterCommit } from '../jobs.js';
 
 const LIST_LIMIT = 100;
 
@@ -53,6 +55,8 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const kind = kindRaw && (REQUEST_KINDS as readonly string[]).includes(kindRaw) ? kindRaw : null;
   const q = (c.req.query('q') ?? '').trim().slice(0, 120);
   const limit = Math.min(LIST_LIMIT, Math.max(1, Number(c.req.query('limit') ?? LIST_LIMIT) || LIST_LIMIT));
+  const sort = c.req.query('sort') === 'recent' ? 'recent' : 'priority';
+  const triageActive = c.env.INBOX_TRIAGE_MODE === 'active';
 
   const rows = await inWorkspace(c, async (work) => {
     const where: string[] = [];
@@ -82,15 +86,35 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
       values,
     );
     const projections = new Map<string, Awaited<ReturnType<typeof loadApprovalListProjection>>>();
+    const jobs: string[] = [];
     for (const row of result.rows) {
       if (row.kind === 'approval') projections.set(row.id, await loadApprovalListProjection(work.tx, row.id, work.userId));
+      if (row.status === 'pending' && c.env.INBOX_TRIAGE_MODE !== 'off' && !row.triage_status) {
+        const jobId = await enqueueRequestTriage(work.tx, work.workspaceId, row.id, row.version);
+        if (jobId) jobs.push(jobId);
+      }
     }
-    return { rows: result.rows, projections };
+    return { rows: result.rows, projections, jobs, workspaceId: work.workspaceId };
   });
+
+  if (rows.jobs.length) c.executionCtx.waitUntil(runJobsAfterCommit(c.env, rows.workspaceId, rows.jobs));
+  const items = rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null, triageActive));
+  if (sort === 'priority' && triageActive) {
+    const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
+    items.sort((left, right) => {
+      const a = requestEntitySchema.parse(left);
+      const b = requestEntitySchema.parse(right);
+      return rank[a.triage?.band ?? 'assessing'] - rank[b.triage?.band ?? 'assessing']
+        || Number(Boolean(b.approval?.pending_for_viewer)) - Number(Boolean(a.approval?.pending_for_viewer))
+        || (b.triage?.score ?? -1) - (a.triage?.score ?? -1)
+        || Date.parse(a.created_at) - Date.parse(b.created_at)
+        || a.id.localeCompare(b.id);
+    });
+  }
 
   return c.json(
     requestPage.parse({
-      items: rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null)),
+      items,
       cursor: null,
       total: rows.rows.length,
     }),
@@ -105,7 +129,7 @@ export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Respons
     return { row, approval };
   });
   if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval)));
+  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval, c.env.INBOX_TRIAGE_MODE === 'active')));
 }
 
 export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -160,5 +184,5 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
   });
 
   if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval)), 201);
+  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval, c.env.INBOX_TRIAGE_MODE === 'active')), 201);
 }
