@@ -6,8 +6,6 @@
 // prove it.
 import type { Context } from 'hono';
 import {
-  DEFAULT_EFFORT,
-  DEFAULT_MODEL_ID,
   bootstrapSchema,
   eventsPageSchema,
   safeParseStreamEvent,
@@ -57,8 +55,8 @@ export async function loadBootstrap(
 ): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
-            COALESCE(s.default_model_id, $2) AS default_model_id,
-            CASE WHEN s.workspace_id IS NULL THEN $3 ELSE s.default_effort END AS default_effort,
+            COALESCE(s.default_model_id, 'deepseek-flash') AS default_model_id,
+            s.default_effort,
             COALESCE(s.default_runtime, 'cloud') AS default_runtime,
             s.daily_token_cap,
             COALESCE(s.max_concurrent_runs, 3) AS max_concurrent_runs,
@@ -67,7 +65,7 @@ export async function loadBootstrap(
        FROM workspaces w
        LEFT JOIN workspace_settings s ON s.workspace_id = w.id
       WHERE w.id = $1`,
-    [workspaceId, DEFAULT_MODEL_ID, DEFAULT_EFFORT],
+    [workspaceId],
   );
   const ws = workspace.rows[0];
   if (!ws) throw new Error('workspace row is not visible inside its own tenant transaction');

@@ -1,5 +1,20 @@
 import { expect, test } from '@playwright/test';
 
+test('an explicit recovery model stays separate from the ordinary workspace default', async ({ page }) => {
+  await page.goto('/?data=empty&key=verified');
+  await page.getByRole('button', { name: 'Model: Anthropic: Claude Sonnet 5', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'medium', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByText('DeepSeek V4.1 Flash', { exact: true })).toHaveCount(0);
+
+  await page.goto('/?recovery=retryable');
+  await page.getByRole('button', { name: 'Model: DeepSeek V4.1 Flash', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'low', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: 'max', exact: true })).toBeVisible();
+  await expect(page.getByRole('radio', { name: 'medium', exact: true })).toHaveCount(0);
+  await expect(page.locator('.menu-item').filter({ hasText: 'Anthropic: Claude Sonnet 5' })).toContainText('Company default');
+  await expect(page.locator('.menu-item').filter({ hasText: 'DeepSeek V4.1 Flash' })).not.toContainText('Company default');
+});
+
 test('a no-output failure can be retried from Overview without using chat', async ({ page }) => {
   await page.goto('/?recovery=retryable');
   const card = page.getByRole('region', { name: 'Agent activity' });

@@ -67,12 +67,13 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.heads).toEqual({ session: '0', workspace: '0' });
     expect(body.requests).toEqual([]);
 
-    // Only Nous Portal rows, and none offered before a key is verified.
+    // Only OpenRouter rows, and none of them offered: no provider key exists
+    // yet, so the shell shows "Add your OpenRouter key in Settings to start".
     // The four seeded DeepSeek/Anthropic/OpenAI rows are still in the table and
     // are no longer in any payload a client sees (decision R12).
     expect(body.catalog.length).toBeGreaterThanOrEqual(1);
     expect(body.catalog.every((row) => row.enabled === false)).toBe(true);
-    expect(body.catalog.map((row) => row.model_id)).toContain('nous:deepseek/deepseek-v4.1-flash');
+    expect(body.catalog.map((row) => row.model_id)).toContain('nous:anthropic/claude-sonnet-5');
     for (const row of body.catalog) expect(row.model_id.startsWith('nous:')).toBe(true);
   });
 

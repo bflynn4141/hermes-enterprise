@@ -120,10 +120,10 @@ test.describe('Nous Portal, added through Settings and picked in the composer', 
     await context.close();
   });
 
-  test('R3 a fresh workspace lands on DeepSeek V4.1 Flash and can take a turn without picking a model', async ({ browser }) => {
+  test('R3 a fresh workspace lands on Sonnet 5 and can take a turn without picking a model', async ({ browser }) => {
     // The scenario this milestone is about (decisions R12, R13). A workspace
-    // that has never been used starts on `nous:deepseek/deepseek-v4.1-flash`
-    // — a placeholder row migration 0039 wrote, disabled until a key exists —
+    // that has never been used starts on `nous:anthropic/claude-sonnet-5`
+    // — a placeholder row migration 0024 wrote, disabled until a key exists —
     // and the person's first action is to paste their Nous Portal key. What must
     // not then happen is a composer refusing the first message with advice
     // about a provider Settings no longer offers.
@@ -135,9 +135,9 @@ test.describe('Nous Portal, added through Settings and picked in the composer', 
     await expect(page.getByRole('button', { name: 'Agents', exact: true }).first()).toBeVisible({ timeout: 20_000 });
 
     // Before the key: the default is already the Nous Portal id, and the model
-    // menu says what to do before its Nous Portal connection is verified.
+    // menu says what to do rather than showing a DeepSeek row nobody can pick.
     expect(psql(`SELECT default_model_id FROM workspace_settings WHERE workspace_id = '${fixture.workspaceId}'`)).toBe(
-      'nous:deepseek/deepseek-v4.1-flash',
+      'nous:anthropic/claude-sonnet-5',
     );
     // And now the harder half: a workspace created *before* this deployment
     // narrowed to Nous Portal, whose default is a DeepSeek row the product no
@@ -157,14 +157,14 @@ test.describe('Nous Portal, added through Settings and picked in the composer', 
     });
     expect(added.status(), await added.text()).toBe(201);
 
-    // The default has moved from the old direct-provider row to the exact
-    // Nous Portal model, now backed by the synced fixture catalog.
+    // The default has moved off DeepSeek and onto Sonnet 5, which is now a real
+    // row with a real price.
     expect(psql(`SELECT default_model_id FROM workspace_settings WHERE workspace_id = '${fixture.workspaceId}'`)).toBe(
-      'nous:deepseek/deepseek-v4.1-flash',
+      'nous:anthropic/claude-sonnet-5',
     );
-    const deepseek = await page.request.get(`/w/${fixture.workspaceId}/catalog?q=deepseek-v4.1-flash&limit=10`);
-    const row = ((await deepseek.json()) as { models: { model_id: string; enabled: boolean; source: string }[] }).models.find(
-      (model) => model.model_id === 'nous:deepseek/deepseek-v4.1-flash',
+    const sonnet = await page.request.get(`/w/${fixture.workspaceId}/catalog?q=sonnet-5&limit=10`);
+    const row = ((await sonnet.json()) as { models: { model_id: string; enabled: boolean; source: string }[] }).models.find(
+      (model) => model.model_id === 'nous:anthropic/claude-sonnet-5',
     )!;
     expect(row.enabled).toBe(true);
     expect(row.source).toBe('provider_list');
@@ -175,9 +175,8 @@ test.describe('Nous Portal, added through Settings and picked in the composer', 
       headers: { origin: ORIGIN },
     });
     expect(created.status(), await created.text()).toBeLessThan(300);
-    const session = (await created.json()) as { id: string; model_id: string; effort: string };
-    expect(session.model_id).toBe('nous:deepseek/deepseek-v4.1-flash');
-    expect(session.effort).toBe('low');
+    const session = (await created.json()) as { id: string; model_id: string };
+    expect(session.model_id).toBe('nous:anthropic/claude-sonnet-5');
 
     const turn = await page.request.post(`/w/${fixture.workspaceId}/sessions/${session.id}/turns`, {
       data: { text: 'Screen the applicant.', client_turn_id: randomUUID(), attachments: [], mode: 'work' },

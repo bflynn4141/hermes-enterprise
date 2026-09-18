@@ -16,8 +16,6 @@
 import { resolveRuntimeBinding, runtimeLocation } from '../runtime/config.js';
 import type { Context } from 'hono';
 import {
-  DEFAULT_EFFORT,
-  DEFAULT_MODEL_ID,
   draftSchema,
   messageSchema,
   paginatedSchema,
@@ -157,8 +155,8 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
       [work.workspaceId],
     );
     const defaults = settings.rows[0] ?? {
-      default_model_id: DEFAULT_MODEL_ID,
-      default_effort: DEFAULT_EFFORT,
+      default_model_id: 'deepseek-flash',
+      default_effort: null,
       default_runtime: 'cloud',
     };
     const mode = input.mode === 'ask' || input.mode === 'plan' ? input.mode : 'work';

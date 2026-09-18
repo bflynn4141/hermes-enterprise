@@ -179,18 +179,12 @@ Installing, verifying or rotating another provider returns
 rows. Legacy transport adapters remain compiled for historical records and
 transport-specific tests, but are outside the product path.
 
-A workspace starts on `nous:deepseek/deepseek-v4.1-flash` at low effort. Migration
-0039 moves existing workspace defaults, automated sessions and inherited or
-unusable session choices to this exact versioned model; explicit usable session
-choices and historical runs remain intact. The backfill runs once, so replay
-does not reset later choices. A disabled placeholder satisfies the foreign key
-before the first catalog sync. Verifying
+A workspace starts on `nous:anthropic/claude-sonnet-5`. Migration 0024 writes a
+disabled placeholder so the foreign key exists before credentials do. Verifying
 a key makes one minimal one-token chat-completions request, then syncs the public
 Nous Portal `/models` catalog. `/models` cannot verify credentials because it is
 public. The same transaction moves a stale workspace default and its unarchived
-sessions to the current default when necessary. The catalog honors each model's
-supported reasoning efforts and provider default; DeepSeek V4.1 offers low,
-high and max (provider default high), with low selected for routine Iris work.
+sessions to the current default when necessary.
 
 **How an Admin connects it.** In the client, use Settings → Provider keys →
 **Connect Nous Portal**. The route requires an Admin session and a sign-in from

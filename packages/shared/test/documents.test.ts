@@ -8,7 +8,6 @@ import {
   nousModelId,
   vendorPrefix,
   DEFAULT_ALLOWED_PROVIDERS,
-  DEFAULT_EFFORT,
   DEFAULT_MODEL_ID,
   PROVIDER_NOT_ALLOWED_COPY,
   SEED_PILOT_MODEL_ID,
@@ -104,14 +103,13 @@ describe('catalog seed', () => {
   });
 
   it('points the workspace default at Nous Portal, which no seeded row can be', () => {
-    // The default is an id the catalog only holds because migration 0039 wrote
+    // The default is an id the catalog only holds because migration 0017 wrote
     // a placeholder, and the first sync replaces it. It is
     // deliberately *not* in `CATALOG_SEED`, because a seeded row is one a sync
     // may never overwrite and this one has to be overwritten.
-    expect(DEFAULT_MODEL_ID).toBe('nous:deepseek/deepseek-v4.1-flash');
-    expect(DEFAULT_EFFORT).toBe('low');
+    expect(DEFAULT_MODEL_ID).toBe('nous:anthropic/claude-sonnet-5');
     expect(CATALOG_SEED.some((r) => r.model_id === DEFAULT_MODEL_ID)).toBe(false);
-    expect(nousModelId(DEFAULT_MODEL_ID)).toBe('deepseek/deepseek-v4.1-flash');
+    expect(nousModelId(DEFAULT_MODEL_ID)).toBe('anthropic/claude-sonnet-5');
   });
 
   it('falls back to Nous Portal when ALLOWED_PROVIDERS is missing or nonsense', () => {

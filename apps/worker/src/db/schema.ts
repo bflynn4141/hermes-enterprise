@@ -175,10 +175,10 @@ export const userNotificationSettings = pgTable(
 
 export const workspaceSettings = pgTable('workspace_settings', {
   workspaceId: uuid('workspace_id').primaryKey(),
-  // 0039: Nous Portal is the product provider, and this row is a placeholder
+  // 0024: Nous Portal is the product provider, and this row is a placeholder
   // until the first workspace catalog sync.
-  defaultModelId: text('default_model_id').notNull().default('nous:deepseek/deepseek-v4.1-flash'),
-  defaultEffort: text('default_effort').default('low'),
+  defaultModelId: text('default_model_id').notNull().default('nous:anthropic/claude-sonnet-5'),
+  defaultEffort: text('default_effort').default('medium'),
   defaultRuntime: text('default_runtime').notNull().default('cloud'),
   dailyTokenCap: bigint('daily_token_cap', { mode: 'number' }),
   maxConcurrentRuns: integer('max_concurrent_runs').notNull().default(3),

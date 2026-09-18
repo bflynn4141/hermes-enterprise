@@ -36,6 +36,8 @@ const REQ_AGREEMENT = mockUuid(14);
 const DOC_INVOICE = mockUuid(30);
 const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
+// An explicit selection for recovery UI coverage, independent of product defaults.
+const RECOVERY_MODEL_ID = 'nous:deepseek/deepseek-v4.1-flash';
 
 export const MOCK_WORKSPACE_ID = WS;
 export const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
@@ -281,7 +283,8 @@ export function createMockBackend(options: MockOptions = {}) {
   // still listed DeepSeek and GPT rows would be a fixture teaching the client's
   // own scenarios about a screen the product no longer has.
   const catalog = [
-    { model_id: DEFAULT_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: DEFAULT_EFFORT, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    ...(options.recovery ? [{ model_id: RECOVERY_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: 'low', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' }] : []),
     { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 
@@ -452,7 +455,7 @@ export function createMockBackend(options: MockOptions = {}) {
     state: options.recovery ?? (empty || options.activity ? 'idle' : 'waiting'),
     run_id: empty ? null : options.recovery ? RUN : TRACE_LEAH,
     session_id: empty ? null : SESSION_A, attempt: empty ? null : 1,
-    model_id: DEFAULT_MODEL_ID,
+    model_id: options.recovery ? RECOVERY_MODEL_ID : DEFAULT_MODEL_ID,
     message: 'No eligible pending work right now.', next_retry_at: null,
     can_retry: false, can_run_now: empty || Boolean(options.activity), can_cancel: false,
   };
@@ -472,12 +475,15 @@ export function createMockBackend(options: MockOptions = {}) {
     traces.splice(0, traces.length, {
       id: RUN, run_id: RUN, agent_id: AGENT, name: 'Automated partner screening', type: 'Hermes Agent · work',
       status: options.recovery === 'idle' ? 'completed' : options.recovery === 'stopped' ? 'stopped' : 'error',
-      sub: 'Attempt 1', needs_you: false, runtime_kind: 'hermes', model_id: DEFAULT_MODEL_ID,
+      sub: 'Attempt 1', needs_you: false, runtime_kind: 'hermes', model_id: RECOVERY_MODEL_ID,
       ref: { section: 'agents', view: 'trace', id: RUN }, steps: [], tool_calls: [], allowed_tools: [], version: 1,
     });
     messages[SESSION_A] = [];
     const session = sessions.find((item) => item.id === SESSION_A);
-    if (session) { session.title = 'Automated partner screening'; session.status = traces[0]!.status; }
+    if (session) {
+      session.title = 'Automated partner screening'; session.status = traces[0]!.status;
+      session.model_id = RECOVERY_MODEL_ID; session.effort = 'low';
+    }
   }
 
   /**
@@ -785,7 +791,7 @@ export function createMockBackend(options: MockOptions = {}) {
       if (body.action === 'cancel_retry' && recoveryView.can_cancel) {
         recoveryView = { ...recoveryView, state: 'stopped', next_retry_at: null, can_retry: true, can_cancel: false, message: 'Automatic retry cancelled. You can resume this task when ready.' };
       } else if (body.action === 'retry' && recoveryView.can_retry) {
-        recoveryView = { ...recoveryView, state: 'queued', attempt: (recoveryView.attempt ?? 0) + 1, next_retry_at: null, can_retry: false, can_cancel: false, model_id: DEFAULT_MODEL_ID, message: 'Retry queued. Iris will continue the saved task.' };
+        recoveryView = { ...recoveryView, state: 'queued', attempt: (recoveryView.attempt ?? 0) + 1, next_retry_at: null, can_retry: false, can_cancel: false, model_id: options.recovery ? RECOVERY_MODEL_ID : DEFAULT_MODEL_ID, message: 'Retry queued. Iris will continue the saved task.' };
         const trace = traces.find((item) => item.id === recoveryView.run_id);
         if (trace) { trace.status = 'queued'; trace.sub = `Attempt ${recoveryView.attempt}`; }
       }

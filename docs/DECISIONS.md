@@ -5247,13 +5247,19 @@ quota and unresolved effects never become an unbounded retry loop. The UI uses
 server-confirmed state and existing button feedback; its countdown is motionless
 and does not repeatedly announce itself to screen readers.
 
-The general Iris default is the exact Nous model
-`nous:deepseek/deepseek-v4.1-flash`, with product effort `low`. Catalog capabilities
-retain the vendor's valid `low`, `high`, `max` choices and vendor default `high`.
-A ledger-guarded migration updates workspace defaults and automated/inherited or
-unusable sessions once, preserving explicit usable choices, archived sessions and
-historical runs. Automation follows the current workspace policy. The separate
-Jev typed classifier is unchanged. Production automation remains disabled.
+Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
+`low`, `high`, `max`, with provider default `high`. Automation follows the
+workspace policy, and retries use the task's current selected model. The
+separate Jev typed classifier and production automation policy are unchanged.
+
+**Default rollout held.** The requested all-workspace V4.1 Flash/low migration
+is prepared separately. A September 18 staging preflight of exact
+`nous:deepseek/deepseek-v4.1-flash` at explicit low effort returned Nous HTTP 404
+on all three native attempts (run `fb738cb4-c64c-4bf4-ae2a-132326ce6675`). The
+public catalog still lists it; official routing and OAuth handling match the
+application. Do not promote it globally until exact-model inference and tool
+acceptance pass. Recovery can ship independently while configured defaults and
+historical records remain intact.
 
 **Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
 reviewed-cycle recovery, current-model snapshots, paid receipts, cadence keys and
