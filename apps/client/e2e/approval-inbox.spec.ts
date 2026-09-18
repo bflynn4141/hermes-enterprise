@@ -56,7 +56,7 @@ test.describe('enterprise approval inbox', () => {
 
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
-    await app.getByRole('button', { name: 'All' }).click();
+    await app.getByLabel('Reviewer').selectOption('all');
     for (const approval of APPROVAL_CASES) {
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
@@ -94,7 +94,7 @@ test.describe('enterprise approval inbox', () => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const app = await openInbox(page);
-      await app.getByRole('button', { name: 'All' }).click();
+      await app.getByLabel('Reviewer').selectOption('all');
 
       for (const approval of APPROVAL_CASES) {
         await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
