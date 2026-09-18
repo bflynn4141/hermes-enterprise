@@ -60,6 +60,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       providerKeysLocked: params.get('providerKeys') === 'locked',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
+      communicationDraft: params.get('communicationDraft') === '1',
       workspaceName: readMockWorkspaceName(),
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',

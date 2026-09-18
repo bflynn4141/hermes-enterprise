@@ -110,6 +110,7 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  communicationDraft?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
@@ -222,6 +223,7 @@ export function createMockBackend(options: MockOptions = {}) {
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
+    communicationDraft: options.communicationDraft,
     workspaceId: WS,
     sessionId: SESSION_A,
     runId: mockUuid(1_030),
@@ -606,7 +608,7 @@ export function createMockBackend(options: MockOptions = {}) {
         : source.status !== 'pending'
           ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: 'Review complete.' }
           : canDecide
-            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: false, reason: null }
+            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: seat === 'admin' && source.payload.approval_type === 'communication' && source.payload.details.draft_only, reason: null }
             : { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: `Waiting for ${current.flatMap((step) => step.current_reviewer_member_ids).map((id) => source.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name).filter(Boolean).join(', ') || 'an eligible reviewer'}.` },
     };
   }
@@ -901,6 +903,12 @@ export function createMockBackend(options: MockOptions = {}) {
         row.decided_at = approval.finalized_at;
         row.decided_by_name = approval.votes.at(-1)?.reviewer_name ?? null;
       };
+      if (rest.startsWith('/approval/evidence/') && method === 'GET') {
+        if (options.communicationDraft && id === APPROVAL_DEMO_REQUEST_IDS.communication && decodeURIComponent(rest.slice('/approval/evidence/'.length)) === mockUuid(1900)) {
+          return json({ id: mockUuid(1900), kind: 'partner_source', label: 'Illustrative partner source', note: 'Illustrative note from Iris about the pilot.', source_url: 'https://example.invalid/illustrative-pilot', fetched_at: iso(-60), source_updated_at: null, verified_at: null, sha256: (23).toString(16).padStart(64, '0'), facts: [{ label: 'Organization', value: 'Fictional Partner Cooperative' }, { label: 'Source excerpt', value: 'Illustrative stored fact: the cooperative runs small onboarding pilots.' }] });
+        }
+        return fail(404, 'approval_evidence_unavailable');
+      }
       if (rest === '/approval' && method === 'GET') return approval ? json(approvalForViewer(approval)) : fail(404, 'not_found');
       if (rest === '/approval/decisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');
@@ -918,7 +926,7 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       if (rest === '/approval/revisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');
-        if (seat !== 'admin' || approval.status !== 'changes_requested') return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
+        if (seat !== 'admin' || !['pending', 'changes_requested'].includes(approval.status)) return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
         if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
         const proposal = body.proposal as Record<string, unknown> | undefined;
         if (!proposal || proposal.approval_type !== approval.payload.approval_type) return fail(422, 'invalid_revision', 'The revised approval type must not change');
@@ -931,6 +939,7 @@ export function createMockBackend(options: MockOptions = {}) {
           authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + [...approvalViews.keys()].indexOf(id) * 100) },
         } as ApprovalView['payload'];
         approval.status = 'pending';
+        approval.votes = [];
         approval.finalized_at = null;
         approval.steps = approval.payload.policy.steps.map((step, index) => ({
           step_id: step.id,
@@ -1137,7 +1146,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (path.endsWith('/upload') && method === 'PUT') return json({ ok: true, size: 1 });
     if (path.endsWith('/complete') && method === 'POST') {
       const id = path.split('/')[4] ?? mockUuid(800);
-      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: 'a'.repeat(64), status: 'ready' });
+      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
     }
 
     if (p('/usage')) return json(usage);

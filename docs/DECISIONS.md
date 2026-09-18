@@ -5267,3 +5267,45 @@ cancellation. Runtime adapter tests assert saved evidence instructions reach the
 native submission. Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.
+
+---
+
+## C74. Approval review starts with the decision and the content
+
+**Decided September 18, 2026.** Brian accepted the compact decision/header/email
+arrangement and evidence expanding below. Each governed review starts with the
+decision, exact per-step approval counts, policy ordering, expiry and the server's
+eligibility reason. Specialized previews remain intact. Proposer, long summary,
+request identity and policy metadata live in Request details. Review history shows
+all votes from the current revision; it does not claim to be a cross-revision audit.
+
+Communication drafts use **Approve draft** throughout Inbox, chat, Overview and
+detail. This records review of copy and sends nothing. Authorized reviewers can
+revise an email draft's actual subject/body through the existing revision contract;
+sender, recipients, evidence, policy and external effects stay unchanged. Pending
+revision entry is under More actions, and decision controls hide while editing.
+Saving produces a fresh server-bound revision requiring a fresh decision. Stale
+responses refetch for review; authentication never automatically replays an action.
+
+Invoice and agreement review uses **Approve invoice draft** and **Approve agreement
+draft**. One workspace Admin approves the current legacy draft. The document preview
+preserves supplied parties, currency, dates and terms; absent data is explicit.
+Approval saves a Library draft. Bank setup, payment authorization and signature
+consent ceremony are removed because those effects are unavailable. Historical
+authorization text remains an internal note, not evidence of execution. Client
+decisions carry the backend's version/hash binding and refresh conflicts without
+resubmitting.
+
+Evidence expands below the content. Stored partner facts, dates and safe original
+URLs load from the request-scoped evidence projection, with Iris's note labeled
+separately. Opaque proposal references never become links. Unsupported sources and
+unlinked legacy messages are stated as unavailable; email ingestion is outside this
+release. Native disclosures open instantly. Preview transitions honor both system
+and app reduced-motion preferences.
+
+**Evidence.** Client regressions cover draft labels, per-step quorums, all votes,
+real email-body revision, old-binding rejection, safe evidence links, and legacy
+draft receipts. Browser checks cover all ten governed previews at desktop and narrow
+widths, plus phone review with the existing sidebar collapsed. This change does not
+redesign the phone navigation shell. The client requires the matching backend
+review-binding helper and typed evidence endpoint; integrate and release together.
