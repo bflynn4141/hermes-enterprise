@@ -13,7 +13,7 @@ import { seedWorkspace, setTenant, withClient } from './helpers.js';
 
 const OLD = 'nous:anthropic/claude-sonnet-5';
 const EXPLICIT = 'nous:google/gemini-3-flash';
-const FILENAME = '0039_deepseek_default.sql';
+const FILENAME = '0040_deepseek_default.sql';
 
 describe('the DeepSeek default rollout', () => {
   it('migrates all workspace defaults and inherited or automated sessions once without changing history or later selections', async () => {

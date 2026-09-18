@@ -27,7 +27,7 @@ ALTER TABLE workspace_settings
 -- same transaction, so a crash cannot leave a half-applied data migration.
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '0039_deepseek_default.sql') THEN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '0040_deepseek_default.sql') THEN
     -- Existing synced rows may still have the former generic medium map.
     -- Prices, availability and historical runs remain untouched.
     UPDATE catalog
