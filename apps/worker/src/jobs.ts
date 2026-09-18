@@ -66,6 +66,8 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
+  'run_recovery',
+  'run_launch',
   // Warm-pool invitation expiry and operator capacity alerts. Assignment is
   // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
@@ -586,6 +588,12 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'slack_revoke':
       await (await import('./integrations/slack/revoke.js')).runSlackRevokeJob(env, job);
+      return;
+    case 'run_recovery':
+      await (await import('./runs/recovery.js')).runRecoveryJob(env, job);
+      return;
+    case 'run_launch':
+      await (await import('./runs/recovery.js')).runLaunchJob(env, job);
       return;
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);

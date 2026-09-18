@@ -16,6 +16,7 @@ import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js'
 import { useWorkspaceLists } from './lists.js';
 import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
+import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
 
 function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -63,14 +64,26 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
   const nav = useNav();
   const prefersReducedMotion = useReducedMotion();
   const activity = agentActivity(state, traces);
+  const recovery = useAgentRecovery();
+  const liveAttempt = Object.values(state.sessions).find((session) => session.run?.id === activity.traceId)?.run?.attempt ?? 0;
+  // A newly started turn can arrive over the socket before its recovery read.
+  // Do not let the previous task's polled state hide that confirmed activity.
+  const recoveryBehindLive = activity.state === 'working' && recovery.view &&
+    (activity.traceId !== recovery.view.run_id || liveAttempt > (recovery.view.attempt ?? 0));
+  const recoveryState = recoveryBehindLive ? undefined : recovery.view?.state;
+  const activityState: AgentActivityState = !recoveryState ? activity.state
+    : recoveryState === 'working' ? 'working'
+      : ['waiting', 'queued', 'retry_scheduled'].includes(recoveryState) ? 'waiting'
+        : ['retryable', 'blocked', 'stopped'].includes(recoveryState) ? 'stopped' : 'idle';
   const reduced = state.ui.reduceMotion || Boolean(prefersReducedMotion);
-  const target = activity.traceId ? TRACE(activity.traceId) : TRACES;
+  const traceId = recoveryBehindLive ? activity.traceId : recovery.view?.run_id ?? activity.traceId;
+  const target = traceId ? TRACE(traceId) : TRACES;
 
   return (
-    <section className="agent-activity-card" data-activity-state={activity.state} aria-label="Agent activity">
+    <section className="agent-activity-card" data-activity-state={activityState} aria-label="Agent activity">
       <div className="agent-activity-head">
         <span className="agent-activity-mark">
-          <IrisMark size={32} state={activityMarkState(activity.state)} />
+          <IrisMark size={32} state={activityMarkState(activityState)} />
         </span>
         <div className="agent-activity-identity">
           <span className="agent-activity-title">{state.workspace.name}</span>
@@ -79,9 +92,9 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
         <div className="agent-activity-actions">
           <span className="agent-activity-status" role="status" aria-live="polite">
             <i aria-hidden="true" />
-            {activity.status}
+            {recoveryState ? RECOVERY_STATUS[recoveryState] : activity.status}
           </span>
-          <Button link onClick={() => nav(target)}>{activity.traceId ? 'View trace →' : 'View traces →'}</Button>
+          <Button link onClick={() => nav(target)}>{traceId ? 'View trace →' : 'View traces →'}</Button>
         </div>
       </div>
 
@@ -106,9 +119,10 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
               </span>
             </>
           )}
-          {activity.action && <span className="agent-activity-action">{activity.action}</span>}
+          {activity.action && (!recoveryState || recoveryState === 'idle') && <span className="agent-activity-action">{activity.action}</span>}
         </motion.div>
       </div>
+      {!recoveryBehindLive && <RecoveryControlView recovery={recovery} />}
     </section>
   );
 }
@@ -637,7 +651,7 @@ export function TraceFailure({ error }: { error: NonNullable<TraceEntity['error'
  * Two rules the server sets and the client keeps:
  *   * a truncated tool result is shown truncated, marker and all. Re-expanding
  *     it would be a trace of a run that did not happen;
- *   * opening a trace advances nothing. There is no control on this screen.
+ *   * opening a trace advances nothing; recovery requires its explicit control.
  */
 export function TraceDetail({ id }: { id: string | null }) {
   const adapter = useAdapter();
@@ -703,6 +717,7 @@ export function TraceDetail({ id }: { id: string | null }) {
         </div>
         <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${trace.model_id ?? 'unknown model'}`} />
         {trace.error && <TraceFailure error={trace.error} />}
+        {id && <AgentRecovery runId={id} />}
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">

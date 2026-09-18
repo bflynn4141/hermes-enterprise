@@ -3,6 +3,8 @@
 import type { Context } from 'hono';
 import { nousModelId, openRouterModelId } from '@hermes/shared';
 import type { Env } from '../env.js';
+import type { Tx } from '../db/client.js';
+import { parseProviderRetryAfter, type ProviderRetryAfter } from './retry-after.js';
 import type { AgentDb, EmittedEvent, EngineRunRow, EmitInput } from '../engine/agent-db.js';
 import { allowedTools, executeTool, FOCUS_TOOLS, TOOL_SOURCE, toolResultEnvelope, type FetchUrlRunner } from '../engine/tools.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
@@ -387,6 +389,15 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
   } finally { await db.close(); }
 }
 
+/** A retry and a paid-call lease serialize on the same task row. */
+async function requireCurrentPaidRun(tx: Tx, workspaceId: string, agentId: string, runId: string, runtimeRunId: string): Promise<void> {
+  const { rows } = await tx.query(
+    `SELECT id FROM runs WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
+       AND runtime_run_id=$4 AND runtime_attempt=attempt AND status='working'
+       AND NOT stop_requested FOR UPDATE`, [workspaceId,agentId,runId,runtimeRunId]);
+  if (!rows.length) throw new RouteError('The task attempt is no longer active.', 'runtime_run_inactive', 409);
+}
+
 /** Atomically reserve the one paid call before the AgentCash MCP executes it. */
 export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
@@ -404,6 +415,7 @@ export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env 
   const screeningRunId = match[1]!;
   let created = false;
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     const screening = await tx.query<{
       status: 'running' | 'completed' | 'failed';
       source: string;
@@ -588,6 +600,7 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
   let screeningRunId = '';
   let created = false;
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-creators:${run.id}`]);
     const context = await tx.query<{ owner_id: string; prompt: string | null }>(
       `SELECT s.owner_id, user_turn.provider_message::text AS prompt
@@ -775,6 +788,7 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
   let created = false;
   let enrichmentId = '';
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-contact:${run.id}`]);
     const existing = await tx.query<ContactLeaseRow>(
       `SELECT e.id, e.candidate_id, e.run_id, e.runtime_run_id, e.status, e.pending_kind,
@@ -835,11 +849,11 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
     }
     await tx.query(
       `UPDATE partner_contact_enrichments
-          SET status=$4, pending_kind=$5, pending_tool_call_id=$6,
+          SET status=$4, pending_kind=$5, pending_tool_call_id=$6, runtime_run_id=$7,
               verification_tool_call_id=COALESCE(verification_tool_call_id, $6),
               verification_poll_count=verification_poll_count + CASE WHEN $5='verification_poll' THEN 1 ELSE 0 END
         WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
-      [workspaceId, agentId, row.id, kind === 'verification' ? 'verification_reserved' : 'verification_pending', kind, input.tool_call_id],
+      [workspaceId, agentId, row.id, kind === 'verification' ? 'verification_reserved' : 'verification_pending', kind, input.tool_call_id, input.runtime_run_id],
     );
     enrichmentId = row.id;
     created = true;
@@ -1007,6 +1021,7 @@ export interface ModelBridgeDb extends RuntimeBudgetDb {
   allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]>;
   resolveCredential: AgentDb['resolveCredential'];
   recordModelCall: AgentDb['recordModelCall'];
+  recordProviderRetryAfter?(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void>;
   settleRuntimeModelCall?(input: {
     reservation: {
       reservationId: string;
@@ -1143,13 +1158,18 @@ export async function proxyRuntimeModel(
   }
   if (!response.ok) {
     const failure = runtimeProviderError(response);
+    const delay = ['runtime_provider_rate_limited', 'runtime_provider_unavailable'].includes(failure.reason)
+      ? parseProviderRetryAfter(response.headers.get('Retry-After')) : null;
     try { await response.body?.cancel(); } catch { /* Rejection accounting must still settle. */ }
     await settle(null, 'error', reservation ? 'rejected' : null);
+    if (delay) await db.recordProviderRetryAfter?.(run.id, run.attempt, delay);
     console.warn(JSON.stringify({
       at: 'runtime.model_rejected', provider: selected.provider,
       modelId: selected.model_id, status: failure.status, reason: failure.reason,
     }));
-    return modelError(failure.reason, failure.status);
+    const rejection = modelError(failure.reason, failure.status);
+    if (delay?.header !== null && delay?.header !== undefined) rejection.headers.set('Retry-After', delay.header);
+    return rejection;
   }
   lifecycle?.defer();
   const safeResponse = new Response(response.body, {

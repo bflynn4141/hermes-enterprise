@@ -22,6 +22,8 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   finalizing = false;
   bootstrap: ProviderMessage[] = [];
   acceptBinding = true;
+  resumeInput: string | null = null;
+  recoveryInput() { return Promise.resolve(this.resumeInput); }
 
   constructor(overrides: Partial<EngineRunRow> = {}) {
     super({ modelId: MODEL, ...overrides });
@@ -148,6 +150,16 @@ async function execute(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('submits saved recovery instructions instead of replaying original discovery input', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2 });
+    db.resumeInput = 'Resume stored screening evidence. Do not repeat the paid search.';
+    const { client } = await execute(db);
+    expect(client.submissions).toHaveLength(1);
+    expect(client.submissions[0]?.body.input).toBe(db.resumeInput);
+    expect(client.submissions[0]?.key).toContain('-a2');
+    expect(db.snapshots.get(2)?.input).toBe(db.resumeInput);
+  });
+
   it('streams into a single assistant message and replaces interim prose with authoritative final output', async () => {
     const client = new FakeHermesClient();
     client.final.usage = { input_tokens: 37, output_tokens: 9 };

@@ -18,6 +18,7 @@ export interface RuntimePersistence extends AgentDb {
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string): Promise<boolean>;
   snapshotRequest(runId: string, attempt: number, body: Record<string, unknown>): Promise<Record<string, unknown>>;
   loadBootstrapHistory(run: EngineRunRow): Promise<ProviderMessage[]>;
+  recoveryInput?(runId: string, attempt: number): Promise<string | null>;
   nextRuntimeSequence(runId: string): Promise<number>;
   activeRuntimeMs?(runId: string, attempt: number, start: number, end: number): Promise<number>;
   finalizeRuntime<T>(runId: string, attempt: number, work: () => Promise<T>): Promise<T | null>;
@@ -113,6 +114,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
       const history = await db.loadHistory(run.id, 100);
       const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
+      const recoveryInput = await db.recoveryInput?.(run.id, run.attempt);
       const previous = await db.loadBootstrapHistory(run);
       const model = await db.loadModel(run.modelId);
       if (!model || !['openrouter', 'nous_portal'].includes(model.provider)) {
@@ -120,7 +122,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       }
       const wireModel = model.model_id.replace(/^(?:openrouter|nous):/, '');
       const proposed: Record<string, unknown> = {
-        input: userInput,
+        input: recoveryInput ?? userInput,
         session_id: run.sessionId,
         model: wireModel,
         provider: 'custom',

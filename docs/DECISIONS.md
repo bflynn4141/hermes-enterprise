@@ -5219,3 +5219,45 @@ that provider diagnostics never cross the boundary, and verify rejected calls
 remain attributed to the exact credential and model. The Nous adapter test
 pins the independent verification route. A live Hermes Cloud trace completed
 the StepFun control request in one model call with no tool calls.
+
+---
+
+## C73. Iris recovery preserves tasks, effects and model provenance
+
+**Decided September 18, 2026.** Overview and trace expose Retry task without a
+chat message. Idle Run now checks only the current authorized screening cadence;
+its durable cycle key prevents a second allowance. Existing requests and paid
+receipts are inspected before advancing an attempt. Completed discovery resumes
+from stored candidate evidence; pending imports retain their native mapping, and
+uncertain mutations or existing drafts block replay. Reviewing an already-created
+draft permits future cadence work even when the original final response failed.
+
+Manual and automatic retries share admission, ownership, provider, capacity and
+approval-budget checks. Expected attempts make delayed duplicate requests no-ops.
+An app transaction records the new attempt and a durable launch job before the
+Workflow starts. Prior model/effort, trace, failure and trigger remain in the
+recovery history. Paid authorization rechecks the active native attempt under the
+same task-row lock so a late callback cannot reserve work after recovery advances.
+
+For automated screening, only recognized provider outages and rate limits retry
+automatically, up to three total attempts with one- and five-minute delays.
+Sanitized provider Retry-After deadlines can extend those waits; excessive waits
+pause recovery. Cancellation, human review, stopped tasks, unavailable credentials,
+quota and unresolved effects never become an unbounded retry loop. The UI uses
+server-confirmed state and existing button feedback; its countdown is motionless
+and does not repeatedly announce itself to screen readers.
+
+The general Iris default is the exact Nous model
+`nous:deepseek/deepseek-v4.1-flash`, with product effort `low`. Catalog capabilities
+retain the vendor's valid `low`, `high`, `max` choices and vendor default `high`.
+A ledger-guarded migration updates workspace defaults and automated/inherited or
+unusable sessions once, preserving explicit usable choices, archived sessions and
+historical runs. Automation follows the current workspace policy. The separate
+Jev typed classifier is unchanged. Production automation remains disabled.
+
+**Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
+reviewed-cycle recovery, current-model snapshots, paid receipts, cadence keys and
+cancellation. Runtime adapter tests assert saved evidence instructions reach the
+native submission. Browser tests cover Overview/trace actions, no-output failure,
+countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
+and live-provider acceptance are recorded in the Tech Lead delivery note.

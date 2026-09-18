@@ -19,7 +19,7 @@ import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
-import { approvalContinuationRetryBlock } from '../runtime/continuation.js';
+import { retryTask } from '../runs/recovery.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
@@ -463,7 +463,7 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
     // One transaction: the flag and the status. A reader that saw `stopping`
     // without the flag would resume the run.
     await work.tx.query(
-      `UPDATE runs SET stop_requested = true, status = 'stopping' WHERE workspace_id = $1 AND id = $2`,
+      `UPDATE runs SET stop_requested = true, status = 'stopping', recovery_cancelled=true, recovery_next_at=NULL WHERE workspace_id = $1 AND id = $2`,
       [work.workspaceId, runId],
     );
     // A Stop pauses the queue rather than dropping it: the human's queued
@@ -702,44 +702,19 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
   const runId = pathUuid(c, 'runId');
+  const input = await jsonBody<{ expected_attempt?: number }>(c);
+  if (!Number.isInteger(input.expected_attempt) || input.expected_attempt! < 1) {
+    throw new RouteError('Refresh this task before retrying.', 'expected_attempt_required', 422);
+  }
 
-  const outcome = await inWorkspace(c, async (work) => {
-    await loadSessionForWrite(work, sessionId);
-    const run = await loadRun(work, sessionId, runId);
-    if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
-      throw new RouteError('this run is still going', 'run_active', 409);
-    }
-    if (isEnginePaused(c.env)) {
-      throw new RouteError('the engine is paused for a deploy', 'engine_paused', 409);
-    }
-    const attempt = run.attempt + 1;
-    const approvalRetryBlock = await approvalContinuationRetryBlock(work.tx, runId, attempt);
-    if (approvalRetryBlock) {
-      throw new RouteError('this approved continuation cannot be retried under its current authorization and budget', approvalRetryBlock, 409);
-    }
-    const engineVersion = Number(c.env.ENGINE_VERSION ?? '1') || 1;
-    const traceId = crypto.randomUUID();
-    const instanceId = runAttemptInstanceId(runId, attempt);
-    await work.tx.query(
-      `UPDATE runs
-          SET attempt = $3, status = 'working', stop_requested = false, error = NULL,
-              ended_at = NULL, engine_version = $4, trace_id = $5, workflow_instance_id = $6
-        WHERE workspace_id = $1 AND id = $2`,
-      [work.workspaceId, runId, attempt, engineVersion, traceId, instanceId],
-    );
-    work.jobs.push(
-      ...(await publishEvents(work.tx, work.workspaceId, [
-        { kind: 'run.status', sessionId, traceId, payload: { run_id: runId, attempt, status: 'working' } },
-      ])),
-    );
-    return {
-      run: { id: runId, status: 'working', attempt },
-      create: { runId, workspaceId: work.workspaceId, sessionId, attempt, engineVersion, traceId },
-    };
+
+  const result = await inWorkspace(c, async (work) => {
+    const session = await loadSessionForWrite(work, sessionId);
+    const run = await retryTask(work, c.env, session.agent_id, runId, input.expected_attempt);
+    if (run.session_id !== sessionId) throw new RouteError('No such task.', 'unknown_run', 404);
+    return { id: run.id, status: run.status, attempt: run.attempt };
   });
-
-  await createInstance(c.env, outcome.create);
-  return c.json(runView(outcome.run), 201);
+  return c.json(runView(result), 201);
 }
 
 // ---------------------------------------------------------------------------

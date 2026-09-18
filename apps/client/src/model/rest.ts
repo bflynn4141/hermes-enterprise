@@ -13,6 +13,7 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
   catalogPageSchema,
   errorBodySchema,
@@ -37,6 +38,7 @@ import {
   approvalViewSchema,
   directUploadResultSchema,
   type AttachmentUpload,
+  type AgentWakeInput,
   type ApprovalView,
   type Bootstrap,
   type CatalogPage,
@@ -267,8 +269,12 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
-    retry: (workspaceId: string, sessionId: string, runId: string) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, {}) as Promise<RunView>,
+    retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt }) as Promise<RunView>,
+    agentRecovery: (workspaceId: string, agentId: string, runId?: string) =>
+      request('GET', `${ws(workspaceId)}/agents/${agentId}/recovery${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`, agentRecoveryViewSchema),
+    wakeAgent: (workspaceId: string, agentId: string, body: AgentWakeInput) =>
+      request('POST', `${ws(workspaceId)}/agents/${agentId}/wake`, agentRecoveryViewSchema, body),
     guide: (workspaceId: string, sessionId: string, runId: string, text: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/guide`, guidanceAcceptedSchema, { text }),
     enqueue: (workspaceId: string, sessionId: string, runId: string, text: string) =>

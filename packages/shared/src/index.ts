@@ -19,3 +19,4 @@ export * from './slack.js';
 export * from './partner-screening.js';
 export * from './plain-text.js';
 export * from './wire.js';
+export * from './recovery.js';

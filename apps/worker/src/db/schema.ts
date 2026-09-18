@@ -175,10 +175,10 @@ export const userNotificationSettings = pgTable(
 
 export const workspaceSettings = pgTable('workspace_settings', {
   workspaceId: uuid('workspace_id').primaryKey(),
-  // 0024: Nous Portal is the product provider, and this row is a placeholder
+  // 0039: Nous Portal is the product provider, and this row is a placeholder
   // until the first workspace catalog sync.
-  defaultModelId: text('default_model_id').notNull().default('nous:anthropic/claude-sonnet-5'),
-  defaultEffort: text('default_effort').default('medium'),
+  defaultModelId: text('default_model_id').notNull().default('nous:deepseek/deepseek-v4.1-flash'),
+  defaultEffort: text('default_effort').default('low'),
   defaultRuntime: text('default_runtime').notNull().default('cloud'),
   dailyTokenCap: bigint('daily_token_cap', { mode: 'number' }),
   maxConcurrentRuns: integer('max_concurrent_runs').notNull().default(3),
@@ -458,6 +458,12 @@ export const runs = pgTable(
     workspaceId: uuid('workspace_id').notNull(),
     sessionId: uuid('session_id').notNull(),
     agentId: uuid('agent_id'),
+    recoveryNextAt: ts('recovery_next_at'),
+    recoveryNotBefore: ts('recovery_not_before'),
+    recoveryCancelled: boolean('recovery_cancelled').notNull().default(false),
+    recoveryBlockedReason: text('recovery_blocked_reason'),
+    recoveryInput: text('recovery_input'),
+    recoveryHistory: jsonb('recovery_history').notNull().default([]),
     runtimeKind: text('runtime_kind').notNull().default('legacy'),
     runtimeProfile: text('runtime_profile'),
     runtimeRunId: text('runtime_run_id'),
