@@ -8,10 +8,10 @@
 // nothing will ever move it. The sweep is what turns that into an error a human
 // can Retry, which is the difference between a stuck run and a broken product.
 //
-// A verdict is also an instruction, not just a label. Marking a run dead while
-// the instance behind it keeps calling tools is the failure the review named
-// O2, so every non-`ok` verdict now sets `stop_requested` in the same statement
-// as the status and calls `terminate()` after the commit.
+// A failed monitoring request is not evidence that a Workflow died. Only a
+// confirmed terminal verdict may stop a run, and only while its attempt and
+// progress still match the snapshot that produced the verdict. Confirmed
+// absence is retained separately so monitoring never looks like run progress.
 //
 // Two other jobs ride along because they are the `app`-role half of things the
 // engine cannot do itself: the `agent` role has no UPDATE on
@@ -22,7 +22,11 @@ import { isEnginePaused } from '../env.js';
 import { connect } from '../db/client.js';
 import { publishEvents, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { ORPHAN_NO_EVENT_MINUTES, DEFAULT_MAX_TURNS } from '../engine/constants.js';
-import { runAttemptInstanceId } from './workflow.js';
+import { runAttemptInstanceId } from './instance-id.js';
+
+export const SWEEP_STARTUP_GRACE_SECONDS = 120;
+export const SWEEP_MISSING_CONFIRM_SECONDS = 60;
+export const SWEEP_LOOKUP_TIMEOUT_MS = 5_000;
 
 export interface SweepResult {
   readonly checked: number;
@@ -61,10 +65,55 @@ interface LiveRun {
   workflow_instance_id: string | null;
   stop_requested: boolean;
   stale: boolean;
+  in_grace: boolean;
+  /** PostgreSQL text preserves microseconds; a JavaScript Date does not. */
+  progress_at: string;
   model_id: string;
 }
 
-type Verdict = { kind: 'ok' } | { kind: 'stopped' } | { kind: 'error'; reason: string; message: string };
+type TerminalVerdict = { kind: 'stopped' } | { kind: 'error'; reason: string; message: string };
+type LookupCategory = 'timeout' | 'http_5xx' | 'http_4xx' | 'lookup_failed';
+type Verdict = { kind: 'ok' } | TerminalVerdict | { kind: 'missing' }
+  | { kind: 'deferred'; reason: 'startup_grace' | 'unknown_status' | LookupCategory };
+
+function confirmedMissing(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const detail = error as { code?: unknown; message?: unknown };
+  // Cloudflare's Workflow binding uses this specific error code, represented
+  // in the message by createWorkflowError in the pinned workers-sdk runtime.
+  // Its get() wrapper can also collapse status failures into the bare message
+  // 'instance.not_found'; that ambiguous form deliberately does not qualify.
+  // A generic 404, null response or arbitrary get/status exception is not it.
+  return detail.code === 'instance.not_found'
+    || (typeof detail.message === 'string' && /^\(instance\.not_found\)(?:\s|$)/.test(detail.message));
+}
+
+function lookupCategory(error: unknown): LookupCategory {
+  if (typeof error !== 'object' || error === null) return 'lookup_failed';
+  const detail = error as { name?: unknown; code?: unknown; status?: unknown };
+  if (detail.name === 'TimeoutError' || detail.name === 'AbortError' || detail.code === 'ETIMEDOUT') return 'timeout';
+  if (typeof detail.status === 'number' && detail.status >= 500 && detail.status < 600) return 'http_5xx';
+  if (typeof detail.status === 'number' && detail.status >= 400 && detail.status < 500) return 'http_4xx';
+  return 'lookup_failed';
+}
+
+async function boundedLookup(lookup: () => Promise<string | null>): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(lookup),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('Workflow status lookup timed out');
+          error.name = 'TimeoutError';
+          reject(error);
+        }, SWEEP_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * What the sweep concludes about one run.
@@ -88,23 +137,26 @@ export async function verdictFor(
     };
   }
 
+  // Admission commits before Workflow creation. Retry and recent progress also
+  // refresh updated_at, so none can be reaped during the visibility window.
+  if (run.in_grace) return { kind: 'deferred', reason: 'startup_grace' };
+
   let status: string | null;
   try {
-    status = await instanceStatus();
-  } catch {
-    // `get()` throws on an unknown id, and instances are retained 30 days.
-    return { kind: 'error', reason: 'instance_missing', message: 'the run attempt no longer exists' };
+    status = await boundedLookup(instanceStatus);
+  } catch (error) {
+    return confirmedMissing(error) ? { kind: 'missing' } : { kind: 'deferred', reason: lookupCategory(error) };
   }
-  if (status === null) {
-    return { kind: 'error', reason: 'instance_missing', message: 'the run attempt no longer exists' };
-  }
-  if (status === 'errored' || status === 'terminated' || status === 'unknown') {
+  if (status === 'errored' || status === 'terminated') {
     return { kind: 'error', reason: 'instance_dead', message: `the run attempt is ${status}` };
+  }
+  if (status === null || !['queued', 'running', 'paused', 'complete', 'waiting', 'waitingForPause'].includes(status)) {
+    return { kind: 'deferred', reason: 'unknown_status' };
   }
 
   // A `waiting` run is legitimately idle for up to 30 days, so the silence rule
   // applies only to a run that claims to be working.
-  if (run.stale && run.status !== 'waiting') {
+  if (run.stale && run.status !== 'waiting' && (status === 'running' || status === 'complete')) {
     return {
       kind: 'error',
       reason: 'no_progress',
@@ -125,12 +177,14 @@ export async function sweepWorkspace(env: Env, workspaceId: string, result: { ch
   const runs = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
     const { rows } = await tx.query<LiveRun>(
       `SELECT id, session_id, status, attempt, engine_version, workflow_instance_id, stop_requested, model_id,
+              updated_at::text AS progress_at,
+              (updated_at > now() - ($3 || ' seconds')::interval) AS in_grace,
               (updated_at < now() - ($2 || ' minutes')::interval) AS stale
          FROM runs
         WHERE workspace_id = $1 AND status IN ('working', 'waiting', 'stopping')
-        ORDER BY updated_at
+        ORDER BY stop_requested DESC, updated_at
         LIMIT 200`,
-      [workspaceId, String(ORPHAN_NO_EVENT_MINUTES)],
+      [workspaceId, String(ORPHAN_NO_EVENT_MINUTES), String(SWEEP_STARTUP_GRACE_SECONDS)],
     );
     return rows;
   });
@@ -138,55 +192,93 @@ export async function sweepWorkspace(env: Env, workspaceId: string, result: { ch
   for (const run of runs) {
     result.checked += 1;
     const verdict = await verdictFor(run, currentEngineVersion, async () => {
-      if (!run.workflow_instance_id) return null;
-      const instance = await env.RUN_ATTEMPT.get(run.workflow_instance_id);
+      const instance = await env.RUN_ATTEMPT.get(run.workflow_instance_id ?? runAttemptInstanceId(run.id, run.attempt));
       const status = await instance.status();
-      return (status as { status?: string }).status ?? null;
+      return typeof status?.status === 'string' ? status.status : null;
     });
-    if (verdict.kind === 'ok') continue;
+    if (verdict.kind === 'deferred' || verdict.kind === 'missing') {
+      console.log(JSON.stringify({
+        at: 'cron.orphans.lookup', run_id: run.id, attempt: run.attempt,
+        instance_id: (run.workflow_instance_id ?? runAttemptInstanceId(run.id, run.attempt)).slice(0, 100),
+        category: verdict.kind === 'missing' ? 'confirmed_missing' : verdict.reason,
+      }));
+    }
 
-    const jobIds = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+    const transition = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+      const snapshot = [workspaceId, run.id, run.attempt, run.workflow_instance_id, run.status,
+        run.progress_at, run.stop_requested, run.engine_version];
+      const unchanged = `workspace_id = $1 AND id = $2 AND attempt = $3
+        AND workflow_instance_id IS NOT DISTINCT FROM $4 AND status = $5
+        AND updated_at = $6::timestamptz AND stop_requested = $7 AND engine_version = $8`;
+      // Serialize observations against run progress and competing sweeps. The
+      // network lookup stays outside this lock; a changed snapshot loses here.
+      const locked = await tx.query(`SELECT id FROM runs WHERE ${unchanged} FOR UPDATE`, snapshot);
+      if (!locked.rowCount) return null;
+
+      let terminal: TerminalVerdict;
+      if (verdict.kind === 'missing') {
+        const observed = await tx.query<{ confirmed: boolean }>(
+          `INSERT INTO run_sweep_observations
+             (workspace_id, run_id, attempt, workflow_instance_id, run_status, progress_at, first_missing_at)
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, now())
+           ON CONFLICT (run_id) DO UPDATE SET
+             attempt = EXCLUDED.attempt, workflow_instance_id = EXCLUDED.workflow_instance_id,
+             run_status = EXCLUDED.run_status, progress_at = EXCLUDED.progress_at,
+             first_missing_at = CASE
+               WHEN run_sweep_observations.attempt = EXCLUDED.attempt
+                AND run_sweep_observations.workflow_instance_id IS NOT DISTINCT FROM EXCLUDED.workflow_instance_id
+                AND run_sweep_observations.run_status = EXCLUDED.run_status
+                AND run_sweep_observations.progress_at = EXCLUDED.progress_at
+               THEN run_sweep_observations.first_missing_at ELSE now() END
+           RETURNING first_missing_at <= now() - ($7 || ' seconds')::interval AS confirmed`,
+          [...snapshot.slice(0, 6), String(SWEEP_MISSING_CONFIRM_SECONDS)],
+        );
+        if (!observed.rows[0]?.confirmed) return null;
+        terminal = { kind: 'error', reason: 'instance_missing', message: 'the run attempt no longer exists' };
+      } else {
+        // A successful or uncertain observation breaks consecutive absence.
+        // This never updates runs.updated_at or extends the no-progress timer.
+        await tx.query(`DELETE FROM run_sweep_observations WHERE workspace_id = $1 AND run_id = $2`, [workspaceId, run.id]);
+        if (verdict.kind === 'ok' || verdict.kind === 'deferred') return null;
+        terminal = verdict;
+      }
       const error =
-        verdict.kind === 'error'
-          ? { class: 'transient', retryable: true, reason: verdict.reason, message: verdict.message, step_id: null }
+        terminal.kind === 'error'
+          ? { class: 'transient', retryable: true, reason: terminal.reason, message: terminal.message, step_id: null }
           : null;
-      const status = verdict.kind === 'stopped' ? 'stopped' : 'error';
-      // `stop_requested` goes down in the same statement as the status, and it
-      // goes down for *every* non-`ok` verdict rather than only for the ones
-      // that were already stopping. It used to be written by nothing here, so a
-      // run the sweep declared dead for `engine_version_changed` or
-      // `no_progress` carried on: the live Workflow polls this flag and nothing
-      // else, so it called more tools, wrote more `requests` rows, and on
-      // completion moved itself back to `completed` (security review O2). The
-      // flag is the half that works at the next step boundary; `terminate()`
-      // below is the half that may not work at all.
+      const status = terminal.kind === 'stopped' ? 'stopped' : 'error';
+      // Keep the durable stop flag and terminal projection atomic (O2), but
+      // never apply an old verdict to a newer attempt, status or progress row.
       const { rowCount } = await tx.query(
-        `UPDATE runs SET status = $3, error = $4::jsonb, ended_at = now(), stop_requested = true
-          WHERE workspace_id = $1 AND id = $2 AND status IN ('working', 'waiting', 'stopping')`,
-        [workspaceId, run.id, status, error ? JSON.stringify(error) : null],
+        `UPDATE runs SET status = $9, error = $10::jsonb, ended_at = now(), stop_requested = true
+          WHERE ${unchanged}`,
+        [...snapshot, status, error ? JSON.stringify(error) : null],
       );
-      if (!rowCount) return [];
-      if (verdict.kind === 'error') {
+      if (!rowCount) return null;
+      await tx.query(`DELETE FROM run_sweep_observations WHERE workspace_id = $1 AND run_id = $2`, [workspaceId, run.id]);
+      if (terminal.kind === 'error') {
         await tx.query(
           `INSERT INTO events (workspace_id, actor_type, kind, run_id, session_id)
            VALUES ($1, 'system', 'run.errored', $2, $3)`,
           [workspaceId, run.id, run.session_id],
         );
       }
-      return publishEvents(tx, workspaceId, [
+      const jobIds = await publishEvents(tx, workspaceId, [
         {
           kind: 'run.status',
           sessionId: run.session_id,
           payload: { run_id: run.id, attempt: run.attempt, status, error },
         },
       ]);
+      return { jobIds, status };
     });
-    if (verdict.kind === 'stopped') result.stopped += 1;
+    if (!transition) continue;
+    if (transition.status === 'stopped') result.stopped += 1;
     else result.errored += 1;
-    if (jobIds.length > 0) await runJobsAfterCommit(env, workspaceId, jobIds);
     // After the commit, never before: a terminate that landed on a run whose
     // UPDATE then rolled back would have killed a live run for nothing.
     await terminateInstance(env, run);
+    if (transition.jobIds.length > 0) await runJobsAfterCommit(env, workspaceId, transition.jobIds);
   }
 }
 
@@ -211,10 +303,11 @@ async function terminateInstance(env: Env, run: LiveRun): Promise<void> {
   try {
     const instance = await env.RUN_ATTEMPT.get(instanceId);
     await instance.terminate();
-    console.log(JSON.stringify({ at: 'cron.orphans.terminate', ok: true, run_id: run.id, instance_id: instanceId }));
+    console.log(JSON.stringify({ at: 'cron.orphans.terminate', ok: true, run_id: run.id, attempt: run.attempt, instance_id: instanceId.slice(0, 100) }));
   } catch (error) {
     console.log(
-      JSON.stringify({ at: 'cron.orphans.terminate', ok: false, run_id: run.id, instance_id: instanceId, error: String(error) }),
+      JSON.stringify({ at: 'cron.orphans.terminate', ok: false, run_id: run.id, attempt: run.attempt,
+        instance_id: instanceId.slice(0, 100), category: confirmedMissing(error) ? 'confirmed_missing' : lookupCategory(error) }),
     );
   }
 }
@@ -369,8 +462,8 @@ async function drainRunQueues(env: Env, workspaceId: string): Promise<number> {
         id: runAttemptInstanceId(start.runId, start.attempt),
         params: { ...start, workspaceId },
       });
-    } catch (error) {
-      console.log(JSON.stringify({ at: 'cron.queue', ok: false, run_id: start.runId, error: String(error) }));
+    } catch {
+      console.log(JSON.stringify({ at: 'cron.queue', ok: false, run_id: start.runId, category: 'workflow_create_failed' }));
     }
   }
   if (jobIds.length > 0) await runJobsAfterCommit(env, workspaceId, jobIds);
@@ -387,10 +480,10 @@ export async function sweepRuns(env: Env): Promise<SweepResult> {
       await sweepWorkspace(env, workspaceId, tally);
       keysMarked += await markKeysFromRunErrors(env, workspaceId);
       queueStarted += await drainRunQueues(env, workspaceId);
-    } catch (error) {
+    } catch {
       // One workspace's failure must not stop the others: the next minute runs
       // them all again from wherever this one stopped.
-      console.log(JSON.stringify({ at: 'cron.orphans', workspace_id: workspaceId, ok: false, error: String(error) }));
+      console.log(JSON.stringify({ at: 'cron.orphans', workspace_id: workspaceId, ok: false, category: 'sweep_failed' }));
     }
   }
   return { ...tally, keysMarked, queueStarted };

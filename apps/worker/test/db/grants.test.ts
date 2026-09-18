@@ -90,6 +90,7 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
 
 /** The revocations the approval invariant rests on, named one by one. */
 const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
+  { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'members', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
@@ -134,6 +135,11 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
 ];
 
 describe('database grants', () => {
+  it('keeps missing-instance observations app-owned', async () => {
+    expect((await grantsFor('app')).get('run_sweep_observations')).toEqual(new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']));
+    expect((await grantsFor('agent')).has('run_sweep_observations')).toBe(false);
+  });
+
   it('gives the agent role exactly the privileges the plan lists', async () => {
     const actual = await grantsFor('agent');
     const actualPlain: Record<string, Privilege[]> = {};
