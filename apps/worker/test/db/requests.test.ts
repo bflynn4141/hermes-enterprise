@@ -46,6 +46,26 @@ describe('GET /w/:ws/requests', () => {
     expect(search.items[0]?.label).toBe('Leah Martinez');
   });
 
+  it('queues a bounded triage batch without running model work in the read request', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    e.INBOX_TRIAGE_MODE = 'shadow';
+    for (let index = 0; index < 7; index += 1) {
+      await seedRequest(fx, 'application', { label: `Candidate ${index}` });
+    }
+
+    const response = await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?status=pending`);
+    expect(response.status).toBe(200);
+    const jobs = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const { rows } = await client.query<{ attempts: number }>(
+        `SELECT attempts FROM jobs WHERE kind = 'request_triage' ORDER BY created_at`,
+      );
+      return rows;
+    });
+    expect(jobs).toHaveLength(5);
+    expect(jobs.every((job) => job.attempts === 0)).toBe(true);
+  });
+
   it('carries the payload, its sources and what the model could not find', async () => {
     const fx = await seedWorkspace();
     const { env: e } = env();

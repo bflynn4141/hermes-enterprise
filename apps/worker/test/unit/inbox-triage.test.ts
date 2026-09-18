@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { normalizedTriageState, scoreTriage } from '../../src/inbox-triage/service.js';
+import { describe, expect, it, vi } from 'vitest';
+import { callJev, JEV_MODEL_ID, normalizedTriageState, scoreTriage } from '../../src/inbox-triage/service.js';
 
 describe('Inbox triage', () => {
   it('redacts contact details and excludes evidence bodies from model state', () => {
@@ -31,5 +31,31 @@ describe('Inbox triage', () => {
     const sensitive = scoreTriage({ approval_type: 'data_disclosure' }, weak);
     expect(sensitive.score).toBeGreaterThanOrEqual(45);
     expect(sensitive.reasons).toContain('sensitive_authorization');
+  });
+
+  it('calls TypeSafe System One with the Jev model and bearer credential', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ model: JEV_MODEL_ID, answers: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const fetcher = fetchMock as unknown as typeof fetch;
+    await expect(callJev('test-key', { request_kind: 'application' }, fetcher)).resolves.toMatchObject({
+      model: JEV_MODEL_ID,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer test-key');
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      state: { request_kind: 'application' },
+      model: JEV_MODEL_ID,
+      questions: { goal_relevance: { type: 'score' }, needs_human_triage: { type: 'noul' } },
+    });
+  });
+
+  it('reports only the TypeSafe status when the API rejects a call', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response('credential detail that must not be logged', { status: 401 })) as unknown as typeof fetch;
+    await expect(callJev('test-key', { request_kind: 'application' }, fetcher)).rejects.toThrow('typesafe_http_401');
   });
 });
