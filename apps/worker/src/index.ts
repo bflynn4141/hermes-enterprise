@@ -296,8 +296,8 @@ app.post('/w/:ws/partner-screening/runs', startPartnerScreening);
 app.get('/w/:ws/partner-screening/runs/:id', getPartnerScreening);
 app.post('/w/:ws/partner-screening/runs/:id/handoff', handoffPartnerScreening);
 
-// Settings > Provider keys (Admin, step-up) and the catalog the model menu
-// reads (any member). See src/routes/keys.ts for why the two differ.
+// Settings > Provider keys (Admin; mutations require step-up) and the catalog
+// the model menu reads (any member). See src/routes/keys.ts for the boundary.
 app.get('/w/:ws/catalog', catalog);
 app.get('/w/:ws/provider-keys', listKeys);
 app.post('/w/:ws/provider-keys', addKey);

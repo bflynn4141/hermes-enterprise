@@ -200,6 +200,33 @@ describe('SR-3 · installing and revoking a billing credential needs a CSRF toke
   });
 });
 
+describe('provider connection status', () => {
+  it('lets an Admin read masked status with an ordinary session while mutations still require step-up', async () => {
+    const fx = await seedWorkspace();
+    const { env } = makeEnv();
+
+    // Establish the fake-auth session, then move only its recent-auth marker
+    // beyond the five-minute step-up window.
+    expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).status).toBe(200);
+    await withClient('owner', (c) =>
+      c.query(`UPDATE auth_sessions SET authenticated_at = now() - interval '10 minutes' WHERE sid = $1`, [
+        `dev-${fx.adminId}`,
+      ]),
+    );
+
+    const listed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/provider-keys`);
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({ keys: [] });
+
+    const mutation = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/provider-keys/${randomUUID()}/verify`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(mutation.status).toBe(401);
+    expect(await mutation.json()).toMatchObject({ reason: 'reauth_required' });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // SR-4 · an invitation is matched against a *verified* address
 // ---------------------------------------------------------------------------

@@ -153,11 +153,17 @@ async function auditKeyEvent(
   );
 }
 
-/** GET /w/:ws/provider-keys — masked, Admin, step-up. */
+/**
+ * GET /w/:ws/provider-keys — masked, Admin.
+ *
+ * Connection health is ordinary workspace status. Requiring a five-minute
+ * step-up here made an existing connection disappear from the client whenever
+ * the Admin's recent-auth window elapsed. Every credential mutation below
+ * keeps its step-up boundary; this read returns masked metadata only.
+ */
 export async function listKeys(c: Context<{ Bindings: Env }>): Promise<Response> {
   const keys = await inWorkspace(c, async (work) => {
     work.requireAdmin('reading provider keys');
-    requireStepUp(work.session);
     return listProviderKeys(work.tx, work.workspaceId);
   });
   return c.json(providerKeyListSchema.parse({ keys }));

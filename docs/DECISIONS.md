@@ -1849,9 +1849,11 @@ render anyway. Two details fell out of it:
 * `/auth/session` **must** carry `?ws=`. Without it the route walks
   `workspace_directory`, which only the WorkOS mirror writes, so a seeded
   development workspace is not in it and the answer is 404 `no_workspace`.
-* reading provider keys is itself a step-up action, so a 401 there is
-  `reauth_required`, not "signed out". `ui.providerKeysLocked` keeps "no keys"
-  and "not allowed to look right now" as different screens.
+* the Admin-only provider-key read returns masked connection health without a
+  recent-auth challenge. Connect, verify, rotate and remove still require
+  step-up. `ui.providerKeysLocked` remains a rolling-deploy fallback for an
+  older Worker that answers `reauth_required`; the client renders a protected
+  state instead of falsely claiming no connection exists.
 
 ---
 

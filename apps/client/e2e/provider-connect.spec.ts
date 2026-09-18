@@ -70,4 +70,17 @@ test.describe('Nous Portal connection', () => {
     await expect(app.getByText('Admin decision required')).toBeVisible();
     await expect(app.getByRole('button', { name: 'Connect Nous Portal' })).toHaveCount(0);
   });
+
+  test('never presents protected connection status as a missing connection', async ({ page }) => {
+    await page.goto('/?data=empty&key=none&providerKeys=locked');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Provider keys' }).click();
+
+    await expect(app.getByText('Provider connection details are protected')).toBeVisible();
+    await expect(app.getByText(/Iris can keep using a saved Nous Portal connection/)).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Sign in to manage' })).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Connect Nous Portal' })).toHaveCount(0);
+    await expect(app.getByText('Connect Nous Portal to enable models')).toHaveCount(0);
+  });
 });
