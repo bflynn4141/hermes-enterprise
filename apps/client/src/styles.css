@@ -132,6 +132,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
    SidebarNav already carries Codex-like 32 px rows, 14 px type and compact
    gutters. Keep those native metrics; the client only adds a status dot and
    makes the one-line truncation contract explicit for session titles. */
+.sidebar .sidebar-row[data-session-row] { padding-inline: 12px; }
 .sidebar .sidebar-row[data-session-row] > .sidebar-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .sidebar-row[data-session-row]::after { content: ''; width: 8px; height: 8px; margin-left: 10px; border-radius: 50%; flex: 0 0 8px; align-self: center; background: #4ED890; box-shadow: 0 0 0 3px rgba(78,216,144,.12); }
 .sidebar .sidebar-row[data-session-status="working"]::after { background: #8BA7FF; box-shadow: 0 0 0 3px rgba(139,167,255,.12); }
