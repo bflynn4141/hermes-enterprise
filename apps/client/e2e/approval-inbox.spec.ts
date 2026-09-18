@@ -31,6 +31,9 @@ test.describe('enterprise approval inbox', () => {
   test('the opt-in fixture exposes every approval type while preserving legacy requests', async ({ page }) => {
     const app = await openInbox(page);
     await expect(app.getByText('Illustrative demo')).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Priority' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(app.getByText('urgent', { exact: true })).toBeVisible();
+    await expect(app.getByText('0/1 Workspace owner').first()).toBeVisible();
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
 
     for (const approval of APPROVAL_CASES.filter((item) => item.type !== 'agent_governance')) {
@@ -145,8 +148,8 @@ test.describe('enterprise approval inbox', () => {
     await expect(limits.getByText('5,000', { exact: true })).toBeVisible();
     await expect(limits.getByText('2', { exact: true })).toBeVisible();
     await expect(app.getByText('Illustrative scenario. Names, prices, sources and effects shown here are fictional')).toBeVisible();
-    await expect(app.getByText('Workspace owner')).toBeVisible();
-    await expect(app.getByText('Budget reviewer')).toBeVisible();
+    await expect(app.getByText('Workspace owner', { exact: true })).toBeVisible();
+    await expect(app.getByText('Budget reviewer', { exact: true })).toBeVisible();
 
     await app.getByRole('button', { name: 'Approve plan' }).click();
     await expect(app.getByText('Waiting for Alex Rivera').first()).toBeVisible();

@@ -478,6 +478,15 @@ export const approvalListProjectionSchema = z
     pending_for_viewer: z.boolean(),
     waiting_on_others: z.boolean(),
     current_reviewer_names: z.array(shortText).max(25),
+    mode: z.enum(['sequential', 'parallel']),
+    completed_steps: z.number().int().min(0),
+    total_steps: z.number().int().min(1),
+    remaining_approvals: z.number().int().min(0),
+    current_steps: z.array(z.object({
+      label: shortText,
+      approvals_recorded: z.number().int().min(0),
+      quorum: z.number().int().min(1),
+    }).strict()).max(25),
     effect_status: approvalEffectOutcomeSchema.shape.status,
     work_status: approvalWorkOutcomeSchema.shape.status,
   })

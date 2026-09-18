@@ -727,6 +727,7 @@ export async function loadApprovalListProjection(
   const currentIds = new Set(view.steps.filter((step) => step.status === 'current').flatMap((step) => step.current_reviewer_member_ids));
   const reviewerNames = view.identities.reviewers.filter((reviewer) => currentIds.has(reviewer.member_id)).map((reviewer) => reviewer.name);
   const pendingForViewer = status === 'pending' && view.capabilities.allowed_decisions.length > 0;
+  const currentSteps = view.steps.filter((step) => step.status === 'current');
   return {
     approval_type: view.payload.approval_type,
     authorization_status: status,
@@ -735,6 +736,17 @@ export async function loadApprovalListProjection(
     pending_for_viewer: pendingForViewer,
     waiting_on_others: status === 'pending' && !pendingForViewer,
     current_reviewer_names: reviewerNames,
+    mode: view.payload.policy.mode,
+    completed_steps: view.steps.filter((step) => step.status === 'approved').length,
+    total_steps: view.steps.length,
+    remaining_approvals: view.steps
+      .filter((step) => !['approved', 'declined', 'changes_requested'].includes(step.status))
+      .reduce((sum, step) => sum + Math.max(0, step.quorum - step.approvals_recorded), 0),
+    current_steps: currentSteps.map((step) => ({
+      label: step.label,
+      approvals_recorded: step.approvals_recorded,
+      quorum: step.quorum,
+    })),
     effect_status: view.effect.status,
     work_status: expired ? 'cancelled' : view.work.status,
   };
@@ -882,10 +894,10 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   const payload = approvalPayloadSchema.parse({ ...input.proposal, context: serverContext, authorization: { revision: 1, hash, expires_at: expiresAt }, policy: selected.policy, resource_bindings: bindings });
   const effect = effectFor(input.proposal, bindings);
 
-  const inserted = await context.tx.query<{ id: string }>(
+  const inserted = await context.tx.query<{ id: string; version: number }>(
     `INSERT INTO requests (workspace_id, kind, label, payload, status, run_id, session_id, tool_call_id)
      VALUES ($1, 'approval', $2, $3::jsonb, 'pending', $4, $5, $6)
-     RETURNING id`,
+     RETURNING id, EXTRACT(EPOCH FROM updated_at)::int AS version`,
     [context.workspaceId, input.label, JSON.stringify(payload), requester.runId, requester.sessionId, input.idempotency_key],
   );
   const requestId = inserted.rows[0]?.id;
@@ -1107,7 +1119,10 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
        effect_reason=$9, work_status='waiting', work_reason=NULL, finalized_at=NULL
      WHERE request_id=$1`, [requestId, selected.row.id, selected.row.version, nextRevision, hash, expiresAt, effect.kind, effect.status, effect.reason],
   );
-  await context.tx.query(`UPDATE requests SET payload = $2::jsonb, status = 'pending' WHERE id = $1`, [requestId, JSON.stringify(payload)]);
+  await context.tx.query(
+    `UPDATE requests SET payload = $2::jsonb, status = 'pending' WHERE id = $1
+     RETURNING EXTRACT(EPOCH FROM updated_at)::int AS version`, [requestId, JSON.stringify(payload)],
+  );
   await recordCommand(context.tx, row, 'revision', input.idempotency_key, inputHash);
   await audit(context.tx, context.workspaceId, 'user', context.userId, 'approval.revised', requestId, row.source_session_id);
   await publishRequestChanged(context, requestId);

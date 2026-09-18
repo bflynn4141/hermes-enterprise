@@ -665,6 +665,33 @@ export const requests = pgTable('requests', {
   updatedAt: now('updated_at'),
 });
 
+export const requestTriageAssessments = pgTable(
+  'request_triage_assessments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    requestVersion: integer('request_version').notNull(),
+    stateHash: text('state_hash').notNull(),
+    rubricVersion: text('rubric_version').notNull(),
+    summaryVersion: text('summary_version').notNull(),
+    provider: text('provider').notNull().default('cloudflare_workers_ai'),
+    modelId: text('model_id').notNull().default('typesafe/jev'),
+    modelVersion: text('model_version'),
+    status: text('status').notNull().default('pending'),
+    priorityScore: numeric('priority_score', { precision: 5, scale: 2 }),
+    priorityBand: text('priority_band'),
+    confidence: numeric('confidence', { precision: 5, scale: 4 }),
+    signals: jsonb('signals').notNull().default({}),
+    reasonCodes: jsonb('reason_codes').notNull().default([]),
+    failureClass: text('failure_class'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    createdAt: now('created_at'),
+    completedAt: ts('completed_at'),
+  },
+  (t) => [unique('request_triage_assessments_revision_key').on(t.requestId, t.stateHash, t.rubricVersion, t.modelId)],
+);
+
 export const decisions = pgTable('decisions', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1456,6 +1483,7 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  request_triage_assessments: requestTriageAssessments,
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,
   onboarding_sample_events: onboardingSampleEvents,

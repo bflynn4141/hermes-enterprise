@@ -70,6 +70,8 @@ export const JOB_KINDS = [
   // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
   'hermes_capacity_alert',
+  // Advisory Jev assessment for Inbox ordering. Approval policy remains the authority.
+  'request_triage',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -593,6 +595,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'hermes_capacity_alert':
       (await import('./hermes-cloud/capacity.js')).runCapacityAlertJob(job);
+      return;
+    case 'request_triage':
+      await (await import('./inbox-triage/service.js')).runRequestTriageJob(env, job);
       return;
     case 'reverify':
       {

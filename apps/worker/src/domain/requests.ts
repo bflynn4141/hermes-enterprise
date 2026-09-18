@@ -20,7 +20,8 @@
 //     older than the one an event carried — and a timestamp already has exactly
 //     that property without a column that something has to remember to bump.
 import type { Tx } from '../db/client.js';
-import type { ApprovalListProjection, RequestKind } from '@hermes/shared';
+import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
+import { decisionSummary } from './request-summary.js';
 
 export interface RequestRow {
   id: string;
@@ -36,6 +37,14 @@ export interface RequestRow {
   decision_id: string | null;
   decided_at: Date | null;
   decided_by_name: string | null;
+  triage_status?: 'pending' | 'complete' | 'abstained' | 'failed' | null;
+  triage_score?: string | number | null;
+  triage_band?: 'urgent' | 'high' | 'normal' | 'low' | null;
+  triage_confidence?: string | number | null;
+  triage_reason_codes?: unknown;
+  triage_completed_at?: Date | null;
+  triage_rubric_version?: string | null;
+  triage_model_id?: string | null;
 }
 
 /** Every column the shaping needs, plus the latest note and the decision. */
@@ -46,10 +55,27 @@ export const REQUEST_SELECT = `
            WHERE n.request_id = r.id ORDER BY n.created_at DESC, n.id DESC LIMIT 1) AS note,
          d.id AS decision_id,
          d.decided_at,
-         u.name AS decided_by_name
+         u.name AS decided_by_name,
+         ta.status AS triage_status,
+         ta.priority_score AS triage_score,
+         ta.priority_band AS triage_band,
+         ta.confidence AS triage_confidence,
+         ta.reason_codes AS triage_reason_codes,
+         ta.completed_at AS triage_completed_at,
+         ta.rubric_version AS triage_rubric_version,
+         ta.model_id AS triage_model_id
     FROM requests r
     LEFT JOIN decisions d ON d.request_id = r.id
-    LEFT JOIN users u ON u.id = d.decided_by`;
+    LEFT JOIN users u ON u.id = d.decided_by
+    LEFT JOIN LATERAL (
+      SELECT status, priority_score, priority_band, confidence, reason_codes,
+             completed_at, rubric_version, model_id
+        FROM request_triage_assessments
+       WHERE request_id = r.id
+         AND request_version = EXTRACT(EPOCH FROM r.updated_at)::int
+       ORDER BY created_at DESC
+       LIMIT 1
+    ) ta ON true`;
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -122,7 +148,37 @@ function missingOf(payload: Record<string, unknown>): string[] {
 }
 
 /** The row as `requestEntitySchema` wants it. Parse the result before sending. */
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null): Record<string, unknown> {
+function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjection | null): RequestTriage {
+  if (!active) return { status: 'unavailable', band: 'assessing', score: null, confidence: null, reason_codes: [], assessed_at: null, rubric_version: row.triage_rubric_version ?? '1', model_id: row.triage_model_id ?? 'typesafe/jev' };
+  const status = row.triage_status ?? 'pending';
+  const complete = status === 'complete' && row.triage_band !== null;
+  const reasons = Array.isArray(row.triage_reason_codes) ? row.triage_reason_codes.filter((value): value is string => typeof value === 'string').slice(0, 8) : [];
+  const result: RequestTriage = {
+    status,
+    band: complete ? row.triage_band! : 'assessing',
+    score: complete && row.triage_score !== null ? Number(row.triage_score) : null,
+    confidence: complete && row.triage_confidence !== null ? Number(row.triage_confidence) : null,
+    reason_codes: reasons,
+    assessed_at: row.triage_completed_at?.toISOString() ?? null,
+    rubric_version: row.triage_rubric_version ?? '1',
+    model_id: row.triage_model_id ?? 'typesafe/jev',
+  };
+  if (complete && approval && row.status === 'pending') {
+    const expiresInHours = (Date.parse(approval.expires_at) - Date.now()) / 3_600_000;
+    if (expiresInHours <= 4) {
+      result.band = 'urgent';
+      result.score = Math.max(result.score ?? 0, 90);
+      result.reason_codes = [...new Set(['expires_within_4h', ...result.reason_codes])].slice(0, 8);
+    } else if (expiresInHours <= 24 && result.band !== 'urgent') {
+      result.band = 'high';
+      result.score = Math.max(result.score ?? 0, 70);
+      result.reason_codes = [...new Set(['expires_within_24h', ...result.reason_codes])].slice(0, 8);
+    }
+  }
+  return result;
+}
+
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
@@ -145,6 +201,8 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
+    decision_summary: decisionSummary(row, approval),
+    triage: triageOf(row, triageActive, approval),
   };
 }
 
