@@ -39,7 +39,11 @@ import {
 } from './types.js';
 
 export const NOUS_PORTAL_BASE = 'https://inference-api.nousresearch.com/v1';
-export const NOUS_VERIFICATION_MODEL = 'anthropic/claude-sonnet-5';
+// Verification must test the credential, not the current capacity of a
+// premium upstream. This free Portal route is deliberately separate from the
+// workspace default model so a temporary Claude outage cannot make a healthy
+// OAuth grant look invalid or block reconnecting it.
+export const NOUS_VERIFICATION_MODEL = 'stepfun/step-3.7-flash:free';
 
 /**
  * Fixed headers for the OpenAI-compatible gateway. Tenant credentials and

@@ -18,6 +18,7 @@ const includesAny = (value: string, patterns: readonly RegExp[]): boolean =>
   patterns.some((pattern) => pattern.test(value));
 
 const AUTH = [
+  /runtime_provider_auth/,
   /provider authentication failed/,
   /\b(?:http\s*)?401\b/,
   /\bunauthori[sz]ed\b/,
@@ -29,6 +30,7 @@ const AUTH = [
 ] as const;
 
 const QUOTA = [
+  /runtime_provider_quota/,
   /\b(?:http\s*)?402\b/,
   /\binsufficient (?:credits?|balance|funds)\b/,
   /\b(?:credits?|balance) exhausted\b/,
@@ -37,12 +39,15 @@ const QUOTA = [
 ] as const;
 
 const RATE_LIMIT = [
+  /runtime_provider_rate_limited/,
   /\b(?:http\s*)?429\b/,
   /\brate[ -]?limit(?:ed|ing)?\b/,
   /\btoo many requests\b/,
 ] as const;
 
 const REJECTED = [
+  /runtime_model_unavailable/,
+  /runtime_provider_rejected/,
   /\b(?:http\s*)?(?:400|404|405|413|415|422)\b/,
   /\bbad request\b/,
   /\binvalid request\b/,
@@ -59,6 +64,7 @@ const INTERRUPTED = [
 ] as const;
 
 const UNAVAILABLE = [
+  /runtime_provider_unavailable/,
   /\b(?:http\s*)?(?:500|502|503|504)\b/,
   /\binternal server error\b/,
   /\btemporar(?:y|ily) unavailable\b/,
@@ -131,7 +137,7 @@ export function classifyHermesFailure(
       code: 'unavailable', nativeErrorPresent,
       error: {
         class: 'transient', retryable: true, reason: 'hermes_provider_unavailable',
-        message: 'The model provider is temporarily unavailable. Retry the remaining work.', step_id: 'hermes',
+        message: 'The selected model is temporarily unavailable. Choose another model or retry shortly.', step_id: 'hermes',
       },
     };
   }

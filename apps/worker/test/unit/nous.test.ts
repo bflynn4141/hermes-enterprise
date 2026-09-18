@@ -67,7 +67,7 @@ describe('the Nous Portal adapter', () => {
     const rec = recorder(() => Response.json({ choices: [{ message: { content: 'OK' } }] }));
     expect(await new NousPortalProvider({ fetch: rec.fetch }).listModels(credential)).toEqual({ ok: true, models: [] });
     expect(rec.calls[0]?.url).toBe('https://inference-api.nousresearch.com/v1/chat/completions');
-    expect(JSON.parse(String(rec.calls[0]?.init?.body))).toMatchObject({ max_tokens: 1, model: 'anthropic/claude-sonnet-5' });
+    expect(JSON.parse(String(rec.calls[0]?.init?.body))).toMatchObject({ max_tokens: 1, model: 'stepfun/step-3.7-flash:free' });
   });
 });
 
