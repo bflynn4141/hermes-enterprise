@@ -34,6 +34,7 @@ import { runtimeSkillManifests } from '../runtime/skills.js';
 import { runtimeLatency } from '../runtime/latency.js';
 import { logEvent } from '../keys/redact.js';
 import { recordHermesLatency } from '../ops/analytics.js';
+import { exportRaindropRun } from '../ops/raindrop.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -391,6 +392,18 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           }),
           skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
         }, engineStep(step), runInput);
+        // The terminal message and status have already been committed and sent
+        // to the session hub. Raindrop is a post-run observer: a timeout,
+        // invalid key or vendor outage cannot change or delay that outcome.
+        const raindrop = await exportRaindropRun(this.env, db, run.id);
+        logEvent({
+          at: 'raindrop.export', run_id: run.id, trace_id: params.traceId,
+          status: raindrop.status,
+          ...('reason' in raindrop ? { reason: raindrop.reason } : {}),
+          ...('httpStatus' in raindrop ? { http_status: raindrop.httpStatus } : {}),
+          ...('eventId' in raindrop ? { event_id: raindrop.eventId } : {}),
+          ...('signal' in raindrop ? { signal: raindrop.signal } : {}),
+        });
       } else {
         await runAttempt(deps, engineStep(step), runInput);
       }
