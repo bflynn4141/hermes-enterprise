@@ -4,7 +4,7 @@ import { mockUuid, type Ref, type RequestEntity } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState, reduce } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { InboxList, RequestReview } from './Inbox.js';
+import { DocumentView, InboxList, RequestReview } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
   const payload = kind === 'application'
@@ -57,6 +57,15 @@ function render(ref: Ref, selectedId?: string): string {
   return renderToStaticMarkup(
     <StoreProvider store={createStore(state)} adapter={{} as Adapter}>
       {selectedId ? <RequestReview id={selectedId} /> : <InboxList />}
+    </StoreProvider>,
+  );
+}
+
+function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', readOnly = false): string {
+  const state = { ...initialState(), user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role } };
+  return renderToStaticMarkup(
+    <StoreProvider store={createStore(state)} adapter={{} as Adapter}>
+      <DocumentView request={row} readOnly={readOnly} />
     </StoreProvider>,
   );
 }
@@ -129,41 +138,79 @@ describe('the Inbox renders the focused view', () => {
     expect(html).not.toContain('Ada pending');
   });
 
-  it('renders staged invoice and signature flows around the complete documents', () => {
-    const invoice = render({ section: 'inbox', view: 'request', id: requests[3]!.id }, requests[3]!.id);
-    expect(invoice).toContain('Invoice approval');
-    expect(invoice).toContain('Invoice approval steps');
-    expect(invoice).toContain('Review invoice');
-    expect(invoice).toContain('Payment');
-    expect(invoice).toContain('Confirm');
+  it('starts invoice review with the actual draft decision and available source context', () => {
+    const invoice = renderDocument(requests[3]!);
+    expect(invoice).toContain('Your decision');
+    expect(invoice).toContain('Approve invoice draft');
+    expect(invoice).toContain('0 of 1 Admin approval');
+    expect(invoice).toContain('You can approve');
+    expect(invoice).toContain('Robin Studio');
+    expect(invoice).toContain('Nous Research');
+    expect(invoice).toContain('2026-09-30');
+    expect(invoice).toContain('What is this for?');
+    expect(invoice).toContain('Partner workshop');
+    expect(invoice).toContain('No source messages linked.');
     expect(invoice).toContain('Full document');
-    expect(invoice).toContain('Review payment');
-    expect(invoice).toContain('Nothing is approved, signed, sent, or paid yet.');
-
-    const agreement = render({ section: 'inbox', view: 'request', id: requests[4]!.id }, requests[4]!.id);
-    expect(agreement).toContain('Signature approval');
-    expect(agreement).toContain('Signature approval steps');
-    expect(agreement).toContain('Review agreement');
-    expect(agreement).toContain('Signature');
-    expect(agreement).toContain('Full document');
-    expect(agreement).toContain('Add signature');
-    expect(agreement).toContain('Nothing is approved, signed, sent, or paid yet.');
+    expect(invoice).toContain('No payment or email is sent.');
+    expect(invoice).not.toContain('Review payment');
+    expect(invoice).not.toContain('Payment authorization');
+    expect(invoice).not.toContain('Connect a bank');
   });
 
-  it('keeps complete documents and authorization controls in resolved receipts', () => {
-    const invoice = render({ section: 'inbox', view: 'request', id: requests[5]!.id }, requests[5]!.id);
-    expect(invoice).toContain('Complete document');
-    expect(invoice).toContain('Payment authorization');
-    expect(invoice).toContain('Connect a bank account');
-    expect(invoice).toContain('Save payment authorization');
-    expect(invoice).toContain('Provider actions');
+  it('shows the agreement draft, all parties and supplied terms without a signature ceremony', () => {
+    const base = requests[4]!;
+    const agreement = renderDocument({ ...base, payload: { ...base.payload, parties: [{ name: 'Nous Research' }, { name: 'Robin Studio' }, { name: 'Third Party' }], effective_dates: { from: '2026-10-01', to: '2026-12-31' }, currency: 'EUR', total_minor: 120050 } });
+    expect(agreement).toContain('Approve agreement draft');
+    expect(agreement).toContain('Third Party');
+    expect(agreement).toContain('2026-10-01');
+    expect(agreement).toContain('2026-12-31');
+    expect(agreement).toContain('EUR');
+    expect(agreement).toContain('1,200.50');
+    expect(agreement).toContain('One partner workshop.');
+    expect(agreement).toContain('Nothing is signed or sent.');
+    expect(agreement).not.toContain('Full legal name');
+    expect(agreement).not.toContain('electronic signature');
+    expect(agreement).not.toContain('Approve &amp; sign');
+  });
 
-    const agreement = render({ section: 'inbox', view: 'request', id: requests[6]!.id }, requests[6]!.id);
-    expect(agreement).toContain('Complete document');
-    expect(agreement).toContain('Full legal name');
-    expect(agreement).toContain('I agree to use this as my electronic signature');
-    expect(agreement).toContain('Save signature authorization');
-    expect(agreement).toContain('Provider actions');
+  it('uses currency-aware invoice amounts and discloses unresolved citations without invented links', () => {
+    const base = requests[3]!;
+    const invoice = renderDocument({ ...base, payload: { ...base.payload, currency: 'GBP', lines: [{ id: 'line-1', label: 'Partner workshop', qty: 1, amount_minor: 120000, source_ids: ['message-1', 'https://unverified.example/source'] }] } });
+    expect(invoice).toContain('GBP');
+    expect(invoice).not.toContain('$1,200');
+    expect(invoice).toContain('2 unresolved source references');
+    expect(invoice).toContain('message-1');
+    expect(invoice).not.toContain('href="https://unverified.example/source"');
+  });
+
+  it('shows the actual legacy reviewer eligibility and does not give members a draft approval action', () => {
+    const invoice = renderDocument(requests[3]!, 'member');
+    expect(invoice).toContain('0 of 1 Admin approval');
+    expect(invoice).toContain('Admin required');
+    expect(invoice).not.toContain('>Approve invoice draft</button>');
+  });
+
+  it('keeps resolved documents read-only and preserves prior authorization text only as a note', () => {
+    const note = 'Electronic signature authorization recorded for Maya on AGR-42 v3.';
+    const agreement = renderDocument({ ...requests[6]!, note }, 'admin', true);
+    expect(agreement).toContain('Saved unsigned');
+    expect(agreement).toContain('Review note');
+    expect(agreement).toContain(note);
+    expect(agreement).not.toContain('Save signature authorization');
+    expect(agreement).not.toContain('Signature authorized');
+    expect(agreement).not.toContain('Full legal name');
+    const invoice = renderDocument(requests[5]!, 'admin', true);
+    expect(invoice).toContain('Saved in Library');
+    expect(invoice).not.toContain('Save payment authorization');
+    expect(invoice).not.toContain('Connect a bank');
+  });
+
+  it('does not describe a withdrawn draft as approved', () => {
+    const invoice = renderDocument({ ...requests[3]!, status: 'withdrawn' }, 'admin', true);
+    expect(invoice).toContain('Withdrawn');
+    expect(invoice).toContain('No approval recorded');
+    expect(invoice).not.toContain('1 of 1 Admin approval');
+    expect(invoice).not.toContain('Downstream actions unavailable');
   });
 
   it('distinguishes an empty filtered result from an empty Inbox', () => {
