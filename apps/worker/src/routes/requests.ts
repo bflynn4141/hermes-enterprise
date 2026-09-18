@@ -31,7 +31,7 @@ import { loadRequest, toRequestEntity, REQUEST_SELECT, type RequestRow } from '.
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
-import { enqueueRequestTriage } from '../inbox-triage/service.js';
+import { enqueueRequestTriage, JEV_MODEL_ID } from '../inbox-triage/service.js';
 
 const LIST_LIMIT = 100;
 const TRIAGE_ENQUEUE_LIMIT = 5;
@@ -93,7 +93,9 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         jobs.length < TRIAGE_ENQUEUE_LIMIT
         && row.status === 'pending'
         && c.env.INBOX_TRIAGE_MODE !== 'off'
-        && !row.triage_status
+        && (row.triage_model_id !== JEV_MODEL_ID
+          || row.triage_rubric_version !== (c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1')
+          || !row.triage_status)
       ) {
         const jobId = await enqueueRequestTriage(work.tx, work.workspaceId, row.id, row.version);
         if (jobId) jobs.push(jobId);

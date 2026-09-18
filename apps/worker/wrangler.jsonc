@@ -217,7 +217,6 @@
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         "R2_BUCKET": "hermes-uploads-staging"
       },
-      "ai": { "binding": "AI" },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
       // that it did nothing when the binding is absent rather than failing.
       "r2_buckets": [
@@ -314,7 +313,6 @@
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://app.hermes.brianflynn.dev",
         "R2_BUCKET": "hermes-uploads-production"
       },
-      "ai": { "binding": "AI" },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
       // that it did nothing when the binding is absent rather than failing.
       "r2_buckets": [
