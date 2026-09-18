@@ -935,8 +935,8 @@ describe('the adapter', () => {
       [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () => new Response(JSON.stringify({ error: 'Changed', reason: 'stale_request' }), { status: 409, headers: { 'content-type': 'application/json' } }),
     });
     await adapter.start();
-    store.dispatch({ type: 'entity/upsert', kind: 'request', id: REQUEST, version: reviewed.version, data: reviewed });
-    await expect(adapter.decide(REQUEST, 'approve')).rejects.toMatchObject({ reason: 'stale_request' });
+    store.dispatch({ type: 'entity/upsert', kind: 'request', id: REQUEST, version: 8, data: { ...reviewed, version: 8, payload: { ...reviewed.payload, total_minor: 99000 } } });
+    await expect(adapter.decide(REQUEST, 'approve', undefined, reviewed)).rejects.toMatchObject({ reason: 'stale_request' });
     const decisions = calls.filter((call) => call.path.endsWith('/decisions'));
     expect(decisions).toHaveLength(1);
     expect(decisions[0]?.body).toEqual({ decision: 'approve', ...await requestReviewBinding(reviewed) });

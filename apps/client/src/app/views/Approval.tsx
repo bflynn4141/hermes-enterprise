@@ -14,6 +14,7 @@ export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, ap
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
+import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
 import { RestError } from '../../model/rest.js';
 
 const shortDateTime = (value: string): string => {
@@ -325,13 +326,13 @@ export function proposalFrom(view: ApprovalView, summary: string, draft?: { subj
   return { ...proposal, summary } as ApprovalProposal;
 }
 
-function decisionError(caught: unknown): string {
+export function decisionError(caught: unknown): string {
   const reason = (caught as { reason?: string }).reason;
   if (reason === 'stale_authorization') return 'This proposal changed. Review the current version before deciding.';
   if (reason === 'reauth_required') return 'Sign in again, then review and confirm. Nothing will be submitted automatically.';
-  if (reason === 'expired') return 'This request expired and cannot be approved.';
-  if (reason === 'not_eligible' || reason === 'self_review') return 'You are not eligible for the current review step.';
-  if (reason === 'already_voted' || reason === 'duplicate') return 'This decision was already recorded.';
+  if (['expired', 'approval_expired'].includes(reason ?? '')) return 'This request expired and cannot be approved.';
+  if (['not_eligible', 'self_review', 'reviewer_not_eligible', 'self_review_forbidden'].includes(reason ?? '')) return 'You are not eligible for the current review step.';
+  if (['already_voted', 'duplicate', 'duplicate_reviewer'].includes(reason ?? '')) return 'This decision was already recorded.';
   return 'Could not update this approval. Try again.';
 }
 
@@ -353,15 +354,32 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const [revisionSubject, setRevisionSubject] = useState('');
   const [revisionBody, setRevisionBody] = useState('');
   const [needsReauth, setNeedsReauth] = useState(false);
+  const [expiredHash, setExpiredHash] = useState<string | null>(null);
   const [routeMode, setRouteMode] = useState(false);
   const [routeMember, setRouteMember] = useState('');
   const [routeReason, setRouteReason] = useState('');
   const [menu, setMenu] = useState(false);
   const menuAnchor = useRef<HTMLButtonElement>(null);
 
+  const revisionScope = (approval: ApprovalView): ApprovalRevisionScope => ({
+    viewerId: state.user.id, workspaceId: state.workspace.id, requestId: approval.request_id,
+    revision: approval.payload.authorization.revision, hash: approval.payload.authorization.hash,
+    authorizationExpiresAt: approval.payload.authorization.expires_at,
+    canRevise: approval.capabilities.can_submit_revision && ['pending', 'changes_requested'].includes(approval.status)
+      && approval.payload.approval_type === 'communication' && approval.payload.details.draft_only && approval.payload.details.channel === 'email',
+  });
+
   useEffect(() => {
     let live = true;
     setLoadState('loading');
+    setRevisionMode(false);
+    setRevisionNote('');
+    setChangeMode(false);
+    setChangeNote('');
+    setRouteMode(false);
+    setRouteReason('');
+    setNeedsReauth(false);
+    setError(null);
     void adapter.rest.getApproval(state.workspace.id, request.id).then(
       (approval) => {
         if (!live) return;
@@ -370,6 +388,15 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
         if (approval.payload.approval_type === 'communication') {
           setRevisionSubject(approval.payload.details.subject ?? '');
           setRevisionBody(approval.payload.details.body);
+        }
+        const restored = state.user.id ? takeApprovalRevisionDraft(revisionDraftStorage(), revisionScope(approval)) : null;
+        if (restored) {
+          setRevisionSubject(restored.subject);
+          setRevisionBody(restored.body);
+          setRevisionSummary(restored.summary);
+          setRevisionNote(restored.changeNote);
+          setRevisionMode(true);
+          setError('Your unsaved rewrite is restored. Review it and explicitly save the new revision.');
         }
         setLoadState('ready');
       },
@@ -380,7 +407,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
       },
     );
     return () => { live = false; };
-  }, [adapter, state.workspace.id, request.id]);
+  }, [adapter, state.workspace.id, state.user.id, request.id]);
 
   const syncRequest = async (): Promise<void> => {
     const updated = await adapter.rest.getRequest(state.workspace.id, request.id);
@@ -405,6 +432,8 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     setError(null);
     try {
       const updated = await operation(view);
+      clearApprovalRevisionDraft(revisionDraftStorage());
+      setNeedsReauth(false);
       setView(updated);
       setRevisionSummary(updated.payload.summary);
       if (updated.payload.approval_type === 'communication') {
@@ -418,7 +447,9 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     } catch (caught) {
       setError(decisionError(caught));
       if (caught instanceof RestError && caught.reauthRequired) setNeedsReauth(true);
-      if ((caught as { reason?: string }).reason === 'stale_authorization') {
+      if (['expired', 'approval_expired'].includes((caught as { reason?: string }).reason ?? '')) setExpiredHash(view.payload.authorization.hash);
+      if (['stale_authorization', 'expired', 'approval_expired'].includes((caught as { reason?: string }).reason ?? '')) clearApprovalRevisionDraft(revisionDraftStorage());
+      if (['stale_authorization', 'expired', 'approval_expired', 'reviewer_not_eligible', 'self_review_forbidden', 'duplicate_reviewer'].includes((caught as { reason?: string }).reason ?? '')) {
         await adapter.rest.getApproval(state.workspace.id, request.id).then((fresh) => {
           setView(fresh);
           setRevisionMode(false);
@@ -445,17 +476,36 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     }));
   };
 
+  const signInAgain = (): void => {
+    if (!view) return;
+    const url = adapter.auth.stepUpUrl(window.location.href, 'decision');
+    if (url) {
+      if (revisionMode && revisionScope(view).canRevise) {
+        const saved = saveApprovalRevisionDraft(revisionDraftStorage(), revisionScope(view), {
+          subject: revisionSubject, body: revisionBody, summary: revisionSummary, changeNote: revisionNote,
+        });
+        if (!saved) { setError('Your browser could not preserve this rewrite for sign-in. Copy your edits before reloading.'); return; }
+      }
+      window.location.assign(url);
+    } else {
+      void adapter.refreshAuth().then(() => { setNeedsReauth(false); setError('Authentication refreshed. Review this request and confirm again.'); })
+        .catch(() => setError('Could not refresh authentication. Reload and sign in again.'));
+    }
+  };
+
   if (loadState === 'loading') return <div className="scroll"><div className="app-body"><Skeleton rows={6} label="Loading approval" /></div></div>;
   if (loadState === 'missing') return <div className="scroll"><div className="app-body"><EmptyState icon="admission" title="Approval not found" detail="It may have been withdrawn or you may no longer be eligible to read it." /></div></div>;
   if (loadState === 'error' || !view) return <div className="scroll"><div className="app-body"><EmptyState icon="trace" title="Could not load this approval" action={<Button onClick={() => window.location.reload()}>Reload</Button>} /></div></div>;
 
-  const canApprove = view.capabilities.allowed_decisions.includes('approve');
-  const canDecline = view.capabilities.allowed_decisions.includes('decline');
-  const canRequestChanges = view.capabilities.allowed_decisions.includes('request_changes');
+  const authorizationExpired = expiredHash === view.payload.authorization.hash || Date.parse(view.payload.authorization.expires_at) <= Date.now();
+  const canApprove = !authorizationExpired && view.capabilities.allowed_decisions.includes('approve');
+  const canDecline = !authorizationExpired && view.capabilities.allowed_decisions.includes('decline');
+  const canRequestChanges = !authorizationExpired && view.capabilities.allowed_decisions.includes('request_changes');
+  const canRevise = !authorizationExpired && view.capabilities.can_submit_revision;
   const resolved = view.status !== 'pending';
   const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
-  const invalidRevision = busy || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
+  const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
 
   return (
     <div className="app-pane-body request-pane approval-shell">
@@ -491,20 +541,20 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           <span className="f-title">{resolved ? `${view.status.replaceAll('_', ' ')} · authorization v${view.payload.authorization.revision}` : revisionMode ? 'Editing draft · Save a new revision to continue' : approvalEffectCopy(view)}</span>
           {error && <span className="f-sub" role="alert">{error}</span>}
         </div>
-        {needsReauth && <Button onClick={() => { const url = adapter.auth.stepUpUrl(window.location.href, 'decision'); if (url) window.location.assign(url); else void adapter.refreshAuth().then(() => { setNeedsReauth(false); setError('Authentication refreshed. Review this request and confirm again.'); }).catch(() => setError('Could not refresh authentication. Reload and sign in again.')); }}>Sign in again</Button>}
+        {needsReauth && <Button onClick={signInAgain}>Sign in again</Button>}
         {!resolved && !revisionMode && canRequestChanges && <Button disabled={busy} onClick={() => setChangeMode((open) => !open)}>Request changes</Button>}
         {!resolved && !revisionMode && canApprove && <Button primary disabled={busy} onClick={() => decide('approve')}>{busy ? 'Recording…' : approvalPrimaryAction(view)}</Button>}
-        {!resolved && !revisionMode && (canDecline || view.capabilities.can_route || view.capabilities.can_submit_revision) && (
+        {!resolved && !revisionMode && !authorizationExpired && (canDecline || view.capabilities.can_route || view.capabilities.can_submit_revision) && (
           <span className="approval-more">
             <button ref={menuAnchor} type="button" className="icon-btn" aria-label="More approval actions" aria-expanded={menu} onClick={() => setMenu((open) => !open)}><Icon name="more" /></button>
             <Popover open={menu} onClose={() => setMenu(false)} anchorRef={menuAnchor} align="right" above width={240} label="Approval actions" portal className="menu">
-              {view.capabilities.can_submit_revision && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</MenuItem>}
+              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</MenuItem>}
               {canDecline && <MenuItem icon="close" onClick={() => { setMenu(false); decide('decline'); }}>Decline</MenuItem>}
               {view.capabilities.can_route && <MenuItem icon="users" onClick={() => { setMenu(false); setRouteMode(true); }}>Route reviewer</MenuItem>}
             </Popover>
           </span>
         )}
-        {resolved && view.capabilities.can_submit_revision && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</Button>}
+        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</Button>}
       </div>
 
       {changeMode && (
@@ -518,7 +568,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
           {editableDraft && <><label><span>Revised email subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>Revised email body</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
           <label><span>Revised proposal summary</span><textarea value={revisionSummary} onChange={(event) => setRevisionSummary(event.target.value)} maxLength={1000} autoFocus /></label>
           <label><span>What changed</span><input value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} maxLength={2000} /></label>
-          <Button onClick={() => setRevisionMode(false)}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Submit v{view.payload.authorization.revision + 1}</Button>
+          <Button onClick={() => { clearApprovalRevisionDraft(revisionDraftStorage()); setRevisionMode(false); setRevisionNote(''); setRevisionSummary(view.payload.summary); if (view.payload.approval_type === 'communication') { setRevisionSubject(view.payload.details.subject ?? ''); setRevisionBody(view.payload.details.body); } }}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Submit v{view.payload.authorization.revision + 1}</Button>
         </div>
       )}
       {routeMode && (

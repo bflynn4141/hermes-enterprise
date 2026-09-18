@@ -5477,7 +5477,11 @@ revise an email draft's actual subject/body through the existing revision contra
 sender, recipients, evidence, policy and external effects stay unchanged. Pending
 revision entry is under More actions, and decision controls hide while editing.
 Saving produces a fresh server-bound revision requiring a fresh decision. Stale
-responses refetch for review; authentication never automatically replays an action.
+responses refetch for review; authentication never automatically replays an action. An unsaved email rewrite can
+survive a sign-in redirect for at most 15 minutes, bounded by authorization expiry.
+It restores only after a matching viewer/workspace/request/revision/hash refetch
+with revision permission, and opens the editor for an explicit save. Cancel, success,
+expiry or any binding/account mismatch clears the saved rewrite.
 
 Invoice and agreement review uses **Approve invoice draft** and **Approve agreement
 draft**. One workspace Admin approves the current legacy draft. The document preview
@@ -5485,7 +5489,8 @@ preserves supplied parties, currency, dates and terms; absent data is explicit.
 Approval saves a Library draft. Bank setup, payment authorization and signature
 consent ceremony are removed because those effects are unavailable. Historical
 authorization text remains an internal note, not evidence of execution. Client
-decisions carry the backend's version/hash binding and refresh conflicts without
+decisions bind the exact request snapshot rendered by the pane, even if the entity
+cache advances before the click, using the backend's version/hash binding and refresh conflicts without
 resubmitting.
 
 Evidence expands below the content. Stored partner facts, dates and safe original
