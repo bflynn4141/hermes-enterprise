@@ -82,12 +82,19 @@ export class HermesClient {
     return response;
   }
   private async connector(operation: string, payload: Record<string, unknown> = {}, signal?: AbortSignal): Promise<Response> {
+    const streaming = operation === 'events';
     const response = await this.send(this.baseUrl.replace(/\/$/, ''), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
-        Accept: operation === 'events' ? 'text/event-stream' : 'application/json',
+        Accept: streaming ? 'text/event-stream' : 'application/json',
+        ...(streaming ? {
+          // The response is already compact SSE. Compression thresholds can
+          // otherwise turn incremental native frames into one terminal burst.
+          'Accept-Encoding': 'identity',
+          'Cache-Control': 'no-cache',
+        } : {}),
       },
       body: JSON.stringify({ operation, ...payload }),
       redirect: 'manual',
@@ -100,26 +107,10 @@ export class HermesClient {
     return response;
   }
   private async connectorEvents(id: string, signal: AbortSignal): Promise<Response> {
-    const url = new URL(this.baseUrl.replace(/\/$/, ''));
-    url.searchParams.set('run_id', id);
-    const response = await this.send(url.toString(), {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        Accept: 'text/event-stream',
-        // Streaming is latency-sensitive and already compact. An intermediary
-        // must not wait for a compression threshold before exposing a delta.
-        'Accept-Encoding': 'identity',
-        'Cache-Control': 'no-cache',
-      },
-      redirect: 'manual',
-      signal,
-    });
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new HermesApiError(response.status, 'request');
-    }
-    return response;
+    // Hermes Dashboard's machine-authenticated plugin edge dispatches POST
+    // operations. A GET route can exist inside the plugin yet never be reached
+    // through that edge, leaving the Worker to poll until terminal output.
+    return this.connector('events', { run_id: id }, signal);
   }
   async capabilities(): Promise<HermesCapabilities> {
     const response = this.transport === 'dashboard_connector'

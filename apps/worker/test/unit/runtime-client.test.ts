@@ -73,7 +73,7 @@ describe('official Hermes Runs transport', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
   });
 
-  it('uses conventional GET SSE on the fixed connector path without compression', async () => {
+  it('uses the authenticated POST operation that the dashboard edge streams without compression', async () => {
     const event = { event: 'message.delta', run_id: RUN_ID, delta: 'First' };
     const { client, send } = connectorTransport(() => new Response(`: enterprise-bridge-connected\n\ndata: ${JSON.stringify(event)}\n\n`, {
       headers: { 'Content-Type': 'text/event-stream' },
@@ -82,13 +82,12 @@ describe('official Hermes Runs transport', () => {
     const received = [];
     for await (const item of client.events(RUN_ID, controller.signal)) received.push(item);
     expect(received).toEqual([event]);
-    const [rawUrl, init] = send.mock.calls[0]!;
-    const url = new URL(String(rawUrl));
-    expect(`${url.origin}${url.pathname}`).toBe('https://iris.example/api/plugins/enterprise_bridge/control');
-    expect(url.searchParams.get('run_id')).toBe(RUN_ID);
-    expect(init?.method).toBe('GET');
-    expect(init?.body).toBeUndefined();
+    const [url, init] = send.mock.calls[0]!;
+    expect(url).toBe('https://iris.example/api/plugins/enterprise_bridge/control');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ operation: 'events', run_id: RUN_ID });
     expect(init?.signal).toBe(controller.signal);
+    expect(new Headers(init?.headers).get('Accept')).toBe('text/event-stream');
     expect(new Headers(init?.headers).get('Accept-Encoding')).toBe('identity');
     expect(new Headers(init?.headers).get('Cache-Control')).toBe('no-cache');
   });
