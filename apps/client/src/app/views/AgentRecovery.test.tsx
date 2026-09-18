@@ -1,9 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { agentRecoveryViewSchema, mockUuid, type AgentRecoveryView, type AgentWakeInput } from '@hermes/shared';
-import { AgentRecoveryControls, createRecoverySubmitter, retryCountdown } from './AgentRecovery.js';
+import { AgentRecoveryControls, createRecoverySubmitter, refreshRecoveryContext, retryCountdown } from './AgentRecovery.js';
 import { createRest } from '../../model/rest.js';
 import { createAuth } from '../../model/auth.js';
+import { createStore, initialState } from '../../model/store.js';
+import type { Adapter } from '../../model/adapter.js';
 
 const failed: AgentRecoveryView = {
   state: 'retryable', run_id: mockUuid(3), session_id: mockUuid(2), attempt: 1,
@@ -113,5 +115,58 @@ describe('recovery admission requests', () => {
     await expect(rest.agentRecovery(mockUuid(1), mockUuid(4), mockUuid(3))).resolves.toEqual(failed);
     expect(calls[0]).toBe(`/w/${mockUuid(1)}/agents/${mockUuid(4)}/recovery?run_id=${mockUuid(3)}`);
     expect(agentRecoveryViewSchema.safeParse({ ...failed, state: 'pretend_working' }).success).toBe(false);
+  });
+});
+
+
+describe('active recovery hydration', () => {
+  function setup() {
+    const state = initialState();
+    const workspaceId = state.workspace.id;
+    const store = createStore(state);
+    store.dispatch({ type: 'session/create', id: failed.session_id! });
+    const run = { run_id: failed.run_id!, status: 'working' as const, attempt: 2 };
+    const sessions = vi.fn(async () => ({ items: [], cursor: null, total: 0 }));
+    const loadRun = vi.fn(async () => run);
+    const invalidateList = vi.fn();
+    const ensure = vi.fn();
+    const adapter = { rest: { sessions, run: loadRun }, invalidateList, ensure } as unknown as Adapter;
+    const view = { ...queued, state: 'working' as const };
+    const hydrate = () => refreshRecoveryContext(adapter, store, workspaceId, mockUuid(4), view, true);
+    const start = (id: string, attempt = 2) => store.dispatch({ type: 'run/start', sessionId: failed.session_id!, run: {
+      id, session_id: failed.session_id!, agent_id: mockUuid(4), status: 'working', attempt, title: null, steps: [], queue: [],
+    } });
+    return { store, loadRun, sessions, invalidateList, ensure, hydrate, start };
+  }
+
+  it('restores the active attempt once without invalidating and remounting Overview', async () => {
+    const f = setup();
+    await f.hydrate();
+    expect(f.store.getState().sessions[failed.session_id!]?.run).toMatchObject({ id: failed.run_id, status: 'working', attempt: 2 });
+    await f.hydrate();
+    expect(f.loadRun).toHaveBeenCalledOnce();
+    expect(f.sessions).toHaveBeenCalledOnce();
+    expect(f.invalidateList).not.toHaveBeenCalled();
+    expect(f.ensure).not.toHaveBeenCalled();
+  });
+
+  it('keeps a different current run when the recovery read is already stale', async () => {
+    const f = setup();
+    const newerId = mockUuid(900);
+    f.start(newerId);
+    await f.hydrate();
+    expect(f.loadRun).not.toHaveBeenCalled();
+    expect(f.store.getState().sessions[failed.session_id!]?.run?.id).toBe(newerId);
+  });
+
+  it('keeps a newer run that arrives while initial hydration is fetching', async () => {
+    const f = setup();
+    const newerId = mockUuid(900);
+    f.loadRun.mockImplementationOnce(async () => {
+      f.start(newerId);
+      return { run_id: failed.run_id!, status: 'working', attempt: 2 };
+    });
+    await f.hydrate();
+    expect(f.store.getState().sessions[failed.session_id!]?.run?.id).toBe(newerId);
   });
 });

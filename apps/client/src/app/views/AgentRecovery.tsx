@@ -64,10 +64,13 @@ function errorCopy(error: unknown, mutation: boolean): string {
 }
 
 /** Refreshes the existing cache without resetting navigation, drafts or transcript. */
-export async function refreshRecoveryContext(adapter: Adapter, store: Store, workspaceId: string, agentId: string, view: AgentRecoveryView): Promise<void> {
-  for (const key of [LIST_KEYS.traces, LIST_KEYS.requests, LIST_KEYS.documents, LIST_KEYS.history]) adapter.invalidateList(key);
-  if (view.run_id) adapter.ensure('trace', view.run_id, true);
+export async function refreshRecoveryContext(adapter: Adapter, store: Store, workspaceId: string, agentId: string, view: AgentRecoveryView, initial = false): Promise<void> {
   const before = view.session_id ? store.getState().sessions[view.session_id]?.run : null;
+  if (initial && before && (before.id !== view.run_id || before.attempt >= (view.attempt ?? 0))) return;
+  if (!initial) {
+    for (const key of [LIST_KEYS.traces, LIST_KEYS.requests, LIST_KEYS.documents, LIST_KEYS.history]) adapter.invalidateList(key);
+    if (view.run_id) adapter.ensure('trace', view.run_id, true);
+  }
   const sessions = await adapter.rest.sessions(workspaceId);
   if (store.getState().workspace.id !== workspaceId) return;
   for (const session of sessions.items) store.dispatch({ type: 'session/upsert', session });
@@ -108,11 +111,15 @@ export function useAgentRecovery(runId?: string) {
   const mounted = useRef(false);
   const submitter = useMemo(() => createRecoverySubmitter((input) => adapter.rest.wakeAgent(workspaceId, agentId!, input)), [adapter, workspaceId, agentId]);
 
-  const accept = useCallback((next: AgentRecoveryView, forceRefresh = false) => {
+  const accept = useCallback((next: AgentRecoveryView, { forceRefresh = false, refresh = true } = {}) => {
     setView(next);
     const signature = `${next.state}:${next.run_id}:${next.attempt}:${next.model_id}`;
-    if (forceRefresh || (lastSignature.current && signature !== lastSignature.current)) {
-      void refreshRecoveryContext(adapter, store, workspaceId, agentId!, next).catch(() => {
+    // A reload starts after the run.started event. Restore active run details
+    // on the first read too, so the existing Stop control has its run id even
+    // when the provider has not emitted output. Historical failures stay inert.
+    const initialActive = !lastSignature.current && (next.state === 'working' || next.state === 'queued');
+    if (refresh && (forceRefresh || initialActive || (lastSignature.current && signature !== lastSignature.current))) {
+      void refreshRecoveryContext(adapter, store, workspaceId, agentId!, next, initialActive && !forceRefresh).catch(() => {
         if (mounted.current) setError('Iris’s status is current, but the task details could not refresh. Refresh status to try again.');
       });
     }
@@ -128,7 +135,7 @@ export function useAgentRecovery(runId?: string) {
       const next = await adapter.rest.agentRecovery(workspaceId, agentId, runId);
       if (!mounted.current || requestGeneration !== generation.current) return;
       setError(null);
-      accept(next, refreshDetails);
+      accept(next, { forceRefresh: refreshDetails });
     } catch (failure) {
       if (mounted.current && requestGeneration === generation.current) setError(errorCopy(failure, false));
     } finally {
@@ -168,8 +175,7 @@ export function useAgentRecovery(runId?: string) {
       const next = await submitter.submit(action, view);
       if (!mounted.current || generation.current !== requestGeneration) return;
       // A successful no-op wake also refreshes the workspace's pending work.
-      lastSignature.current = '';
-      accept(next);
+      accept(next, { refresh: false });
       await refreshRecoveryContext(adapter, store, workspaceId, agentId, next).catch(() => {
         if (mounted.current) setError('Request accepted, but the task details could not refresh. Refresh status to try again.');
       });

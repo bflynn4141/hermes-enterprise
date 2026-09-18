@@ -85,7 +85,7 @@ const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toStr
 
 interface MockOptions {
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
-  recovery?: 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
+  recovery?: 'working' | 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
   /** Terminal Hermes traces for the activity-card regression, never live data. */
   activity?: 'completed' | 'completed-tool';
   /** `admin` is the first-run Admin seat; `member` exercises the Member copy. */
@@ -463,7 +463,8 @@ export function createMockBackend(options: MockOptions = {}) {
   if (options.recovery) {
     recoveryView = {
       ...recoveryView,
-      message: options.recovery === 'blocked' ? 'Reconnect Nous Portal in Settings before retrying.'
+      message: options.recovery === 'working' ? 'Iris is working on this task.'
+        : options.recovery === 'blocked' ? 'Reconnect Nous Portal in Settings before retrying.'
         : options.recovery === 'idle' ? 'No eligible pending work right now.'
           : options.recovery === 'stopped' ? 'Automatic retry cancelled. You can resume this task when ready.'
             : 'The selected model is temporarily unavailable. Your completed work is saved.',
@@ -474,7 +475,7 @@ export function createMockBackend(options: MockOptions = {}) {
     };
     traces.splice(0, traces.length, {
       id: RUN, run_id: RUN, agent_id: AGENT, name: 'Automated partner screening', type: 'Hermes Agent · work',
-      status: options.recovery === 'idle' ? 'completed' : options.recovery === 'stopped' ? 'stopped' : 'error',
+      status: options.recovery === 'working' ? 'working' : options.recovery === 'idle' ? 'completed' : options.recovery === 'stopped' ? 'stopped' : 'error',
       sub: 'Attempt 1', needs_you: false, runtime_kind: 'hermes', model_id: RECOVERY_MODEL_ID,
       ref: { section: 'agents', view: 'trace', id: RUN }, steps: [], tool_calls: [], allowed_tools: [], version: 1,
     });
@@ -858,7 +859,7 @@ export function createMockBackend(options: MockOptions = {}) {
       // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.
       if (rest.startsWith('/runs/')) {
         const control = rest.split('/')[3] ?? '';
-        if (!control && options.recovery) return json({ run_id: RUN, attempt: recoveryView.attempt ?? 1, status: recoveryView.state === 'queued' ? 'working' : recoveryView.state === 'idle' ? 'completed' : recoveryView.state === 'stopped' ? 'stopped' : 'error' });
+        if (!control && options.recovery) return json({ run_id: RUN, attempt: recoveryView.attempt ?? 1, status: recoveryView.state === 'queued' || recoveryView.state === 'working' ? 'working' : recoveryView.state === 'idle' ? 'completed' : recoveryView.state === 'stopped' ? 'stopped' : 'error' });
         if (control === 'stop') {
           runScenario('stopped', sessionId);
           return json({ run_id: RUN, status: 'stopping', attempt: 1 });

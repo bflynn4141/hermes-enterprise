@@ -87,3 +87,15 @@ test('recovery controls fit a narrow pane and stay still with reduced motion', a
   expect(await card.locator('.agent-recovery').evaluate((element) => element.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running').length)).toBe(0);
   await page.screenshot({ path: 'qa/agent-recovery-narrow.png', fullPage: false });
 });
+
+
+test('an active recovered task restores Stop work after reloading without output', async ({ page }) => {
+  await page.goto('/?recovery=working');
+  const card = page.getByRole('region', { name: 'Agent activity' });
+  await expect(card.getByRole('status')).toHaveText('Working now');
+  await expect(page.getByRole('button', { name: 'Stop work', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(card.getByRole('status')).toHaveText('Working now');
+  await expect(page.getByRole('button', { name: 'Stop work', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Message Iris' })).toBeEmpty();
+});
