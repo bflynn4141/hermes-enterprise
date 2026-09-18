@@ -134,7 +134,7 @@ describe('active recovery hydration', () => {
     const view = { ...queued, state: 'working' as const };
     const hydrate = () => refreshRecoveryContext(adapter, store, workspaceId, mockUuid(4), view, true);
     const start = (id: string, attempt = 2) => store.dispatch({ type: 'run/start', sessionId: failed.session_id!, run: {
-      id, session_id: failed.session_id!, agent_id: mockUuid(4), status: 'working', attempt, steps: [], queue: [],
+      id, session_id: failed.session_id!, agent_id: mockUuid(4), status: 'working', attempt, title: null, steps: [], queue: [],
     } });
     return { store, loadRun, sessions, invalidateList, ensure, hydrate, start };
   }
