@@ -208,7 +208,7 @@ export function AgentRecoveryControls({ view, modelLabel, error, busy, loading, 
           {(view.attempt !== null || view.model_id) && <p className="meta">
             {view.attempt !== null && <span>{view.state === 'retry_scheduled' ? `Attempt ${view.attempt} of 3` : `Attempt ${view.attempt}`}</span>}
             {view.attempt !== null && view.model_id && ' · '}
-            {view.model_id && <span title={view.model_id}>{modelLabel ?? view.model_id}</span>}
+            {view.model_id && <span title={view.model_id}>{view.can_retry ? 'Retry with ' : ''}{modelLabel ?? view.model_id}</span>}
           </p>}
         </div>
         <div className="agent-recovery-actions">

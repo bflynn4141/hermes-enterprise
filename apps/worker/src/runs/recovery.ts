@@ -44,7 +44,7 @@ export async function requireRecoveryAgent(work: RecoveryWork, agentId: string, 
        AND (EXISTS (SELECT 1 FROM agent_owners o JOIN members m ON m.id=o.member_id
                     WHERE o.workspace_id=a.workspace_id AND o.agent_id=a.id AND m.user_id=$3 AND m.status='active')
          OR (NOT EXISTS (SELECT 1 FROM agent_owners o WHERE o.workspace_id=a.workspace_id AND o.agent_id=a.id)
-             AND EXISTS (SELECT 1 FROM sessions s WHERE s.workspace_id=a.workspace_id AND s.agent_id=a.id AND s.owner_id=$3 AND NOT s.read_only)))
+             AND EXISTS (SELECT 1 FROM sessions s WHERE s.workspace_id=a.workspace_id AND s.agent_id=a.id AND s.owner_id=$3 AND NOT s.read_only AND NOT s.archived)))
        ${lock ? 'FOR UPDATE OF a' : ''}`,
     [work.workspaceId, agentId, work.userId]);
   if (!rows[0]) throw new RouteError('This agent is not assigned to you.', 'agent_not_bound', 404);
@@ -94,11 +94,13 @@ export async function recoveryView(work:RecoveryWork,env:Env,agentId:string,runI
   }
   Object.assign(view,{run_id:run.id,session_id:run.session_id,attempt:run.attempt,model_id:run.session_model_id});
   if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
+    view.model_id = run.model_id;
     view.state = run.status === 'working' ? 'working' : 'waiting';
     view.message = run.status === 'working' ? 'Iris is working on this task.' : 'This task is waiting for input or a stop to complete.';
     return view;
   }
   if (run.status === 'completed') {
+    view.model_id = run.model_id;
     view.message = 'The last task completed. Check for authorized pending work.';
     view.can_run_now = !runId && (await wakePolicy(work,env,agentId)) === null;
     return view;
