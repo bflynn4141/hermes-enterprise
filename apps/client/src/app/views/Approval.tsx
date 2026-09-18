@@ -219,7 +219,13 @@ function CommunicationPreview({ view }: { view: ApprovalView }) {
   return (
     <div className="approval-preview">
       <article className="approval-message">
-        <dl><div><dt>From</dt><dd>{details.sender.address}</dd></div><div><dt>To</dt><dd>{details.recipients.map((item) => item.address ? `${item.name} <${item.address}>` : `${item.name} · email address needed`).join(', ')}</dd></div>{details.subject && <div><dt>Subject</dt><dd>{details.subject}</dd></div>}</dl>
+        <dl>
+          <div><dt>From</dt><dd>{details.sender.address}</dd></div>
+          <div><dt>To</dt><dd>{details.recipients.map((item) => item.address ? `${item.name} <${item.address}>` : `${item.name} · email address needed`).join(', ')}</dd></div>
+          {details.recipients.some((item) => item.phone_numbers?.length) && <div><dt>Phone</dt><dd>{details.recipients.flatMap((item) => item.phone_numbers ?? []).map((phone) => phone.type ? `${phone.number} · ${phone.type}` : phone.number).join(', ')}</dd></div>}
+          {details.recipients.some((item) => item.social_profiles?.length) && <div><dt>Profiles</dt><dd>{details.recipients.flatMap((item) => item.social_profiles ?? []).map((profile) => <a key={`${profile.network}:${profile.url}`} href={profile.url} target="_blank" rel="noreferrer">{profile.network}</a>).reduce<ReactNode[]>((items, link, index) => index === 0 ? [link] : [...items, ', ', link], [])}</dd></div>}
+          {details.subject && <div><dt>Subject</dt><dd>{details.subject}</dd></div>}
+        </dl>
         <div className="approval-message-body">{details.body}</div>
         {details.attachments.length > 0 && <div className="approval-attachments">{details.attachments.map((item) => <span key={item.id}><Icon name="doc" size={15} /> {item.label}</span>)}</div>}
       </article>

@@ -18,6 +18,9 @@ SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
 TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
+AGENTCASH_CONTACT_ENRICH_URL = "https://stableenrich.dev/api/minerva/enrich"
+AGENTCASH_EMAIL_VERIFY_URL = "https://stableenrich.dev/api/hunter/email-verifier"
+CONTACT_RETURN_FIELDS = ["full_name", "linkedin_url", "professional_emails", "phones", "twitter_url", "facebook_url"]
 
 
 def approved_agentcash_arguments(program):
@@ -44,6 +47,36 @@ def approved_agentcash_arguments(program):
         "offset": 0,
     })
     return {"url": AGENTCASH_PEOPLE_SEARCH_URL, "method": "POST", "maxAmount": 0.15, "body": body}
+
+
+def agentcash_contact_call_kind(arguments):
+    """Syntactically narrow contact calls before authoritative Worker admission."""
+    if not isinstance(arguments, dict):
+        return None
+    url, method, maximum = arguments.get("url"), arguments.get("method"), arguments.get("maxAmount")
+    body = arguments.get("body")
+    if url == AGENTCASH_CONTACT_ENRICH_URL and method == "POST" and maximum == 0.05:
+        records = body.get("records") if isinstance(body, dict) else None
+        if (isinstance(records, list) and len(records) == 1 and isinstance(records[0], dict)
+                and re.fullmatch(r"[0-9a-f-]{36}", str(records[0].get("record_id", "")), re.I)
+                and isinstance(records[0].get("linkedin_url"), str)
+                and body.get("return_fields") == CONTACT_RETURN_FIELDS
+                and set(body) == {"records", "return_fields"}):
+            return "enrichment"
+    if url == AGENTCASH_EMAIL_VERIFY_URL and method == "POST" and maximum == 0.03:
+        if (isinstance(body, dict) and set(body) == {"email"}
+                and isinstance(body.get("email"), str) and 3 <= len(body["email"]) <= 320):
+            return "verification"
+    if method == "GET" and maximum == 0.03 and "body" not in arguments and isinstance(url, str):
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            parsed = None
+        if (parsed and parsed.scheme == "https" and parsed.hostname == "stableenrich.dev"
+                and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment
+                and re.fullmatch(r"/api/hunter/email-verifier/jobs/[A-Za-z0-9_-]{1,160}", parsed.path)):
+            return "verification_poll"
+    return None
 
 
 class BridgeError(Exception):
@@ -331,6 +364,61 @@ class Bridge:
             raise BridgeError("AgentCash payment authorization was rejected.")
         return body
 
+    def authorize_contact(self, run_id, tool_call_id, arguments):
+        """Reserve the run-bound contact step before AgentCash is reached."""
+        status, body = self.request(
+            "POST", self.base_url + "/agentcash/contact/authorize", self.token,
+            {"runtime_run_id": run_id, "tool_call_id": tool_call_id, "arguments": arguments},
+        )
+        if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
+            raise BridgeError("AgentCash contact authorization was rejected.")
+        return body
+
+    def import_contact(self, run_id, tool_call_id, arguments, result):
+        if not isinstance(result, (str, dict, list)):
+            raise BridgeError("AgentCash contact lookup returned an unsupported result.")
+        status, body = self.request(
+            "POST", self.base_url + "/agentcash/contact/import", self.token,
+            {"runtime_run_id": run_id, "tool_call_id": tool_call_id,
+             "arguments": arguments, "result": result}, timeout=25.0,
+        )
+        if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
+            raise BridgeError("AgentCash contact evidence import failed.")
+        return body
+
+    def recover_pending_contacts(self):
+        """Replay already-paid contact spill files without issuing source calls."""
+        status, body = self.request(
+            "GET", self.base_url + "/agentcash/contact/pending", self.token, timeout=25.0,
+        )
+        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("pending"), list):
+            raise BridgeError("AgentCash pending contact lookup failed.")
+        home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")).resolve()
+        spill_dir = (home / "cache" / "spillover").resolve()
+        imported = []
+        for pending in body["pending"]:
+            if not isinstance(pending, dict):
+                raise BridgeError("AgentCash pending contact identity was rejected.")
+            run_id, tool_call_id, arguments = (pending.get("runtime_run_id"),
+                                                pending.get("tool_call_id"), pending.get("arguments"))
+            if (not isinstance(run_id, str) or not re.fullmatch(r"run_[0-9a-f]{32}", run_id)
+                    or not isinstance(tool_call_id, str) or not TOOL_CALL_ID.fullmatch(tool_call_id)
+                    or agentcash_contact_call_kind(arguments) is None):
+                raise BridgeError("AgentCash pending contact identity was rejected.")
+            spill_path = spill_dir / (tool_call_id + ".txt")
+            try:
+                stat = spill_path.lstat()
+            except OSError as error:
+                raise BridgeError("AgentCash pending contact result is not available in spill storage.") from error
+            if spill_path.is_symlink() or not spill_path.is_file() or stat.st_size > MAX_BODY_BYTES:
+                raise BridgeError("AgentCash pending contact result failed spill storage validation.")
+            try:
+                result = spill_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise BridgeError("AgentCash pending contact result could not be read safely.") from error
+            imported.append(self.import_contact(run_id, tool_call_id, arguments, result))
+        return imported
+
 
 def register(ctx):
     # Register the Cloud control surface before tool discovery. If the Worker is
@@ -387,8 +475,9 @@ def register(ctx):
         if policy is None:
             return {"action": "block", "message": "This MCP tool is not in the enterprise allowlist."}
         args = args if isinstance(args, dict) else {}
-        if tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments:
-            return {"action": "block", "message": "Only the exact approved AgentCash People Search request is allowed."}
+        if (tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments
+                and agentcash_contact_call_kind(args) is None):
+            return {"action": "block", "message": "Only the exact approved Partner Program AgentCash requests are allowed."}
         if "url" in args:
             try:
                 parsed = urllib.parse.urlsplit(args["url"])
@@ -423,7 +512,10 @@ def register(ctx):
             if tool_name == "mcp__agentcash__fetch":
                 try:
                     run_id, call_id = trusted_hook_identity(tool_call_id)
-                    bridge.authorize_people_search(run_id, call_id, args)
+                    if args == agentcash_arguments:
+                        bridge.authorize_people_search(run_id, call_id, args)
+                    else:
+                        bridge.authorize_contact(run_id, call_id, args)
                 except Exception:
                     return {"action": "block", "message": "AgentCash payment authorization failed closed."}
             return None
@@ -435,11 +527,12 @@ def register(ctx):
         # every other AgentCash call and reserved this tool-call id before pay.
         if tool_name != "mcp__agentcash__fetch" or not isinstance(args, dict):
             return None
-        if args != agentcash_arguments:
-            return None
         try:
             run_id, trusted_call_id = trusted_hook_identity(tool_call_id)
-            bridge.import_people_search(run_id, trusted_call_id, args, result)
+            if args == agentcash_arguments:
+                bridge.import_people_search(run_id, trusted_call_id, args, result)
+            elif agentcash_contact_call_kind(args) is not None:
+                bridge.import_contact(run_id, trusted_call_id, args, result)
         except Exception:
             # post_tool_call is observational and must never mutate the model's
             # original tool result. The managed skill verifies import by listing
@@ -454,7 +547,7 @@ def register(ctx):
         name="partner-program-screening",
         path=skill_path,
         description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.4.0", "metadata": {"hermes": {"category": "enterprise"}}},
+        frontmatter={"version": "1.5.0", "metadata": {"hermes": {"category": "enterprise"}}},
     )
     for schema in bridge.tools():
         name = schema["name"]
@@ -474,3 +567,9 @@ def register(ctx):
             logging.warning("AgentCash pending evidence recovery did not complete: %s", error)
         except Exception:
             logging.warning("AgentCash pending evidence recovery did not complete: unexpected error.")
+        try:
+            bridge.recover_pending_contacts()
+        except BridgeError as error:
+            logging.warning("AgentCash pending contact recovery did not complete: %s", error)
+        except Exception:
+            logging.warning("AgentCash pending contact recovery did not complete: unexpected error.")

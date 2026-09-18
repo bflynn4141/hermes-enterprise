@@ -176,6 +176,75 @@ describe('enterprise approval policy and voting', () => {
     });
   });
 
+  it('accepts only contact fields copied from stored verified partner evidence', async () => {
+    const seeded = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const screening = await client.query<{ id: string }>(
+        `INSERT INTO partner_screening_runs
+           (workspace_id,agent_id,created_by,idempotency_key,status,source,authentication,
+            config_snapshot,api_requests_max,api_requests_used,agentcash_tool_call_id,
+            candidates_discovered,monetary_cost_usd,completed_at)
+         VALUES ($1,$2,$3,$4,'completed','agentcash_people','wallet','{}',1,1,'seed',1,0.15,now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, fx.adminId, `approval-contact:${randomUUID()}`],
+      );
+      const candidate = await client.query<{ id: string }>(
+        `INSERT INTO partner_candidates
+           (workspace_id,agent_id,source,source_key,display_name,profile_url,
+            deterministic_priority,priority_breakdown,confidence,evidence_gaps,
+            latest_run_id,first_seen_at,last_seen_at)
+         VALUES ($1,$2,'agentcash_people',$3,'Taylor Brooks','https://www.linkedin.com/in/taylor-brooks',
+                 90,'[]','high','{}',$4,now(),now()) RETURNING id`,
+        [fx.workspaceId, fx.agentId, `approval-contact:${randomUUID()}`, screening.rows[0]!.id],
+      );
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode)
+         VALUES ($1,$2,$3,'completed','deepseek-flash',$4,$5,'work') RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID()],
+      );
+      const enrichment = await client.query<{ id: string }>(
+        `INSERT INTO partner_contact_enrichments
+           (workspace_id,agent_id,candidate_id,run_id,runtime_run_id,status,contact_data,
+            preferred_email,verification_status,verification_checks,draft_eligible,
+            monetary_cost_usd,fetched_at,verified_at)
+         VALUES ($1,$2,$3,$4,$5,'completed',$6::jsonb,'taylor@example.com','valid',$7::jsonb,true,0.08,now(),now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, candidate.rows[0]!.id, run.rows[0]!.id, `run_${'d'.repeat(32)}`,
+          JSON.stringify({ professional_emails: ['taylor@example.com'], phones: [{ number: '+1 415 555 0100', type: 'mobile' }], social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/taylor-brooks' }] }),
+          JSON.stringify({ regexp: true, mx_records: true, smtp_server: true, smtp_check: true, disposable: false, block: false })],
+      );
+      await client.query(
+        `INSERT INTO approval_policies
+          (workspace_id,key,version,approval_type,requester_agent_id,priority,mode,
+           prevent_self_review,steps)
+         VALUES ($1,$2,1,'communication',$3,1000000,'sequential',false,$4::jsonb)`,
+        [fx.workspaceId, `partner-outreach-draft-${fx.agentId}`, fx.agentId, JSON.stringify([{
+          id: 'owner-review', label: 'Review partner draft', order: 0,
+          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+        }])],
+      );
+      await client.query('COMMIT');
+      return { candidateId: candidate.rows[0]!.id, enrichmentId: enrichment.rows[0]!.id };
+    });
+    const proposal = outreachDraft(fx);
+    proposal.evidence.push({ id: seeded.enrichmentId, kind: 'artifact', label: 'Verified professional contact' });
+    proposal.details.recipients = [{
+      name: 'Taylor Brooks', address: 'taylor@example.com', candidate_id: seeded.candidateId,
+      phone_numbers: [{ number: '+1 415 555 0100', type: 'mobile' }],
+      social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/taylor-brooks' }],
+    }];
+    const policyKey = `partner-outreach-draft-${fx.agentId}`;
+    const accepted = await propose(fx, proposal, `proposal:${randomUUID()}`, policyKey);
+    expect(accepted.payload.approval_type).toBe('communication');
+
+    const forged = structuredClone(proposal);
+    forged.details.recipients[0]!.address = 'invented@example.net';
+    await expect(propose(fx, forged, `proposal:${randomUUID()}`, policyKey)).rejects.toMatchObject({
+      reason: 'invalid_partner_outreach_contact',
+    });
+  });
+
   it('requires two distinct current reviewers and prevents requester self-review', async () => {
     const e = env();
     const proposed = await propose(fx, runPlan(fx), `proposal:${randomUUID()}`);

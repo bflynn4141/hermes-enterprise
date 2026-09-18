@@ -1,7 +1,7 @@
 ---
 name: partner-program-screening
 description: Screen partner prospects and prepare cited human reviews.
-version: 1.4.0
+version: 1.5.0
 metadata:
   hermes:
     category: enterprise
@@ -69,9 +69,10 @@ Use this skill when reviewing public organization evidence for the configured pa
    - **Inference:** a restrained conclusion drawn from that evidence.
    - **Gap:** anything the public evidence cannot establish, including interest, availability, consent, capacity, or commercial fit.
 6. A discovered prospect has not applied. Never use `propose_request` with `kind: application` for a discovered person or organization.
-7. When the server prompt supplies the exact outreach-draft policy, sender and reviewer context, use `propose_approval` with `approval_type: communication` and `details.draft_only: true`. Use the candidate's name and a null recipient address; the governed source intentionally removes contact details.
-8. Personalize the subject and body with cited professional evidence. Invite the candidate to explore or apply without claiming prior interest, approval, benefits or terms. State that approval records reviewed copy and does not send it.
-9. Stop after preparing the pending draft. A human reviews the copy and separately supplies a verified address or chooses a supported delivery path.
+7. Choose exactly one strongest candidate per run. Call `get_partner_candidate` for it. If `next_contact_call` is present, call `mcp__agentcash__fetch` with those exact arguments and read the candidate again. Continue only through the returned contact-enrichment, email-verification, and bounded verification-poll calls. Never alter the arguments, repeat a completed paid call, or enrich a second candidate.
+8. When the server prompt supplies the exact outreach-draft policy, sender and reviewer context, use `propose_approval` with `approval_type: communication` and `details.draft_only: true`. Set one recipient with the stored candidate ID and name. Use only `preferred_verified_email` as the address; otherwise use null. Copy only stored phone numbers and public social profiles for human review.
+9. Personalize the subject and body with cited professional evidence. Cite both the candidate artifacts and contact enrichment ID. Invite the candidate to explore or apply without claiming prior interest, approval, benefits or terms. State that approval records reviewed copy and does not send, call, text, or message anyone.
+10. Stop after preparing the pending draft. A person must review the copy and choose any future delivery path separately.
 
 ## Boundaries
 
@@ -81,10 +82,13 @@ Use this skill when reviewing public organization evidence for the configured pa
 - Do not cite a URL unless its stored artifact ID appears in the candidate record.
 - AgentCash results are not Inbox evidence until the approved connector imports
   and stores them. Do not infer sensitive traits or make an automated decision
-  about a person. Never expose, store, search for or invent contact details for
-  this flow.
+  about a person. Contact enrichment may store only professional emails, phones
+  with provider type, and trusted LinkedIn, X/Twitter, or Facebook URLs. Never
+  use personal emails, addresses, demographics, relatives, or financial data.
+- Phone numbers and social profiles are review-only data. Never call, text, or
+  message a candidate, and never use an unverified or accept-all email address.
 - Do not lower the configured evidence threshold to fill a quota.
 
 ## Verification
 
-Before finishing, confirm that every proposed communication is marked draft-only, is pending human review, contains only stored evidence IDs, names its evidence gaps, has no recipient address, and created no outreach or external effect.
+Before finishing, confirm that the run enriched no more than one candidate, every proposed communication is marked draft-only and pending human review, any recipient email is the stored verified professional email, every phone and profile is stored review-only data, all evidence IDs are stored, evidence gaps are named, and no outreach or external effect occurred.

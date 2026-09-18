@@ -851,6 +851,39 @@ export const partnerScreeningRunCandidates = pgTable(
   },
 );
 
+export const partnerContactEnrichments = pgTable(
+  'partner_contact_enrichments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    candidateId: uuid('candidate_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    runtimeRunId: text('runtime_run_id').notNull(),
+    status: text('status').notNull().default('enrichment_reserved'),
+    pendingKind: text('pending_kind'),
+    pendingToolCallId: text('pending_tool_call_id'),
+    enrichmentToolCallId: text('enrichment_tool_call_id'),
+    verificationToolCallId: text('verification_tool_call_id'),
+    verificationPollCount: integer('verification_poll_count').notNull().default(0),
+    contactData: jsonb('contact_data').notNull().default({ professional_emails: [], phones: [], social_profiles: [] }),
+    preferredEmail: text('preferred_email'),
+    verificationStatus: text('verification_status'),
+    verificationScore: numeric('verification_score', { precision: 5, scale: 2 }),
+    verificationChecks: jsonb('verification_checks').notNull().default({}),
+    draftEligible: boolean('draft_eligible').notNull().default(false),
+    verificationJobId: text('verification_job_id'),
+    verificationPollUrl: text('verification_poll_url'),
+    verificationRetryAfterSeconds: integer('verification_retry_after_seconds'),
+    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),
+    fetchedAt: ts('fetched_at'),
+    verifiedAt: ts('verified_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_contact_enrichments_run_key').on(t.workspaceId, t.runId)],
+);
+
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1429,6 +1462,7 @@ export const ALL_TABLES = {
   partner_screening_runs: partnerScreeningRuns,
   partner_source_artifacts: partnerSourceArtifacts,
   partner_candidates: partnerCandidates,
+  partner_contact_enrichments: partnerContactEnrichments,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

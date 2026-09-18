@@ -250,12 +250,13 @@ async function ensurePartnerOutreachDraftPolicy(
 
 function outreachDraftInstructions(context: DraftPolicyContext): string {
   return [
-    'For each prospect whose stored professional evidence supports outreach, prepare a personalized email draft for human review.',
+    'Choose exactly one strongest prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
+    'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. Never alter an argument, repeat a completed paid call, or use another contact source.',
     `Call propose_approval with policy_key ${JSON.stringify(context.policyKey)}, approval_type communication, illustrative false, target_member_ids [${JSON.stringify(context.memberId)}], and no target agents, resources, dependent requests, continuation, or scheduled_for.`,
     `Set details.channel to email, details.draft_only to true, and details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
-    'Set one recipient with the candidate name and address null. The governed source intentionally removes contact details; do not search for, infer, or invent an email address.',
+    'Set one recipient with candidate_id and the candidate name. Set address only to preferred_verified_email; otherwise set it to null. Copy only the stored phone_numbers and social_profiles into the recipient for human review.',
     'Write a concise subject and body grounded in the cited professional evidence. Invite the person to explore or apply to the configured Partner Program without claiming prior interest, approval, benefits, or terms.',
-    'Cite the stored candidate artifacts in proposal.evidence. State in summary and consequence that this is a draft only: approval records reviewed copy and does not send a message.',
+    'Cite the stored candidate artifacts and the contact enrichment id in proposal.evidence. State in summary and consequence that this is a draft only: approval records reviewed copy and does not send, call, text, or message anyone.',
     'Do not use propose_request for a discovered prospect. A prospect has not submitted an application.',
   ].join(' ');
 }

@@ -10,6 +10,10 @@ import { runJob, type Job } from '../../src/jobs.js';
 import { bridgeToken } from '../../src/runtime/config.js';
 import { agentCashPeopleSearchArguments } from '../../src/partner-screening/agentcash-people.js';
 import { partnerAgentConfig } from '../../src/partner-screening/config.js';
+import {
+  agentCashContactEnrichmentArguments,
+  agentCashEmailVerificationArguments,
+} from '../../src/partner-screening/agentcash-contact.js';
 
 async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise<void> {
   await withClient('owner', async (client) => {
@@ -218,8 +222,10 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       const detail = await db.getPartnerCandidate(fx.agentId, snapshot.candidates[0]!.id) as {
         source: 'github'; source_key: string; deterministic_priority: number; last_seen_at: Date;
         source_artifacts: { id: string; kind: string; source_url: string }[];
+        next_contact_call: unknown;
       };
       expect(detail.source_artifacts).toHaveLength(2);
+      expect(detail.next_contact_call).toBeNull();
       const artifactIds = detail.source_artifacts.map((artifact) => artifact.id);
       const proposal = {
         kind: 'application',
@@ -386,7 +392,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(stored.runs).toHaveLength(1);
     expect(stored.runs[0]?.client_turn_id).toMatch(/^partner-screening:/);
     expect(stored.prompt).toContain('details.draft_only to true');
-    expect(stored.prompt).toContain('address null');
+    expect(stored.prompt).toContain('otherwise set it to null');
     expect(stored.prompt).toContain('Do not use propose_request');
     expect(stored.policy).toEqual([{ approval_type: 'communication', requester_agent_id: fx.agentId }]);
   });
@@ -606,5 +612,160 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
     expect(stored.artifacts).not.toContain('must-not-persist');
     expect(stored.artifacts).not.toContain('+15551234567');
+  });
+
+  it('enriches and verifies exactly one stored candidate per native run', async () => {
+    const fx = await seedWorkspace();
+    const nativeRunId = `run_${'c'.repeat(32)}`;
+    const traceId = randomUUID();
+    const profileUrl = 'https://www.linkedin.com/in/contact-candidate';
+    const seeded = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const screening = await client.query<{ id: string }>(
+        `INSERT INTO partner_screening_runs
+           (workspace_id,agent_id,created_by,idempotency_key,status,source,authentication,
+            config_snapshot,api_requests_max,api_requests_used,agentcash_tool_call_id,
+            candidates_discovered,monetary_cost_usd,completed_at)
+         VALUES ($1,$2,$3,$4,'completed','agentcash_people','wallet',$5::jsonb,1,1,'seed-call',1,0.15,now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, fx.adminId, `contact-seed:${randomUUID()}`, JSON.stringify({ source: 'agentcash_people' })],
+      );
+      const candidate = await client.query<{ id: string }>(
+        `INSERT INTO partner_candidates
+           (workspace_id,agent_id,source,source_key,display_name,profile_url,
+            deterministic_priority,priority_breakdown,confidence,evidence_gaps,
+            latest_run_id,first_seen_at,last_seen_at)
+         VALUES ($1,$2,'agentcash_people','contact-person','Contact Candidate',$3,
+                 90,'[]'::jsonb,'high','{}',$4,now(),now()) RETURNING id`,
+        [fx.workspaceId, fx.agentId, profileUrl, screening.rows[0]!.id],
+      );
+      await client.query(
+        `INSERT INTO partner_screening_run_candidates
+           (workspace_id,run_id,candidate_id,deterministic_priority,priority_breakdown,
+            confidence,evidence_gaps,artifact_ids)
+         VALUES ($1,$2,$3,90,'[]'::jsonb,'high','{}','{}')`,
+        [fx.workspaceId, screening.rows[0]!.id, candidate.rows[0]!.id],
+      );
+      await client.query(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::uuid::text,'agent-' || $3::uuid::text,1)`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), traceId, nativeRunId],
+      );
+      await client.query('COMMIT');
+      return { candidateId: candidate.rows[0]!.id };
+    });
+    const bridgeSecret = 'agentcash-contact-bridge-secret-1234567890';
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: bridgeSecret,
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const headers = { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` };
+    const enrichArgs = agentCashContactEnrichmentArguments(seeded.candidateId, profileUrl);
+    const authorized = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_contact_1', arguments: enrichArgs },
+    });
+    expect(authorized.status).toBe(201);
+    const pending = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/pending`, {
+      method: 'GET', origin: null, headers,
+    });
+    expect(await pending.json()).toEqual({ pending: [{
+      runtime_run_id: nativeRunId, tool_call_id: 'call_contact_1', arguments: enrichArgs,
+    }] });
+    const imported = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/import`, {
+      method: 'POST', origin: null, headers,
+      body: {
+        runtime_run_id: nativeRunId, tool_call_id: 'call_contact_1', arguments: enrichArgs,
+        result: {
+          records: [{
+            record_id: seeded.candidateId,
+            professional_emails: ['WORK@EXAMPLE.COM'], personal_emails: ['private@example.net'],
+            phones: [{ number: '+1 415 555 0100', phone_type: 'mobile' }],
+            linkedin_url: profileUrl, twitter_url: 'https://x.com/contact_candidate',
+            home_address: 'must not persist', net_worth: 'must not persist',
+          }],
+        },
+      },
+    });
+    expect(imported.status).toBe(200);
+    expect(await imported.json()).toMatchObject({ ok: true, state: 'enriched' });
+
+    const verifyArgs = agentCashEmailVerificationArguments('work@example.com');
+    const verifyAuthorized = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_verify_1', arguments: verifyArgs },
+    });
+    expect(verifyAuthorized.status).toBe(201);
+    const verified = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/import`, {
+      method: 'POST', origin: null, headers,
+      body: {
+        runtime_run_id: nativeRunId, tool_call_id: 'call_verify_1', arguments: verifyArgs,
+        result: {
+          email: 'work@example.com', status: 'valid', score: 98, regexp: true,
+          mx_records: true, smtp_server: true, smtp_check: true,
+          disposable: false, block: false, accept_all: false,
+        },
+      },
+    });
+    expect(await verified.json()).toMatchObject({ ok: true, state: 'completed' });
+
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const result = await client.query(
+        `SELECT status, contact_data, preferred_email, verification_status,
+                draft_eligible, monetary_cost_usd
+           FROM partner_contact_enrichments WHERE candidate_id=$1`,
+        [seeded.candidateId],
+      );
+      return result.rows[0];
+    });
+    expect(stored).toMatchObject({
+      status: 'completed', preferred_email: 'work@example.com',
+      verification_status: 'valid', draft_eligible: true,
+      contact_data: {
+        professional_emails: ['work@example.com'],
+        phones: [{ number: '+1 415 555 0100', type: 'mobile' }],
+        social_profiles: [
+          { network: 'linkedin', url: profileUrl },
+          { network: 'twitter', url: 'https://x.com/contact_candidate' },
+        ],
+      },
+    });
+    expect(Number(stored.monetary_cost_usd)).toBe(0.08);
+    expect(JSON.stringify(stored)).not.toContain('private@example.net');
+    expect(JSON.stringify(stored)).not.toContain('must not persist');
+
+    const agentDb = new PgAgentDb(env as Env, fx.workspaceId, traceId);
+    try {
+      const detail = await agentDb.getPartnerCandidate(fx.agentId, seeded.candidateId) as {
+        professional_contact: {
+          preferred_verified_email: string | null;
+          phone_numbers: { number: string; type: string | null }[];
+          verification: { draft_eligible: boolean };
+        };
+        next_contact_call: unknown;
+      };
+      expect(detail.professional_contact).toMatchObject({
+        preferred_verified_email: 'work@example.com',
+        phone_numbers: [{ number: '+1 415 555 0100', type: 'mobile' }],
+        verification: { draft_eligible: true },
+      });
+      expect(detail.next_contact_call).toBeNull();
+    } finally { await agentDb.close(); }
+
+    const repeated = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/contact/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_contact_2', arguments: enrichArgs },
+    });
+    expect(repeated.status).toBe(409);
+    expect(await repeated.json()).toMatchObject({ reason: 'partner_contact_budget_exhausted' });
   });
 });
