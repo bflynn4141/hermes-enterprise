@@ -67,7 +67,13 @@ export function approvalReviewerLabel(request: RequestEntity): string {
 
 export function matchesReviewerFilter(request: RequestEntity, reviewer: 'for_me' | 'waiting' | 'all'): boolean {
   if (reviewer === 'all') return true;
-  if (request.kind !== 'approval') return reviewer === 'for_me';
+  if (request.kind !== 'approval') {
+    // Setup is actionable work, but does not require an approval vote. Older
+    // responses without a summary retain the existing list behavior.
+    const requirement = request.decision_summary?.approval_requirement;
+    if (request.kind === 'task' || !requirement) return reviewer === 'for_me';
+    return reviewer === 'for_me' ? requirement.pending_for_viewer : requirement.waiting_on_others;
+  }
   return reviewer === 'for_me' ? request.approval?.pending_for_viewer === true : request.approval?.waiting_on_others === true;
 }
 
