@@ -97,7 +97,13 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
           || row.triage_rubric_version !== (c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1')
           || !row.triage_status)
       ) {
-        const jobId = await enqueueRequestTriage(work.tx, work.workspaceId, row.id, row.version);
+        const jobId = await enqueueRequestTriage(
+          work.tx,
+          work.workspaceId,
+          row.id,
+          row.version,
+          c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1',
+        );
         if (jobId) jobs.push(jobId);
       }
     }
