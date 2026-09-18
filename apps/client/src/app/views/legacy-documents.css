@@ -1,0 +1,65 @@
+/* Native disclosures keep long source/document reading stable; no motion is needed. */
+.legacy-document-view { display: flex; flex-direction: column; min-height: 0; flex: 1 1 0; overflow: hidden; }
+.legacy-document-scroll { display: flex; flex-direction: column; gap: 24px; overflow: auto; padding: 22px 28px 28px; min-height: 0; flex: 1 1 auto; }
+.legacy-decision, .legacy-context { display: flex; flex-direction: column; gap: 10px; }
+.legacy-decision h1, .legacy-context h2 { margin: 0; color: var(--body); font: 500 14px/1.45 var(--font-body); }
+.legacy-decision h2 { margin: 0; font: 400 24px/1.3 var(--font-display); overflow-wrap: anywhere; }
+.legacy-document-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; margin: 4px 0; }
+.legacy-document-facts > div { min-width: 0; }
+.legacy-document-facts dt { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.legacy-document-facts dd { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.legacy-document-facts .legacy-fact-wide { grid-column: 1 / -1; }
+.legacy-reviewer { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0; padding: 12px 0 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.legacy-context p, .legacy-disclosure p { margin: 0; font-size: 13px; line-height: 1.6; }
+.legacy-context ul, .legacy-disclosure ul { display: flex; flex-direction: column; gap: 10px; list-style: none; padding: 0; margin: 0; }
+.legacy-context li, .legacy-disclosure li { display: flex; flex-direction: column; gap: 3px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.legacy-excerpt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.legacy-context .legacy-excerpt { max-height: 9.5em; overflow: auto; }
+.legacy-disclosure { border-top: 1px solid var(--line); padding-top: 14px; min-width: 0; }
+.legacy-disclosure summary { cursor: pointer; min-height: 32px; font-size: 13px; font-weight: 500; line-height: 1.5; }
+.legacy-disclosure[open] > summary { margin-bottom: 12px; }
+.legacy-disclosure > p + ul, .legacy-disclosure > p + p { margin-top: 10px; }
+.legacy-disclosure summary:focus-visible { outline: 2px solid #A7A4FF; outline-offset: 4px; border-radius: 3px; }
+.legacy-disclosure code { overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; }
+.legacy-document-view .meta { font-size: 12px; line-height: 1.5; }
+.legacy-document-view .doc-frame { flex: none; min-height: 0; padding: 12px; }
+.legacy-document-view .doc-toolbar { flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.legacy-document-view .doc-page { max-width: none; padding: 22px; gap: 18px; border-radius: 4px; }
+.legacy-document-heading { display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid #DDDDDF; padding-bottom: 16px; }
+.legacy-document-heading h3 { margin: 0; font: 400 27px/1.2 var(--font-display); }
+.legacy-document-heading span { font-size: 12px; color: #555563; }
+.legacy-document-view .doc-parties { flex-wrap: wrap; align-items: flex-start; padding-bottom: 0; }
+.legacy-document-view .doc-parties > .col { flex: 1 1 170px; }
+.legacy-document-view .doc-parties strong { font-size: 14px; }
+.legacy-document-view .doc-parties span:not(.doc-label) { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.legacy-document-view .doc-page p { font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.legacy-line-head, .legacy-invoice-line { display: grid; grid-template-columns: minmax(0, 1fr) 36px minmax(100px, auto); gap: 12px; padding: 12px 8px; font-size: 12px; line-height: 1.5; width: 100%; text-align: left; }
+.legacy-line-head { background: #F0F0F4; }
+.legacy-invoice-line { color: #181829; border-bottom: 1px solid #DDDDDF; border-radius: 3px; cursor: pointer; }
+.legacy-invoice-line > span:first-child { overflow-wrap: anywhere; }
+.legacy-line-head > span:not(:first-child), .legacy-invoice-line > span:not(:first-child) { text-align: right; }
+.legacy-invoice-line small { display: block; color: #555563; font-size: 11px; }
+.legacy-invoice-line:hover { background: #F4F4FA; }
+.legacy-invoice-line[aria-pressed="true"] { background: #E8E8FF; outline: 1px solid #7777F0; }
+.legacy-invoice-line:focus-visible { outline: 2px solid #5D58E8; }
+.legacy-agreement-section { display: flex; flex-direction: column; gap: 8px; }
+.legacy-agreement-section h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.legacy-agreement-section details { font-size: 12px; color: #555563; }
+.legacy-agreement-section code { display: block; }
+.legacy-document-view .doc-total { flex-wrap: wrap; gap: 12px; }
+.legacy-document-view .doc-total .v { font-size: 22px; }
+.legacy-document-view .doc-foot { flex-wrap: wrap; gap: 10px; font-size: 12px; }
+.legacy-document-view > .app-footer { margin-inline: 0 !important; padding: 16px 28px; }
+.legacy-document-view > .app-footer .f-title { font-size: 13px; }
+.legacy-document-view > .app-footer .f-sub { font-size: 12px; }
+.legacy-document-view .pdf-embed { min-height: 500px; width: 100%; }
+@media (max-width: 650px) {
+  .legacy-document-scroll { padding: 20px 18px; gap: 22px; }
+  .legacy-document-view > .app-footer { flex-wrap: wrap; gap: 10px; padding: 14px 18px; }
+  .legacy-document-view > .app-footer > .col { flex-basis: 100%; }
+  .legacy-document-view > .app-footer .btn { min-height: 42px; }
+  .legacy-document-view .doc-frame { padding: 6px; }
+  .legacy-document-view .doc-page { padding: 16px 12px; }
+  .legacy-line-head, .legacy-invoice-line { gap: 8px; grid-template-columns: minmax(0, 1fr) 28px minmax(82px, auto); font-size: 11px; }
+  .legacy-document-facts { gap: 12px; }
+}
