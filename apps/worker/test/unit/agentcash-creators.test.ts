@@ -30,6 +30,9 @@ describe('AgentCash creator consultant discovery', () => {
     });
     const prompt = 'Run a Hermes creator test for LinkedIn, YouTube, and X.';
     expect(requestedCreatorSearchKinds(prompt)).toEqual(['linkedin_youtube', 'x']);
+    expect(requestedCreatorSearchKinds(
+      'Run an X search to find Hermes creators and consultants.',
+    )).toEqual(['x']);
     const governed = governedCreatorSearchInput(prompt);
     expect(governed).toContain(JSON.stringify(AGENTCASH_CREATOR_SEARCH_ARGUMENTS));
     expect(governed).toContain(JSON.stringify(AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS));

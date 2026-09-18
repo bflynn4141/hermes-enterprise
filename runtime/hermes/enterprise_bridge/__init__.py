@@ -404,7 +404,10 @@ class Bridge:
             {"runtime_run_id": run_id, "tool_call_id": tool_call_id, "arguments": arguments},
         )
         if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
-            raise BridgeError("AgentCash creator-search authorization was rejected.")
+            reason = body.get("reason") if isinstance(body, dict) else None
+            safe_reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z0-9_:-]{1,80}", reason) else None
+            detail = f"{status} {safe_reason}" if safe_reason else str(status)
+            raise BridgeError(f"AgentCash creator-search authorization was rejected ({detail}).")
         return body
 
     def import_creator_search(self, run_id, tool_call_id, arguments, result):
@@ -603,7 +606,11 @@ def register(ctx):
                         bridge.authorize_creator_search(run_id, call_id, args)
                     else:
                         bridge.authorize_contact(run_id, call_id, args)
+                except BridgeError as error:
+                    logging.warning("AgentCash payment authorization failed: %s", error)
+                    return {"action": "block", "message": "AgentCash payment authorization failed closed."}
                 except Exception:
+                    logging.warning("AgentCash payment authorization failed: unexpected error.")
                     return {"action": "block", "message": "AgentCash payment authorization failed closed."}
             return None
         if tool_name not in allowed:
