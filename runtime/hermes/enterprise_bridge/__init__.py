@@ -18,9 +18,31 @@ SERVICE_USER_AGENT = "Hermes-Enterprise-Bridge/1.0"
 MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
 TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
+AGENTCASH_CREATOR_SEARCH_URL = "https://stableenrich.dev/api/exa/search"
 AGENTCASH_CONTACT_ENRICH_URL = "https://stableenrich.dev/api/minerva/enrich"
 AGENTCASH_EMAIL_VERIFY_URL = "https://stableenrich.dev/api/hunter/email-verifier"
 CONTACT_RETURN_FIELDS = ["full_name", "linkedin_url", "professional_emails", "phones", "twitter_url", "facebook_url"]
+AGENTCASH_CREATOR_SEARCH_ARGUMENTS = {
+    "url": AGENTCASH_CREATOR_SEARCH_URL,
+    "method": "POST",
+    "maxAmount": 0.01,
+    "body": {
+        "query": '"Hermes Agent" "Nous Research" consultant creator tutorial implementation',
+        "includeDomains": ["linkedin.com", "www.linkedin.com", "youtube.com", "www.youtube.com"],
+        "numResults": 10,
+        "type": "auto",
+        "contents": {
+            "summary": {
+                "query": "Identify the person or channel and concise public evidence that they teach, implement, advise on, or consult about Nous Research Hermes Agent."
+            },
+            "highlights": {"query": "Hermes Agent consulting implementation tutorial", "maxCharacters": 600},
+            "text": {"maxCharacters": 1500, "verbosity": "compact", "includeSections": ["body", "metadata"]},
+            "livecrawl": "fallback",
+            "maxAgeHours": 72,
+            "extras": {"links": 10},
+        },
+    },
+}
 
 
 def approved_agentcash_arguments(program):
@@ -364,6 +386,57 @@ class Bridge:
             raise BridgeError("AgentCash payment authorization was rejected.")
         return body
 
+    def authorize_creator_search(self, run_id, tool_call_id, arguments):
+        """Reserve one user-requested public creator search before payment."""
+        status, body = self.request(
+            "POST", self.base_url + "/agentcash/creator-search/authorize", self.token,
+            {"runtime_run_id": run_id, "tool_call_id": tool_call_id, "arguments": arguments},
+        )
+        if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
+            raise BridgeError("AgentCash creator-search authorization was rejected.")
+        return body
+
+    def import_creator_search(self, run_id, tool_call_id, arguments, result):
+        if not isinstance(result, (str, dict, list)):
+            raise BridgeError("AgentCash creator search returned an unsupported result.")
+        status, body = self.request(
+            "POST", self.base_url + "/agentcash/creator-search/import", self.token,
+            {"runtime_run_id": run_id, "tool_call_id": tool_call_id,
+             "arguments": arguments, "result": result}, timeout=25.0,
+        )
+        if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
+            raise BridgeError("AgentCash creator evidence import failed.")
+        return body
+
+    def recover_pending_creator_search(self):
+        """Replay one already-paid creator result; never issues a source request."""
+        status, pending = self.request(
+            "GET", self.base_url + "/agentcash/creator-search/pending", self.token, timeout=25.0,
+        )
+        if status == 204:
+            return None
+        if status != 200 or not isinstance(pending, dict):
+            raise BridgeError("AgentCash pending creator import lookup failed.")
+        run_id, tool_call_id, arguments = (pending.get("runtime_run_id"),
+                                            pending.get("tool_call_id"), pending.get("arguments"))
+        if (not isinstance(run_id, str) or not re.fullmatch(r"run_[0-9a-f]{32}", run_id)
+                or not isinstance(tool_call_id, str) or not TOOL_CALL_ID.fullmatch(tool_call_id)
+                or arguments != AGENTCASH_CREATOR_SEARCH_ARGUMENTS):
+            raise BridgeError("AgentCash pending creator import identity was rejected.")
+        home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")).resolve()
+        spill_path = (home / "cache" / "spillover" / (tool_call_id + ".txt")).resolve()
+        try:
+            stat = spill_path.lstat()
+        except OSError as error:
+            raise BridgeError("AgentCash pending creator result is not available in spill storage.") from error
+        if spill_path.is_symlink() or not spill_path.is_file() or stat.st_size > MAX_BODY_BYTES:
+            raise BridgeError("AgentCash pending creator result failed spill storage validation.")
+        try:
+            result = spill_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise BridgeError("AgentCash pending creator result could not be read safely.") from error
+        return self.import_creator_search(run_id, tool_call_id, arguments, result)
+
     def authorize_contact(self, run_id, tool_call_id, arguments):
         """Reserve the run-bound contact step before AgentCash is reached."""
         status, body = self.request(
@@ -476,6 +549,7 @@ def register(ctx):
             return {"action": "block", "message": "This MCP tool is not in the enterprise allowlist."}
         args = args if isinstance(args, dict) else {}
         if (tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments
+                and args != AGENTCASH_CREATOR_SEARCH_ARGUMENTS
                 and agentcash_contact_call_kind(args) is None):
             return {"action": "block", "message": "Only the exact approved Partner Program AgentCash requests are allowed."}
         if "url" in args:
@@ -514,6 +588,8 @@ def register(ctx):
                     run_id, call_id = trusted_hook_identity(tool_call_id)
                     if args == agentcash_arguments:
                         bridge.authorize_people_search(run_id, call_id, args)
+                    elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+                        bridge.authorize_creator_search(run_id, call_id, args)
                     else:
                         bridge.authorize_contact(run_id, call_id, args)
                 except Exception:
@@ -531,6 +607,8 @@ def register(ctx):
             run_id, trusted_call_id = trusted_hook_identity(tool_call_id)
             if args == agentcash_arguments:
                 bridge.import_people_search(run_id, trusted_call_id, args, result)
+            elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+                bridge.import_creator_search(run_id, trusted_call_id, args, result)
             elif agentcash_contact_call_kind(args) is not None:
                 bridge.import_contact(run_id, trusted_call_id, args, result)
         except Exception:
@@ -547,7 +625,7 @@ def register(ctx):
         name="partner-program-screening",
         path=skill_path,
         description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.5.0", "metadata": {"hermes": {"category": "enterprise"}}},
+        frontmatter={"version": "1.6.0", "metadata": {"hermes": {"category": "enterprise"}}},
     )
     for schema in bridge.tools():
         name = schema["name"]
@@ -573,3 +651,9 @@ def register(ctx):
             logging.warning("AgentCash pending contact recovery did not complete: %s", error)
         except Exception:
             logging.warning("AgentCash pending contact recovery did not complete: unexpected error.")
+        try:
+            bridge.recover_pending_creator_search()
+        except BridgeError as error:
+            logging.warning("AgentCash pending creator recovery did not complete: %s", error)
+        except Exception:
+            logging.warning("AgentCash pending creator recovery did not complete: unexpected error.")

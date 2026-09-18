@@ -12,7 +12,7 @@ profiles for human review and uses an email only after verification passes.
 Approval records reviewed copy and never sends, calls, texts, or messages anyone.
 
 Iris now receives this procedure as the native, read-only Hermes skill
-`enterprise_bridge:partner-program-screening` version `1.5.0`. Its approved
+`enterprise_bridge:partner-program-screening` version `1.6.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
 model credentials remain server-side. The skill is automatically in use when
 this agent has a valid policy. It describes the review workflow but grants no
@@ -31,11 +31,12 @@ activity cannot establish them.
 |---|---|---|---|
 | GitHub | Live through `api.github.com` | Works anonymously at 60 core requests/hour, with search limited to 10 requests/minute. `PARTNER_GITHUB_TOKEN` raises the primary core allowance to 5,000/hour and authenticated search to 30/minute. GitHub does not charge per REST request. | Organization and repository records only. The connector drops user-owned search results and public email, and cannot contact anyone. GitHub prohibits using the service for spam, including unsolicited recruiting. |
 | AgentCash People Search | Live through `stableenrich.dev/api/fullenrich/people-search` inside Iris's Nous Cloud profile | One request per run, capped at $0.15. The endpoint is free when it returns no match. The dedicated AgentCash wallet pays; no source API key is needed. | The model cannot select the URL, filters, or spend cap. The Worker accepts a response only from the native run that owns the screening job, removes contact data, and stores public professional fields. Results are prospects, never applicants, until a human reviews them. |
+| AgentCash LinkedIn/YouTube creator search | Live through one fixed `stableenrich.dev/api/exa/search` request when the current user explicitly asks for Hermes creators, influencers, or consultants | One request capped at $0.01. It is separate from the recurring six-hour job and is not added to that budget. | Searches publicly indexed LinkedIn and YouTube pages without using either platform's member API. The Worker accepts the exact request only when the trusted native run contains matching user intent, removes contact-like text, and stores at most five cited results. Search relevance is not proof of audience size, influence, identity matching, availability, or consent. |
 | AgentCash contact enrichment + verification | Live through fixed Minerva and Hunter endpoints after Iris selects one candidate | At most one $0.05 enrichment and one $0.03 verification per native run. Async verification polls reuse the paid job and cannot add another candidate. | The Worker stores only professional emails, phones with provider type, and trusted LinkedIn/X/Facebook URLs. Personal emails, addresses, demographics, relatives, and financial fields are dropped. Phones and profiles are review-only; verified professional email may enter a draft. |
 | Explicit GitHub URL intake | Live through the same connector | Same GitHub limits. URLs must be `https://github.com/<organization>` or one repository beneath it. | A URL is an input hint; the saved evidence is still fetched from the official API. The profile call must prove the owner is an organization. |
-| YouTube | Not implemented | A Google Cloud project and `PARTNER_YOUTUBE_API_KEY` would be required. `search.list` currently costs one unit and has a separate default search quota of 100 calls/day. A credential alone does not mark this source live. | Build and policy review of a dedicated connector are still required. No YouTube request is made here. |
+| YouTube direct API | Not implemented | A Google Cloud project and `PARTNER_YOUTUBE_API_KEY` would be required. `search.list` currently costs one unit and has a separate default search quota of 100 calls/day. | The creator search above reads indexed public results through Exa; it does not call the YouTube Data API or claim subscriber metrics. |
 | X | Not implemented | Requires an approved developer account, project/app and `PARTNER_X_BEARER_TOKEN`. X charges from prepaid credits per API usage. A credential alone does not mark this source live. | A dedicated connector and a workspace budget must be approved first. No X request is made here. |
-| LinkedIn | Unsupported for prospect discovery | Most access requires explicit LinkedIn approval. | The Profile API restricts other-member data and says it may not be stored; Marketing API restrictions prohibit using member data to identify prospects or leads. Hermes does not discover LinkedIn prospects. An applicant-supplied URL may only be a reference under an approved LinkedIn product. |
+| LinkedIn direct API | Unsupported for prospect discovery | Most access requires explicit LinkedIn approval. | Hermes does not use the Profile or Marketing APIs for prospect discovery. The creator search above stores only public pages returned by the independent web index and does not claim private member data or LinkedIn-derived influence metrics. |
 
 Source policy and quota references were checked on 2026-09-16:
 
@@ -72,22 +73,26 @@ Source policy and quota references were checked on 2026-09-16:
    into the idempotent importer, even when the model run has already ended. A transport failure after
    leasing never starts another source request or substitutes a new tool-call ID, preventing accidental
    duplicate payment.
-4. A successful run commits sanitized source snapshots and candidates. Source
+4. A creator search follows the same lease/import boundary with a fixed `$0.01`
+   request. The Worker also verifies that the current native run's user message
+   explicitly names Hermes, LinkedIn or YouTube, and a consultant, influencer,
+   or creator intent. It is not scheduled by Cloudflare Cron.
+5. A successful run commits sanitized source snapshots and candidates. Source
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,
    confidence, and gaps are preserved.
-5. Iris selects exactly one stored candidate. Each Minerva or Hunter request is
+6. Iris selects exactly one stored candidate. Each Minerva or Hunter request is
    reconstructed from database state, leased to one native run/tool-call ID,
    and imported through the same spill-recovery boundary. The Worker stores no
    raw enrichment response. A Hunter result is draft-eligible only when it is
    `valid` and syntax, MX, SMTP-server, and SMTP-check signals pass while
    disposable and blocked signals do not.
-6. Onboarding calls the explicit handoff route after the provider is connected.
+7. Onboarding calls the explicit handoff route after the provider is connected.
    Cloudflare Cron performs the same idempotent handoff automatically. The
    agent's auto-loaded Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates.
-7. Before handing work to Iris, the Worker installs an agent-specific
+8. Before handing work to Iris, the Worker installs an agent-specific
    communication policy reviewed by the responsible member. Iris may call
    `propose_approval` only with `draft_only: true`, the verified sender, and
    contact fields that exactly match stored evidence. The recipient address is

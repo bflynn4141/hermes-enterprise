@@ -155,9 +155,11 @@ export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMat
       },
       {
         id: 'youtube',
-        state: 'unconfigured',
-        authentication: env.PARTNER_YOUTUBE_API_KEY?.trim() ? 'authenticated' : 'not_applicable',
-        note: 'Requires a Google Cloud project/API key and a separate approved connector. No YouTube calls are made by this build.',
+        state: config.config ? 'live' : 'unconfigured',
+        authentication: config.config ? 'wallet' : 'not_applicable',
+        note: config.config
+          ? 'Explicit-request creator discovery can search public YouTube evidence through one fixed $0.01 AgentCash call; it does not claim subscriber scale or identity matches.'
+          : config.problem,
       },
       {
         id: 'x',
@@ -167,9 +169,11 @@ export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMat
       },
       {
         id: 'linkedin',
-        state: 'unsupported_policy',
-        authentication: 'not_applicable',
-        note: 'LinkedIn member prospect discovery is not supported. Applicant-supplied URLs may be treated only as explicit references under an approved integration.',
+        state: config.config ? 'live' : 'unconfigured',
+        authentication: config.config ? 'wallet' : 'not_applicable',
+        note: config.config
+          ? 'Explicit-request creator discovery can search public LinkedIn evidence through one fixed $0.01 AgentCash call; stored profiles remain prospects and require human review.'
+          : config.problem,
       },
     ],
     onboarding_live_search: {

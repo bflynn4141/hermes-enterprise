@@ -14,6 +14,7 @@ import {
   agentCashContactEnrichmentArguments,
   agentCashEmailVerificationArguments,
 } from '../../src/partner-screening/agentcash-contact.js';
+import { AGENTCASH_CREATOR_SEARCH_ARGUMENTS } from '../../src/partner-screening/agentcash-creators.js';
 
 async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise<void> {
   await withClient('owner', async (client) => {
@@ -612,6 +613,163 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
     expect(stored.artifacts).not.toContain('must-not-persist');
     expect(stored.artifacts).not.toContain('+15551234567');
+  });
+
+  it('leases an explicit one-time creator search and imports only bounded public evidence', async () => {
+    const fx = await seedWorkspace();
+    const nativeRunId = `run_${'d'.repeat(32)}`;
+    const traceId = randomUUID();
+    const runId = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::uuid::text,'agent-' || $3::uuid::text,1)
+         RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), traceId, nativeRunId],
+      );
+      await client.query(
+        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+         VALUES ($1,$2,0,0,'user',$3::jsonb)`,
+        [fx.workspaceId, run.rows[0]!.id, JSON.stringify({
+          role: 'user',
+          content: 'Search YouTube or LinkedIn influencers who are Hermes consultants.',
+        })],
+      );
+      await client.query('COMMIT');
+      return run.rows[0]!.id;
+    });
+    const bridgeSecret = 'agentcash-creator-bridge-secret-1234567890';
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: bridgeSecret,
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const headers = { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` };
+    const authorized = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_creator_1', arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS },
+    });
+    expect(authorized.status).toBe(201);
+    expect(await authorized.json()).toMatchObject({ ok: true, reserved_requests: 1, max_spend_usd: 0.01 });
+
+    const pending = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/pending`, {
+      method: 'GET', origin: null, headers,
+    });
+    expect(await pending.json()).toEqual({
+      runtime_run_id: nativeRunId,
+      tool_call_id: 'call_creator_1',
+      arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+    });
+
+    const imported = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/import`, {
+      method: 'POST', origin: null, headers,
+      body: {
+        runtime_run_id: nativeRunId,
+        tool_call_id: 'call_creator_1',
+        arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+        result: {
+          results: [{
+            title: 'Alex Example - Hermes Agent implementation consultant',
+            url: 'https://www.linkedin.com/posts/alex-example_hermes-agent-activity-123',
+            author: 'Alex Example',
+            summary: 'Nous Research Hermes Agent implementation consulting and tutorials.',
+            text: 'Public post. private@example.com +1 555 111 2222',
+            extras: { links: ['https://www.linkedin.com/in/alex-example'] },
+          }],
+        },
+      },
+    });
+    expect(imported.status).toBe(201);
+    expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const screening = await client.query(
+        `SELECT status, source, monetary_cost_usd, agentcash_tool_call_id
+           FROM partner_screening_runs WHERE idempotency_key=$1`,
+        [`creator:${nativeRunId}`],
+      );
+      const candidate = await client.query(
+        `SELECT id, source, display_name, profile_url FROM partner_candidates
+          WHERE source='agentcash_creators' AND agent_id=$1`,
+        [fx.agentId],
+      );
+      const artifact = await client.query<{ body: string }>(
+        `SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts
+          WHERE source='agentcash_creators'`,
+      );
+      return { screening: screening.rows[0], candidate: candidate.rows[0], artifact: artifact.rows[0]?.body ?? '' };
+    });
+    expect(stored.screening).toMatchObject({ status: 'completed', source: 'agentcash_creators', agentcash_tool_call_id: 'call_creator_1' });
+    expect(Number(stored.screening.monetary_cost_usd)).toBe(0.01);
+    expect(stored.candidate).toMatchObject({
+      source: 'agentcash_creators', display_name: 'Alex Example',
+      profile_url: 'https://www.linkedin.com/in/alex-example',
+    });
+    expect(stored.artifact).not.toContain('private@example.com');
+    expect(stored.artifact).not.toContain('+1 555 111 2222');
+
+    const agentDb = new PgAgentDb(env as Env, fx.workspaceId, traceId);
+    try {
+      const detail = await agentDb.getPartnerCandidate(fx.agentId, stored.candidate.id) as { next_contact_call: unknown };
+      expect(detail.next_contact_call).toEqual(agentCashContactEnrichmentArguments(
+        stored.candidate.id,
+        'https://www.linkedin.com/in/alex-example',
+      ));
+    } finally { await agentDb.close(); }
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(`UPDATE runs SET status='completed', ended_at=now() WHERE id=$1`, [runId]);
+      await client.query('COMMIT');
+    });
+  });
+
+  it('rejects creator-search payment without matching explicit user intent', async () => {
+    const fx = await seedWorkspace();
+    const nativeRunId = `run_${'e'.repeat(32)}`;
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::uuid::text,'agent-' || $3::uuid::text,1)
+         RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID(), nativeRunId],
+      );
+      await client.query(
+        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+         VALUES ($1,$2,0,0,'user',$3::jsonb)`,
+        [fx.workspaceId, run.rows[0]!.id, JSON.stringify({ role: 'user', content: 'Summarize the partner program.' })],
+      );
+      await client.query('COMMIT');
+    });
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: 'agentcash-creator-reject-secret-1234567890',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const denied = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/authorize`, {
+      method: 'POST', origin: null,
+      headers: { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` },
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_creator_1', arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS },
+    });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reason: 'partner_creator_search_not_authorized' });
   });
 
   it('enriches and verifies exactly one stored candidate per native run', async () => {

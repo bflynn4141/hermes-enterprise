@@ -45,6 +45,7 @@ import {
   agentCashEmailVerificationArguments,
   agentCashEmailVerificationPollArguments,
 } from '../partner-screening/agentcash-contact.js';
+import { trustedLinkedInProfileUrl } from '../partner-screening/agentcash-creators.js';
 
 /**
  * The tool names a workspace with no configured capability rows still gets.
@@ -945,7 +946,9 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, agentId, candidate.id, this.traceId],
       );
       const contact = contactResult.rows[0];
-      const nextContactCall = candidate.source !== 'agentcash_people'
+      const contactEligible = ['agentcash_people', 'agentcash_creators'].includes(String(candidate.source))
+        && trustedLinkedInProfileUrl(String(candidate.profile_url)) !== null;
+      const nextContactCall = !contactEligible
         ? null
         : !contact
           ? agentCashContactEnrichmentArguments(String(candidate.id), String(candidate.profile_url))

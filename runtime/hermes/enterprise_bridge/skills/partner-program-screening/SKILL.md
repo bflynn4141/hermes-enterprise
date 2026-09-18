@@ -1,7 +1,7 @@
 ---
 name: partner-program-screening
 description: Screen partner prospects and prepare cited human reviews.
-version: 1.5.0
+version: 1.6.0
 metadata:
   hermes:
     category: enterprise
@@ -60,7 +60,7 @@ Use this skill when reviewing public organization evidence for the configured pa
 
 ## Procedure
 
-1. If the run prompt contains the exact approved `mcp__agentcash__fetch` arguments, call it exactly once. Do not add, remove, or change filters, the URL, or the $0.15 cap. The enterprise pre-tool hook reserves the run's one payment allowance; the post-tool hook imports and sanitizes the successful response.
+1. If the run prompt contains exact approved `mcp__agentcash__fetch` arguments, call them exactly once. Do not add, remove, or change filters, URLs, or caps. The ordinary People Search is $0.15. An explicitly requested LinkedIn/YouTube Hermes creator search is one separate fixed $0.01 call and is never added to the recurring schedule automatically. The enterprise pre-tool hook reserves the payment allowance; the post-tool hook imports and sanitizes the successful response.
 2. Call `list_partner_candidates` to see candidates collected under the enterprise's approved source policy. If the AgentCash call succeeded but no stored candidate appears, stop and report that the evidence import needs attention; do not pay for a retry.
 3. Call `get_partner_candidate` for each candidate you may advance. Read the stored artifacts rather than relying on the discovery summary alone.
 4. Treat `deterministic_priority` only as discovery triage. Make an independent assessment using the configured program, role, dimensions, and keywords.
@@ -88,6 +88,10 @@ Use this skill when reviewing public organization evidence for the configured pa
 - Phone numbers and social profiles are review-only data. Never call, text, or
   message a candidate, and never use an unverified or accept-all email address.
 - Do not lower the configured evidence threshold to fill a quota.
+- Treat creator search as relevance discovery, not proof of influence. Do not
+  claim audience size, subscriber or follower count, engagement quality,
+  identity matching, or consulting availability unless a stored artifact
+  directly supports that claim.
 
 ## Verification
 
