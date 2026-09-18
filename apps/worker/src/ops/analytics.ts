@@ -43,6 +43,8 @@ export const METRICS = [
   'instance.subrequests',
   'spend.daily',
   'instance.created',
+  'hermes.stream',
+  'hermes.terminal_failure',
 ] as const;
 export type Metric = (typeof METRICS)[number];
 
@@ -175,4 +177,54 @@ export const recordInstanceCreated = (
   writePoint(env, 'instance.created', workspaceId, {
     blobs: [],
     doubles: [1, fields.used, fields.cap ?? 0],
+  });
+
+/**
+ * Hermes delivery health. Timings and counts are deliberately separate from
+ * response content so the first-token and stream-tail SLOs remain queryable
+ * without putting customer text in Analytics Engine.
+ */
+export const recordHermesStream = (
+  env: Env,
+  workspaceId: string,
+  fields: {
+    runId: string;
+    releaseRing: 'canary' | 'stable';
+    streamEnd: 'terminal' | 'eof' | 'disconnected' | 'drain_timeout' | 'not_opened';
+    firstDeltaMs: number | null;
+    firstPreviewMs: number | null;
+    firstCheckpointMs: number | null;
+    deltaCount: number;
+    deltaCharacters: number;
+  },
+): boolean =>
+  writePoint(env, 'hermes.stream', workspaceId, {
+    blobs: [fields.runId, fields.releaseRing, fields.streamEnd],
+    doubles: [
+      fields.firstDeltaMs ?? -1,
+      fields.firstPreviewMs ?? -1,
+      fields.firstCheckpointMs ?? -1,
+      fields.deltaCount,
+      fields.deltaCharacters,
+    ],
+  });
+
+/** Safe, versioned terminal classification only; provider prose is forbidden. */
+export const recordHermesTerminalFailure = (
+  env: Env,
+  workspaceId: string,
+  fields: {
+    runId: string;
+    releaseRing: 'canary' | 'stable';
+    code: string;
+    source: string;
+    structured: boolean;
+    retryable: boolean;
+    workedMs: number;
+    partialCharacters: number;
+  },
+): boolean =>
+  writePoint(env, 'hermes.terminal_failure', workspaceId, {
+    blobs: [fields.runId, fields.releaseRing, fields.code, fields.source, fields.structured ? 'structured' : 'contract_violation'],
+    doubles: [fields.retryable ? 1 : 0, fields.workedMs, fields.partialCharacters],
   });

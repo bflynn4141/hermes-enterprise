@@ -181,6 +181,21 @@ test.describe('final handoff event ordering', () => {
     await expect(page.getByText('An intermediate preview.', { exact: true })).toHaveCount(0);
   });
 
+  test('late reset, durable delta and preview cannot erase or resurrect a completed answer', async ({ page }) => {
+    await mount(page, 'Draft response.', true);
+    await page.evaluate((text) => {
+      window.streamHandoffFixture.finalize(text);
+      window.streamHandoffFixture.terminal();
+    }, answer);
+    await expect(page.locator('.stream-text')).toHaveCount(0);
+    await expect(page.locator('.msg-iris .lead-text')).toHaveText(answer.replace(/\n\n/g, ''));
+
+    await page.evaluate(() => window.streamHandoffFixture.lateFrames('Late stale text'));
+    await expect(page.locator('.stream-text')).toHaveCount(0);
+    await expect(page.getByText('Late stale text', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.msg-iris .lead-text')).toHaveText(answer.replace(/\n\n/g, ''));
+  });
+
   test('a blocks-only final hands off to its structured answer', async ({ page }) => {
     await mount(page, 'Preparing the result.', true);
     await page.evaluate(() => window.streamHandoffFixture.finalize('', [{ type: 'note', title: 'The structured result is ready.' }]));

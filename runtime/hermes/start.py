@@ -23,6 +23,143 @@ MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
 AGENTCASH_TOOLS = ("fetch",)
+CONTRACT = json.loads((ROOT / "contract.json").read_text())
+if CONTRACT.get("source_revision") != REVISION:
+    raise RuntimeError("runtime/hermes/contract.json must match the pinned official source revision.")
+TERMINAL_ERROR_CODES = {
+    "provider_auth": ("auth", False, "provider"),
+    "provider_quota": ("quota", False, "provider"),
+    "provider_rate_limited": ("rate_limit", True, "provider"),
+    "request_rejected": ("rejected", False, "request"),
+    "provider_unavailable": ("unavailable", True, "provider"),
+    "runtime_interrupted": ("interrupted", True, "runtime"),
+    "runtime_unknown": ("unknown", True, "runtime"),
+}
+TERMINAL_ERROR_MESSAGES = {
+    "provider_auth": "The selected model connection needs attention.",
+    "provider_quota": "The selected model account has no available quota.",
+    "provider_rate_limited": "The selected model is rate limited.",
+    "request_rejected": "The selected model rejected this request.",
+    "provider_unavailable": "The model provider is temporarily unavailable.",
+    "runtime_interrupted": "Hermes restarted before this run settled.",
+    "runtime_unknown": "Hermes could not finish this run.",
+}
+ENTERPRISE_TERMINAL_PREFIX = "enterprise-terminal:"
+NATIVE_FAILURE_REASON_CODES = {
+    "auth": "provider_auth",
+    "auth_permanent": "provider_auth",
+    "billing": "provider_quota",
+    "rate_limit": "provider_rate_limited",
+    "upstream_rate_limit": "provider_rate_limited",
+    "overloaded": "provider_unavailable",
+    "server_error": "provider_unavailable",
+    "timeout": "provider_unavailable",
+    "ssl_cert_verification": "provider_unavailable",
+    "context_overflow": "request_rejected",
+    "payload_too_large": "request_rejected",
+    "image_too_large": "request_rejected",
+    "image_corrupt": "request_rejected",
+    "model_not_found": "request_rejected",
+    "provider_policy_blocked": "request_rejected",
+    "content_policy_blocked": "request_rejected",
+    "format_error": "request_rejected",
+    "invalid_encrypted_content": "request_rejected",
+    "multimodal_tool_content_unsupported": "request_rejected",
+    "reasoning_mandatory": "request_rejected",
+    "thinking_signature": "request_rejected",
+    "long_context_tier": "request_rejected",
+    "oauth_long_context_beta_forbidden": "request_rejected",
+    "llama_cpp_grammar_pattern": "request_rejected",
+    "unknown": "runtime_unknown",
+}
+
+
+def _matches(value, patterns):
+    return any(re.search(pattern, value) for pattern in patterns)
+
+
+def terminal_error(error=None, status="failed"):
+    """Project provider-controlled text into the versioned safe wire contract."""
+    signal = str(error or "").lower()[:2000]
+    sentinel = re.fullmatch(re.escape(ENTERPRISE_TERMINAL_PREFIX) + r"([a-z_]+)", signal)
+    if sentinel and sentinel.group(1) in TERMINAL_ERROR_CODES:
+        code = sentinel.group(1)
+    elif status == "interrupted" or _matches(signal, (
+            r"gateway restarted", r"runtime_run_inactive", r"run (?:was )?interrupted")):
+        code = "runtime_interrupted"
+    elif _matches(signal, (
+            r"provider authentication failed", r"\b(?:http\s*)?401\b", r"\bunauthori[sz]ed\b",
+            r"\binvalid (?:api )?key\b", r"\bapi key (?:is )?(?:invalid|expired|missing)\b",
+            r"\boauth\b.*\bexpired\b", r"\b(?:access |auth )?token\b.*\bexpired\b",
+            r"\bcredentials?\b.*\b(?:invalid|expired|missing)\b")):
+        code = "provider_auth"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?402\b", r"\binsufficient (?:credits?|balance|funds)\b",
+            r"\b(?:credits?|balance) exhausted\b", r"\bquota (?:exceeded|exhausted)\b",
+            r"\bbilling (?:limit|disabled|required)\b")):
+        code = "provider_quota"
+    elif _matches(signal, (r"\b(?:http\s*)?429\b", r"\brate[ -]?limit(?:ed|ing)?\b", r"\btoo many requests\b")):
+        code = "provider_rate_limited"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b", r"\bbad request\b",
+            r"\binvalid request\b", r"\bcontext (?:length|window)\b", r"\bmaximum context\b",
+            r"\bmodel (?:not found|is not supported|unsupported)\b", r"\bunsupported model\b")):
+        code = "request_rejected"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?(?:500|502|503|504)\b", r"\binternal server error\b",
+            r"\btemporar(?:y|ily) unavailable\b", r"\bservice unavailable\b", r"\boverloaded\b",
+            r"\btime(?:d)? out\b", r"\btimeout\b", r"\bconnection (?:reset|closed|failed|error)\b",
+            r"\bnetwork (?:error|failure)\b")):
+        code = "provider_unavailable"
+    else:
+        code = "runtime_unknown"
+    category, retryable, source = TERMINAL_ERROR_CODES[code]
+    return {
+        "schema_version": CONTRACT["terminal_error_schema_version"],
+        "code": code,
+        "category": category,
+        "retryable": retryable,
+        "source": source,
+    }
+
+
+def governed_terminal_fields(status, fields):
+    """Replace native error prose before status persistence or SSE emission."""
+    if status not in {"failed", "interrupted"}:
+        return dict(fields)
+    existing = fields.get("terminal_error")
+    existing_code = existing.get("code") if isinstance(existing, dict) else None
+    if existing_code in TERMINAL_ERROR_CODES:
+        category, retryable, source = TERMINAL_ERROR_CODES[existing_code]
+        projected = {
+            "schema_version": CONTRACT["terminal_error_schema_version"],
+            "code": existing_code,
+            "category": category,
+            "retryable": retryable,
+            "source": source,
+        }
+    else:
+        projected = terminal_error(fields.get("error"), status)
+    return {
+        **fields,
+        "error": TERMINAL_ERROR_MESSAGES[projected["code"]],
+        "terminal_error": projected,
+    }
+
+
+def runtime_contract():
+    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if ring not in CONTRACT["supported_release_rings"]:
+        raise RuntimeError("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable.")
+    return {
+        "schema_version": CONTRACT["contract_version"],
+        "source_revision": CONTRACT["source_revision"],
+        "release_ring": ring,
+        "terminal_errors": {
+            "supported": True,
+            "schema_version": CONTRACT["terminal_error_schema_version"],
+        },
+    }
 
 
 def native_cron_route(path):
@@ -43,9 +180,39 @@ def assert_native_cron_empty(load_jobs=None):
 
 
 def install_native_api_policy():
-    """Remove native cron routes and make native health assert an empty cron store."""
+    """Install the Enterprise route, error-contract and native-cron policy."""
     from aiohttp import web
     from gateway.platforms.api_server import APIServerAdapter
+    from gateway.platforms import api_server_runs
+
+    original_run_agent_sync = api_server_runs._run_agent_sync
+    if not getattr(original_run_agent_sync, "_enterprise_contract", False):
+        def governed_run_agent_sync(*args, **kwargs):
+            result, usage = original_run_agent_sync(*args, **kwargs)
+            if isinstance(result, dict) and result.get("failed"):
+                code = NATIVE_FAILURE_REASON_CODES.get(str(result.get("failure_reason")), "runtime_unknown")
+                # The native enum is consumed before Hermes' or the provider's
+                # prose reaches the status/SSE functions. The sentinel is
+                # process-internal and is replaced by governed_terminal_fields.
+                result = {**result, "error": ENTERPRISE_TERMINAL_PREFIX + code}
+            return result, usage
+        governed_run_agent_sync._enterprise_contract = True
+        api_server_runs._run_agent_sync = governed_run_agent_sync
+
+    original_set_status = api_server_runs._set_run_status
+    if not getattr(original_set_status, "_enterprise_contract", False):
+        def governed_set_status(adapter, run_id, status, **fields):
+            return original_set_status(adapter, run_id, status, **governed_terminal_fields(status, fields))
+        governed_set_status._enterprise_contract = True
+        api_server_runs._set_run_status = governed_set_status
+
+    original_run_event = api_server_runs._run_event
+    if not getattr(original_run_event, "_enterprise_contract", False):
+        def governed_run_event(run_id, name, **fields):
+            status = name.removeprefix("run.") if name.startswith("run.") else ""
+            return original_run_event(run_id, name, **governed_terminal_fields(status, fields))
+        governed_run_event._enterprise_contract = True
+        api_server_runs._run_event = governed_run_event
 
     original = APIServerAdapter._http_route_table
     if getattr(original, "_enterprise_policy", False):
@@ -56,18 +223,28 @@ def install_native_api_policy():
         for method, path, handler in original(adapter):
             if native_cron_route(path):
                 continue
-            if path in NATIVE_HEALTH_PATHS:
+            if path in NATIVE_HEALTH_PATHS or path == "/v1/runs/{run_id}":
                 async def guarded(request, _handler=handler):
                     response = await _handler(request)
                     if response.status >= 400:
                         return response
-                    try:
-                        assert_native_cron_empty()
-                    except Exception:
-                        return web.json_response({
-                            "error": "Enterprise native cron policy failed.",
-                            "code": "native_cron_not_empty",
-                        }, status=503)
+                    if request.path in NATIVE_HEALTH_PATHS:
+                        try:
+                            assert_native_cron_empty()
+                        except Exception:
+                            return web.json_response({
+                                "error": "Enterprise native cron policy failed.",
+                                "code": "native_cron_not_empty",
+                            }, status=503)
+                    if request.path == "/v1/capabilities":
+                        payload = json.loads(response.body)
+                        payload["enterprise_contract"] = runtime_contract()
+                        return web.json_response(payload, status=response.status)
+                    if request.path.startswith("/v1/runs/"):
+                        payload = json.loads(response.body)
+                        if isinstance(payload, dict) and payload.get("status") in {"failed", "interrupted"}:
+                            payload.update(governed_terminal_fields(payload["status"], payload))
+                        return web.json_response(payload, status=response.status)
                     return response
                 handler = guarded
             routes.append((method, path, handler))
@@ -260,7 +437,7 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
     return servers, policies, passthrough
 
 
-def clean_environment(source, profile, token, api_key, extra=None):
+def clean_environment(source, profile, token, api_key, release_ring="stable", extra=None):
     # Nothing from personal provider config, bots, proxies, plugin paths or credentials survives.
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR") if key in os.environ}
     env.update({
@@ -268,6 +445,8 @@ def clean_environment(source, profile, token, api_key, extra=None):
         "PYTHONPATH": str(source), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
         "ENTERPRISE_RUNTIME_TOKEN": token, "API_SERVER_KEY": api_key,
         "API_SERVER_ENABLED": "true", "API_SERVER_HOST": "127.0.0.1",
+        "HERMES_ENTERPRISE_SOURCE_REVISION": REVISION,
+        "HERMES_ENTERPRISE_RELEASE_RING": release_ring,
     })
     env.update(extra or {})
     return env
@@ -452,9 +631,13 @@ def main():
     for name in ("home", "os-home", "workspace"):
         (profile / name).mkdir(exist_ok=True, mode=0o700)
     metadata_path = profile / "runtime.json"
+    release_ring = supplied.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if release_ring not in CONTRACT["supported_release_rings"]:
+        parser.error("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable")
     metadata = {"agent_id": agent_id, "workspace_id": args.workspace_id,
                 "enterprise_url": args.enterprise_url.rstrip("/"), "model": args.model,
                 "port": args.port, "source": str(source), "revision": REVISION,
+                "release_ring": release_ring,
                 "verify_only": args.verify_only,
                 "native_cron_enabled": supplied.get("HERMES_NATIVE_CRON_ENABLED") == "1",
                 "mcp_servers": mcp_servers, "mcp_policy": mcp_policy}
@@ -473,7 +656,9 @@ def main():
     reset_managed_skill_home(profile)
     shutil.copytree(ROOT / "enterprise_bridge", profile / "home/plugins/enterprise_bridge", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    env = clean_environment(source, profile, token, api_key_path.read_text().strip(), mcp_environment)
+    env = clean_environment(
+        source, profile, token, api_key_path.read_text().strip(), release_ring, mcp_environment,
+    )
     print("Native API key file: " + str(api_key_path), flush=True)
     print("Native API URL: http://127.0.0.1:" + str(args.port), flush=True)
     os.execve(str(args.python.absolute()), [str(args.python.absolute()), str(ROOT / "start.py"), "_child", str(metadata_path)], env)

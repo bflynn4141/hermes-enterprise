@@ -149,6 +149,10 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
         run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
       },
+      enterprise_contract: {
+        schema_version: 1, source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+        release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
+      },
     }));
     const { env, created } = envWithWorkflow({
       MODEL_SCRIPTED: '0',
@@ -191,6 +195,10 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
         run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
         run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+      },
+      enterprise_contract: {
+        schema_version: 1, source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+        release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
       },
     }));
     const { env } = envWithWorkflow({

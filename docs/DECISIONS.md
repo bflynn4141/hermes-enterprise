@@ -5181,3 +5181,32 @@ Primary references:
 - https://www.inngest.com/docs/learn/inngest-steps
 - https://docs.temporal.io/
 - https://docs.restate.dev/
+
+---
+
+## C72. Version and canary the Hermes runtime boundary as one contract
+
+**Decided September 17, 2026.** The native launcher now replaces provider
+failure prose with a fixed, versioned terminal-error envelope before either
+status persistence or SSE emission. The Worker validates the exact contract
+schema, terminal schema, official Hermes source revision and release ring at
+health and admission, then classifies only the structured code. Missing or
+unknown envelopes fail closed instead of reviving free-text heuristics.
+
+The pinned runtime probe is a required CI job. It launches the real official
+gateway and AIAgent loop, injects deterministic local authentication, quota,
+rate-limit, rejected-request and unavailable-provider failures, and verifies a
+process restart becomes a structured interruption. This is fixture-only fault
+injection; production exposes no fault switch.
+
+The browser reducer records an authoritative per-run/turn final fence. Reset,
+durable delta and preview frames at or below that fence cannot resurrect text
+after the reveal handoff; a later turn remains valid. Delivery-order
+permutations exercise the invariant rather than relying on one expected event
+sequence.
+
+Runtime stream timing and structured failures are emitted as content-free
+Analytics Engine series and ring-tagged alert logs. A dedicated canary profile
+must attest `canary`, while ordinary and dynamically provisioned profiles
+attest `stable`. This makes launcher/adapter incompatibility observable before
+fleet promotion and prevents an accidental binding swap from admitting it.

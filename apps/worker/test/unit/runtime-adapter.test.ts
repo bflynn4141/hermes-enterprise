@@ -5,13 +5,21 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
-import { HermesClient, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import { HermesClient, HermesContractError, terminalHermesStatus, type HermesCapabilities, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
 const NATIVE_ID = 'run_native-123';
 const MODEL = 'openrouter:anthropic/claude-sonnet-4';
 const PROFILE = 'enterprise-agent-1';
+const CAPABILITIES: HermesCapabilities = {
+  durableIdempotency: true,
+  retentionSeconds: 86_400,
+  contractVersion: 1,
+  terminalErrorSchemaVersion: 1,
+  sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+  releaseRing: 'stable',
+};
 
 class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   nativeBinding: { runtimeRunId: string | null; runtimeAttempt: number | null } | null = null;
@@ -92,7 +100,7 @@ class FakeHermesClient extends HermesClient {
     this.capabilityReads += 1;
     return this.capabilityFailure
       ? Promise.reject(this.capabilityFailure)
-      : Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+      : Promise.resolve(CAPABILITIES);
   }
 
   override submit(body: Record<string, unknown>, key: string) {
@@ -425,10 +433,10 @@ describe('official Hermes enterprise projection', () => {
       override capabilities() {
         this.capabilityReads += 1;
         if (this.capabilityReads !== 1) {
-          return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+          return Promise.resolve(CAPABILITIES);
         }
-        return new Promise<{ durableIdempotency: true; retentionSeconds: number }>((resolve) => {
-          releaseReadiness = () => resolve({ durableIdempotency: true, retentionSeconds: 86_400 });
+        return new Promise<HermesCapabilities>((resolve) => {
+          releaseReadiness = () => resolve(CAPABILITIES);
         });
       }
     }
@@ -576,7 +584,12 @@ describe('official Hermes enterprise projection', () => {
 
   it('classifies failed native execution, logs only safe fields and does not duplicate proxy accounting', async () => {
     const client = new FakeHermesClient();
-    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 429: provider-key-and-private-request-must-not-leak' };
+    client.final = {
+      run_id: NATIVE_ID,
+      status: 'failed',
+      error: 'fixed safe copy',
+      terminal_error: { schema_version: 1, code: 'provider_rate_limited', category: 'rate_limit', retryable: true, source: 'provider' },
+    };
     const terminalFailures: RuntimeTerminalFailure[] = [];
     const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
       onTerminalFailure: (failure) => terminalFailures.push(failure),
@@ -597,7 +610,12 @@ describe('official Hermes enterprise projection', () => {
   it('reports stopped after native authority revocation beats the stop poll to a terminal failure', async () => {
     const db = new FakeRuntimeDb();
     const client = new FakeHermesClient();
-    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 409: runtime_run_inactive' };
+    client.final = {
+      run_id: NATIVE_ID,
+      status: 'failed',
+      error: 'Hermes restarted before this run settled.',
+      terminal_error: { schema_version: 1, code: 'runtime_interrupted', category: 'interrupted', retryable: true, source: 'runtime' },
+    };
     client.onStatus = () => { if (client.current.status === 'failed') db.stopFlag = true; };
     await execute(db, client);
     expect(db.statusChanges.at(-1)?.status).toBe('stopped');
@@ -615,6 +633,24 @@ describe('official Hermes enterprise projection', () => {
     expect(db.events.filter((event) => event.kind === 'message.final')).toHaveLength(1);
     expect(client.stops).toEqual([NATIVE_ID]);
     expect(JSON.stringify(db.events)).not.toContain('private upstream failure');
+  });
+
+  it('fails closed and emits a content-free alert signal on a runtime contract violation', async () => {
+    const client = new FakeHermesClient();
+    client.capabilityFailure = new HermesContractError();
+    const terminalFailures: RuntimeTerminalFailure[] = [];
+    const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      onTerminalFailure: (failure) => terminalFailures.push(failure),
+    });
+    expect(db.statusChanges.at(-1)).toMatchObject({
+      status: 'error',
+      error: { class: 'permanent', retryable: false, reason: 'hermes_contract_violation' },
+    });
+    expect(terminalFailures).toEqual([expect.objectContaining({
+      native_status: 'contract_violation', failure_code: 'contract_violation',
+      structured_error: false, terminal_error_source: 'contract', retryable: false,
+    })]);
+    expect(JSON.stringify({ status: db.statusChanges, terminalFailures })).not.toContain('runtime.invalid');
   });
 
   it('keeps an explicitly empty final output instead of promoting intermediate prose to the answer', async () => {

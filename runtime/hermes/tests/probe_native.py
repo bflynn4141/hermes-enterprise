@@ -96,6 +96,18 @@ def main():
                 self.reply(404, {})
                 return
             model_calls.append(body)
+            prompt = str(body.get("messages", []))
+            faults = {
+                "FAULT_AUTH": (401, "Provider authentication failed: SECRET_NATIVE_AUTH"),
+                "FAULT_QUOTA": (402, "Insufficient credits: SECRET_NATIVE_QUOTA"),
+                "FAULT_RATE_LIMIT": (429, "Too many requests: SECRET_NATIVE_RATE"),
+                "FAULT_REJECTED": (400, "Maximum context length exceeded: SECRET_NATIVE_REQUEST"),
+                "FAULT_UNAVAILABLE": (503, "Provider temporarily unavailable: SECRET_NATIVE_UPSTREAM"),
+            }
+            for marker, (status, message) in faults.items():
+                if marker in prompt:
+                    self.reply(status, {"error": {"message": message, "type": "fixture_fault", "code": marker.lower()}})
+                    return
             catalog_names.update(t["function"]["name"] for t in body.get("tools", []))
             messages = body["messages"]
             if messages[-1]["role"] == "tool":
@@ -183,6 +195,12 @@ def main():
             process, native_key, capabilities = start_native()
             assert capabilities["object"] == "hermes.api_server.capabilities", capabilities
             assert capabilities["features"]["runs_idempotency"]["durable"] is True, capabilities
+            assert capabilities["enterprise_contract"] == {
+                "schema_version": 1,
+                "source_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+                "release_ring": "stable",
+                "terminal_errors": {"supported": True, "schema_version": 1},
+            }, capabilities
             assert request("GET", "/api/jobs")[0] == 404, "native cron routes remain reachable"
             body = {"input": "ECHO_VALUE", "session_id": "fixture-session", "provider": "custom", "model": "test/fixture"}
             code, accepted = request("POST", "/v1/runs", body, "fixture-first")
@@ -223,7 +241,36 @@ def main():
                 "Partner Program Screening" in str(message.get("content", ""))
                 for call in model_calls for message in call.get("messages", [])
             ), "Managed Partner Program skill was not auto-loaded into model context"
-            process.terminate()
+            for marker, expected in (
+                    ("FAULT_AUTH", ("provider_auth", "auth", False)),
+                    ("FAULT_QUOTA", ("provider_quota", "quota", False)),
+                    ("FAULT_RATE_LIMIT", ("provider_rate_limited", "rate_limit", True)),
+                    ("FAULT_REJECTED", ("request_rejected", "rejected", False)),
+                    ("FAULT_UNAVAILABLE", ("provider_unavailable", "unavailable", True))):
+                fault_body = {**body, "input": marker, "session_id": "fault-" + marker.lower()}
+                fault_code, fault = request("POST", "/v1/runs", fault_body, "fixture-" + marker.lower())
+                assert fault_code == 202, fault
+                failed = settle(fault["run_id"])
+                assert failed["status"] == "failed", failed
+                detail = failed.get("terminal_error")
+                assert detail and (detail["code"], detail["category"], detail["retryable"]) == expected, {
+                    "status": failed,
+                    "gateway_log": log_file.read_text(),
+                }
+                assert "SECRET_NATIVE" not in json.dumps(failed), failed
+
+            # A retained nonterminal reservation whose owner disappears must
+            # become a structured interrupted failure after restart.
+            _, interrupted = request("POST", "/v1/runs", {**body, "input": "WAIT_FOR_CONTEXT", "session_id": "restart-interrupted"}, "fixture-interrupted")
+            interrupted_id = interrupted["run_id"]
+            until = time.monotonic() + 20
+            while not any(c["runtime_run_id"] == interrupted_id for c in tool_calls) and time.monotonic() < until:
+                time.sleep(0.1)
+            assert any(c["runtime_run_id"] == interrupted_id for c in tool_calls), "Interrupted fixture never became active"
+            # Simulate an ungraceful host/process loss. SIGTERM is cooperative
+            # and correctly persists `cancelled`; only a disappeared owner
+            # exercises restart hydration to `interrupted`.
+            process.kill()
             process.wait(timeout=20)
             process = None
             # The profile state, not the listener number, owns idempotency.
@@ -234,6 +281,10 @@ def main():
             replay_code, replay = request("POST", "/v1/runs", body, "fixture-first")
             assert replay_code == 202 and replay["run_id"] == run_id and replay["replayed"], replay
             assert request("GET", "/v1/runs/" + run_id)[1]["status"] == "completed"
+            interrupted_status = request("GET", "/v1/runs/" + interrupted_id)[1]
+            assert interrupted_status["status"] == "interrupted", interrupted_status
+            assert interrupted_status["terminal_error"]["code"] == "runtime_interrupted", interrupted_status
+            assert interrupted_status["terminal_error"]["retryable"] is True, interrupted_status
             second_body = {**body, "input": "SECOND_TURN"}
             _, second = request("POST", "/v1/runs", second_body, "fixture-second")
             assert settle(second["run_id"])["status"] == "completed"
@@ -255,7 +306,7 @@ def main():
             jobs_file.write_text(json.dumps({"jobs": [{"id": "forbidden-fixture", "enabled": False}]}))
             assert request("GET", "/health")[0] == 503, "native health ignored a nonempty cron store"
             print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model.")
-            print("Verified durable capabilities, restart replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
+            print("Verified the versioned failure matrix, structured restart interruption, durable replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

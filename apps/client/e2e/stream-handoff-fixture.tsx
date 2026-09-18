@@ -20,6 +20,7 @@ declare global {
       finalize(text: string, blocks?: Message['blocks']): void;
       terminal(status?: 'completed' | 'stopped' | 'error'): void;
       nextTurn(text: string): void;
+      lateFrames(text: string): void;
       sendAgain(text: string): Promise<void>;
       remount(): void;
       snapshot(): { status: Run['status'] | undefined; stream: string | null; messages: string[] };
@@ -93,6 +94,11 @@ window.streamHandoffFixture = {
     store.dispatch({ type: 'run/step', sessionId, stepId: 'lookup', state: 'done', label: 'Checked the workspace', toolCallId: 'tool-1' });
     turn += 1;
     delta(text);
+  },
+  lateFrames(text) {
+    store.dispatch({ type: 'stream/reset', sessionId, runId: activeRunId, turn, stepAttempt: 2 });
+    store.dispatch({ type: 'stream/delta', sessionId, runId: activeRunId, turn, stepAttempt: 2, delta: text });
+    store.dispatch({ type: 'stream/preview', sessionId, runId: activeRunId, turn, stepAttempt: 2, offset: 0, delta: text });
   },
   async sendAgain(text) {
     activeRunId = crypto.randomUUID();

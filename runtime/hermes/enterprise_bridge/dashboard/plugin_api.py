@@ -42,6 +42,73 @@ router = APIRouter()
 MAX_BODY_BYTES = 2 * 1024 * 1024
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
+CONTRACT_VERSION = 1
+TERMINAL_ERROR_SCHEMA_VERSION = 1
+SOURCE_REVISION = "5d59366010640c1d6b8f170d8a4ee109db2bbdef"
+TERMINAL_ERROR_CODES = {
+    "provider_auth": ("auth", False, "provider", "The selected model connection needs attention."),
+    "provider_quota": ("quota", False, "provider", "The selected model account has no available quota."),
+    "provider_rate_limited": ("rate_limit", True, "provider", "The selected model is rate limited."),
+    "request_rejected": ("rejected", False, "request", "The selected model rejected this request."),
+    "provider_unavailable": ("unavailable", True, "provider", "The model provider is temporarily unavailable."),
+    "runtime_interrupted": ("interrupted", True, "runtime", "Hermes restarted before this run settled."),
+    "runtime_unknown": ("unknown", True, "runtime", "Hermes could not finish this run."),
+}
+
+
+def runtime_contract():
+    if os.environ.get("HERMES_ENTERPRISE_SOURCE_REVISION", "").strip() != SOURCE_REVISION:
+        raise RuntimeError("enterprise connector source revision is not attested")
+    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if ring not in {"canary", "stable"}:
+        raise RuntimeError("enterprise connector release ring is invalid")
+    return {
+        "schema_version": CONTRACT_VERSION,
+        "source_revision": SOURCE_REVISION,
+        "release_ring": ring,
+        "terminal_errors": {"supported": True, "schema_version": TERMINAL_ERROR_SCHEMA_VERSION},
+    }
+
+
+def _terminal_error(error: Any = None, status: str = "failed"):
+    signal = str(error or "").lower()[:2000]
+    if status == "interrupted" or re.search(r"gateway restarted|runtime_run_inactive|run (?:was )?interrupted", signal):
+        code = "runtime_interrupted"
+    elif re.search(r"\b(?:http\s*)?401\b|unauthori[sz]ed|authentication failed|invalid (?:api )?key|token.*expired", signal):
+        code = "provider_auth"
+    elif re.search(r"\b(?:http\s*)?402\b|insufficient (?:credits?|balance|funds)|quota (?:exceeded|exhausted)|billing (?:limit|disabled|required)", signal):
+        code = "provider_quota"
+    elif re.search(r"\b(?:http\s*)?429\b|rate[ -]?limit(?:ed|ing)?|too many requests", signal):
+        code = "provider_rate_limited"
+    elif re.search(r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b|bad request|invalid request|context (?:length|window)|maximum context|unsupported model", signal):
+        code = "request_rejected"
+    elif re.search(r"\b(?:http\s*)?(?:500|502|503|504)\b|temporar(?:y|ily) unavailable|service unavailable|overloaded|timeout|connection (?:reset|closed|failed|error)", signal):
+        code = "provider_unavailable"
+    else:
+        code = "runtime_unknown"
+    category, retryable, source, _ = TERMINAL_ERROR_CODES[code]
+    return {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code, "category": category,
+            "retryable": retryable, "source": source}
+
+
+def govern_terminal_payload(payload: Any):
+    if not isinstance(payload, dict):
+        return payload
+    status = str(payload.get("status") or "")
+    if payload.get("event") == "run.failed":
+        status = "failed"
+    if status not in {"failed", "interrupted"}:
+        return payload
+    existing = payload.get("terminal_error")
+    code = existing.get("code") if isinstance(existing, dict) else None
+    if code in TERMINAL_ERROR_CODES:
+        category, retryable, source, message = TERMINAL_ERROR_CODES[code]
+        detail = {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code,
+                  "category": category, "retryable": retryable, "source": source}
+    else:
+        detail = _terminal_error(payload.get("error"), status)
+        message = TERMINAL_ERROR_CODES[detail["code"]][3]
+    return {**payload, "error": message, "terminal_error": detail}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -108,7 +175,14 @@ class NativeControl:
                 "native_cron_disabled": os.environ.get("HERMES_NATIVE_CRON_ENABLED", "") != "1",
             }
         if operation == "capabilities":
-            return self._request("GET", "/v1/capabilities")
+            status, body = self._request("GET", "/v1/capabilities")
+            if status == 200 and isinstance(body, dict):
+                expected = runtime_contract()
+                existing = body.get("enterprise_contract")
+                if existing is not None and existing != expected:
+                    return 502, {"error": "native Enterprise contract does not match connector"}
+                body = {**body, "enterprise_contract": expected}
+            return status, body
         if operation == "submit":
             key = payload.get("idempotency_key")
             body = payload.get("body")
@@ -117,7 +191,8 @@ class NativeControl:
             return self._request("POST", "/v1/runs", body, {"Idempotency-Key": key})
         if operation == "status":
             run_id = self.require_run_id(payload.get("run_id"))
-            return self._request("GET", "/v1/runs/" + run_id)
+            status, body = self._request("GET", "/v1/runs/" + run_id)
+            return status, govern_terminal_payload(body)
         if operation == "stop":
             run_id = self.require_run_id(payload.get("run_id"))
             return self._request("POST", "/v1/runs/" + run_id + "/stop", {})
@@ -146,18 +221,50 @@ class NativeControl:
             return error
 
 
+def _project_sse_frame(frame: bytes) -> bytes:
+    projected = []
+    for line in frame.splitlines():
+        if line.startswith(b"data:"):
+            data = line[5:]
+            if data.startswith(b" "):
+                data = data[1:]
+            if data == b"[DONE]":
+                projected.append(b"data: [DONE]")
+                continue
+            try:
+                payload = json.loads(data)
+                line = b"data: " + json.dumps(
+                    govern_terminal_payload(payload), separators=(",", ":"),
+                ).encode()
+            except (ValueError, UnicodeDecodeError):
+                line = b": enterprise malformed data"
+        projected.append(line)
+    return b"\n".join(projected) + b"\n\n"
+
+
 def _stream_native(response):
+    buffered = b""
     try:
         # ``HTTPResponse.read(size)`` waits for the requested byte count or
         # EOF, which turns a short model response into one burst after the run
         # finishes. ``read1`` returns the bytes already available from the
         # socket, preserving the native SSE frame cadence through Hermes Cloud.
-        read_available = getattr(response, "read1", response.read)
+        read_available = getattr(response, "read1", None) or response.read
         while True:
             chunk = read_available(8192)
             if not chunk:
                 break
-            yield chunk
+            buffered += chunk
+            while True:
+                boundary = re.search(br"\r?\n\r?\n", buffered)
+                if boundary is None:
+                    break
+                frame, buffered = buffered[:boundary.start()], buffered[boundary.end():]
+                yield _project_sse_frame(frame)
+        if buffered:
+            # A peer may close without the optional final blank line. Project
+            # that last frame through the same boundary before releasing it.
+            yield _project_sse_frame(buffered)
     finally:
         response.close()
 

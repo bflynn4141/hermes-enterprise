@@ -100,6 +100,10 @@ provide `HERMES_BRIDGE_SECRET`; `HERMES_RUNTIME_AGENTS` contains fixed profiles
 and the permanent identities of unclaimed warm-pool profiles. After acceptance,
 invitee profiles resolve from encrypted dynamic bindings. Missing bindings fail
 explicitly; there is no silent fallback to a chat loop.
+Bindings default to `"release_ring":"stable"`. A dedicated rollout profile may
+declare `"release_ring":"canary"` only when its launcher also sets
+`HERMES_ENTERPRISE_RELEASE_RING=canary`; the Worker rejects any ring, contract,
+terminal schema or official-source-pin mismatch before admitting a turn.
 The legacy/scripted path remains available for existing deployments and offline
 contract tests during rollout.
 

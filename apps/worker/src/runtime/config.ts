@@ -4,6 +4,7 @@ import { RouteError } from '../routes/tenant.js';
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { openSecret, type StoredEnvelope } from '../keys/envelope.js';
+import type { HermesReleaseRing } from './client.js';
 
 export interface RuntimeEnv {
   readonly ENVIRONMENT: string;
@@ -22,6 +23,8 @@ export interface RuntimeBinding {
   readonly assignment: 'fixed' | 'invitee_pool' | 'provisioned';
   /** Deployment attestation that this profile was launched with the bounded AgentCash MCP. */
   readonly agentCash: boolean;
+  /** Capability-attested rollout ring; prevents canary/stable binding swaps. */
+  readonly releaseRing: HermesReleaseRing;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const misconfigured = (): never => {
@@ -43,6 +46,8 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
   const assignment = row.assignment ?? 'fixed';
   if (assignment !== 'fixed' && assignment !== 'invitee_pool') return misconfigured();
   if (row.agentcash !== undefined && typeof row.agentcash !== 'boolean') return misconfigured();
+  const releaseRing = row.release_ring ?? 'stable';
+  if (releaseRing !== 'canary' && releaseRing !== 'stable') return misconfigured();
   let url: URL;
   try { url = new URL(row.base_url); } catch { return misconfigured(); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -57,6 +62,7 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
     transport,
     assignment,
     agentCash: row.agentcash === true,
+    releaseRing,
   };
 }
 export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
@@ -167,7 +173,7 @@ async function dynamicRuntimeBinding(
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return misconfigured();
   return {
     workspaceId, agentId, profile: row.profile, baseUrl: url.toString().replace(/\/$/, ''), apiKey,
-    transport: row.transport, assignment: row.assignment, agentCash: row.agentcash,
+    transport: row.transport, assignment: row.assignment, agentCash: row.agentcash, releaseRing: 'stable',
   };
 }
 

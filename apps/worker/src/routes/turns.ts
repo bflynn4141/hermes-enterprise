@@ -256,7 +256,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
       const binding = await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, session.agent_id);
       try {
-        await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities();
+        await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing).capabilities();
       } catch (error) {
         console.error(JSON.stringify({ at: 'runtime.admission', ok: false, error: String(error) }));
         throw new RouteError(
@@ -494,7 +494,7 @@ export async function stopRun(c: Context<{ Bindings: Env }>): Promise<Response> 
       // Reach the native interruption flag immediately. The persisted Stop is
       // still authoritative if this request is lost; Workflow polling retries.
       try {
-        if (result.binding) await new HermesClient(result.binding.baseUrl, result.binding.apiKey, undefined, result.binding.transport).stop(result.nativeId);
+        if (result.binding) await new HermesClient(result.binding.baseUrl, result.binding.apiKey, undefined, result.binding.transport, result.binding.releaseRing).stop(result.nativeId);
       } catch { /* The committed flag prevents further enterprise tool calls. */ }
     }
     // The hub's copy is a cache with one reader: the engine reads it from every

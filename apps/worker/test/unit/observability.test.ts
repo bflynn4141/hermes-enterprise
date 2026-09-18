@@ -12,6 +12,8 @@ import { scrubEvent, sentryOptions, type SentryEventLike } from '../../src/ops/s
 import {
   METRICS,
   analyticsAvailable,
+  recordHermesStream,
+  recordHermesTerminalFailure,
   recordProviderLatency,
   recordStopLatency,
   writePoint,
@@ -157,6 +159,32 @@ describe('Analytics Engine', () => {
     expect(recordStopLatency(e, 'ws', { runId: 'r', ms: 12, honouredAt: 'delta' })).toBe(false);
   });
 
+  it('records Hermes stream SLOs and structured terminal failures without response text', () => {
+    const written: Record<string, unknown>[] = [];
+    const e = env({
+      ANALYTICS: { writeDataPoint: (point: Record<string, unknown>) => written.push(point) },
+    } as unknown as Partial<Env>);
+
+    recordHermesStream(e, 'ws-1', {
+      runId: 'run-1', releaseRing: 'canary', streamEnd: 'terminal',
+      firstDeltaMs: 120, firstPreviewMs: 124, firstCheckpointMs: 260,
+      deltaCount: 4, deltaCharacters: 57,
+    });
+    recordHermesTerminalFailure(e, 'ws-1', {
+      runId: 'run-2', releaseRing: 'canary', code: 'provider_rate_limited',
+      source: 'runtime', structured: true, retryable: true,
+      workedMs: 900, partialCharacters: 12,
+    });
+
+    expect(written[0]?.blobs).toEqual(['hermes.stream', 'ws-1', 'run-1', 'canary', 'terminal']);
+    expect(written[0]?.doubles).toEqual([120, 124, 260, 4, 57]);
+    expect(written[1]?.blobs).toEqual([
+      'hermes.terminal_failure', 'ws-1', 'run-2', 'canary',
+      'provider_rate_limited', 'runtime', 'structured',
+    ]);
+    expect(JSON.stringify(written)).not.toContain('response');
+  });
+
   it('covers every metric plan section 5 names', () => {
     for (const metric of [
       'run.duration',
@@ -166,6 +194,8 @@ describe('Analytics Engine', () => {
       'stop.latency',
       'instance.subrequests',
       'spend.daily',
+      'hermes.stream',
+      'hermes.terminal_failure',
     ]) {
       expect(METRICS).toContain(metric);
     }

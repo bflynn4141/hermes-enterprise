@@ -287,7 +287,12 @@ export function createAdapter(options: AdapterOptions): Adapter {
         // placeholder text is not a final answer and may lag the live preview.
         if (message.status === 'streaming') continue;
         const ownsUnsettledStream = Boolean(message.run_id && current.stream?.runId === message.run_id && current.stream.status === 'streaming');
-        if (!seen || ownsUnsettledStream) dispatch({ type: 'stream/final', sessionId, message });
+        if (!seen || ownsUnsettledStream) dispatch({
+          type: 'stream/final',
+          sessionId,
+          message,
+          turn: current.stream?.runId === message.run_id ? current.stream.turn : undefined,
+        });
       } else if (message.role === 'user' && (!seen || current.pendingTurn)) {
         dispatch({ type: 'message/confirm-turn', sessionId, message });
       } else if (!seen) {

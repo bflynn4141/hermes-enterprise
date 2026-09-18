@@ -49,12 +49,23 @@ describe('official runtime configuration and authentication', () => {
     expect(runtimeBinding(env, workspaceId, agentId)).toMatchObject({
       profile: `agent-${agentId}`,
       transport: 'native',
+      releaseRing: 'stable',
     });
     const token = await bridgeToken(env, workspaceId, agentId);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     await expect(requireBridgeAuth(env, workspaceId, agentId, `Bearer ${token}`)).resolves.toMatchObject({ workspaceId, agentId });
     await expect(requireBridgeAuth(env, workspaceId, agentId, `Bearer ${'0'.repeat(64)}`)).rejects.toMatchObject({ reason: 'runtime_unauthorized' });
     await expect(requireBridgeAuth(env, workspaceId, agentId, null)).rejects.toMatchObject({ reason: 'runtime_unauthorized' });
+  });
+  it('attests an explicit canary ring and rejects unknown rollout rings', () => {
+    const withRing = (release_ring: string) => ({
+      ...env,
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [agentId]: { workspace_id: workspaceId, base_url: 'http://localhost:8642', api_key: 'runtime-key', release_ring },
+      }),
+    });
+    expect(runtimeBinding(withRing('canary'), workspaceId, agentId).releaseRing).toBe('canary');
+    expect(() => runtimeBinding(withRing('experimental'), workspaceId, agentId)).toThrow();
   });
   it('refuses cross-workspace paths even with the original valid token', async () => {
     const token = await bridgeToken(env, workspaceId, agentId);

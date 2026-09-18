@@ -497,6 +497,41 @@ pnpm --filter @hermes/worker exec wrangler secret put SENTRY_DSN --env $E
 
 Confirm: `wrangler secret list --env $E`.
 
+### Hermes runtime contract rollout and alerts
+
+Treat the launcher and Worker adapter as one versioned boundary even though they
+deploy separately. CI installs the exact official source pin and runs the real
+gateway/AIAgent probe before a commit is eligible to deploy. The probe's model
+faults are local fixtures only and must never be enabled on a shared profile.
+
+Roll out a runtime change in this order:
+
+1. Start one dedicated profile with `HERMES_ENTERPRISE_RELEASE_RING=canary`.
+   A stock Hermes Cloud profile must also set
+   `HERMES_ENTERPRISE_SOURCE_REVISION=5d59366010640c1d6b8f170d8a4ee109db2bbdef`;
+   the verified native launcher supplies this attestation itself.
+2. Add `"release_ring":"canary"` only to that profile's
+   `HERMES_RUNTIME_AGENTS` binding. Health and turn admission must reject a
+   stable/canary mismatch.
+3. Exercise submit, first delta, durable checkpoint, completed final, each
+   structured terminal class, stop, disconnect recovery and process restart.
+4. Compare canary with stable for first-delta p95, first-checkpoint p95,
+   disconnected/drain-timeout rate, unknown terminal failures and retry rate.
+5. After a clean observation window, restart the remaining profiles with the
+   new launcher in the `stable` ring. Roll back by restoring the previous
+   launcher and binding together; never relabel an unverified process.
+
+Create alerts from the `hermes.stream` and `hermes.terminal_failure` Analytics
+Engine series. Page immediately for any `contract_violation`/unknown terminal
+failure or a sustained inability to admit the stable ring. Warn when
+`disconnected` or `drain_timeout` exceeds 1% over 15 minutes, or first-delta
+p95 exceeds 5 seconds for 15 minutes. These are starting thresholds: tighten
+them after a representative baseline, and split every dashboard by release
+ring so a canary regression cannot hide in fleet averages. Logs use
+`hermes.alert.contract` and `hermes.alert.stream` as content-free incident
+breadcrumbs; they contain ids, enums, timings and counts, never prompts,
+responses, provider bodies or credentials.
+
 `WORKOS_REDIRECT_URI` is an ordinary variable pinned to each deployed host in
 `wrangler.jsonc`. `/health` refuses staging or production if it is missing,
 off-origin, or not exactly `/auth/callback`. The full dashboard and live test

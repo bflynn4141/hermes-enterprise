@@ -1,7 +1,7 @@
 // The real transport is exercised against the pinned native Runs API wire
 // format. Response bodies and transport errors must not expose credentials.
 import { describe, expect, it, vi } from 'vitest';
-import { HermesApiError, HermesCapabilitiesError, HermesClient, terminalHermesStatus } from '../../src/runtime/client.js';
+import { HermesApiError, HermesCapabilitiesError, HermesClient, HermesContractError, terminalHermesStatus } from '../../src/runtime/client.js';
 
 const RUN_ID = 'run_native-123';
 const SECRET = 'runtime-secret-that-must-stay-server-side';
@@ -28,7 +28,22 @@ const capabilities = (durable = true) => ({
     run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
     run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
   },
+  enterprise_contract: {
+    schema_version: 1,
+    source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+    release_ring: 'stable',
+    terminal_errors: { supported: true, schema_version: 1 },
+  },
 });
+
+const expectedCapabilities = {
+  durableIdempotency: true as const,
+  retentionSeconds: 86_400,
+  contractVersion: 1 as const,
+  terminalErrorSchemaVersion: 1 as const,
+  sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+  releaseRing: 'stable' as const,
+};
 
 function transport(response: () => Response) {
   const send = vi.fn<typeof fetch>(async () => response());
@@ -64,7 +79,7 @@ describe('official Hermes Runs transport', () => {
 
   it('uses one fixed service-authenticated route for a Hermes Cloud connector', async () => {
     const { client, send } = connectorTransport(() => json(capabilities()));
-    await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });
+    await expect(client.capabilities()).resolves.toEqual(expectedCapabilities);
     const [url, init] = send.mock.calls[0]!;
     expect(url).toBe('https://iris.example/api/plugins/enterprise_bridge/control');
     expect(init?.method).toBe('POST');
@@ -93,15 +108,28 @@ describe('official Hermes Runs transport', () => {
 
   it('requires the authenticated server-agent Runs contract and durable reservations', async () => {
     const { client, send } = transport(() => json(capabilities()));
-    await expect(client.capabilities()).resolves.toEqual({ durableIdempotency: true, retentionSeconds: 86_400 });
+    await expect(client.capabilities()).resolves.toEqual(expectedCapabilities);
     expect(send.mock.calls[0]?.[0]).toBe('https://runtime.example/v1/capabilities');
     expect(new Headers(send.mock.calls[0]?.[1]?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
+  });
+
+  it('admits a canary only through an explicitly canary-bound adapter', async () => {
+    const body = capabilities();
+    body.enterprise_contract.release_ring = 'canary';
+    const send = vi.fn<typeof fetch>(async () => json(body));
+    const canary = new HermesClient('https://runtime.example/', SECRET, send, 'native', 'canary');
+    await expect(canary.capabilities()).resolves.toMatchObject({ releaseRing: 'canary' });
+    const stable = new HermesClient('https://runtime.example/', SECRET, send);
+    await expect(stable.capabilities()).rejects.toEqual(new HermesCapabilitiesError());
   });
 
   it.each([
     ['non-durable reservations', (() => capabilities(false))()],
     ['missing run status endpoint', (() => { const value = capabilities(); delete (value.endpoints as Record<string, unknown>).run_status; return value; })()],
     ['split client execution', (() => { const value = capabilities(); value.runtime.split_runtime = true; return value; })()],
+    ['missing terminal error contract', (() => { const value = capabilities(); delete (value as {enterprise_contract?: unknown}).enterprise_contract; return value; })()],
+    ['wrong pinned source', (() => { const value = capabilities(); value.enterprise_contract.source_revision = 'different'; return value; })()],
+    ['wrong release ring', (() => { const value = capabilities(); value.enterprise_contract.release_ring = 'canary'; return value; })()],
   ])('rejects %s before native admission', async (_label, body) => {
     const { client } = transport(() => json(body));
     await expect(client.capabilities()).rejects.toEqual(new HermesCapabilitiesError());
@@ -143,10 +171,33 @@ describe('official Hermes Runs transport', () => {
     expect(send.mock.calls[0]?.[0]).toBe(`https://runtime.example/v1/runs/${RUN_ID}`);
   });
 
+  it('accepts only the negotiated terminal error shape and does not need native prose', async () => {
+    const status = {
+      run_id: RUN_ID,
+      status: 'failed',
+      error: 'fixed safe copy',
+      terminal_error: { schema_version: 1, code: 'provider_rate_limited', category: 'rate_limit', retryable: true, source: 'provider' },
+    };
+    const { client } = transport(() => json(status));
+    await expect(client.status(RUN_ID)).resolves.toMatchObject(status);
+  });
+
+  it.each([
+    undefined,
+    { schema_version: 1, code: 'provider_rate_limited', category: 'rate_limit', retryable: false, source: 'provider' },
+    { schema_version: 1, code: 'new_unversioned_code', category: 'unknown', retryable: true, source: 'runtime' },
+    { schema_version: 1, code: 'runtime_unknown', category: 'unknown', retryable: true, source: 'runtime', raw: SECRET },
+  ])('rejects a malformed terminal error envelope: %j', async (terminal_error) => {
+    const { client } = transport(() => json({ run_id: RUN_ID, status: 'failed', error: SECRET, terminal_error }));
+    const failure = client.status(RUN_ID);
+    await expect(failure).rejects.toEqual(new HermesContractError());
+    await expect(failure).rejects.not.toThrow(SECRET);
+  });
+
   it.each([{ run_id: 'run_other', status: 'completed' }, { run_id: RUN_ID, status: null }])(
     'rejects a status response that does not belong to this run: %j', async (body) => {
       const { client } = transport(() => json(body));
-      await expect(client.status(RUN_ID)).rejects.toThrow('invalid run status');
+      await expect(client.status(RUN_ID)).rejects.toEqual(new HermesContractError());
     },
   );
 

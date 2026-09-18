@@ -462,6 +462,42 @@ describe('the entity cache', () => {
 });
 
 describe('streaming text and step_attempt', () => {
+  it('keeps an authoritative final under every reset/delta/preview/final delivery order', () => {
+    const permutations = <T,>(items: readonly T[]): T[][] =>
+      items.length <= 1
+        ? [Array.from(items)]
+        : items.flatMap((item, index) =>
+            permutations([...items.slice(0, index), ...items.slice(index + 1)])
+              .map((rest) => [item, ...rest]));
+    const frames = [
+      event('message.reset', { run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, message_id: MESSAGE }, 1n),
+      event('message.delta', { message_id: MESSAGE, run_id: RUN, turn: 0, attempt: 1, step_attempt: 1, seq: 0, delta: 'Draft' }, 2n),
+      event('message.final', {
+        message_id: MESSAGE, session_id: SESSION_A, run_id: RUN, turn: 0,
+        attempt: 1, text: 'Authoritative answer', blocks: [], incomplete: false, worked_ms: 900,
+      }, 3n),
+      event('run.status', { run_id: RUN, attempt: 1, status: 'completed', active_ms: 900 }, 4n),
+    ] as const;
+
+    for (const ordering of permutations(frames)) {
+      let state = base();
+      for (const frame of ordering) state = feed(state, frame);
+      state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Late preview' });
+      state = reduce(state, { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 2 });
+      state = reduce(state, { type: 'stream/delta', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 2, delta: 'Late durable text' });
+
+      expect(state.sessions[SESSION_A]!.messages).toHaveLength(1);
+      expect(state.sessions[SESSION_A]!.messages[0]?.text).toBe('Authoritative answer');
+      expect([null, 'Authoritative answer']).toContain(state.sessions[SESSION_A]!.stream?.text ?? null);
+      state = reduce(state, { type: 'stream/reveal-complete', sessionId: SESSION_A, runId: RUN });
+      expect(state.sessions[SESSION_A]!.stream).toBeNull();
+
+      state = reduce(state, { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 1, stepAttempt: 1 });
+      state = reduce(state, { type: 'stream/delta', sessionId: SESSION_A, runId: RUN, turn: 1, stepAttempt: 1, delta: 'Next turn' });
+      expect(state.sessions[SESSION_A]!.stream).toMatchObject({ turn: 1, text: 'Next turn' });
+    }
+  });
+
   it('does not finalize a live reply from a persisted streaming placeholder', () => {
     let state = reduce(base(), { type: 'stream/reset', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1 });
     state = reduce(state, { type: 'stream/preview', sessionId: SESSION_A, runId: RUN, turn: 0, stepAttempt: 1, offset: 0, delta: 'Rain drums steadily' });

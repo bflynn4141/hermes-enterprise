@@ -50,7 +50,16 @@ class StreamingClient extends HermesClient {
       headers: { 'Content-Type': 'text/event-stream' },
     }));
   }
-  override capabilities() { return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86400 }); }
+  override capabilities() {
+    return Promise.resolve({
+      durableIdempotency: true as const,
+      retentionSeconds: 86400,
+      contractVersion: 1 as const,
+      terminalErrorSchemaVersion: 1 as const,
+      sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      releaseRing: 'stable' as const,
+    });
+  }
   override submit() { return Promise.resolve(NATIVE_ID); }
   override async status(): Promise<HermesStatus> {
     this.statusReads += 1;

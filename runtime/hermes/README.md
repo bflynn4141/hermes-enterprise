@@ -129,6 +129,8 @@ Use a stable `Idempotency-Key` for one logical turn. It must be 1–255 visible 
 
 `GET /v1/runs/<id>` is authoritative reconciliation. Statuses: `queued`, `running`, `waiting_for_approval`, `stopping`, `completed`, `failed`, `cancelled`, `interrupted`. Polling includes `object:"hermes.run"`, `run_id`, `session_id`, model, Unix-second `created_at`/`updated_at`, and terminal output/usage or error. Non-idempotent terminal statuses remain in memory for one hour.
 
+`GET /v1/capabilities` must attest the exact `enterprise_contract` in `contract.json`: contract schema, official source revision, release ring, and terminal-error schema. A failed or interrupted status, and every `run.failed` frame, carries only the versioned `{schema_version,code,category,retryable,source}` terminal envelope plus fixed safe copy. Provider response text never crosses the runtime boundary. The Worker refuses admission when the pin, schema, release ring, or terminal envelope differs. Set `HERMES_ENTERPRISE_RELEASE_RING=canary` only on a dedicated canary profile; the default is `stable`. The verified launcher supplies its checked source revision automatically. A stock Hermes Cloud profile must explicitly set the matching `HERMES_ENTERPRISE_SOURCE_REVISION` shown in `credentials.env.example`; the connector refuses to attest an unreviewed revision.
+
 For continuation, reuse an enterprise-owned stable `session_id` and omit `conversation_history`/`previous_response_id`. Native Hermes loads the stored conversation including tool calls/results and resolves a pre-compression ID to the current continuation tip. Explicit `conversation_history` takes precedence and flattens entries to role/content strings; do not use it to round-trip structured tool history. An ordinary `/v1/runs` result does not create an OpenAI response ID, so do not chain runs via `previous_response_id`.
 
 `GET /v1/runs/<id>/events` emits **only** `data: <JSON>\n\n` frames. The event name is in the JSON, not an SSE `event:` line. There are no SSE event IDs. All payloads have `{event, run_id, timestamp}` (Unix seconds):
@@ -140,7 +142,7 @@ For continuation, reuse an enterprise-owned stable `session_id` and omit `conver
 | `tool.completed` | `tool`, `duration` (seconds), `error` (boolean) |
 | `reasoning.available` | `text` |
 | `run.completed` | `output`, `usage:{input_tokens,output_tokens,total_tokens}`, optional `pending_steer` |
-| `run.failed` | `error` |
+| `run.failed` | fixed safe `error`, versioned `terminal_error` |
 | `run.cancelled` | none |
 | `approval.request` | approval transport payload, `choices` |
 | `approval.responded` | `choice`, optional `request_id`, `resolved` |
@@ -160,7 +162,7 @@ python3 runtime/hermes/tests/probe_native.py \
   --python runtime/hermes/.state/venv/bin/python
 ```
 
-The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under a disposable isolated home. It checks the durable capability contract, exact model/tool boundary, admission replay/conflict, a full gateway restart followed by durable replay, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
+The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under a disposable isolated home. It checks the durable capability contract, exact model/tool boundary, admission replay/conflict, a full gateway restart followed by durable replay, structured restart interruption, deterministic authentication/quota/rate-limit/rejection/unavailable faults, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. Fault injection exists only inside this disposable CI fixture; there is no deployed fault endpoint. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
 
 ## Official source anchors
 
