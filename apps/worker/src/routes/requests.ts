@@ -32,9 +32,9 @@ import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
-import { runJobsAfterCommit } from '../jobs.js';
 
 const LIST_LIMIT = 100;
+const TRIAGE_ENQUEUE_LIMIT = 5;
 
 const requestPage = paginatedSchema(requestEntitySchema);
 const effectPage = paginatedSchema(effectEntitySchema);
@@ -89,15 +89,19 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
     const jobs: string[] = [];
     for (const row of result.rows) {
       if (row.kind === 'approval') projections.set(row.id, await loadApprovalListProjection(work.tx, row.id, work.userId));
-      if (row.status === 'pending' && c.env.INBOX_TRIAGE_MODE !== 'off' && !row.triage_status) {
+      if (
+        jobs.length < TRIAGE_ENQUEUE_LIMIT
+        && row.status === 'pending'
+        && c.env.INBOX_TRIAGE_MODE !== 'off'
+        && !row.triage_status
+      ) {
         const jobId = await enqueueRequestTriage(work.tx, work.workspaceId, row.id, row.version);
         if (jobId) jobs.push(jobId);
       }
     }
-    return { rows: result.rows, projections, jobs, workspaceId: work.workspaceId };
+    return { rows: result.rows, projections };
   });
 
-  if (rows.jobs.length) c.executionCtx.waitUntil(runJobsAfterCommit(c.env, rows.workspaceId, rows.jobs));
   const items = rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null, triageActive));
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
