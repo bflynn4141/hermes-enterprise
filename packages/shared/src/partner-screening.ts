@@ -95,7 +95,7 @@ export const partnerScreeningSnapshotSchema = z
     disclosure: z.enum([
       'Public organization evidence was fetched through the official GitHub REST API. No person was contacted and no application, admission, message, payment, signature, or external write was performed.',
       'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.',
-      'Public LinkedIn and YouTube creator evidence was fetched through one explicitly requested AgentCash search. Influence scale and contactability remain evidence gaps; no person was contacted and no message was sent.',
+      'Public LinkedIn, YouTube, or X creator evidence was fetched through an explicitly requested AgentCash search. Public metrics are point-in-time evidence; influence quality and contactability remain gaps. No person was contacted and no message was sent.',
     ]),
   })
   .strict();

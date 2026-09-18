@@ -14,7 +14,10 @@ import {
   agentCashContactEnrichmentArguments,
   agentCashEmailVerificationArguments,
 } from '../../src/partner-screening/agentcash-contact.js';
-import { AGENTCASH_CREATOR_SEARCH_ARGUMENTS } from '../../src/partner-screening/agentcash-creators.js';
+import {
+  AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
+} from '../../src/partner-screening/agentcash-creators.js';
 
 async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise<void> {
   await withClient('owner', async (client) => {
@@ -730,6 +733,109 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       await client.query(`UPDATE runs SET status='completed', ended_at=now() WHERE id=$1`, [runId]);
       await client.query('COMMIT');
     });
+  });
+
+  it('leases one explicit X search and stores sanitized public creator evidence', async () => {
+    const fx = await seedWorkspace();
+    const nativeRunId = `run_${'f'.repeat(32)}`;
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::uuid::text,'agent-' || $3::uuid::text,1)
+         RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID(), nativeRunId],
+      );
+      await client.query(
+        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+         VALUES ($1,$2,0,0,'user',$3::jsonb)`,
+        [fx.workspaceId, run.rows[0]!.id, JSON.stringify({
+          role: 'user',
+          content: 'Run an X search to find Hermes creator and consultant candidates.',
+        })],
+      );
+      await client.query('COMMIT');
+    });
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: 'agentcash-x-creator-secret-123456789012345',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const headers = { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` };
+    const authorized = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_x_creator_1', arguments: AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS },
+    });
+    expect(authorized.status).toBe(201);
+    expect(await authorized.json()).toMatchObject({ ok: true, reserved_requests: 1, max_spend_usd: 0.005 });
+
+    const imported = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/import`, {
+      method: 'POST', origin: null, headers,
+      body: {
+        runtime_run_id: nativeRunId,
+        tool_call_id: 'call_x_creator_1',
+        arguments: AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
+        result: {
+          status: 200,
+          message: 'OK',
+          data: { tweets: [{
+            id: '2101069073878507707',
+            url: 'https://x.com/HermesAgentTips/status/2101069073878507707',
+            fullText: 'Hermes Agent implementation tutorial. private@example.com +1 555 111 2222',
+            createdAt: 'Fri Sep 18 22:01:17 +0000 2026',
+            likeCount: 12,
+            viewCount: 200,
+            author: {
+              userName: 'HermesAgentTips',
+              url: 'https://x.com/HermesAgentTips',
+              name: 'Hermes Agent Tips',
+              description: 'Covering Nous Research Hermes Agent and building practical guides.',
+              followers: 9506,
+              following: 1056,
+              isBlueVerified: true,
+            },
+          }] },
+        },
+      },
+    });
+    expect(imported.status).toBe(201);
+    expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
+
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const screening = await client.query(
+        `SELECT status, source, monetary_cost_usd, config_snapshot->>'query_kind' AS query_kind
+           FROM partner_screening_runs WHERE idempotency_key=$1`,
+        [`creator:x:${nativeRunId}`],
+      );
+      const candidate = await client.query(
+        `SELECT source, display_name, profile_url FROM partner_candidates
+          WHERE source='agentcash_creators' AND agent_id=$1`,
+        [fx.agentId],
+      );
+      const artifact = await client.query<{ body: string }>(
+        `SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts
+          WHERE source='agentcash_creators'`,
+      );
+      return { screening: screening.rows[0], candidate: candidate.rows[0], artifact: artifact.rows[0]?.body ?? '' };
+    });
+    expect(stored.screening).toMatchObject({
+      status: 'completed', source: 'agentcash_creators', query_kind: 'hermes_x_creator_posts',
+    });
+    expect(Number(stored.screening.monetary_cost_usd)).toBe(0.005);
+    expect(stored.candidate).toMatchObject({
+      source: 'agentcash_creators', display_name: 'Hermes Agent Tips', profile_url: 'https://x.com/HermesAgentTips',
+    });
+    expect(stored.artifact).toContain('"followers": 9506');
+    expect(stored.artifact).not.toContain('private@example.com');
+    expect(stored.artifact).not.toContain('+1 555 111 2222');
   });
 
   it('rejects creator-search payment without matching explicit user intent', async () => {

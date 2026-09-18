@@ -24,6 +24,47 @@ export const AGENTCASH_CREATOR_SEARCH_ARGUMENTS = {
   },
 } as const;
 
+export const AGENTCASH_X_CREATOR_SEARCH_URL =
+  'https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top' as const;
+export const AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS = {
+  url: AGENTCASH_X_CREATOR_SEARCH_URL,
+  method: 'GET' as const,
+  maxAmount: 0.005 as const,
+} as const;
+
+export type AgentCashCreatorSearchKind = 'linkedin_youtube' | 'x';
+
+const ACTION_INTENT = /\b(?:search|find|discover|identify|look\s*up|run|test)\b/iu;
+const CREATOR_INTENT = /\b(?:consult(?:ant|ing)?|influenc(?:er|ers)?|creator|teacher|tutorial|implement(?:er|ation)?)\b/iu;
+
+/** Paid creator discovery is only attached to an explicit, imperative user request. */
+export function requestedCreatorSearchKinds(prompt: string | null | undefined): readonly AgentCashCreatorSearchKind[] {
+  const value = prompt ?? '';
+  if (!/\bhermes\b/iu.test(value) || !ACTION_INTENT.test(value) || !CREATOR_INTENT.test(value)) return [];
+  const kinds: AgentCashCreatorSearchKind[] = [];
+  if (/\b(?:linkedin|youtube)\b/iu.test(value)) kinds.push('linkedin_youtube');
+  if (/\b(?:x|twitter)\b/iu.test(value)) kinds.push('x');
+  return kinds;
+}
+
+/**
+ * The native runtime receives the exact governed call instead of being asked
+ * to rediscover a hidden constant from natural language. The original user
+ * text remains first and is still the authority checked by the Worker lease.
+ */
+export function governedCreatorSearchInput(prompt: string): string {
+  const kinds = requestedCreatorSearchKinds(prompt);
+  if (kinds.length === 0) return prompt;
+  const calls = kinds.map((kind, index) => {
+    const argumentsValue = kind === 'x'
+      ? AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS
+      : AGENTCASH_CREATOR_SEARCH_ARGUMENTS;
+    const label = kind === 'x' ? 'X/Twitter public-post search' : 'LinkedIn/YouTube public creator search';
+    return `${index + 1}. For the ${label}, call mcp__agentcash__fetch exactly once with ${JSON.stringify(argumentsValue)}.`;
+  });
+  return `${prompt}\n\nGoverned enterprise procedure (required):\n${calls.join('\n')}\nAfter each paid call, use list_partner_candidates and get_partner_candidate to inspect only imported evidence. Report a channel as empty when it imports no candidate. Do not substitute another source, repeat a paid call, contact anyone, or create/send a message.`;
+}
+
 const resultSchema = z.object({
   id: z.string().optional(),
   title: z.string().max(500).optional(),
@@ -38,6 +79,38 @@ const resultSchema = z.object({
 }).passthrough();
 
 const responseSchema = z.object({ results: z.array(resultSchema).max(100) }).passthrough();
+
+const xAuthorSchema = z.object({
+  userName: z.string().min(1).max(100),
+  url: z.string().url().max(2048),
+  name: z.string().min(1).max(300),
+  description: z.string().max(5_000).optional(),
+  followers: z.number().int().nonnegative().optional(),
+  following: z.number().int().nonnegative().optional(),
+  isVerified: z.boolean().optional(),
+  isBlueVerified: z.boolean().optional(),
+  professional: z.object({
+    professional_type: z.string().max(100).optional(),
+    category: z.array(z.object({ name: z.string().max(200).optional() }).passthrough()).max(20).optional(),
+  }).passthrough().optional(),
+}).passthrough();
+
+const xTweetSchema = z.object({
+  id: z.string().min(1).max(100),
+  url: z.string().url().max(2048),
+  text: z.string().max(20_000).optional(),
+  fullText: z.string().max(20_000).optional(),
+  createdAt: z.string().max(200).optional(),
+  lang: z.string().max(30).optional(),
+  retweetCount: z.number().int().nonnegative().optional(),
+  replyCount: z.number().int().nonnegative().optional(),
+  likeCount: z.number().int().nonnegative().optional(),
+  quoteCount: z.number().int().nonnegative().optional(),
+  viewCount: z.number().int().nonnegative().optional(),
+  author: xAuthorSchema,
+}).passthrough();
+
+const xResponseSchema = z.object({ tweets: z.array(xTweetSchema).max(100) }).passthrough();
 
 export interface AgentCashCreatorArtifact {
   readonly key: string;
@@ -61,8 +134,10 @@ export interface AgentCashCreatorResult {
   readonly artifacts: readonly AgentCashCreatorArtifact[];
   readonly apiRequestsUsed: 1;
   readonly rateLimits: readonly [];
-  readonly monetaryCostUsd: 0.01;
+  readonly monetaryCostUsd: 0.01 | 0.005;
 }
+
+type CreatorPlatform = 'linkedin' | 'youtube' | 'x';
 
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -97,6 +172,38 @@ function unwrap(value: unknown, depth = 0): unknown {
       const parsed = unwrap(value[key], depth + 1);
       if (object(parsed) && Array.isArray(parsed.results)) return parsed;
     }
+  }
+  return value;
+}
+
+function unwrapTweets(value: unknown, depth = 0): unknown {
+  if (depth > 7) return value;
+  if (typeof value === 'string') {
+    try { return unwrapTweets(JSON.parse(value), depth + 1); } catch {
+      for (const line of value.split(/\r?\n/u)) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = unwrapTweets(JSON.parse(line), depth + 1);
+          if (object(parsed) && Array.isArray(parsed.tweets)) return parsed;
+        } catch { /* AgentCash may append payment metadata as another JSON line. */ }
+      }
+      return value;
+    }
+  }
+  if (!object(value)) return value;
+  if (Array.isArray(value.tweets)) return value;
+  if (object(value.data) && Array.isArray(value.data.tweets)) return value.data;
+  if (Array.isArray(value.content)) {
+    for (const item of value.content) {
+      if (!object(item) || typeof item.text !== 'string') continue;
+      const parsed = unwrapTweets(item.text, depth + 1);
+      if (object(parsed) && Array.isArray(parsed.tweets)) return parsed;
+    }
+  }
+  for (const key of ['data', 'body', 'result', 'response']) {
+    if (!(key in value)) continue;
+    const parsed = unwrapTweets(value[key], depth + 1);
+    if (object(parsed) && Array.isArray(parsed.tweets)) return parsed;
   }
   return value;
 }
@@ -165,7 +272,7 @@ function displayName(result: z.infer<typeof resultSchema>, platform: 'linkedin' 
   return title.split(/\s+[|–—]\s+|\s+-\s+/u)[0]!.slice(0, 200);
 }
 
-function sourceKey(platform: 'linkedin' | 'youtube', profileUrl: string): string {
+function sourceKey(platform: CreatorPlatform, profileUrl: string): string {
   const url = new URL(profileUrl);
   return `creator:${platform}:${url.pathname.replace(/^\/+|\/+$/gu, '').replace(/[^a-zA-Z0-9@._-]+/gu, '-').slice(0, 150)}`;
 }
@@ -179,33 +286,50 @@ function publishedAt(value: string | null | undefined): string | null {
 function priority(
   text: string,
   key: string,
-  platform: 'linkedin' | 'youtube',
+  platform: CreatorPlatform,
   isProfile: boolean,
   hasPublishedDate: boolean,
+  audienceVerified = false,
 ): DiscoveryPriority {
   const lower = text.toLowerCase();
   const hermes = lower.includes('hermes agent') || lower.includes('nous research');
-  const consultingTerms = ['consultant', 'consulting', 'advisor', 'advisory', 'implement', 'deployment', 'integration'];
-  const creatorTerms = ['creator', 'tutorial', 'guide', 'course', 'video', 'post', 'teach', 'youtube'];
+  const consultingTerms = ['consultant', 'consulting', 'advisor', 'advisory', 'implement', 'deployment', 'integration', 'build', 'managed'];
+  const creatorTerms = ['creator', 'tutorial', 'guide', 'course', 'video', 'post', 'teach', 'youtube', 'covering'];
   const consulting = consultingTerms.filter((term) => lower.includes(term));
   const creator = creatorTerms.filter((term) => lower.includes(term));
   const criteria: DiscoveryPriorityCriterion[] = [
     { id: 'relevance', label: 'Hermes Agent relevance', points: hermes ? 40 : 0, points_max: 40, evidence: hermes ? 'The indexed public result names Hermes Agent or Nous Research.' : 'The stored result did not clearly name Hermes Agent or Nous Research.', source_artifact_keys: [key] },
     { id: 'activity', label: 'Published creator activity', points: creator.length || hasPublishedDate ? 25 : 0, points_max: 25, evidence: creator.length ? `Creator signals in the result: ${creator.join(', ')}.` : hasPublishedDate ? 'The indexed result includes a publication date.' : 'No creator-activity signal was confirmed.', source_artifact_keys: [key] },
     { id: 'adoption', label: 'Consulting or implementation signal', points: consulting.length ? 20 : 0, points_max: 20, evidence: consulting.length ? `Consulting signals in the result: ${consulting.join(', ')}.` : 'No consulting or implementation signal was confirmed.', source_artifact_keys: [key] },
-    { id: 'openness', label: 'Public professional profile', points: isProfile ? 15 : platform === 'youtube' ? 5 : 0, points_max: 15, evidence: isProfile ? `A public ${platform === 'linkedin' ? 'LinkedIn profile' : 'YouTube channel'} URL was found.` : 'Only a public content URL was found; a creator profile was not confirmed.', source_artifact_keys: [key] },
+    { id: 'openness', label: 'Public professional profile', points: isProfile ? 15 : platform === 'youtube' ? 5 : 0, points_max: 15, evidence: isProfile ? `A public ${platform === 'linkedin' ? 'LinkedIn profile' : platform === 'youtube' ? 'YouTube channel' : 'X profile'} URL was found.` : 'Only a public content URL was found; a creator profile was not confirmed.', source_artifact_keys: [key] },
   ];
   return {
     total: criteria.reduce((sum, criterion) => sum + criterion.points, 0),
     criteria,
     confidence: hermes && consulting.length && isProfile ? 'high' : hermes && (consulting.length || creator.length) ? 'medium' : 'low',
     gaps: [
-      'Audience size, follower or subscriber count, and engagement quality were not verified by this search.',
+      audienceVerified
+        ? 'Follower count is a point-in-time public metric and does not establish engagement quality or influence.'
+        : 'Audience size, follower or subscriber count, and engagement quality were not verified by this search.',
       'Interest, availability, consent, consulting capacity, and commercial fit were not evaluated.',
       ...(platform === 'youtube' ? ['A YouTube result does not establish a matching LinkedIn identity or professional contact channel.'] : []),
+      ...(platform === 'x' ? ['An X result does not establish a matching LinkedIn identity, professional email, availability, or consent.'] : []),
     ],
     sourceUpdatedAt: null,
   };
+}
+
+function trustedXUrl(value: string, kind: 'profile' | 'post'): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password) return null;
+    if (!['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(url.hostname.toLowerCase())) return null;
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (!/^[A-Za-z0-9_]{1,30}$/u.test(parts[0] ?? '')) return null;
+    if (kind === 'profile' && parts.length !== 1) return null;
+    if (kind === 'post' && (parts.length !== 3 || parts[1] !== 'status' || !/^\d{1,30}$/u.test(parts[2] ?? ''))) return null;
+    return `https://x.com/${parts.join('/')}`;
+  } catch { return null; }
 }
 
 export function parseAgentCashCreatorSearch(value: unknown, fetchedAt = new Date()): AgentCashCreatorResult {
@@ -255,4 +379,65 @@ export function parseAgentCashCreatorSearch(value: unknown, fetchedAt = new Date
     if (candidates.length >= 5) break;
   }
   return { candidates, artifacts, apiRequestsUsed: 1, rateLimits: [], monetaryCostUsd: 0.01 };
+}
+
+/** Parse one paid public X search without retaining payment metadata or private/contact fields. */
+export function parseAgentCashXCreatorSearch(value: unknown, fetchedAt = new Date()): AgentCashCreatorResult {
+  const response = xResponseSchema.parse(unwrapTweets(value));
+  const candidates: AgentCashCreatorCandidate[] = [];
+  const artifacts: AgentCashCreatorArtifact[] = [];
+  const seen = new Set<string>();
+  for (const tweet of response.tweets) {
+    const profileUrl = trustedXUrl(tweet.author.url, 'profile');
+    const resultUrl = trustedXUrl(tweet.url, 'post');
+    if (!profileUrl || !resultUrl || seen.has(profileUrl)) continue;
+    const evidenceText = [tweet.fullText, tweet.text, tweet.author.description,
+      tweet.author.professional?.professional_type,
+      ...(tweet.author.professional?.category ?? []).map((item) => item.name)]
+      .filter((part): part is string => typeof part === 'string').join(' ');
+    const lower = evidenceText.toLowerCase();
+    if (!(lower.includes('hermes agent') || lower.includes('nous research'))) continue;
+    seen.add(profileUrl);
+    const key = sourceKey('x', profileUrl);
+    const published = publishedAt(tweet.createdAt);
+    const followerCount = tweet.author.followers ?? null;
+    const artifact: AgentCashCreatorArtifact = {
+      key,
+      kind: 'creator_content',
+      url: resultUrl,
+      sourceUpdatedAt: published,
+      fetchedAt: fetchedAt.toISOString(),
+      content: {
+        platform: 'x',
+        creator_name: compact(tweet.author.name, 200),
+        creator_profile_url: profileUrl,
+        handle: compact(tweet.author.userName, 100),
+        result_url: resultUrl,
+        published_at: published,
+        language: compact(tweet.lang, 30),
+        excerpt: publicEvidenceText(tweet.fullText ?? tweet.text, 2_000),
+        public_bio: publicEvidenceText(tweet.author.description, 1_000),
+        is_verified: tweet.author.isVerified === true || tweet.author.isBlueVerified === true,
+        followers: followerCount,
+        following: tweet.author.following ?? null,
+        public_engagement: {
+          likes: tweet.likeCount ?? null,
+          replies: tweet.replyCount ?? null,
+          reposts: tweet.retweetCount ?? null,
+          quotes: tweet.quoteCount ?? null,
+          views: tweet.viewCount ?? null,
+        },
+      },
+    };
+    artifacts.push(artifact);
+    candidates.push({
+      sourceKey: key,
+      displayName: compact(tweet.author.name, 200) ?? tweet.author.userName,
+      profileUrl,
+      priority: priority(evidenceText, key, 'x', true, Boolean(published), followerCount !== null),
+      artifacts: [artifact],
+    });
+    if (candidates.length >= 5) break;
+  }
+  return { candidates, artifacts, apiRequestsUsed: 1, rateLimits: [], monetaryCostUsd: 0.005 };
 }

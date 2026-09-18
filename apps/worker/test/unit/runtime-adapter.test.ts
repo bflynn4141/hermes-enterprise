@@ -151,6 +151,21 @@ async function execute(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('submits exact governed creator calls for an explicit channel test', async () => {
+    const db = new FakeRuntimeDb();
+    db.turns.splice(0, 1, {
+      ...db.turns[0]!,
+      providerMessage: { role: 'user', content: 'Run a Hermes creator test for LinkedIn, YouTube, and X.' },
+    });
+    const { client } = await execute(db);
+    const input = String(client.submissions[0]?.body.input ?? '');
+    expect(input).toContain(db.turns[0]!.providerMessage.content);
+    expect(input).toContain('https://stableenrich.dev/api/exa/search');
+    expect(input).toContain('https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top');
+    expect(input.match(/mcp__agentcash__fetch exactly once/g)).toHaveLength(2);
+    expect(db.snapshots.get(1)?.input).toBe(input);
+  });
+
   it('submits saved recovery instructions instead of replaying original discovery input', async () => {
     const db = new FakeRuntimeDb({ attempt: 2 });
     db.resumeInput = 'Resume stored screening evidence. Do not repeat the paid search.';

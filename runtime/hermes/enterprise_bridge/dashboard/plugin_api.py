@@ -51,7 +51,7 @@ except Exception:  # Unit tests exercise the transport helper without FastAPI.
 
 router = APIRouter()
 
-CONNECTOR_VERSION = "1.6.1"
+CONNECTOR_VERSION = "1.6.2"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")

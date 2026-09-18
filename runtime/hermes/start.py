@@ -215,7 +215,7 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
             "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
             "env": {"HOME": "${AGENTCASH_HOME}"},
             "tools": {"include": list(AGENTCASH_TOOLS)},
-            "policy": {"allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15},
+            "policy": {"allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15},
         }
 
     servers, policies, passthrough = {}, [], {}
