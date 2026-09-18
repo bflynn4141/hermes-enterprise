@@ -15,7 +15,7 @@ import type { Env } from './env.js';
 import { AuthError } from './auth.js';
 import { TenancyError } from './db/client.js';
 import { health } from './routes/health.js';
-import { authorizeAgentCashPeopleSearch, importAgentCashPeopleSearch, pendingAgentCashPeopleSearch, listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
+import { authorizeAgentCashContact, authorizeAgentCashPeopleSearch, importAgentCashContact, importAgentCashPeopleSearch, pendingAgentCashContacts, pendingAgentCashPeopleSearch, listRuntimeSkills, listRuntimeTools, callRuntimeTool, runtimeModels, runtimeChatCompletions } from './runtime/bridge.js';
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
@@ -250,6 +250,9 @@ app.post('/internal/runtime/w/:ws/agents/:agentId/calls', callRuntimeTool);
 app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/authorize', authorizeAgentCashPeopleSearch);
 app.get('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/pending', pendingAgentCashPeopleSearch);
 app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/people-search/import', importAgentCashPeopleSearch);
+app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/contact/authorize', authorizeAgentCashContact);
+app.get('/internal/runtime/w/:ws/agents/:agentId/agentcash/contact/pending', pendingAgentCashContacts);
+app.post('/internal/runtime/w/:ws/agents/:agentId/agentcash/contact/import', importAgentCashContact);
 app.get('/internal/runtime/w/:ws/agents/:agentId/model/v1/models', runtimeModels);
 app.post('/internal/runtime/w/:ws/agents/:agentId/model/v1/chat/completions', runtimeChatCompletions);
 

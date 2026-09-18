@@ -761,6 +761,58 @@ async function publishRequestChanged(
   work.jobs.push(...await publishEvents(work.tx, work.workspaceId, events));
 }
 
+async function validatePartnerOutreachContact(
+  context: ApprovalProposerContext,
+  policyKey: string,
+  proposal: ApprovalProposal,
+): Promise<void> {
+  const canonicalJson = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  };
+  if (policyKey !== `partner-outreach-draft-${context.agentId}`) return;
+  if (proposal.approval_type !== 'communication' || !proposal.details.draft_only
+      || proposal.details.recipients.length !== 1) {
+    throw new RouteError('partner outreach must remain one draft-only communication', 'invalid_partner_outreach', 422);
+  }
+  const recipient = proposal.details.recipients[0]!;
+  if (!recipient.candidate_id) {
+    throw new RouteError('partner outreach must name the stored candidate', 'invalid_partner_outreach_contact', 422);
+  }
+  const result = await context.tx.query<{
+    enrichment_id: string; display_name: string; contact_data: {
+      phones?: { number: string; type?: string | null }[];
+      social_profiles?: { network: string; url: string }[];
+    }; preferred_email: string | null; draft_eligible: boolean;
+  }>(
+    `SELECT e.id AS enrichment_id, c.display_name, e.contact_data,
+            e.preferred_email, e.draft_eligible
+       FROM partner_candidates c
+       JOIN LATERAL (
+         SELECT id, contact_data, preferred_email, draft_eligible
+           FROM partner_contact_enrichments
+          WHERE workspace_id=c.workspace_id AND agent_id=c.agent_id AND candidate_id=c.id
+          ORDER BY updated_at DESC LIMIT 1
+       ) e ON true
+      WHERE c.workspace_id=$1 AND c.agent_id=$2 AND c.id=$3`,
+    [context.workspaceId, context.agentId, recipient.candidate_id],
+  );
+  const stored = result.rows[0];
+  const expectedAddress = stored?.draft_eligible ? stored.preferred_email : null;
+  const expectedPhones = stored?.contact_data.phones ?? [];
+  const expectedProfiles = stored?.contact_data.social_profiles ?? [];
+  if (!stored || recipient.name !== stored.display_name || recipient.address !== expectedAddress
+      || canonicalJson(recipient.phone_numbers ?? []) !== canonicalJson(expectedPhones)
+      || canonicalJson(recipient.social_profiles ?? []) !== canonicalJson(expectedProfiles)
+      || !proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact')) {
+    throw new RouteError('partner outreach contact fields must match stored verified evidence', 'invalid_partner_outreach_contact', 422);
+  }
+}
+
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
   const input = proposeApprovalInputSchema.parse(rawInput);
   await validateJoinSource(context, input.proposal);
@@ -802,6 +854,7 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   }
   const targets = await validatedTargetContext(context.tx, context.workspaceId, input.proposal, input);
   const selected = await selectPolicy(context.tx, context.workspaceId, input.proposal, context.agentId, targets.targetResourceIds, input.policy_key);
+  await validatePartnerOutreachContact(context, selected.row.key, input.proposal);
   const members = await activeMembers(context.tx, context.workspaceId);
   validatePolicyFeasibility(selected.policy, members, requester.memberId, targets.requiredOwnerIds);
 

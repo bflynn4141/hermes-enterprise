@@ -40,6 +40,11 @@ import type {
 } from './agent-db.js';
 import { persistApprovalContinuation } from '../runtime/continuation-intent.js';
 import { partnerAgentConfig } from '../partner-screening/config.js';
+import {
+  agentCashContactEnrichmentArguments,
+  agentCashEmailVerificationArguments,
+  agentCashEmailVerificationPollArguments,
+} from '../partner-screening/agentcash-contact.js';
 
 /**
  * The tool names a workspace with no configured capability rows still gets.
@@ -868,11 +873,20 @@ export class PgAgentDb implements AgentDb {
         `SELECT c.id, c.source, c.source_key, c.display_name, c.profile_url,
                 c.deterministic_priority, c.confidence, c.evidence_gaps,
                 c.source_updated_at, c.last_seen_at,
+                ce.status AS contact_status,
+                COALESCE(jsonb_array_length(ce.contact_data->'phones'), 0) AS phone_count,
+                COALESCE(ce.draft_eligible, false) AS verified_email,
                 (SELECT r.id FROM requests r
                   WHERE r.workspace_id = c.workspace_id
                     AND r.subject_key = 'partner-candidate:' || c.id::text
                   ORDER BY r.created_at LIMIT 1) AS existing_request_id
            FROM partner_candidates c
+           LEFT JOIN LATERAL (
+             SELECT status, contact_data, draft_eligible
+               FROM partner_contact_enrichments e
+              WHERE e.workspace_id=c.workspace_id AND e.agent_id=c.agent_id AND e.candidate_id=c.id
+              ORDER BY e.updated_at DESC LIMIT 1
+           ) ce ON true
           WHERE c.workspace_id = $1 AND c.agent_id = $2
             AND c.deterministic_priority >= $3
           ORDER BY c.deterministic_priority DESC, c.last_seen_at DESC
@@ -910,6 +924,36 @@ export class PgAgentDb implements AgentDb {
           ORDER BY kind, id`,
         [candidate.latest_run_id, candidate.artifact_ids],
       );
+      const contactResult = await q<{
+        id: string; status: string; contact_data: {
+          professional_emails?: string[];
+          phones?: { number: string; type: string | null }[];
+          social_profiles?: { network: string; url: string }[];
+        }; preferred_email: string | null; verification_status: string | null;
+        verification_score: string | null; verification_checks: Record<string, boolean | null>;
+        draft_eligible: boolean; verification_poll_url: string | null;
+        monetary_cost_usd: string; fetched_at: string | null; verified_at: string | null;
+      }>(
+        `SELECT e.id, e.status, e.contact_data, e.preferred_email, e.verification_status,
+                e.verification_score, e.verification_checks, e.draft_eligible,
+                e.verification_poll_url, e.monetary_cost_usd, e.fetched_at, e.verified_at
+           FROM partner_contact_enrichments e
+           JOIN runs r ON r.id=e.run_id AND r.workspace_id=e.workspace_id
+          WHERE e.workspace_id=$1 AND e.agent_id=$2 AND e.candidate_id=$3
+            AND r.trace_id=$4
+          ORDER BY e.updated_at DESC LIMIT 1`,
+        [this.workspaceId, agentId, candidate.id, this.traceId],
+      );
+      const contact = contactResult.rows[0];
+      const nextContactCall = candidate.source !== 'agentcash_people'
+        ? null
+        : !contact
+          ? agentCashContactEnrichmentArguments(String(candidate.id), String(candidate.profile_url))
+          : contact.status === 'enriched' && contact.preferred_email
+            ? agentCashEmailVerificationArguments(contact.preferred_email)
+            : contact.status === 'verification_pending' && contact.verification_poll_url
+              ? agentCashEmailVerificationPollArguments(contact.verification_poll_url)
+              : null;
       const { latest_run_id: _run, artifact_ids: _ids, ...summary } = candidate;
       return {
         ...summary,
@@ -922,11 +966,32 @@ export class PgAgentDb implements AgentDb {
           discovered_at: candidate.last_seen_at,
           deterministic_priority: candidate.deterministic_priority,
         },
+        professional_contact: contact ? {
+          enrichment_id: contact.id,
+          status: contact.status,
+          professional_emails: contact.contact_data.professional_emails ?? [],
+          preferred_verified_email: contact.draft_eligible ? contact.preferred_email : null,
+          phone_numbers: contact.contact_data.phones ?? [],
+          social_profiles: contact.contact_data.social_profiles ?? [],
+          verification: {
+            status: contact.verification_status,
+            score: contact.verification_score === null ? null : Number(contact.verification_score),
+            checks: contact.verification_checks,
+            draft_eligible: contact.draft_eligible,
+          },
+          monetary_cost_usd: Number(contact.monetary_cost_usd),
+          fetched_at: contact.fetched_at,
+          verified_at: contact.verified_at,
+          source: 'agentcash_minerva_hunter',
+        } : null,
+        next_contact_call: nextContactCall,
         constraints: [
           'Do not claim this organization applied or consented.',
           'Cite only source_artifact ids returned here.',
           'Do not infer capacity, availability, identity, or interest from missing public metadata.',
           'A proposal remains pending until a human reviews it; do not contact the organization.',
+          'Phone numbers and social profiles are review-only data. Never call, text, or message them.',
+          'Use an email address in a draft only when preferred_verified_email is non-null.',
         ],
       };
     });

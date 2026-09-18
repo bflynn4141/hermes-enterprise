@@ -118,7 +118,19 @@ export const communicationDetailsSchema = z
     draft_only: z.boolean().default(false),
     sender: z.object({ member_id: uuidSchema, address: z.string().trim().min(1).max(320) }).strict(),
     recipients: z
-      .array(z.object({ name: shortText, address: z.string().trim().min(1).max(320).nullable() }).strict())
+      .array(z.object({
+        name: shortText,
+        address: z.string().trim().min(1).max(320).nullable(),
+        candidate_id: uuidSchema.optional(),
+        phone_numbers: z.array(z.object({
+          number: z.string().trim().min(7).max(40),
+          type: z.string().trim().min(1).max(40).nullable().optional(),
+        }).strict()).max(5).optional(),
+        social_profiles: z.array(z.object({
+          network: z.enum(['linkedin', 'twitter', 'facebook']),
+          url: z.url().max(500),
+        }).strict()).max(3).optional(),
+      }).strict())
       .min(1)
       .max(100),
     subject: z.string().trim().max(500).optional(),

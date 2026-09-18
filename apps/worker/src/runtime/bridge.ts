@@ -24,6 +24,16 @@ import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
+import {
+  AGENTCASH_CONTACT_ENRICH_URL,
+  AGENTCASH_EMAIL_VERIFY_URL,
+  agentCashContactEnrichmentArguments,
+  agentCashEmailVerificationArguments,
+  agentCashEmailVerificationPollArguments,
+  parseAgentCashContactEnrichment,
+  parseAgentCashEmailVerification,
+  type ContactCallKind,
+} from '../partner-screening/agentcash-contact.js';
 import { partnerAgentConfigSchema } from '../partner-screening/config.js';
 import { completePartnerScreening } from '../partner-screening/service.js';
 
@@ -94,6 +104,8 @@ function parseAgentCashPeopleImport(value: unknown): AgentCashPeopleImport {
     result: value.result,
   };
 }
+const parseAgentCashContactAuthorization = parseAgentCashPeopleAuthorization;
+const parseAgentCashContactImport = parseAgentCashPeopleImport;
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (object(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
@@ -541,6 +553,234 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
   });
   return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }
+
+interface ContactLeaseRow {
+  id: string;
+  candidate_id: string;
+  run_id: string;
+  runtime_run_id: string;
+  status: string;
+  pending_kind: ContactCallKind | null;
+  pending_tool_call_id: string | null;
+  contact_data: { professional_emails?: string[]; phones?: unknown[]; social_profiles?: unknown[] };
+  preferred_email: string | null;
+  verification_poll_url: string | null;
+  verification_poll_count: number;
+  profile_url: string;
+}
+
+function candidateIdFromEnrichmentArguments(argumentsValue: Record<string, unknown>): string | null {
+  const bodyValue = object(argumentsValue.body) ? argumentsValue.body : null;
+  const records = bodyValue && Array.isArray(bodyValue.records) ? bodyValue.records : [];
+  const first = object(records[0]) ? records[0] : null;
+  return first && typeof first.record_id === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(first.record_id)
+    ? first.record_id : null;
+}
+
+function contactKind(argumentsValue: Record<string, unknown>): ContactCallKind | null {
+  if (argumentsValue.url === AGENTCASH_CONTACT_ENRICH_URL && argumentsValue.method === 'POST') return 'enrichment';
+  if (argumentsValue.url === AGENTCASH_EMAIL_VERIFY_URL && argumentsValue.method === 'POST') return 'verification';
+  if (typeof argumentsValue.url === 'string' && argumentsValue.method === 'GET'
+      && argumentsValue.url.startsWith(`${AGENTCASH_EMAIL_VERIFY_URL}/jobs/`)) return 'verification_poll';
+  return null;
+}
+
+function expectedContactArguments(kind: ContactCallKind, row: ContactLeaseRow): Record<string, unknown> {
+  if (kind === 'enrichment') return agentCashContactEnrichmentArguments(row.candidate_id, row.profile_url);
+  if (kind === 'verification') {
+    if (!row.preferred_email) throw new RouteError('No professional email is available to verify.', 'partner_contact_missing_email', 409);
+    return agentCashEmailVerificationArguments(row.preferred_email);
+  }
+  if (!row.verification_poll_url) throw new RouteError('No email verification job is pending.', 'partner_contact_poll_missing', 409);
+  return agentCashEmailVerificationPollArguments(row.verification_poll_url);
+}
+
+/** Reserve exactly one shortlisted candidate and one bounded contact call. */
+export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashContactAuthorization(await body(c));
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try {
+    run = await runtime.findRuntimeRun(input.runtime_run_id, agentId);
+    requireActive(run, workspaceId, agentId);
+  } finally { await runtime.close(); }
+  const kind = contactKind(input.arguments);
+  if (!kind) throw new RouteError('This AgentCash endpoint is not part of contact enrichment.', 'partner_contact_policy_mismatch', 422);
+
+  let created = false;
+  let enrichmentId = '';
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-contact:${run.id}`]);
+    const existing = await tx.query<ContactLeaseRow>(
+      `SELECT e.id, e.candidate_id, e.run_id, e.runtime_run_id, e.status, e.pending_kind,
+              e.pending_tool_call_id, e.contact_data, e.preferred_email,
+              e.verification_poll_url, e.verification_poll_count, c.profile_url
+         FROM partner_contact_enrichments e
+         JOIN partner_candidates c ON c.id=e.candidate_id AND c.workspace_id=e.workspace_id
+        WHERE e.workspace_id=$1 AND e.agent_id=$2 AND e.run_id=$3
+        FOR UPDATE OF e`,
+      [workspaceId, agentId, run.id],
+    );
+    const row = existing.rows[0];
+    if (row?.pending_kind === kind && row.pending_tool_call_id === input.tool_call_id
+        && canonical(input.arguments) === canonical(expectedContactArguments(kind, row))) {
+      enrichmentId = row.id;
+      return;
+    }
+    if (row?.pending_kind || ['completed', 'failed'].includes(row?.status ?? '')) {
+      throw new RouteError('This run already used its contact-enrichment allowance.', 'partner_contact_budget_exhausted', 409);
+    }
+
+    if (kind === 'enrichment') {
+      if (row) throw new RouteError('This run already selected a candidate for enrichment.', 'partner_contact_candidate_locked', 409);
+      const candidateId = candidateIdFromEnrichmentArguments(input.arguments);
+      if (!candidateId) throw new RouteError('The contact request does not identify one stored candidate.', 'partner_contact_policy_mismatch', 422);
+      const candidate = await tx.query<{ id: string; profile_url: string }>(
+        `SELECT id, profile_url FROM partner_candidates
+          WHERE workspace_id=$1 AND agent_id=$2 AND id=$3 AND source='agentcash_people'
+          FOR SHARE`,
+        [workspaceId, agentId, candidateId],
+      );
+      const selected = candidate.rows[0];
+      if (!selected || canonical(input.arguments) !== canonical(agentCashContactEnrichmentArguments(selected.id, selected.profile_url))) {
+        throw new RouteError('The contact request does not match the stored candidate.', 'partner_contact_policy_mismatch', 422);
+      }
+      const inserted = await tx.query<{ id: string }>(
+        `INSERT INTO partner_contact_enrichments
+           (workspace_id, agent_id, candidate_id, run_id, runtime_run_id, status,
+            pending_kind, pending_tool_call_id, enrichment_tool_call_id)
+         VALUES ($1,$2,$3,$4,$5,'enrichment_reserved','enrichment',$6,$6)
+         RETURNING id`,
+        [workspaceId, agentId, candidateId, run.id, input.runtime_run_id, input.tool_call_id],
+      );
+      enrichmentId = inserted.rows[0]!.id;
+      created = true;
+      return;
+    }
+
+    if (!row || canonical(input.arguments) !== canonical(expectedContactArguments(kind, row))) {
+      throw new RouteError('The contact request does not match the stored enrichment state.', 'partner_contact_policy_mismatch', 422);
+    }
+    if (kind === 'verification' && row.status !== 'enriched') {
+      throw new RouteError('Professional contact enrichment must complete before verification.', 'partner_contact_sequence_invalid', 409);
+    }
+    if (kind === 'verification_poll' && (row.status !== 'verification_pending' || row.verification_poll_count >= 5)) {
+      throw new RouteError('No bounded email verification poll is available.', 'partner_contact_sequence_invalid', 409);
+    }
+    await tx.query(
+      `UPDATE partner_contact_enrichments
+          SET status=$4, pending_kind=$5, pending_tool_call_id=$6,
+              verification_tool_call_id=COALESCE(verification_tool_call_id, $6),
+              verification_poll_count=verification_poll_count + CASE WHEN $5='verification_poll' THEN 1 ELSE 0 END
+        WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
+      [workspaceId, agentId, row.id, kind === 'verification' ? 'verification_reserved' : 'verification_pending', kind, input.tool_call_id],
+    );
+    enrichmentId = row.id;
+    created = true;
+  });
+  return c.json({ ok: true, enrichment_id: enrichmentId, call_kind: kind }, created ? 201 : 200);
+}
+
+/** Import a leased response after the wallet call; no raw provider data is retained. */
+export async function importAgentCashContact(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const input = parseAgentCashContactImport(await body(c));
+  const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
+  let run: EngineRunRow | null = null;
+  try { run = await runtime.findRuntimeRun(input.runtime_run_id, agentId); } finally { await runtime.close(); }
+  if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId) {
+    throw new RouteError('This runtime run is no longer available.', 'runtime_run_inactive', 409);
+  }
+  let state = '';
+  await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    const result = await tx.query<ContactLeaseRow>(
+      `SELECT e.id, e.candidate_id, e.run_id, e.runtime_run_id, e.status, e.pending_kind,
+              e.pending_tool_call_id, e.contact_data, e.preferred_email,
+              e.verification_poll_url, e.verification_poll_count, c.profile_url
+         FROM partner_contact_enrichments e
+         JOIN partner_candidates c ON c.id=e.candidate_id AND c.workspace_id=e.workspace_id
+        WHERE e.workspace_id=$1 AND e.agent_id=$2 AND e.run_id=$3
+        FOR UPDATE OF e`,
+      [workspaceId, agentId, run.id],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RouteError('No contact enrichment is bound to this run.', 'partner_contact_missing', 409);
+    if (!row.pending_kind && ['enriched', 'verification_pending', 'completed'].includes(row.status)) {
+      state = row.status;
+      return;
+    }
+    const kind = row.pending_kind;
+    if (!kind || row.pending_tool_call_id !== input.tool_call_id
+        || canonical(input.arguments) !== canonical(expectedContactArguments(kind, row))) {
+      throw new RouteError('This contact result does not have the matching lease.', 'partner_contact_payment_not_authorized', 409);
+    }
+    if (kind === 'enrichment') {
+      let parsed;
+      try { parsed = parseAgentCashContactEnrichment(input.result, row.candidate_id); } catch {
+        throw new RouteError('Contact enrichment returned an unsupported response.', 'partner_contact_invalid_response', 422);
+      }
+      const preferred = parsed.professionalEmails[0] ?? null;
+      state = preferred ? 'enriched' : 'completed';
+      await tx.query(
+        `UPDATE partner_contact_enrichments
+            SET status=$4, pending_kind=NULL, pending_tool_call_id=NULL,
+                contact_data=$5::jsonb, preferred_email=$6,
+                monetary_cost_usd=0.05, fetched_at=now()
+          WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
+        [workspaceId, agentId, row.id, state, JSON.stringify({
+          professional_emails: parsed.professionalEmails,
+          phones: parsed.phones,
+          social_profiles: parsed.socialProfiles,
+        }), preferred],
+      );
+      return;
+    }
+    let parsed;
+    try { parsed = parseAgentCashEmailVerification(input.result, row.preferred_email!); } catch {
+      throw new RouteError('Email verification returned an unsupported response.', 'partner_contact_invalid_response', 422);
+    }
+    state = parsed.pending ? 'verification_pending' : 'completed';
+    await tx.query(
+      `UPDATE partner_contact_enrichments
+          SET status=$4, pending_kind=NULL, pending_tool_call_id=NULL,
+              verification_job_id=$5, verification_poll_url=$6,
+              verification_retry_after_seconds=$7, verification_status=$8,
+              verification_score=$9, verification_checks=$10::jsonb,
+              draft_eligible=$11, verified_at=CASE WHEN $12 THEN NULL ELSE now() END,
+              monetary_cost_usd=CASE WHEN $13='verification' THEN 0.08 ELSE monetary_cost_usd END
+        WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
+      [workspaceId, agentId, row.id, state, parsed.jobId, parsed.pollUrl, parsed.retryAfterSeconds,
+        parsed.status, parsed.score, JSON.stringify(parsed.checks), parsed.draftEligible,
+        parsed.pending, kind],
+    );
+  });
+  return c.json({ ok: true, state });
+}
+
+/** Return already-paid spill identities for startup recovery; never creates a lease. */
+export async function pendingAgentCashContacts(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const { workspaceId, agentId } = await authenticate(c);
+  const pending = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => tx.query<ContactLeaseRow & { tool_call_id: string }>(
+    `SELECT e.id, e.candidate_id, e.run_id, e.runtime_run_id, e.status, e.pending_kind,
+            e.pending_tool_call_id, e.pending_tool_call_id AS tool_call_id, e.contact_data,
+            e.preferred_email, e.verification_poll_url, e.verification_poll_count, c.profile_url
+       FROM partner_contact_enrichments e
+       JOIN partner_candidates c ON c.id=e.candidate_id AND c.workspace_id=e.workspace_id
+      WHERE e.workspace_id=$1 AND e.agent_id=$2 AND e.pending_kind IS NOT NULL
+        AND e.pending_tool_call_id IS NOT NULL
+      ORDER BY e.created_at
+      LIMIT 10`,
+    [workspaceId, agentId],
+  ));
+  return c.json({ pending: pending.rows.map((row) => ({
+    runtime_run_id: row.runtime_run_id,
+    tool_call_id: row.tool_call_id,
+    arguments: expectedContactArguments(row.pending_kind!, row),
+  })) });
+}
+
 function modelError(reason: string, status: number): Response {
   return Response.json({ error: { message: reason, type: 'runtime_bridge_error', code: reason } }, { status });
 }

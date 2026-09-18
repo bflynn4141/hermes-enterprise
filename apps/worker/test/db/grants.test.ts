@@ -75,6 +75,7 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   partner_source_artifacts: ['SELECT'],
   partner_candidates: ['SELECT'],
   partner_screening_run_candidates: ['SELECT'],
+  partner_contact_enrichments: ['SELECT'],
   stream_events: ['INSERT'],
   instruction_versions: ['SELECT', 'INSERT'],
   run_steps: ['SELECT', 'INSERT', 'UPDATE'],
@@ -127,6 +128,7 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'partner_source_artifacts', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_screening_run_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_contact_enrichments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {

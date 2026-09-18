@@ -5,12 +5,14 @@ professional evidence from AgentCash People Search, save immutable source
 artifacts, and hand the candidates to the bound Iris agent for judgment. Source
 collection never creates an application by itself.
 Iris must inspect the stored evidence and may use `propose_approval` to create a
-personalized, draft-only email in the Inbox. The source connector removes
-contact details, so the draft names the prospect and shows that a verified
-address is still needed. Approval records reviewed copy and never sends it.
+personalized, draft-only email in the Inbox. Discovery removes contact details.
+After Iris selects one strongest prospect, it may run one bounded professional
+contact lookup and email verification. The Inbox shows stored phones and public
+profiles for human review and uses an email only after verification passes.
+Approval records reviewed copy and never sends, calls, texts, or messages anyone.
 
 Iris now receives this procedure as the native, read-only Hermes skill
-`enterprise_bridge:partner-program-screening` version `1.4.0`. Its approved
+`enterprise_bridge:partner-program-screening` version `1.5.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
 model credentials remain server-side. The skill is automatically in use when
 this agent has a valid policy. It describes the review workflow but grants no
@@ -29,6 +31,7 @@ activity cannot establish them.
 |---|---|---|---|
 | GitHub | Live through `api.github.com` | Works anonymously at 60 core requests/hour, with search limited to 10 requests/minute. `PARTNER_GITHUB_TOKEN` raises the primary core allowance to 5,000/hour and authenticated search to 30/minute. GitHub does not charge per REST request. | Organization and repository records only. The connector drops user-owned search results and public email, and cannot contact anyone. GitHub prohibits using the service for spam, including unsolicited recruiting. |
 | AgentCash People Search | Live through `stableenrich.dev/api/fullenrich/people-search` inside Iris's Nous Cloud profile | One request per run, capped at $0.15. The endpoint is free when it returns no match. The dedicated AgentCash wallet pays; no source API key is needed. | The model cannot select the URL, filters, or spend cap. The Worker accepts a response only from the native run that owns the screening job, removes contact data, and stores public professional fields. Results are prospects, never applicants, until a human reviews them. |
+| AgentCash contact enrichment + verification | Live through fixed Minerva and Hunter endpoints after Iris selects one candidate | At most one $0.05 enrichment and one $0.03 verification per native run. Async verification polls reuse the paid job and cannot add another candidate. | The Worker stores only professional emails, phones with provider type, and trusted LinkedIn/X/Facebook URLs. Personal emails, addresses, demographics, relatives, and financial fields are dropped. Phones and profiles are review-only; verified professional email may enter a draft. |
 | Explicit GitHub URL intake | Live through the same connector | Same GitHub limits. URLs must be `https://github.com/<organization>` or one repository beneath it. | A URL is an input hint; the saved evidence is still fetched from the official API. The profile call must prove the owner is an organization. |
 | YouTube | Not implemented | A Google Cloud project and `PARTNER_YOUTUBE_API_KEY` would be required. `search.list` currently costs one unit and has a separate default search quota of 100 calls/day. A credential alone does not mark this source live. | Build and policy review of a dedicated connector are still required. No YouTube request is made here. |
 | X | Not implemented | Requires an approved developer account, project/app and `PARTNER_X_BEARER_TOKEN`. X charges from prepaid credits per API usage. A credential alone does not mark this source live. | A dedicated connector and a workspace budget must be approved first. No X request is made here. |
@@ -73,22 +76,30 @@ Source policy and quota references were checked on 2026-09-16:
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,
    confidence, and gaps are preserved.
-5. Onboarding calls the explicit handoff route after the provider is connected.
+5. Iris selects exactly one stored candidate. Each Minerva or Hunter request is
+   reconstructed from database state, leased to one native run/tool-call ID,
+   and imported through the same spill-recovery boundary. The Worker stores no
+   raw enrichment response. A Hunter result is draft-eligible only when it is
+   `valid` and syntax, MX, SMTP-server, and SMTP-check signals pass while
+   disposable and blocked signals do not.
+6. Onboarding calls the explicit handoff route after the provider is connected.
    Cloudflare Cron performs the same idempotent handoff automatically. The
    agent's auto-loaded Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates.
-6. Before handing work to Iris, the Worker installs an agent-specific
+7. Before handing work to Iris, the Worker installs an agent-specific
    communication policy reviewed by the responsible member. Iris may call
-   `propose_approval` only with `draft_only: true`, the verified sender, a null
-   recipient address and stored evidence. The resulting Inbox item has no
-   delivery effect. Discovered prospects are never represented as applicants.
+   `propose_approval` only with `draft_only: true`, the verified sender, and
+   contact fields that exactly match stored evidence. The recipient address is
+   null unless the professional email passed verification. The resulting Inbox
+   item has no delivery effect. Discovered prospects are never represented as applicants.
 
 Cloudflare Cron uses six-hour idempotency buckets. Paid AgentCash runs have a
 second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`. Local and
 production keep it at `0`; staging is `1` under Brian's 2026-09-17 approval for
-the existing Iris demo. At the default policy cap, the maximum is $0.15 per
-six-hour run for each configured agent. A new environment or agent still needs
+the existing Iris demo. The approved staging maximum is $0.23 per six-hour run
+for each configured agent: $0.15 discovery plus $0.05 enrichment and $0.03
+verification for one shortlisted candidate. A new environment or agent still needs
 its own recurring-budget approval before this switch can authorize spending.
 
 Discovery credentials and model-provider credentials are separate. A
@@ -117,7 +128,7 @@ search call. The source-matrix route is read-only and reports credentials only
 as `authenticated`, `unauthenticated`, or `not_applicable`.
 
 Start the Worker after applying migrations through
-`0034_proactive_partner_outreach.sql`, then:
+`0036_partner_contact_enrichment.sql`, then:
 
 ```sh
 WS=11111111-1111-4111-8111-111111111111
