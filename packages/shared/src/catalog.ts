@@ -119,12 +119,12 @@ export const SEED_PILOT_MODEL_ID = 'deepseek-flash';
  * The workspace default, from the seed and from `POST /workspaces` onwards.
  *
  * A Nous Portal id, because Nous Portal is the product inference provider
- * (decision C55). Migration 0024 writes a disabled placeholder so the foreign
+ * (decision C55). Migration 0041 writes a disabled placeholder so the foreign
  * key holds before the first workspace key is verified. Verification replaces
  * that placeholder with the provider catalog row.
  */
-export const DEFAULT_MODEL_ID = 'nous:anthropic/claude-sonnet-5';
-export const DEFAULT_EFFORT = 'medium';
+export const DEFAULT_MODEL_ID = 'nous:deepseek/deepseek-v4.1-flash';
+export const DEFAULT_EFFORT = 'low';
 
 // ---------------------------------------------------------------------------
 // Nous Portal
@@ -143,6 +143,7 @@ export function nousModelId(catalogModelId: string): string | null {
   return catalogModelId.startsWith(NOUS_PREFIX) ? catalogModelId.slice(NOUS_PREFIX.length) : null;
 }
 
+/** Legacy fallback only when the provider omits per-model reasoning metadata. */
 export const NOUS_EFFORT_MAP: Readonly<Record<string, string>> = {
   low: 'low',
   medium: 'medium',

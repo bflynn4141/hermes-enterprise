@@ -279,12 +279,12 @@ export function createMockBackend(options: MockOptions = {}) {
   const hasVerifiedKey = providerKeys.some((k) => k.status === 'verified' || k.status === 'verified_scoped');
 
   // Nous Portal rows only, because that is the only provider the Worker offers
-  // and the only one `GET /w/:ws/catalog` returns (decision R12). A mock that
-  // still listed DeepSeek and GPT rows would be a fixture teaching the client's
-  // own scenarios about a screen the product no longer has.
+  // and the only one `GET /w/:ws/catalog` returns (decision R12). Direct-provider
+  // rows would teach the client's scenarios about a screen the product no
+  // longer has. These are simulated capabilities, not live availability.
   const catalog = [
+    { model_id: DEFAULT_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: 'high', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
     { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
-    ...(options.recovery ? [{ model_id: RECOVERY_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: 'low', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' }] : []),
     { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 

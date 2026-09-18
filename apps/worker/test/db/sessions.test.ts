@@ -62,9 +62,8 @@ describe('POST /w/:ws/sessions', () => {
     expect(await response.json()).toMatchObject({
       agent_id: fixture.agentId,
       title: 'Partner applications',
-      // The workspace default, which is an OpenRouter id from the seed onwards
-      // (decision R13). The row it names is the placeholder 0016 wrote.
-      model_id: 'nous:anthropic/claude-sonnet-5',
+      // The exact product default, backed by migration 0041's placeholder.
+      model_id: 'nous:deepseek/deepseek-v4.1-flash',
       effort: 'low',
       runtime: 'local',
       status: 'idle',
