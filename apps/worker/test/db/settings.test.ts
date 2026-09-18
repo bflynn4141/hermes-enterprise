@@ -47,13 +47,14 @@ describe('GET/PATCH /w/:ws/settings', () => {
     const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/settings`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      defaults: { model_id: string };
+      defaults: { model_id: string; effort: string | null };
       caps: { max_concurrent_runs: number };
       fetch_url_allowlist: string[];
       notifications: { blocked: boolean };
       role: string;
     };
-    expect(body.defaults.model_id).toBe('nous:anthropic/claude-sonnet-5');
+    expect(body.defaults.model_id).toBe('nous:deepseek/deepseek-v4.1-flash');
+    expect(body.defaults.effort).toBe('low');
     expect(body.caps.max_concurrent_runs).toBe(3);
     // Decision E2: empty means nothing is reachable, not everything.
     expect(body.fetch_url_allowlist).toEqual([]);

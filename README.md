@@ -179,8 +179,19 @@ Installing, verifying or rotating another provider returns
 rows. Legacy transport adapters remain compiled for historical records and
 transport-specific tests, but are outside the product path.
 
-A workspace starts on `nous:anthropic/claude-sonnet-5`. Migration 0024 writes a
-disabled placeholder so the foreign key exists before credentials do. Verifying
+**DeepSeek default rollout is held.** This branch prepares
+`nous:deepseek/deepseek-v4.1-flash` at low effort for new and existing workspaces.
+The September 18 staging preflight returned Nous HTTP 404 at explicit low
+effort despite the model remaining in its public catalog. This migration must
+not deploy until exact-model inference and tool acceptance pass; local fixtures
+do not establish provider availability.
+
+Pending migration 0041 moves workspace defaults, automated sessions and inherited
+or unusable session choices once. It preserves explicit usable session choices,
+archived sessions, historical runs and later choices on migration replay. A
+disabled placeholder satisfies the foreign key before the first catalog sync.
+Catalog capabilities retain DeepSeek's low, high and max efforts and provider
+default high, while the proposed product default is low. Verifying
 a key makes one minimal one-token chat-completions request, then syncs the public
 Nous Portal `/models` catalog. `/models` cannot verify credentials because it is
 public. The same transaction moves a stale workspace default and its unarchived

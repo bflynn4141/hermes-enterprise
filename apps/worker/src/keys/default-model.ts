@@ -16,7 +16,7 @@
 //   * It never *downgrades*. A default that is already allowed and enabled is
 //     left alone, because it was somebody's choice and a sync is not a reason
 //     to overrule it.
-//   * It prefers one named model and falls back to the list. `claude-sonnet-5`
+//   * It prefers one named model and falls back to the list. DeepSeek V4.1 Flash
 //     is what the product is documented around; a workspace whose provider
 //     account cannot reach it gets the first tool-capable row rather than
 //     nothing, because "no default" is not a state any other code handles.
@@ -29,7 +29,7 @@
 // The events row is `settings.changed` with `actor_type = 'system'`, because
 // that is what happened and because the weekly reverify job has no user to
 // name. It carries ids and a kind, like every other audit row.
-import { DEFAULT_MODEL_ID } from '@hermes/shared';
+import { DEFAULT_EFFORT, DEFAULT_MODEL_ID } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 
 /** The model a workspace is moved onto when its own default is unusable. */
@@ -91,8 +91,9 @@ export async function promoteDefaultModel(
   // thinking block when the configuration changed mid-conversation (decision
   // 26), so a workspace default effort the new row does not name is worse than
   // no effort at all.
-  const effort =
-    settings.default_effort !== null && pick.effort_map !== null && pick.effort_map[settings.default_effort] !== undefined
+  const effort = pick.model_id === DEFAULT_MODEL_ID && pick.effort_map?.[DEFAULT_EFFORT] !== undefined
+    ? DEFAULT_EFFORT
+    : settings.default_effort !== null && pick.effort_map !== null && pick.effort_map[settings.default_effort] !== undefined
       ? settings.default_effort
       : pick.default_effort;
 

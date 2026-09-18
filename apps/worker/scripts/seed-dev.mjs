@@ -54,7 +54,7 @@ try {
   if (target.test) {
     await client.query(
       `UPDATE workspace_settings
-          SET default_model_id = 'nous:anthropic/claude-sonnet-5', default_effort = 'medium'
+          SET default_model_id = 'nous:deepseek/deepseek-v4.1-flash', default_effort = 'low'
         WHERE workspace_id = $1`,
       [WORKSPACE_ID],
     );
@@ -82,8 +82,8 @@ try {
     [WORKSPACE_ID, AGENT_ID, ADMIN_ID],
   );
   await client.query(
-    `INSERT INTO sessions (id, workspace_id, owner_id, title, model_id)
-     VALUES ($1, $2, $3, 'Partner applications', 'nous:anthropic/claude-sonnet-5')
+    `INSERT INTO sessions (id, workspace_id, owner_id, title, model_id, effort)
+     VALUES ($1, $2, $3, 'Partner applications', 'nous:deepseek/deepseek-v4.1-flash', 'low')
      ON CONFLICT (id) DO NOTHING`,
     [SESSION_ID, WORKSPACE_ID, ADMIN_ID],
   );

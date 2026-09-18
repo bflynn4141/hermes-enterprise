@@ -5252,14 +5252,29 @@ Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
 workspace policy, and retries use the task's current selected model. The
 separate Jev typed classifier and production automation policy are unchanged.
 
-**Default rollout held.** The requested all-workspace V4.1 Flash/low migration
-is prepared separately. A September 18 staging preflight of exact
+**Default rollout held.** This separate branch prepares the requested
+all-workspace V4.1 Flash/low rollout as pending migration
+`0041_deepseek_default.sql`, following recovery migration 0040. Shared product
+defaults, provisioning, session fallbacks and default promotion use the exact
+model at low effort. The ledger-guarded backfill updates workspace defaults and
+automated, inherited or unusable sessions once, preserving explicit usable
+session choices, archived sessions, historical runs and choices made afterward.
+Automation continues to follow workspace policy.
+
+A September 18 staging preflight of exact
 `nous:deepseek/deepseek-v4.1-flash` at explicit low effort returned Nous HTTP 404
 on all three native attempts (run `fb738cb4-c64c-4bf4-ae2a-132326ce6675`). The
 public catalog still lists it; official routing and OAuth handling match the
 application. Do not promote it globally until exact-model inference and tool
 acceptance pass. Recovery can ship independently while configured defaults and
 historical records remain intact.
+
+Held-branch validation used Node 26 and a separate disposable PostgreSQL database:
+the default-focused shared/Nous unit tests, workspace/session/catalog/migration
+tests, schema/grant checks, all-package typecheck and seven recovery browser
+scenarios passed. All 41 migrations applied and replayed with the same schema
+fingerprint. Browser coverage uses simulated provider data; no live provider
+calls were made for this held rollout, so the inference release gate remains unmet.
 
 **Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
 reviewed-cycle recovery, current-model snapshots, paid receipts, cadence keys and

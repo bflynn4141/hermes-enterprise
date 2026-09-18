@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nousCatalogId, nousModelId, vendorPrefix } from '@hermes/shared';
+import { DEFAULT_EFFORT, DEFAULT_MODEL_ID, nousCatalogId, nousModelId, vendorPrefix } from '@hermes/shared';
 import { NousPortalProvider, mergeNousReasoningDetails, toNousChatMessages } from '../../src/model/nous.js';
 import { normaliseNousModels } from '../../src/model/nous-catalog.js';
 import { NOUS_PORTAL_FIXTURE_MODELS, nousPortalFixtureEnabled, nousPortalFixtureFetch } from '../../src/model/nous-dev.js';
@@ -31,10 +31,10 @@ describe('the nous: model id convention', () => {
 });
 
 describe('the Nous Portal adapter', () => {
-  it('sends the exact V4.1 model and supported low effort when explicitly selected', async () => {
-    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === 'nous:deepseek/deepseek-v4.1-flash')!;
+  it('sends the exact V4.1 model and supported low effort for routine Iris work', async () => {
+    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === DEFAULT_MODEL_ID)!;
     const rec = recorder(() => sseResponse([frame({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }), 'data: [DONE]']));
-    await collect(new NousPortalProvider({ fetch: rec.fetch }).stream(request({ model: 'nous:deepseek/deepseek-v4.1-flash', effort: 'low', effortMap: row.effort_map })));
+    await collect(new NousPortalProvider({ fetch: rec.fetch }).stream(request({ model: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, effortMap: row.effort_map })));
     expect(JSON.parse(String(rec.calls[0]?.init?.body))).toMatchObject({ model: 'deepseek/deepseek-v4.1-flash', reasoning: { effort: 'low' } });
   });
   it('strips the durable prefix, fixes the endpoint, and maps effort', async () => {
@@ -78,8 +78,8 @@ describe('the Nous Portal adapter', () => {
 });
 
 describe('the Nous Portal catalog and local seam', () => {
-  it('uses per-model supported efforts and keeps the provider default', () => {
-    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === 'nous:deepseek/deepseek-v4.1-flash');
+  it('uses per-model supported efforts and keeps the provider default distinct from the product default', () => {
+    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === DEFAULT_MODEL_ID);
     expect(row).toMatchObject({ effort_map: { low: 'low', high: 'high', max: 'max' }, default_effort: 'high' });
     expect(Object.keys(row!.effort_map!)).toEqual(['low', 'high', 'max']);
     expect(row!.effort_map).not.toHaveProperty('medium');
