@@ -105,6 +105,11 @@ R2_SECRET_ACCESS_KEY=""
 
 # --- Observability ------------------------------------------------------------
 SENTRY_DSN=""
+# Server-only Raindrop write key. Keep RAINDROP_OBSERVABILITY_MODE=off locally
+# unless testing the exporter against a dedicated development project.
+RAINDROP_WRITE_KEY=""
+# Optional when the write key is already scoped to the intended project.
+RAINDROP_PROJECT_ID=""
 
 # --- Switches (also set as plain vars per environment in wrangler.jsonc) -------
 # fake: `x-dev-user` names a seeded user. workos: sealed cookie (M2).
@@ -113,6 +118,9 @@ AUTH_MODE="fake"
 MODEL_GATEWAY_MODE="off"
 # 1 refuses to create new Workflow instances; part of the engine-version runbook.
 ENGINE_PAUSED="0"
+# off | active. Staging is active in wrangler.jsonc but remains a no-op until
+# RAINDROP_WRITE_KEY is configured as a Worker secret.
+RAINDROP_OBSERVABILITY_MODE="off"
 
 # Official Hermes runtime. Fixed profiles and permanently pre-bound invitation
 # slots live in the deployment map. The application never creates, mutates or

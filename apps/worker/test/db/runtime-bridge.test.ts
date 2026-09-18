@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { RuntimeDb } from '../../src/runtime/store.js';
 import { dispatchRuntimeCall, type RuntimeCall } from '../../src/runtime/bridge.js';
+import { loadRaindropRunSnapshot } from '../../src/ops/raindrop.js';
 import { AGENT_URL, APP_URL } from '../../scripts/db-config.mjs';
 import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 
@@ -39,6 +40,36 @@ async function mappedRun(fx: Fixture, store: RuntimeDb): Promise<{ id: string; r
 }
 
 describe('official runtime on the restricted agent role', () => {
+  it('reads a content-free Raindrop snapshot from the canonical terminal trace', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const { id, remote } = await mappedRun(fx, store);
+      await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, nativeCall(remote));
+      await store.upsertAssistantMessage({
+        runId: id,
+        sessionId: fx.sessionId,
+        turn: 0,
+        text: 'Private applicant alice@example.com should never leave Hermes.',
+        blocks: [],
+        status: 'complete',
+        workedMs: 250,
+      });
+      await store.setRunStatus(id, 'completed');
+
+      const snapshot = await loadRaindropRunSnapshot(store, id);
+      expect(snapshot).toMatchObject({
+        id,
+        runtimeKind: 'hermes',
+        status: 'completed',
+        outputPresent: true,
+        outputCharacters: 62,
+        tools: [{ name: 'propose_instruction', state: 'done' }],
+      });
+      expect(JSON.stringify(snapshot)).not.toContain('alice@example.com');
+      expect(JSON.stringify(snapshot)).not.toContain('Use published evidence.');
+    } finally { await store.close(); }
+  });
+
   it('serializes simultaneous identical callbacks into one proposal and one trace result', async () => {
     const fx = await seedWorkspace(); const first = makeDb(fx); const second = makeDb(fx);
     try {

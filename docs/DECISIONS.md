@@ -5267,3 +5267,32 @@ cancellation. Runtime adapter tests assert saved evidence instructions reach the
 native submission. Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.
+
+---
+
+## C74. Raindrop observes terminal Hermes runs through a content-free boundary
+
+**Decided September 18, 2026.** Staging exports one AI event after an official
+Hermes run has committed and delivered its terminal message and status. The
+event contains model and lifecycle metadata, tool names and states, final-answer
+presence and length, and fixed error taxonomies. Tenant and run identifiers are
+one-way hashed. Prompts, answers, applicant data, tool arguments and results,
+provider bodies and error messages remain inside Hermes.
+
+The exporter uses Raindrop's documented batch ingestion contract directly. The
+official JavaScript package was rejected for the Worker path because one event
+export added 290 transitive packages and a blocked protobuf build script. A
+small HTTP client keeps the Worker bundle and supply-chain surface bounded.
+
+Raindrop runs after the canonical result and has a 2.5-second request deadline.
+Its absence or failure is logged as metadata and cannot alter the run. Stable
+pseudonymous event ids make Workflow replay idempotent. Development and
+production default off; staging is active only when its server-side write key
+exists. The first explicit agent signals are terminal error and tool use without
+a final response.
+
+**Evidence.** Unit tests assert the export query cannot select transcript or
+tool contents, raw identifiers and error messages never reach request bodies,
+negative signals attach to the same event, disabled mode does no work, and
+vendor failures resolve without throwing. The Worker typecheck and dry-run
+bundle verify Cloudflare compatibility without the vendor SDK.

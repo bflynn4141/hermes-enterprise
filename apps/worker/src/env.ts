@@ -92,6 +92,10 @@ export interface Env {
   INBOX_TRIAGE_MODE?: 'off' | 'shadow' | 'active';
   /** Versioned scoring rubric, persisted beside each append-only assessment. */
   INBOX_TRIAGE_RUBRIC_VERSION?: string;
+  /** Export content-free terminal Hermes run events to Raindrop when active. */
+  RAINDROP_OBSERVABILITY_MODE?: 'off' | 'active';
+  /** Optional Raindrop project override; the write key's default project is otherwise used. */
+  RAINDROP_PROJECT_ID?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
@@ -142,6 +146,8 @@ export interface Env {
    */
   KEK_CURRENT?: string;
   SENTRY_DSN?: string;
+  /** Server-side Raindrop ingestion credential. Never exposed to the client. */
+  RAINDROP_WRITE_KEY?: string;
   /**
    * The S3-compatible credentials that let this Worker mint a presigned URL.
    *
