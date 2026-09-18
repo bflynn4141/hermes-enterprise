@@ -4,7 +4,7 @@ import { assertRunLog } from '@hermes/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
-import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence } from '../../src/runtime/adapter.js';
+import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
 import { HermesClient, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
@@ -135,13 +135,14 @@ async function execute(
   client = new FakeHermesClient(),
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
-  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview'] } = {},
+  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview']; onTerminalFailure?: RuntimeDeps['onTerminalFailure'] } = {},
 ) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
     db, client, profile: PROFILE, pollMs: timing.pollMs ?? 0, batchMs: timing.batchMs,
     forward: forward ?? (async () => ({ stop_requested: db.stopFlag })),
     ...(timing.preview ? { preview: timing.preview } : {}),
+    ...(timing.onTerminalFailure ? { onTerminalFailure: timing.onTerminalFailure } : {}),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
 }
@@ -573,14 +574,24 @@ describe('official Hermes enterprise projection', () => {
     expect(db.carriedGuidance).toEqual([db.guidance[0]!.id]);
   });
 
-  it('does not duplicate proxy accounting for failed native execution or surface raw upstream errors', async () => {
+  it('classifies failed native execution, logs only safe fields and does not duplicate proxy accounting', async () => {
     const client = new FakeHermesClient();
-    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'provider-key-and-private-request-must-not-leak' };
-    const { db } = await execute(new FakeRuntimeDb(), client);
-    expect(db.statusChanges.at(-1)).toMatchObject({ status: 'error', error: { reason: 'hermes_run_failed' } });
+    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 429: provider-key-and-private-request-must-not-leak' };
+    const terminalFailures: RuntimeTerminalFailure[] = [];
+    const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      onTerminalFailure: (failure) => terminalFailures.push(failure),
+    });
+    expect(db.statusChanges.at(-1)).toMatchObject({
+      status: 'error',
+      error: { class: 'transient', retryable: true, reason: 'hermes_provider_rate_limited', step_id: 'hermes' },
+    });
+    expect(terminalFailures).toEqual([expect.objectContaining({
+      native_status: 'failed', failure_code: 'rate_limit', reason: 'hermes_provider_rate_limited',
+      retryable: true, native_error_present: true,
+    })]);
     expect(db.messages.get(0)?.status).toBe('incomplete');
     expect(db.modelCalls).toEqual([]);
-    expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges })).not.toContain(client.final.error);
+    expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges, terminalFailures })).not.toContain(client.final.error);
   });
 
   it('reports stopped after native authority revocation beats the stop poll to a terminal failure', async () => {

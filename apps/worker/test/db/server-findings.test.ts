@@ -599,6 +599,29 @@ describe('F8 · traces', () => {
     expect(body.allowed_tools).toEqual(['list_requests', 'propose_request']);
   });
 
+  it('shows the safe terminal failure classification without native provider text', async () => {
+    const fx = await seedWorkspace();
+    const { runId } = await seedRun(fx);
+    const error = {
+      class: 'auth', retryable: false, reason: 'hermes_provider_auth',
+      message: 'The selected model connection needs attention. Reconnect it before retrying.',
+      step_id: 'hermes',
+    };
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE runs SET status='error', error=$3::jsonb WHERE workspace_id=$1 AND id=$2`, [
+        fx.workspaceId, runId, JSON.stringify(error),
+      ]);
+      await c.query('COMMIT');
+    });
+    const response = await call(`/w/${fx.workspaceId}/traces/${runId}`, { headers: asUser(fx.adminId) });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { error: typeof error };
+    expect(body.error).toEqual(error);
+    expect(JSON.stringify(body)).not.toContain('native-provider-secret');
+  });
+
   it('marks a result that carried the 8 KB truncation marker', async () => {
     const fx = await seedWorkspace();
     const { runId } = await seedRun(fx);

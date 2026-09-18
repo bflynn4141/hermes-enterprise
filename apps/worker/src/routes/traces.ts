@@ -21,6 +21,7 @@
 import type { Context } from 'hono';
 import { paginatedSchema, refSchema, traceEntitySchema, uuidSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
+import type { RunErrorInput } from '../engine/agent-db.js';
 import { TOOL_RESULT_TRUNCATION_MARKER } from '../engine/constants.js';
 import { inWorkspace, pathUuid } from './tenant.js';
 import { VISIBLE } from './sessions.js';
@@ -49,6 +50,7 @@ interface RunRow {
   runtime_profile: string | null;
   runtime_run_id: string | null;
   runtime_session_id: string | null;
+  error: RunErrorInput | null;
 }
 
 interface StepRow {
@@ -112,7 +114,7 @@ const toTraceEntity = (run: RunRow, steps: StepRow[], extra: Record<string, unkn
 // documents are — for a session they were never shown.
 const RUN_SELECT = `
   SELECT r.id, COALESCE(r.agent_id, s.agent_id) AS agent_id, r.session_id, s.title, r.status, r.mode, r.model_id, r.active_ms, r.attempt,
-         r.waiting_for, r.started_at, r.runtime_kind, r.runtime_profile, r.runtime_run_id, r.runtime_session_id, r.runtime_request->'_enterprise_tool_names' AS runtime_tools,
+         r.waiting_for, r.started_at, r.runtime_kind, r.runtime_profile, r.runtime_run_id, r.runtime_session_id, r.error, r.runtime_request->'_enterprise_tool_names' AS runtime_tools,
          (SELECT count(*) FROM run_steps st WHERE st.run_id = r.id)::text AS step_count
     FROM runs r
     JOIN sessions s ON s.id = r.session_id`;
@@ -275,6 +277,7 @@ export async function getTrace(c: Context<{ Bindings: Env }>): Promise<Response>
     );
 
     return toTraceEntity(run, steps.rows, {
+      error: run.error,
       tool_calls: toolCalls,
       fetched_urls: fetchedUrls(turns.rows),
       focus,

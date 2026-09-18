@@ -5099,3 +5099,83 @@ coverage holds final/status delivery apart and checks the no-blank, one-answer
 handoff with normal and reduced motion, as well as continued tool turns. These
 fixtures use real client state/rendering with synthetic events; they do not
 claim native model or paid-tool evaluation.
+
+---
+
+## C70. Native terminal failures become safe structured product errors
+
+**Decided September 17, 2026.** A terminal Hermes status may include a redacted
+provider error, but it is still provider-controlled free text. The Enterprise
+adapter uses that text only to choose one fixed failure class: authentication,
+quota, rate limit, rejected request, temporary provider unavailability,
+interrupted runtime or unknown. It persists and streams only our stable error
+code, retryability and fixed user copy. The native text is never copied into
+Postgres, browser events, traces or Worker logs.
+
+The same structured error now reaches the chat status bar and the trace detail.
+Permanent authentication, quota and rejected-request failures require action
+and do not offer a misleading retry. Transient failures preserve completed
+work and keep Retry available. A content-free `hermes.terminal_failure` event
+records the class, retryability, native status, elapsed work and partial-output
+length so an incident can be diagnosed without exposing a prompt, credential
+or upstream response.
+
+**Why.** The prior adapter discarded `status.error` and labeled every failure
+`hermes_run_failed`. That made a provider rejection, expired connection and
+temporary outage look identical, and made the Traces screen omit the only safe
+diagnostic the product had. The repair belongs at the Hermes-to-Enterprise
+boundary: changing the workflow engine would still lose the same field.
+
+**Evidence.** Classifier tests cover every failure class and prove the native
+text is absent from the persisted and logged projection. Adapter coverage
+proves terminal classification and proxy-accounting isolation. A real-Postgres
+route test proves trace detail returns the safe error, and client rendering
+tests cover retryable and action-required trace states.
+
+---
+
+## C71. Keep Cloudflare Worker and Workflows around the official Hermes runtime
+
+**Revalidated September 17, 2026.** Cloudflare remains the Enterprise control
+plane and Hermes Cloud remains the agent runtime. The Worker owns identity,
+tenant and approval policy, the durable Postgres audit and browser delivery.
+One Workflow coordinates each run attempt. Hermes owns planning, model calls,
+tool execution and its native session through the authenticated Runs API.
+
+Hermes' current official guidance confirms the integration boundary rather
+than prescribing an outside workflow product: custom HTTP control planes use
+the API Server and its `/v1/runs`, status, event, stop, steer and approval
+endpoints; hosted instances run on Hermes Cloud, while the official Docker
+image is the supported self-hosted fallback. There is no official Hermes
+recommendation to move its loop into Temporal, Trigger.dev, Inngest, Restate or
+Cloudflare Agents.
+
+The current alternatives do not improve this incident:
+
+| Option | Current fit | Decision |
+| --- | --- | --- |
+| Cloudflare Workflows | Durable step retries and waits, unlimited per-step wall time within CPU limits, native Worker bindings, and up to 30-day completed-state retention; product truth already lives in Postgres | Keep |
+| Cloudflare Agents SDK | Strong Durable Object runtime for building a different agent harness; it would duplicate or replace Hermes' loop and session model rather than supervise it | Do not adopt for this path |
+| Trigger.dev or Inngest | Excellent TypeScript-first long jobs, streaming and managed run observability; each adds another control plane while Hermes still owns the real loop | Revisit only if run observability or portable background execution becomes a measured blocker |
+| Temporal | The mature choice for vendor-neutral, multi-service workflows that must resume for months or years | Revisit for multi-cloud/customer-VPC orchestration or requirements Cloudflare cannot meet |
+| Restate | Promising lightweight durable services, exactly-once communication and BYOC/self-hosting | Watch; no migration benefit today |
+
+Changing orchestration is justified only by a measured requirement: customer
+VPC or regional placement, multi-language workers, vendor-neutral workflow
+history, cross-service compensation beyond the present run boundary, or a
+Cloudflare limit observed in production. Better error projection, scoped
+observability access and runtime telemetry are smaller and more direct repairs.
+
+Primary references:
+
+- https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server
+- https://hermes-agent.nousresearch.com/docs/guides/manage-hermes-cloud-with-mcp
+- https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md
+- https://developers.cloudflare.com/workflows/reference/limits/
+- https://developers.cloudflare.com/agents/runtime/execution/run-workflows/
+- https://developers.cloudflare.com/agents/runtime/lifecycle/agent-class/
+- https://trigger.dev/docs/introduction
+- https://www.inngest.com/docs/learn/inngest-steps
+- https://docs.temporal.io/
+- https://docs.restate.dev/

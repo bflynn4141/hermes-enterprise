@@ -366,6 +366,10 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
             at: 'hermes.stream', run_id: run.id, attempt: params.attempt,
             trace_id: params.traceId, ...metrics,
           }),
+          onTerminalFailure: (failure) => logEvent({
+            at: 'hermes.terminal_failure', run_id: run.id, attempt: params.attempt,
+            trace_id: params.traceId, ...failure,
+          }),
           skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
         }, engineStep(step), runInput);
       } else {
