@@ -34,6 +34,7 @@ import { pickDevScript, runAttemptInstanceId } from '../runs/workflow.js';
 import { CONTEXT_ANSWERED_EVENT, DEFAULT_MAX_TURNS } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 import { VISIBLE } from './sessions.js';
+import { logEvent } from '../keys/redact.js';
 
 /** Plan section 5: "Per-user limits (30 turns/min ...)". */
 const TURN_LIMIT: RateLimit = { action: 'run.turn', limit: 30, windowSeconds: 60 };
@@ -149,6 +150,7 @@ async function createInstance(
     attempt: number;
     engineVersion: number;
     traceId: string;
+    receivedAt?: number;
     scriptedScript?: string;
   },
 ): Promise<{ created: boolean; instanceId: string }> {
@@ -214,6 +216,8 @@ async function withRefusalMetered<T>(c: Context<{ Bindings: Env }>, work: () => 
 }
 
 export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const receivedAt = Date.now();
+  let capabilityMs: number | null = null;
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
@@ -255,6 +259,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
 
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
       const binding = await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, session.agent_id);
+      const capabilityStartedAt = Date.now();
       try {
         await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities();
       } catch (error) {
@@ -264,6 +269,8 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
           'runtime_unhealthy',
           503,
         );
+      } finally {
+        capabilityMs = Math.max(0, Date.now() - capabilityStartedAt);
       }
     }
 
@@ -433,13 +440,22 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         attempt: 1,
         engineVersion,
         traceId,
+        receivedAt,
         ...(scriptedScript ? { scriptedScript } : {}),
       },
     };
   }));
 
   if (!outcome.duplicate && 'create' in outcome && outcome.create) {
+    const admissionMs = Math.max(0, Date.now() - receivedAt);
     await createInstance(c.env, outcome.create);
+    try {
+      logEvent({
+        at: 'hermes.turn_admitted', run_id: outcome.run.id, trace_id: outcome.create.traceId,
+        model_id: outcome.run.model_id, capability_ms: capabilityMs,
+        admission_ms: admissionMs, workflow_create_ms: Math.max(0, Date.now() - receivedAt - admissionMs),
+      });
+    } catch { /* Telemetry cannot turn an admitted run into a failed POST. */ }
   }
   return c.json(runView(outcome.run), outcome.status);
 }
