@@ -44,19 +44,19 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.locator('.inbox-item').filter({ hasText: /Invoice/ })).toBeVisible();
     await expect(app.locator('.inbox-item').filter({ hasText: /Signature/ })).toBeVisible();
 
-    await app.getByRole('button', { name: 'Waiting on others' }).click();
+    await app.getByLabel('Reviewer').selectOption('waiting');
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
     await expect(app.getByText('Waiting for Alex Rivera')).toBeVisible();
     await expect(app.getByText('Launch partner research sprint')).toHaveCount(0);
 
-    await app.getByRole('button', { name: 'All' }).click();
+    await app.getByLabel('Reviewer').selectOption('all');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
   });
 
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
-    await app.getByRole('button', { name: 'All' }).click();
+    await app.getByLabel('Reviewer').selectOption('all');
     for (const approval of APPROVAL_CASES) {
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await expect(app.getByRole('heading', { name: approval.subject })).toBeVisible();
@@ -68,7 +68,7 @@ test.describe('enterprise approval inbox', () => {
   for (const approval of APPROVAL_CASES.filter((item) => item.action !== null)) {
     test(`${approval.type} records the configured action and result states`, async ({ page }) => {
       const app = await openInbox(page);
-      await app.getByRole('button', { name: 'All' }).click();
+      await app.getByLabel('Reviewer').selectOption('all');
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await app.getByRole('button', { name: approval.action }).click();
 
@@ -94,7 +94,7 @@ test.describe('enterprise approval inbox', () => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const app = await openInbox(page);
-      await app.getByRole('button', { name: 'All' }).click();
+      await app.getByLabel('Reviewer').selectOption('all');
 
       for (const approval of APPROVAL_CASES) {
         await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -157,7 +157,7 @@ test.describe('enterprise approval inbox', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('12');
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
-    await app.getByRole('button', { name: 'Waiting on others' }).click();
+    await app.getByLabel('Reviewer').selectOption('waiting');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
 

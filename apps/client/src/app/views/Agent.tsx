@@ -14,7 +14,7 @@ import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
-import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
+import { approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
 import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
 
@@ -38,14 +38,49 @@ function AgentTabsRow({ value }: { value: string }) {
   return <Tabs strong tabs={AGENT_TABS} value={value} onChange={(id) => nav(refs[id] ?? OV)} label="Agent views" />;
 }
 
+interface RequestRowCopy {
+  title: string;
+  summary: string;
+  compact: boolean;
+}
+
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+export function requestRowCopy(request: RequestEntity): RequestRowCopy {
+  const fallback = {
+    title: request.subject ?? request.label,
+    summary: request.title ?? '',
+    compact: false,
+  };
+  if (request.kind !== 'approval' || approvalType(request) !== 'communication') return fallback;
+
+  const details = record(record(request.payload).details);
+  const recipients = Array.isArray(details.recipients) ? details.recipients : [];
+  const firstRecipient = record(recipients[0]);
+  const firstName = typeof firstRecipient.name === 'string' ? firstRecipient.name.trim() : '';
+  if (!firstName) return fallback;
+
+  const more = Math.max(0, recipients.length - 1);
+  const recipient = more > 0 ? `${firstName} +${more}` : firstName;
+  const channel = details.channel === 'email' ? 'email' : 'message';
+  const draftOnly = details.draft_only === true;
+  return {
+    title: draftOnly ? `Draft outreach — ${recipient}` : `Send ${channel} — ${recipient}`,
+    summary: draftOnly ? 'Review copy only · Nothing is sent' : 'Review before approving send',
+    compact: true,
+  };
+}
+
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
   const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
+  const copy = requestRowCopy(request);
   return (
     <div className="list-row">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
-      <div className="row-id">
-        <span className="t">{request.subject ?? request.label}</span>
-        <span className="s">{request.title ?? ''}</span>
+      <div className={`row-id${copy.compact ? ' approval-compact-copy' : ''}`}>
+        <span className="t" title={copy.title}>{copy.title}</span>
+        <span className="s" title={copy.summary}>{copy.summary}</span>
       </div>
       <div className="row-main">
         <span className="t">{type}</span>
