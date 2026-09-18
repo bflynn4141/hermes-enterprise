@@ -227,7 +227,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
  * gallery's fixtures — which is how a reply to "testing" came to offer "Show
  * the application evidence" and claim three sources.
  */
-function FluidRunStream({ session, stream }: { session: SessionState; stream: NonNullable<SessionState['stream']> }) {
+function FluidRunStream({ session, stream, canRelease }: { session: SessionState; stream: NonNullable<SessionState['stream']>; canRelease: boolean }) {
   const dispatch = useDispatch();
   const appReducedMotion = useAppState().ui.reduceMotion;
   const systemReducedMotion = useReducedMotion() ?? false;
@@ -257,10 +257,12 @@ function FluidRunStream({ session, stream }: { session: SessionState; stream: No
 
   const renderedText = reducedMotion ? stream.text : visibleText;
   useEffect(() => {
-    if (!final || renderedText !== stream.text || completionSent.current) return;
+    // message.final can precede run.status, including between tool turns. Until
+    // a durable answer is actually renderable, this is its only full-text view.
+    if (!canRelease || !final || renderedText !== stream.text || completionSent.current) return;
     completionSent.current = true;
     dispatch({ type: 'stream/reveal-complete', sessionId: session.id, runId: stream.runId });
-  }, [dispatch, final, renderedText, session.id, stream.runId, stream.text]);
+  }, [canRelease, dispatch, final, renderedText, session.id, stream.runId, stream.text]);
 
   const showCaret = !final || renderedText !== stream.text;
   return (
@@ -273,8 +275,8 @@ function FluidRunStream({ session, stream }: { session: SessionState; stream: No
   );
 }
 
-export function RunStream({ session }: { session: SessionState }) {
+export function RunStream({ session, canRelease }: { session: SessionState; canRelease: boolean }) {
   const stream = session.stream;
   if (!stream || (stream.text.length === 0 && stream.status === 'streaming')) return null;
-  return <FluidRunStream key={`${stream.runId}:${stream.turn}:${stream.stepAttempt}`} session={session} stream={stream} />;
+  return <FluidRunStream key={`${stream.runId}:${stream.turn}:${stream.stepAttempt}`} session={session} stream={stream} canRelease={canRelease} />;
 }

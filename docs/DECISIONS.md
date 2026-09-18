@@ -5063,3 +5063,39 @@ Only terminal message rows may enter `stream/final`; the adapter filters
 streaming snapshots and the reducer enforces the same invariant defensively.
 An older in-flight snapshot cannot revive a completed attempt or overwrite a
 retry that has advanced the run's attempt number.
+
+## C69. Transcript ownership must survive admission and final handoff races
+
+**Decided September 17, 2026.** A reply appeared to disappear after streaming.
+The affected open document retained an extra local `again` bubble after the
+saved answer; a fresh document showed the correct saved conversation without
+that extra bubble. The sequence-number failure was reproduced in adapter and
+reducer tests: live `message.final` has no session sequence and uses
+`MAX_SAFE_INTEGER` locally, the next optimistic question inherited that value
+plus one, and its real user row could never satisfy the confirmation's
+sequence comparison. The remaining local question anchored the viewport below
+the reply when its live accumulator was removed.
+
+Turn confirmation now uses the exact `client_turn_id`, or the admitted run id
+plus the user text when a snapshot lacks that key. Local sequence numbers are
+not identity. A repeated prompt from an older run cannot confirm a new turn
+before admission establishes its run. POST and `run.started` also reconcile a
+user row already received through a snapshot, and a delayed POST cannot change
+a terminal run back to working. Background snapshots revisit already-seen user
+rows while a pending turn remains. Optimistic sequences exclude the live-final
+ordering sentinel.
+
+Separately, a provider-turn final is not a run-completion event. Clearing the
+finished text reveal before the transcript can render its durable replacement
+left a blank gap while `run.status` was delayed. The reveal must retain
+ownership until a matching durable answer is renderable. Tool rounds still
+remain progress, not an invented completed run; an explicit next-turn reset
+can replace the current live surface normally.
+
+**Coverage.** Consecutive repeated prompts after a live final are tested through
+both socket and snapshot delivery, including admission/event reordering,
+already-seen-row recovery, and terminal-state preservation. Rendered browser
+coverage holds final/status delivery apart and checks the no-blank, one-answer
+handoff with normal and reduced motion, as well as continued tool turns. These
+fixtures use real client state/rendering with synthetic events; they do not
+claim native model or paid-tool evaluation.
