@@ -11,7 +11,7 @@
 // its tests are the only producers, and they parse through the same schemas, so
 // a drift between mock and server is a test failure rather than a surprise.
 import { z } from 'zod';
-import { streamIdSchema, uuidSchema } from './events.js';
+import { runErrorSchema, streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
 import { refSchema } from './refs.js';
 import { approvalListProjectionSchema } from './approvals.js';
@@ -420,6 +420,8 @@ export const traceEntitySchema = z
       .array(z.object({ at: z.iso.datetime({ offset: true }), ref: refSchema.nullable(), entity_type: z.string().max(32), entity_id: z.string().max(128) }).strict())
       .max(100)
       .optional(),
+    /** Safe, fixed-copy terminal failure detail. Present on failed run detail. */
+    error: runErrorSchema.nullable().optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();

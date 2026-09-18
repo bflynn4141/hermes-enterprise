@@ -10,6 +10,7 @@ import type { ProviderMessage } from '../model/types.js';
 import { HermesClient, HermesApiError, terminalHermesStatus, type HermesStatus } from './client.js';
 import { StreamBuffer } from './stream-buffer.js';
 import type { RuntimeSkillManifest } from './skills.js';
+import { classifyHermesFailure } from './errors.js';
 import type { MessagePreviewFrame } from '@hermes/shared';
 
 export interface RuntimePersistence extends AgentDb {
@@ -40,6 +41,8 @@ export interface RuntimeDeps {
   drainMs?: number;
   /** Counts and relative timings only; never prompt, response, or tool contents. */
   onStreamMetrics?(metrics: RuntimeStreamMetrics): void;
+  /** Safe terminal classification only; the native provider error never crosses this seam. */
+  onTerminalFailure?(failure: RuntimeTerminalFailure): void;
 }
 export interface RuntimeStreamMetrics {
   first_delta_ms: number | null;
@@ -49,6 +52,16 @@ export interface RuntimeStreamMetrics {
   delta_characters: number;
   preview_count: number;
   stream_end: 'terminal' | 'eof' | 'disconnected' | 'drain_timeout' | 'not_opened';
+}
+export interface RuntimeTerminalFailure {
+  native_status: string;
+  failure_code: string;
+  error_class: string;
+  reason: string;
+  retryable: boolean;
+  native_error_present: boolean;
+  worked_ms: number;
+  partial_characters: number;
 }
 const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exponential' }, timeout: '1 minute' };
 // A failed stream is reconciled with native status, never replayed as a new run.
@@ -368,9 +381,22 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const stoppedStatus = status.status === 'cancelled' || (!completed && (stopped || await db.stopRequested(run.id)));
       const finalStatus = completed ? 'completed' : stoppedStatus ? 'stopped' : 'error';
       await nativeToolControl.close(finalStatus !== 'completed');
-      const error: RunErrorInput | null = finalStatus === 'error' ? {
-        class: 'transient', retryable: true, reason: 'hermes_run_failed', message: 'Hermes could not finish this run. Retry to continue.',
-      } : null;
+      const classified = finalStatus === 'error' ? classifyHermesFailure(status) : null;
+      const error: RunErrorInput | null = classified?.error ?? null;
+      if (classified) {
+        try {
+          deps.onTerminalFailure?.({
+            native_status: status.status,
+            failure_code: classified.code,
+            error_class: classified.error.class,
+            reason: classified.error.reason,
+            retryable: classified.error.retryable,
+            native_error_present: classified.nativeErrorPresent,
+            worked_ms: workedMs,
+            partial_characters: parsed.text.length,
+          });
+        } catch { /* Telemetry cannot change run outcome. */ }
+      }
       const finalEvents = await db.finalizeRuntime(run.id, run.attempt, async () => {
       const guidanceEvents: EmitInput[] = [];
       for (const [guidanceId, guidanceText] of sentGuidance) {

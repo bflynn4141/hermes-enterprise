@@ -616,6 +616,15 @@ function RunFlow({ steps }: { steps: TraceEntity['steps'] }) {
   );
 }
 
+export function TraceFailure({ error }: { error: NonNullable<TraceEntity['error']> }) {
+  return (
+    <div className="error-block" role="status">
+      <span className="t">{error.retryable ? 'Run failed · Safe to retry' : 'Run failed · Action required'}</span>
+      <span className="s">{error.message}</span>
+    </div>
+  );
+}
+
 /**
  * One run, read back.
  *
@@ -693,6 +702,7 @@ export function TraceDetail({ id }: { id: string | null }) {
           <span className="meta">{trace.status}</span>
         </div>
         <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${trace.model_id ?? 'unknown model'}`} />
+        {trace.error && <TraceFailure error={trace.error} />}
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">
