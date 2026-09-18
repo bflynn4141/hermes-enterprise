@@ -541,8 +541,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       rest.authSession(workspaceId).catch(() => null),
       rest.listMembers(workspaceId).catch(() => null),
       rest.listInvitations(workspaceId).catch(() => null),
-      // A 401 here is `reauth_required`, not "signed out": reading provider
-      // keys is a step-up action. The tab asks again behind the step-up flow.
+      // Current Workers expose masked connection health to an Admin's ordinary
+      // session. Preserve the older `reauth_required` response as a distinct
+      // locked state during rolling deploys; it must never look like no key.
       rest.providerKeys(workspaceId).then(
         (page) => ({ keys: page.keys, locked: false }),
         (error: unknown) => ({ keys: [], locked: error instanceof RestError && error.reauthRequired }),

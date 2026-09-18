@@ -1190,8 +1190,18 @@ function ProviderKeysTab() {
   const [connectKeyId, setConnectKeyId] = useState<string | null>(null);
   const [autoFocusKey, setAutoFocusKey] = useState(false);
   const keys = lists.providerKeys;
+  const locked = state.ui.providerKeysLocked;
 
   const refreshKeys = (): void => adapter.invalidateList(LIST_KEYS.providerKeys);
+
+  const revealConnectionStatus = (): void => {
+    const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+    if (url) {
+      window.location.assign(url);
+      return;
+    }
+    setNotice('This needs a recent sign-in. Sign in again to continue.');
+  };
 
   const closeConnect = (): void => {
     setDialog(null);
@@ -1381,22 +1391,31 @@ function ProviderKeysTab() {
       <div className="row">
         <h2 className="section-title">Provider keys</h2>
         <span className="grow" />
-        <Button
-          onClick={() => {
-            setDialog('add');
-            setTarget(null);
-            setSecret('');
-            setConnectStatus({ kind: 'idle' });
-            setConnectKeyId(null);
-            setAutoFocusKey(false);
-            setManualProviderFlow(false);
-            setNotice(null);
-          }}
-        >
-          Connect Nous Portal
-        </Button>
+        {!locked && (
+          <Button
+            onClick={() => {
+              setDialog('add');
+              setTarget(null);
+              setSecret('');
+              setConnectStatus({ kind: 'idle' });
+              setConnectKeyId(null);
+              setAutoFocusKey(false);
+              setManualProviderFlow(false);
+              setNotice(null);
+            }}
+          >
+            Connect Nous Portal
+          </Button>
+        )}
       </div>
-      {keys.length === 0 ? (
+      {locked ? (
+        <EmptyState
+          icon="key"
+          title="Provider connection details are protected"
+          detail="Iris can keep using a saved Nous Portal connection in the background. Sign in again only to view or change connection settings."
+          action={<Button onClick={revealConnectionStatus}>Sign in to manage</Button>}
+        />
+      ) : keys.length === 0 ? (
         <EmptyState icon="key" title={EMPTY.providerKeys} />
       ) : (
         <div className="col">

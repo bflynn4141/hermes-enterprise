@@ -1,7 +1,8 @@
 // Make the fake-auth dev sessions fresh enough to pass `requireStepUp`.
 //
-// Why this exists. Decisions and every provider-key route call `requireStepUp`,
-// which compares `auth_sessions.authenticated_at` against a five-minute window.
+// Why this exists. Decisions and every mutating provider-key route call
+// `requireStepUp`, which compares `auth_sessions.authenticated_at` against a
+// five-minute window. Reading masked connection health does not need step-up.
 // In `AUTH_MODE=workos` the client sends the person to `/auth/login?step_up=1`
 // and WorkOS advances the access token's `auth_time` while retaining `sid`. In
 // `AUTH_MODE=fake` there is no external challenge:

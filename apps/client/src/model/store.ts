@@ -206,9 +206,10 @@ export interface UiState {
   /** Set by a 401 or a 4401 socket close; the shell blocks on it. */
   banner: 'none' | 'reconnecting' | 'redeploying' | 'signed-out' | 'evicted';
   /**
-   * True when `GET /w/:ws/provider-keys` answered `reauth_required`. Reading
-   * the key rows is itself a step-up action, so "no keys" and "not allowed to
-   * look right now" are different screens and the tab has to tell them apart.
+   * True when an older Worker answers `reauth_required` while reading masked
+   * provider status. Current Workers allow this Admin-only read without
+   * step-up, but the client keeps the distinction during rolling deploys so a
+   * protected list can never be mistaken for "no connection".
    */
   providerKeysLocked: boolean;
 }

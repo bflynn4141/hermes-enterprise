@@ -90,6 +90,8 @@ interface MockOptions {
   data?: 'seeded' | 'empty';
   /** No verified provider key: the composer greys and the banner shows. */
   providerKey?: 'verified' | 'none' | 'invalid';
+  /** Simulate an older Worker that step-up protects even the masked key list. */
+  providerKeysLocked?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -1018,7 +1020,10 @@ export function createMockBackend(options: MockOptions = {}) {
       // manual workspace-key fallback without inventing an OAuth credential.
       return fail(503, 'oauth_not_configured', 'Hosted Nous sign-in is not configured in this fixture.');
     }
-    if (p('/provider-keys') && method === 'GET') return json({ keys: providerKeys });
+    if (p('/provider-keys') && method === 'GET') {
+      if (options.providerKeysLocked) return fail(401, 'reauth_required', 'This action needs a recent sign-in.');
+      return json({ keys: providerKeys });
+    }
     if (p('/provider-keys') && method === 'POST') {
       // Explicit fake values let browser tests exercise both outcomes without
       // putting a real credential on the wire or making a paid provider call.
