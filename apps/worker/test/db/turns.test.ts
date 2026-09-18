@@ -445,7 +445,7 @@ describe('the controls', () => {
       env,
       workspace.adminId,
       `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
-      { method: 'POST' },
+      { method: 'POST', body: { expected_attempt: 1 } },
     );
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({ run_id: runId, attempt: 2, status: 'working' });
@@ -460,7 +460,7 @@ describe('the controls', () => {
       env,
       workspace.adminId,
       `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
-      { method: 'POST' },
+      { method: 'POST', body: { expected_attempt: 1 } },
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ reason: 'run_active' });

@@ -162,6 +162,8 @@ export async function enqueueAutomatedPartnerScreening(
           skippedPaid += 1;
           continue;
         }
+        // A failed cycle is recovered in place, never replaced by a new paid allowance.
+        if (await unresolvedPartnerWork(tx, workspaceId, candidate.agent_id)) continue;
         const id = await enqueueJob(
           tx,
           workspaceId,
@@ -269,27 +271,6 @@ async function automationSession(
   agentId: string,
 ): Promise<TurnSession> {
   const allowed = allowedProviders(env);
-  const existing = await tx.query<TurnSession>(
-    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort
-       FROM sessions s
-       JOIN catalog c ON c.model_id=s.model_id
-      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
-        AND s.title=$4 AND NOT s.archived
-        AND c.provider=ANY($5::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
-      ORDER BY s.created_at LIMIT 1 FOR UPDATE OF s`,
-    [workspaceId, ownerId, agentId, AUTOMATION_TITLE, [...allowed]],
-  );
-  if (existing.rows[0]) return existing.rows[0];
-
-  const template = await tx.query<{ model_id: string; effort: string | null; runtime: string }>(
-    `SELECT s.model_id, s.effort, s.runtime
-       FROM sessions s
-       JOIN catalog c ON c.model_id=s.model_id
-      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
-        AND c.provider=ANY($4::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
-      ORDER BY s.last_activity_at DESC NULLS LAST, s.created_at DESC LIMIT 1`,
-    [workspaceId, ownerId, agentId, [...allowed]],
-  );
   const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
     `SELECT picked.model_id AS default_model_id,
             CASE
@@ -313,22 +294,30 @@ async function automationSession(
       WHERE ws.workspace_id=$1`,
     [workspaceId, [...allowed], DEFAULT_MODEL_ID],
   );
-  const source = template.rows[0] ?? settings.rows[0];
+  const source = settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
+  // Automation follows the workspace policy. Active run snapshots remain fixed.
+  const existing = await tx.query<TurnSession>(
+    `UPDATE sessions SET model_id=$5, effort=$6
+      WHERE id=(SELECT id FROM sessions WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3
+        AND title=$4 AND NOT archived AND NOT read_only ORDER BY created_at LIMIT 1 FOR UPDATE)
+      RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
+    [workspaceId,ownerId,agentId,AUTOMATION_TITLE,source.default_model_id,source.default_effort]);
+  if (existing.rows[0]) return existing.rows[0];
   const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
     ? await resolveRuntimeBinding(env, tx, workspaceId, agentId)
     : null;
   const runtime = resolvedRuntime
     ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
-    : ('runtime' in source ? source.runtime : source.default_runtime);
+    : source.default_runtime;
   const inserted = await tx.query<TurnSession>(
     `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
      VALUES ($1,$2,$3,$4,'work',$5,$6,$7)
      RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
     [
       workspaceId, ownerId, agentId, AUTOMATION_TITLE,
-      'model_id' in source ? source.model_id : source.default_model_id,
-      'effort' in source ? source.effort : source.default_effort,
+      source.default_model_id,
+      source.default_effort,
       runtime,
     ],
   );
@@ -399,6 +388,22 @@ export async function handoffPartnerScreeningToIris(
   return admitted;
 }
 
+/** Existing active work or the latest unresolved screening owns the agent. */
+export async function unresolvedPartnerWork(tx: Tx, workspaceId: string, agentId: string): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id
+      WHERE r.workspace_id=$1 AND r.agent_id=$2 AND NOT s.archived
+        AND (r.status IN ('working','waiting','stopping') OR
+          (r.status IN ('error','stopped') AND r.client_turn_id LIKE 'partner-screening:%'
+            AND (NOT EXISTS(SELECT 1 FROM requests q WHERE q.workspace_id=r.workspace_id AND q.run_id=r.id)
+              OR EXISTS(SELECT 1 FROM requests q WHERE q.workspace_id=r.workspace_id AND q.run_id=r.id AND q.status='pending'))
+            AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id
+              AND newer.agent_id=r.agent_id AND newer.client_turn_id LIKE 'partner-screening:%'
+              AND newer.created_at>r.created_at)))
+      ORDER BY r.created_at DESC LIMIT 1`, [workspaceId,agentId]);
+  return rows[0]?.id ?? null;
+}
+
 /** Durable discovery -> stored evidence -> Iris run. A retry reuses both ids. */
 export async function runPartnerScreeningAutomationJob(env: Env, job: Job): Promise<void> {
   const payload = (job.payload ?? {}) as { agent_id?: string; owner_user_id?: string; bucket?: string };
@@ -407,14 +412,25 @@ export async function runPartnerScreeningAutomationJob(env: Env, job: Job): Prom
   }
   const configured = partnerAgentConfig(env, payload.agent_id);
   if (!configured.config) throw new Error('partner_screening_config_missing');
+  if (!automatedTriggersEnabled(env) || (configured.config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env))) return;
   const idempotencyKey = `auto:${payload.bucket}`;
   const authentication = configured.config.source === 'agentcash_people'
     ? 'wallet' as const
     : env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
-  const started = await withWorkspaceTransaction(env, job.workspace_id, (tx) => beginPartnerScreening(
-    work(tx, job.workspace_id, payload.owner_user_id!),
-    { agentId: payload.agent_id!, idempotencyKey, config: configured.config!, authentication },
-  ));
+  const started = await withWorkspaceTransaction(env, job.workspace_id, async tx => {
+    await tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [job.workspace_id,payload.agent_id]);
+    const unresolved = await unresolvedPartnerWork(tx,job.workspace_id,payload.agent_id!);
+    if (unresolved) {
+      const same = await tx.query(`SELECT 1 FROM runs r JOIN partner_screening_runs p
+        ON r.client_turn_id='partner-screening:' || p.id::text
+        WHERE r.id=$1 AND p.workspace_id=$2 AND p.idempotency_key=$3`,
+        [unresolved,job.workspace_id,idempotencyKey]);
+      if (!same.rows.length) return null;
+    }
+    return beginPartnerScreening(work(tx, job.workspace_id, payload.owner_user_id!),
+      { agentId: payload.agent_id!, idempotencyKey, config: configured.config!, authentication });
+  });
+  if (!started) return;
 
   if (configured.config.source === 'github' && started.run.status !== 'completed') {
     try {

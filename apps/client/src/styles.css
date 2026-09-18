@@ -1318,6 +1318,21 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 [data-reduced-motion="true"] .live-tool-row[data-state="active"] .live-tool-dot,
 [data-reduced-motion="true"] .stream-caret { animation: none; }
 
+/* Recovery uses immediate server states. Countdown text has no motion or live
+   announcement loop; the existing button focus/hover feedback is sufficient. */
+.agent-recovery { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 16px 0; border-top: 1px solid var(--line); }
+.agent-recovery-copy { flex: 1 1 220px; min-width: 0; }
+.agent-recovery p { margin: 0; overflow-wrap: anywhere; }
+.agent-recovery-copy p + p { margin-top: 6px; }
+.agent-recovery-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.agent-recovery-error { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.agent-recovery-error p { flex: 1 1 220px; color: var(--red, #f07d86); }
+.agent-recovery-countdown { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .agent-recovery-actions { width: 100%; }
+  .agent-recovery-actions .btn { min-height: 44px; }
+}
+
 /* ---------------------------------------------------------------------------
    The Markdown subset (decision C39).
 

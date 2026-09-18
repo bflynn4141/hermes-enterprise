@@ -5,6 +5,7 @@ import type { EngineRunRow } from '../engine/agent-db.js';
 import type { RunErrorInput } from '../engine/agent-db.js';
 import type { ProviderMessage, ToolCall } from '../model/types.js';
 import { RouteError } from '../routes/tenant.js';
+import type { ProviderRetryAfter } from './retry-after.js';
 import {
   RuntimeBudgetError,
   type RuntimeBudgetContext,
@@ -44,6 +45,21 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     const actual = rows[0]?.status;
     if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
     await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
+  }
+  async recoveryInput(runId: string, attempt: number): Promise<string | null> {
+    const { rows } = await this.runtimeQuery<{ recovery_input: string | null }>(
+      'SELECT recovery_input FROM runs WHERE id=$1 AND attempt=$2', [runId, attempt]);
+    return rows[0]?.recovery_input ?? null;
+  }
+  async recordProviderRetryAfter(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void> {
+    // A delayed provider response from the old attempt cannot postpone its
+    // successor. Concurrent failures keep the longest valid provider deadline.
+    await this.runtimeQuery(
+      `UPDATE runs SET recovery_not_before=GREATEST(recovery_not_before,$3::timestamptz),
+              recovery_blocked_reason=COALESCE(recovery_blocked_reason,$4)
+        WHERE workspace_id=app_workspace_id() AND id=$1 AND attempt=$2`,
+      [runId, attempt, delay.notBefore, delay.blockedReason],
+    );
   }
   async binding(runId: string): Promise<RunBinding | null> {
     const { rows } = await this.runtimeQuery<RunBinding>(

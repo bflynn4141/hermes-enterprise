@@ -223,7 +223,7 @@ test('P7 · Stop pauses the queue, keeps completed work, and starts no further s
 // P8/P9 · a second attempt, and the text appearing exactly once
 // ---------------------------------------------------------------------------
 
-test('P8 · Retry runs a second attempt and the answer is shown once, not twice', async ({ browser }) => {
+test('P8 · completed work cannot be retried into a second copy', async ({ browser }) => {
   const context = await asUser(browser, SEED_ADMIN);
   const page = await context.newPage();
   const sessionId = await newSession(page, SEED_WORKSPACE, 'P8 retry');
@@ -232,15 +232,13 @@ test('P8 · Retry runs a second attempt and the answer is shown once, not twice'
 
   const runId = rows(`SELECT id::text FROM runs WHERE session_id = '${sessionId}' ORDER BY started_at DESC LIMIT 1;`)[0]!;
   const retried = await page.request.post(`/w/${SEED_WORKSPACE}/sessions/${sessionId}/runs/${runId}/retry`, {
-    data: {},
+    data: { expected_attempt: 1 },
     headers: { origin: ORIGIN },
   });
-  expect(retried.status(), await retried.text()).toBe(201);
-  expect((await retried.json()).attempt).toBe(2);
+  expect(retried.status(), await retried.text()).toBe(409);
+  expect((await retried.json()).reason).toBe('run_completed');
 
-  // The assertion the scenario is really about: a second attempt replaces the
-  // turn's assistant message rather than appending a second copy, so the
-  // reader never sees the same answer twice.
+  // Completed work stays in place; Retry cannot produce another approval.
   await expect
     .poll(
       () => rows(`SELECT count(*)::text FROM messages WHERE run_id = '${runId}' AND role = 'iris' AND turn = 1;`)[0],

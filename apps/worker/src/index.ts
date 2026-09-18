@@ -117,6 +117,8 @@ import { sentryOptions } from './ops/sentry.js';
 import { sweepPlatformCounters } from './ops/instance-cap.js';
 import { runNightly } from './ops/nightly.js';
 import { sweepRuns } from './runs/sweep.js';
+import { getAgentRecovery, wakeAgent } from './routes/recovery.js';
+import { scheduleRunRecovery } from './runs/recovery.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
 import { drainJobs, withWorkspaceTransaction } from './jobs.js';
@@ -334,6 +336,8 @@ app.get('/w/:ws/sessions/:id/runs/:runId', getRunRoute);
 app.post('/w/:ws/sessions/:id/runs/:runId/stop', stopRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/guide', guideRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/retry', retryRun);
+app.get('/w/:ws/agents/:agentId/recovery', getAgentRecovery);
+app.post('/w/:ws/agents/:agentId/wake', wakeAgent);
 app.post('/w/:ws/sessions/:id/runs/:runId/queue', queueMessage);
 app.patch('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', editQueueItem);
 app.delete('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', removeQueueItem);
@@ -543,6 +547,12 @@ const handler = {
         // Admission is separate from draining: the same minute may enqueue a
         // job after this pass, and the next minute will claim it. The durable
         // idempotency key makes overlapping Cron invocations harmless.
+        try {
+          const recovered = await scheduleRunRecovery(env);
+          console.log(JSON.stringify({ at: 'cron.run_recovery', ...recovered }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.run_recovery', ok: false, error: String(error) }));
+        }
         try {
           const automated = await enqueueAutomatedPartnerScreening(env, new Date(event.scheduledTime));
           console.log(JSON.stringify({ at: 'cron.partner_screening', ...automated }));

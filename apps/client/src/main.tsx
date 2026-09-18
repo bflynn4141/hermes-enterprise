@@ -50,7 +50,9 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
   if (__MOCK__) {
     const { createMockBackend } = await import('./model/mock.js');
     const params = new URL(window.location.href).searchParams;
+    const recovery = params.get('recovery');
     const backend = createMockBackend({
+      recovery: recovery === 'retryable' || recovery === 'retry_scheduled' || recovery === 'blocked' || recovery === 'stopped' || recovery === 'idle' ? recovery : undefined,
       activity: params.get('activity') === 'completed-tool' ? 'completed-tool' : params.get('activity') === 'completed' ? 'completed' : undefined,
       seat: params.get('seat') === 'member' ? 'member' : 'admin',
       data: params.get('data') === 'empty' ? 'empty' : 'seeded',

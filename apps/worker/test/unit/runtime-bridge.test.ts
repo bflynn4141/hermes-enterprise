@@ -207,6 +207,33 @@ describe('workspace model credential proxy', () => {
     resolveCredential: vi.fn(async () => ({ provider: 'nous_portal', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
     recordModelCall: vi.fn(async () => undefined),
   });
+  it.each([
+    [429, '7200', '7200', new Date('2026-09-18T19:00:00.000Z'), null],
+    [503, 'Fri, 18 Sep 2026 20:00:00 GMT', '10800', new Date('2026-09-18T20:00:00.000Z'), null],
+    [429, '999999999999999999999999', null, null, 'provider_retry_after_excessive'],
+  ])('records a safe provider deadline for %i before returning its rejection', async (status, value, header, notBefore, blockedReason) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-18T17:00:00.000Z'));
+    try {
+      const store = { ...makeModelDb(), recordProviderRetryAfter: vi.fn(async () => undefined) };
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId,
+        { model: 'nousresearch/hermes-4', messages: [] },
+        vi.fn<typeof fetch>(async () => new Response('private provider details', { status, headers: { 'Retry-After': value } })));
+      expect(store.recordProviderRetryAfter).toHaveBeenCalledWith(expect.any(String), 1, { notBefore, blockedReason, header });
+      expect(response.headers.get('Retry-After')).toBe(header);
+      expect(await response.text()).not.toContain('private provider details');
+    } finally { clock.mockRestore(); }
+  });
+  it('does not persist Retry-After on authentication failures or malformed metadata', async () => {
+    for (const [status, value] of [[401, '120'], [429, 'secret=provider-key']] as const) {
+      const store = { ...makeModelDb(), recordProviderRetryAfter: vi.fn(async () => undefined) };
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId,
+        { model: 'nousresearch/hermes-4', messages: [] },
+        vi.fn<typeof fetch>(async () => new Response('', { status, headers: { 'Retry-After': value } })));
+      expect(store.recordProviderRetryAfter).not.toHaveBeenCalled();
+      expect(response.headers.get('Retry-After')).toBeNull();
+    }
+  });
+
   it('measures preparation, headers and first observed text without buffering or logging content', async () => {
     let clock = 1000;
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);

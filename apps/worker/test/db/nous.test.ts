@@ -52,8 +52,9 @@ describe('Nous Portal workspace catalog', () => {
     });
 
     const result = await tenant('app', fx, (tx) => syncNousPortalCatalog(tx, NOUS_PORTAL_FIXTURE_MODELS));
-    expect(result).toMatchObject({ written: 5, skipped: 2 });
+    expect(result).toMatchObject({ written: 6, skipped: 2 });
     const after = await tenant('owner', fx, (tx) => loadCatalogPage(tx, fx.workspaceId, { provider: 'nous_portal', limit: 100 }));
     expect(after.models.find((row) => row.model_id === 'nous:anthropic/claude-sonnet-5')).toMatchObject({ enabled: true, transport: 'nous_chat' });
+    expect(after.models.find((row) => row.model_id === 'nous:deepseek/deepseek-v4.1-flash')).toMatchObject({ enabled: true, transport: 'nous_chat', effort_map: { low: 'low', high: 'high', max: 'max' }, default_effort: 'high' });
   });
 });

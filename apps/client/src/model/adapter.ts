@@ -1101,7 +1101,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
     send,
     stop,
     retry: async (sessionId, runId) => {
-      await rest.retry(workspaceId, sessionId, runId);
+      const current = state().sessions[sessionId]?.run;
+      const expected = current?.id === runId ? current.attempt : (await rest.run(workspaceId, sessionId, runId)).attempt;
+      await rest.retry(workspaceId, sessionId, runId, expected);
     },
     guide,
     queue: enqueue,

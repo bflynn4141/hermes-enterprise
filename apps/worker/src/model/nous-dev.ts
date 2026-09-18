@@ -4,7 +4,20 @@ import type { Env } from '../env.js';
 import { OPENROUTER_FIXTURE_MODELS } from './openrouter-dev.js';
 import type { FetchLike } from './types.js';
 
-export const NOUS_PORTAL_FIXTURE_MODELS = OPENROUTER_FIXTURE_MODELS;
+export const NOUS_PORTAL_FIXTURE_MODELS = {
+  data: [
+    ...OPENROUTER_FIXTURE_MODELS.data,
+    {
+      id: 'deepseek/deepseek-v4.1-flash',
+      name: 'DeepSeek: DeepSeek V4.1 Flash',
+      context_length: 1_048_576,
+      architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+      pricing: { prompt: '0.00000015', completion: '0.0000006', input_cache_read: '0.000000015' },
+      supported_parameters: ['tools', 'reasoning', 'reasoning_effort'],
+      reasoning: { supported_efforts: ['max', 'high', 'low'], default_effort: 'high' },
+    },
+  ],
+} as const;
 
 export function nousPortalFixtureEnabled(
   env: Pick<Env, 'ENVIRONMENT'> & { NOUS_PORTAL_FIXTURE?: string },

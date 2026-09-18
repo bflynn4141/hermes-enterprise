@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -36,6 +36,8 @@ const REQ_AGREEMENT = mockUuid(14);
 const DOC_INVOICE = mockUuid(30);
 const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
+// An explicit selection for recovery UI coverage, independent of product defaults.
+const RECOVERY_MODEL_ID = 'nous:deepseek/deepseek-v4.1-flash';
 
 export const MOCK_WORKSPACE_ID = WS;
 export const MOCK_WORKSPACE_NAME_KEY = 'hermes:mock-workspace-name';
@@ -82,6 +84,8 @@ const iso = (offsetMinutes = 0) => new Date(Date.UTC(2026, 9, 12, 9, 49 + offset
 const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toString(16).padStart(64, '0')}`;
 
 interface MockOptions {
+  /** Isolated recovery fixtures; no live agent or provider work occurs. */
+  recovery?: 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
   /** Terminal Hermes traces for the activity-card regression, never live data. */
   activity?: 'completed' | 'completed-tool';
   /** `admin` is the first-run Admin seat; `member` exercises the Member copy. */
@@ -280,6 +284,7 @@ export function createMockBackend(options: MockOptions = {}) {
   // own scenarios about a screen the product no longer has.
   const catalog = [
     { model_id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', provider: 'nous_portal', effort: ['low', 'medium', 'high'], default_effort: 'medium', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
+    ...(options.recovery ? [{ model_id: RECOVERY_MODEL_ID, label: 'DeepSeek V4.1 Flash', provider: 'nous_portal', effort: ['low', 'high', 'max'], default_effort: 'low', enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' }] : []),
     { model_id: 'nous:google/gemini-3-flash', label: 'Google: Gemini 3 Flash', provider: 'nous_portal', effort: null, default_effort: null, enabled: hasVerifiedKey, disabled_reason: hasVerifiedKey ? null : 'Connect Nous Portal in Settings to use this model.' },
   ];
 
@@ -326,10 +331,10 @@ export function createMockBackend(options: MockOptions = {}) {
   ];
 
   const sessions: MockSession[] = empty
-    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
+    ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
       ];
 
   const messages: Record<string, unknown[]> = {
@@ -446,6 +451,41 @@ export function createMockBackend(options: MockOptions = {}) {
     });
   }
 
+  let recoveryView: AgentRecoveryView = {
+    state: options.recovery ?? (empty || options.activity ? 'idle' : 'waiting'),
+    run_id: empty ? null : options.recovery ? RUN : TRACE_LEAH,
+    session_id: empty ? null : SESSION_A, attempt: empty ? null : 1,
+    model_id: options.recovery ? RECOVERY_MODEL_ID : DEFAULT_MODEL_ID,
+    message: 'No eligible pending work right now.', next_retry_at: null,
+    can_retry: false, can_run_now: empty || Boolean(options.activity), can_cancel: false,
+  };
+  if (recoveryView.state === 'waiting') recoveryView.message = 'Waiting for the current request to be reviewed.';
+  if (options.recovery) {
+    recoveryView = {
+      ...recoveryView,
+      message: options.recovery === 'blocked' ? 'Reconnect Nous Portal in Settings before retrying.'
+        : options.recovery === 'idle' ? 'No eligible pending work right now.'
+          : options.recovery === 'stopped' ? 'Automatic retry cancelled. You can resume this task when ready.'
+            : 'The selected model is temporarily unavailable. Your completed work is saved.',
+      can_retry: options.recovery === 'retryable' || options.recovery === 'retry_scheduled' || options.recovery === 'stopped',
+      can_run_now: options.recovery === 'idle',
+      can_cancel: options.recovery === 'retry_scheduled',
+      next_retry_at: options.recovery === 'retry_scheduled' ? new Date(Date.now() + 90_000).toISOString() : null,
+    };
+    traces.splice(0, traces.length, {
+      id: RUN, run_id: RUN, agent_id: AGENT, name: 'Automated partner screening', type: 'Hermes Agent · work',
+      status: options.recovery === 'idle' ? 'completed' : options.recovery === 'stopped' ? 'stopped' : 'error',
+      sub: 'Attempt 1', needs_you: false, runtime_kind: 'hermes', model_id: RECOVERY_MODEL_ID,
+      ref: { section: 'agents', view: 'trace', id: RUN }, steps: [], tool_calls: [], allowed_tools: [], version: 1,
+    });
+    messages[SESSION_A] = [];
+    const session = sessions.find((item) => item.id === SESSION_A);
+    if (session) {
+      session.title = 'Automated partner screening'; session.status = traces[0]!.status;
+      session.model_id = RECOVERY_MODEL_ID; session.effort = 'low';
+    }
+  }
+
   /**
    * The usage report, in the shape `GET /w/:ws/usage?range=` actually answers.
    *
@@ -504,7 +544,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const settingsView = {
     workspace_id: WS,
     role: seat === 'admin' ? 'admin' : 'member',
-    defaults: { model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium' as string | null, runtime: 'cloud' },
+    defaults: { model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
     flags: approvalScenario ? { approval_demo: true } : {} as Record<string, unknown>,
@@ -654,6 +694,16 @@ export function createMockBackend(options: MockOptions = {}) {
   function publish(event: StreamEvent): void {
     backlog.push(event);
     head = BigInt(event.id);
+    if (!options.recovery && (event.kind === 'run.started' || event.kind === 'run.status')) {
+      const status = event.kind === 'run.started' ? 'working' : event.payload.status;
+      const recoveryState = status === 'working' ? 'working' : status === 'error' ? 'retryable' : status === 'stopped' ? 'stopped' : status === 'waiting' || status === 'stopping' ? 'waiting' : 'idle';
+      recoveryView = {
+        ...recoveryView, state: recoveryState, run_id: event.payload.run_id, session_id: event.session_id,
+        attempt: event.payload.attempt, can_retry: recoveryState === 'retryable' || recoveryState === 'stopped',
+        can_run_now: recoveryState === 'idle',
+        message: recoveryState === 'working' ? 'Iris is working on the current task.' : recoveryState === 'waiting' ? 'Waiting for your input.' : recoveryState === 'idle' ? 'No eligible pending work right now.' : 'The task needs attention.',
+      };
+    }
     for (const listener of listeners) listener(event);
   }
 
@@ -662,7 +712,7 @@ export function createMockBackend(options: MockOptions = {}) {
       id: WS,
       name: workspaceName,
       jurisdiction: 'default',
-      settings: { default_model_id: 'nous:anthropic/claude-sonnet-5', default_effort: 'medium', default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
+      settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
     },
     viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
     agent: { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
@@ -733,6 +783,21 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/bootstrap')) return json(bootstrap());
 
+    if (p(`/agents/${AGENT}/recovery`) && method === 'GET') return json(recoveryView);
+    if (p(`/agents/${AGENT}/wake`) && method === 'POST') {
+      // Keep submission observable to browser tests; this is a mock admission,
+      // never an inference call or another paid discovery cycle.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      if (body.action === 'cancel_retry' && recoveryView.can_cancel) {
+        recoveryView = { ...recoveryView, state: 'stopped', next_retry_at: null, can_retry: true, can_cancel: false, message: 'Automatic retry cancelled. You can resume this task when ready.' };
+      } else if (body.action === 'retry' && recoveryView.can_retry) {
+        recoveryView = { ...recoveryView, state: 'queued', attempt: (recoveryView.attempt ?? 0) + 1, next_retry_at: null, can_retry: false, can_cancel: false, model_id: options.recovery ? RECOVERY_MODEL_ID : DEFAULT_MODEL_ID, message: 'Retry queued. Iris will continue the saved task.' };
+        const trace = traces.find((item) => item.id === recoveryView.run_id);
+        if (trace) { trace.status = 'queued'; trace.sub = `Attempt ${recoveryView.attempt}`; }
+      }
+      return json(recoveryView);
+    }
+
     if (path === '/workspaces' && method === 'POST') {
       const name = String(body.name ?? '').trim();
       if (name.length < 2 || name.length > 80) return fail(422, 'bad_name', 'A workspace needs a name of 2 to 80 characters');
@@ -773,7 +838,7 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (p('/sessions') && method === 'GET') return page(sessions);
     if (p('/sessions') && method === 'POST') {
-      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
+      const created = { id: mockUuid(400 + sessions.length), agent_id: String(body.agent_id ?? AGENT), title: String(body.title ?? 'New session'), mode: String(body.mode ?? 'ask'), model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 };
       sessions.push(created);
       messages[created.id] = [];
       return json(created);
@@ -793,6 +858,7 @@ export function createMockBackend(options: MockOptions = {}) {
       // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.
       if (rest.startsWith('/runs/')) {
         const control = rest.split('/')[3] ?? '';
+        if (!control && options.recovery) return json({ run_id: RUN, attempt: recoveryView.attempt ?? 1, status: recoveryView.state === 'queued' ? 'working' : recoveryView.state === 'idle' ? 'completed' : recoveryView.state === 'stopped' ? 'stopped' : 'error' });
         if (control === 'stop') {
           runScenario('stopped', sessionId);
           return json({ run_id: RUN, status: 'stopping', attempt: 1 });
