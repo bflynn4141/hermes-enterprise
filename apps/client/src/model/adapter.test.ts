@@ -464,6 +464,85 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it('repairs an already-seen user row and phantom pending turn even after the run was reconciled as completed', async () => {
+    const user = { id: mockUuid(70), session_id: SESSION, seq: 0, role: 'user' as const, kind: null,
+      text: 'again', blocks: [], status: 'complete' as const, run_id: RUN, at: iso };
+    const final = { ...streamingPlaceholder, status: 'complete', text: 'The persisted answer.' };
+    const h = await activeSnapshotFixture(() => h.json({ items: [user, final], cursor: null, total: 2 }));
+    try {
+      h.setRunStatus('completed');
+      h.arm();
+      h.show();
+      await vi.advanceTimersByTimeAsync(0);
+      h.store.dispatch({ type: 'stream/reveal-complete', sessionId: SESSION, runId: RUN });
+      expect(h.session().run?.status).toBe('completed');
+      // Model the already-seen row that the old sequence guard failed to
+      // reconcile. No new event or message id is needed to repair it.
+      h.store.dispatch({ type: 'session/set', id: SESSION, patch: {
+        pendingTurn: { clientTurnId: 'old-client', runId: RUN, previousStatus: 'Ready',
+          message: { ...user, id: mockUuid(69), seq: Number.MAX_SAFE_INTEGER } },
+      } });
+      const calls = h.snapshotCalls();
+      // The already-scheduled idle audit must still perform semantic repair.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.snapshotCalls()).toBeGreaterThan(calls);
+      expect(h.session().pendingTurn).toBeNull();
+      expect(h.session().messages.filter((message) => message.role === 'user')).toEqual([user]);
+      expect(h.session().messages.at(-1)?.text).toBe(final.text);
+    } finally { h.adapter.dispose(); }
+  });
+
+  it.each(['event', 'snapshot'] as const)('confirms a second same-text send after a live final via %s without a phantom trailing user bubble', async (via) => {
+    const previousRun = mockUuid(71);
+    const userId = mockUuid(72);
+    let snapshotItems: unknown[] = [];
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    const { adapter, store, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => json({ run_id: RUN, status: 'working', attempt: 1 }),
+      [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () => json({ run_id: RUN, status: 'working', attempt: 1 }),
+      [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => json({ items: snapshotItems, cursor: null, total: snapshotItems.length }),
+    });
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.find((candidate) => candidate.url.includes('/hub/session/'))!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      socket.deliver(streamEvent('message.appended', {
+        message_id: mockUuid(73), session_id: SESSION, seq: 0, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: previousRun, client_turn_id: 'previous',
+      }, 1n));
+      socket.deliver(streamEvent('message.final', {
+        message_id: mockUuid(74), session_id: SESSION, run_id: previousRun, turn: 0,
+        attempt: 1, text: 'Previous reply.', blocks: [], worked_ms: 1000,
+      }, 2n));
+      // The live final has no session sequence on the wire. Sending again
+      // without reloading used to inherit its MAX_SAFE_INTEGER sentinel.
+      await adapter.send(SESSION, 'again');
+      await vi.advanceTimersByTimeAsync(0);
+      const pending = state().sessions[SESSION]!.pendingTurn!;
+      const user = { id: userId, session_id: SESSION, seq: 2, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: RUN, at: iso };
+      if (via === 'event') socket.deliver(streamEvent('message.appended', {
+        message_id: userId, session_id: SESSION, seq: 2, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: RUN, client_turn_id: pending.clientTurnId,
+      }, 3n));
+      else {
+        snapshotItems = [user];
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+      expect(state().sessions[SESSION]!.pendingTurn).toBeNull();
+      expect(pending.message.seq).toBeLessThan(Number.MAX_SAFE_INTEGER);
+      socket.deliver(streamEvent('message.final', {
+        message_id: mockUuid(75), session_id: SESSION, run_id: RUN, turn: 0,
+        attempt: 1, text: 'New reply stays below the real question.', blocks: [], worked_ms: 2000,
+      }, 4n));
+      store.dispatch({ type: 'stream/reveal-complete', sessionId: SESSION, runId: RUN });
+      expect(state().sessions[SESSION]!.messages.map((message) => message.text)).toEqual([
+        'again', 'Previous reply.', 'again', 'New reply stays below the real question.',
+      ]);
+    } finally { adapter.dispose(); }
+  });
+
   it.each(['scheduled', 'visibility'] as const)('preserves live text when a %s snapshot contains an empty streaming placeholder', async (trigger) => {
     let snapshotMessage = { ...streamingPlaceholder };
     const h = await activeSnapshotFixture(() => new Response(JSON.stringify({ items: [snapshotMessage], cursor: null, total: 1 }), {

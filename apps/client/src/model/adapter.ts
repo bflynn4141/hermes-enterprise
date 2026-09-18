@@ -239,6 +239,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     if (!session || !run) return false;
     const hasAnswer = session.messages.some((message) => message.role === 'iris' && message.run_id === run.id);
     return (
+      session.pendingTurn?.runId === run.id ||
       run.status === 'working' ||
       run.status === 'stopping' ||
       session.stream?.status === 'streaming' ||
@@ -287,7 +288,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         if (message.status === 'streaming') continue;
         const ownsUnsettledStream = Boolean(message.run_id && current.stream?.runId === message.run_id && current.stream.status === 'streaming');
         if (!seen || ownsUnsettledStream) dispatch({ type: 'stream/final', sessionId, message });
-      } else if (!seen && message.role === 'user') {
+      } else if (message.role === 'user' && (!seen || current.pendingTurn)) {
         dispatch({ type: 'message/confirm-turn', sessionId, message });
       } else if (!seen) {
         dispatch({ type: 'message/add', sessionId, message });
@@ -725,7 +726,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const attachments = state().capabilities.turnAttachments
       ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
       : [];
-    const seq = (session.messages.at(-1)?.seq ?? -1) + 1;
+    // Live finals lack a session sequence and use MAX_SAFE_INTEGER as an
+    // ordering sentinel. Never propagate that sentinel into another turn.
+    const seq = session.messages.reduce((last, item) =>
+      Number.isSafeInteger(item.seq) && item.seq < Number.MAX_SAFE_INTEGER ? Math.max(last, item.seq) : last, -1) + 1;
     const message: Message = {
       id: uuid(),
       session_id: sessionId,

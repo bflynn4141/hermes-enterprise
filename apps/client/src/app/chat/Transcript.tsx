@@ -36,7 +36,7 @@ import { IrisText } from './IrisText.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
 import { RunActivity, RunStream } from './RunSurface.js';
-import { collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
+import { canReleaseRunStream, collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
@@ -307,6 +307,10 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   const settled = Boolean(session.run && ['completed', 'stopped', 'error'].includes(session.run.status));
   const currentRunMessages = partitionRunMessages(during, settled, settled ? session.run?.active_ms : null);
   const streamOwnsAnswer = Boolean(currentRunMessages.answer && session.stream?.runId === currentRunMessages.answer.run_id);
+  const streamCanRelease = canReleaseRunStream(
+    session.stream,
+    currentRunMessages.answer ? [...before, currentRunMessages.answer] : before,
+  );
 
   const lastIris = [...messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
@@ -381,7 +385,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
           {currentRunMessages.answer && !streamOwnsAnswer && <IrisMessage message={currentRunMessages.answer} session={session} />}
 
           {/* And the text that has not finalised yet. */}
-          <RunStream session={session} />
+          <RunStream session={session} canRelease={streamCanRelease} />
 
           {/* The queue's own Edit and Remove. TaskRows renders the rows; it has
               no affordance for changing one, and a queued follow-up a person

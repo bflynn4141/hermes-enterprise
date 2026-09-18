@@ -7,6 +7,17 @@ const isProviderTurn = (message: Message): boolean =>
 export const hasVisibleMessageContent = (message: Message): boolean =>
   Boolean(message.heading?.trim() || message.text.trim() || message.blocks.length > 0 || message.incomplete);
 
+/** Keep visible finals until the transcript can render their replacement. */
+export function canReleaseRunStream(
+  stream: { runId: string; text: string; blocks: readonly unknown[]; status: 'streaming' | 'complete' | 'incomplete' } | null,
+  renderedMessages: readonly Message[],
+): boolean {
+  if (stream?.status === 'complete' && !stream.text.trim() && stream.blocks.length === 0) return true;
+  return Boolean(stream && stream.status !== 'streaming' && renderedMessages.some((message) =>
+    message.role === 'iris' && message.status !== 'streaming' && message.run_id === stream.runId && message.text === stream.text,
+  ));
+}
+
 function withWorkedTotal(message: Message, messages: readonly Message[], totalWorkedMs?: number | null): Message {
   if (totalWorkedMs != null) return { ...message, worked_ms: totalWorkedMs };
   const durations = messages.map((item) => item.worked_ms).filter((value): value is number => value != null);

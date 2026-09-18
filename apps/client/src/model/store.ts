@@ -109,6 +109,23 @@ export interface PendingTurn {
   previousStatus: string;
 }
 
+/** Local sequence numbers are layout hints, never proof of turn identity. */
+function confirmsPendingTurn(pending: PendingTurn | null, message: Message, clientTurnId?: string | null): boolean {
+  if (!pending || message.role !== 'user') return false;
+  if (clientTurnId) return clientTurnId === pending.clientTurnId;
+  // Snapshots do not carry client_turn_id. Wait for admission/run.started to
+  // establish the run instead of matching an older repeated prompt by text.
+  return pending.runId !== null && message.run_id === pending.runId &&
+    message.kind === null && message.text === pending.message.text;
+}
+
+function admitPendingTurn(session: SessionState, runId: string): PendingTurn | null {
+  if (!session.pendingTurn) return null;
+  const pending = { ...session.pendingTurn, runId, message: { ...session.pendingTurn.message, run_id: runId } };
+  // A snapshot can contain the user row before the POST/run.started arrives.
+  return session.messages.some((message) => confirmsPendingTurn(pending, message)) ? null : pending;
+}
+
 export interface SessionState {
   id: string;
   agentId: string | null;
@@ -820,16 +837,12 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'turn/accepted':
       return withSession(state, action.sessionId, (s) => {
         if (s.pendingTurn?.clientTurnId !== action.clientTurnId) return s;
-        const run = s.run && (s.run.id === action.clientTurnId || s.run.id === s.pendingTurn.runId)
+        const run = s.run && s.run.id === action.clientTurnId
           ? { ...s.run, id: action.runId, status: action.status, attempt: action.attempt }
           : s.run;
         return {
           ...s,
-          pendingTurn: {
-            ...s.pendingTurn,
-            runId: action.runId,
-            message: { ...s.pendingTurn.message, run_id: action.runId },
-          },
+          pendingTurn: admitPendingTurn(s, action.runId),
           run,
         };
       });
@@ -866,15 +879,8 @@ export function reduce(state: AppState, action: Action): AppState {
       if (!session) return state;
       const duplicate = session.messages.some((message) => message.id === action.message.id);
       const pending = session.pendingTurn;
-      const confirmsPending = Boolean(
-        pending &&
-          action.message.role === 'user' &&
-          action.message.seq >= pending.message.seq &&
-          ((action.clientTurnId && action.clientTurnId === pending.clientTurnId) ||
-            (action.message.kind === null &&
-              action.message.text === pending.message.text &&
-              ((!pending.runId && action.message.run_id !== null) || action.message.run_id === pending.runId))),
-      );
+      const confirmsPending = confirmsPendingTurn(pending, action.message, action.clientTurnId);
+      if (duplicate && !confirmsPending) return state;
       const next = withSession(state, action.sessionId, (s) => {
         let run = s.run;
         if (confirmsPending && pending && run?.id === pending.clientTurnId && action.message.run_id) {
@@ -908,11 +914,7 @@ export function reduce(state: AppState, action: Action): AppState {
         ...s,
         pendingTurn:
           action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId
-            ? {
-                ...s.pendingTurn,
-                runId: action.run.id,
-                message: { ...s.pendingTurn.message, run_id: action.run.id },
-              }
+            ? admitPendingTurn(s, action.run.id)
             : s.pendingTurn,
         run: action.run,
         status: 'Working',

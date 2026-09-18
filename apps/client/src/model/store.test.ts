@@ -313,6 +313,68 @@ describe('sessions', () => {
     expect(state.sessions[SESSION_A]!.pendingTurn?.clientTurnId).toBe(clientTurnId);
   });
 
+  it.each(['client-id', 'run-id', 'admission-after-message', 'run-start-after-message'] as const)('confirms a pending turn by %s even when its local sequence is only a placeholder', (via) => {
+    const clientTurnId = mockUuid(28);
+    let state = reduce(base(), {
+      type: 'turn/optimistic', sessionId: SESSION_A, clientTurnId,
+      message: { id: mockUuid(29), session_id: SESSION_A, seq: Number.MAX_SAFE_INTEGER,
+        role: 'user', kind: null, text: 'again', blocks: [], status: 'complete', run_id: clientTurnId },
+      run: { id: clientTurnId, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+        attempt: 1, title: null, steps: [], queue: [], guidance: null },
+    });
+    const message = { id: MESSAGE, session_id: SESSION_A, seq: 2, role: 'user' as const,
+      kind: null, text: 'again', blocks: [], status: 'complete' as const, run_id: RUN };
+    if (via === 'run-id') state = reduce(state, {
+      type: 'turn/accepted', sessionId: SESSION_A, clientTurnId, runId: RUN, status: 'working', attempt: 1,
+    });
+    state = reduce(state, { type: 'message/confirm-turn', sessionId: SESSION_A, message,
+      ...(via === 'client-id' ? { clientTurnId } : {}) });
+    if (via === 'admission-after-message') state = reduce(state, {
+      type: 'turn/accepted', sessionId: SESSION_A, clientTurnId, runId: RUN, status: 'working', attempt: 1,
+    });
+    if (via === 'run-start-after-message') state = reduce(state, {
+      type: 'run/start', sessionId: SESSION_A, clientTurnId,
+      run: { id: RUN, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+        attempt: 1, title: null, steps: [], queue: [], guidance: null },
+    });
+    expect(state.sessions[SESSION_A]!.pendingTurn).toBeNull();
+    expect(state.sessions[SESSION_A]!.messages).toEqual([message]);
+    expect(state.sessions[SESSION_A]!.run?.id).toBe(RUN);
+  });
+
+  it('does not confirm a repeated prompt from an older run before admission establishes identity', () => {
+    const clientTurnId = mockUuid(28);
+    let state = reduce(base(), {
+      type: 'turn/optimistic', sessionId: SESSION_A, clientTurnId,
+      message: { id: mockUuid(29), session_id: SESSION_A, seq: 0, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: clientTurnId },
+      run: { id: clientTurnId, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+        attempt: 1, title: null, steps: [], queue: [], guidance: null },
+    });
+    state = reduce(state, { type: 'message/confirm-turn', sessionId: SESSION_A,
+      message: { id: MESSAGE, session_id: SESSION_A, seq: 20, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: RUN } });
+    expect(state.sessions[SESSION_A]!.pendingTurn?.clientTurnId).toBe(clientTurnId);
+    expect(state.sessions[SESSION_A]!.run?.id).toBe(clientTurnId);
+  });
+
+  it('late turn admission cannot roll a completed run back to working', () => {
+    const clientTurnId = mockUuid(28);
+    let state = reduce(base(), {
+      type: 'turn/optimistic', sessionId: SESSION_A, clientTurnId,
+      message: { id: mockUuid(29), session_id: SESSION_A, seq: 0, role: 'user', kind: null,
+        text: 'again', blocks: [], status: 'complete', run_id: clientTurnId },
+      run: { id: clientTurnId, session_id: SESSION_A, agent_id: AGENT, status: 'working',
+        attempt: 1, title: null, steps: [], queue: [], guidance: null },
+    });
+    state = reduce(state, { type: 'run/start', sessionId: SESSION_A, clientTurnId,
+      run: { ...state.sessions[SESSION_A]!.run!, id: RUN } });
+    state = reduce(state, { type: 'run/status', sessionId: SESSION_A, runId: RUN, status: 'completed' });
+    state = reduce(state, { type: 'turn/accepted', sessionId: SESSION_A, clientTurnId,
+      runId: RUN, status: 'working', attempt: 1 });
+    expect(state.sessions[SESSION_A]!.run?.status).toBe('completed');
+  });
+
   it('archiving the active session falls back to the next unarchived one', () => {
     const state = reduce(base(), { type: 'session/archive', id: SESSION_A, archived: true });
     expect(state.activeSessionId).toBe(SESSION_B);
