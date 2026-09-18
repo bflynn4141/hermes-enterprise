@@ -79,7 +79,13 @@ async function createStarterItems(
     { kind: 'request.created', payload: { request_id: taskId, kind: 'task', status: 'pending', label: 'Complete Partner Program criteria', run_id: null, session_id: sessionId } },
     { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: taskId, ref: { section: 'inbox', view: 'request', id: taskId }, version: null } },
   ]));
-  const triageJob = await enqueueRequestTriage(input.tx, input.workspaceId, taskId, task.rows[0]?.version ?? 0);
+  const triageJob = await enqueueRequestTriage(
+    input.tx,
+    input.workspaceId,
+    taskId,
+    task.rows[0]?.version ?? 0,
+    input.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1',
+  );
   if (triageJob) input.jobs.push(triageJob);
 
   const policyKey = await installFirstSearchPolicy(input.tx, input.workspaceId, agentId, input.joiningMemberId);
