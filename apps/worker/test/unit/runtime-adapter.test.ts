@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
-import { HermesClient, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import { HermesClient, HermesCapabilitiesError, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
@@ -135,7 +135,7 @@ async function execute(
   client = new FakeHermesClient(),
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
-  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview']; onTerminalFailure?: RuntimeDeps['onTerminalFailure'] } = {},
+  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview']; onTerminalFailure?: RuntimeDeps['onTerminalFailure']; onLatency?: RuntimeDeps['onLatency'] } = {},
 ) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
@@ -143,11 +143,108 @@ async function execute(
     forward: forward ?? (async () => ({ stop_requested: db.stopFlag })),
     ...(timing.preview ? { preview: timing.preview } : {}),
     ...(timing.onTerminalFailure ? { onTerminalFailure: timing.onTerminalFailure } : {}),
+    ...(timing.onLatency ? { onLatency: timing.onLatency } : {}),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('starts fresh streaming without a second remote readiness round trip', async () => {
+    const client = new FakeHermesClient();
+    await execute(new FakeRuntimeDb(), client);
+    expect(client.capabilityReads).toBe(1);
+    expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('rechecks readiness when a fresh submission takes longer than the reuse window', async () => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const client = new FakeHermesClient();
+      client.onSubmit = () => { now += 5_001; };
+      await execute(new FakeRuntimeDb(), client);
+      expect(client.capabilityReads).toBe(2);
+      expect(client.eventSubscriptions).toBe(1);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('does not treat a persisted submit checkpoint as a fresh readiness check', async () => {
+    const db = new FakeRuntimeDb();
+    db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };
+    const client = new FakeHermesClient();
+    client.capabilityFailure = new HermesCapabilitiesError();
+    const step = new FakeStep();
+    step.results.set('hermes-submit', { id: NATIVE_ID });
+    await execute(db, client, step);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.capabilityReads).toBe(1);
+    expect(client.eventSubscriptions).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
+  });
+
+  it('consumes a fresh check before an execution retry and refuses the changed runtime', async () => {
+    const db = new FakeRuntimeDb();
+    const client = new FakeHermesClient();
+    vi.spyOn(db, 'enterStep').mockImplementationOnce(async () => {
+      client.capabilityFailure = new HermesCapabilitiesError();
+      throw new Error('transient persistence failure before subscribing');
+    });
+    class RetryingStep extends FakeStep {
+      override do<T>(name: string, config: Parameters<FakeStep['do']>[1], fn: () => Promise<T>) {
+        return super.do(name, name === 'hermes-execute' ? { ...config, retries: { ...config.retries, limit: 2 } } : config, fn);
+      }
+    }
+    await execute(db, client, new RetryingStep());
+    expect(client.submissions).toHaveLength(1);
+    expect(client.capabilityReads).toBe(2);
+    expect(client.eventSubscriptions).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
+  });
+
+  it.each([5_001, -1])('refuses changed readiness after a %i ms clock difference', async (difference) => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const client = new FakeHermesClient();
+      client.onSubmit = () => {
+        now += difference;
+        client.capabilityFailure = new HermesCapabilitiesError();
+      };
+      const { db } = await execute(new FakeRuntimeDb(), client);
+      expect(client.capabilityReads).toBe(2);
+      expect(client.eventSubscriptions).toBe(0);
+      expect(db.statusChanges.at(-1)?.status).toBe('error');
+    } finally { clock.mockRestore(); }
+  });
+
+  it('reports first text from attempt entry including capability and submission time', async () => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const measurements: Array<Parameters<NonNullable<RuntimeDeps['onLatency']>>[0]> = [];
+    class TimedClient extends FakeHermesClient {
+      override capabilities() {
+        now += 600;
+        return super.capabilities();
+      }
+    }
+    try {
+      const client = new TimedClient();
+      client.onSubmit = () => { now += 800; };
+      const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+        onLatency: (measurement) => {
+          measurements.push(measurement);
+          // A broken telemetry sink must not interrupt the native stream.
+          throw new Error('metric sink unavailable');
+        },
+      });
+      expect(measurements).toContainEqual(expect.objectContaining({ phase: 'submit_capabilities', duration_ms: 600 }));
+      expect(measurements).toContainEqual(expect.objectContaining({ phase: 'native_submit', duration_ms: 800 }));
+      expect(measurements).toContainEqual(expect.objectContaining({ phase: 'first_delta', elapsed_ms: 1400 }));
+      expect(JSON.stringify(measurements)).not.toContain(client.deltas[0]);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+    } finally { clock.mockRestore(); }
+  });
+
   it('streams into a single assistant message and replaces interim prose with authoritative final output', async () => {
     const client = new FakeHermesClient();
     client.final.usage = { input_tokens: 37, output_tokens: 9 };
@@ -443,7 +540,7 @@ describe('official Hermes enterprise projection', () => {
 
     const client = new ConcurrentSubmitClient();
     await execute(new ConcurrentBindingDb(), client);
-    expect(client.capabilityReads).toBe(2);
+    expect(client.capabilityReads).toBe(1);
     expect(client.statusReads).toBeGreaterThan(0);
   });
 
