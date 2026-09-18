@@ -1,6 +1,9 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const activity = (page: Page) => page.getByRole('region', { name: 'Agent activity' });
+const runningAnimations = (locator: Locator): Promise<number> => locator.evaluate((element) =>
+  element.getAnimations().filter((animation) => animation.playState === 'running').length,
+);
 
 test('the overview stays live after Iris is collapsed', async ({ page }) => {
   await page.goto('/');
@@ -37,7 +40,7 @@ test('idle and reduced-motion states remain still', async ({ page }) => {
   await expect(card.getByRole('status')).toHaveText('Idle');
   await expect(card.getByText('No active work right now', { exact: true })).toBeVisible();
   await expect(card.locator('.agent-tool-pair')).toHaveCount(0);
-  expect(await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await runningAnimations(card.locator('.agent-activity-status i'))).toBe(0);
 
   await page.getByRole('button', { name: 'Your account' }).click();
   await page.getByRole('switch', { name: 'Reduce motion' }).click();
@@ -47,10 +50,10 @@ test('idle and reduced-motion states remain still', async ({ page }) => {
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect(card).toHaveAttribute('data-activity-state', 'working');
 
-  expect(await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
-  expect(await card.locator('.orbit').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await runningAnimations(card.locator('.agent-activity-status i'))).toBe(0);
+  expect(await runningAnimations(card.locator('.orbit'))).toBe(0);
   await expect(card.locator('.agent-tool-pair i')).toBeVisible();
-  expect(await card.locator('.agent-tool-pair i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await runningAnimations(card.locator('.agent-tool-pair i'))).toBe(0);
 });
 
 test('a completed no-tool Hermes run never looks like it is still thinking', async ({ page }) => {
@@ -61,7 +64,7 @@ test('a completed no-tool Hermes run never looks like it is still thinking', asy
   await expect(card.getByText('Response completed · No tool calls', { exact: true })).toBeVisible();
   await expect(card.getByText('Thinking', { exact: true })).toHaveCount(0);
   await expect(card.locator('.agent-tool-pair')).toHaveCount(0);
-  expect(await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await runningAnimations(card.locator('.agent-activity-status i'))).toBe(0);
 });
 
 test('a completed run keeps its last tool visible when the pane is narrow', async ({ page }) => {
@@ -72,6 +75,6 @@ test('a completed run keeps its last tool visible when the pane is narrow', asyn
   await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
   await expect(card).toContainText(/get_document_text\s*→\s*Read a source document/);
   await expect(card.locator('.agent-tool-pair')).toHaveAttribute('data-tool-state', 'complete');
-  expect(await card.locator('.agent-tool-pair i').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
+  expect(await runningAnimations(card.locator('.agent-tool-pair i'))).toBe(0);
   expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
