@@ -31,7 +31,9 @@ import { resolveRuntimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
 import { runtimeSkillManifests } from '../runtime/skills.js';
+import { runtimeLatency } from '../runtime/latency.js';
 import { logEvent } from '../keys/redact.js';
+import { recordHermesLatency } from '../ops/analytics.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -55,6 +57,8 @@ export interface RunAttemptParams {
   readonly attempt: number;
   readonly engineVersion: number;
   readonly traceId: string;
+  /** Server clock at interactive turn receipt; older and background jobs omit it. */
+  readonly receivedAt?: number;
   /**
    * Development only: which `ScriptedProvider` script this attempt answers
    * from. Set by `POST turns` when `MODEL_SCRIPTED=1`, ignored otherwise, and
@@ -279,6 +283,7 @@ function engineStep(step: WorkflowStep): EngineStep {
 
 export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
   override async run(event: WorkflowEvent<RunAttemptParams>, step: WorkflowStep): Promise<void> {
+    const invocationStartedAt = Date.now();
     const params = event.payload;
     if (!params?.runId || !params.workspaceId) {
       throw new NonRetryableError('RunAttempt was created without a run id');
@@ -354,8 +359,22 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           run.agentId,
         );
         checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
+        const onLatency = (measurement: import('../runtime/latency.js').RuntimeLatency) => {
+          recordHermesLatency(this.env, params.workspaceId, {
+            runId: run.id, modelId: run.modelId, ...measurement,
+          });
+          logEvent({
+            at: 'hermes.latency', run_id: run.id, trace_id: params.traceId,
+            attempt: params.attempt, model_id: run.modelId,
+            ...measurement,
+          });
+        };
+        runtimeLatency(invocationStartedAt, params.receivedAt, onLatency).mark('workflow_setup');
         await runHermesAttempt({
           db,
+          startedAt: invocationStartedAt,
+          receivedAt: params.receivedAt,
+          onLatency,
           client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport),
           profile: binding.profile,
           forward: deps.forward,

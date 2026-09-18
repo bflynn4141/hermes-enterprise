@@ -18,7 +18,9 @@ import {
   RuntimeBudgetError,
   type RuntimeBudgetDb,
   type RuntimeBudgetReservation,
+  type ProviderStreamObservation,
 } from './budget.js';
+import { logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
@@ -1036,6 +1038,7 @@ export async function proxyRuntimeModel(
   fetchImpl: typeof fetch = fetch,
   lifecycle?: ModelProxyLifecycle,
 ): Promise<Response> {
+  const proxyStartedAt = Date.now();
   if (!object(value) || typeof value.model !== 'string' || !Array.isArray(value.messages)) return modelError('bad_body', 400);
   const run = await db.activeProfileRun(agentId);
   if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
@@ -1084,11 +1087,45 @@ export async function proxyRuntimeModel(
   }
   let response: Response;
   const providerStartedAt = Date.now();
+  const proxyPrepareMs = Math.max(0, providerStartedAt - proxyStartedAt);
+  const callTraceId = crypto.randomUUID();
+  let providerHeadersMs: number | null = null;
+  const observations: Record<ProviderStreamObservation, number | null> = {
+    first_byte: null, first_frame: null, first_reasoning: null, first_content: null,
+  };
+  const recordTiming = (
+    phase: 'headers' | 'first_reasoning' | 'first_content' | 'settled',
+    status?: 'ok' | 'error' | 'stopped',
+    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens: number } | null,
+  ): void => {
+    // These are bridge-observed arrival times, not an upstream compute clock:
+    // downstream backpressure can delay reads. Reuse the accounting parser so
+    // observation neither drains ahead of demand nor keeps another body copy.
+    try {
+      logEvent({
+        at: 'runtime.provider_timing', phase,
+        workspace_id: workspaceId, run_id: run.id, attempt: run.attempt,
+        trace_id: run.traceId, call_trace_id: callTraceId,
+        provider: selected.provider, model_id: selected.model_id,
+        streamed: forwarded.stream === true, status,
+        proxy_prepare_ms: proxyPrepareMs, provider_headers_ms: providerHeadersMs,
+        provider_first_byte_observed_ms: observations.first_byte,
+        provider_first_frame_observed_ms: observations.first_frame,
+        provider_first_reasoning_observed_ms: observations.first_reasoning,
+        provider_first_content_observed_ms: observations.first_content,
+        provider_total_ms: phase === 'settled' ? Math.max(0, Date.now() - providerStartedAt) : null,
+        input_tokens: usage?.inputTokens ?? null,
+        output_tokens: usage?.outputTokens ?? null,
+        cached_input_tokens: usage?.cachedInputTokens ?? null,
+      });
+    } catch { /* Observability must not fail a request or change usage settlement. */ }
+  };
   const settle = async (
     usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number } | null,
     status: 'ok' | 'error' | 'stopped',
     resolution: 'completed' | 'rejected' | 'unresolved' | 'cancelled' | null,
   ): Promise<void> => {
+    recordTiming('settled', status, usage);
     const counted = usage ?? (prepared && resolution === 'unresolved'
       ? {
           inputTokens: prepared.inputTokenBound,
@@ -1134,6 +1171,8 @@ export async function proxyRuntimeModel(
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${credential.apiKey}`, ...config.headers },
       body: JSON.stringify(forwarded),
     });
+    providerHeadersMs = Math.max(0, Date.now() - providerStartedAt);
+    recordTiming('headers');
   } catch (error) {
     // Once fetch started, whether the provider accepted and billed the call is
     // unknown. Keep the reserved upper bound consumed before surfacing the
@@ -1165,6 +1204,9 @@ export async function proxyRuntimeModel(
     } finally {
       await lifecycle?.settled();
     }
+  }, (observation) => {
+    observations[observation] = Math.max(0, Date.now() - providerStartedAt);
+    if (observation === 'first_reasoning' || observation === 'first_content') recordTiming(observation);
   });
 }
 export async function runtimeChatCompletions(c: Context<{ Bindings: Env }>): Promise<Response> {
