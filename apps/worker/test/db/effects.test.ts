@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
-import { INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
+import { fetchReviewBinding, INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
 
 function env() {
   const sent: { workspace_id: string; document_id: string; version: number }[] = [];
@@ -16,7 +16,7 @@ async function approve(e: ReturnType<typeof env>, fx: Fixture, requestId: string
   const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
     method: 'POST',
     headers: INBOX_HEADERS,
-    body: { decision: 'approve' },
+    body: { decision: 'approve', ...await fetchReviewBinding(e.env, fx, requestId) },
   });
   expect(response.status).toBe(201);
   return ((await response.json()) as { effect_ids: string[] }).effect_ids;

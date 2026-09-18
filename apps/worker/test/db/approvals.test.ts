@@ -127,6 +127,24 @@ function outreachDraft(fx: ApprovalFixture): Extract<ApprovalProposal, { approva
   };
 }
 
+async function installOutreachDraftPolicy(fx: ApprovalFixture): Promise<void> {
+  await withClient('owner', async (client) => {
+    await client.query('BEGIN');
+    await setTenant(client, fx.workspaceId, fx.adminId);
+    await client.query(
+      `INSERT INTO approval_policies
+        (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
+         prevent_self_review, steps)
+       VALUES ($1,'partner-outreach-draft',1,'communication',$2,100,'sequential',false,$3::jsonb)`,
+      [fx.workspaceId, fx.agentId, JSON.stringify([{
+        id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+        reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+      }])],
+    );
+    await client.query('COMMIT');
+  });
+}
+
 async function propose(fx: ApprovalFixture, proposal: ApprovalProposal, key: string, policyKey = 'run-plan-low'): Promise<ApprovalView> {
   const e = env();
   return withTenantTransaction(e.env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, (tx) =>
@@ -150,21 +168,7 @@ describe('enterprise approval policy and voting', () => {
   beforeEach(async () => { fx = await seedApprovalFixture(); });
 
   it('stores outreach as a draft-only review with no delivery effect', async () => {
-    await withClient('owner', async (client) => {
-      await client.query('BEGIN');
-      await setTenant(client, fx.workspaceId, fx.adminId);
-      await client.query(
-        `INSERT INTO approval_policies
-          (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
-           prevent_self_review, steps)
-         VALUES ($1,'partner-outreach-draft',1,'communication',$2,100,'sequential',false,$3::jsonb)`,
-        [fx.workspaceId, fx.agentId, JSON.stringify([{
-          id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
-          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
-        }])],
-      );
-      await client.query('COMMIT');
-    });
+    await installOutreachDraftPolicy(fx);
     const proposed = await propose(fx, outreachDraft(fx), `proposal:${randomUUID()}`, 'partner-outreach-draft');
     expect(proposed.payload.approval_type).toBe('communication');
     if (proposed.payload.approval_type !== 'communication') throw new Error('fixture drift');
@@ -174,6 +178,55 @@ describe('enterprise approval policy and voting', () => {
     expect(proposed.effect).toMatchObject({
       kind: 'communication', status: 'not_required', reason: expect.stringContaining('does not send'),
     });
+  });
+
+  it('saves revised email copy and requires a fresh review of that exact draft', async () => {
+    await installOutreachDraftPolicy(fx);
+    const e = env();
+    const original = outreachDraft(fx);
+    const proposed = await propose(fx, original, `proposal:${randomUUID()}`, 'partner-outreach-draft');
+    const requestChanges = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS,
+      body: { ...decision(proposed, `vote:${randomUUID()}`, 'request_changes'), note: 'Make the invitation shorter.' },
+    });
+    expect(requestChanges.status).toBe(201);
+
+    const revised = {
+      ...original,
+      details: { ...original.details, subject: 'Build with Hermes', body: 'Hi Taylor,\n\nWould you like to explore the Hermes Partner Program?' },
+    };
+    const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/revisions`, {
+      method: 'POST', headers: INBOX_HEADERS,
+      body: {
+        expected_authorization_revision: proposed.payload.authorization.revision,
+        expected_authorization_hash: proposed.payload.authorization.hash,
+        idempotency_key: `revision:${randomUUID()}`, proposal: revised,
+        change_summary: 'Shortened the subject and invitation body.',
+      },
+    });
+    expect(response.status).toBe(201);
+    const current = await response.json() as ApprovalView;
+    expect(current.payload.authorization.revision).toBe(2);
+    expect(current.payload.authorization.hash).not.toBe(proposed.payload.authorization.hash);
+    expect(current.payload.details).toEqual(revised.details);
+    expect(current.payload.evidence).toEqual(original.evidence);
+    expect(current.votes).toHaveLength(0);
+    expect(current.status).toBe('pending');
+
+    const staleVote = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`),
+    });
+    expect(staleVote.status).toBe(409);
+    expect(await staleVote.json()).toMatchObject({ reason: 'stale_authorization' });
+
+    const freshVote = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(current, `vote:${randomUUID()}`),
+    });
+    expect(freshVote.status).toBe(201);
+    const approved = await freshVote.json() as ApprovalView;
+    expect(approved.status).toBe('approved');
+    expect(approved.payload.details).toEqual(revised.details);
+    expect(approved.effect).toMatchObject({ kind: 'communication', status: 'not_required' });
   });
 
   it('accepts only contact fields copied from stored verified partner evidence', async () => {

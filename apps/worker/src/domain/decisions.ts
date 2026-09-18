@@ -31,6 +31,7 @@
 // cannot drift apart without a test failing.
 import {
   RESULTING_STATUS,
+  requestReviewBinding,
   type Decision,
   type EffectKind,
   type RequestKind,
@@ -58,6 +59,7 @@ interface RequestRow {
   session_id: string | null;
   label: string;
   payload: unknown;
+  version: number;
 }
 
 /**
@@ -118,12 +120,14 @@ export async function recordDecision(
   requestId: string,
   decision: Decision,
   note: string | null,
+  review: { expected_version?: unknown; expected_payload_hash?: unknown } = {},
 ): Promise<DecisionOutcome> {
   // FOR UPDATE, so the second of two concurrent tabs waits here rather than
   // racing the status check. When it wakes, the row it re-reads is the one this
   // transaction committed, and it takes the conflict path below.
   const found = await work.tx.query<RequestRow>(
-    `SELECT id, kind, status, session_id, label, payload
+    `SELECT id, kind, status, session_id, label, payload,
+            GREATEST(0, EXTRACT(EPOCH FROM updated_at)::int) AS version
        FROM requests WHERE id = $1 FOR UPDATE`,
     [requestId],
   );
@@ -149,6 +153,24 @@ export async function recordDecision(
   }
   if (request.kind === 'task') {
     throw new RouteError('tasks are completed through their named workflow', 'task_route_required', 409);
+  }
+
+  if (request.kind === 'invoice' || request.kind === 'agreement') {
+    if (review.expected_version === undefined && review.expected_payload_hash === undefined) {
+      throw new RouteError('review the document before recording a decision', 'review_binding_required', 409);
+    }
+    if (typeof review.expected_version !== 'number' || !Number.isSafeInteger(review.expected_version)
+      || review.expected_version < 0 || typeof review.expected_payload_hash !== 'string'
+      || !/^sha256:[0-9a-f]{64}$/.test(review.expected_payload_hash)) {
+      throw new RouteError('the document review binding is invalid', 'bad_review_binding', 422);
+    }
+    // Compare under the row lock, before any write. Content hashing also
+    // catches edits inside the timestamp version's one-second resolution.
+    const current = await requestReviewBinding(request);
+    if (review.expected_version !== current.expected_version
+      || review.expected_payload_hash !== current.expected_payload_hash) {
+      throw new RouteError('this document changed; review it again before deciding', 'stale_request', 409);
+    }
   }
 
   const resulting = RESULTING_STATUS[request.kind][decision];

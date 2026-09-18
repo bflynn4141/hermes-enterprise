@@ -107,17 +107,17 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         if (jobId) jobs.push(jobId);
       }
     }
-    return { rows: result.rows, projections };
+    return { rows: result.rows, projections, canDecideLegacy: work.role === 'admin' };
   });
 
-  const items = rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null, triageActive));
+  const items = rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null, triageActive, rows.canDecideLegacy));
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
     items.sort((left, right) => {
       const a = requestEntitySchema.parse(left);
       const b = requestEntitySchema.parse(right);
       return rank[a.triage?.band ?? 'assessing'] - rank[b.triage?.band ?? 'assessing']
-        || Number(Boolean(b.approval?.pending_for_viewer)) - Number(Boolean(a.approval?.pending_for_viewer))
+        || Number(Boolean(b.decision_summary?.approval_requirement.pending_for_viewer)) - Number(Boolean(a.decision_summary?.approval_requirement.pending_for_viewer))
         || (b.triage?.score ?? -1) - (a.triage?.score ?? -1)
         || Date.parse(a.created_at) - Date.parse(b.created_at)
         || a.id.localeCompare(b.id);
@@ -138,10 +138,10 @@ export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Respons
   const result = await inWorkspace(c, async (work) => {
     const row = await loadRequest(work.tx, requestId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval };
+    return { row, approval, canDecideLegacy: work.role === 'admin' };
   });
   if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval, c.env.INBOX_TRIAGE_MODE === 'active')));
+  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval, c.env.INBOX_TRIAGE_MODE === 'active', result.canDecideLegacy)));
 }
 
 export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -192,9 +192,9 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
     );
     const row = await loadRequest(work.tx, requestId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval };
+    return { row, approval, canDecideLegacy: work.role === 'admin' };
   });
 
   if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval, c.env.INBOX_TRIAGE_MODE === 'active')), 201);
+  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval, c.env.INBOX_TRIAGE_MODE === 'active', row.canDecideLegacy)), 201);
 }

@@ -9,9 +9,12 @@
 // The rest are the five guards, each refused on its own, and the two-tab race.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { decisionResultSchema, requestReviewBinding, type ReviewableRequest } from '@hermes/shared';
+import { recordDecision } from '../../src/domain/decisions.js';
+import type { TenantWork } from '../../src/routes/tenant.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
-import { seedWorkspace, withClient, type Fixture } from './helpers.js';
-import { ageSession, INBOX_HEADERS, permutations, seedQueue, seedRequest } from './m4-fixtures.js';
+import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
+import { ageSession, fetchReviewBinding, INBOX_HEADERS, permutations, seedQueue, seedRequest } from './m4-fixtures.js';
 
 /** The renders queue is recorded rather than run: Node has no Cloudflare queue. */
 function env() {
@@ -20,11 +23,11 @@ function env() {
   return { ...made, sent };
 }
 
-const decide = (e: ReturnType<typeof env>, fx: Fixture, requestId: string, decision = 'approve', extra: Record<string, string> = {}) =>
+const decide = (e: ReturnType<typeof env>, fx: Fixture, requestId: string, decision = 'approve', review: object = {}) =>
   asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
     method: 'POST',
-    headers: { ...INBOX_HEADERS, ...extra },
-    body: { decision },
+    headers: INBOX_HEADERS,
+    body: { decision, ...review },
   });
 
 /** The counts the Inbox badge, the Overview and History read. Views only. */
@@ -38,6 +41,16 @@ async function counts(fx: Fixture): Promise<{ inbox: number; decisions: number; 
       [fx.workspaceId],
     );
     return rows[0]!;
+  });
+}
+
+async function expectUnchanged(fx: Fixture, requestId: string): Promise<void> {
+  await readTenant(fx.workspaceId, fx.adminId, async (c) => {
+    expect((await c.query(`SELECT status FROM requests WHERE id = $1`, [requestId])).rows[0]?.status).toBe('pending');
+    for (const table of ['decisions', 'effects', 'documents', 'jobs']) {
+      expect((await c.query(`SELECT 1 FROM ${table}`)).rowCount).toBe(0);
+    }
+    expect((await c.query(`SELECT 1 FROM events WHERE kind = 'decision.recorded'`)).rowCount).toBe(0);
   });
 }
 
@@ -56,7 +69,8 @@ describe('all 24 completion orders', () => {
 
         for (const [step, index] of order.entries()) {
           const request = queue[index]!;
-          const response = await decide(e, fx, request.id);
+          const binding = request.kind === 'application' ? {} : await fetchReviewBinding(e.env, fx, request.id);
+          const response = await decide(e, fx, request.id, 'approve', binding);
           expect(response.status).toBe(201);
           const body = (await response.json()) as { resulting_status: string; effect_ids: string[] };
           expect(body.resulting_status).toBe(request.expected);
@@ -102,6 +116,19 @@ describe('all 24 completion orders', () => {
 });
 
 describe('a decision is refused unless every guard passes', () => {
+  it.each(['invoice', 'agreement'] as const)('requires the reviewed %s binding before recording a decision', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+
+    const response = await decide(e, fx, requestId);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'review_binding_required' });
+    expect(await counts(fx)).toEqual({ inbox: 1, decisions: 0, grants: 0, documents: 0 });
+    await expectUnchanged(fx, requestId);
+    expect(e.sent).toHaveLength(0);
+  });
+
   it('needs an allowlisted Origin', async () => {
     const fx = await seedWorkspace();
     const requestId = await seedRequest(fx, 'application');
@@ -193,13 +220,133 @@ describe('a decision is refused unless every guard passes', () => {
   });
 });
 
-describe('two tabs', () => {
-  it('produce one decision, one receipt job, and a conflict for the loser', async () => {
+describe('binding a decision to the reviewed document', () => {
+  it.each([
+    ['invoice', 'approve', 'created'], ['invoice', 'decline', 'declined'],
+    ['agreement', 'approve', 'drafted'], ['agreement', 'decline', 'declined'],
+  ] as const)('records a current %s %s decision', async (kind, decision, expectedStatus) => {
     const fx = await seedWorkspace();
-    const requestId = await seedRequest(fx, 'application');
+    const requestId = await seedRequest(fx, kind);
     const e = env();
+    const binding = await fetchReviewBinding(e.env, fx, requestId);
 
-    const [first, second] = await Promise.all([decide(e, fx, requestId), decide(e, fx, requestId)]);
+    const response = await decide(e, fx, requestId, decision, binding);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ request_id: requestId, resulting_status: expectedStatus });
+    expect((await counts(fx)).decisions).toBe(1);
+  });
+
+  it.each(['invoice', 'agreement'] as const)('rejects malformed %s bindings without writing anything', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+    const binding = await fetchReviewBinding(e.env, fx, requestId);
+    const malformed = [
+      { expected_version: binding.expected_version },
+      { expected_payload_hash: binding.expected_payload_hash },
+      { ...binding, expected_version: null },
+      { ...binding, expected_version: String(binding.expected_version) },
+      { ...binding, expected_version: -1 },
+      { ...binding, expected_version: 1.5 },
+      { ...binding, expected_version: Number.MAX_SAFE_INTEGER + 1 },
+      { ...binding, expected_payload_hash: null },
+      { ...binding, expected_payload_hash: 'sha256:1234' },
+      { ...binding, expected_payload_hash: `sha256:${'A'.repeat(64)}` },
+      { ...binding, expected_payload_hash: { hash: binding.expected_payload_hash } },
+    ];
+    for (const review of malformed) {
+      const response = await decide(e, fx, requestId, 'approve', review);
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ reason: 'bad_review_binding' });
+    }
+    await expectUnchanged(fx, requestId);
+    expect(e.sent).toHaveLength(0);
+  });
+
+  it.each(['invoice', 'agreement'] as const)('rejects an old %s version even when its payload matches', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+    const binding = await fetchReviewBinding(e.env, fx, requestId);
+
+    const response = await decide(e, fx, requestId, 'decline', { ...binding, expected_version: binding.expected_version - 1 });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'stale_request' });
+    await expectUnchanged(fx, requestId);
+  });
+
+  it.each(['invoice', 'agreement'] as const)('rejects a %s payload revised after the reviewer fetched it', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+    const binding = await fetchReviewBinding(e.env, fx, requestId);
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE requests SET payload = payload || '{"notes":"Revised after review"}'::jsonb WHERE id = $1`, [requestId]);
+      await c.query('COMMIT');
+    });
+
+    const response = await decide(e, fx, requestId, 'approve', binding);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'stale_request' });
+    await expectUnchanged(fx, requestId);
+  });
+
+  it.each(['invoice', 'agreement'] as const)('catches a same-second %s edit under the database row lock', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      try {
+        // now() is constant in one transaction, so both real updates receive
+        // exactly the same timestamp without disabling the timestamp trigger.
+        await c.query(`UPDATE requests SET payload = payload WHERE id = $1`, [requestId]);
+        const before = await c.query<ReviewableRequest>(
+          `SELECT id, kind, payload, EXTRACT(EPOCH FROM updated_at)::int AS version FROM requests WHERE id = $1`, [requestId],
+        );
+        const binding = await requestReviewBinding(before.rows[0]!);
+        await c.query(`UPDATE requests SET payload = payload || '{"notes":"Different reviewed terms"}'::jsonb WHERE id = $1`, [requestId]);
+        const after = await c.query(`SELECT EXTRACT(EPOCH FROM updated_at)::int AS version FROM requests WHERE id = $1`, [requestId]);
+        expect(after.rows[0]?.version).toBe(binding.expected_version);
+
+        const work = { tx: c, session: { sid: 'same-second-test' } } as unknown as TenantWork;
+        await expect(recordDecision(work, requestId, 'approve', null, binding))
+          .rejects.toMatchObject({ reason: 'stale_request', status: 409 });
+        expect((await c.query(`SELECT 1 FROM decisions WHERE request_id = $1`, [requestId])).rowCount).toBe(0);
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    await expectUnchanged(fx, requestId);
+  });
+
+  it('rejects a binding taken from another invoice', async () => {
+    const fx = await seedWorkspace();
+    const firstId = await seedRequest(fx, 'invoice');
+    const secondId = await seedRequest(fx, 'invoice');
+    const e = env();
+    const first = await fetchReviewBinding(e.env, fx, firstId);
+    const second = await fetchReviewBinding(e.env, fx, secondId);
+    const response = await decide(e, fx, secondId, 'approve', { ...first, expected_version: second.expected_version });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'stale_request' });
+    await expectUnchanged(fx, secondId);
+  });
+});
+
+describe('two tabs', () => {
+  it.each(['application', 'invoice', 'agreement'] as const)('produce one %s decision, one receipt job, and a conflict for the loser', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+    const binding = kind === 'application' ? {} : await fetchReviewBinding(e.env, fx, requestId);
+
+    const [first, second] = await Promise.all([
+      decide(e, fx, requestId, 'approve', binding), decide(e, fx, requestId, 'approve', binding),
+    ]);
     const statuses = [first.status, second.status].sort();
     expect(statuses).toEqual([200, 201]);
 
@@ -219,6 +366,28 @@ describe('two tabs', () => {
       expect(receipts.rowCount).toBe(1);
       expect(receipts.rows[0]?.key).toBe(`receipt:${a.decision_id}`);
     });
+  });
+
+  it.each(['invoice', 'agreement'] as const)('returns the recorded %s decision even if a retry binding is absent, malformed or stale', async (kind) => {
+    const fx = await seedWorkspace();
+    const requestId = await seedRequest(fx, kind);
+    const e = env();
+    const binding = await fetchReviewBinding(e.env, fx, requestId);
+    const created = await decide(e, fx, requestId, 'approve', binding);
+    expect(created.status).toBe(201);
+    const recorded = decisionResultSchema.parse(await created.json());
+
+    for (const review of [{}, { expected_version: null }, { ...binding, expected_version: binding.expected_version - 1 }]) {
+      const retry = await decide(e, fx, requestId, 'decline', review);
+      expect(retry.status).toBe(200);
+      expect(retry.headers.get('x-hermes-conflict')).toBe('true');
+      const returned = decisionResultSchema.parse(await retry.json());
+      expect({ ...returned, effect_ids: [...returned.effect_ids].sort() })
+        .toEqual({ ...recorded, effect_ids: [...recorded.effect_ids].sort() });
+    }
+    expect((await counts(fx)).decisions).toBe(1);
+    expect((await counts(fx)).documents).toBe(1);
+    expect(e.sent).toHaveLength(1);
   });
 
   it('refuses a second decision on a request that is already admitted', async () => {

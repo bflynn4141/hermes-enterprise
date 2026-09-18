@@ -7,7 +7,17 @@
 // route both validate, and a fixture that only looked right would pass the
 // decision tests and fail the ones that matter.
 import { randomUUID } from 'node:crypto';
+import { requestEntitySchema, requestReviewBinding, type RequestReviewBinding } from '@hermes/shared';
+import type { Env } from '../../src/env.js';
+import { asUser } from './harness.js';
 import { setTenant, withClient, type Fixture } from './helpers.js';
+
+/** Bind explicitly to the same request response a reviewer sees in Inbox. */
+export async function fetchReviewBinding(env: Env, fx: Fixture, requestId: string): Promise<RequestReviewBinding> {
+  const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}`);
+  if (response.status !== 200) throw new Error(`could not review request: ${response.status}`);
+  return requestReviewBinding(requestEntitySchema.parse(await response.json()));
+}
 
 export const applicationPayload = (name: string, role: string): Record<string, unknown> => ({
   kind: 'application',

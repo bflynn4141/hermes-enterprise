@@ -87,6 +87,7 @@ import {
   createApprovalRevision,
   createApprovalRoute,
   getApprovalRoute,
+  getApprovalEvidenceRoute,
 } from './routes/approvals.js';
 import {
   createRequestNote,
@@ -370,6 +371,7 @@ app.get('/w/:ws/requests', listRequests);
 app.get('/w/:ws/requests/:id', getRequest);
 app.post('/w/:ws/requests/:id/decisions', createDecision);
 app.get('/w/:ws/requests/:id/approval', getApprovalRoute);
+app.get('/w/:ws/requests/:id/approval/evidence/:evidenceId', getApprovalEvidenceRoute);
 app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);

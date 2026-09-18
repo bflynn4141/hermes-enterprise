@@ -47,6 +47,8 @@ import { recordDecision } from '../domain/decisions.js';
 interface DecisionBody {
   decision?: string;
   note?: string;
+  expected_version?: unknown;
+  expected_payload_hash?: unknown;
 }
 
 export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -65,7 +67,7 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
   const outcome = await inWorkspace(c, async (work) => {
     work.requireAdmin('recording a decision');
     requireStepUp(work.session);
-    return recordDecision(work, requestId, decision, note);
+    return recordDecision(work, requestId, decision, note, input);
   });
 
   const body = decisionResultSchema.parse({

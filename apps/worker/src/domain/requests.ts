@@ -90,7 +90,7 @@ export function subjectOf(row: Pick<RequestRow, 'kind' | 'payload' | 'label'>): 
     case 'application':
       return text(asRecord(payload.applicant).name) ?? text(row.label);
     case 'invoice':
-      return text(asRecord(payload.payer).name) ?? text(asRecord(payload.payee).name) ?? text(row.label);
+      return text(asRecord(payload.payee).name) ?? text(row.label);
     case 'agreement': {
       const parties = Array.isArray(payload.parties) ? payload.parties : [];
       return text(asRecord(parties[0]).name) ?? text(row.label);
@@ -178,7 +178,7 @@ function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjec
   return result;
 }
 
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false): Record<string, unknown> {
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
@@ -201,7 +201,7 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
-    decision_summary: decisionSummary(row, approval),
+    decision_summary: decisionSummary(row, approval, canDecideLegacy),
     triage: triageOf(row, triageActive, approval),
   };
 }
