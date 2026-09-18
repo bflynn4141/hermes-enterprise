@@ -825,7 +825,7 @@ export const partnerScreeningRuns = pgTable(
     agentCashToolCallId: text('agentcash_tool_call_id'),
     rateLimits: jsonb('rate_limits').notNull().default([]),
     candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
-    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),
+    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 7, scale: 3 }).notNull().default('0'),
     errorCode: text('error_code'),
     errorDetail: text('error_detail'),
     startedAt: now('started_at'),

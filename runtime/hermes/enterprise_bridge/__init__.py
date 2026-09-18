@@ -19,6 +19,7 @@ MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
 TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
 AGENTCASH_CREATOR_SEARCH_URL = "https://stableenrich.dev/api/exa/search"
+AGENTCASH_X_CREATOR_SEARCH_URL = "https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top"
 AGENTCASH_CONTACT_ENRICH_URL = "https://stableenrich.dev/api/minerva/enrich"
 AGENTCASH_EMAIL_VERIFY_URL = "https://stableenrich.dev/api/hunter/email-verifier"
 CONTACT_RETURN_FIELDS = ["full_name", "linkedin_url", "professional_emails", "phones", "twitter_url", "facebook_url"]
@@ -43,6 +44,16 @@ AGENTCASH_CREATOR_SEARCH_ARGUMENTS = {
         },
     },
 }
+AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS = {
+    "url": AGENTCASH_X_CREATOR_SEARCH_URL,
+    "method": "GET",
+    "maxAmount": 0.005,
+}
+
+
+def is_creator_search_arguments(arguments):
+    return arguments in (AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+                         AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS)
 
 
 def approved_agentcash_arguments(program):
@@ -421,7 +432,7 @@ class Bridge:
                                             pending.get("tool_call_id"), pending.get("arguments"))
         if (not isinstance(run_id, str) or not re.fullmatch(r"run_[0-9a-f]{32}", run_id)
                 or not isinstance(tool_call_id, str) or not TOOL_CALL_ID.fullmatch(tool_call_id)
-                or arguments != AGENTCASH_CREATOR_SEARCH_ARGUMENTS):
+                or not is_creator_search_arguments(arguments)):
             raise BridgeError("AgentCash pending creator import identity was rejected.")
         home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")).resolve()
         spill_path = (home / "cache" / "spillover" / (tool_call_id + ".txt")).resolve()
@@ -524,7 +535,7 @@ def register(ctx):
     if not configured_mcp_policy and os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1":
         configured_mcp_policy = [{
             "server": "agentcash", "tools": ["fetch"],
-            "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15,
+            "allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15,
         }]
     mcp_policy = {}
     for item in configured_mcp_policy:
@@ -549,7 +560,7 @@ def register(ctx):
             return {"action": "block", "message": "This MCP tool is not in the enterprise allowlist."}
         args = args if isinstance(args, dict) else {}
         if (tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments
-                and args != AGENTCASH_CREATOR_SEARCH_ARGUMENTS
+                and not is_creator_search_arguments(args)
                 and agentcash_contact_call_kind(args) is None):
             return {"action": "block", "message": "Only the exact approved Partner Program AgentCash requests are allowed."}
         if "url" in args:
@@ -588,7 +599,7 @@ def register(ctx):
                     run_id, call_id = trusted_hook_identity(tool_call_id)
                     if args == agentcash_arguments:
                         bridge.authorize_people_search(run_id, call_id, args)
-                    elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+                    elif is_creator_search_arguments(args):
                         bridge.authorize_creator_search(run_id, call_id, args)
                     else:
                         bridge.authorize_contact(run_id, call_id, args)
@@ -607,7 +618,7 @@ def register(ctx):
             run_id, trusted_call_id = trusted_hook_identity(tool_call_id)
             if args == agentcash_arguments:
                 bridge.import_people_search(run_id, trusted_call_id, args, result)
-            elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+            elif is_creator_search_arguments(args):
                 bridge.import_creator_search(run_id, trusted_call_id, args, result)
             elif agentcash_contact_call_kind(args) is not None:
                 bridge.import_contact(run_id, trusted_call_id, args, result)
@@ -625,7 +636,7 @@ def register(ctx):
         name="partner-program-screening",
         path=skill_path,
         description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.6.0", "metadata": {"hermes": {"category": "enterprise"}}},
+        frontmatter={"version": "1.7.0", "metadata": {"hermes": {"category": "enterprise"}}},
     )
     for schema in bridge.tools():
         name = schema["name"]

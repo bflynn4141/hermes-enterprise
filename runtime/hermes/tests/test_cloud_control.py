@@ -53,7 +53,7 @@ class CloudControlTests(unittest.TestCase):
         }):
             status, body = self.control().dispatch({"operation": "readiness"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["version"], "1.6.1")
+        self.assertEqual(body["version"], "1.6.2")
 
     def test_submit_forwards_only_native_body_and_idempotency_key(self):
         control = self.control()

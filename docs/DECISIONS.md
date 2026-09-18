@@ -5332,3 +5332,45 @@ model ids. Browser tests prove visible text grows before completion, the final
 handoff has no blank frame, and committed output survives session navigation
 and reload. Model-menu unit and browser tests cover the two same-label StepFun
 routes and the selected exact id.
+
+---
+
+## C76. Creator-channel runs receive exact governed calls and X uses a $0.005 public-post connector
+
+**Decided September 18, 2026.** An explicit Hermes creator, influencer,
+consultant, or implementation search now causes the Worker to append the exact
+approved AgentCash call to the native runtime input. The original user message
+remains authoritative: the payment endpoint independently checks that it names
+Hermes, an action such as search or test, and the requested channel before it
+leases a call. Recovery input never receives a fresh paid-search instruction.
+
+LinkedIn and YouTube keep the fixed $0.01 public-index search. X uses one fixed
+read-only `fetcher.sh/api/twitter/search` request for the exact `"Hermes Agent"`
+phrase, capped at $0.005. Its importer stores at most five canonical X
+profile/post pairs, bounded public bio and post text, point-in-time follower and
+engagement metrics, and explicit evidence gaps. It drops contact-like text,
+provider metadata, payment receipts, locations, images, and unrelated response
+fields. Direct messaging, outreach, and direct platform credentials remain
+outside this connector.
+
+The screening cost column uses millidollar precision so the audit row records
+$0.005 instead of rounding it to $0.01. LinkedIn/YouTube and X use separate
+run-bound idempotency keys, so an explicit multi-channel test can lease each
+fixed call once without sharing or replaying an allowance.
+
+**Why.** A staging acceptance prompt asked Iris to call the existing creator
+search exactly once. The free model rate-limited; a paid-model retry then spent
+ten tool steps reading unrelated Inbox records because the skill referred to
+exact arguments that the app never supplied. The connector was implemented,
+but model tool selection made it practically unreachable. Exact prompt
+augmentation removes that hidden dependency while the Worker lease preserves
+the spend and intent boundary.
+
+**Evidence.** Three live AgentCash X calls verified the origin-hosted schema: a
+narrow combined account query returned no users, `Nous Research` returned the
+verified Nous profile, and the public-post search returned current Hermes
+authors and posts. Unit tests cover explicit-intent detection, exact runtime
+input, X sanitization, public metrics, skill metadata and source state. Python
+plugin tests cover host allowlisting plus pre/post hooks. The PostgreSQL route
+test covers the $0.005 lease, import, candidate/artifact persistence and exact
+audited cost.

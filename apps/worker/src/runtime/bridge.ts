@@ -30,7 +30,11 @@ import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
   AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
   parseAgentCashCreatorSearch,
+  parseAgentCashXCreatorSearch,
+  requestedCreatorSearchKinds,
+  type AgentCashCreatorSearchKind,
 } from '../partner-screening/agentcash-creators.js';
 import {
   AGENTCASH_CONTACT_ENRICH_URL,
@@ -574,22 +578,33 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
   return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }
 
-function creatorPromptAuthorized(prompt: string | null): boolean {
-  const normalized = (prompt ?? '').toLowerCase();
-  return normalized.includes('hermes')
-    && (normalized.includes('youtube') || normalized.includes('linkedin'))
-    && (normalized.includes('consult') || normalized.includes('influenc') || normalized.includes('creator'));
+interface CreatorSearchSpec {
+  readonly kind: AgentCashCreatorSearchKind;
+  readonly cost: number;
 }
 
-function creatorRunKey(runtimeRunId: string): string {
-  return `creator:${runtimeRunId}`;
+function creatorSearchSpec(argumentsValue: Record<string, unknown>): CreatorSearchSpec | null {
+  if (canonical(argumentsValue) === canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+    return { kind: 'linkedin_youtube', cost: 0.01 };
+  }
+  if (canonical(argumentsValue) === canonical(AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS)) {
+    return { kind: 'x', cost: 0.005 };
+  }
+  return null;
+}
+
+function creatorRunKey(runtimeRunId: string, kind: AgentCashCreatorSearchKind): string {
+  // Preserve the deployed LinkedIn/YouTube idempotency key for recovery and
+  // use a separate namespace for X so one explicit multi-channel run is safe.
+  return kind === 'linkedin_youtube' ? `creator:${runtimeRunId}` : `creator:x:${runtimeRunId}`;
 }
 
 /** Reserve one fixed $0.01 public creator search only from an explicitly matching user turn. */
 export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const input = parseAgentCashCreatorAuthorization(await body(c));
-  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+  const spec = creatorSearchSpec(input.arguments);
+  if (!spec) {
     throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
   }
   const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
@@ -617,10 +632,10 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
       [workspaceId, run.id, agentId],
     );
     const authorized = context.rows[0];
-    if (!authorized || !creatorPromptAuthorized(authorized.prompt)) {
+    if (!authorized || !requestedCreatorSearchKinds(authorized.prompt).includes(spec.kind)) {
       throw new RouteError('This run does not contain an explicit Hermes creator-search request.', 'partner_creator_search_not_authorized', 403);
     }
-    const key = creatorRunKey(input.runtime_run_id);
+    const key = creatorRunKey(input.runtime_run_id, spec.kind);
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO partner_screening_runs
          (workspace_id, agent_id, created_by, idempotency_key, source, authentication,
@@ -630,12 +645,12 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
        RETURNING id`,
       [workspaceId, agentId, authorized.owner_id, key, JSON.stringify({
         runtime_run_id: input.runtime_run_id,
-        query_kind: 'hermes_creator_consultants',
+        query_kind: spec.kind === 'x' ? 'hermes_x_creator_posts' : 'hermes_creator_consultants',
         minimum_priority: 0,
         ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
         max_candidates: 5,
         max_api_requests: 1,
-        max_spend_usd: 0.01,
+        max_spend_usd: spec.cost,
       }), input.tool_call_id],
     );
     if (inserted.rows[0]) {
@@ -656,16 +671,17 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
     }
     screeningRunId = row.id;
   });
-  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1, max_spend_usd: 0.01 }, created ? 201 : 200);
+  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1, max_spend_usd: spec.cost }, created ? 201 : 200);
 }
 
 /** Return a paid creator response that still needs import after a gateway restart. */
 export async function pendingAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const pending = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => tx.query<{
-    runtime_run_id: string; agentcash_tool_call_id: string;
+    runtime_run_id: string; agentcash_tool_call_id: string; query_kind: string | null;
   }>(
-    `SELECT config_snapshot->>'runtime_run_id' AS runtime_run_id, agentcash_tool_call_id
+    `SELECT config_snapshot->>'runtime_run_id' AS runtime_run_id, agentcash_tool_call_id,
+            config_snapshot->>'query_kind' AS query_kind
        FROM partner_screening_runs
       WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_creators'
         AND status='running' AND api_requests_used=1 AND agentcash_tool_call_id IS NOT NULL
@@ -678,14 +694,18 @@ export async function pendingAgentCashCreatorSearch(c: Context<{ Bindings: Env }
   if (!/^run_[0-9a-f]{32}$/.test(row.runtime_run_id) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(row.agentcash_tool_call_id)) {
     throw new RouteError('The pending creator import has invalid runtime identity.', 'partner_screening_conflict', 409);
   }
-  return c.json({ runtime_run_id: row.runtime_run_id, tool_call_id: row.agentcash_tool_call_id, arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS });
+  const argumentsValue = row.query_kind === 'hermes_x_creator_posts'
+    ? AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS
+    : AGENTCASH_CREATOR_SEARCH_ARGUMENTS;
+  return c.json({ runtime_run_id: row.runtime_run_id, tool_call_id: row.agentcash_tool_call_id, arguments: argumentsValue });
 }
 
 /** Import one exact creator-search response as bounded public evidence. */
 export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const input = parseAgentCashCreatorImport(await body(c));
-  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+  const spec = creatorSearchSpec(input.arguments);
+  if (!spec) {
     throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
   }
   const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
@@ -707,7 +727,7 @@ export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>
          FROM partner_screening_runs
         WHERE workspace_id=$1 AND agent_id=$2 AND idempotency_key=$3 AND source='agentcash_creators'
         FOR UPDATE`,
-      [workspaceId, agentId, creatorRunKey(input.runtime_run_id)],
+      [workspaceId, agentId, creatorRunKey(input.runtime_run_id, spec.kind)],
     );
     const row = screening.rows[0];
     if (!row || row.status === 'failed' || row.api_requests_used !== 1 || row.agentcash_tool_call_id !== input.tool_call_id) {
@@ -719,7 +739,11 @@ export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>
       return;
     }
     let result;
-    try { result = parseAgentCashCreatorSearch(input.result); } catch {
+    try {
+      result = spec.kind === 'x'
+        ? parseAgentCashXCreatorSearch(input.result)
+        : parseAgentCashCreatorSearch(input.result);
+    } catch {
       throw new RouteError('AgentCash creator search returned an unsupported response shape.', 'partner_source_invalid_response', 422);
     }
     importedCandidates = result.candidates.length;

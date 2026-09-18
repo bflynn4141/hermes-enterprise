@@ -87,7 +87,7 @@ describe('partner screening source configuration', () => {
     expect(matrix.sources).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'github', state: 'live', authentication: 'authenticated' }),
       expect.objectContaining({ id: 'youtube', state: 'live', authentication: 'wallet' }),
-      expect.objectContaining({ id: 'x', state: 'unconfigured' }),
+      expect.objectContaining({ id: 'x', state: 'live', authentication: 'wallet' }),
       expect.objectContaining({ id: 'linkedin', state: 'live', authentication: 'wallet' }),
     ]));
     expect(matrix.onboarding_live_search).toMatchObject({ available: true, source: 'github' });

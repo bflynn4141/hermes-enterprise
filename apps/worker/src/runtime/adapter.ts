@@ -13,6 +13,7 @@ import type { RuntimeSkillManifest } from './skills.js';
 import { classifyHermesFailure } from './errors.js';
 import type { MessagePreviewFrame } from '@hermes/shared';
 import { runtimeLatency, type RuntimeLatency } from './latency.js';
+import { governedCreatorSearchInput } from '../partner-screening/agentcash-creators.js';
 
 export interface RuntimePersistence extends AgentDb {
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
@@ -137,7 +138,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       }
       const wireModel = model.model_id.replace(/^(?:openrouter|nous):/, '');
       const proposed: Record<string, unknown> = {
-        input: recoveryInput ?? userInput,
+        input: recoveryInput ?? governedCreatorSearchInput(userInput),
         session_id: run.sessionId,
         model: wireModel,
         provider: 'custom',

@@ -10,7 +10,7 @@ export const LIVE_DISCLOSURE =
 export const AGENTCASH_DISCLOSURE =
   'Public professional evidence was fetched through AgentCash People Search using one capped wallet payment. No person was contacted and no application, admission, message, signature, or other external write was performed.' as const;
 export const AGENTCASH_CREATOR_DISCLOSURE =
-  'Public LinkedIn and YouTube creator evidence was fetched through one explicitly requested AgentCash search. Influence scale and contactability remain evidence gaps; no person was contacted and no message was sent.' as const;
+  'Public LinkedIn, YouTube, or X creator evidence was fetched through an explicitly requested AgentCash search. Public metrics are point-in-time evidence; influence quality and contactability remain gaps. No person was contacted and no message was sent.' as const;
 export const PRIORITY_NOTE = 'This is connector-side triage, not an Iris or Hermes decision.' as const;
 
 export type PartnerScreeningSource = 'github' | 'agentcash_people' | 'agentcash_creators';

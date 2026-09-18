@@ -163,9 +163,11 @@ export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMat
       },
       {
         id: 'x',
-        state: 'unconfigured',
-        authentication: env.PARTNER_X_BEARER_TOKEN?.trim() ? 'authenticated' : 'not_applicable',
-        note: 'Requires an approved X developer app, bearer token, and pay-per-use budget. No X calls are made by this build.',
+        state: config.config ? 'live' : 'unconfigured',
+        authentication: config.config ? 'wallet' : 'not_applicable',
+        note: config.config
+          ? 'Explicit-request creator discovery can search public X posts through one fixed $0.005 AgentCash call; public metrics are point-in-time evidence, not proof of influence or availability.'
+          : config.problem,
       },
       {
         id: 'linkedin',

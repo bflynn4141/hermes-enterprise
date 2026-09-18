@@ -58,6 +58,7 @@ CONTACT_ARGS = {
     },
 }
 CREATOR_ARGS = plugin.AGENTCASH_CREATOR_SEARCH_ARGUMENTS
+X_CREATOR_ARGS = plugin.AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS
 
 
 class BridgeTests(unittest.TestCase):
@@ -262,7 +263,7 @@ class BridgeTests(unittest.TestCase):
 
         manifest = {
             "name": "enterprise_bridge:partner-program-screening",
-            "version": "1.6.0",
+            "version": "1.7.0",
             "auto_load": True,
             "config": {"partner_program": PEOPLE_PROGRAM},
         }
@@ -418,6 +419,52 @@ class BridgeTests(unittest.TestCase):
         authorized.assert_called_once_with(RUN_ID, "call_creator", CREATOR_ARGS)
         imported.assert_called_once_with(RUN_ID, "call_creator", CREATOR_ARGS, json.dumps({"results": []}))
 
+    def test_x_creator_search_is_allowlisted_authorized_and_imported(self):
+        class Context:
+            def __init__(self):
+                self.hooks = {}
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                    "partner_program": PEOPLE_PROGRAM,
+                    "mcp_policy": [{
+                        "server": "agentcash", "tools": ["fetch"],
+                        "allowed_hosts": ["stableenrich.dev", "fetcher.sh"],
+                        "max_amount_usd": 0.15,
+                    }],
+                }.get(name, default)
+
+            def register_hook(self, name, callback):
+                self.hooks[name] = callback
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin.Bridge, "authorize_creator_search") as authorized, \
+                patch.object(plugin.Bridge, "import_creator_search") as imported, \
+                patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_x_creator")):
+            plugin.register(context)
+            self.assertIsNone(context.hooks["pre_tool_call"](
+                "mcp__agentcash__fetch", X_CREATOR_ARGS, tool_call_id="call_x_creator"))
+            result = json.dumps({"status": 200, "data": {"tweets": []}})
+            context.hooks["post_tool_call"](
+                tool_name="mcp__agentcash__fetch", args=X_CREATOR_ARGS,
+                result=result, tool_call_id="call_x_creator",
+            )
+        authorized.assert_called_once_with(RUN_ID, "call_x_creator", X_CREATOR_ARGS)
+        imported.assert_called_once_with(RUN_ID, "call_x_creator", X_CREATOR_ARGS, result)
+
     def test_contact_enrichment_is_worker_authorized_and_imported(self):
         class Context:
             def __init__(self):
@@ -519,7 +566,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.6.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": "1.7.0",
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 
