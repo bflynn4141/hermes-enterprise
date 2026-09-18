@@ -15,6 +15,7 @@ import { errorFromResponse } from '../../src/model/http.js';
 const anthropicKey = ['sk', 'ant', 'api03', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAA'].join('-');
 const openaiKey = ['sk', 'proj', 'BBBBBBBBBBBBBBBBBBBBBBBB'].join('-');
 const deepseekKey = ['sk', 'CCCCCCCCCCCCCCCCCCCCCCCCCCCC'].join('-');
+const typesafeKey = ['apikey', 'AAAAAAAAAAAAAAAA', 'BBBBBBBBBBBBBBBB'].join('_');
 const gatewayToken = 'zzzzzzzzzzzzzzzzzzzzzzzz';
 
 /** Capture what a helper actually wrote, as the strings a log pipeline sees. */
@@ -37,7 +38,7 @@ function captureLog(fn: () => void): string[] {
 
 describe('key-shaped strings', () => {
   it('are replaced wherever they appear, including inside prose', () => {
-    for (const key of [anthropicKey, openaiKey, deepseekKey]) {
+    for (const key of [anthropicKey, openaiKey, deepseekKey, typesafeKey]) {
       expect(redactString(`the provider rejected ${key} at 14:02`)).not.toContain(key);
       expect(redactString(key)).toBe(REDACTED);
     }
@@ -53,7 +54,7 @@ describe('key-shaped strings', () => {
     });
 
     const printed = lines.join('\n');
-    for (const key of [anthropicKey, openaiKey, deepseekKey]) expect(printed).not.toContain(key);
+    for (const key of [anthropicKey, openaiKey, deepseekKey, typesafeKey]) expect(printed).not.toContain(key);
     expect(printed).toContain(REDACTED);
   });
 });
