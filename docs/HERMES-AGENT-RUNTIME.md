@@ -49,6 +49,15 @@ frame limit. Each lane has at most one delivery in flight. Received response
 text is capped at 4 Mi code units; queued tool/activity operations are capped at
 256. Exceeding a bound fails explicitly and preserves received partial output.
 
+For Hermes Cloud bindings, the long-lived connector hop is a conventional GET
+SSE response on the same exact service-authenticated `/control` path used by
+POST control operations. It commits headers with an immediate SSE comment,
+asks intermediaries for identity encoding, and relays one complete native frame
+per ASGI body write. This removes POST-response and compression thresholds from
+the first-delta path without widening the connector's host, path or operation
+allowlist. The legacy POST `events` envelope remains temporarily drainable by
+an older Worker.
+
 Tool activity and control reads serialize whole operations on the main database
 client; production delta checkpoints use their existing dedicated connection.
 Native completion wakes status reconciliation. If status wins the race, the
@@ -233,9 +242,11 @@ approvals, audit data, model credentials, and the reverse tool/model bridge. It
 must not proxy a developer laptop or impersonate the agent runtime. A Cloud
 instance binds to the Worker through the reviewed `enterprise_bridge` plugin.
 The plugin contributes one fixed service-authenticated dashboard endpoint. It
-accepts only capabilities, submit, status, events, stop and steer operations,
-then forwards them to the loopback API Server with the native key. It is not an
-arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
+accepts only capabilities, submit, status, events, stop and steer operations.
+Control operations use POST; the event stream uses GET with a validated
+`run_id` query on that same exact path, then forwards to the loopback API Server
+with the native key. It is not an arbitrary path proxy.
+`HERMES_RUNTIME_AGENTS` records the endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
 

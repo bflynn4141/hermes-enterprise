@@ -27,14 +27,19 @@ plugin and enable it to add one machine-authenticated connector route:
 
 ```text
 POST /api/plugins/enterprise_bridge/control
+GET  /api/plugins/enterprise_bridge/control?run_id=run_…  # SSE only
 ```
 
 Set a unique `HERMES_ENTERPRISE_CONTROL_SECRET` (at least 43 random URL-safe
 characters) on the Cloud instance. The Worker stores that value as the
 per-agent runtime `api_key`, sets the binding's `transport` to
 `dashboard_connector`, and uses the full connector URL as `base_url`. The
-plugin accepts only capabilities, submit, status, events, stop and steer; it
-forwards them to `http://127.0.0.1:8642` with `API_SERVER_KEY`. The native key
+plugin accepts only capabilities, submit, status, events, stop and steer. The
+long-lived event stream uses GET on the same exact token-authenticated path so
+intermediaries treat it as conventional SSE; it emits an immediate comment and
+then flushes one complete native event frame at a time. All other operations
+use POST. The connector forwards them to `http://127.0.0.1:8642` with
+`API_SERVER_KEY`. The native key
 never leaves the Cloud instance, and the connector cannot select another host
 or path.
 

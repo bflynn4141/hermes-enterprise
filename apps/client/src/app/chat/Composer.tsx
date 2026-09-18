@@ -15,7 +15,7 @@ import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitive
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
-import { ModelMenu } from './ModelMenu.js';
+import { ModelMenu, modelRouteLabel } from './ModelMenu.js';
 import { refusalFor, type Refusal } from './refusal.js';
 import type { SessionState } from '../../model/store.js';
 
@@ -69,6 +69,7 @@ export function Composer({ session }: { session: SessionState }) {
   const agent = agentName(state);
   const catalog = catalogRows(state);
   const model = catalog.find((row) => row.model_id === session.model) ?? catalog[0];
+  const modelRoute = model ? modelRouteLabel(model) : null;
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
   const attachmentsAvailable = state.capabilities.turnAttachments;
 
@@ -360,8 +361,10 @@ export function Composer({ session }: { session: SessionState }) {
             {/* Named, not just labelled by its own text: the text is the
                 current model, so "the control that changes the model" had no
                 stable name for a screen reader or a test to ask for. */}
-            <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}`} aria-expanded={menu === 'model'} disabled={active} title={active ? 'Model for this run' : undefined} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
-              <span className="composer-model-label">{model?.label ?? EMPTY.noProvider}</span> <Icon name="chevron" size={14} className="composer-selector-chevron" />
+            <button ref={modelBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-label={`Model: ${model?.label ?? 'none available'}${modelRoute ? ` · ${modelRoute}` : ''}`} aria-expanded={menu === 'model'} disabled={active} title={active ? 'Model for this run' : model?.model_id} onClick={() => setMenu(menu === 'model' ? null : 'model')}>
+              <span className="composer-model-label">{model?.label ?? EMPTY.noProvider}</span>
+              {modelRoute && <span className="composer-model-route">{modelRoute}</span>}
+              <Icon name="chevron" size={14} className="composer-selector-chevron" />
             </button>
             <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
           </span>

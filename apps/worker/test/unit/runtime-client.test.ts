@@ -73,6 +73,26 @@ describe('official Hermes Runs transport', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
   });
 
+  it('uses conventional GET SSE on the fixed connector path without compression', async () => {
+    const event = { event: 'message.delta', run_id: RUN_ID, delta: 'First' };
+    const { client, send } = connectorTransport(() => new Response(`: enterprise-bridge-connected\n\ndata: ${JSON.stringify(event)}\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    const controller = new AbortController();
+    const received = [];
+    for await (const item of client.events(RUN_ID, controller.signal)) received.push(item);
+    expect(received).toEqual([event]);
+    const [rawUrl, init] = send.mock.calls[0]!;
+    const url = new URL(String(rawUrl));
+    expect(`${url.origin}${url.pathname}`).toBe('https://iris.example/api/plugins/enterprise_bridge/control');
+    expect(url.searchParams.get('run_id')).toBe(RUN_ID);
+    expect(init?.method).toBe('GET');
+    expect(init?.body).toBeUndefined();
+    expect(init?.signal).toBe(controller.signal);
+    expect(new Headers(init?.headers).get('Accept-Encoding')).toBe('identity');
+    expect(new Headers(init?.headers).get('Cache-Control')).toBe('no-cache');
+  });
+
   it('wraps Cloud submit and control operations without exposing a generic proxy', async () => {
     const responses = [
       json({ run_id: RUN_ID, status: 'started' }, 202),

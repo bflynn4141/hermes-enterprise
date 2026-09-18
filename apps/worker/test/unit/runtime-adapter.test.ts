@@ -540,6 +540,22 @@ describe('official Hermes enterprise projection', () => {
     expect(JSON.stringify(client.submissions)).not.toContain('sk-test');
   });
 
+  it.each([
+    ['nous:stepfun/step-3.7-flash', 'stepfun/step-3.7-flash'],
+    ['nous:stepfun/step-3.7-flash:free', 'stepfun/step-3.7-flash:free'],
+  ])('submits the exact effective Portal route for %s', async (catalogId, wireId) => {
+    class NousRuntimeDb extends FakeRuntimeDb {
+      constructor() { super({ modelId: catalogId }); }
+      override loadModel() {
+        return Promise.resolve({ model_id: catalogId, provider: 'nous_portal', transport: 'nous_chat', effort_map: null });
+      }
+    }
+    const client = new FakeHermesClient();
+    await execute(new NousRuntimeDb(), client);
+    expect(client.submissions[0]?.body.model).toBe(wireId);
+    expect(client.submissions[0]?.body.provider).toBe('custom');
+  });
+
   it('reuses a persisted native run when submission checkpoints are lost', async () => {
     const db = new FakeRuntimeDb();
     db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };

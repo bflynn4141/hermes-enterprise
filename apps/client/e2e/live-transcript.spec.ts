@@ -138,6 +138,42 @@ test('T2 · a reader at the bottom stays at the bottom for the whole run', async
   await expect(page.locator('.jump-latest')).toHaveCount(0);
 });
 
+test('T2b · streamed text grows before completion and the final survives navigation and reload', async ({ browser }) => {
+  const page = await openSession(browser, 'T2b stream persistence');
+  const originalUrl = page.url();
+  await send(page, 'Screen the applicant.');
+
+  const live = page.locator('.stream-text .lead-text');
+  await expect(live).toBeVisible({ timeout: 10_000 });
+  const lengths = await live.evaluate((element) => new Promise<number[]>((resolve) => {
+    const seen: number[] = [];
+    const started = performance.now();
+    const sample = () => {
+      const length = element.textContent?.length ?? 0;
+      if (length > 0 && length !== seen.at(-1)) seen.push(length);
+      if (seen.length >= 3 || performance.now() - started > 2_000) resolve(seen);
+      else requestAnimationFrame(sample);
+    };
+    sample();
+  }));
+  expect(lengths.length, `observed text lengths: ${lengths.join(', ')}`).toBeGreaterThanOrEqual(2);
+  expect(lengths.at(-1)!).toBeGreaterThan(lengths[0]!);
+
+  const final = /pending your decision in the Inbox/;
+  await expect(page.getByText(final)).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator('.stream-text')).toHaveCount(0);
+
+  const otherSession = await newSession(page, 'T2b navigation target');
+  await page.goto(`/workspace/${SEED_WORKSPACE}/s/${otherSession}`);
+  await expect(page.getByRole('textbox', { name: /^Message/ })).toBeVisible();
+  await page.goto(originalUrl);
+  await expect(page.getByText(final)).toBeVisible({ timeout: 15_000 });
+
+  await page.reload();
+  await expect(page.getByText(final)).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.stream-text')).toHaveCount(0);
+});
+
 // ---------------------------------------------------------------------------
 // T3 · a reader who scrolls up keeps their place
 // ---------------------------------------------------------------------------
