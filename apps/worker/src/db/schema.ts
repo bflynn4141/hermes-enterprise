@@ -505,6 +505,16 @@ export const runs = pgTable(
   (t) => [unique('runs_client_turn_key').on(t.sessionId, t.clientTurnId)],
 );
 
+export const runSweepObservations = pgTable('run_sweep_observations', {
+  runId: uuid('run_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  attempt: integer('attempt').notNull(),
+  workflowInstanceId: text('workflow_instance_id'),
+  runStatus: text('run_status').notNull(),
+  progressAt: ts('progress_at').notNull(),
+  firstMissingAt: now('first_missing_at'),
+});
+
 export const runSteps = pgTable(
   'run_steps',
   {
@@ -1481,6 +1491,7 @@ export const ALL_TABLES = {
   messages,
   message_feedback: messageFeedback,
   runs,
+  run_sweep_observations: runSweepObservations,
   run_steps: runSteps,
   run_turns: runTurns,
   run_queue: runQueue,
