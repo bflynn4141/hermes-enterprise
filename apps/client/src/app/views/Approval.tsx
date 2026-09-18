@@ -560,7 +560,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
       {changeMode && (
         <div className="approval-inline-form" role="region" aria-label="Request changes">
           <label><span>What needs to change</span><textarea value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={4000} autoFocus /></label>
-          <Button onClick={() => setChangeMode(false)}>Cancel</Button><Button primary disabled={busy || changeNote.trim().length === 0} onClick={() => decide('request_changes', changeNote.trim())}>Send back for changes</Button>
+          <Button onClick={() => setChangeMode(false)}>Cancel</Button><Button primary disabled={busy || !canRequestChanges || changeNote.trim().length === 0} onClick={() => decide('request_changes', changeNote.trim())}>Send back for changes</Button>
         </div>
       )}
       {revisionMode && (
@@ -575,7 +575,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
         <div className="approval-inline-form" role="region" aria-label="Route reviewer">
           <label><span>Eligible reviewer</span><select value={routeMember} onChange={(event) => setRouteMember(event.target.value)}><option value="">Choose reviewer</option>{view.identities.reviewers.map((reviewer) => <option key={reviewer.member_id} value={reviewer.member_id}>{reviewer.name} · {reviewer.authority_roles.join(', ') || 'member'}</option>)}</select></label>
           <label><span>Routing reason</span><input value={routeReason} onChange={(event) => setRouteReason(event.target.value)} maxLength={1000} /></label>
-          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Route review</Button>
+          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || authorizationExpired || !view.capabilities.can_route || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Route review</Button>
         </div>
       )}
     </div>
