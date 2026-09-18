@@ -217,15 +217,11 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
             </label>
             {activeTab === 'needs-review' && (
-              <span className="reviewer-filter" role="group" aria-label="Reviewer">
-                {([
-                  ['for_me', 'For me'],
-                  ['waiting', 'Waiting on others'],
-                  ['all', 'All'],
-                ] as const).map(([value, label]) => (
-                  <button key={value} type="button" aria-pressed={reviewer === value} onClick={() => setFilters({ reviewer: value })}>{label}</button>
-                ))}
-              </span>
+              <select className="btn reviewer-filter" aria-label="Reviewer" value={reviewer} onChange={(event) => setFilters({ reviewer: event.target.value as NonNullable<Ref['filters']>['reviewer'] })}>
+                <option value="for_me">For me</option>
+                <option value="waiting">Waiting on others</option>
+                <option value="all">All reviewers</option>
+              </select>
             )}
             <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
               <option value="all">All types</option>
