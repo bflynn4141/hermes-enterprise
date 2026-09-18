@@ -145,6 +145,20 @@ class BridgeTests(unittest.TestCase):
             "AgentCash People Search evidence import failed (422 partner_source_invalid_response).",
         )
 
+    def test_creator_authorization_reports_only_safe_rejection_metadata(self):
+        bridge = self.bridge()
+        with patch.object(bridge, "request", return_value=(403, {
+            "error": "raw database detail must not be logged",
+            "reason": "partner_creator_search_not_authorized",
+        })):
+            with self.assertRaises(plugin.BridgeError) as raised:
+                bridge.authorize_creator_search(RUN_ID, "call_creator", CREATOR_ARGS)
+        self.assertEqual(
+            str(raised.exception),
+            "AgentCash creator-search authorization was rejected "
+            "(403 partner_creator_search_not_authorized).",
+        )
+
     def test_startup_recovery_replays_only_the_leased_spill_file(self):
         bridge = self.bridge()
         with tempfile.TemporaryDirectory() as directory:

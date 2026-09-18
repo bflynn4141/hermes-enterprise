@@ -35,7 +35,7 @@ export const AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS = {
 export type AgentCashCreatorSearchKind = 'linkedin_youtube' | 'x';
 
 const ACTION_INTENT = /\b(?:search|find|discover|identify|look\s*up|run|test)\b/iu;
-const CREATOR_INTENT = /\b(?:consult(?:ant|ing)?|influenc(?:er|ers)?|creator|teacher|tutorial|implement(?:er|ation)?)\b/iu;
+const CREATOR_INTENT = /\b(?:consult(?:ants?|ing)?|influenc(?:er|ers)?|creators?|teachers?|tutorials?|implement(?:ers?|ations?)?)\b/iu;
 
 /** Paid creator discovery is only attached to an explicit, imperative user request. */
 export function requestedCreatorSearchKinds(prompt: string | null | undefined): readonly AgentCashCreatorSearchKind[] {
