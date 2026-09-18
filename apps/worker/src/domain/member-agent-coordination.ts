@@ -4,6 +4,7 @@ import { publishEvents } from '../jobs.js';
 import { consumeReservedCapacity, reservedCapacityAgentId } from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { proposeApproval } from './approvals.js';
+import { enqueueRequestTriage } from '../inbox-triage/service.js';
 
 const PARTNER_PROGRAM_INSTRUCTIONS = [
   'Support this member as Iris for the Partner Program: discover and screen potential ecosystem partners from approved professional evidence.',
@@ -54,10 +55,10 @@ async function createStarterItems(
   agentId: string,
   sessionId: string,
 ): Promise<string> {
-  const task = await input.tx.query<{ id: string }>(
+  const task = await input.tx.query<{ id: string; version: number }>(
     `INSERT INTO requests (workspace_id, kind, label, payload, status, session_id, tool_call_id)
      VALUES ($1,'task','Complete Partner Program criteria',$2::jsonb,'pending',$3,$4)
-     RETURNING id`,
+     RETURNING id, EXTRACT(EPOCH FROM updated_at)::int AS version`,
     [input.workspaceId, JSON.stringify({
       kind: 'task',
       task_type: 'partner_criteria_setup',
@@ -78,6 +79,8 @@ async function createStarterItems(
     { kind: 'request.created', payload: { request_id: taskId, kind: 'task', status: 'pending', label: 'Complete Partner Program criteria', run_id: null, session_id: sessionId } },
     { kind: 'entity.updated', payload: { entity_type: 'request', entity_id: taskId, ref: { section: 'inbox', view: 'request', id: taskId }, version: null } },
   ]));
+  const triageJob = await enqueueRequestTriage(input.tx, input.workspaceId, taskId, task.rows[0]?.version ?? 0);
+  if (triageJob) input.jobs.push(triageJob);
 
   const policyKey = await installFirstSearchPolicy(input.tx, input.workspaceId, agentId, input.joiningMemberId);
   const approval = await proposeApproval({

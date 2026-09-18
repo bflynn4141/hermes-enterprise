@@ -329,6 +329,9 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       expires_at: payload.authorization.expires_at,
       pending_for_viewer: !waitsForAlex, waiting_on_others: waitsForAlex,
       current_reviewer_names: [waitsForAlex ? 'Alex Rivera' : 'Maya Chen'],
+      mode: payload.policy.mode, completed_steps: 0, total_steps: policySteps.length,
+      remaining_approvals: policySteps[0]?.quorum ?? 1,
+      current_steps: [{ label: policySteps[0]?.label ?? 'Review', approvals_recorded: 0, quorum: policySteps[0]?.quorum ?? 1 }],
       effect_status: effectKind === 'none' ? 'not_required' : 'unavailable', work_status: 'waiting',
     };
     requests.push({
@@ -336,6 +339,21 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       session_id: context.sessionId, run_id: context.runId, created_at: context.at(index - 20), version: 1,
       payload: payload as unknown as Record<string, unknown>, sources: [], missing: [], note: null,
       decision_id: null, decided_at: null, decided_by_name: null, approval: projection,
+      decision_summary: {
+        action: 'Review approval', primary: proposal.summary, facts: [], consequence: proposal.consequence,
+        approval_requirement: {
+          mode: projection.mode, completed_steps: projection.completed_steps, total_steps: projection.total_steps,
+          remaining_approvals: projection.remaining_approvals, current: projection.current_steps,
+          pending_for_viewer: projection.pending_for_viewer, waiting_on_others: projection.waiting_on_others,
+          expires_at: projection.expires_at,
+        },
+      },
+      triage: {
+        status: 'complete', band: index === 0 ? 'urgent' : index < 4 ? 'high' : 'normal',
+        score: index === 0 ? 91 : index < 4 ? 72 - index : 48 - index,
+        confidence: .88, reason_codes: [index === 0 ? 'deadline' : index < 4 ? 'impact' : 'goal'],
+        assessed_at: context.at(index - 19), rubric_version: '1', model_id: 'typesafe/jev',
+      },
     });
     views.set(requestId, {
       request_id: requestId, workspace_id: context.workspaceId, status: 'pending', payload,

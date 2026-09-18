@@ -5184,7 +5184,7 @@ Primary references:
 
 ---
 
-## C72. Version and canary the Hermes runtime boundary as one contract
+## C73. Version and canary the Hermes runtime boundary as one contract
 
 **Decided September 17, 2026.** The native launcher now replaces provider
 failure prose with a fixed, versioned terminal-error envelope before either
@@ -5210,3 +5210,41 @@ Analytics Engine series and ring-tagged alert logs. A dedicated canary profile
 must attest `canary`, while ordinary and dynamically provisioned profiles
 attest `stable`. This makes launcher/adapter incompatibility observable before
 fleet promotion and prevents an accidental binding swap from admitting it.
+
+---
+
+## C72. Runtime provider failures retain safe, actionable status classes
+
+**Decided September 17, 2026.** The agent-scoped model bridge preserves the
+upstream HTTP status but returns one fixed error code for each action a person
+can take: reconnect authentication, restore quota, wait for a rate limit,
+change an unavailable model, retry a provider outage, or correct a rejected
+request. Provider response bodies remain outside the Enterprise trust boundary
+and are cancelled without being stored, streamed or logged. Worker telemetry
+records only provider, catalog model id, status and the fixed classification.
+
+Nous credential verification uses the callable free
+`stepfun/step-3.7-flash:free` route rather than the premium workspace default.
+Verification answers whether the OAuth grant can invoke inference; a temporary
+capacity outage on Claude must not mark that grant invalid or prevent a user
+from reconnecting it. The product default remains a separate quality choice.
+
+**Why.** A live Iris run reproduced three provider calls through the same saved
+OAuth connection. Claude Sonnet 5 returned 503 three times, while a cataloged
+DeepSeek route returned 404. Both were flattened to
+`runtime_provider_rejected`. A control call through the same bridge and OAuth
+grant completed on StepFun with HTTP 200 and authoritative streamed usage,
+proving that identity, credential refresh and the Enterprise transport were
+healthy. The failing boundary was model availability at Nous Portal.
+
+The Brian Interview Demo workspace and its proactive Iris session were moved
+to the proven StepFun route so scheduled and interactive work can continue
+while the premium routes are unavailable. That operational choice is visible
+in the session and workspace model selectors; the bridge does not silently
+substitute a different model.
+
+**Evidence.** Runtime bridge tests cover 401, 402, 404, 422, 429 and 503, assert
+that provider diagnostics never cross the boundary, and verify rejected calls
+remain attributed to the exact credential and model. The Nous adapter test
+pins the independent verification route. A live Hermes Cloud trace completed
+the StepFun control request in one model call with no tool calls.

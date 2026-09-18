@@ -251,6 +251,33 @@ describe('workspace model credential proxy', () => {
     expect(await response.text()).not.toContain('workspace-provider-secret');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    [401, 'runtime_provider_auth'],
+    [402, 'runtime_provider_quota'],
+    [404, 'runtime_model_unavailable'],
+    [429, 'runtime_provider_rate_limited'],
+    [503, 'runtime_provider_unavailable'],
+    [422, 'runtime_provider_rejected'],
+  ])('classifies an upstream %i without forwarding provider-controlled diagnostics', async (status, code) => {
+    const store = makeModelDb();
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(
+      'provider diagnostic containing workspace-provider-secret',
+      { status },
+    ));
+    const response = await proxyRuntimeModel(
+      env, store, workspaceId, agentId,
+      { model: 'nousresearch/hermes-4', messages: [] },
+      fetcher,
+    );
+    expect(response.status).toBe(status);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(await response.json()).toEqual({
+      error: { message: code, type: 'runtime_bridge_error', code },
+    });
+    expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: selected, provider: 'nous_portal', keyId: 'key-1', status: 'error',
+    }));
+  });
   it('reserves an approved plan before fetch and reconciles final streamed usage', async () => {
     const store = {
       ...makeModelDb(),

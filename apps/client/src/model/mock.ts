@@ -585,6 +585,11 @@ export function createMockBackend(options: MockOptions = {}) {
       pending_for_viewer: pendingForViewer,
       waiting_on_others: view.status === 'pending' && !pendingForViewer,
       current_reviewer_names: names,
+      mode: view.payload.policy.mode,
+      completed_steps: view.steps.filter((step) => step.status === 'approved').length,
+      total_steps: view.steps.length,
+      remaining_approvals: view.steps.filter((step) => !['approved', 'declined', 'changes_requested'].includes(step.status)).reduce((sum, step) => sum + Math.max(0, step.quorum - step.approvals_recorded), 0),
+      current_steps: current.map((step) => ({ label: step.label, approvals_recorded: step.approvals_recorded, quorum: step.quorum })),
       effect_status: view.effect.status,
       work_status: view.work.status,
     };

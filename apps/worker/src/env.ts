@@ -88,6 +88,10 @@ export interface Env {
   PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
   /** Separate spend gate for recurring AgentCash discovery. Manual onboarding keeps its one-use allowance. */
   PARTNER_SCREENING_PAID_AUTOMATION_ENABLED?: string;
+  /** Jev Inbox ranking rollout: off, shadow (store only), or active (serve ranking). */
+  INBOX_TRIAGE_MODE?: 'off' | 'shadow' | 'active';
+  /** Versioned scoring rubric, persisted beside each append-only assessment. */
+  INBOX_TRIAGE_RUBRIC_VERSION?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
@@ -178,6 +182,8 @@ export interface Env {
   // --- Queues ---------------------------------------------------------------
   EXTRACT_QUEUE: Queue;
   RENDERS_QUEUE: Queue;
+  /** Cloudflare Workers AI; optional in tests and local development. */
+  AI?: Ai;
 
   // --- R2 -------------------------------------------------------------------
   /** Uploads, extracted text (`{key}.txt`) and, from M4, rendered documents. */
