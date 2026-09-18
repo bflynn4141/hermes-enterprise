@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { mockUuid } from '@hermes/shared';
+import { APPROVAL_REVISION_DRAFT_KEY } from '../src/model/approval-revision-draft.js';
 
 const APPROVALS = '/?scenario=approvals';
 
@@ -28,6 +30,30 @@ async function openRequest(app: ReturnType<Page['getByRole']>, name: RegExp) {
 }
 
 test.describe('enterprise approval inbox', () => {
+  test('step-up restores an exact email rewrite to the editor and waits for explicit save', async ({ page }) => {
+    await page.addInitScript(({ key, viewerId, workspaceId, requestId }) => {
+      sessionStorage.setItem(key, JSON.stringify({
+        scope: { viewerId, workspaceId, requestId, revision: 1, hash: `sha256:${'4'.padStart(64, '0')}`, authorizationExpiresAt: '2026-10-19T12:00:00Z', canRevise: true },
+        draft: { subject: 'Restored subject', body: 'Restored unsaved email wording.', summary: 'Restored review summary.', changeNote: 'Shortened the message.' },
+        expiresAt: Date.now() + 60_000,
+      }));
+    }, { key: APPROVAL_REVISION_DRAFT_KEY, viewerId: mockUuid(100), workspaceId: mockUuid(1), requestId: mockUuid(1004) });
+    await page.goto(`${APPROVALS}&communicationDraft=1`);
+    await page.getByRole('button', { name: /^Inbox/ }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await openRequest(app, /Review the partner pilot outreach draft/);
+    await expect(app.getByLabel('Revised email subject')).toHaveValue('Restored subject');
+    await expect(app.getByLabel('Revised email body')).toHaveValue('Restored unsaved email wording.');
+    await expect(app.getByLabel('Revised proposal summary')).toHaveValue('Restored review summary.');
+    await expect(app.getByLabel('What changed', { exact: true })).toHaveValue('Shortened the message.');
+    await expect(app.locator('.approval-message-body')).not.toContainText('Restored unsaved email wording.');
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
+    await expect(app.getByRole('button', { name: 'Submit v2' })).toBeEnabled();
+    await app.getByRole('button', { name: 'Submit v2' }).click();
+    await expect(app.locator('.approval-message-body')).toContainText('Restored unsaved email wording.');
+    await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
+  });
+
   test('a long outreach draft leads with the decision and readable copy, then records no send', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 900, height: 850 });

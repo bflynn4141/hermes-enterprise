@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { mockUuid } from '@hermes/shared';
 import { createApprovalDemoFixtures } from '../../model/approval-fixtures.js';
-import { ApprovalDecisionHeader, ApprovalEvidence, ReviewerSequence, approvalActionLabel, approvalPrimaryAction } from './Approval.js';
+import { ApprovalDecisionHeader, ApprovalEvidence, ReviewerSequence, approvalActionLabel, approvalPrimaryAction, decisionError } from './Approval.js';
 
 export function approvalFixtures() {
   return createApprovalDemoFixtures({
@@ -13,6 +13,12 @@ export function approvalFixtures() {
 }
 
 describe('approval decision copy', () => {
+  it('handles the Worker authorization error codes specifically', () => {
+    expect(decisionError({ reason: 'approval_expired' })).toContain('expired');
+    expect(decisionError({ reason: 'reviewer_not_eligible' })).toContain('not eligible');
+    expect(decisionError({ reason: 'self_review_forbidden' })).toContain('not eligible');
+    expect(decisionError({ reason: 'duplicate_reviewer' })).toContain('already recorded');
+  });
   it('uses the same copy-only decision in detail and compact surfaces', () => {
     const fixtures = approvalFixtures();
     const request = fixtures.requests.find((item) => item.approval?.approval_type === 'communication')!;
