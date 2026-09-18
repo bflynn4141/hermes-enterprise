@@ -4,7 +4,7 @@ import json
 import pathlib
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "enterprise_bridge/dashboard/plugin_api.py"
@@ -53,7 +53,24 @@ class CloudControlTests(unittest.TestCase):
         }):
             status, body = self.control().dispatch({"operation": "readiness"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["version"], "1.6.2")
+        self.assertEqual(body["version"], "1.6.3")
+
+    def test_post_events_envelope_opens_the_native_stream(self):
+        class Request:
+            headers = {}
+
+            async def body(self):
+                return json.dumps({"operation": "events", "run_id": RUN_ID}).encode()
+
+        stream = object()
+        event_stream = AsyncMock(return_value=stream)
+        control = object()
+        with patch.object(cloud, "NativeControl", return_value=control), \
+             patch.object(cloud, "_event_stream", event_stream):
+            response = asyncio.run(cloud.enterprise_control(Request()))
+
+        self.assertIs(response, stream)
+        event_stream.assert_awaited_once_with(control, RUN_ID)
 
     def test_submit_forwards_only_native_body_and_idempotency_key(self):
         control = self.control()

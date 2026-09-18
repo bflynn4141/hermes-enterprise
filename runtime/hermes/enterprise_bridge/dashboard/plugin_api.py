@@ -51,7 +51,7 @@ except Exception:  # Unit tests exercise the transport helper without FastAPI.
 
 router = APIRouter()
 
-CONNECTOR_VERSION = "1.6.2"
+CONNECTOR_VERSION = "1.6.3"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
@@ -229,7 +229,7 @@ async def _event_stream(control: NativeControl, run_id: Any):
 
 @router.get("/control")
 async def enterprise_events(run_id: str):
-    """Use a conventional GET response for the long-lived SSE operation."""
+    """Compatibility route for hosts that expose plugin GET handlers."""
     try:
         return await _event_stream(NativeControl(), run_id)
     except ValueError as error:
@@ -256,8 +256,9 @@ async def enterprise_control(request: Request):
     try:
         control = NativeControl()
         if payload.get("operation") == "events":
-            # Kept for one release so already-running Workers can drain. New
-            # Workers use GET on this same authenticated path for SSE.
+            # Hermes Dashboard's service-authenticated plugin edge dispatches
+            # POST envelopes. StreamingResponse and the priming comment still
+            # commit the SSE response before the first native model token.
             return await _event_stream(control, payload.get("run_id"))
         status, body = await asyncio.to_thread(control.dispatch, payload)
         return JSONResponse(body, status_code=status)

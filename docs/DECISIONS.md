@@ -5374,3 +5374,29 @@ input, X sanitization, public metrics, skill metadata and source state. Python
 plugin tests cover host allowlisting plus pre/post hooks. The PostgreSQL route
 test covers the $0.005 lease, import, candidate/artifact persistence and exact
 audited cost.
+
+---
+
+## C77. Dashboard-connector events use its authenticated POST dispatcher
+
+**Decided September 18, 2026.** A Hermes Cloud run subscribes through the
+fixed, service-authenticated `POST /api/plugins/enterprise_bridge/control`
+operation envelope. The plugin's GET handler remains as a compatibility route
+for hosts that expose plugin GET routes, but it is not the Enterprise Worker's
+primary transport. The POST response is still a primed `StreamingResponse`;
+its native relay uses nonblocking `read1`, emits complete SSE frames as soon as
+they arrive, requests identity encoding, and disables intermediary transforms.
+
+**Why.** Staging disproved C75's routing assumption. A real run reached native
+submit and status repeatedly but never produced a native `/events` request:
+the dashboard edge did not dispatch the plugin's GET handler. That left the
+Worker to reconcile only the terminal status and made the completed answer
+appear at once. The POST dispatcher is the route the dashboard actually
+exposes. The buffering bug that originally motivated GET was in the connector's
+blocking native read, which remains fixed independently of the HTTP method.
+
+**Evidence.** The Worker regression test requires an authenticated POST events
+envelope, the caller's execution signal, `text/event-stream`, identity encoding
+and no-cache. The connector test requires that the POST events envelope enters
+the same native stream relay used by GET. The incremental ASGI timing test
+continues to prove the first delayed native frame leaves before terminal EOF.
