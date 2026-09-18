@@ -22,6 +22,10 @@ WORKOS_ISSUER=""
 # registered as a redirect URI in the WorkOS dashboard, exactly.
 WORKOS_REDIRECT_URI=""
 
+# --- TypeSafe Jev Inbox classifier ------------------------------------------
+# Needed only when INBOX_TRIAGE_MODE is shadow or active.
+TYPESAFE_API_KEY=""
+
 # --- Slack workspace channel -------------------------------------------------
 # Create one granular-permissions Slack app from docs/slack-app-manifest.yaml.
 # The redirect URI and Events API Request URL must exactly match the public

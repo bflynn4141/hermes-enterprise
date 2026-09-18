@@ -101,6 +101,8 @@ export interface Env {
 
   // --- Secrets (never in the repository; see .dev.vars.example) -------------
   WORKOS_API_KEY?: string;
+  /** TypeSafe Jev API credential for the advisory Inbox classifier. */
+  TYPESAFE_API_KEY?: string;
   WORKOS_CLIENT_ID?: string;
   WORKOS_COOKIE_PASSWORD?: string;
   /**
@@ -182,9 +184,6 @@ export interface Env {
   // --- Queues ---------------------------------------------------------------
   EXTRACT_QUEUE: Queue;
   RENDERS_QUEUE: Queue;
-  /** Cloudflare Workers AI; optional in tests and local development. */
-  AI?: Ai;
-
   // --- R2 -------------------------------------------------------------------
   /** Uploads, extracted text (`{key}.txt`) and, from M4, rendered documents. */
   UPLOADS: R2Bucket;
