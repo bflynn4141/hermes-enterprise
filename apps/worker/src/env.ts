@@ -21,6 +21,10 @@ export interface Env {
   HERMES_POOL_LOW_CAPACITY_THRESHOLD?: string;
   /** Public origin the Cloud profile uses for its reverse enterprise bridge. */
   HERMES_ENTERPRISE_PUBLIC_URL?: string;
+  /** Reviewed native plugin commit accepted for managed warm-pool profiles. */
+  HERMES_ENTERPRISE_PLUGIN_REVISION?: string;
+  /** Reviewed deterministic digest of the installed enterprise_bridge tree. */
+  HERMES_ENTERPRISE_PLUGIN_SHA256?: string;
   /**
    * 'fake' reads a seeded user from `x-dev-user`; 'workos' verifies a sealed
    * cookie. M1 ships 'fake' only, behind the same `getSession` interface the

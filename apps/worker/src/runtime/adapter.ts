@@ -14,6 +14,7 @@ import { classifyHermesFailure } from './errors.js';
 import type { MessagePreviewFrame } from '@hermes/shared';
 import { runtimeLatency, type RuntimeLatency } from './latency.js';
 import { governedCreatorSearchInput } from '../partner-screening/agentcash-creators.js';
+import { matchesManagedRuntimeAttestation, type ManagedRuntimeIdentity } from './readiness.js';
 
 export interface RuntimePersistence extends AgentDb {
   /** Collapse a serial runtime phase into one tenant-scoped database transaction. */
@@ -37,6 +38,9 @@ export interface RuntimeDeps {
   db: RuntimePersistence;
   client: HermesClient;
   profile: string;
+  /** Token-digest bindings must re-prove their managed process and current
+   * explicit assignment before every native submission. */
+  managedRuntimeIdentity?: ManagedRuntimeIdentity;
   /** Run already loaded while resolving the runtime binding for this invocation. */
   run?: EngineRunRow;
   forward(sessionId: string, runId: string, events: readonly EmittedEvent[]): Promise<{stop_requested:boolean}>;
@@ -100,6 +104,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
     };
   }));
   const { run, existingBinding, stopAtStart } = startup;
+  const attestRuntime = async (): Promise<number> => {
+    await client.capabilities();
+    if (deps.managedRuntimeIdentity) {
+      const readiness = await client.enterpriseReadiness();
+      if (!matchesManagedRuntimeAttestation(
+        readiness,
+        deps.managedRuntimeIdentity,
+        deps.skillSnapshot ?? [],
+      )) {
+        throw new Error('managed_runtime_readiness_incomplete');
+      }
+    }
+    return Date.now();
+  };
   const emit = async (events: EmitInput[]): Promise<void> => {
     const saved = await db.emit(events.map((event) => ({ ...event, sessionId: run.sessionId })));
     await deps.forward(run.sessionId, run.id, saved);
@@ -141,11 +159,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       // A Workflow callback may be replaying after either process restarted.
       // Re-read the live contract before trusting a persisted binding or
       // replaying the stable idempotency key.
-      const [checkedAt, existing] = await Promise.all([
-        latency.measure('submit_capabilities', async () => {
-          await client.capabilities();
-          return Date.now();
-        }),
+      let [checkedAt, existing] = await Promise.all([
+        latency.measure('submit_capabilities', attestRuntime),
         db.binding(run.id),
       ]);
       if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
@@ -180,6 +195,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         return db.snapshotRequest(run.id, run.attempt, proposed);
       });
       latency.mark('submit_preparation', preparationStartedAt);
+      const readinessAge = Date.now() - checkedAt;
+      if (readinessAge < 0 || readinessAge > FRESH_CAPABILITIES_MS) {
+        checkedAt = await latency.measure('submit_capabilities', attestRuntime);
+      }
       const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
       // Bind the exact snapshotted value. A Workflow replay may carry a request
       // created by an older release, and changing its session id would violate
@@ -202,7 +221,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const age = checkedAt === null ? null : Date.now() - checkedAt;
       if (age === null || age < 0 || age > FRESH_CAPABILITIES_MS) {
         // Independent retry/reconciliation must not trust a pre-restart check.
-        await latency.measure('execute_capabilities', () => client.capabilities());
+        await latency.measure('execute_capabilities', attestRuntime);
       }
       const startedAt = Date.now();
       const progress = { runId: run.id, turn: 0, stepId: 'hermes', label: 'Thinking', state: 'active' as const };

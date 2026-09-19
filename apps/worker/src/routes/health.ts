@@ -163,6 +163,10 @@ async function checkHermesRuntimes(env: Env): Promise<string> {
   if (publicUrl.protocol !== 'https:' || publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash) {
     throw new Error('invalid Hermes Enterprise public URL');
   }
+  if (!/^[0-9a-f]{40}$/.test(env.HERMES_ENTERPRISE_PLUGIN_REVISION ?? '') ||
+      !/^sha256:[0-9a-f]{64}$/.test(env.HERMES_ENTERPRISE_PLUGIN_SHA256 ?? '')) {
+    throw new Error('missing or invalid reviewed Hermes Enterprise plugin identity');
+  }
 
   // Warm-pool invitees use encrypted database bindings, not the original
   // deployment map. Keep probing any fixed profiles that still exist, but do
@@ -206,6 +210,8 @@ const cacheKey = (env: Env): string =>
     env.HERMES_RUNTIME_AGENTS?.length ?? 0,
     env.HERMES_BRIDGE_SECRET?.length ?? 0,
     env.HERMES_ENTERPRISE_PUBLIC_URL ?? '',
+    env.HERMES_ENTERPRISE_PLUGIN_REVISION ?? '',
+    env.HERMES_ENTERPRISE_PLUGIN_SHA256 ?? '',
   ].join('|');
 
 /** Tests reach for this rather than waiting out `CACHE_MS`. */

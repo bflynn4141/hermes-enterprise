@@ -23,6 +23,10 @@ import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../job
 import { optionalWorkosPort, type WorkOSEvent } from './workos.js';
 import { mirrorMembership, revokeAccess, type MemberRow } from '../routes/members.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import {
+  verifyPendingInvitationCapacityForEmail,
+  withCapacityGrantQuarantine,
+} from '../hermes-cloud/capacity.js';
 
 interface MembershipEventData {
   id?: string;
@@ -100,28 +104,33 @@ async function applyEvent(env: Env, event: WorkOSEvent): Promise<boolean> {
   const client = await connect(env, 'app');
   let workspaceId: string | null;
   let userId: string | null;
+  let userEmail: string | null;
   try {
     const workspace = await client.query<{ workspace_id: string }>(
       `SELECT workspace_id FROM workspace_directory WHERE workos_organization_id = $1`,
       [organizationId],
     );
     workspaceId = workspace.rows[0]?.workspace_id ?? null;
-    const user = await client.query<{ id: string }>(`SELECT id FROM users WHERE workos_user_id = $1`, [
+    const user = await client.query<{ id: string; email: string }>(`SELECT id, email FROM users WHERE workos_user_id = $1`, [
       workosUserId,
     ]);
     userId = user.rows[0]?.id ?? null;
+    userEmail = user.rows[0]?.email ?? null;
   } finally {
     await client.end();
   }
   // An organization we do not mirror, or a person who has never signed in here:
   // nothing to change, and nothing lost. Their first sign-in mirrors them.
-  if (!workspaceId || !userId) return false;
+  if (!workspaceId || !userId || !userEmail) return false;
 
   const role = data.role?.slug === 'admin' ? 'admin' : 'member';
   const deleted = event.event === 'organization_membership.deleted';
   const inactive = deleted || data.status === 'inactive';
+  const capacityProof = inactive
+    ? null
+    : await verifyPendingInvitationCapacityForEmail(env, workspaceId, userEmail);
 
-  const jobs = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+  const jobs = await withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, workspaceId, async (tx) => {
     const existing = await tx.query<MemberRow>(
       `SELECT id, user_id, role, status, workos_membership_id
          FROM members WHERE workspace_id = $1 AND user_id = $2`,
@@ -191,11 +200,12 @@ async function applyEvent(env: Env, event: WorkOSEvent): Promise<boolean> {
         joiningUserId: userId as string,
         joiningMemberId: mirrored.memberId,
         invitationId: mirrored.acceptedInvitation.id,
+        capacityProof,
         jobs: coordinationJobs,
       });
     }
     return coordinationJobs;
-  });
+  }));
 
   if (jobs.length > 0) await runJobsAfterCommit(env, workspaceId, jobs);
   return true;

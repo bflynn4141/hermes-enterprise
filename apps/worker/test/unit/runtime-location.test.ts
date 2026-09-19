@@ -30,6 +30,8 @@ describe('session execution location after a runtime rollout', () => {
       transport: 'native',
       assignment: 'fixed',
       agentCash: false,
+      runtimeAuthMode: 'legacy_hmac',
+      runtimeCredentialDigest: null,
     }]);
   });
 

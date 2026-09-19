@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { EnterpriseSkillAssignment } from '@hermes/shared';
 import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
 import {
   ENTERPRISE_BRIDGE_VERSION,
   HERMES_NATIVE_REVISION,
   enterpriseReadinessToolNames,
+  LEGACY_PARTNER_CONTENT_DIGEST,
+  matchesLegacyCapacityAttestation,
   matchesExactEnterpriseAttestation,
   matchesEnterpriseReadiness,
   requiresExactEnterpriseAttestation,
 } from '../../src/runtime/readiness.js';
+import { PARTNER_PROGRAM_DEFINITION, PARTNER_PROGRAM_TOOLS } from '../../src/enterprise-skills/registry.js';
+
+const PLUGIN_REVISION = 'a'.repeat(40);
+const PLUGIN_DIGEST = `sha256:${'d'.repeat(64)}`;
 
 function assignment(overrides: Partial<EnterpriseSkillAssignment> = {}): EnterpriseSkillAssignment {
   return {
@@ -30,7 +40,10 @@ function readiness(overrides: Partial<HermesEnterpriseReadiness> = {}): HermesEn
   return {
     object: 'hermes.enterprise_bridge.readiness', version: ENTERPRISE_BRIDGE_VERSION,
     runtimeRevision: HERMES_NATIVE_REVISION,
-    plugin: { name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION },
+    plugin: {
+      name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION,
+      revision: PLUGIN_REVISION, artifactDigest: PLUGIN_DIGEST,
+    },
     workspaceId: 'workspace', agentId: '22222222-2222-4222-8222-222222222222',
     enterpriseUrl: 'https://enterprise.example',
     skills: [{
@@ -99,6 +112,45 @@ describe('role-aware native readiness', () => {
     expect(matchesEnterpriseReadiness(oldPayload, null)).toBe(true);
     expect(matchesExactEnterpriseAttestation(oldPayload, legacy)).toBe(false);
     expect(matchesExactEnterpriseAttestation(oldPayload, null)).toBe(false);
+  });
+
+  it('requires exact P1.7 source bytes and native inventory for newly registered capacity', () => {
+    const exact = readiness({
+      skills: [{
+        name: PARTNER_PROGRAM_DEFINITION.runtimeName,
+        version: PARTNER_PROGRAM_DEFINITION.version,
+        artifactDigest: PARTNER_PROGRAM_DEFINITION.artifactDigest,
+        contentDigest: LEGACY_PARTNER_CONTENT_DIGEST,
+      }],
+      toolNames: [...PARTNER_PROGRAM_TOOLS, 'skill_view'],
+      agentCashEnabled: true,
+      agentCashWalletPresent: true,
+    });
+    expect(matchesLegacyCapacityAttestation(exact)).toBe(true);
+    const expected = {
+      workspaceId: exact.workspaceId, agentId: exact.agentId,
+      enterpriseUrl: exact.enterpriseUrl,
+      pluginRevision: PLUGIN_REVISION, pluginArtifactDigest: PLUGIN_DIGEST,
+    };
+    expect(matchesLegacyCapacityAttestation(exact, expected)).toBe(true);
+    expect(matchesLegacyCapacityAttestation({
+      ...exact,
+      plugin: { name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION,
+        revision: null, artifactDigest: null },
+    }, expected)).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, enterpriseUrl: 'https://other.example' }, expected)).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, plugin: { ...exact.plugin!, revision: 'b'.repeat(40) } }, expected)).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, plugin: { ...exact.plugin!, artifactDigest: `sha256:${'e'.repeat(64)}` } }, expected)).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, runtimeRevision: null })).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, version: '1.6.0' })).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, skills: [{ ...exact.skills![0]!, contentDigest: `sha256:${'0'.repeat(64)}` }] })).toBe(false);
+    expect(matchesLegacyCapacityAttestation({ ...exact, toolNames: [...exact.toolNames!, 'publish_partner_invoice_review'] })).toBe(false);
+  });
+
+  it('pins the strict P1.7 content attestation to the packaged SKILL.md bytes', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const bytes = readFileSync(join(root, 'runtime/hermes/enterprise_bridge/skills/partner-program-screening/SKILL.md'));
+    expect(`sha256:${createHash('sha256').update(bytes).digest('hex')}`).toBe(LEGACY_PARTNER_CONTENT_DIGEST);
   });
 
   it.each([
