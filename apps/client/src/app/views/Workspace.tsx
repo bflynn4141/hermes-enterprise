@@ -24,6 +24,7 @@ import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import { PartnerWorkflow } from './PartnerWorkflow.js';
+import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -188,7 +189,9 @@ export function Members() {
         invitationsChanged();
         showAck(action === 'resend' ? 'Invitation resent' : 'Invitation withdrawn');
       })
-      .catch(() => setNotice(action === 'resend' ? 'Could not resend that invitation. Try again.' : 'Could not withdraw that invitation. Try again.'))
+      .catch((error: unknown) => setNotice(action === 'resend'
+        ? invitationFailureMessage(error)
+        : 'Could not withdraw that invitation. Try again.'))
       .finally(() => setPending(null));
   };
 
@@ -258,6 +261,7 @@ export function Members() {
           <div className="col" role="list">
             {invitations.map((row) => {
               const status = invitationStatusLabel(row.status);
+              const delivery = invitationDeliveryMessage(row);
               return (
                 <div className="list-row members-row" role="listitem" key={row.id} style={{ minHeight: 84 }}>
                   <Avatar person={{ name: row.email }} size={40} />
@@ -266,6 +270,7 @@ export function Members() {
                       {row.email}
                     </span>
                     <span className="s">Invited {new Date(row.invited_at).toLocaleDateString()}</span>
+                    {delivery && <span className="meta">{delivery}</span>}
                   </div>
                   <Pill>{row.role === 'admin' ? 'Admin' : 'Member'}</Pill>
                   <Pill tone={statusTone(status)}>{status}</Pill>
@@ -329,9 +334,9 @@ export function Members() {
                       setEmail('');
                       setInvite(false);
                       setTab('invites');
-                      showAck('Invitation sent');
+                      showAck('Invitation recorded · Email delivery queued');
                     })
-                    .catch(() => setInviteError('Could not send that invitation. Check the address and try again.'))
+                    .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
                     .finally(() => setPending(null));
                 }}
               >
@@ -344,7 +349,7 @@ export function Members() {
             <span className="sr-only">Work email</span>
             <input type="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
-          <p className="meta">The invitation is recorded now; the email is sent by the identity provider.</p>
+          <p className="meta">The invitation is recorded first. The identity provider sends the email after it is queued.</p>
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

@@ -27,6 +27,13 @@ import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
 import type { HubEvent } from './hubs.js';
 import { scopeWorkspaceHubEvents } from './domain/audience.js';
+import {
+  classifyInvitationDeliveryFailure,
+  InvitationDeliveryError,
+  invitationCorrelationId,
+  logInvitationDiagnostic,
+  type InvitationDiagnosticAction,
+} from './ops/invitation-diagnostics.js';
 
 export interface Job {
   readonly id: string;
@@ -132,6 +139,14 @@ export async function finishJob(tx: Tx, jobId: string): Promise<void> {
   await tx.query('UPDATE jobs SET done_at = now(), locked_until = NULL WHERE id = $1', [jobId]);
   // The pointer the Cron reads exists only while there is work to point at.
   await tx.query('DELETE FROM job_ready WHERE job_id = $1', [jobId]);
+}
+
+async function finishFailedJob(tx: Tx, jobId: string, error: string): Promise<void> {
+  await tx.query(
+    `UPDATE jobs SET done_at=now(), locked_until=NULL, last_error=$2 WHERE id=$1`,
+    [jobId, error.slice(0, 1000)],
+  );
+  await tx.query('DELETE FROM job_ready WHERE job_id=$1', [jobId]);
 }
 
 /** Release a failed job for a later attempt, with backoff. */
@@ -384,6 +399,7 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     organization_id?: string;
     email?: string;
     inviter_user_id?: string;
+    correlation_id?: string;
   };
   const port = optionalWorkosPort(env);
   const mark = async (status: 'done' | 'failed', error?: string): Promise<void> => {
@@ -396,11 +412,43 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     });
   };
 
+  const invitationAction: InvitationDiagnosticAction | null = payload.action === 'send_invitation'
+    ? 'send_delivery'
+    : payload.action === 'resend_invitation'
+      ? 'resend_delivery'
+      : null;
+  const correlationId = invitationCorrelationId(payload.correlation_id ?? job.id);
+  const invitationLog = (
+    checkpoint: string,
+    ok: boolean,
+    reason?: string,
+  ): void => {
+    if (!invitationAction) return;
+    logInvitationDiagnostic({
+      action: invitationAction,
+      checkpoint,
+      correlationId,
+      workspaceId: job.workspace_id,
+      invitationId: payload.invitation_id,
+      jobId: job.id,
+      ok,
+      reason,
+    });
+  };
+
+  invitationLog('job_claimed', true);
+
   if (!port) {
     if (env.AUTH_MODE === 'workos' || env.ENVIRONMENT === 'staging' || env.ENVIRONMENT === 'production') {
       // A production-mode sync is not complete when the system that owns the
       // organization or invitation was never called. Mark the evidence failed
       // and throw so the durable job keeps retrying instead of erasing the gap.
+      if (invitationAction) {
+        const reason = 'workos_invitation_delivery_not_configured';
+        await mark('failed', reason);
+        invitationLog('provider_unavailable', false, reason);
+        throw new InvitationDeliveryError(reason);
+      }
       await mark('failed', 'workos not configured');
       throw new Error('WorkOS is required for this synchronization job');
     }
@@ -413,7 +461,10 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     case 'send_invitation':
     case 'resend_invitation': {
       if (!payload.invitation_id || !payload.organization_id || !payload.email || !payload.role) {
-        throw new Error('WorkOS invitation delivery payload is incomplete');
+        const reason = 'workos_invitation_payload_invalid';
+        await mark('failed', reason);
+        invitationLog('job_payload_invalid', false, reason);
+        throw new InvitationDeliveryError(reason, 0, false);
       }
       // A delivery job may have been delayed behind an outage. Reconcile local
       // expiry before making the external call so an invitation cannot be sent
@@ -421,19 +472,40 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
       const { expireInvitationReservations } = await import('./hermes-cloud/capacity.js');
       const deliverable = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
         await expireInvitationReservations(tx, job.workspace_id);
-        const invitation = await tx.query<{ status: string; workos_invitation_id: string | null }>(
-          `SELECT status, workos_invitation_id FROM invitations
+        const invitation = await tx.query<{
+          status: string;
+          workos_invitation_id: string | null;
+          delivery_status: string;
+          delivery_error: string | null;
+        }>(
+          `SELECT status, workos_invitation_id, delivery_status, delivery_error FROM invitations
             WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
           [job.workspace_id, payload.invitation_id],
         );
         const row = invitation.rows[0];
-        if (!row || row.status !== 'pending') return { deliver: false, done: true };
+        if (!row || row.status !== 'pending') return { deliver: false, done: true, failure: null };
         if (row.workos_invitation_id) {
           await tx.query(
             `UPDATE invitations SET delivery_status='delivered', delivery_error=NULL WHERE id=$1`,
             [payload.invitation_id],
           );
-          return { deliver: false, done: true };
+          return { deliver: false, done: true, failure: null };
+        }
+        if (row.delivery_status === 'sending') {
+          return {
+            deliver: false,
+            done: false,
+            failure: 'workos_invitation_delivery_outcome_unknown',
+          };
+        }
+        const persistedTerminalReason = row.delivery_error;
+        if (row.delivery_status === 'failed' && persistedTerminalReason && [
+          'workos_invitation_delivery_outcome_unknown',
+          'workos_invitation_delivery_rejected',
+          'workos_invitation_local_commit_failed',
+          'iris_capacity_reservation_missing',
+        ].includes(persistedTerminalReason)) {
+          return { deliver: false, done: false, failure: persistedTerminalReason };
         }
         if (env.AGENT_RUNTIME === 'hermes') {
           const capacity = await tx.query(
@@ -441,17 +513,41 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
               WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'`,
             [job.workspace_id, payload.invitation_id],
           );
-          if (capacity.rowCount !== 1) throw new Error('invitation delivery refused without reserved Iris capacity');
+          if (capacity.rowCount !== 1) {
+            return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
+          }
         }
         await tx.query(
           `UPDATE invitations SET delivery_status='sending', delivery_error=NULL WHERE id=$1`,
           [payload.invitation_id],
         );
-        return { deliver: true, done: false };
+        return { deliver: true, done: false, failure: null };
       });
+      if (deliverable.failure) {
+        await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+          `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+            WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+          [job.workspace_id, payload.invitation_id, deliverable.failure],
+        ));
+        try { await mark('failed', deliverable.failure); }
+        catch { /* The terminal delivery state remains authoritative. */ }
+        const checkpoint = deliverable.failure === 'workos_invitation_delivery_outcome_unknown'
+          ? 'ambiguous_delivery_detected'
+          : deliverable.failure === 'iris_capacity_reservation_missing'
+            ? 'reservation_recheck_failed'
+            : 'terminal_delivery_replayed';
+        try { invitationLog(checkpoint, false, deliverable.failure); }
+        catch { /* Logging cannot make a terminal delivery retryable. */ }
+        // These states require Admin reconciliation. The persisted terminal
+        // reason also prevents a later claim from re-entering provider send.
+        throw new InvitationDeliveryError(deliverable.failure, 0, false);
+      }
+      invitationLog(deliverable.done ? 'delivery_already_resolved' : 'pending_and_reservation_rechecked', true);
       if (deliverable.deliver) {
+        let sent: Awaited<ReturnType<typeof port.sendInvitation>>;
         try {
-          const sent = payload.action === 'resend_invitation' && payload.previous_workos_invitation_id
+          invitationLog('provider_attempted', true);
+          sent = payload.action === 'resend_invitation' && payload.previous_workos_invitation_id
             ? await port.resendInvitation(payload.previous_workos_invitation_id)
             : await port.sendInvitation({
                 email: payload.email,
@@ -460,6 +556,25 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
                 inviterUserId: payload.inviter_user_id,
                 expiresInDays: 7,
               });
+          invitationLog('provider_accepted', true);
+        } catch (error) {
+          const failure = classifyInvitationDeliveryFailure(error);
+          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+            [job.workspace_id, payload.invitation_id, failure.reason],
+          ));
+          if (failure.retryable) {
+            await mark('failed', failure.reason);
+          } else {
+            try { await mark('failed', failure.reason); } catch { /* Preserve the terminal provider outcome. */ }
+          }
+          try { invitationLog('provider_failed', false, failure.reason); }
+          catch { /* Logging cannot change provider retry safety. */ }
+          throw new InvitationDeliveryError(failure.reason, failure.retryAfterSeconds, failure.retryable);
+        }
+
+        try {
           await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
             await tx.query(
               `UPDATE invitations
@@ -479,14 +594,35 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
               [job.workspace_id, expiryKey, sent.expiresAt],
             );
           });
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
-            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
-              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
-            [job.workspace_id, payload.invitation_id, detail.slice(0, 500)],
-          ));
-          throw error;
+          invitationLog('local_delivery_committed', true);
+        } catch {
+          const reason = 'workos_invitation_local_commit_failed';
+          try {
+            await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+              `UPDATE invitations
+                  SET workos_invitation_id=$3, expires_at=$4, delivery_status='failed', delivery_error=$5
+                WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+              [job.workspace_id, payload.invitation_id, sent.id, sent.expiresAt, reason],
+            ));
+          } catch {
+            // The provider response is still never replayed automatically. A
+            // later Admin reconciliation can use the shared correlation id.
+          }
+          try {
+            await mark('failed', reason);
+          } catch {
+            // Do not turn a post-acceptance bookkeeping failure into another
+            // provider call. The terminal error below remains authoritative.
+          }
+          try {
+            invitationLog('local_delivery_commit_failed', false, reason);
+          } catch {
+            // Logging cannot make an accepted provider write retryable.
+          }
+          // WorkOS already accepted the write. Replaying this job could send a
+          // second email because the provider id was the value we failed to
+          // persist, so keep the uncertainty visible for manual reconciliation.
+          throw new InvitationDeliveryError(reason, 0, false);
         }
       }
       break;
@@ -712,7 +848,10 @@ async function claimRunFinish(
       && typeof error.retryAfterSeconds === 'number'
       ? error.retryAfterSeconds
       : 0;
-    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts, retryAfter));
+    const retryable = !(error instanceof InvitationDeliveryError) || error.retryable;
+    await withWorkspaceTransaction(env, workspaceId, (tx) => retryable
+      ? failJob(tx, job.id, message, job.attempts, retryAfter)
+      : finishFailedJob(tx, job.id, message));
     logError({
       at: 'job.failed',
       kind: job.kind,
