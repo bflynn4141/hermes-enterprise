@@ -17,7 +17,7 @@ function NoteEditor({ note, onSave, onCancel }: { note: ContextNote | null; onSa
     if (busy || !title.trim() || !text.trim()) return;
     setBusy(true); setError('');
     void onSave(title.trim(), text.trim()).catch((caught: unknown) => {
-      setError((caught as { reason?: string }).reason === 'stale_revision' ? 'This note changed elsewhere. Cancel and reopen it to review the latest version.' : 'Could not save this note. Your text is still here. Try again.');
+      setError(['stale_revision', 'context_revision_conflict'].includes((caught as { reason?: string }).reason ?? '') ? 'This note changed elsewhere. Cancel and reopen it to review the latest version.' : 'Could not save this note. Your text is still here. Try again.');
     }).finally(() => setBusy(false));
   }}>
     <h3 className="section-title">{note ? 'Edit note' : 'Add a note'}</h3>
@@ -89,7 +89,7 @@ function ContextContents() {
   const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
   return <div className="scroll"><div className="app-body agent-settings">
     <AgentHead /><AgentTabsRow value="context" />
-    <div className="agent-settings-heading"><div><h2 className="display-28">What {agentName(state)} knows</h2><p className="meta">Program facts and source material.</p></div>{admin && <Button ref={addButton} primary onClick={() => { setEditor('new'); setStatus(''); }}>+ Add context</Button>}</div>
+    <div className="agent-settings-heading"><div><h2 className="display-28">What {agentName(state)} knows</h2><p className="meta">Program facts and source material.</p></div>{admin && <button ref={addButton} type="button" className="btn primary" onClick={() => { setEditor('new'); setStatus(''); }}>+ Add context</button>}</div>
     {error && <div role="alert" className="agent-settings-error">{error} <Button link onClick={() => { setError(''); void refresh().catch(() => setError('Could not load context. Try again.')); }}>Reload context</Button></div>}
     <div className="agent-settings-status" role="status">{status}</div>
     {editor && <NoteEditor key={editor === 'new' ? 'new' : editor.id} note={editor === 'new' ? null : editor} onCancel={closeEditor} onSave={async (title, text) => {
