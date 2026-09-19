@@ -10,7 +10,9 @@ the test is the thing to keep passing.
 
 1. **A decision is recorded only by the guarded decision route.**
    `POST /w/:ws/requests/:id/decisions` (M4) is the only path that changes a
-   request's status. It requires an Admin session, step-up freshness, an
+   request's status. Legacy requests require an Admin session; a governed
+   Finance invoice additionally allows only its named active audience member
+   with the Finance reviewer role. Both paths require step-up freshness, an
    `X-Requested-From: inbox` header, an allowlisted `Origin` and a CSRF token,
    and it does everything in one transaction. No other route, job, queue
    consumer, cron handler or tool may write `decisions` or move a request out of
@@ -53,6 +55,21 @@ the test is the thing to keep passing.
    DELETE, and a trigger refuses both for the owner too. Erasure goes through
    `redact_subject`, which rewrites the subject rows and leaves the audit ids.
 
+9. **Cross-team authority is server-derived and revision-bound.** A model may
+   publish only an immutable intake id plus its expected hash. The server owns
+   the human authorization, source digests, role/recipient, record revisions,
+   run grants and correction lineage. An unsigned agreement draft or model
+   assertion is never engagement authority. Revised terms invalidate older
+   undecided bindings; decided receipts remain immutable.
+
+10. **An audience follows the whole request graph.** A request with one or
+    more `request_audiences` rows is visible only to an active named member
+    through list/detail, documents, effects, notes, history, counts, event
+    replay and live delivery. Generic agent reads have no named human principal
+    and therefore exclude every scoped request/document. An empty live audience
+    is deny-all, not workspace broadcast. Requests without an audience preserve
+    legacy workspace visibility.
+
 ## Directory ownership
 
 | Directory | Owns | Do not |
@@ -87,7 +104,9 @@ Cross-package imports go one way: `apps/*` may import `@hermes/shared`;
 6. Run `pnpm db:migrate`, then `pnpm db:migrations:verify`. While iterating on a
    migration you have already applied to your local database,
    `MIGRATE_ALLOW_EDIT=1 pnpm db:migrate`; drop the volume
-   (`pnpm db:down && pnpm db:up`) before you finish.
+   against a disposable test database before you finish. Never stop, rename or
+   reset a shared local Postgres container merely because it predates the
+   current task.
 
 ## Adding an event kind
 
