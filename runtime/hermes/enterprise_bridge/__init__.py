@@ -510,10 +510,24 @@ class Bridge:
 
 
 def register(ctx):
+    # Managed Cloud startup installs the non-disposable native admission gate
+    # before control auth, network discovery, or any context-owned hook that
+    # Hermes would dispose after a caught register() failure.
+    managed_state = None
+    if os.environ.get("HERMES_ENTERPRISE_CLOUD_MANAGED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from .cloud_managed import begin_managed_startup, is_gateway_process
+        if is_gateway_process():
+            managed_state = begin_managed_startup()
+    if managed_state is not None:
+        from .cloud_managed import install_enterprise_reader_toolset
+        install_enterprise_reader_toolset()
+
     # Register the Cloud control surface before tool discovery. If the Worker is
     # temporarily unavailable, dashboard startup still leaves the route either
     # strongly authenticated or absent; it never falls open.
-    register_control_auth(ctx)
+    control_auth = register_control_auth(ctx)
+    if managed_state is not None and control_auth is None:
+        raise BridgeError("Cloud-managed Enterprise control authentication is unavailable.")
     bridge = Bridge(
         ctx.get_config("base_url", ""), os.environ.get("ENTERPRISE_RUNTIME_TOKEN", ""),
         ctx.get_config("native_url", "http://127.0.0.1:8642"), os.environ.get("API_SERVER_KEY", ""),
@@ -588,6 +602,8 @@ def register(ctx):
         return None
 
     def guard(tool_name, args=None, tool_call_id="", **kwargs):
+        if managed_state is not None and not managed_state.ensure_current():
+            return {"action": "block", "message": "Enterprise native readiness is unavailable."}
         if tool_name == "skill_view":
             args = args if isinstance(args, dict) else {}
             if (args.get("name") in assigned_skills
@@ -652,6 +668,7 @@ def register(ctx):
                 "metadata": {"hermes": {"category": "enterprise"}},
             },
         )
+    enterprise_tool_names = set()
     for schema in bridge.tools():
         name = schema["name"]
         handle = ctx.register_tool(name=name, toolset=TOOLSET, schema=schema,
@@ -659,8 +676,9 @@ def register(ctx):
         if handle is None:
             raise BridgeError("An enterprise tool conflicts with another runtime tool.")
         allowed.add(name)
+        enterprise_tool_names.add(name)
     spill_root = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")) / "cache" / "spillover"
-    if agentcash_arguments is not None and spill_root.is_dir():
+    if managed_state is None and agentcash_arguments is not None and spill_root.is_dir():
         try:
             bridge.recover_pending_people_search(agentcash_arguments)
         except BridgeError as error:
@@ -682,3 +700,12 @@ def register(ctx):
             logging.warning("AgentCash pending creator recovery did not complete: %s", error)
         except Exception:
             logging.warning("AgentCash pending creator recovery did not complete: unexpected error.")
+    if managed_state is not None:
+        from .cloud_managed import start_initializer
+        start_initializer({
+            "base_url": ctx.get_config("base_url", ""),
+            "native_url": ctx.get_config("native_url", "http://127.0.0.1:8642"),
+            "allowed_skills": ctx.get_config("allowed_skills", []),
+            "mcp_policy": ctx.get_config("mcp_policy", []),
+            "partner_program": ctx.get_config("partner_program", {}),
+        }, managed_state, enterprise_tool_names)
