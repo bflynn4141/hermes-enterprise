@@ -90,19 +90,43 @@ export async function scopeWorkspaceHubEvents(
   if (workspaceIds.length === 0) return [...events];
 
   const eventRequestId = streamEventRequestIdSql('stream_scope');
-  const { rows } = await tx.query<{ id: string; audience_user_ids: string[] | null }>(
+  const { rows } = await tx.query<{
+    id: string;
+    has_audience: boolean;
+    audience_user_ids: string[] | null;
+  }>(
     `SELECT stream_scope.id::text AS id,
+            EXISTS (
+              SELECT 1
+                FROM request_audiences stream_audience_any
+               WHERE stream_audience_any.workspace_id = stream_scope.workspace_id
+                 AND stream_audience_any.request_id::text = ${eventRequestId}
+            ) AS has_audience,
             (SELECT array_agg(stream_audience.user_id::text ORDER BY stream_audience.user_id::text)
                FROM request_audiences stream_audience
-              WHERE stream_audience.request_id::text = ${eventRequestId}) AS audience_user_ids
+               JOIN members active_member
+                 ON active_member.workspace_id = stream_audience.workspace_id
+                AND active_member.user_id = stream_audience.user_id
+                AND active_member.status = 'active'
+              WHERE stream_audience.workspace_id = stream_scope.workspace_id
+                AND stream_audience.request_id::text = ${eventRequestId}) AS audience_user_ids
        FROM stream_events stream_scope
       WHERE stream_scope.id = ANY ($1::bigint[])`,
     [workspaceIds],
   );
-  const byId = new Map(rows.map((row) => [row.id, row.audience_user_ids]));
+  const byId = new Map(rows.map((row) => [row.id, row]));
 
   return events.map((event) => {
-    const audience = byId.get(event.id);
-    return audience && audience.length > 0 ? { ...event, audience_user_ids: audience } : event;
+    if (event.session_id !== null || !/^\d{1,19}$/.test(event.id)) return event;
+    const scope = byId.get(event.id);
+    // A numeric workspace event missing from the tenant-scoped query is not
+    // safe to broadcast. Every legitimate caller just read or inserted the row
+    // in this transaction, so absence means its scope could not be established.
+    if (!scope) return { ...event, audience_user_ids: [] };
+    if (!scope.has_audience) return event;
+    // Keep an explicitly scoped request private even after its last viewer is
+    // removed. Omitting the property here would turn an empty active audience
+    // into the legacy workspace-public case in WorkspaceHub.maySee.
+    return { ...event, audience_user_ids: scope.audience_user_ids ?? [] };
   });
 }
