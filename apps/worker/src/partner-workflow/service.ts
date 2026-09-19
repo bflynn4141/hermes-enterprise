@@ -214,7 +214,12 @@ async function assignRoleSkill(
             capability_grants=$8,schedule='{"enabled":false,"interval_minutes":360}'::jsonb,
             approval_policy='{"human_review_required":true}'::jsonb,
             assigned_by=$9,revision=revision+1
-      WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
+      WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
+        AND (team_id IS DISTINCT FROM $4 OR artifact_id IS DISTINCT FROM $5
+          OR skill_version IS DISTINCT FROM $6 OR state IS DISTINCT FROM 'active'
+          OR config IS DISTINCT FROM $7::jsonb OR capability_grants IS DISTINCT FROM $8::text[]
+          OR schedule IS DISTINCT FROM '{"enabled":false,"interval_minutes":360}'::jsonb
+          OR approval_policy IS DISTINCT FROM '{"human_review_required":true}'::jsonb)`,
     [workspaceId, agentId, row.id, teamId, artifactRow.id, definition.version,
       JSON.stringify(config), grants, assignedBy],
   );
@@ -315,7 +320,7 @@ export async function configurePartnerWorkflow(
      DO UPDATE SET requester_agent_id=EXCLUDED.requester_agent_id,
                    target_resource_ids=EXCLUDED.target_resource_ids,steps=EXCLUDED.steps,active=true`,
     [workspaceId, input.partnerships.agent_id, JSON.stringify([{
-      id: 'finance-review', label: 'Finance verifies externally agreed terms', order: 0,
+      id: 'finance-review', label: 'Finance verifies the stated terms and provenance', order: 0,
       reviewers: [{ kind: 'member', member_id: financeMemberId }], quorum: 1,
     }])],
   );
@@ -773,6 +778,7 @@ export async function preparePartnerInvoiceReviewModelTurn(
   const row = rows[0];
   if (!row) throw new PartnerWorkflowError('handoff_not_found', 'No such invoice-review handoff.');
   if (row.simulated) return null;
+  if (['completed', 'needs_information', 'stale', 'failed'].includes(row.status)) return null;
   // Do not spend a model call explaining a handoff whose frozen records have
   // already changed. processPartnerInvoiceReview records the stale result.
   if (row.invoice_current_revision !== row.invoice_record_revision

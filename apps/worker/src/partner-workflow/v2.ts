@@ -90,11 +90,62 @@ async function actors(tx: Tx, workspaceId: string): Promise<{ partnerships: Work
 }
 
 async function requireAdmission(tx: Tx, workspaceId: string): Promise<void> {
-  const row = (await tx.query<{ admission_state: string }>(
-    `SELECT admission_state FROM partner_workflow_settings WHERE workspace_id=$1`, [workspaceId],
+  const settings = (await tx.query<{
+    admission_state: string;
+    readiness: Record<string, {
+      agent_id?: string; assignment_id?: string; assignment_revision?: number;
+      skill_version?: string; artifact_digest?: string;
+    }>;
+  }>(
+    `SELECT admission_state,readiness FROM partner_workflow_settings WHERE workspace_id=$1 FOR SHARE`,
+    [workspaceId],
   )).rows[0];
-  if (row?.admission_state !== 'enabled') {
+  if (settings?.admission_state !== 'enabled') {
     throw new PartnerWorkflowError('workflow_admission_disabled', 'New partner invoice admissions are disabled until both native roles are ready.');
+  }
+  const assignments = await tx.query<{
+    role: 'partnerships' | 'finance'; agent_id: string; assignment_id: string;
+    assignment_revision: number; assignment_state: string; skill_key: string;
+    skill_version: string; artifact_digest: string;
+  }>(
+    `SELECT et.slug AS role,eta.agent_id,esa.id AS assignment_id,
+            esa.revision AS assignment_revision,esa.state AS assignment_state,
+            esa.skill_key,esa.skill_version,artifact.digest AS artifact_digest
+       FROM enterprise_team_agents eta
+       JOIN enterprise_teams et ON et.workspace_id=eta.workspace_id AND et.id=eta.team_id
+       JOIN enterprise_skill_assignments esa
+         ON esa.workspace_id=eta.workspace_id AND esa.agent_id=eta.agent_id AND esa.team_id=eta.team_id
+        AND esa.skill_key=CASE et.slug
+          WHEN 'partnerships' THEN 'partner-program-screening' ELSE 'partner-invoice-review' END
+       JOIN enterprise_skill_artifacts artifact ON artifact.id=esa.artifact_id
+      WHERE eta.workspace_id=$1 AND et.slug IN ('partnerships','finance')
+      FOR SHARE OF eta,esa,artifact`,
+    [workspaceId],
+  );
+  const expected = {
+    partnerships: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+    finance: PARTNER_INVOICE_REVIEW_DEFINITION,
+  } as const;
+  const ready = assignments.rows.length === 2 && (['partnerships', 'finance'] as const).every((role) => {
+    const assignment = assignments.rows.find((candidate) => candidate.role === role);
+    const attested = settings.readiness?.[role];
+    const definition = expected[role];
+    return Boolean(assignment && attested
+      && assignment.assignment_state === 'active'
+      && assignment.skill_key === definition.key
+      && assignment.skill_version === definition.version
+      && assignment.artifact_digest === definition.artifactDigest
+      && attested.agent_id === assignment.agent_id
+      && attested.assignment_id === assignment.assignment_id
+      && attested.assignment_revision === assignment.assignment_revision
+      && attested.skill_version === assignment.skill_version
+      && attested.artifact_digest === assignment.artifact_digest);
+  });
+  if (!ready) {
+    throw new PartnerWorkflowError(
+      'workflow_readiness_incomplete',
+      'A reviewed role assignment changed after native readiness was attested. Refresh readiness before submitting.',
+    );
   }
 }
 
@@ -364,13 +415,41 @@ export async function materializePartnerEngagementAuthorization(
       `engagement-authorization:${input.requestId}:${input.authorizationRevision}`],
   )).rows[0]?.id;
   if (!recordId) throw new PartnerWorkflowError('engagement_not_authorized', 'Could not materialize the authorized engagement.');
-  await tx.query(
+  const superseded = await tx.query<{ engagement_record_id: string | null }>(
     `UPDATE partner_engagement_authorizations
         SET status='superseded'
       WHERE workspace_id=$1 AND partner_id=$2 AND engagement_reference=$3 AND id<>$4
-        AND status='authorized' AND consumed_handoff_id IS NULL`,
+        AND status='authorized'
+      RETURNING engagement_record_id`,
     [input.workspaceId, row.partner_id, row.engagement_reference, row.id],
   );
+  const supersededRecordIds = superseded.rows
+    .map((candidate) => candidate.engagement_record_id)
+    .filter((id): id is string => Boolean(id));
+  if (supersededRecordIds.length > 0) {
+    const staleHandoffs = await tx.query<{ id: string }>(
+      `UPDATE partner_handoffs
+          SET status='stale',validation_status='stale',human_decision_status='superseded',
+              result_reason='Replacement engagement terms superseded this authorization.',
+              completed_at=COALESCE(completed_at,now())
+        WHERE workspace_id=$1 AND source_record_id=ANY($2::uuid[])
+          AND human_decision_status IN ('not_ready','pending')
+        RETURNING id`,
+      [input.workspaceId, supersededRecordIds],
+    );
+    const handoffIds = staleHandoffs.rows.map((candidate) => candidate.id);
+    if (handoffIds.length > 0) {
+      await tx.query(
+        `UPDATE requests request
+            SET status='withdrawn'
+           FROM partner_workflow_executions execution
+          WHERE execution.workspace_id=$1 AND execution.handoff_id=ANY($2::uuid[])
+            AND request.workspace_id=execution.workspace_id AND request.id=execution.request_id
+            AND request.status='pending'`,
+        [input.workspaceId, handoffIds],
+      );
+    }
+  }
   await tx.query(
     `UPDATE partner_engagement_authorizations
         SET status='authorized',engagement_record_id=$2,authorized_at=now()
@@ -887,12 +966,17 @@ export async function loadPartnerWorkflowViewV2(
        JOIN users u ON u.id=eta.principal_user_id
        JOIN enterprise_skill_assignments esa
          ON esa.workspace_id=eta.workspace_id AND esa.agent_id=eta.agent_id AND esa.team_id=eta.team_id
+        AND esa.skill_key=CASE et.slug
+          WHEN 'partnerships' THEN 'partner-program-screening' ELSE 'partner-invoice-review' END
        JOIN enterprise_skill_artifacts art ON art.id=esa.artifact_id
       WHERE eta.workspace_id=$1 ORDER BY et.slug DESC`, [workspaceId],
   );
   const settings = (await tx.query<{
     admission_state: 'disabled' | 'enabled';
-    readiness: Record<string, { agent_id?: string; assignment_revision?: number; artifact_digest?: string }>;
+    readiness: Record<string, {
+      agent_id?: string; assignment_id?: string; assignment_revision?: number;
+      skill_version?: string; artifact_digest?: string;
+    }>;
   }>(
     `SELECT admission_state,readiness FROM partner_workflow_settings WHERE workspace_id=$1`, [workspaceId],
   )).rows[0];
@@ -949,13 +1033,30 @@ export async function loadPartnerWorkflowViewV2(
       WHERE workspace_id=$1 ORDER BY name LIMIT 50`, [workspaceId, role.partnerships.agent_id],
   )).rows : [];
   const configured = agents.rows.length === 2;
+  const expectedDefinitions = {
+    partnerships: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+    finance: PARTNER_INVOICE_REVIEW_DEFINITION,
+  } as const;
+  const roleReady = (slug: 'partnerships' | 'finance') => {
+    const row = agents.rows.find((agent) => agent.team_slug === slug);
+    const attested = settings?.readiness?.[slug];
+    const definition = expectedDefinitions[slug];
+    return Boolean(row && attested && row.assignment_state === 'active'
+      && row.skill_key === definition.key && row.skill_version === definition.version
+      && row.artifact_digest === definition.artifactDigest
+      && attested.agent_id === row.id && attested.assignment_id === row.assignment_id
+      && attested.assignment_revision === row.assignment_revision
+      && attested.skill_version === row.skill_version
+      && attested.artifact_digest === row.artifact_digest);
+  };
+  const workflowReady = roleReady('partnerships') && roleReady('finance');
   return partnerWorkflowViewV2Schema.parse({
     configured, admission_state: admissionState, viewer_role: viewerRole,
     actions: {
       configure: member.role === 'admin', set_admission: member.role === 'admin' && configured,
       propose_engagement: viewerRole === 'partnerships',
-      submit_invoice: viewerRole === 'partnerships' && admissionState === 'enabled',
-      correct_invoice: viewerRole === 'partnerships' && admissionState === 'enabled',
+      submit_invoice: viewerRole === 'partnerships' && admissionState === 'enabled' && workflowReady,
+      correct_invoice: viewerRole === 'partnerships' && admissionState === 'enabled' && workflowReady,
       view_finance_review: viewerRole === 'finance',
     },
     teams: teams.rows,
@@ -974,9 +1075,7 @@ export async function loadPartnerWorkflowViewV2(
     readiness: viewerRole === 'unrelated' ? [] : (['partnerships','finance'] as const).map((slug) => {
       const row = agents.rows.find((agent) => agent.team_slug === slug);
       const attested = settings?.readiness?.[slug];
-      const ready = Boolean(row && attested?.agent_id === row.id
-        && attested.assignment_revision === row.assignment_revision
-        && attested.artifact_digest === row.artifact_digest);
+      const ready = roleReady(slug);
       return {
         role: slug, configured: Boolean(row), assignment_state: row?.assignment_state ?? 'missing',
         native_status: ready ? 'ready' : row ? 'not_ready' : 'unknown',
