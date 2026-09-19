@@ -301,6 +301,19 @@ export const invitationEntitySchema = z
     role: memberRoleSchema,
     status: z.enum(['pending', 'accepted', 'expired', 'withdrawn', 'bounced', 'resent']),
     invited_at: z.iso.datetime({ offset: true }),
+    /** WorkOS email handoff state. Present on current servers; optional for older clients/fixtures. */
+    delivery_status: z.enum(['not_required', 'queued', 'sending', 'delivered', 'failed']).optional(),
+    /** Stable allowlisted failure category. Provider text never enters this contract. */
+    delivery_reason: z.enum([
+      'workos_invitation_delivery_not_configured',
+      'workos_invitation_payload_invalid',
+      'iris_capacity_reservation_missing',
+      'workos_invitation_delivery_rejected',
+      'workos_invitation_delivery_unavailable',
+      'workos_invitation_local_commit_failed',
+      'invitation_delivery_failed',
+    ]).nullable().optional(),
+    delivery_trace_id: uuidSchema.nullable().optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();

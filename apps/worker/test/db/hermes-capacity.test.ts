@@ -4,7 +4,7 @@ import type { Env } from '../../src/env.js';
 import { POOL_CONTROL_NAMESPACE } from '../../src/hermes-cloud/capacity.js';
 import { sealSecret } from '../../src/keys/envelope.js';
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../../src/auth/cookies.js';
-import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
+import { FakeWorkOS, FakeWorkOSError, seal, signAccessToken } from '../stubs/fake-workos.js';
 import {
   asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv,
 } from './harness.js';
@@ -78,6 +78,7 @@ describe('Hermes Cloud invitation capacity', () => {
   afterEach(() => {
     clearFakeWorkOS();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('lets only one of two racing invitations reserve the single available instance', async () => {
@@ -119,13 +120,25 @@ describe('Hermes Cloud invitation capacity', () => {
     ));
     const env = workosEnv({ AGENT_RUNTIME: 'hermes', KEK_V1 }).env;
     const email = `exhausted-${randomUUID()}@example.test`;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     const response = await asWorkOSAdmin(
       fixture, env, `/w/${fixture.workspaceId}/invitations`, { email },
     );
     expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({ reason: 'iris_capacity_unavailable' });
+    const failure = await response.json() as { reason: string; trace_id: string };
+    expect(failure).toMatchObject({ reason: 'iris_capacity_unavailable' });
+    expect(failure.trace_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(fake.calls.filter((call) => call.method.includes('Invitation'))).toHaveLength(0);
+
+    const diagnostic = log.mock.calls.flatMap((call) => call.map(String))
+      .find((line) => line.includes('"at":"invitation.lifecycle"') && line.includes('"ok":false'));
+    expect(diagnostic).toBeTruthy();
+    expect(JSON.parse(diagnostic!) as unknown).toMatchObject({
+      action: 'create', checkpoint: 'invitation_stored', correlation_id: failure.trace_id,
+      workspace_id: fixture.workspaceId, ok: false, reason: 'iris_capacity_unavailable', status: 409,
+    });
+    expect(diagnostic).not.toContain(email);
 
     const state = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
       const invitations = await client.query(`SELECT id FROM invitations WHERE workspace_id=$1 AND email=$2`, [fixture.workspaceId, email]);
@@ -134,6 +147,173 @@ describe('Hermes Cloud invitation capacity', () => {
       return { invitations: invitations.rowCount, sync: sync.rowCount, jobs: jobs.rowCount };
     });
     expect(state).toEqual({ invitations: 0, sync: 0, jobs: 0 });
+  });
+
+  it('preserves the Admin boundary and reports only a correlated auth reason', async () => {
+    const fixture = await seedWorkspace();
+    const env = hermesEnv();
+    const email = `forbidden-${randomUUID()}@example.test`;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const response = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST', body: { email },
+    });
+    expect(response.status).toBe(403);
+    const failure = await response.json() as { reason: string; trace_id: string };
+    expect(failure).toMatchObject({ reason: 'admin_required' });
+    expect(failure.trace_id).toMatch(/^[0-9a-f-]{36}$/);
+    const diagnostic = log.mock.calls.flatMap((call) => call.map(String))
+      .find((line) => line.includes('"at":"invitation.lifecycle"'));
+    expect(JSON.parse(diagnostic!) as unknown).toMatchObject({
+      checkpoint: 'request_received', correlation_id: failure.trace_id,
+      reason: 'admin_required', status: 403,
+    });
+    expect(diagnostic).not.toContain(email);
+    const rows = await readTenant(fixture.workspaceId, fixture.adminId, (client) => client.query(
+      `SELECT id FROM invitations WHERE workspace_id=$1 AND email=$2`, [fixture.workspaceId, email],
+    ));
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it('preserves stable malformed request reasons while adding a correlation id', async () => {
+    const fixture = await seedWorkspace();
+    const env = hermesEnv();
+    const malformedBody = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+    });
+    expect(malformedBody.status).toBe(400);
+    await expect(malformedBody.json()).resolves.toMatchObject({
+      reason: 'bad_body', trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+
+    const malformedId = await asUser(
+      env, fixture.adminId, `/w/${fixture.workspaceId}/invitations/not-a-uuid/resend`, { method: 'POST' },
+    );
+    expect(malformedId.status).toBe(400);
+    await expect(malformedId.json()).resolves.toMatchObject({
+      reason: 'bad_id', trace_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+  });
+
+  it('sanitizes an asynchronous WorkOS delivery failure and retains the retry', async () => {
+    const fixture = await seedWorkspace();
+    const organizationId = `org_${randomUUID().slice(0, 12)}`;
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1,$2)
+       ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id=EXCLUDED.workos_organization_id`,
+      [fixture.workspaceId, organizationId],
+    ));
+    const env = workosEnv({ AGENT_RUNTIME: 'hermes', KEK_V1 }).env;
+    await seedCapacity(fixture, env);
+    const email = `private-${randomUUID()}@example.test`;
+    const upstream = `WorkOS rejected ${email}; bearer top-secret; {"recipient":"${email}"}`;
+    fake.invitationFailure = new FakeWorkOSError(upstream, 503);
+    const output: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...values: unknown[]) => { output.push(values.map(String).join(' ')); });
+    vi.spyOn(console, 'error').mockImplementation((...values: unknown[]) => { output.push(values.map(String).join(' ')); });
+
+    const response = await asWorkOSAdmin(
+      fixture, env, `/w/${fixture.workspaceId}/invitations`, { email },
+    );
+    expect(response.status).toBe(201);
+    const invitation = await response.json() as { id: string };
+
+    const state = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+      const delivery = await client.query<{ delivery_status: string; delivery_error: string | null }>(
+        `SELECT delivery_status,delivery_error FROM invitations WHERE workspace_id=$1 AND id=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      const sync = await client.query<{ status: string; last_error: string | null }>(
+        `SELECT status,last_error FROM workos_sync WHERE workspace_id=$1 AND resource_id=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      const job = await client.query<{
+        last_error: string | null; done: boolean; unlocked: boolean; retry_scheduled: boolean;
+      }>(
+        `SELECT last_error,done_at IS NOT NULL AS done,locked_until IS NULL AS unlocked,
+                next_at > created_at AS retry_scheduled
+           FROM jobs WHERE workspace_id=$1 AND kind='workos_sync' AND payload->>'invitation_id'=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      const ready = await client.query(
+        `SELECT 1 FROM job_ready r JOIN jobs j ON j.id=r.job_id
+          WHERE j.workspace_id=$1 AND j.kind='workos_sync' AND j.payload->>'invitation_id'=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      return { delivery: delivery.rows[0]!, sync: sync.rows[0]!, job: job.rows[0]!, ready: ready.rowCount };
+    });
+    expect(state).toEqual({
+      delivery: { delivery_status: 'failed', delivery_error: 'workos_invitation_delivery_unavailable' },
+      sync: { status: 'failed', last_error: 'workos_invitation_delivery_unavailable' },
+      job: {
+        last_error: 'workos_invitation_delivery_unavailable', done: false,
+        unlocked: true, retry_scheduled: true,
+      },
+      ready: 1,
+    });
+    expect(output.join('\n')).not.toContain(email);
+    expect(output.join('\n')).not.toContain('top-secret');
+    expect(output.join('\n')).not.toContain('recipient');
+    const lifecycle = output.filter((line) => line.includes('"at":"invitation.lifecycle"'))
+      .map((line) => JSON.parse(line) as { correlation_id: string; checkpoint: string });
+    expect(lifecycle.map((row) => row.checkpoint)).toEqual(expect.arrayContaining([
+      'job_claimed', 'pending_and_reservation_rechecked', 'provider_attempted', 'provider_failed', 'committed',
+    ]));
+    expect(new Set(lifecycle.map((row) => row.correlation_id)).size).toBe(1);
+
+    const adminList = await asUser(hermesEnv(), fixture.adminId, `/w/${fixture.workspaceId}/invitations`);
+    const adminItems = (await adminList.json() as { items: Array<Record<string, unknown>> }).items;
+    expect(adminItems.find((row) => row.id === invitation.id)).toMatchObject({
+      delivery_status: 'failed',
+      delivery_reason: 'workos_invitation_delivery_unavailable',
+      delivery_trace_id: lifecycle[0]?.correlation_id,
+    });
+    const memberList = await asUser(hermesEnv(), fixture.memberId, `/w/${fixture.workspaceId}/invitations`);
+    const memberItems = (await memberList.json() as { items: Array<Record<string, unknown>> }).items;
+    const memberRow = memberItems.find((row) => row.id === invitation.id)!;
+    expect(memberRow).not.toHaveProperty('delivery_status');
+    expect(memberRow).not.toHaveProperty('delivery_reason');
+    expect(memberRow).not.toHaveProperty('delivery_trace_id');
+  });
+
+  it('records a terminal provider rejection once without retrying it', async () => {
+    const fixture = await seedWorkspace();
+    const organizationId = `org_${randomUUID().slice(0, 12)}`;
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1,$2)
+       ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id=EXCLUDED.workos_organization_id`,
+      [fixture.workspaceId, organizationId],
+    ));
+    const env = workosEnv({ AGENT_RUNTIME: 'hermes', KEK_V1 }).env;
+    await seedCapacity(fixture, env);
+    fake.invitationFailure = new FakeWorkOSError('private provider rejection', 400);
+
+    const response = await asWorkOSAdmin(
+      fixture, env, `/w/${fixture.workspaceId}/invitations`, { email: `rejected-${randomUUID()}@example.test` },
+    );
+    expect(response.status).toBe(201);
+    const invitation = await response.json() as { id: string };
+    const state = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+      const delivery = await client.query<{ delivery_status: string; delivery_error: string | null }>(
+        `SELECT delivery_status,delivery_error FROM invitations WHERE id=$1`, [invitation.id],
+      );
+      const job = await client.query<{ done: boolean; last_error: string | null }>(
+        `SELECT done_at IS NOT NULL AS done,last_error FROM jobs
+          WHERE workspace_id=$1 AND kind='workos_sync' AND payload->>'invitation_id'=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      const ready = await client.query(
+        `SELECT 1 FROM job_ready r JOIN jobs j ON j.id=r.job_id
+          WHERE j.workspace_id=$1 AND j.kind='workos_sync' AND j.payload->>'invitation_id'=$2`,
+        [fixture.workspaceId, invitation.id],
+      );
+      return { delivery: delivery.rows[0]!, job: job.rows[0]!, ready: ready.rowCount };
+    });
+    expect(state).toEqual({
+      delivery: { delivery_status: 'failed', delivery_error: 'workos_invitation_delivery_rejected' },
+      job: { done: true, last_error: 'workos_invitation_delivery_rejected' },
+      ready: 0,
+    });
+    expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
   });
 
   it('delivers through WorkOS only after the exact invitation has reserved capacity', async () => {
@@ -147,6 +327,8 @@ describe('Hermes Cloud invitation capacity', () => {
     const env = workosEnv({ AGENT_RUNTIME: 'hermes', KEK_V1 }).env;
     const [capacityId] = await seedCapacity(fixture, env);
     const email = `deliverable-${randomUUID()}@example.test`;
+    const output: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...values: unknown[]) => { output.push(values.map(String).join(' ')); });
 
     const response = await asWorkOSAdmin(
       fixture, env, `/w/${fixture.workspaceId}/invitations`, { email },
@@ -167,6 +349,13 @@ describe('Hermes Cloud invitation capacity', () => {
     expect(state.capacity).toEqual([expect.objectContaining({
       id: capacityId, state: 'reserved', reserved_invitation_id: invitation.id,
     })]);
+    const lifecycle = output.filter((line) => line.includes('"at":"invitation.lifecycle"'))
+      .map((line) => JSON.parse(line) as { correlation_id: string; checkpoint: string });
+    expect(lifecycle.map((row) => row.checkpoint)).toEqual(expect.arrayContaining([
+      'job_claimed', 'provider_attempted', 'provider_accepted', 'local_delivery_committed', 'committed',
+    ]));
+    expect(new Set(lifecycle.map((row) => row.correlation_id)).size).toBe(1);
+    expect(output.join('\n')).not.toContain(email);
   });
 
   it('makes duplicate requests idempotent without consuming another instance', async () => {
