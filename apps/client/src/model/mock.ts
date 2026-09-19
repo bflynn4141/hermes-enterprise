@@ -205,6 +205,39 @@ export function createMockBackend(options: MockOptions = {}) {
     { id: 'youtube', name: 'YouTube', note: 'Illustrative bootcamp sessions and technical walkthroughs.', url: 'https://www.youtube.com/' },
     { id: 'x', name: 'X profile', note: 'Illustrative public writing about field engineering.', url: 'https://x.com/' },
   ];
+  const invoiceFixture = options.partnerWorkflow
+    ? {
+        subject: 'Robin Studio',
+        label: 'INV-SAMPLE-014',
+        payload: {
+          kind: 'invoice', number: 'INV-SAMPLE-014', total_minor: 120000, currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-12', due_date: '2026-09-26',
+          notes: 'Sample invoice for the local fixture. No provider call, payment, or email occurs.',
+          lines: [{ id: 'l1', label: 'Partner enablement workshop', short: 'Workshop', qty: 1, amount_minor: 120000, date: '2026-09-08', source_ids: [mockUuid(619)] }],
+          workflow_provenance: {
+            handoff_id: mockUuid(610),
+            input_provenance: 'sample',
+            shared_partner: { id: mockUuid(611), name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42' },
+            source_sessions: [
+              { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
+              { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Sample invoice fields matched the authorized amount.', simulated: true },
+            ],
+            source_record_revisions: { engagement: 1, invoice: 1 },
+            checks: { duplicate: 'clear', engagement_match: 'matched', missing_context: [] },
+          },
+        },
+      }
+    : {
+        subject: 'Robin Ellis',
+        label: 'INV-2026-014',
+        payload: {
+          number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026',
+          notes: 'Fictional demo invoice. No provider is connected.',
+          lines: [
+            { id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' },
+            { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' },
+          ],
+        },
+      };
   const legacyRequests: MockRequest[] = empty
     ? []
     : [
@@ -230,24 +263,7 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
-        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Studio', 'INV-SAMPLE-014', {
-          kind: 'invoice', number: 'INV-SAMPLE-014', total_minor: 120000, currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-12', due_date: '2026-09-26',
-          notes: 'Sample invoice for the local fixture. No provider call, payment, or email occurs.',
-          lines: [{ id: 'l1', label: 'Partner enablement workshop', short: 'Workshop', qty: 1, amount_minor: 120000, date: '2026-09-08', source_ids: [mockUuid(619)] }],
-          ...(options.partnerWorkflow ? {
-            workflow_provenance: {
-              handoff_id: mockUuid(610),
-              input_provenance: 'sample',
-              shared_partner: { id: mockUuid(611), name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42' },
-              source_sessions: [
-                { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
-                { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Sample invoice fields matched the authorized amount.', simulated: true },
-              ],
-              source_record_revisions: { engagement: 1, invoice: 1 },
-              checks: { duplicate: 'clear', engagement_match: 'matched', missing_context: [] },
-            },
-          } : {}),
-        }),
+        request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
