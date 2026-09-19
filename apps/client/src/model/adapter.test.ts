@@ -1289,6 +1289,20 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('a rejected source-bound turn retains the exact selected sources for retry', async () => {
+    const { adapter, store, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Promise.reject(new Error('offline')),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: { emailIngress: false, turnAttachments: true, automatedTriggers: false } } });
+    const source = { id: mockUuid(60), label: 'Program.md', kind: 'source' as const, sha256: 'a'.repeat(64), icon: 'context' };
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: source });
+    await expect(adapter.send(SESSION, 'Use the source')).rejects.toThrow('offline');
+    expect(state().sessions[SESSION]!.draft.attachments).toEqual([source]);
+    expect(state().sessions[SESSION]!.draft.text).toBe('Use the source');
+    adapter.dispose();
+  });
+
   const reauthOverride = {
     [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () =>
       new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),

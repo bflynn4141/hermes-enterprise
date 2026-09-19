@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 async function openTab(page: Page, name: string) {
+  await expect(page.locator('.agent-tabs-navigation')).toBeVisible();
   const mobile = page.getByRole('combobox', { name: 'Agent view' });
   if (await mobile.isVisible()) await mobile.selectOption(name.toLowerCase());
   else await page.getByRole('tab', { name, exact: true }).click();
@@ -66,7 +67,7 @@ test('a failed note write preserves input and does not add a note', async ({ pag
 });
 
 test('members can inspect context and permissions but cannot change them', async ({ page }) => {
-  await page.goto('/?agentSettings=1&seat=member');
+  await page.goto('/?agentSettings=1&seat=member&workflowRole=partnerships');
   await openTab(page, 'Context');
   await expect(page.getByRole('button', { name: '+ Add context', exact: true })).toHaveCount(0);
   await openTab(page, 'Permissions');
@@ -86,7 +87,7 @@ test('standing instructions save for the selected agent and survive navigation',
   await expect(page.getByRole('status')).toContainText('Saved');
   await openTab(page, 'Context');
   await openTab(page, 'Skills');
-  await expect(page.getByText('Cite the evidence and lead with missing information.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Instructions for Iris', exact: true }).getByText('Cite the evidence and lead with missing information.', { exact: true })).toBeVisible();
   await page.screenshot({ path: 'qa/agent-skills-settings-desktop.png', fullPage: true });
 });
 
@@ -105,7 +106,8 @@ test('mobile sections and reduced-motion approval switch stay usable', async ({ 
   await page.goto('/?agentSettings=1');
   // The app pane may start behind the conversation on narrow screens.
   const appButton = page.getByRole('button', { name: 'App', exact: true });
-  if (await appButton.isVisible()) await appButton.click();
+  await expect(appButton).toBeVisible();
+  await appButton.click();
   await openTab(page, 'Permissions');
   const toggle = page.getByRole('switch', { name: 'Require human approval: Save review notes' });
   await expect(toggle).toBeVisible();

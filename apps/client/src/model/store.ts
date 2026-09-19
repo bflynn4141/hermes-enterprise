@@ -993,7 +993,7 @@ export function reduce(state: AppState, action: Action): AppState {
           lastActivity: duplicate ? s.lastActivity : Date.now(),
           unread: duplicate || action.sessionId === state.activeSessionId ? s.unread : true,
           oldestSeq: duplicate ? s.oldestSeq : s.oldestSeq ?? action.message.seq,
-          messages: duplicate ? s.messages : [...s.messages, action.message],
+          messages: duplicate ? s.messages : [...s.messages, { ...action.message, ...(confirmsPending && pending?.message.attachments && !action.message.attachments ? { attachments: pending.message.attachments } : {}) }],
         };
       });
       return duplicate ? next : countUnread(state, next, action.sessionId, action.message.role);
