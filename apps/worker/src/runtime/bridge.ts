@@ -25,7 +25,8 @@ import {
 import { logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
-import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifestsForAgent } from './skills.js';
+import { PARTNER_PROGRAM_TOOLS, preflightPartnerManifest, runtimeSkillManifestsForAgent } from './skills.js';
+import { requireRuntimeDiscoveryAuth, type RuntimeDiscoveryAuthorization } from './discovery-grants.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
@@ -348,6 +349,17 @@ async function authenticate(c: Context<{ Bindings: Env }>): Promise<{
     requireResolvedBridgeAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
   return { workspaceId, agentId, binding };
 }
+async function authenticateDiscovery(c: Context<{ Bindings: Env }>): Promise<{
+  workspaceId: string;
+  agentId: string;
+  authorization: RuntimeDiscoveryAuthorization;
+}> {
+  const workspaceId = pathUuid(c, 'ws');
+  const agentId = pathUuid(c, 'agentId');
+  const authorization = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+    requireRuntimeDiscoveryAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
+  return { workspaceId, agentId, authorization };
+}
 async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   if (Number(c.req.header('Content-Length') ?? 0) > 1_048_576) throw new RouteError('Runtime body too large.', 'bad_body', 400);
   const text = await c.req.text();
@@ -355,7 +367,12 @@ async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   try { return JSON.parse(text); } catch { throw new RouteError('Invalid JSON body.', 'bad_body', 400); }
 }
 export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { workspaceId, agentId, binding } = await authenticate(c);
+  const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
+  if (authorization.kind === 'preflight_grant') {
+    const tools = allowedTools('work', PARTNER_PROGRAM_TOOLS);
+    return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
+  }
+  const binding = authorization.binding;
   const db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
   try {
     const configured = await db.loadToolNames(agentId);
@@ -370,7 +387,10 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
   } finally { await db.close(); }
 }
 export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { workspaceId, agentId } = await authenticate(c);
+  const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
+  if (authorization.kind === 'preflight_grant') {
+    return c.json({ skills: [preflightPartnerManifest(authorization.config, authorization.grant)] });
+  }
   const skills = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
     runtimeSkillManifestsForAgent(c.env, tx, workspaceId, agentId));
   return c.json({ skills });

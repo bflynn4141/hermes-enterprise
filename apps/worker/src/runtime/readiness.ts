@@ -5,9 +5,38 @@ import {
   type SkillQuery,
 } from '../enterprise-skills/service.js';
 import type { HermesEnterpriseReadiness } from './client.js';
+import type { RuntimeSkillManifest } from './skills.js';
+import {
+  enterpriseSkillDefinition,
+  PARTNER_PROGRAM_DEFINITION,
+  PARTNER_PROGRAM_TOOLS,
+  toolsForSkillVersion,
+} from '../enterprise-skills/registry.js';
 
 export const HERMES_NATIVE_REVISION = '5d59366010640c1d6b8f170d8a4ee109db2bbdef';
 export const ENTERPRISE_BRIDGE_VERSION = '1.7.0';
+export const LEGACY_PARTNER_CONTENT_DIGEST =
+  'sha256:cd26e70aa49de223f28216ea579d33c610305d3184a6c592c7841fa12aca6ddf';
+
+export interface ManagedRuntimeIdentity {
+  readonly workspaceId: string;
+  readonly agentId: string;
+  readonly enterpriseUrl: string | undefined;
+  readonly pluginRevision: string | undefined;
+  readonly pluginArtifactDigest: string | undefined;
+}
+
+function cleanOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password ||
+        url.pathname !== '/' || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
 
 const CURRENT_ASSIGNMENTS = new Map<string, { version: string; agentCash: boolean }>([
   ['partner-program-screening', { version: '1.8.0', agentCash: true }],
@@ -45,6 +74,25 @@ function sameNames(actual: readonly string[], expected: readonly string[]): bool
   return actual.length === expected.length &&
     new Set(actual).size === actual.length &&
     expected.every((name) => actual.includes(name));
+}
+
+function matchesManagedRuntimeIdentity(
+  readiness: HermesEnterpriseReadiness,
+  expected: ManagedRuntimeIdentity,
+): boolean {
+  return readiness.workspaceId === expected.workspaceId &&
+    readiness.agentId === expected.agentId &&
+    cleanOrigin(readiness.enterpriseUrl) !== null &&
+    cleanOrigin(readiness.enterpriseUrl) === cleanOrigin(expected.enterpriseUrl) &&
+    /^[0-9a-f]{40}$/.test(expected.pluginRevision ?? '') &&
+    /^sha256:[0-9a-f]{64}$/.test(expected.pluginArtifactDigest ?? '') &&
+    readiness.runtimeRevision === HERMES_NATIVE_REVISION &&
+    readiness.plugin?.name === 'enterprise_bridge' &&
+    readiness.plugin.version === ENTERPRISE_BRIDGE_VERSION &&
+    readiness.plugin.revision === expected.pluginRevision &&
+    readiness.plugin.artifactDigest === expected.pluginArtifactDigest &&
+    readiness.version === ENTERPRISE_BRIDGE_VERSION &&
+    readiness.nativeCronDisabled;
 }
 
 export function enterpriseReadinessToolNames(assignment: EnterpriseSkillAssignment): string[] {
@@ -90,4 +138,64 @@ export function matchesExactEnterpriseAttestation(
 ): boolean {
   return requiresExactEnterpriseAttestation(assignment) &&
     matchesEnterpriseReadiness(readiness, assignment);
+}
+
+/** A promoted digest binding follows its current explicit assignment. The
+ * common managed boot/source identity remains fixed while the reviewed role
+ * can move from bootstrap P1.7 to P1.8 or Finance. */
+export function matchesManagedRuntimeAttestation(
+  readiness: HermesEnterpriseReadiness,
+  expected: ManagedRuntimeIdentity,
+  manifests: readonly RuntimeSkillManifest[],
+): boolean {
+  if (!matchesManagedRuntimeIdentity(readiness, expected) || manifests.length !== 1 ||
+      !readiness.skills || readiness.skills.length !== 1 || !readiness.toolNames) return false;
+  const manifest = manifests[0]!;
+  const definition = enterpriseSkillDefinition(manifest.skill_key, manifest.version);
+  if (!definition || manifest.binding_source !== 'enterprise_assignment' ||
+      !Number.isInteger(manifest.assignment_revision) || (manifest.assignment_revision ?? 0) < 1 ||
+      manifest.grant_revision !== null || manifest.binding_state !== null ||
+      manifest.grant_expires_at !== null || manifest.state !== 'active' || manifest.auto_load !== true ||
+      manifest.name !== definition.runtimeName || manifest.runtime_name !== definition.runtimeName ||
+      manifest.artifact_digest !== definition.artifactDigest) return false;
+  const expectsAgentCash = definition.roleTemplateKey === 'partnerships-agent';
+  const skill = readiness.skills[0]!;
+  const expectedContentDigest = manifest.skill_key === PARTNER_PROGRAM_DEFINITION.key &&
+      manifest.version === PARTNER_PROGRAM_DEFINITION.version
+    ? LEGACY_PARTNER_CONTENT_DIGEST
+    : manifest.artifact_digest;
+  const expectedTools = [
+    ...toolsForSkillVersion(manifest.skill_key, manifest.version, manifest.capability_grants),
+    'skill_view',
+  ];
+  return readiness.agentCashEnabled === expectsAgentCash &&
+    readiness.agentCashWalletPresent === expectsAgentCash &&
+    skill.name === manifest.runtime_name && skill.version === manifest.version &&
+    skill.artifactDigest === manifest.artifact_digest &&
+    skill.contentDigest === expectedContentDigest &&
+    sameNames(readiness.toolNames, expectedTools);
+}
+
+/** New warm capacity must prove the complete historical P1.7 inventory. This
+ * deliberately does not replace the looser legacy matcher used by the already
+ * deployed Iris profile. */
+export function matchesLegacyCapacityAttestation(
+  readiness: HermesEnterpriseReadiness,
+  expected?: ManagedRuntimeIdentity,
+): boolean {
+  const expectedTools = [...PARTNER_PROGRAM_TOOLS, 'skill_view'];
+  return (!expected || matchesManagedRuntimeIdentity(readiness, expected)) &&
+    readiness.runtimeRevision === HERMES_NATIVE_REVISION &&
+    readiness.plugin?.name === 'enterprise_bridge' &&
+    readiness.plugin.version === ENTERPRISE_BRIDGE_VERSION &&
+    readiness.version === ENTERPRISE_BRIDGE_VERSION &&
+    readiness.nativeCronDisabled &&
+    readiness.agentCashEnabled &&
+    readiness.agentCashWalletPresent &&
+    readiness.skills?.length === 1 &&
+    readiness.skills[0]?.name === PARTNER_PROGRAM_DEFINITION.runtimeName &&
+    readiness.skills[0]?.version === PARTNER_PROGRAM_DEFINITION.version &&
+    readiness.skills[0]?.artifactDigest === PARTNER_PROGRAM_DEFINITION.artifactDigest &&
+    readiness.skills[0]?.contentDigest === LEGACY_PARTNER_CONTENT_DIGEST &&
+    readiness.toolNames !== null && sameNames(readiness.toolNames, expectedTools);
 }

@@ -18,15 +18,50 @@ export { PARTNER_PROGRAM_SKILL, PARTNER_PROGRAM_TOOLS };
 
 export interface RuntimeSkillManifest {
   readonly name: string;
+  readonly skill_key: string;
+  readonly runtime_name: string;
   readonly version: string;
+  readonly artifact_digest: string;
+  readonly state: 'active';
+  readonly assignment_revision: number | null;
+  readonly grant_revision: number | null;
+  readonly binding_source: 'enterprise_assignment' | 'legacy_config' | 'preflight_grant';
+  readonly binding_state: 'prepared' | 'linked_available' | 'linked_reserved' | null;
+  readonly grant_expires_at: string | null;
+  readonly capability_grants: readonly string[];
   readonly auto_load: true;
   readonly config: Readonly<Record<string, unknown>>;
 }
 
-function partnerManifest(config: Record<string, unknown>, assignment?: EnterpriseSkillAssignment | null): RuntimeSkillManifest {
+function partnerManifest(
+  config: Record<string, unknown>,
+  assignment?: EnterpriseSkillAssignment | null,
+  preflight?: {
+    grantRevision: number;
+    assignmentRevision: number | null;
+    linkedCapacityId: string | null;
+    capacityState: string | null;
+    expiresAt: Date | null;
+  },
+): RuntimeSkillManifest {
+  const runtimeName = assignment?.runtime_name ?? PARTNER_PROGRAM_DEFINITION.runtimeName;
   return {
-    name: assignment?.runtime_name ?? PARTNER_PROGRAM_DEFINITION.runtimeName,
+    name: runtimeName,
+    skill_key: PARTNER_PROGRAM_DEFINITION.key,
+    runtime_name: runtimeName,
     version: assignment?.version ?? PARTNER_PROGRAM_DEFINITION.version,
+    artifact_digest: assignment?.artifact_digest ?? PARTNER_PROGRAM_DEFINITION.artifactDigest,
+    state: 'active',
+    assignment_revision: preflight?.assignmentRevision ?? assignment?.revision ?? null,
+    grant_revision: preflight?.grantRevision ?? null,
+    binding_source: preflight ? 'preflight_grant' : assignment ? 'enterprise_assignment' : 'legacy_config',
+    binding_state: preflight
+      ? preflight.linkedCapacityId
+        ? preflight.capacityState === 'reserved' ? 'linked_reserved' : 'linked_available'
+        : 'prepared'
+      : null,
+    grant_expires_at: preflight?.expiresAt?.toISOString() ?? null,
+    capability_grants: assignment?.capability_grants ?? PARTNER_PROGRAM_DEFINITION.defaultCapabilityGrants,
     auto_load: true,
     config: {
       partner_program: {
@@ -39,9 +74,20 @@ function partnerManifest(config: Record<string, unknown>, assignment?: Enterpris
 }
 
 function financeManifest(config: Record<string, unknown>, assignment?: EnterpriseSkillAssignment | null): RuntimeSkillManifest {
+  const runtimeName = assignment?.runtime_name ?? PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName;
   return {
-    name: assignment?.runtime_name ?? PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+    name: runtimeName,
+    skill_key: PARTNER_INVOICE_REVIEW_DEFINITION.key,
+    runtime_name: runtimeName,
     version: assignment?.version ?? PARTNER_INVOICE_REVIEW_DEFINITION.version,
+    artifact_digest: assignment?.artifact_digest ?? PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+    state: 'active',
+    assignment_revision: assignment?.revision ?? null,
+    grant_revision: null,
+    binding_source: assignment ? 'enterprise_assignment' : 'legacy_config',
+    binding_state: null,
+    grant_expires_at: null,
+    capability_grants: assignment?.capability_grants ?? PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants,
     auto_load: true,
     config: {
       invoice_review: {
@@ -52,6 +98,25 @@ function financeManifest(config: Record<string, unknown>, assignment?: Enterpris
       },
     },
   };
+}
+
+export function preflightPartnerManifest(
+  config: Readonly<Record<string, unknown>>,
+  grant: {
+    grant_revision: number;
+    assignment_revision: number | null;
+    linked_capacity_id: string | null;
+    capacity_state: string | null;
+    expires_at: Date | null;
+  },
+): RuntimeSkillManifest {
+  return partnerManifest({ ...config }, null, {
+    grantRevision: grant.grant_revision,
+    assignmentRevision: grant.assignment_revision,
+    linkedCapacityId: grant.linked_capacity_id,
+    capacityState: grant.capacity_state,
+    expiresAt: grant.expires_at,
+  });
 }
 
 /**

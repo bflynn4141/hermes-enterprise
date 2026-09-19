@@ -163,7 +163,6 @@ async function checkHermesRuntimes(env: Env): Promise<string> {
   if (publicUrl.protocol !== 'https:' || publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash) {
     throw new Error('invalid Hermes Enterprise public URL');
   }
-
   // Warm-pool invitees use encrypted database bindings, not the original
   // deployment map. Keep probing any fixed profiles that still exist, but do
   // not make a legacy map a prerequisite for the new dynamic architecture.

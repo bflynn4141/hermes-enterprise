@@ -161,15 +161,23 @@ export async function materializeLegacyPartnerAssignment(
   if (!legacy.config) return null;
   const schedule = { enabled: options.scheduleEnabled ?? true, interval_minutes: 360 };
   const approvalPolicy = { human_review_required: true };
+  const artifact = await tx.query<{ id: string }>(
+    `SELECT id FROM enterprise_skill_artifacts
+      WHERE skill_key=$1 AND skill_version=$2 AND digest=$3`,
+    [PARTNER_PROGRAM_DEFINITION.key, PARTNER_PROGRAM_DEFINITION.version,
+      PARTNER_PROGRAM_DEFINITION.artifactDigest],
+  );
+  const artifactId = artifact.rows[0]?.id;
+  if (!artifactId) throw new Error('legacy_partner_artifact_not_found');
   await tx.query(
     `INSERT INTO enterprise_skill_assignments
        (workspace_id, agent_id, skill_key, skill_version, state, config,
-        capability_grants, schedule, approval_policy, assigned_by)
-     VALUES ($1,$2,$3,$4,'active',$5::jsonb,$6,$7::jsonb,$8::jsonb,$9)
+        capability_grants, schedule, approval_policy, artifact_id, assigned_by)
+     VALUES ($1,$2,$3,$4,'active',$5::jsonb,$6,$7::jsonb,$8::jsonb,$9,$10)
      ON CONFLICT (workspace_id, agent_id, skill_key) DO NOTHING`,
     [workspaceId, agentId, PARTNER_PROGRAM_DEFINITION.key, PARTNER_PROGRAM_DEFINITION.version,
       JSON.stringify(legacy.config), [...PARTNER_PROGRAM_DEFINITION.defaultCapabilityGrants],
-      JSON.stringify(schedule), JSON.stringify(approvalPolicy), assignedBy],
+      JSON.stringify(schedule), JSON.stringify(approvalPolicy), artifactId, assignedBy],
   );
   const row = await selectAssignment(tx, workspaceId, agentId, PARTNER_PROGRAM_DEFINITION.key);
   if (!row) return null;

@@ -1,13 +1,68 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalView, Bootstrap } from '@hermes/shared';
 import type { Env } from '../../src/env.js';
 import { POOL_CONTROL_NAMESPACE } from '../../src/hermes-cloud/capacity.js';
 import { sealSecret } from '../../src/keys/envelope.js';
+import { discoveryConfigDigest } from '../../src/runtime/discovery-grants.js';
+import { runtimeCredentialDigest } from '../../src/runtime/credentials.js';
+import { PARTNER_PROGRAM_DEFINITION, PARTNER_PROGRAM_TOOLS } from '../../src/enterprise-skills/registry.js';
+import {
+  ENTERPRISE_BRIDGE_VERSION,
+  HERMES_NATIVE_REVISION,
+  LEGACY_PARTNER_CONTENT_DIGEST,
+} from '../../src/runtime/readiness.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
 
 const KEK_V1 = Buffer.alloc(32, 23).toString('base64');
+const PLUGIN_REVISION = 'a'.repeat(40);
+const PLUGIN_DIGEST = `sha256:${'d'.repeat(64)}`;
+const POLICY = {
+  source: 'github', program_name: 'Hermes Partner Program',
+  source_purpose: 'organization_partner_research', organization_only: true, no_outreach: true,
+  role_label: 'Partner Program', search_queries: ['developer infrastructure'], intake_urls: [],
+  keywords: ['developer', 'infrastructure'],
+  ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+  minimum_priority: 50, lookback_days: 365, max_candidates: 5, max_api_requests: 12,
+  minimum_rate_remaining: 5, max_spend_usd: 0,
+};
+
+function capabilitiesBody(): Record<string, unknown> {
+  return {
+    object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+    auth: { type: 'bearer', required: true },
+    runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+    features: {
+      run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+      runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+    },
+    endpoints: {
+      runs: { method: 'POST', path: '/v1/runs' }, run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+      run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+      run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+      run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+    },
+  };
+}
+
+function readinessBody(workspaceId: string, agentId: string): Record<string, unknown> {
+  return {
+    object: 'hermes.enterprise_bridge.readiness', version: ENTERPRISE_BRIDGE_VERSION,
+    runtime_revision: HERMES_NATIVE_REVISION,
+    plugin: { name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION,
+      revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
+    workspace_id: workspaceId, agent_id: agentId,
+    enterprise_url: 'https://enterprise.example.test',
+    skills: [{
+      name: PARTNER_PROGRAM_DEFINITION.runtimeName, version: PARTNER_PROGRAM_DEFINITION.version,
+      artifact_digest: PARTNER_PROGRAM_DEFINITION.artifactDigest,
+      content_digest: LEGACY_PARTNER_CONTENT_DIGEST,
+    }],
+    tools: [...PARTNER_PROGRAM_TOOLS, 'skill_view'],
+    agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
+  };
+}
 
 async function seedInvitation(
   env: Env,
@@ -27,6 +82,14 @@ async function seedInvitation(
         'pool-control-secret-longer-than-twenty-four-characters',
       )
     : null;
+  const grantId = capacityId ? randomUUID() : null;
+  const credentialDigest = preflightAgentId
+    ? await runtimeCredentialDigest(workspaceId, preflightAgentId, 'a'.repeat(64))
+    : null;
+  const configDigest = await discoveryConfigDigest({
+    role_template_key: PARTNER_PROGRAM_DEFINITION.roleTemplateKey,
+    config: POLICY,
+  });
   await withClient('owner', async (client) => {
     await client.query('BEGIN');
     await client.query(
@@ -41,16 +104,33 @@ async function seedInvitation(
     );
     if (capacityId && envelope) {
       await client.query(
+        `INSERT INTO runtime_discovery_grants
+           (id, workspace_id, agent_id, created_by, credential_digest,
+            role_template_key, skill_key, skill_version, runtime_name, artifact_digest,
+            config_digest, expires_at)
+         VALUES ($1,$2,$3,$4,$5,'partnerships-agent',$6,$7,$8,$9,$10,now()+interval '24 hours')`,
+        [grantId, workspaceId, preflightAgentId, adminId, Buffer.from(credentialDigest!),
+          PARTNER_PROGRAM_DEFINITION.key, PARTNER_PROGRAM_DEFINITION.version,
+          PARTNER_PROGRAM_DEFINITION.runtimeName, PARTNER_PROGRAM_DEFINITION.artifactDigest,
+          configDigest],
+      );
+      await client.query(
         `INSERT INTO hermes_cloud_capacity
-           (id, workspace_id, cloud_agent_id, instance_name, preflight_agent_id, connector_url, state,
+           (id, workspace_id, cloud_agent_id, instance_name, preflight_agent_id, discovery_grant_id, connector_url, state,
             reserved_invitation_id, ciphertext, iv, wrapped_dek, wrap_iv, kek_version,
             plugin_version, agentcash_enabled, agentcash_wallet_present, native_cron_disabled,
             readiness_checked_at, last_health_checked_at)
-         VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8,$9,$10,$11,$12,'1.5.0',true,true,true,now(),now())`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'reserved',$8,$9,$10,$11,$12,$13,'1.7.0',true,true,true,now(),now())`,
         [capacityId, workspaceId, `cloud-${capacityId}`, `iris-pool-${capacityId.slice(0, 8)}`,
-         preflightAgentId, `https://reserved-${capacityId}.example.test/api/plugins/enterprise_bridge/control`, invitationId,
+         preflightAgentId, grantId,
+         `https://reserved-${capacityId}.example.test/api/plugins/enterprise_bridge/control`, invitationId,
          Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv), Buffer.from(envelope.wrappedDek),
          Buffer.from(envelope.wrapIv), envelope.kekVersion],
+      );
+      await client.query(
+        `UPDATE runtime_discovery_grants SET linked_capacity_id=$3, expires_at=NULL
+          WHERE workspace_id=$1 AND id=$2`,
+        [workspaceId, grantId, capacityId],
       );
     }
     await client.query('COMMIT');
@@ -59,6 +139,7 @@ async function seedInvitation(
 }
 
 describe('invitation-derived member and agent coordination', () => {
+  afterEach(() => vi.unstubAllGlobals());
   it('consumes the exact reserved instance and creates real, capped Inbox starter work', async () => {
     const fixture = await seedWorkspace();
     const joinerId = randomUUID();
@@ -68,10 +149,22 @@ describe('invitation-derived member and agent coordination', () => {
       KEK_V1,
       HERMES_BRIDGE_SECRET: 'invitee-pool-test-secret-longer-than-32-characters',
       HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example.test',
+      HERMES_ENTERPRISE_PLUGIN_REVISION: PLUGIN_REVISION,
+      HERMES_ENTERPRISE_PLUGIN_SHA256: PLUGIN_DIGEST,
+      PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify(POLICY),
     });
     const seeded = await seedInvitation(
       env, fixture.workspaceId, fixture.adminId, joinerId, invitationId, true,
     );
+    const upstream = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = init?.body ? JSON.parse(String(init.body)) as { operation?: string } : {};
+      if (body.operation === 'capabilities') return Response.json(capabilitiesBody());
+      if (body.operation === 'readiness') {
+        return Response.json(readinessBody(fixture.workspaceId, seeded.preflightAgentId!));
+      }
+      return new Response('unexpected operation', { status: 500 });
+    });
+    vi.stubGlobal('fetch', upstream);
 
     const accepted = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, {
       method: 'POST', body: {},
