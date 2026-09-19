@@ -80,6 +80,8 @@ function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', 
     user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role },
   };
   const reviewer = row.payload.workflow_provenance ? 'Finance reviewer' : 'Workspace Admin';
+  const requirement = row.decision_summary?.approval_requirement;
+  const eligibleRole = reviewer === 'Finance reviewer' ? 'member' : 'admin';
   const requestWithEligibility: RequestEntity = {
     ...row,
     decision_summary: {
@@ -88,9 +90,16 @@ function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', 
       facts: row.decision_summary?.facts ?? [],
       consequence: row.decision_summary?.consequence ?? null,
       approval_requirement: {
-        mode: 'single', completed_steps: 0, total_steps: 1, remaining_approvals: 1,
-        current: [{ label: reviewer, approvals_recorded: 0, quorum: 1 }],
-        pending_for_viewer: role === 'admin', waiting_on_others: role !== 'admin', expires_at: null,
+        mode: requirement?.mode ?? 'single',
+        completed_steps: requirement?.completed_steps ?? (row.status === 'pending' ? 0 : 1),
+        total_steps: requirement?.total_steps ?? 1,
+        remaining_approvals: requirement?.remaining_approvals ?? (row.status === 'pending' ? 1 : 0),
+        current: row.status === 'pending'
+          ? (requirement?.current.length ? requirement.current.map((step) => ({ ...step, label: reviewer })) : [{ label: reviewer, approvals_recorded: 0, quorum: 1 }])
+          : [],
+        pending_for_viewer: row.status === 'pending' && role === eligibleRole,
+        waiting_on_others: row.status === 'pending' && role !== eligibleRole,
+        expires_at: requirement?.expires_at ?? null,
       },
     },
   };
@@ -260,8 +269,35 @@ describe('the Inbox renders the focused view', () => {
     expect(agreement).not.toContain('Full legal name');
     const invoice = renderDocument(requests[5]!, 'admin', true);
     expect(invoice).toContain('Saved in Library');
+    expect(invoice).toContain('1 of 1 Admin approval');
     expect(invoice).not.toContain('Save payment authorization');
     expect(invoice).not.toContain('Connect a bank');
+  });
+
+  it('keeps the Finance reviewer and server-projected count on a resolved invoice', () => {
+    const base = requests[5]!;
+    const invoice = renderDocument({
+      ...base,
+      payload: {
+        ...base.payload,
+        workflow_provenance: {
+          handoff_id: mockUuid(303),
+          shared_partner: { id: mockUuid(304), name: 'Robin Studio', engagement_reference: 'ENG-42' },
+          source_sessions: [],
+        },
+      },
+      decision_summary: {
+        ...base.decision_summary!,
+        approval_requirement: {
+          ...base.decision_summary!.approval_requirement,
+          completed_steps: 2,
+          total_steps: 2,
+          current: [],
+        },
+      },
+    }, 'member', true);
+    expect(invoice).toContain('2 of 2 Finance review steps');
+    expect(invoice).not.toContain('Admin approval');
   });
 
   it('does not describe a withdrawn draft as approved', () => {

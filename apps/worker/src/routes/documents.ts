@@ -32,11 +32,11 @@ import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
 import type { Tx } from '../db/client.js';
 import { getObject } from '../storage/r2.js';
+import { requestAudiencePredicate } from '../domain/audience.js';
 import {
   DOCUMENT_SELECT,
   loadDocument,
   loadVersions,
-  renderUrl,
   toDocumentEntity,
   toDraftEntity,
   type DocumentRow,
@@ -65,14 +65,19 @@ export async function listDocuments(c: Context<{ Bindings: Env }>): Promise<Resp
       const drafts = await work.tx.query<DraftRow>(
         `SELECT id, kind, payload, created_at FROM requests
           WHERE status = 'pending' AND kind IN ('invoice', 'agreement')
+            AND ${requestAudiencePredicate('requests.id', '$1')}
           ORDER BY created_at DESC LIMIT 100`,
+        [work.userId],
       );
       for (const row of drafts.rows) rows.push({ at: row.created_at.getTime(), entity: toDraftEntity(row) });
     }
 
     if (wantSaved) {
       const saved = await work.tx.query<DocumentRow>(
-        `${DOCUMENT_SELECT} ORDER BY d.created_at DESC LIMIT 100`,
+        `${DOCUMENT_SELECT}
+          WHERE ${requestAudiencePredicate('r.id', '$1')}
+          ORDER BY d.created_at DESC LIMIT 100`,
+        [work.userId],
       );
       for (const row of saved.rows) rows.push({ at: row.created_at.getTime(), entity: toDocumentEntity(row) });
     }
@@ -84,11 +89,12 @@ export async function listDocuments(c: Context<{ Bindings: Env }>): Promise<Resp
 }
 
 /** A pending invoice or agreement request, read as the draft the Library shows. */
-async function loadDraft(tx: Tx, id: string): Promise<DraftRow | null> {
+async function loadDraft(tx: Tx, id: string, userId: string): Promise<DraftRow | null> {
   const { rows } = await tx.query<DraftRow & Record<string, unknown>>(
     `SELECT id, kind, payload, created_at FROM requests
-      WHERE id = $1 AND status = 'pending' AND kind IN ('invoice', 'agreement')`,
-    [id],
+      WHERE id = $1 AND status = 'pending' AND kind IN ('invoice', 'agreement')
+        AND ${requestAudiencePredicate('requests.id', '$2')}`,
+    [id, userId],
   );
   return rows[0] ?? null;
 }
@@ -96,17 +102,14 @@ async function loadDraft(tx: Tx, id: string): Promise<DraftRow | null> {
 export async function getDocument(c: Context<{ Bindings: Env }>): Promise<Response> {
   const id = pathUuid(c, 'id');
   const found = await inWorkspace(c, async (work) => {
-    const document = await loadDocument(work.tx, id);
+    const document = await loadDocument(work.tx, id, work.userId);
     if (document) return { document, draft: null };
     // The id may name a pending request, which is what a draft in the Library
     // is: a proposal with no document row, because nobody has decided.
-    return { document: null, draft: await loadDraft(work.tx, id) };
+    return { document: null, draft: await loadDraft(work.tx, id, work.userId) };
   });
 
   if (found.document) {
-    // Only a *PDF* goes in `pdf_url`, and this build renders none (D-7), so the
-    // field stays null and the render is reached through its own route.
-    void (await renderUrl(c.env, found.document));
     return c.json(documentEntitySchema.parse(toDocumentEntity(found.document)));
   }
   if (found.draft) return c.json(documentEntitySchema.parse(toDraftEntity(found.draft)));
@@ -116,9 +119,9 @@ export async function getDocument(c: Context<{ Bindings: Env }>): Promise<Respon
 export async function listDocumentVersions(c: Context<{ Bindings: Env }>): Promise<Response> {
   const id = pathUuid(c, 'id');
   const rows = await inWorkspace(c, async (work) => {
-    const document = await loadDocument(work.tx, id);
+    const document = await loadDocument(work.tx, id, work.userId);
     if (!document) throw new RouteError('no such document', 'unknown_document', 404);
-    return loadVersions(work.tx, document.request_id);
+    return loadVersions(work.tx, document.request_id, work.userId);
   });
   return c.json(
     documentPage.parse({ items: rows.map((row) => toDocumentEntity(row)), cursor: null, total: rows.length }),
@@ -128,16 +131,14 @@ export async function listDocumentVersions(c: Context<{ Bindings: Env }>): Promi
 /**
  * GET /w/:ws/documents/:id/render
  *
- * A redirect to a presigned GET where this environment can sign one, and the
- * object streamed through the binding where it cannot — `wrangler dev --local`
- * simulates R2 on disk with no account and therefore no S3 credentials. The
- * membership check happens here either way; the presigned URL is minted only
- * after it passed.
+ * An authenticated proxy for the rendered object. Every request rechecks the
+ * document's audience before any bytes leave storage; private workflow
+ * documents never receive a reusable presigned source URL.
  */
 export async function getDocumentRender(c: Context<{ Bindings: Env }>): Promise<Response> {
   const id = pathUuid(c, 'id');
   const row = await inWorkspace(c, async (work) => {
-    const document = await loadDocument(work.tx, id);
+    const document = await loadDocument(work.tx, id, work.userId);
     if (!document) throw new RouteError('no such document', 'unknown_document', 404);
     return document;
   });
@@ -149,9 +150,6 @@ export async function getDocumentRender(c: Context<{ Bindings: Env }>): Promise<
       row.render_status === 'failed' ? 422 : 404,
     );
   }
-
-  const signed = await renderUrl(c.env, row);
-  if (signed) return c.redirect(signed, 302);
 
   const object = await getObject(c.env, row.storage_key);
   if (!object) throw new RouteError('the rendered file is no longer in the store', 'render_missing', 404);
@@ -173,7 +171,7 @@ export async function createDocumentVersion(c: Context<{ Bindings: Env }>): Prom
     work.requireAdmin('saving a new document version');
     requireStepUp(work.session);
 
-    const current = await loadDocument(work.tx, id);
+    const current = await loadDocument(work.tx, id, work.userId);
     if (!current) throw new RouteError('no such document', 'unknown_document', 404);
 
     const parsed = documentPayloadSchema.safeParse(input.payload);
@@ -268,7 +266,7 @@ export async function createDocumentVersion(c: Context<{ Bindings: Env }>): Prom
       ])),
     );
 
-    const fresh = await loadDocument(work.tx, document.id);
+    const fresh = await loadDocument(work.tx, document.id, work.userId);
     if (!fresh) throw new RouteError('the version was not written', 'version_failed', 409);
     return fresh;
   });

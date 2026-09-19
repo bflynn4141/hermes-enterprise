@@ -14,6 +14,7 @@
 import type { EffectKind } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import { EFFECT_LABELS, EFFECT_UNAVAILABLE_REASON } from './effects.js';
+import { requestAudiencePredicate } from './audience.js';
 
 export interface EffectRow {
   id: string;
@@ -39,6 +40,7 @@ const SELECT = `
 export interface EffectFilter {
   readonly requestId?: string;
   readonly status?: readonly string[];
+  readonly audienceUserId?: string;
   readonly limit?: number;
 }
 
@@ -53,6 +55,10 @@ export async function effectRows(tx: Tx, filter: EffectFilter = {}): Promise<Eff
     values.push([...filter.status]);
     where.push(`e.status = ANY ($${values.length}::text[])`);
   }
+  if (filter.audienceUserId) {
+    values.push(filter.audienceUserId);
+    where.push(requestAudiencePredicate('e.request_id', `$${values.length}`));
+  }
   values.push(Math.min(200, filter.limit ?? 100));
 
   const { rows } = await tx.query<EffectRow>(
@@ -65,8 +71,11 @@ export async function effectRows(tx: Tx, filter: EffectFilter = {}): Promise<Eff
   return rows;
 }
 
-export async function loadEffect(tx: Tx, effectId: string): Promise<EffectRow | null> {
-  const { rows } = await tx.query<EffectRow>(`${SELECT} WHERE e.id = $1`, [effectId]);
+export async function loadEffect(tx: Tx, effectId: string, audienceUserId?: string): Promise<EffectRow | null> {
+  const { rows } = await tx.query<EffectRow>(
+    `${SELECT} WHERE e.id = $1${audienceUserId ? ` AND ${requestAudiencePredicate('e.request_id', '$2')}` : ''}`,
+    audienceUserId ? [effectId, audienceUserId] : [effectId],
+  );
   return rows[0] ?? null;
 }
 

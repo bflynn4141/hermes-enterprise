@@ -11,10 +11,10 @@
 // own route, which is the better shape anyway: the page changes as you scroll
 // and the counts do not, and a client that re-reads the counts on every page of
 // a backscroll is asking the database four aggregate questions it already knew
-// the answers to. Both come from the views (`v_decision_count`,
-// `v_pending_grants`, `v_inbox_count`, `v_created_documents`), never from a
-// stored counter — invariant 4, and the reason the demo's 4 -> 0 works in any
-// of the 24 orders.
+// the answers to. Counts are derived from the same source rows and document
+// view as the lists, never from a stored counter. The per-request audience
+// predicate must run before aggregation; a workspace-wide aggregate cannot
+// recover which rows this caller was allowed to count.
 //
 // ## Why erasure is here
 //
@@ -32,6 +32,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, RouteError } from './tenant.js';
 import { isHistoryTab, loadHistory, renderHistoryRow } from '../domain/history.js';
+import { requestAudiencePredicate } from '../domain/audience.js';
 import { deletePrefix } from '../storage/r2.js';
 import { documentPrefix } from '../documents/keys.js';
 
@@ -47,7 +48,7 @@ export async function listHistory(c: Context<{ Bindings: Env }>): Promise<Respon
   }
   const limit = Math.min(HISTORY_LIMIT, Math.max(1, Number(c.req.query('limit') ?? 50) || 50));
 
-  const rows = await inWorkspace(c, (work) => loadHistory(work.tx, tabRaw, before, limit));
+  const rows = await inWorkspace(c, (work) => loadHistory(work.tx, tabRaw, before, limit, work.userId));
   const items = rows.map(renderHistoryRow);
 
   // The cursor is the last row's timestamp, which is also what the client uses
@@ -72,18 +73,43 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
       inbox: number;
       documents: number;
     }>(
-      `SELECT COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0)
-                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status IN ('approved','declined')) AS decisions,
-              COALESCE((SELECT approved  FROM v_decision_count WHERE workspace_id = $1), 0)
-                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status = 'approved') AS approved,
-              COALESCE((SELECT declined  FROM v_decision_count WHERE workspace_id = $1), 0)
-                + (SELECT count(*)::int FROM approval_requests WHERE workspace_id = $1 AND status = 'declined') AS declined,
-              COALESCE((SELECT pending   FROM v_pending_grants WHERE workspace_id = $1), 0) AS pending_grants,
+      `SELECT (SELECT count(*)::int FROM decisions decision_row
+                JOIN requests r ON r.id = decision_row.request_id
+               WHERE decision_row.workspace_id = $1 AND ${requestAudiencePredicate('r.id', '$2')})
+                + (SELECT count(*)::int FROM approval_requests approval_row
+                    JOIN requests r ON r.id = approval_row.request_id
+                   WHERE approval_row.workspace_id = $1 AND approval_row.status IN ('approved','declined')
+                     AND ${requestAudiencePredicate('r.id', '$2')}) AS decisions,
+              (SELECT count(*)::int FROM decisions decision_row
+                JOIN requests r ON r.id = decision_row.request_id
+               WHERE decision_row.workspace_id = $1 AND decision_row.decision = 'approve'
+                 AND ${requestAudiencePredicate('r.id', '$2')})
+                + (SELECT count(*)::int FROM approval_requests approval_row
+                    JOIN requests r ON r.id = approval_row.request_id
+                   WHERE approval_row.workspace_id = $1 AND approval_row.status = 'approved'
+                     AND ${requestAudiencePredicate('r.id', '$2')}) AS approved,
+              (SELECT count(*)::int FROM decisions decision_row
+                JOIN requests r ON r.id = decision_row.request_id
+               WHERE decision_row.workspace_id = $1 AND decision_row.decision = 'decline'
+                 AND ${requestAudiencePredicate('r.id', '$2')})
+                + (SELECT count(*)::int FROM approval_requests approval_row
+                    JOIN requests r ON r.id = approval_row.request_id
+                   WHERE approval_row.workspace_id = $1 AND approval_row.status = 'declined'
+                     AND ${requestAudiencePredicate('r.id', '$2')}) AS declined,
+              (SELECT count(*)::int FROM effects effect_row
+                JOIN requests r ON r.id = effect_row.request_id
+               WHERE effect_row.workspace_id = $1 AND effect_row.kind = 'access_grant'
+                 AND effect_row.status IN ('pending', 'assigned')
+                 AND ${requestAudiencePredicate('r.id', '$2')}) AS pending_grants,
               (SELECT count(*)::int FROM requests r LEFT JOIN approval_requests ar ON ar.request_id = r.id
                 WHERE r.workspace_id = $1 AND r.status = 'pending'
-                  AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))) AS inbox,
-              (SELECT count(*)::int FROM v_created_documents WHERE workspace_id = $1)        AS documents`,
-      [work.workspaceId],
+                  AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+                  AND ${requestAudiencePredicate('r.id', '$2')}) AS inbox,
+              (SELECT count(*)::int FROM v_created_documents document_view
+                JOIN requests r ON r.id = document_view.request_id
+               WHERE document_view.workspace_id = $1
+                 AND ${requestAudiencePredicate('r.id', '$2')}) AS documents`,
+      [work.workspaceId, work.userId],
     );
     return rows[0] ?? { decisions: 0, approved: 0, declined: 0, pending_grants: 0, inbox: 0, documents: 0 };
   });

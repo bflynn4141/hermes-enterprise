@@ -9,7 +9,7 @@
 // `MotionConfig` plus the `data-reduce-motion` effect are replaced by
 // `HermesMotionProvider`, which honours the OS setting and the member
 // preference together.
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HermesMotionProvider } from '@hermes/motion-components';
 import { createStore, initialState } from './model/store.js';
@@ -19,7 +19,7 @@ import { RestError } from './model/rest.js';
 import { createRest } from './model/rest.js';
 import { currentRoute, parseRef, serialiseRef, SHELL_PREFIX, type Route } from './model/routes.js';
 import { activeSessionKey } from './model/constants.js';
-import { StoreProvider, useAppState } from './app/store-context.js';
+import { StoreProvider, useAdapter, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
 import { Onboarding, SignIn } from './app/onboarding/Onboarding.js';
 import { SharedViewer } from './app/shared/SharedViewer.js';
@@ -66,6 +66,11 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
       email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
+      partnerWorkflowNative: params.get('workflowExecution') === 'native',
+      workflowRole: params.get('workflowRole') === 'partnerships' ? 'partnerships'
+        : params.get('workflowRole') === 'finance' ? 'finance'
+          : params.get('workflowRole') === 'unrelated' ? 'unrelated'
+            : params.get('workflowRole') === 'admin' ? 'admin' : undefined,
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }
@@ -122,8 +127,7 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
         const hashRef = parseRef(window.location.hash);
         const sessionId = current.sessionId ?? readActiveSession(current.workspaceId);
         if (sessionId && store.getState().sessions[sessionId]) {
-          store.dispatch({ type: 'session/select', id: sessionId });
-          next.openSession(sessionId);
+          await next.activateSession(sessionId);
         }
         if (hashRef) store.dispatch({ type: 'nav/app', object: hashRef, manual: true });
         setAdapter(next);
@@ -138,7 +142,7 @@ function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspac
       live = false;
       active?.dispose();
     };
-  }, [current.workspaceId, current.sessionId]);
+  }, [current.workspaceId]);
 
   if (error === 'signed-out') return <SignIn returnTo={window.location.href} />;
   if (error === 'not-found')
@@ -194,6 +198,20 @@ function readActiveSession(workspaceId: string): string | null {
 
 function App() {
   const state = useAppState();
+  const adapter = useAdapter();
+  const previousSession = useRef(state.activeSessionId);
+
+  useEffect(() => {
+    const restore = (): void => {
+      const next = currentRoute();
+      if (next.kind !== 'workspace' || next.workspaceId !== state.workspace.id) return;
+      if (next.sessionId) void adapter.activateSession(next.sessionId).catch(() => undefined);
+      const ref = parseRef(window.location.hash);
+      if (ref) store.dispatch({ type: 'nav/app', object: ref, manual: true });
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, [adapter, state.workspace.id]);
   // The URL follows the app pane and the active session, so a deep link and a
   // reload land on the same object.
   useEffect(() => {
@@ -212,7 +230,12 @@ function App() {
     const url = new URL(window.location.href);
     url.pathname = `/${SHELL_PREFIX}/${state.workspace.id}${state.activeSessionId ? `/s/${state.activeSessionId}` : ''}`;
     url.hash = serialiseRef(state.ui.app);
-    if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+    if (url.href !== window.location.href) {
+      const changedSession = previousSession.current !== state.activeSessionId;
+      if (changedSession && !previousSession.current?.startsWith('local-')) window.history.pushState(null, '', url);
+      else window.history.replaceState(null, '', url);
+    }
+    previousSession.current = state.activeSessionId;
   }, [state.workspace.id, state.activeSessionId, state.ui.app]);
 
   return (

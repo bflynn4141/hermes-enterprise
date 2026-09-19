@@ -8,9 +8,10 @@
     "dev": "node build.mjs --watch --serve",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:browser:mock": "playwright test scenarios.spec.ts partner-workflow.spec.ts approval-inbox.spec.ts composer-waiting.spec.ts provider-connect.spec.ts first-run-setup.spec.ts agent-activity.spec.ts agent-recovery.spec.ts streaming-motion.spec.ts",
+    "test:browser:mock": "playwright test scenarios.spec.ts partner-workflow.spec.ts approval-inbox.spec.ts composer-waiting.spec.ts provider-connect.spec.ts first-run-setup.spec.ts agent-activity.spec.ts agent-recovery.spec.ts streaming-motion.spec.ts session-reliability.spec.ts",
     "e2e": "playwright test",
     "e2e:live": "node scripts/e2e-live.mjs",
+    "acceptance:native-staging": "node scripts/native-staging-acceptance.mjs",
     "dev:step-up": "node scripts/dev-step-up.mjs"
   },
   "dependencies": {

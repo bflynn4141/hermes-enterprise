@@ -125,11 +125,18 @@ describe('invitation-derived member and agent coordination', () => {
         `SELECT status FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2`,
         [fixture.workspaceId, joiner.rows[0]!.agent_id],
       );
+      const assignment = await client.query<{ enabled_schedules: number }>(
+        `SELECT count(*) FILTER (WHERE COALESCE((schedule->>'enabled')::boolean,false))::int AS enabled_schedules
+           FROM enterprise_skill_assignments
+          WHERE workspace_id=$1 AND agent_id=$2`,
+        [fixture.workspaceId, joiner.rows[0]!.agent_id],
+      );
       const runs = await client.query(`SELECT id FROM runs WHERE workspace_id=$1`, [fixture.workspaceId]);
       return {
         joiner: joiner.rows[0]!, requests: requests.rows, approval: approval.rows[0]!,
         policy: policy.rows[0]!, welcome: welcome.rows[0]!, capacity: capacity.rows[0]!,
-        binding: binding.rows[0]!, provisioning: provisioning.rows[0]!, runCount: runs.rowCount,
+        binding: binding.rows[0]!, provisioning: provisioning.rows[0]!,
+        assignment: assignment.rows[0]!, runCount: runs.rowCount,
       };
     });
 
@@ -147,6 +154,7 @@ describe('invitation-derived member and agent coordination', () => {
     });
     expect(persisted.binding).toEqual({ assignment: 'invitee_pool', agentcash: true, ready: true });
     expect(persisted.provisioning).toEqual({ status: 'ready' });
+    expect(persisted.assignment).toEqual({ enabled_schedules: 0 });
     expect(persisted.welcome.text).toContain('Your organization has assigned you Iris');
     expect(persisted.welcome.text).not.toMatch(/Admin bootstrap|Hermes Cloud/i);
     expect(persisted.requests.map((request) => [request.kind, request.label])).toEqual(expect.arrayContaining([

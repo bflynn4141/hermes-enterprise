@@ -192,6 +192,9 @@ export const EVENT_KINDS = [
   'slack.credential_rewrapped',
   'gmail.connected',
   'outbound_email.sent',
+  'partner.invoice_received',
+  'partner.invoice_corrected',
+  'partner.decision_acknowledged',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 

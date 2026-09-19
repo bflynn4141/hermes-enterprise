@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { agentRecoveryViewSchema, mockUuid, type AgentRecoveryView, type AgentWakeInput } from '@hermes/shared';
+import { agentRecoveryViewSchema, mockUuid, type AgentRecoveryView, type AgentWakeInput, type SessionSnapshot } from '@hermes/shared';
 import { AgentRecoveryControls, createRecoverySubmitter, refreshRecoveryContext, retryCountdown } from './AgentRecovery.js';
 import { createRest } from '../../model/rest.js';
 import { createAuth } from '../../model/auth.js';
@@ -122,7 +122,8 @@ describe('recovery admission requests', () => {
 describe('active recovery hydration', () => {
   function setup() {
     const state = initialState();
-    const workspaceId = state.workspace.id;
+    const workspaceId = mockUuid(1);
+    state.workspace.id = workspaceId;
     const store = createStore(state);
     store.dispatch({ type: 'session/create', id: failed.session_id! });
     const run = { run_id: failed.run_id!, status: 'working' as const, attempt: 2 };
@@ -130,7 +131,17 @@ describe('active recovery hydration', () => {
     const loadRun = vi.fn(async () => run);
     const invalidateList = vi.fn();
     const ensure = vi.fn();
-    const adapter = { rest: { sessions, run: loadRun }, invalidateList, ensure } as unknown as Adapter;
+    const sessionSnapshot = async (): Promise<SessionSnapshot> => {
+      const current = await loadRun();
+      return { workspace_id: workspaceId, watermark: '0', recovery: null, stream: null,
+        session: { id: failed.session_id!, agent_id: mockUuid(4), title: 'Recovery', mode: 'work', model_id: 'model', effort: null, runtime: 'cloud',
+          pinned: false, archived: false, focus_ref: null, status: 'Working', last_activity_at: '2026-09-19T10:00:00Z' },
+        messages: { items: [], cursor: null, total: 0 }, run: { id: current.run_id, status: current.status, attempt: current.attempt,
+          session_id: failed.session_id!, agent_id: mockUuid(4), title: null, steps: [], queue: [], model_id: 'model', effort: null,
+          started_at: '2026-09-19T10:00:00Z', admitted_at: '2026-09-19T10:00:00Z', execution_started_at: null, ended_at: null },
+      };
+    };
+    const adapter = { rest: { sessions, sessionSnapshot }, invalidateList, ensure } as unknown as Adapter;
     const view = { ...queued, state: 'working' as const };
     const hydrate = () => refreshRecoveryContext(adapter, store, workspaceId, mockUuid(4), view, true);
     const start = (id: string, attempt = 2) => store.dispatch({ type: 'run/start', sessionId: failed.session_id!, run: {

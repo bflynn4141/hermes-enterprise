@@ -1,94 +1,153 @@
 # Partnerships + Finance workflow
 
-This local workflow gives two employees one agent each. Partnerships uses Iris
-for candidate evidence and draft-only outreach. Finance uses a separate agent
-for invoice checks and a human Finance decision. The agents share connector
-code, not unrestricted data access.
+This workflow gives two employees one agent each. Partnerships uses Iris to
+collect partner evidence and prepare draft-only work. Finance uses a separate
+agent to check one confirmed invoice, followed by a named Finance employee's
+decision. Models explain evidence; they do not create authority, choose a
+recipient, approve, pay, sign or send.
 
-## Authorization model
+## Setup and admission
 
-- An Admin applies the role templates with
-  `POST /w/:ws/partner-workflow/configure` and two distinct agent/principal
-  bindings. Reapplying a reviewed template replaces semantic capability grants
-  with that template's exact allowlist; arbitrary historic grants are not
-  retained. New schedules are off.
-- Runtime skill discovery and recovery status reads are side-effect free. The
-  deployment-wide legacy Partnerships policy is projected only for genuinely
-  ungoverned rollout agents; it cannot attach Partnerships manifests or tools
-  to a Finance-governed agent.
-- Each active run uses a grant snapshot tied to the exact assignment revision,
-  immutable skill artifact, connection binding, capability, resource and
-  action. Pause, revision changes, revocation and explicit denies fail closed.
-- `partner_records`, handoffs, run grants and workflow executions are app-role
-  only. The database agent role cannot query them directly.
-- Partnerships and Finance can list or fetch only their own team records.
-  Finance receives a strict handoff projection, not the Partnerships record or
-  source session. The Inbox links only to the Finance-owned review session.
-- A scoped Finance request is visible only to its named audience, including by
-  direct id, search and related documents/effects/notes. Legacy Inbox requests
-  without an audience keep their existing workspace visibility.
+An Admin applies the two role templates with
+`POST /w/:ws/partner-workflow/configure`. The request binds two distinct active
+members to two distinct agents. Applying a template replaces semantic grants
+with the reviewed allowlist, pauses that agent's other role assignment and
+turns its schedule off. Reapplying the same template is idempotent and does not
+advance the assignment revision.
 
-## Trigger and decision boundary
+Configuration alone does not admit invoices. Migration 0049 and new workspace
+settings start with admission disabled. Enabling
+`POST /w/:ws/partner-workflow/admission` requires both native profiles to attest
+the exact current agent, assignment id and revision, skill version and artifact
+digest, complete tool inventory, pinned runtime/plugin identity and the role's
+AgentCash state. The route re-locks the role and assignment rows after the
+native probes. Every later invoice intake rechecks the saved attestation
+against the current bindings. Pausing or revising either relevant assignment
+therefore closes admission until a fresh probe; an unrelated assignment is
+ignored.
 
-`POST /w/:ws/partner-workflow/invoice-review-handoffs` is the only workflow
-trigger. It requires an actual schema-valid invoice, engagement reference,
-authorized currency and amount, non-empty evidence, the Partnerships-owned
-source session/run and an idempotency key. A qualification, outreach draft or
-outreach approval cannot satisfy that schema and starts no Finance work.
+The opt-in roles are:
 
-The durable job freezes the engagement and invoice revisions, checks the
-current role assignment and connector grants, then checks duplicate number,
-payee and amount, currency, authorized amount and evidence. Discrepancies create
-a Finance-private needs-information record. A valid input creates one pending
-invoice request for the Finance principal. Replay returns the original handoff;
-stale revisions stop the review.
+| Role | Native package | Version | Governed tools |
+| --- | --- | --- | --- |
+| Partnerships | `enterprise_bridge:partner-program-screening-v1-8` | `1.8.0` | Existing Partnerships tools plus `publish_partner_invoice_review` |
+| Finance | `enterprise_bridge:partner-invoice-review` | `1.0.1` | `get_partner_handoff_result`, `list_requests`, `get_request`, `skill_view` |
 
-For a non-simulated event, the same transaction also persists a one-way agent
-message using Hermes Bot Mode's canonical envelope:
+Finance does not need AgentCash or a wallet. Existing Partnerships 1.7 and
+Finance 1.0.0 assignments remain historical/compatible definitions and do not
+satisfy new-workflow admission.
+
+## Exact human authority and immutable intake
+
+An unsigned agreement draft, a qualification, an outreach proposal and a model
+statement are never proof of an authorized engagement. Partnerships proposes
+terms through `POST /w/:ws/partner-workflow/engagement-authorizations`. The
+server binds a `record_change` approval to:
+
+- the named Finance reviewer and exact approval revision/hash;
+- the selected partner and reference, amount, currency and validity dates;
+- one-invoice scope and `sample` or `customer` input provenance; and
+- a Partnerships-owned attachment id, digest and exact permitted excerpt.
+
+Finance's human approval atomically rechecks the stored source and materializes
+the allowlisted engagement record. Replacement approved terms supersede older
+authority for the same partner/reference, including an authority reserved by an
+undecided handoff. Undecided old handoffs become stale and their pending Finance
+requests are withdrawn. Decided receipts remain immutable.
+
+Partnerships then confirms an invoice with
+`POST /w/:ws/partner-workflow/invoice-intakes`. The server derives the caller,
+source session/run, Finance recipient and role assignments. It hashes and saves
+an immutable intake containing the exact authorization, frozen invoice source
+and parsed invoice. A repeated caller/idempotency key with the same hash returns
+the original intake; changed input conflicts. One authorization can reserve one
+invoice lineage. A correction uses
+`POST /w/:ws/partner-workflow/handoffs/:id/corrections`, creates one successor
+revision and withdraws an undecided predecessor. Sample lineage can never be
+promoted to customer data.
+
+The Partnerships model can publish only that confirmed intake by calling:
 
 ```text
-Message from 🤖 Iris (@<source-profile>): <server-generated handoff body>
+publish_partner_invoice_review({ intake_event_id, expected_payload_hash })
 ```
 
-That user-role turn carries native `turn_author` bot attribution and starts the
-Finance model run after the transaction commits. The UI renders it as a compact
-agent timeline notice rather than a human message bubble. The message is only a
-visible coordination surface: the signed/scoped database handoff remains the
-authority, and the model receives only `list_requests` and `get_request`. It
-cannot create or mutate a request, call native `message_agent`, approve, pay, or
-send. The bridge emits one idempotent Partnerships-to-Finance message and no
-automatic reply, preventing acknowledgement loops.
+The tool accepts no caller-authored invoice fields, recipient, authority or
+provenance. Its run grant is pinned to the intake's handoff. The historical
+`POST /w/:ws/partner-workflow/invoice-review-handoffs` endpoint remains present
+for rollout compatibility but rejects new caller-authored authority.
 
-The Finance agent cannot approve. The existing guarded decision route requires
-the Finance human reviewer, a current payload hash/version and recent sign-in.
-Approval saves the invoice and only records pending downstream effects. This
-repository still has no payment or email executor.
+## Review, decision and acknowledgment
 
-## Local verification
+The Worker rechecks both non-deleted attachment digests, authorization dates,
+record revisions, role assignments and run grants. It deterministically checks
+duplicate number/payee/amount, currency, authorized total and evidence before
+creating any Finance request. The Finance model receives one Bot Mode-compatible
+turn and may explain the stored result. It cannot write the request.
 
-The deterministic fixture sets `simulated: true`; its session copy and Inbox
-evidence are labeled Simulated. It uses the same Bot Mode-compatible envelope
-but performs no model call, so it is not evidence of live model quality. A
-non-simulated event admits an actual Finance run; the server still owns every
-check and request write, and no path sends email or moves money.
+Only the named active Finance audience member with the Finance reviewer role can
+use the guarded human decision route. The click binds the exact request version
+and payload hash and rechecks the captured Finance assignment/grant and all
+authority/evidence again under row locks. Approval saves an invoice **draft**.
+It does not authorize or execute payment, delivery, email or signature. The
+return acknowledgment is one bounded, deterministic row/job containing partner
+identity, reference, result code, reviewer display and time; it carries no
+invoice body and cannot start another agent loop.
 
-Run the focused checks with the repository's separate test database:
+`GET /w/:ws/partner-workflow/handoffs/:id/result` returns the shared result only
+to a configured human role or an exact run grant. Delivery, deterministic
+validation, model explanation, human decision and acknowledgment remain
+separate outcome dimensions. A model error cannot erase passed server checks,
+and passed checks cannot imply human approval.
+
+## Privacy
+
+Finance requests and their documents, notes, effects, history, counts, event
+replay and live events are audience-scoped. A removed member is excluded at
+delivery time. Generic agent request/document methods fail closed for any row
+with an audience because those methods have no named human principal. Finance
+receives the frozen shared handoff projection and its own session; it does not
+receive Partnerships records or source-session history. Legacy requests without
+an audience keep workspace visibility.
+
+## Sample data and execution mode
+
+`input_provenance` is durable and independent from `simulated`. Sample terms
+are labeled demonstration-only in the approval, intake, handoff, result and UI;
+they do not imply an external agreement. A real native run over sample input
+still records `simulated: false`. Historical records without provenance display
+as unknown rather than being relabeled customer data. Deterministic fixtures may
+use simulated execution, and are not evidence of native model quality.
+
+## Rollout and safe Finance enrollment
+
+Deploy the additive Worker and migration first with admission disabled. Install
+and restart only profiles explicitly moved to Partnerships 1.8 or Finance 1.0.1,
+verify their exact readiness, then enable admission for that workspace. Do not
+rewrite existing 1.7 assignments, globally pause schedules or invalidate legacy
+runs.
+
+Invitation onboarding may create the compatibility Iris profile, so a new
+Finance member must not begin default discovery before role setup. The safe
+sequence is: accept the invite with the compatibility assignment's schedule
+disabled, do not approve its starter search, immediately configure that
+member/agent as Finance (which pauses any Partnerships assignment and schedule),
+restart with the Finance 1.0.1 package, verify readiness, and only then enable
+new admission. This sequence changes no other workspace schedule.
+
+## Verification
+
+Use only the isolated `hermes_test` database:
 
 ```sh
-pnpm test:unit
-PGDATABASE=hermes_test pnpm --filter @hermes/worker exec vitest run --project db test/db/partner-workflow.test.ts
-pnpm typecheck
-pnpm build
+pnpm --filter @hermes/worker test:unit
+PGDATABASE=hermes_test pnpm --filter @hermes/worker exec vitest run --project db \
+  test/db/partner-workflow.test.ts test/db/partner-workflow-v2.test.ts
+pnpm --filter @hermes/worker typecheck
+pnpm db:migrations:verify
 ```
 
-Run `pnpm db:migrations:verify` against a disposable migration database before
-release. Do not point tests at a developer or production Hermes database.
-
-## Next step: role selection during onboarding
-
-Brian identified role selection during onboarding as the next product step on
-September 19, 2026. Let users choose Partnerships or Finance and try the
-corresponding employee experience with its assigned agent. Reuse the reviewed
-role templates, persist the choice, and show the matching setup and scoped
-Inbox. Role selection must preserve the existing Admin assignment and human
-approval boundaries. This follow-up is recorded, not implemented in this change.
+Fixtures prove server authority and database behavior. Native profile probes and
+a real two-member workspace are separate release evidence. Until both employees
+exist and the reviewed profiles attest in the hosted workspace, local tests must
+not be described as a live multi-party acceptance.

@@ -22,6 +22,7 @@ import {
   type Run,
   type RunQueueItem,
   type StreamEvent,
+  type SessionSnapshot,
 } from '@hermes/shared';
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,8 @@ export interface StreamAccumulator {
   text: string;
   /** Prefix reconstructed from committed `message.delta` events. */
   durableText: string;
+  /** Last contiguous committed delta; previews never advance this sequence. */
+  seq?: number;
   blocks: Block[];
   status: 'streaming' | 'complete' | 'incomplete';
 }
@@ -107,6 +110,7 @@ export interface PendingTurn {
   runId: string | null;
   message: Message;
   previousStatus: string;
+  previousRun?: Run | null;
 }
 
 /** Local sequence numbers are layout hints, never proof of turn identity. */
@@ -164,6 +168,24 @@ export interface SessionState {
    * people stop trusting with names.
    */
   titleSource: 'auto' | 'manual';
+  settingsPending?: boolean;
+  settingsError?: string | null;
+  hydrationError?: string | null;
+  recovery?: SessionSnapshot['recovery'];
+}
+
+const terminalRun = (status: Run['status']): boolean => ['completed', 'stopped', 'error'].includes(status);
+
+/** The waiting clock may move earlier, but never later within one attempt. */
+function mergeRun(current: Run | null, incoming: Run, sameTurn = false): Run {
+  if (!current || (!sameTurn && current.id !== incoming.id) || current.attempt < incoming.attempt) return incoming;
+  if (current.attempt > incoming.attempt) return current;
+  const started = [current.started_at, incoming.started_at].filter((value): value is string => Boolean(value));
+  return {
+    ...incoming,
+    ...(started.length ? { started_at: started.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! } : {}),
+    ...(terminalRun(current.status) && !terminalRun(incoming.status) ? { status: current.status, error: current.error, active_ms: current.active_ms } : {}),
+  };
 }
 
 export type LinkStatus = 'idle' | 'connecting' | 'open' | 'replaying' | 'reconnecting' | 'signed-out' | 'evicted';
@@ -453,6 +475,7 @@ export type Action =
   | { type: 'session/rollback'; id: string }
   | { type: 'session/upsert'; session: Session }
   | { type: 'session/select'; id: string }
+  | { type: 'session/snapshot'; snapshot: SessionSnapshot }
   | { type: 'session/rename'; id: string; title: string }
   | { type: 'session/auto-title'; id: string; title: string }
   | { type: 'session/pin'; id: string; pinned?: boolean }
@@ -477,7 +500,7 @@ export type Action =
   | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number; toolCallId?: string | null }
   | { type: 'run/status'; sessionId: string; runId: string; status: Run['status']; patch?: Partial<Run> }
   | { type: 'run/guide'; sessionId: string; text: string; id: string }
-  | { type: 'run/guide-apply'; sessionId: string }
+  | { type: 'run/guide-apply'; sessionId: string; runId: string; guidanceId: string }
   | { type: 'run/guide-remove'; sessionId: string }
   | { type: 'run/queue'; sessionId: string; items: RunQueueItem[] }
   | { type: 'run/queue-edit'; sessionId: string; id: string; text: string }
@@ -485,7 +508,7 @@ export type Action =
   | { type: 'run/queue-status'; sessionId: string; status: RunQueueItem['status'] }
   | { type: 'run/clear'; sessionId: string }
   | { type: 'stream/reset'; sessionId: string; runId: string; turn: number; stepAttempt: number }
-  | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string }
+  | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string; seq?: number }
   | { type: 'stream/preview'; sessionId: string; runId: string; turn: number; stepAttempt: number; offset: number; delta: string }
   | { type: 'stream/final'; sessionId: string; message: Message }
   | { type: 'stream/reveal-complete'; sessionId: string; runId: string }
@@ -667,6 +690,81 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, ui: { ...state.ui, ...action.patch } };
 
     // --- sessions ---
+    case 'session/snapshot': {
+      const { snapshot } = action;
+      const id = snapshot.session.id;
+      const current = state.sessions[id];
+      const watermark = BigInt(snapshot.watermark);
+      if (snapshot.workspace_id !== state.workspace.id || !current || watermark < (state.cursors.session[id] ?? 0n)) return state;
+      if (current.run?.id === snapshot.run?.id && current.run && snapshot.run && current.run.attempt > snapshot.run.attempt) return state;
+      let next = reduce(state, { type: 'session/upsert', session: snapshot.session });
+      next = withSession(next, id, (session) => {
+        // An admission in flight may postdate the snapshot transaction. Keep
+        // its projection until admission or its own run appears in a snapshot.
+        const pendingNewer = Boolean(session.pendingTurn && session.pendingTurn.runId !== snapshot.run?.id);
+        let run = pendingNewer ? session.run : snapshot.run ? mergeRun(session.run, snapshot.run) : session.run;
+        const messages = new Map(session.messages.map((message) => [message.id, message]));
+        for (const message of snapshot.messages.items) {
+          const previous = messages.get(message.id);
+          if (previous?.status === 'complete' && (message.status !== 'complete' || previous.text.length > message.text.length)) continue;
+          // Only the assistant placeholder belongs to the accumulator. User
+          // guidance uses streaming to mean durably queued, not partial text.
+          if (message.role === 'iris' && message.status === 'streaming') continue;
+          messages.set(message.id, message.status === 'incomplete' ? { ...message, incomplete: true } : message);
+        }
+        if (!pendingNewer && run && snapshot.run) {
+          let guidance = snapshot.run.guidance;
+          if (guidance === undefined) {
+            // Legacy responses lack the explicit projection. Never attribute
+            // unassigned guidance to a run merely because it is in its page.
+            const latest = [...messages.values()].filter((message) => message.role === 'user' && message.kind === 'guidance' && message.run_id === run!.id)
+              .sort((a, b) => b.seq - a.seq)[0];
+            guidance = latest ? { id: latest.id, text: latest.text, status: latest.status === 'complete' ? 'applied' : 'pending' } : null;
+          }
+          const current = session.run?.id === run.id && session.run.attempt === run.attempt ? session.run.guidance : null;
+          // A snapshot taken before the guidance POST must not erase local
+          // intent; explicit null otherwise clears the durable projection.
+          if (guidance === null && current?.id.startsWith('pending-')) guidance = current;
+          if (guidance && (messages.get(guidance.id)?.status === 'complete' || (current?.id === guidance.id && current.status === 'applied'))) {
+            guidance = { ...guidance, status: 'applied' };
+          }
+          if (guidance?.status === 'applied') {
+            const message = messages.get(guidance.id);
+            if (message?.role === 'user' && message.kind === 'guidance') messages.set(message.id, { ...message, status: 'complete', run_id: run.id });
+          }
+          run = { ...run, guidance };
+        }
+        let stream = session.stream;
+        const incoming = snapshot.stream;
+        if (!pendingNewer && run?.id === snapshot.run?.id) {
+          const sameAttempt = session.run?.id === run?.id && session.run?.attempt === run?.attempt;
+          if (!sameAttempt) stream = null;
+          if (incoming && incoming.status === 'streaming' && !terminalRun(run!.status)) {
+            const sameStream = sameAttempt && stream?.runId === incoming.run_id && stream.turn === incoming.turn && stream.stepAttempt === incoming.step_attempt;
+            const newerPreview = sameAttempt && stream?.runId === incoming.run_id && (stream.turn > incoming.turn || (stream.turn === incoming.turn && stream.stepAttempt > incoming.step_attempt));
+            if (!newerPreview) stream = { runId: incoming.run_id, turn: incoming.turn, stepAttempt: incoming.step_attempt,
+              text: sameStream && stream!.text.startsWith(incoming.text) ? stream!.text : incoming.text,
+              durableText: sameStream && stream!.durableText.startsWith(incoming.text) ? stream!.durableText : incoming.text,
+              seq: sameStream ? Math.max(stream!.seq ?? -1, incoming.seq) : incoming.seq,
+              blocks: [], status: 'streaming' };
+          } else if (incoming?.status === 'final') {
+            const message = incoming.message_id ? messages.get(incoming.message_id) : null;
+            const text = message?.status === 'complete' ? message.text : incoming.text;
+            const olderTurn = sameAttempt && stream?.runId === incoming.run_id && (stream.turn > incoming.turn || (stream.turn === incoming.turn && stream.stepAttempt > incoming.step_attempt));
+            if (!olderTurn && stream?.runId === incoming.run_id) stream = { ...stream, text, durableText: text,
+              blocks: message?.blocks ?? [], status: message?.status === 'incomplete' ? 'incomplete' : 'complete' };
+          } else if (terminalRun(run?.status ?? 'completed')) stream = null;
+        }
+        const ordered = [...messages.values()];
+        const order = (message: Message): number => message.seq < Number.MAX_SAFE_INTEGER ? message.seq
+          : (ordered.find((item) => item.role === 'user' && item.run_id === message.run_id)?.seq ?? Number.MAX_SAFE_INTEGER - 1) + 0.5;
+        ordered.sort((a, b) => order(a) - order(b));
+        const pendingTurn = session.pendingTurn && ordered.some((message) => confirmsPendingTurn(session.pendingTurn, message)) ? null : session.pendingTurn;
+        return { ...session, messages: ordered, oldestSeq: ordered[0]?.seq ?? null, hasEarlier: snapshot.messages.cursor !== null,
+          run, stream, pendingTurn, status: run?.status ?? session.status, recovery: snapshot.recovery, hydrationError: null };
+      });
+      return { ...next, cursors: { ...next.cursors, session: { ...next.cursors.session, [id]: watermark } } };
+    }
     case 'session/create': {
       const session: SessionState = {
         id: action.id,
@@ -753,6 +851,7 @@ export function reduce(state: AppState, action: Action): AppState {
             stream: existing.stream,
             scrollTop: existing.scrollTop,
             unread: existing.unread,
+            ...(existing.settingsPending || existing.settingsError ? { model: existing.model, effort: existing.effort } : {}),
             // Two title races, both lost without this (decision C34). A manual
             // rename is sticky: the row that re-delivers the old title must not
             // undo it. And a local auto-title beats the server's placeholder,
@@ -830,7 +929,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'turn/optimistic':
       return withSession(state, action.sessionId, (s) => ({
         ...s,
-        pendingTurn: { clientTurnId: action.clientTurnId, runId: null, message: action.message, previousStatus: s.status },
+        pendingTurn: { clientTurnId: action.clientTurnId, runId: null, message: action.message, previousStatus: s.status, previousRun: s.run },
         run: action.run,
         status: 'Working',
         lastActivity: Date.now(),
@@ -854,7 +953,7 @@ export function reduce(state: AppState, action: Action): AppState {
         return {
           ...s,
           pendingTurn: null,
-          run: optimisticRun ? null : s.run,
+          run: optimisticRun ? s.pendingTurn.previousRun ?? null : s.run,
           status: optimisticRun ? s.pendingTurn.previousStatus : s.status,
         };
       });
@@ -904,22 +1003,20 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'message/prepend':
       return withSession(state, action.sessionId, (s) => ({
         ...s,
-        messages: [...action.messages, ...s.messages],
+        messages: [...action.messages.filter((message) => !s.messages.some((current) => current.id === message.id)), ...s.messages].sort((a, b) => a.seq - b.seq),
         oldestSeq: action.messages[0]?.seq ?? s.oldestSeq,
         hasEarlier: action.hasEarlier,
       }));
 
     // --- runs ---
     case 'run/start':
-      return withSession(state, action.sessionId, (s) => ({
-        ...s,
-        pendingTurn:
-          action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId
-            ? admitPendingTurn(s, action.run.id)
-            : s.pendingTurn,
-        run: action.run,
-        status: 'Working',
-      }));
+      return withSession(state, action.sessionId, (s) => {
+        const sameTurn = Boolean(action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId);
+        const run = mergeRun(s.run, action.run, sameTurn);
+        const changedAttempt = s.run?.id !== run.id || s.run.attempt !== run.attempt;
+        return { ...s, pendingTurn: sameTurn ? admitPendingTurn(s, run.id) : s.pendingTurn,
+          run, status: run.status, stream: changedAttempt ? null : s.stream };
+      });
     case 'run/step':
       return withRun(state, action.sessionId, (run) => {
         const found = run.steps.some((step) => step.id === action.stepId);
@@ -952,15 +1049,23 @@ export function reduce(state: AppState, action: Action): AppState {
       // already painted. Status belongs to the run named by the event; letting
       // a late completion mutate whichever run is current removes Thinking
       // from the new turn and leaves only its user bubble on screen.
-      return withSession(state, action.sessionId, (s) =>
-        s.run?.id === action.runId
-          ? { ...s, status: action.status, run: { ...s.run, status: action.status, ...(action.patch ?? {}) } }
-          : s,
-      );
+      return withSession(state, action.sessionId, (s) => {
+        if (s.run?.id !== action.runId) return s;
+        const newer = (action.patch?.attempt ?? s.run.attempt) > s.run.attempt;
+        const incoming = { ...s.run, ...(newer ? { steps: [], queue: [], error: null, started_at: undefined } : {}), status: action.status, ...action.patch };
+        const run = mergeRun(s.run, incoming);
+        return { ...s, status: run.status, run, stream: newer ? null : s.stream };
+      });
     case 'run/guide':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: { id: action.id, text: action.text, status: 'pending' } }));
     case 'run/guide-apply':
-      return withRun(state, action.sessionId, (run) => (run.guidance ? { ...run, guidance: { ...run.guidance, status: 'applied' } } : run));
+      return withSession(state, action.sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((message) => message.id === action.guidanceId && message.role === 'user' && message.kind === 'guidance'
+          ? { ...message, status: 'complete', run_id: action.runId } : message),
+        run: session.run?.id === action.runId && session.run.guidance?.id === action.guidanceId
+          ? { ...session.run, guidance: { ...session.run.guidance, status: 'applied' } } : session.run,
+      }));
     case 'run/guide-remove':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: null }));
     case 'run/queue':
@@ -976,38 +1081,46 @@ export function reduce(state: AppState, action: Action): AppState {
 
     // --- streaming text, keyed by step_attempt (spec §4.5) ---
     case 'stream/reset':
-      return withSession(state, action.sessionId, (s) => ({
-        ...s,
-        stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', blocks: [], status: 'streaming' },
-      }));
+      return withSession(state, action.sessionId, (s) => {
+        if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
+        if (s.stream?.runId === action.runId && (s.stream.turn > action.turn || (s.stream.turn === action.turn && s.stream.stepAttempt >= action.stepAttempt))) return s;
+        return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', seq: -1, blocks: [], status: 'streaming' } };
+      });
     case 'stream/delta':
       return withSession(state, action.sessionId, (s) => {
         const current = s.stream;
+        if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
+        if (current?.runId === action.runId && current.turn > action.turn) return s;
         // A delta from a superseded attempt is discarded; a delta from a *higher*
         // attempt is an implicit reset, in case the reset was lost across a hub
         // restart.
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
-          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, blocks: [], status: 'streaming' } };
+          if (action.seq !== undefined && action.seq !== 0) return s;
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, seq: action.seq, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt) return s;
         if (current.status !== 'streaming') return s;
+        // A gap cannot be appended safely. Keep the visible preview and let
+        // the next cumulative snapshot repair the missing committed prefix.
+        if (action.seq !== undefined && action.seq !== (current.seq ?? -1) + 1) return s;
         const durableText = current.durableText + action.delta;
         const text = current.text.startsWith(durableText) ? current.text : durableText;
-        return { ...s, stream: { ...current, text, durableText } };
+        return { ...s, stream: { ...current, text, durableText, seq: action.seq ?? current.seq } };
       });
     case 'stream/preview':
       return withSession(state, action.sessionId, (s) => {
         const current = s.stream;
         // Best-effort RPCs may finish after the final's reveal was cleared or
         // after a new run started. They must not resurrect an old accumulator.
-        if (s.run && s.run.id !== action.runId && !['completed', 'stopped', 'error'].includes(s.run.status)) return s;
+        if (s.run && s.run.id !== action.runId) return s;
         const terminalRun = s.run?.id === action.runId && ['completed', 'stopped', 'error'].includes(s.run.status);
         const savedFinal = s.messages.some((m) => m.run_id === action.runId && m.role === 'iris' && m.status !== 'streaming');
         const matchingLiveStream = current?.runId === action.runId && current.turn === action.turn && current.status === 'streaming';
         if (terminalRun || (savedFinal && !matchingLiveStream)) return s;
+        if (current?.runId === action.runId && current.turn > action.turn) return s;
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
           if (action.offset !== 0) return s;
-          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', blocks: [], status: 'streaming' } };
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', seq: -1, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt || action.offset > current.text.length) return s;
         if (current.status !== 'streaming') return s;
@@ -1034,7 +1147,7 @@ export function reduce(state: AppState, action: Action): AppState {
               text: action.message.text,
               durableText: action.message.text,
               blocks: action.message.blocks,
-              status: action.message.incomplete ? 'incomplete' : 'complete',
+              status: action.message.status === 'incomplete' || action.message.incomplete ? 'incomplete' : 'complete',
             }
           : s.stream,
         lastActivity: Date.now(),
@@ -1160,6 +1273,21 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     ? { type: 'cursor/advance', stream: 'session', sessionId, id }
     : { type: 'cursor/advance', stream: 'workspace', id };
 
+  if (id <= (sessionId ? state.cursors.session[sessionId] ?? 0n : state.cursors.workspace)) return [];
+  if (sessionId && event.kind === 'run.step' && state.sessions[sessionId]?.run?.id !== event.payload.run_id) return [advance];
+  // Run attempts are independent of provider step attempts. Never let a late
+  // frame from the previous retry reintroduce its text, steps, or failure.
+  if (sessionId && 'run_id' in event.payload && 'attempt' in event.payload) {
+    const current = state.sessions[sessionId]?.run;
+    const payload = event.payload;
+    if (current?.id === payload.run_id && typeof payload.attempt === 'number') {
+      if (payload.attempt < current.attempt) return [advance];
+      if (payload.attempt > current.attempt && event.kind !== 'run.started' && event.kind !== 'run.status') {
+        out.push({ type: 'run/start', sessionId, run: { ...current, attempt: payload.attempt, status: 'working', steps: [], queue: [], error: null, started_at: event.at } });
+      }
+    }
+  }
+
   switch (event.kind) {
     case 'run.started': {
       const p = event.payload;
@@ -1222,6 +1350,8 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
           runId: p.run_id,
           status: p.status,
           patch: {
+            attempt: p.attempt,
+            ...(state.sessions[sessionId]?.run?.attempt !== p.attempt ? { started_at: event.at } : {}),
             waiting_for: p.waiting_for ?? null,
             waiting_label: p.waiting_label ?? null,
             active_ms: p.active_ms ?? null,
@@ -1261,7 +1391,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       break;
     }
     case 'run.guidance.applied':
-      if (sessionId) out.push({ type: 'run/guide-apply', sessionId });
+      if (sessionId) out.push({ type: 'run/guide-apply', sessionId, runId: event.payload.run_id, guidanceId: event.payload.guidance_id });
       break;
     case 'run.queue.updated':
       if (sessionId) out.push({ type: 'run/queue', sessionId, items: event.payload.items });
@@ -1283,7 +1413,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     }
     case 'message.delta': {
       const p = event.payload;
-      if (sessionId) out.push({ type: 'stream/delta', sessionId, runId: p.run_id, turn: p.turn, stepAttempt: p.step_attempt, delta: p.delta });
+      if (sessionId) out.push({ type: 'stream/delta', sessionId, runId: p.run_id, turn: p.turn, stepAttempt: p.step_attempt, delta: p.delta, seq: p.seq });
       break;
     }
     case 'message.final': {

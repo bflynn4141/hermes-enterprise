@@ -2,9 +2,28 @@
 
 Hermes Enterprise packages reviewed procedures as official Hermes skills while keeping authority, credentials, source access and approvals in the enterprise control plane.
 
-The Partnerships package is `enterprise_bridge:partner-program-screening` version `1.7.0`. It is a real `SKILL.md` registered by the official runtime plugin and auto-loaded for Iris when that agent has a valid Partner Program assignment. It tells Iris how to inspect stored evidence, separate evidence from inference and gaps, run an explicitly requested fixed $0.01 LinkedIn/YouTube creator search or $0.005 X public-post search, choose one strongest prospect, enrich only that prospect's professional contact data, verify one professional email, prepare a draft-only outreach review, and stop for human review. AgentCash calls require exact one-use Worker leases; only sanitized imported evidence can support an Inbox proposal. The skill cannot send, call, text, message, invent contact data, or decide an application by itself.
+Existing Partnerships profiles keep the immutable
+`enterprise_bridge:partner-program-screening` version `1.7.0` procedure. It
+inspects stored evidence, separates evidence from inference and gaps, uses
+bounded AgentCash searches under one-use Worker leases, prepares draft-only
+outreach and stops for human review. Restarting a legacy profile does not add
+the new handoff publisher.
 
-The Finance package is `enterprise_bridge:partner-invoice-review` version `1.0.0`. It checks a Finance-private invoice against an explicitly shared engagement projection, flags duplicate invoices, missing evidence, currency mismatches and amount mismatches, and prepares a Finance-scoped human decision. It cannot approve the request, create an obligation from a qualification, execute a payment or send email.
+The multi-party workflow is an explicit, per-profile transition:
+
+| Assignment | Runtime package | Version | Artifact digest |
+| --- | --- | --- | --- |
+| Partnerships | `enterprise_bridge:partner-program-screening-v1-8` | `1.8.0` | `sha256:281bbfff95d40e202c3ced5d1cb30ebf432868bee100d0c2a647faa40757a9e5` |
+| Finance | `enterprise_bridge:partner-invoice-review` | `1.0.1` | `sha256:bdb13d70f7a603f92eb47fc2d1c057c82f26658e61df8cf357790f23875753e4` |
+
+The Partnerships 1.8 package adds only the governed publication of a previously
+confirmed intake. Finance 1.0.1 checks a Finance-private invoice against an
+explicitly shared engagement projection, flags duplicate invoices, missing
+evidence, currency mismatches and amount mismatches, and prepares a
+Finance-scoped human decision. It cannot approve, create an obligation from a
+qualification, execute payment or send email. Historical Finance 1.0.0 remains
+resolvable for old assignments but does not receive the new result tool or
+satisfy strict multi-party admission.
 
 ## Why this matches Hermes
 
@@ -38,6 +57,15 @@ pending draft-only Inbox review · human decision
 The runtime fetches `GET /internal/runtime/w/:workspace/agents/:agent/skills` with its agent-scoped bridge credential before it starts. The response is derived from that agent's active Enterprise skill assignment, names reviewed plugin skills and contains bounded non-secret configuration. The launcher validates the payload, rejects credential-shaped keys, writes `skills.auto_load` and `skills.config`, and fails startup if a named plugin skill is absent.
 
 The dedicated enterprise profile removes Hermes's general bundled-skill catalog on startup and marks the profile as managed. Only plugin-packaged enterprise skills are available. The runtime exposes Hermes's read-only `skill_view` only for the exact assigned package because official `skills.auto_load` is gated on a skills tool being present. `skills_list`, `skill_manage`, native skill discovery, background review and automatic skill creation remain disabled. The plugin vetoes any attempt to view another skill or a linked file. This prevents a bundled or agent-authored procedure from expanding the governed tool boundary.
+
+New multi-party admission requires exact native readiness: runtime revision
+`5d59366010640c1d6b8f170d8a4ee109db2bbdef`, plugin/version `1.7.0`, one current
+skill with artifact and content digests equal to the assignment, the exact tool
+inventory, and native cron disabled. Partnerships 1.8 requires AgentCash and a
+wallet; Finance 1.0.1 requires both absent. Compatibility readiness keeps old
+profiles operable, but it can never open new multi-party admission. The deployed
+Partnerships 1.7 registry identity and its byte digest are explicitly tracked as
+a legacy alias rather than treated as a current byte attestation.
 
 The procedure and authority deliberately remain separate:
 
@@ -96,13 +124,16 @@ contains only shared partner identity, engagement reference/summary, authorized
 currency and amount, evidence ids, pinned record revisions and one approved
 source-session excerpt.
 
-Only the authenticated invoice-review handoff route accepts an actual invoice
-and starts the durable Finance review job. Qualification and outreach approval
-do not call it. The job is idempotent, bounded to three attempts and prepares
-one audience-scoped invoice request for the Finance principal. The existing
-decision route still requires current document binding, recent authentication
-and an authorized human. Payment and email effects remain pending and have no
-executor. See `docs/PARTNER-FINANCE-WORKFLOW.md` for the local runbook.
+Only a human-authorized engagement plus an immutable confirmed invoice intake
+can start the durable Finance review. The 1.8 model tool receives only the
+intake event id and expected hash; it cannot supply invoice fields, recipient,
+provenance or authority. Qualification, outreach approval and an unsigned
+agreement draft do not satisfy this contract. The job is idempotent and
+prepares one audience-scoped invoice request for the Finance principal. The
+existing guarded decision route requires the named Finance reviewer, current
+document binding and recent authentication. Approval saves a Library invoice
+draft. Payment and email effects remain pending and have no executor. See
+`docs/PARTNER-FINANCE-WORKFLOW.md` for the route and rollout runbook.
 
 ## Adding another enterprise package
 

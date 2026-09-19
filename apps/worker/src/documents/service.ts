@@ -15,13 +15,9 @@
 // one of its fields or a sibling route. That is why versions are
 // `GET /documents/:id/versions` and the rendered file is
 // `GET /documents/:id/render` rather than two more keys here.
-import type { Env } from '../env.js';
-import { presigningAvailable, presignGet } from '../storage/r2.js';
 import type { Tx } from '../db/client.js';
+import { requestAudiencePredicate } from '../domain/audience.js';
 import { PDF_UNAVAILABLE_REASON } from './render.js';
-
-/** How long a link to a rendered document stays valid. */
-export const DOCUMENT_VIEW_SECONDS = 15 * 60;
 
 export interface DocumentRow {
   id: string;
@@ -144,30 +140,21 @@ export function toDraftEntity(row: DraftRow): Record<string, unknown> {
   });
 }
 
-/**
- * A link to the rendered file, when there is one and this environment can sign.
- *
- * `wrangler dev --local` has no R2 account and therefore nothing to sign with,
- * so the route falls back to streaming the object through the binding; the
- * caller decides, because only it knows whether it can redirect.
- */
-export async function renderUrl(env: Env, row: Pick<DocumentRow, 'storage_key' | 'render_status'>): Promise<string | null> {
-  if (row.render_status !== 'ready' || !row.storage_key || !presigningAvailable(env)) return null;
-  const signed = await presignGet(env, row.storage_key, DOCUMENT_VIEW_SECONDS);
-  return signed.url;
-}
-
 /** One document version, or null. Runs under the caller's tenant transaction. */
-export async function loadDocument(tx: Tx, documentId: string): Promise<DocumentRow | null> {
-  const { rows } = await tx.query<DocumentRow>(`${DOCUMENT_SELECT} WHERE d.id = $1`, [documentId]);
+export async function loadDocument(tx: Tx, documentId: string, userId: string): Promise<DocumentRow | null> {
+  const { rows } = await tx.query<DocumentRow>(
+    `${DOCUMENT_SELECT} WHERE d.id = $1 AND ${requestAudiencePredicate('r.id', '$2')}`,
+    [documentId, userId],
+  );
   return rows[0] ?? null;
 }
 
 /** Every version of the document that shares this one's request, newest first. */
-export async function loadVersions(tx: Tx, requestId: string): Promise<DocumentRow[]> {
+export async function loadVersions(tx: Tx, requestId: string, userId: string): Promise<DocumentRow[]> {
   const { rows } = await tx.query<DocumentRow>(
-    `${DOCUMENT_SELECT} WHERE d.request_id = $1 ORDER BY d.version DESC`,
-    [requestId],
+    `${DOCUMENT_SELECT} WHERE d.request_id = $1 AND ${requestAudiencePredicate('r.id', '$2')}
+      ORDER BY d.version DESC`,
+    [requestId, userId],
   );
   return rows;
 }

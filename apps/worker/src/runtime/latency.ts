@@ -5,7 +5,10 @@ export type RuntimeLatencyPhase =
   | 'submit_capabilities' | 'submit_preparation'
   | 'native_submit' | 'native_binding' | 'execute_capabilities'
   | 'execute_persistence' | 'execute_delivery'
-  | 'stream_subscribe_started' | 'first_delta' | 'first_preview' | 'first_checkpoint';
+  | 'stream_subscribe_started' | 'first_delta' | 'first_preview' | 'first_checkpoint'
+  | 'native_stream_terminal' | 'native_status_terminal'
+  | 'final_stream_drain' | 'final_checkpoint_drain' | 'final_preparation'
+  | 'final_persistence' | 'final_delivery';
 
 export interface RuntimeLatency {
   phase: RuntimeLatencyPhase;

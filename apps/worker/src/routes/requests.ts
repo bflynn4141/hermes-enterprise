@@ -30,7 +30,7 @@ import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './
 import { loadRequest, toRequestEntity, REQUEST_AUDIENCE_PREDICATE, REQUEST_SELECT, type RequestRow } from '../domain/requests.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
-import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
+import { loadVersions, toDocumentEntity } from '../documents/service.js';
 import { enqueueRequestTriage, JEV_MODEL_ID } from '../inbox-triage/service.js';
 
 const LIST_LIMIT = 100;
@@ -173,7 +173,7 @@ export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise
   const requestId = pathUuid(c, 'id');
   const rows = await inWorkspace(c, async (work) => {
     if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
-    return effectRows(work.tx, { requestId });
+    return effectRows(work.tx, { requestId, audienceUserId: work.userId });
   });
   return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
 }
@@ -182,11 +182,7 @@ export async function listRequestDocuments(c: Context<{ Bindings: Env }>): Promi
   const requestId = pathUuid(c, 'id');
   const rows = await inWorkspace(c, async (work) => {
     if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
-    const result = await work.tx.query<DocumentRow>(
-      `${DOCUMENT_SELECT} WHERE d.request_id = $1 ORDER BY d.version DESC`,
-      [requestId],
-    );
-    return result.rows;
+    return loadVersions(work.tx, requestId, work.userId);
   });
   return c.json(
     documentPage.parse({ items: rows.map((row) => toDocumentEntity(row)), cursor: null, total: rows.length }),

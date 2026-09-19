@@ -22,10 +22,10 @@ export interface RuntimeSkillManifest {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
-function partnerManifest(config: Record<string, unknown>): RuntimeSkillManifest {
+function partnerManifest(config: Record<string, unknown>, assignment?: EnterpriseSkillAssignment | null): RuntimeSkillManifest {
   return {
-    name: PARTNER_PROGRAM_DEFINITION.runtimeName,
-    version: PARTNER_PROGRAM_DEFINITION.version,
+    name: assignment?.runtime_name ?? PARTNER_PROGRAM_DEFINITION.runtimeName,
+    version: assignment?.version ?? PARTNER_PROGRAM_DEFINITION.version,
     auto_load: true,
     config: {
       partner_program: {
@@ -37,10 +37,10 @@ function partnerManifest(config: Record<string, unknown>): RuntimeSkillManifest 
   };
 }
 
-function financeManifest(config: Record<string, unknown>): RuntimeSkillManifest {
+function financeManifest(config: Record<string, unknown>, assignment?: EnterpriseSkillAssignment | null): RuntimeSkillManifest {
   return {
-    name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
-    version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+    name: assignment?.runtime_name ?? PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+    version: assignment?.version ?? PARTNER_INVOICE_REVIEW_DEFINITION.version,
     auto_load: true,
     config: {
       invoice_review: {
@@ -67,8 +67,8 @@ export async function runtimeSkillManifestsForAgent(
   const partner = await resolvePartnerSkillAssignment(env, tx, workspaceId, agentId);
   const finance = await resolveEnterpriseSkillAssignment(tx, workspaceId, agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key);
   return [
-    ...(partner.config ? [partnerManifest(partner.config)] : []),
-    ...(finance.config ? [financeManifest(finance.config)] : []),
+    ...(partner.config ? [partnerManifest(partner.config, partner.assignment)] : []),
+    ...(finance.config ? [financeManifest(finance.config, finance.assignment)] : []),
   ];
 }
 

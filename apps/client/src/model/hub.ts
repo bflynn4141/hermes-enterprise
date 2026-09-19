@@ -235,6 +235,7 @@ export function createHub(options: HubOptions): Hub {
     buffer = [];
     previewBuffer = [];
     buffering = false;
+    pending.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     for (const item of pending) intake(item.event);
     // Durable replay and live committed events establish the prefix first.
     // Offset reconciliation then makes an overlapping preview a no-op.
@@ -289,7 +290,7 @@ export function createHub(options: HubOptions): Hub {
         // but these are not buffered: `intake` is called with buffering off for
         // the duration, so replay lands first and the buffer second.
         buffering = false;
-        for (const event of page.events) intake(event);
+        for (const event of [...page.events].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0)) intake(event);
         buffering = true;
         // Stop unless the page itself says there is more. A replay with no
         // `head` is one page by definition: guessing "there might be more"

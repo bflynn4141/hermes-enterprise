@@ -212,8 +212,55 @@ describe('official Hermes enterprise projection', () => {
 
   it('groups startup, submission, and execution setup into four serial runtime transactions', async () => {
     const db = new FakeRuntimeDb();
-    await execute(db);
-    expect(db.runtimeTransactions).toBe(4);
+    let startupTransactions: number | undefined;
+    class Client extends FakeHermesClient {
+      override async *events(id: string, signal: AbortSignal) {
+        startupTransactions = db.runtimeTransactions;
+        yield* super.events(id, signal);
+      }
+    }
+    await execute(db, new Client());
+    expect(startupTransactions).toBe(4);
+  });
+
+  it('reads Stop and guidance in one serial transaction and releases it before native control calls', async () => {
+    const db = new FakeRuntimeDb();
+    db.guidance.push({ id: crypto.randomUUID(), text: 'Check the references.', status: 'queued' });
+    let activeTransaction: number | null = null;
+    let transaction = 0;
+    const reads: Array<{ name: string; transaction: number | null }> = [];
+    vi.spyOn(db, 'withRuntimeTransaction').mockImplementation(async (work) => {
+      expect(activeTransaction).toBeNull();
+      activeTransaction = ++transaction;
+      try { return await work(); }
+      finally { activeTransaction = null; }
+    });
+    const originalStop = db.stopRequested.bind(db);
+    vi.spyOn(db, 'stopRequested').mockImplementation(async () => {
+      reads.push({ name: 'stop', transaction: activeTransaction });
+      return originalStop();
+    });
+    const originalGuidance = db.loadGuidance.bind(db);
+    vi.spyOn(db, 'loadGuidance').mockImplementation(async () => {
+      if (!db.finalizing) reads.push({ name: 'guidance', transaction: activeTransaction });
+      return originalGuidance();
+    });
+    const client = new FakeHermesClient();
+    client.onStatus = () => { expect(activeTransaction).toBeNull(); };
+    const originalSteer = client.steer.bind(client);
+    vi.spyOn(client, 'steer').mockImplementation(async (id, text) => {
+      expect(activeTransaction).toBeNull();
+      return originalSteer(id, text);
+    });
+    await execute(db, client);
+    expect(reads).toEqual([
+      { name: 'stop', transaction: 1 },
+      { name: 'stop', transaction: 5 },
+      { name: 'guidance', transaction: 5 },
+    ]);
+    expect(client.eventSubscriptions).toBe(1);
+    expect(client.steers).toHaveLength(1);
+    expect(db.finalizations).toBe(1);
   });
 
   it('rechecks readiness when a fresh submission takes longer than the reuse window', async () => {
@@ -880,6 +927,39 @@ describe('official Hermes enterprise projection', () => {
     });
     expect(finalPublished).toBe(true);
     expect(db.finalizations).toBe(1);
+  });
+
+  it('measures final persistence through commit before terminal delivery without recording content', async () => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const measurements: Array<Parameters<NonNullable<RuntimeDeps['onLatency']>>[0]> = [];
+    class TimedDb extends FakeRuntimeDb {
+      override async finalizeRuntime<T>(id: string, attempt: number, work: () => Promise<T>) {
+        const events = await super.finalizeRuntime(id, attempt, work);
+        now += 450; // Includes transaction commit, not just its callback.
+        return events;
+      }
+    }
+    try {
+      const db = new TimedDb();
+      const client = new FakeHermesClient();
+      await execute(db, client, new FakeStep(), async (_sessionId, _runId, events) => {
+        if (events.some((event) => event.kind === 'message.final')) {
+          expect(measurements).toContainEqual(expect.objectContaining({ phase: 'final_persistence', duration_ms: 450 }));
+          expect(db.finalizing).toBe(false);
+          now += 40;
+        }
+        return { stop_requested: false };
+      }, { onLatency: (measurement) => { measurements.push(measurement); } });
+      const phases = measurements.map((measurement) => measurement.phase);
+      expect(phases).toContain('native_stream_terminal');
+      expect(phases).toContain('native_status_terminal');
+      expect(phases).toContain('final_stream_drain');
+      expect(phases).toContain('final_checkpoint_drain');
+      expect(measurements).toContainEqual(expect.objectContaining({ phase: 'final_delivery', duration_ms: 40 }));
+      expect(JSON.stringify(measurements)).not.toContain(client.final.output);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+    } finally { clock.mockRestore(); }
   });
 
   it('preserves the completed run and durable final events when their live delivery fails', async () => {

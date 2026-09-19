@@ -54,6 +54,7 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     const actual = rows[0]?.status;
     if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
     await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
+    await this.runtimeQuery('SELECT project_partner_handoff_run_outcome($1)', [runId]);
   }
   async recoveryInput(runId: string, attempt: number): Promise<string | null> {
     const { rows } = await this.runtimeQuery<{ recovery_input: string | null }>(

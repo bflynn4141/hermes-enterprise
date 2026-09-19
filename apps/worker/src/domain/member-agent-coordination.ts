@@ -201,6 +201,11 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
     input.workspaceId,
     agentId,
     input.joiningUserId,
+    // An invitation has not established this employee's Enterprise role yet.
+    // Keep the compatibility skill available for onboarding, but never let a
+    // newly accepted profile enter scheduled paid discovery before an Admin
+    // deliberately assigns its role.
+    { scheduleEnabled: false },
   );
 
   if (input.env.AGENT_RUNTIME === 'hermes') {

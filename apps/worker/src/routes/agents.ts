@@ -12,6 +12,7 @@ import { ensureAgentOwner } from '../domain/agent-ownership.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
 import { resolveProvisioningRuntimeBinding } from '../runtime/config.js';
 import { HermesClient } from '../runtime/client.js';
+import { matchesEnterpriseReadiness, resolveEnterpriseReadinessAssignment } from '../runtime/readiness.js';
 
 const roleId = z.literal('partner-program');
 const loopId = z.literal('screen-partners');
@@ -168,17 +169,18 @@ export async function verifyAgentProvisioning(c: Context<{ Bindings: Env }>): Pr
     const binding = await inWorkspace(c, async (work) => {
       work.requireAdmin('Verifying a Hermes Cloud profile');
       const resolved = await resolveProvisioningRuntimeBinding(c.env, work.tx, work.workspaceId, agentId);
+      const readinessAssignment = await resolveEnterpriseReadinessAssignment(work.tx, work.workspaceId, agentId);
       await work.tx.query(
         `UPDATE agent_provisioning SET status='verifying', error_code=NULL, error_detail=NULL
           WHERE workspace_id=$1 AND agent_id=$2 AND status IN ('awaiting_bootstrap','failed','verifying')`,
         [work.workspaceId, agentId],
       );
-      return resolved;
+      return { ...resolved, readinessAssignment };
     });
     const client = new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport);
     const [capabilities, readiness] = await Promise.all([client.capabilities(), client.enterpriseReadiness()]);
     if (!capabilities.durableIdempotency || readiness.workspaceId !== binding.workspaceId || readiness.agentId !== agentId ||
-        !readiness.agentCashEnabled || !readiness.agentCashWalletPresent || !readiness.nativeCronDisabled) {
+        !matchesEnterpriseReadiness(readiness, binding.readinessAssignment)) {
       throw new Error('enterprise_profile_readiness_incomplete');
     }
     await inWorkspace(c, async (work) => {
@@ -223,6 +225,6 @@ export async function verifyAgentProvisioning(c: Context<{ Bindings: Env }>): Pr
         [work.workspaceId, agentId, detail],
       );
     });
-    throw new RouteError('The Cloud profile has not passed the Enterprise and AgentCash readiness checks.', 'profile_readiness_incomplete', 409);
+    throw new RouteError('The Cloud profile has not passed its role-specific Enterprise readiness checks.', 'profile_readiness_incomplete', 409);
   }
 }

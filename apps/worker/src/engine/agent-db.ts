@@ -18,7 +18,13 @@
 // no INSERT on `jobs` at all (0004: `REVOKE ALL ON jobs FROM agent`), which is
 // why the engine publishes by handing committed rows to the hub itself rather
 // than by enqueuing a `publish` job; see decision 40 in docs/DECISIONS.md.
-import type { ApprovalView, ProposeApprovalInput, RequestKind } from '@hermes/shared';
+import type {
+  ApprovalView,
+  PartnerHandoffResult,
+  ProposeApprovalInput,
+  PublishPartnerInvoiceReviewInput,
+  RequestKind,
+} from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 
 /** An outbox row, written in the same transaction as the change it describes. */
@@ -142,6 +148,11 @@ export interface AgentWrites {
    */
   ensureContextField(input: { runId: string; toolCallId: string; agentId: string; key: string }): Promise<void>;
   proposeInstruction(input: ProposeInstructionInput): Promise<{ versionId: string; created: boolean }>;
+  publishPartnerInvoiceReview?(input: {
+    runId: string;
+    agentId: string;
+    arguments: PublishPartnerInvoiceReviewInput;
+  }): Promise<{ handoff_id: string; job_id: string | null; created: boolean }>;
   appendTurn(input: AppendTurnInput): Promise<{ turnId: string; created: boolean }>;
   emit(events: readonly EmitInput[]): Promise<EmittedEvent[]>;
 }
@@ -274,6 +285,11 @@ export interface AgentDb extends AgentWrites {
     transport: string;
     effort_map: Record<string, string> | null;
   } | null>;
+  getPartnerHandoffResult?(input: {
+    runId: string;
+    agentId: string;
+    handoffId: string;
+  }): Promise<PartnerHandoffResult>;
 
   /** Run bookkeeping. Not on `AgentWrites`: a tool cannot move its own run. */
   enterStep(input: StepProgress): Promise<{ stepAttempt: number }>;

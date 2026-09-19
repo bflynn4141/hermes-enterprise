@@ -86,8 +86,9 @@ describe('live run activity', () => {
   });
 
   it('derives elapsed time from the run start after the activity remounts', () => {
-    const firstMount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:03.700Z')} />);
-    const remount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:24.100Z')} />);
+    const timedRun = { ...run(), id: '77777777-7777-4777-8777-777777777777' };
+    const firstMount = render(<RunActivity session={session(timedRun)} now={() => Date.parse('2026-09-17T19:00:03.700Z')} />);
+    const remount = render(<RunActivity session={session(timedRun)} now={() => Date.parse('2026-09-17T19:00:24.100Z')} />);
 
     expect(firstMount).toContain('3.7s');
     expect(remount).toContain('24.1s');

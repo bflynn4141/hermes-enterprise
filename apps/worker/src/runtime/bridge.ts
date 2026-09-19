@@ -48,6 +48,7 @@ import {
 } from '../partner-screening/agentcash-contact.js';
 import { partnerAgentConfigSchema } from '../partner-screening/config.js';
 import { completePartnerScreening } from '../partner-screening/service.js';
+import { scopeWorkspaceHubEvents } from '../domain/audience.js';
 
 export interface BridgeDb extends AgentDb {
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
@@ -377,7 +378,10 @@ export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<
 async function publish(env: Env, workspaceId: string, result: CallResult): Promise<void> {
   const rows = result.events.map((event) => ({ id: event.id, workspace_id: workspaceId, session_id: event.sessionId, kind: event.kind, payload: event.payload, schema_version: 1, trace_id: event.traceId, at: event.at }));
   const session = rows.filter((event) => event.session_id !== null);
-  const workspace = rows.filter((event) => event.session_id === null);
+  const workspaceRows = rows.filter((event) => event.session_id === null);
+  const workspace = workspaceRows.length === 0 ? workspaceRows : await withWorkspaceTransaction(
+    env, workspaceId, (tx) => scopeWorkspaceHubEvents(tx, workspaceRows),
+  );
   // Delivery failure leaves a committed outbox for the existing replay route.
   try {
     if (session.length) await env.SESSION_HUB.get(env.SESSION_HUB.idFromName(result.run.sessionId)).forward(result.run.id, session);
@@ -1087,6 +1091,7 @@ export async function runtimeModels(c: Context<{ Bindings: Env }>): Promise<Resp
   } finally { await db?.close(); }
 }
 export interface ModelBridgeDb extends RuntimeBudgetDb {
+  withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
   activeProfileRun(agentId: string): Promise<EngineRunRow | null>;
   allowedRuntimeModels(): Promise<RuntimeModelRow[]>;
   resolveCredential: AgentDb['resolveCredential'];
@@ -1123,34 +1128,44 @@ export async function proxyRuntimeModel(
 ): Promise<Response> {
   const proxyStartedAt = Date.now();
   if (!object(value) || typeof value.model !== 'string' || !Array.isArray(value.messages)) return modelError('bad_body', 400);
-  const run = await db.activeProfileRun(agentId);
-  if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
-  const allowed = await db.allowedRuntimeModels();
-  const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
-  const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
-  if (!selected || !config || value.model !== config.wireId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
-  // Whitelist request fields: fallback models, provider credentials,
-  // routing URLs, and other caller-controlled routing cannot bypass the catalog.
-  const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
-  for (const key of ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty']) {
-    if (key in value) forwarded[key] = value[key];
-  }
-  if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
-  // Every streamed native call needs its own authoritative usage; otherwise a
-  // multi-call run can only expose one terminal aggregate and key rotation can
-  // misattribute the spend. The approved-budget path also depends on this.
-  if (forwarded.stream === true) {
-    const existing = object(forwarded.stream_options) ? forwarded.stream_options : {};
-    forwarded.stream_options = { ...existing, include_usage: true };
-  }
-  let prepared;
+  const prepare = async () => {
+    const run = await db.activeProfileRun(agentId);
+    if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
+    const allowed = await db.allowedRuntimeModels();
+    const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
+    const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
+    if (!selected || !config || value.model !== config.wireId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
+    // Whitelist request fields: fallback models, provider credentials,
+    // routing URLs, and other caller-controlled routing cannot bypass the catalog.
+    const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
+    for (const key of ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty']) {
+      if (key in value) forwarded[key] = value[key];
+    }
+    if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
+    // Every streamed native call needs its own authoritative usage; otherwise a
+    // multi-call run can only expose one terminal aggregate and key rotation can
+    // misattribute the spend. The approved-budget path also depends on this.
+    if (forwarded.stream === true) {
+      const existing = object(forwarded.stream_options) ? forwarded.stream_options : {};
+      forwarded.stream_options = { ...existing, include_usage: true };
+    }
+    const prepared = await prepareRuntimeBudget(db, run.id, selected.model_id, forwarded);
+    return { run, selected, config, forwarded, prepared };
+  };
+  let preparation;
   try {
-    prepared = await prepareRuntimeBudget(db, run.id, selected.model_id, forwarded);
+    // These serial reads share one tenant context on the request-local client.
+    preparation = await (db.withRuntimeTransaction ? db.withRuntimeTransaction(prepare) : prepare());
   } catch (error) {
     const response = budgetError(error);
     if (response) return response;
     throw error;
   }
+  if (preparation instanceof Response) return preparation;
+  const { run, selected, config, forwarded, prepared } = preparation;
+  // Credential resolution must retain its own commit: OAuth refresh can
+  // quarantine a key before resolveCredential throws the refusal sentinel.
+  // Budget reservations likewise commit before the provider can accept a call.
   const credential = await db.resolveCredential(selected.provider);
   let reservation: RuntimeBudgetReservation | null = null;
   if (prepared) {

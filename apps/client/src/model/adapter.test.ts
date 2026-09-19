@@ -87,6 +87,16 @@ const bootstrapBody = {
   catalog: [],
 };
 
+function snapshotBody(items: unknown[] = [], status?: string, watermark = '0') {
+  return {
+    workspace_id: WS, session: { ...bootstrapBody.sessions[0], runtime: 'cloud' }, messages: { items, cursor: null, total: items.length }, watermark,
+    run: status ? { id: RUN, session_id: SESSION, agent_id: AGENT, status, attempt: 1, title: null, steps: [], queue: [],
+      model_id: 'deepseek-flash', effort: 'high', admitted_at: iso, started_at: iso, execution_started_at: iso, ended_at: null } : null,
+    stream: status === 'working' ? { run_id: RUN, attempt: 1, turn: 0, step_attempt: 1, message_id: mockUuid(9), text: 'First. ', seq: 0, status: 'streaming' } : null,
+    recovery: null,
+  };
+}
+
 interface Call {
   path: string;
   method: string;
@@ -110,6 +120,7 @@ function makeFetch(overrides: Record<string, () => Response | Promise<Response>>
     if (url.pathname.endsWith('/invitations')) return json({ items: [], cursor: null, total: 0 });
     if (url.pathname.endsWith('/provider-keys')) return json({ keys: [] });
     if (url.pathname.endsWith('/messages')) return json({ items: [], cursor: null, total: 0 });
+    if (url.pathname.endsWith('/snapshot')) return json(snapshotBody());
     if (url.pathname.endsWith('/events')) return json({ stream: 'workspace', after: '0', head: '0', resync: false, events: [] });
     if (url.pathname === '/auth/session')
       return json({
@@ -152,10 +163,12 @@ async function activeSnapshotFixture(snapshot: () => Response | Promise<Response
   let runStatus = 'working';
   const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   const { impl } = makeFetch({
-    [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => {
-      if (!armed) return json({ items: [], cursor: null, total: 0 });
+    [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: async () => {
+      if (!armed) return json(snapshotBody());
       snapshotCalls += 1;
-      return snapshot();
+      const status = runStatus;
+      const page = await (await snapshot()).json() as { items: unknown[] };
+      return json(snapshotBody(page.items, status, status === 'working' ? '3' : '6'));
     },
     [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () => json({ run_id: RUN, status: runStatus, attempt: 1 }),
   });
@@ -464,6 +477,358 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it.each(['workspace', 'viewer', 'same identity'] as const)('scopes draft, pending-turn, and settings preservation across a %s change', async (boundary) => {
+    const first = makeAdapter();
+    await first.adapter.start();
+    const localId = 'local-private-draft';
+    const patch = {
+      draft: { text: 'Private workspace A draft', attachments: [] },
+      settingsPending: true, model: 'private-choice', effort: null,
+      pendingTurn: { clientTurnId: 'pending-a', runId: null, previousStatus: 'Ready',
+        message: { id: mockUuid(601), session_id: SESSION, seq: 0, role: 'user' as const, kind: null, text: 'Private pending A prompt', blocks: [], status: 'complete' as const, run_id: null } },
+    };
+    first.store.dispatch({ type: 'session/set', id: SESSION, patch });
+    first.store.dispatch({ type: 'session/create', id: localId });
+    first.store.dispatch({ type: 'session/set', id: localId, patch: { ...patch, pendingTurn: { ...patch.pendingTurn, message: { ...patch.pendingTurn.message, session_id: localId } } } });
+    first.adapter.dispose();
+    const workspaceId = boundary === 'workspace' ? mockUuid(602) : WS;
+    const viewerId = boundary === 'viewer' ? mockUuid(603) : USER;
+    const { impl } = makeFetch({
+      [`GET /w/${workspaceId}/bootstrap`]: () => Response.json({ ...bootstrapBody, workspace: { ...bootstrapBody.workspace, id: workspaceId }, viewer: { ...bootstrapBody.viewer, user_id: viewerId } }),
+      [`GET /w/${workspaceId}/sessions/${SESSION}/snapshot`]: () => Response.json({ ...snapshotBody(), workspace_id: workspaceId }),
+    });
+    const next = createAdapter({ store: first.store, workspaceId, auth: createAuth('fake'), fetchImpl: impl,
+      socketFactory: (url) => new FakeSocket(url), visibility: { hidden: false, addEventListener: () => undefined, removeEventListener: () => undefined } });
+    try {
+      await next.start();
+      const current = first.state();
+      if (boundary === 'same identity') {
+        expect(current.sessions[localId]).toMatchObject({ ...patch, pendingTurn: { ...patch.pendingTurn, message: { ...patch.pendingTurn.message, session_id: localId } } });
+        expect(current.sessions[SESSION]).toMatchObject(patch);
+        expect(current.activeSessionId).toBe(localId);
+      } else {
+        expect(current.sessions[localId]).toBeUndefined();
+        expect(current.sessionOrder).toEqual([SESSION]);
+        expect(current.activeSessionId).toBe(SESSION);
+        expect(current.sessions[SESSION]).toMatchObject({ draft: { text: '', attachments: [] }, pendingTurn: null, run: null, model: 'deepseek-flash', effort: 'high' });
+        expect(current.sessions[SESSION]!.settingsPending).toBeUndefined();
+      }
+    } finally { next.dispose(); }
+  });
+
+  it('performs a fresh terminal repair after an older in-flight snapshot settles', async () => {
+    let release!: (response: Response) => void;
+    let held = false;
+    let reads = 0;
+    const final = { ...streamingPlaceholder, status: 'complete', text: 'Complete terminal answer.' };
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        reads += 1;
+        if (!held) return Response.json(snapshotBody([], 'working', '10'));
+        if (reads === 3) return new Promise((resolve) => { release = resolve; });
+        return Response.json(snapshotBody([final], 'completed', '20'));
+      },
+    });
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.at(-1)!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      held = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(reads).toBe(3);
+      socket.deliver(streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed' }, 11n));
+      release(Response.json(snapshotBody([], 'working', '20')));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toBe(4);
+      expect(state().sessions[SESSION]!.messages.at(-1)?.text).toBe(final.text);
+      expect(state().sessions[SESSION]!.run?.status).toBe('completed');
+    } finally { adapter.dispose(); }
+  });
+
+  it.each([409, 503])('preserves a pending Send through resync and restores its exact prompt after HTTP %i', async (status) => {
+    let release!: (response: Response) => void;
+    const { adapter, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => new Promise((resolve) => { release = resolve; }),
+    });
+    try {
+      await adapter.start();
+      const text = 'Keep this prompt\nwith its second line';
+      const sending = adapter.send(SESSION, text);
+      const rejected = expect(sending).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      await adapter.resync();
+      expect(state().sessions[SESSION]!.pendingTurn?.message.text).toBe(text);
+      release(Response.json({ reason: 'unavailable', message: 'Turn refused' }, { status }));
+      await rejected;
+      expect(state().sessions[SESSION]!.draft.text).toBe(text);
+      expect(state().sessions[SESSION]!.pendingTurn).toBeNull();
+      expect(state().sessions[SESSION]!.run).toBeNull();
+    } finally { adapter.dispose(); }
+  });
+
+  it('activates the fallback after archiving the selected session without duplicate connections', async () => {
+    const otherId = mockUuid(20);
+    const other = { ...bootstrapBody.sessions[0], id: otherId, runtime: 'cloud' };
+    const { adapter, store, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json({ ...bootstrapBody, sessions: [...bootstrapBody.sessions, other] }),
+      [`GET /w/${WS}/sessions/${otherId}/snapshot`]: () => Response.json({ ...snapshotBody(), session: other }),
+    });
+    try {
+      await adapter.start();
+      const original = FakeSocket.instances.at(-1)!;
+      store.dispatch({ type: 'session/archive', id: SESSION, archived: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBe(otherId);
+      expect(original.closed).not.toBeNull();
+      expect(FakeSocket.instances.at(-1)!.url).toContain(`/hub/session/${otherId}`);
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${otherId}`))).toHaveLength(1);
+      await adapter.activateSession(otherId);
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${otherId}`))).toHaveLength(1);
+    } finally { adapter.dispose(); }
+  });
+
+  it('restores the previous session connection after a failed blank creation rolls back', async () => {
+    const { adapter, state } = makeAdapter({
+      [`POST /w/${WS}/sessions`]: () => Response.json({ reason: 'unavailable', message: 'Create failed' }, { status: 409 }),
+    });
+    try {
+      await adapter.start();
+      const original = FakeSocket.instances.at(-1)!;
+      await expect(adapter.createSession({ title: 'New blank task' })).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBe(SESSION);
+      expect(original.closed).not.toBeNull();
+      expect(FakeSocket.instances.at(-1)!.url).toContain(`/hub/session/${SESSION}`);
+      expect(FakeSocket.instances.at(-1)!.closed).toBeNull();
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${SESSION}`))).toHaveLength(2);
+    } finally { adapter.dispose(); }
+  });
+
+  it('closes the old connection when the selected session is removed with no fallback', async () => {
+    const { adapter, store, state } = makeAdapter();
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.at(-1)!;
+      store.dispatch({ type: 'session/rollback', id: SESSION });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBeNull();
+      expect(socket.closed).not.toBeNull();
+      expect(state().connection.session.status).toBe('idle');
+    } finally { adapter.dispose(); }
+  });
+
+  it.each(['idle', 'active'] as const)('repairs a late lower-id commit at an unchanged watermark while %s', async (phase) => {
+    let committed = false;
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        if (phase === 'idle') return Response.json(committed
+          ? snapshotBody([{ ...streamingPlaceholder, text: 'Late committed final', status: 'complete' }], 'completed', '10')
+          : { ...snapshotBody(), watermark: '10' });
+        const snapshot = snapshotBody([], 'working', '10');
+        return Response.json({ ...snapshot, stream: { ...snapshot.stream, text: committed ? 'First. Late checkpoint.' : 'First. ' } });
+      },
+    });
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.at(-1)!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      committed = true;
+      await vi.advanceTimersByTimeAsync(phase === 'idle' ? 30_000 : 2_000);
+      expect(state().cursors.session[SESSION]).toBe(10n);
+      if (phase === 'idle') expect(state().sessions[SESSION]!.messages.at(-1)?.text).toBe('Late committed final');
+      else expect(state().sessions[SESSION]!.stream?.text).toBe('First. Late checkpoint.');
+    } finally { adapter.dispose(); }
+  });
+
+  it('hydrates a durable prefix and attempt before replay, then ignores covered deltas', async () => {
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => Response.json(snapshotBody([], 'working', '5')),
+    });
+    try {
+      await adapter.start();
+      expect(state().sessions[SESSION]!.run).toMatchObject({ id: RUN, attempt: 1, started_at: iso, status: 'working' });
+      expect(state().sessions[SESSION]!.stream?.text).toBe('First. ');
+      const socket = FakeSocket.instances.find((item) => item.url.includes('/hub/session/'))!;
+      expect(socket.url).toContain('after=5');
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      const delta = { run_id: RUN, message_id: mockUuid(9), attempt: 1, turn: 0, step_attempt: 1, seq: 1, delta: 'Second.' };
+      socket.deliver(streamEvent('message.delta', delta, 5n));
+      socket.deliver(streamEvent('message.delta', delta, 6n));
+      expect(state().sessions[SESSION]!.stream?.text).toBe('First. Second.');
+    } finally { adapter.dispose(); }
+  });
+
+  it('does not let a delayed new-session POST steal the selected session connection or draft', async () => {
+    let release!: (response: Response) => void;
+    const createdId = mockUuid(500);
+    const { adapter, store, state } = makeAdapter({ [`POST /w/${WS}/sessions`]: () => new Promise((resolve) => { release = resolve; }) });
+    try {
+      await adapter.start();
+      const creation = adapter.createSession({ title: 'New task' });
+      const localId = state().activeSessionId!;
+      store.dispatch({ type: 'session/draft', id: localId, text: 'Keep this draft' });
+      await adapter.activateSession(SESSION);
+      const selectedSocket = FakeSocket.instances.at(-1)!;
+      release(Response.json({ ...bootstrapBody.sessions[0], id: createdId, runtime: 'cloud' }));
+      await creation;
+      expect(state().activeSessionId).toBe(SESSION);
+      expect(selectedSocket.closed).toBeNull();
+      expect(FakeSocket.instances.at(-1)).toBe(selectedSocket);
+      expect(state().sessions[createdId]!.draft.text).toBe('Keep this draft');
+    } finally { adapter.dispose(); }
+  });
+
+  it('ignores stale A and B hydration during rapid A → B → A activation', async () => {
+    const otherId = mockUuid(20);
+    const other = { ...bootstrapBody.sessions[0], id: otherId, runtime: 'cloud', model_id: 'other-model' };
+    let aCalls = 0;
+    const releases: ((response: Response) => void)[] = [];
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json({ ...bootstrapBody, sessions: [...bootstrapBody.sessions, other] }),
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => ++aCalls === 1 ? Response.json(snapshotBody()) : new Promise((resolve) => { releases.push(resolve); }),
+      [`GET /w/${WS}/sessions/${otherId}/snapshot`]: () => new Promise((resolve) => { releases.push(resolve); }),
+    });
+    try {
+      await adapter.start();
+      const b = adapter.activateSession(otherId);
+      const a = adapter.activateSession(SESSION);
+      releases[1]!(Response.json(snapshotBody([], 'working', '5')));
+      await a;
+      const selectedSocket = FakeSocket.instances.at(-1)!;
+      releases[0]!(Response.json({ ...snapshotBody(), session: other }));
+      await b;
+      expect(state().activeSessionId).toBe(SESSION);
+      expect(state().sessions[SESSION]!.stream?.text).toBe('First. ');
+      expect(selectedSocket.closed).toBeNull();
+      expect(FakeSocket.instances.at(-1)).toBe(selectedSocket);
+      expect(state().sessions[otherId]!.model).toBe('other-model');
+    } finally { adapter.dispose(); }
+  });
+
+  it('serializes two model/effort saves and admits Send only after the latest choice is confirmed', async () => {
+    const releases: ((response: Response) => void)[] = [];
+    const { adapter, calls, state } = makeAdapter({
+      [`PATCH /w/${WS}/sessions/${SESSION}`]: () => new Promise((resolve) => { releases.push(resolve); }),
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    try {
+      await adapter.start();
+      const first = adapter.updateSessionSettings(SESSION, { model_id: 'first-model', effort: null });
+      const second = adapter.updateSessionSettings(SESSION, { model_id: 'second-model', effort: 'high' });
+      const send = adapter.send(SESSION, 'Use the chosen model');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(releases).toHaveLength(1);
+      expect(calls.some((call) => call.path.endsWith('/turns'))).toBe(false);
+      releases[0]!(Response.json({ ...bootstrapBody.sessions[0], runtime: 'cloud', model_id: 'first-model', effort: null }));
+      await first;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().sessions[SESSION]!.model).toBe('second-model');
+      expect(releases).toHaveLength(2);
+      expect(calls.some((call) => call.path.endsWith('/turns'))).toBe(false);
+      releases[1]!(Response.json({ ...bootstrapBody.sessions[0], runtime: 'cloud', model_id: 'second-model', effort: 'high' }));
+      await Promise.all([second, send]);
+      expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({ model_id: 'second-model', effort: 'high', expected_settings: { model_id: 'second-model', effort: 'high' } });
+      expect(calls.filter((call) => call.method === 'PATCH')[1]?.body).toMatchObject({ expected_settings: { model_id: 'first-model', effort: null } });
+    } finally { adapter.dispose(); }
+  });
+
+  it('surfaces a failed model save, rolls back the choice, and retains a refused Send draft', async () => {
+    let release!: (response: Response) => void;
+    const { adapter, calls, state } = makeAdapter({ [`PATCH /w/${WS}/sessions/${SESSION}`]: () => new Promise((resolve) => { release = resolve; }) });
+    try {
+      await adapter.start();
+      const save = adapter.updateSessionSettings(SESSION, { model_id: 'failed-model', effort: null });
+      const saved = expect(save).rejects.toThrow();
+      const send = adapter.send(SESSION, 'Keep the unsent prompt');
+      const sent = expect(send).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      release(Response.json({ reason: 'unavailable', message: 'Could not save model' }, { status: 409 }));
+      await Promise.all([saved, sent]);
+      expect(calls.some((call) => call.path.endsWith('/turns'))).toBe(false);
+      expect(state().sessions[SESSION]).toMatchObject({ model: 'deepseek-flash', effort: 'high', settingsPending: false, draft: { text: 'Keep the unsent prompt' } });
+      expect(state().sessions[SESSION]!.settingsError).toContain('could not be saved');
+    } finally { adapter.dispose(); }
+  });
+
+  it('parks settings chosen during creation until a real session id exists', async () => {
+    let release!: (response: Response) => void;
+    const createdId = mockUuid(500);
+    const created = { ...bootstrapBody.sessions[0], runtime: 'cloud', id: createdId };
+    const { adapter, calls, state } = makeAdapter({
+      [`POST /w/${WS}/sessions`]: () => new Promise((resolve) => { release = resolve; }),
+      [`GET /w/${WS}/sessions/${createdId}/snapshot`]: () => Response.json({ ...snapshotBody(), session: created }),
+      [`PATCH /w/${WS}/sessions/${createdId}`]: () => Response.json({ ...created, model_id: 'chosen-model', effort: null }),
+      [`POST /w/${WS}/sessions/${createdId}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    try {
+      await adapter.start();
+      const creation = adapter.createSession({ title: 'New task' });
+      const localId = state().activeSessionId!;
+      const save = adapter.updateSessionSettings(localId, { model_id: 'chosen-model', effort: null });
+      const send = adapter.send(localId, 'Start with my chosen model');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
+      release(Response.json(created));
+      await Promise.all([creation, save, send]);
+      expect(calls.every((call) => !call.path.includes('local-'))).toBe(true);
+      expect(state().sessions[createdId]).toMatchObject({ model: 'chosen-model', effort: null });
+      expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({ model_id: 'chosen-model', effort: null });
+    } finally { adapter.dispose(); }
+  });
+
+  it('consumes retry admission without a start event and rejects the older attempt afterward', async () => {
+    let attempt = 1;
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        const snapshot = snapshotBody([], attempt === 1 ? 'error' : 'working', '1');
+        return Response.json({ ...snapshot, run: { ...snapshot.run, attempt }, stream: null });
+      },
+      [`POST /w/${WS}/sessions/${SESSION}/runs/${RUN}/retry`]: () => { attempt = 2; return Response.json({ run_id: RUN, status: 'working', attempt }); },
+    });
+    try {
+      await adapter.start();
+      const retry = adapter.retry(SESSION, RUN);
+      expect(adapter.retry(SESSION, RUN)).toBe(retry);
+      await retry;
+      expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
+      expect(calls.find((call) => call.path.endsWith('/retry'))?.body).toMatchObject({ expected_attempt: 1, expected_settings: { model_id: 'deepseek-flash', effort: 'high' } });
+      expect(calls.filter((call) => call.path.endsWith('/retry'))).toHaveLength(1);
+      const socket = FakeSocket.instances.at(-1)!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      socket.deliver(streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'error' }, 2n));
+      socket.deliver({ type: 'message.preview', session_id: SESSION, run_id: RUN, attempt: 1, turn: 0, step_attempt: 1, offset: 0, delta: 'old' });
+      expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
+      expect(state().sessions[SESSION]!.stream).toBeNull();
+    } finally { adapter.dispose(); }
+  });
+
+  it('keeps accepted retry admission when its hydration fails and allows same-session refresh', async () => {
+    let retryAccepted = false;
+    let snapshots = 0;
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        snapshots += 1;
+        if (retryAccepted && snapshots === 2) return Response.json({ reason: 'unavailable', message: 'Read failed' }, { status: 409 });
+        const snapshot = snapshotBody([], retryAccepted ? 'working' : 'error');
+        return Response.json({ ...snapshot, run: { ...snapshot.run, attempt: retryAccepted ? 2 : 1 }, stream: null });
+      },
+      [`POST /w/${WS}/sessions/${SESSION}/runs/${RUN}/retry`]: () => { retryAccepted = true; return Response.json({ run_id: RUN, status: 'working', attempt: 2 }); },
+    });
+    try {
+      await adapter.start();
+      await adapter.retry(SESSION, RUN);
+      expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
+      expect(state().sessions[SESSION]!.hydrationError).toContain('Retry was accepted');
+      await adapter.activateSession(SESSION);
+      expect(snapshots).toBe(3);
+      expect(state().sessions[SESSION]!.hydrationError).toBeNull();
+    } finally { adapter.dispose(); }
+  });
+
   it('repairs an already-seen user row and phantom pending turn even after the run was reconciled as completed', async () => {
     const user = { id: mockUuid(70), session_id: SESSION, seq: 0, role: 'user' as const, kind: null,
       text: 'again', blocks: [], status: 'complete' as const, run_id: RUN, at: iso };
@@ -500,7 +865,7 @@ describe('the adapter', () => {
     const { adapter, store, state } = makeAdapter({
       [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => json({ run_id: RUN, status: 'working', attempt: 1 }),
       [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () => json({ run_id: RUN, status: 'working', attempt: 1 }),
-      [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => json({ items: snapshotItems, cursor: null, total: snapshotItems.length }),
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => json(snapshotItems.length ? { ...snapshotBody(snapshotItems, 'working', '3'), stream: null } : snapshotBody()),
     });
     try {
       await adapter.start();
@@ -696,9 +1061,9 @@ describe('the adapter', () => {
               };
         return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
       },
-      [`GET /w/${WS}/sessions/${SESSION}/messages`]: () => {
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
         messagesCall += 1;
-        const body = { items: messagesCall === 1 ? [] : [finalMessage], cursor: null, total: null };
+        const body = messagesCall <= 2 ? snapshotBody() : snapshotBody([finalMessage], 'completed', '7');
         return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
       },
       [`GET /w/${WS}/sessions/${SESSION}/runs/${RUN}`]: () =>

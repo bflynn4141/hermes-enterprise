@@ -150,7 +150,9 @@ describe('Partnerships + Finance partner workflow', () => {
     expect(inspected.partnerAssignments).toBe(0);
     const agentDb = new PgAgentDb(env, fx.workspaceId, 'finance-default-policy-boundary');
     try {
-      await expect(agentDb.loadToolNames(fx.financeAgentId)).resolves.toEqual(['list_requests', 'get_request']);
+      await expect(agentDb.loadToolNames(fx.financeAgentId)).resolves.toEqual([
+        'get_partner_handoff_result', 'list_requests', 'get_request',
+      ]);
     } finally {
       await agentDb.close();
     }
@@ -244,10 +246,10 @@ describe('Partnerships + Finance partner workflow', () => {
     const decision = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/requests/${result.execution.request_id}/decisions`, {
       method: 'POST', headers: INBOX_HEADERS, body: { decision: 'decline', ...reviewBinding },
     });
-    expect(decision.status).toBe(201);
-    expect(await decision.json()).toMatchObject({
-      request_id: result.execution.request_id, resulting_status: 'declined', effect_ids: [],
-    });
+    // Caller-authored legacy handoffs remain historical/read-only. They cannot
+    // become new Finance authority after the governed intake rollout.
+    expect(decision.status).toBe(409);
+    expect(await decision.json()).toMatchObject({ reason: 'request_binding_stale' });
 
     const sourceSession = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/sessions/${fx.sessionId}`);
     expect(sourceSession.status).toBe(404);

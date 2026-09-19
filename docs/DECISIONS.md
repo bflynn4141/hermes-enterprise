@@ -5596,31 +5596,41 @@ attribution. The transcript
 renders that exact envelope as an agent timeline notice instead of a human
 message bubble.
 
-The Enterprise Worker generates the message from the allowlisted handoff and
-Finance-private invoice record; neither model can alter the envelope or select a
-recipient. A non-simulated handoff admits an actual Finance run, while the same
-transaction performs the authoritative duplicate, evidence, currency and amount
-checks and creates the only request. The Finance model gets read-only request
-tools and may explain the result. It cannot call native `message_agent`, create
-or mutate a request, approve, pay or send. There is no automatic reply to
-Partnerships, which prevents acknowledgement loops. Simulated fixtures keep the
-same visible envelope but explicitly make no model call.
+The Enterprise Worker generates the message from an immutable, human-confirmed
+intake and the Finance-private invoice record; neither model can alter the
+envelope, choose a recipient or author authority. The Partnerships tool receives
+only the intake id and expected hash. The Worker rechecks the exact human
+authorization, validity window, non-deleted source digests, frozen revisions,
+assignment snapshots and run grants before its deterministic duplicate,
+evidence, currency and amount checks create the only request. An unsigned
+agreement draft is evidence to review, not proof that terms were authorized.
+
+The Finance model gets read-only request/result tools and may explain the stored
+result. It cannot call native `message_agent`, create or mutate a request,
+approve, pay or send. The Finance human decision rechecks the same binding and
+saves only an invoice draft. One bounded server acknowledgment records the
+decision result without invoice content or an automatic agent reply, preventing
+acknowledgement loops.
 
 **Why.** Native Bot Mode's message shape and attribution make agent coordination
 legible and compatible with the Hermes client, but unrestricted peer tools would
 bypass Enterprise team scopes. Keeping transport visible and authority on the
 server preserves both behaviors.
 
+`input_provenance` is separate from execution simulation. Sample terms stay
+sample throughout authorization, intake, correction and results, while a real
+native execution over those terms remains non-simulated. Historical unknown
+provenance is not relabeled customer data.
+
 **Evidence.** Shared tests pin the current and legacy Bot Mode parsers. Runtime
 tests require validated native bot attribution and reject malformed authors
-before network I/O. PostgreSQL coverage proves a non-simulated handoff creates a
-working Finance run, one delivered agent-message row, one server-owned request
-and no synthetic assistant answer. Additional route/database regressions prove
-runtime and recovery GETs create no assignment/schedule, a governed Finance
-agent receives only the Finance manifest/tools even when the deployment-wide
-legacy policy is set, and reviewed template reapplication removes stray grants.
-The complete unit, database, browser, typecheck, build and 48-migration replay
-gates pass.
+before network I/O. The V2 PostgreSQL acceptance covers exact authorization,
+same-key replay/conflict, revised terms, evidence deletion and validity drift,
+assignment drift, one-successor correction, sample lineage, guarded human
+decision and one acknowledgment. On September 19 it passed 8/8 alone and 12/12
+with the legacy partner workflow suite. These fixtures use real Postgres/app
+roles and guarded HTTP with fixture storage/auth and scripted run admission;
+they do not constitute hosted two-account or live provider proof.
 
 ## C84. Native conversation ids start from the first Enterprise run
 
@@ -5643,3 +5653,38 @@ mapping reuse and exact binding. Restricted-role database coverage proves a new
 run resolves to itself and a following run resolves to the earlier native
 conversation root. The live staging acceptance requires a unique-marker prompt
 in a new Enterprise session after deployment.
+
+---
+
+## C85. Multi-party admission is an opt-in, exact-attestation transition
+
+**Decided September 19, 2026.** Existing Partnerships 1.7 profiles and work keep
+their original runtime name, procedure and version-aware tool inventory. The
+new role uses `enterprise_bridge:partner-program-screening-v1-8` version `1.8.0`
+with artifact digest
+`sha256:281bbfff95d40e202c3ced5d1cb30ebf432868bee100d0c2a647faa40757a9e5`.
+Finance keeps its runtime name but new work uses version `1.0.1` with digest
+`sha256:bdb13d70f7a603f92eb47fc2d1c057c82f26658e61df8cf357790f23875753e4`;
+historical 1.0.0 remains resolvable.
+
+The additive migration leaves admission disabled. Enabling it requires exact
+attestation for both current role assignments, including agent/assignment id,
+revision, version, artifact/content digest, complete tool inventory, pinned
+runtime/plugin, native cron off and role-specific AgentCash state. The server
+re-locks the role bindings after the remote probe and rechecks the saved
+snapshot on every new intake. Relevant pause, revision, artifact or principal
+drift closes admission; unrelated assignments do not. Compatibility readiness
+can keep a legacy profile operational but can never admit the new workflow.
+
+**Why.** A global package bump would silently change existing Iris tools and
+could invalidate active assignments or require unrelated restarts. A stored
+"ready" flag without revision binding would allow new work after the native
+profile and Enterprise authority diverged. Per-profile opt-in preserves the
+existing product while making new cross-team authority fail closed.
+
+**Operational consequence.** Deploy the Worker and migration with admission
+off, update only the selected profiles, verify both attestations, then enable
+that workspace. A newly invited Finance employee must start with compatibility
+discovery disabled, receive the Finance role immediately, and never have the
+starter Partnerships search approved. Hosted acceptance still requires the
+second real member and exact native probes; local fixtures cannot replace it.

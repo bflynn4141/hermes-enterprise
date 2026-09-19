@@ -107,8 +107,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                   type="button"
                   className="sr-body"
                   onClick={() => {
-                    dispatch({ type: 'session/select', id: session.id });
-                    adapter.openSession(session.id);
+                    void adapter.activateSession(session.id).catch(() => undefined);
                     onClose();
                   }}
                 >
@@ -186,8 +185,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
             onSelect={(item) => {
               const match = list.find((session) => session.title === item);
               if (match) {
-                dispatch({ type: 'session/select', id: match.id });
-                adapter.openSession(match.id);
+                void adapter.activateSession(match.id).catch(() => undefined);
                 onClose();
               }
             }}

@@ -22,6 +22,7 @@
 import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
 import { decisionSummary } from './request-summary.js';
+import { requestAudiencePredicate } from './audience.js';
 
 export interface RequestRow {
   id: string;
@@ -83,12 +84,7 @@ export const REQUEST_SELECT = `
  * reads. Keep this predicate beside REQUEST_SELECT so list and detail cannot
  * drift.
  */
-export const REQUEST_AUDIENCE_PREDICATE = `(NOT EXISTS (
-  SELECT 1 FROM request_audiences audience_any WHERE audience_any.request_id=r.id
-) OR EXISTS (
-  SELECT 1 FROM request_audiences audience_me
-   WHERE audience_me.request_id=r.id AND audience_me.user_id=$2
-))`;
+export const REQUEST_AUDIENCE_PREDICATE = requestAudiencePredicate('r.id', '$2');
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};

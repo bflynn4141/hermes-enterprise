@@ -63,6 +63,8 @@ export function Sidebar() {
   useLayoutEffect(() => {
     const host = sidebarRef.current;
     if (!host) return;
+    const sessionHeading = [...host.querySelectorAll('span')].find((node) => node.textContent === 'Iris sessions');
+    if (sessionHeading) sessionHeading.textContent = `${state.agent.name || 'Iris'} sessions`;
     const rows = host.querySelectorAll<HTMLButtonElement>('button.sidebar-row[data-session-row], button.sidebar-row[title]:not([aria-label])');
     rows.forEach((row, index) => {
       const session = sessions[index];
@@ -73,7 +75,7 @@ export function Sidebar() {
       row.dataset.sessionStatus = status.toLowerCase() || 'empty';
       row.setAttribute('aria-label', status ? `${title}, ${status}` : title);
     });
-  }, [sessions]);
+  }, [sessions, state.agent.name]);
 
   // SidebarNav owns its disclosure state, but the shell owns the grid column
   // around it. Mirror the component's public data attribute so collapsing the
@@ -133,7 +135,7 @@ export function Sidebar() {
           if (key === 'inbox') dispatch({ type: 'nav/tab', key: 'inboxTab', value: 'needs-review' });
         }}
         onPick={(id) => {
-          dispatch({ type: 'session/select', id });
+          void adapter.activateSession(id).catch(() => undefined);
           dispatch({ type: 'iris/panel', panel: 'open' });
           requestComposerFocus();
         }}

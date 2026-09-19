@@ -16,6 +16,7 @@ import { ApprovalEvidence } from './ApprovalEvidence.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
 import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
 import { RestError } from '../../model/rest.js';
+import { InputProvenanceBadge } from '../input-provenance.js';
 
 const shortDateTime = (value: string): string => {
   const date = new Date(value);
@@ -506,12 +507,14 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
+  const partnerWorkflowRecord = view.payload.approval_type === 'record_change' && view.payload.details.system_id === 'enterprise-partner-records';
 
   return (
     <div className="app-pane-body request-pane approval-shell">
       <div className="scroll request-scroll">
         <div className="col request-content">
           <ApprovalDecisionHeader view={view} />
+          {partnerWorkflowRecord && <p className="partner-provenance-summary"><InputProvenanceBadge value={view.payload.illustrative ? 'sample' : 'customer'} /><span>{view.payload.illustrative ? 'For demonstration only. Approval does not confirm an external agreement.' : 'From externally agreed terms with a verifiable source.'}</span></p>}
 
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={`${view.payload.approval_type}:${view.payload.authorization.revision}`} initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>

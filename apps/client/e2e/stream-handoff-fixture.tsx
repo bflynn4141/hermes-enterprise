@@ -35,6 +35,7 @@ function View() {
 const root = createRoot(document.getElementById('root')!);
 let store = createStore(initialState());
 let turn = 1;
+let eventId = 0;
 let activeRunId = runId;
 let adapter: Adapter;
 let viewKey = 0;
@@ -56,6 +57,7 @@ window.streamHandoffFixture = {
     state.ui.reduceMotion = reducedMotion;
     store = createStore(state);
     turn = 1;
+    eventId = 0;
     activeRunId = runId;
     store.dispatch({ type: 'session/create', id: sessionId, title: 'Streaming regression fixture', mode: 'work', model: 'deepseek-flash', runtime: 'cloud', pending: false });
     store.dispatch({
@@ -80,7 +82,7 @@ window.streamHandoffFixture = {
     // Use the wire action mapping: message.final deliberately has no session
     // sequence, which is the condition that poisoned the following send.
     for (const action of actionsFor({
-      id: '1', workspace_id: workspaceId, session_id: sessionId, schema_version: SCHEMA_VERSION,
+      id: String(++eventId), workspace_id: workspaceId, session_id: sessionId, schema_version: SCHEMA_VERSION,
       trace_id: 'handoff-fixture', at: new Date().toISOString(), kind: 'message.final',
       payload: { message_id: crypto.randomUUID(), session_id: sessionId, run_id: activeRunId,
         turn, attempt: 1, text, blocks, incomplete: false, worked_ms: 1_000 },
@@ -100,7 +102,7 @@ window.streamHandoffFixture = {
     await adapter.send(sessionId, 'again');
     const clientTurnId = store.getState().sessions[sessionId]!.pendingTurn!.clientTurnId;
     for (const action of actionsFor({
-      id: '2', workspace_id: workspaceId, session_id: sessionId, schema_version: SCHEMA_VERSION,
+      id: String(++eventId), workspace_id: workspaceId, session_id: sessionId, schema_version: SCHEMA_VERSION,
       trace_id: 'handoff-fixture', at: new Date().toISOString(), kind: 'message.appended',
       payload: { message_id: crypto.randomUUID(), session_id: sessionId, seq: 3,
         role: 'user', kind: null, text: 'again', blocks: [], status: 'complete',

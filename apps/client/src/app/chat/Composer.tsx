@@ -215,7 +215,7 @@ export function Composer({ session }: { session: SessionState }) {
             </Button>
           )}
           {(status.status === 'stopped' || status.status === 'error') && status.error?.retryable !== false && (
-            <Button onClick={() => void adapter.retry(session.id, status.id).catch(() => undefined)}>
+            <Button onClick={() => void adapter.retry(session.id, status.id).catch((error: unknown) => setRefusal(refusalFor(error)))}>
               {status.status === 'error' ? 'Retry remaining step' : 'Resume'}
             </Button>
           )}
@@ -249,6 +249,9 @@ export function Composer({ session }: { session: SessionState }) {
             </span>
           </div>
         )}
+        {session.settingsPending && <div className="composer-refusal" role="status">Saving model choice…</div>}
+        {session.settingsError && <div className="composer-refusal" role="alert">{session.settingsError}</div>}
+        {session.hydrationError && <div className="composer-refusal" role="alert">{session.hydrationError}</div>}
         {refusal && (
           <div className="composer-refusal" role="alert">
             <Glass name="trace" size={18} />
