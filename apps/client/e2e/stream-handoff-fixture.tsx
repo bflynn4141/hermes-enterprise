@@ -1,6 +1,7 @@
 // Isolate event ordering with the real transcript and reducer, without claiming
 // Worker/provider coverage. The test decides when each authoritative event lands.
 import { createRoot } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { HermesMotionProvider } from '@hermes/motion-components';
 import { SCHEMA_VERSION, type Message, type Run } from '@hermes/shared';
 import { Transcript } from '../src/app/chat/Transcript.js';
@@ -22,6 +23,7 @@ declare global {
       nextTurn(text: string): void;
       sendAgain(text: string): Promise<void>;
       remount(): void;
+      append(text: string): void;
       snapshot(): { status: Run['status'] | undefined; stream: string | null; messages: string[] };
     };
   }
@@ -110,7 +112,10 @@ window.streamHandoffFixture = {
     }, store.getState())) store.dispatch(action);
     delta(text);
   },
-  remount() { viewKey += 1; render(); },
+  remount() { viewKey += 1; flushSync(render); },
+  append(text) {
+    flushSync(() => store.dispatch({ type: 'stream/delta', sessionId, runId: activeRunId, turn, stepAttempt: 1, delta: text }));
+  },
   snapshot() {
     const session = store.getState().sessions[sessionId]!;
     return { status: session.run?.status, stream: session.stream?.text ?? null, messages: session.messages.map((message) => message.text) };

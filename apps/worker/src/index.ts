@@ -49,7 +49,12 @@ import {
   resendInvitation,
   withdrawInvitation,
 } from './routes/members.js';
-import { registerHermesCapacity } from './routes/hermes-capacity.js';
+import {
+  createRuntimeDiscoveryGrant,
+  listRuntimeDiscoveryGrants,
+  registerHermesCapacity,
+  revokeRuntimeDiscoveryGrant,
+} from './routes/hermes-capacity.js';
 import {
   archiveSession,
   clearMessageFeedback,
@@ -224,7 +229,7 @@ app.onError((error, c) => {
   // most likely to have those two fields are objects that came *from* an
   // upstream: a parsed provider error body, a decoded JSON payload. A thrown
   // plain object is a bug, and a bug is a 500.
-  const carried = error as { status?: unknown; reason?: unknown; message?: string };
+  const carried = error as { status?: unknown; reason?: unknown; message?: string; traceId?: unknown };
   if (
     error instanceof Error &&
     typeof carried.status === 'number' &&
@@ -232,8 +237,12 @@ app.onError((error, c) => {
     carried.status <= 599 &&
     typeof carried.reason === 'string'
   ) {
+    const traceId = typeof carried.traceId === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(carried.traceId)
+      ? carried.traceId
+      : null;
     return c.json(
-      { error: carried.message ?? 'request failed', reason: carried.reason },
+      { error: carried.message ?? 'request failed', reason: carried.reason, ...(traceId ? { trace_id: traceId } : {}) },
       carried.status as 400,
     );
   }
@@ -438,6 +447,9 @@ app.post('/w/:ws/invitations', createInvitation);
 app.post('/w/:ws/invitations/:id/resend', resendInvitation);
 app.post('/w/:ws/invitations/:id/withdraw', withdrawInvitation);
 app.post('/w/:ws/admin/hermes-capacity', registerHermesCapacity);
+app.get('/w/:ws/admin/runtime-discovery-grants', listRuntimeDiscoveryGrants);
+app.post('/w/:ws/admin/runtime-discovery-grants', createRuntimeDiscoveryGrant);
+app.delete('/w/:ws/admin/runtime-discovery-grants/:grantId', revokeRuntimeDiscoveryGrant);
 
 // The Agent tab's own surfaces: the runs a person can read back, the skills the
 // agent has adopted, its instruction versions, and the context fields a human

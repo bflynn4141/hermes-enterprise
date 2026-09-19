@@ -112,6 +112,13 @@ import {
 } from '@hermes/shared';
 import type { z } from 'zod';
 import type { AuthAdapter } from './auth.js';
+import {
+  hermesCapacitySchema,
+  runtimeDiscoveryGrantCreatedSchema,
+  runtimeDiscoveryGrantPageSchema,
+  runtimeDiscoveryGrantRevokedSchema,
+  type HermesCapacityInput,
+} from './runtime-capacity.js';
 
 export class RestError extends Error {
   constructor(
@@ -119,6 +126,7 @@ export class RestError extends Error {
     readonly reason: string,
     message: string,
     readonly retryAfter: number | null = null,
+    readonly traceId: string | null = null,
   ) {
     super(message);
     this.name = 'RestError';
@@ -198,11 +206,13 @@ export function createRest(options: RestOptions) {
       const retryAfter = Number(response.headers.get('Retry-After') ?? '') || null;
       let reason = 'http_error';
       let message = `${method} ${path} failed with ${response.status}`;
+      let traceId: string | null = null;
       try {
         const parsed = errorBodySchema.safeParse(await response.json());
         if (parsed.success) {
           reason = parsed.data.reason;
           message = parsed.data.error;
+          traceId = parsed.data.trace_id ?? null;
         }
       } catch {
         /* a non-JSON error body keeps the default reason */
@@ -214,7 +224,7 @@ export function createRest(options: RestOptions) {
         continue;
       }
 
-      const error = new RestError(response.status, reason, message, retryAfter);
+      const error = new RestError(response.status, reason, message, retryAfter, traceId);
       if (error.signedOut) options.onSignedOut?.();
       throw error;
     }
@@ -353,6 +363,14 @@ export function createRest(options: RestOptions) {
       optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
+    runtimeDiscoveryGrants: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantPageSchema),
+    createRuntimeDiscoveryGrant: (workspaceId: string, preflightAgentId: string) =>
+      request('POST', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantCreatedSchema, { preflight_agent_id: preflightAgentId }),
+    revokeRuntimeDiscoveryGrant: (workspaceId: string, grantId: string) =>
+      request('DELETE', `${ws(workspaceId)}/admin/runtime-discovery-grants/${encodeURIComponent(grantId)}`, runtimeDiscoveryGrantRevokedSchema),
+    registerHermesCapacity: (workspaceId: string, body: HermesCapacityInput) =>
+      request('POST', `${ws(workspaceId)}/admin/hermes-capacity`, hermesCapacitySchema, body),
     listEvents: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/history${query}`, paginatedSchema(eventRowSchema)), emptyPage()),
     listTraces: (workspaceId: string, query = '') =>

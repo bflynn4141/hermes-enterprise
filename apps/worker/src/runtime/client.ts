@@ -34,7 +34,12 @@ export interface HermesEnterpriseReadiness {
   object: 'hermes.enterprise_bridge.readiness';
   version: string;
   runtimeRevision: string | null;
-  plugin: { name: string; version: string } | null;
+  plugin: {
+    name: string;
+    version: string;
+    revision: string | null;
+    artifactDigest: string | null;
+  } | null;
   workspaceId: string;
   agentId: string;
   enterpriseUrl: string;
@@ -162,6 +167,7 @@ export class HermesClient {
       body.runtime_revision, body.plugin, body.skills, body.tools,
     ].some((value) => value !== undefined);
     const plugin = hasAnyAttestation ? record(body?.plugin) : null;
+    const hasManagedPluginFields = plugin?.revision !== undefined || plugin?.artifact_digest !== undefined;
     const skillRows = hasAnyAttestation && Array.isArray(body?.skills) ? body.skills : null;
     const toolRows = hasAnyAttestation && Array.isArray(body?.tools) ? body.tools : null;
     const skills = skillRows?.map((value) => {
@@ -186,6 +192,10 @@ export class HermesClient {
         (hasAnyAttestation && (
           typeof body.runtime_revision !== 'string' || !/^[0-9a-f]{40}$/.test(body.runtime_revision) ||
           plugin?.name !== 'enterprise_bridge' || plugin.version !== body.version ||
+          (hasManagedPluginFields && (
+            typeof plugin.revision !== 'string' || !/^[0-9a-f]{40}$/.test(plugin.revision) ||
+            typeof plugin.artifact_digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(plugin.artifact_digest)
+          )) ||
           !skillRows || skillRows.length > 16 || !toolRows || toolRows.length > 128 ||
           !skills || skills.some((skill) => skill === null) || new Set(skills.map((skill) => skill!.name)).size !== skills.length ||
           !toolNames || !toolNames.includes('skill_view') || new Set(toolNames).size !== toolNames.length
@@ -195,7 +205,12 @@ export class HermesClient {
     return {
       object: 'hermes.enterprise_bridge.readiness', version: body.version,
       runtimeRevision: hasAnyAttestation ? body.runtime_revision as string : null,
-      plugin: hasAnyAttestation ? { name: plugin!.name as string, version: plugin!.version as string } : null,
+      plugin: hasAnyAttestation ? {
+        name: plugin!.name as string,
+        version: plugin!.version as string,
+        revision: hasManagedPluginFields ? plugin!.revision as string : null,
+        artifactDigest: hasManagedPluginFields ? plugin!.artifact_digest as string : null,
+      } : null,
       workspaceId: body.workspace_id, agentId: body.agent_id, enterpriseUrl: body.enterprise_url,
       skills: hasAnyAttestation ? skills as NonNullable<HermesEnterpriseReadiness['skills']> : null,
       toolNames: hasAnyAttestation ? toolNames : null,

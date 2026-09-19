@@ -20,6 +20,7 @@ import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedP
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
+import type { RuntimeDiscoveryGrant } from './runtime-capacity.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
@@ -99,6 +100,8 @@ interface MockOptions {
   providerKey?: 'verified' | 'none' | 'invalid';
   /** Simulate an older Worker that step-up protects even the masked key list. */
   providerKeysLocked?: boolean;
+  /** Browser-only fixture for the Admin capacity step-up and lifecycle flow. */
+  runtimeCapacityStepUp?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -338,6 +341,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const invitations: InvitationEntity[] = empty
     ? []
     : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }];
+  const runtimeDiscoveryGrants: RuntimeDiscoveryGrant[] = [];
 
   const providerKeys: MaskedProviderKey[] =
     keyMode === 'none'
@@ -1313,13 +1317,26 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/invitations') && method === 'GET') return page(invitations);
     if (p('/invitations') && method === 'POST') {
-      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      if (options.memberWrites === 'fail') {
+        return json({
+          error: 'No verified Iris profile is available',
+          reason: 'iris_capacity_unavailable',
+          trace_id: mockUuid(399),
+        }, 409);
+      }
       const row: InvitationEntity = { id: mockUuid(220 + invitations.length), email: String(body.email ?? ''), role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0), version: 1 };
       invitations.push(row);
       return json(row, 201);
     }
     const invitationMatch = match(new RegExp(`^/w/${WS}/invitations/([^/]+)/(resend|withdraw)$`));
     if (invitationMatch) {
+      if (options.memberWrites === 'fail' && invitationMatch[2] === 'resend') {
+        return json({
+          error: 'No verified Iris profile is available',
+          reason: 'iris_capacity_unavailable',
+          trace_id: mockUuid(399),
+        }, 409);
+      }
       if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
       const row = invitations.find((item) => item.id === invitationMatch[1]);
       if (!row) return fail(404, 'not_found');
@@ -1543,6 +1560,77 @@ export function createMockBackend(options: MockOptions = {}) {
       // same typed refusal as an unconfigured deployment exercises the real
       // manual workspace-key fallback without inventing an OAuth credential.
       return fail(503, 'oauth_not_configured', 'Hosted Nous sign-in is not configured in this fixture.');
+    }
+    if (p('/admin/runtime-discovery-grants')) {
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_runtime_stepup=1');
+      if (options.runtimeCapacityStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      if (method === 'GET') return json({ grants: runtimeDiscoveryGrants }, 200, { 'cache-control': 'no-store' });
+      if (method === 'POST') {
+        const agentId = String(body.preflight_agent_id ?? '');
+        if (runtimeDiscoveryGrants.some((grant) => grant.preflight_agent_id === agentId && grant.status === 'prepared')) {
+          return fail(409, 'discovery_grant_exists', 'An active credential exists.');
+        }
+        const created = {
+          id: mockUuid(940 + runtimeDiscoveryGrants.length),
+          preflight_agent_id: agentId,
+          bearer: 'd'.repeat(64),
+          status: 'prepared' as const,
+          expires_at: iso(24 * 60),
+          created_at: iso(0),
+        };
+        runtimeDiscoveryGrants.unshift({
+          id: created.id,
+          preflight_agent_id: created.preflight_agent_id,
+          role: 'Partnerships P1.7',
+          assignment_revision: null,
+          grant_revision: 1,
+          linked_capacity_id: null,
+          capacity_state: null,
+          status: created.status,
+          expires_at: created.expires_at,
+          created_at: created.created_at,
+        });
+        return json(created, 201, { 'cache-control': 'no-store' });
+      }
+    }
+    const runtimeGrantMatch = match(new RegExp(`^/w/${WS}/admin/runtime-discovery-grants/([^/]+)$`));
+    if (runtimeGrantMatch && method === 'DELETE') {
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      const row = runtimeDiscoveryGrants.find((grant) => grant.id === runtimeGrantMatch[1]);
+      if (!row) return fail(404, 'not_found', 'Not found.');
+      row.status = 'revoked';
+      if (row.linked_capacity_id) row.capacity_state = 'quarantined';
+      return json({ id: row.id, status: 'revoked' }, 200, { 'cache-control': 'no-store' });
+    }
+    if (p('/admin/hermes-capacity') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      if (String(body.connector_url ?? '').includes('not-ready')) {
+        return fail(409, 'capacity_not_ready', 'Fixture connector is not ready.');
+      }
+      const row = runtimeDiscoveryGrants.find((grant) =>
+        grant.id === body.discovery_grant_id &&
+        grant.preflight_agent_id === body.preflight_agent_id &&
+        grant.status === 'prepared');
+      if (!row) return fail(409, 'discovery_grant_unavailable', 'Credential unavailable.');
+      const capacityId = mockUuid(980);
+      row.linked_capacity_id = capacityId;
+      row.capacity_state = 'available';
+      row.status = 'linked';
+      row.expires_at = null;
+      return json({
+        id: capacityId,
+        cloud_agent_id: String(body.cloud_agent_id ?? ''),
+        instance_name: String(body.instance_name ?? ''),
+        preflight_agent_id: row.preflight_agent_id,
+        state: 'available',
+        plugin_version: '1.0.0-fixture',
+        agentcash_enabled: true,
+        agentcash_wallet_present: true,
+        native_cron_disabled: true,
+        verified_at: iso(0),
+        discovery_grant_id: row.id,
+      }, 201, { 'cache-control': 'no-store' });
     }
     if (p('/provider-keys') && method === 'GET') {
       if (options.providerKeysLocked) return fail(401, 'reauth_required', 'This action needs a recent sign-in.');

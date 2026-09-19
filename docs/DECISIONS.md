@@ -4140,6 +4140,12 @@ rather than per-turn.
 
 ## C41. `StreamingText` is the third component not adopted
 
+**September 19, 2026 clarification:** The current incremental reveal starts from
+the text already present when its component mounts. Restored checkpoints are
+visible immediately, never replayed from blank after navigation. Only subsequent
+deltas use the existing reveal loop; reduced motion remains immediate. Mount,
+remount, appended-delta and durable-final handoff regressions cover this boundary.
+
 **Context.** A turn whose reply was the word "testing" rendered "3 sources" and
 offered "Show the application evidence" and "Draft a follow-up for missing
 details". Nothing had gone wrong: `StreamingText`'s `sources` and `followUps`
@@ -5688,3 +5694,49 @@ that workspace. A newly invited Finance employee must start with compatibility
 discovery disabled, receive the Finance role immediately, and never have the
 starter Partnerships search approved. Hosted acceptance still requires the
 second real member and exact native probes; local fixtures cannot replace it.
+
+---
+
+## C86. Warm capacity begins with a narrow, revocable discovery credential
+
+**Decided September 19, 2026.** A new Hermes Cloud pool profile receives its
+permanent Enterprise agent UUID before it can become invitation capacity. A
+stepped-up workspace Admin prepares one random 32-byte discovery bearer for
+that unused identity. Enterprise returns the bearer once and stores only a
+workspace-and-agent-scoped digest. Before verified registration, it expires in
+24 hours and can call only the read-only skills and tools discovery routes.
+Registration links the exact credential to live-attested capacity and keeps it
+valid across restarts until assignment or revocation.
+
+The bootstrap contract is the historical Partnerships 1.7 profile: exact
+runtime, plugin source identity, role, configuration digest, skill artifact and
+content digests, tool inventory, AgentCash wallet state and disabled native
+cron. Its connector must also attest the exact permanent workspace and agent
+IDs and the configured Enterprise public origin. Registration and invitation
+acceptance probe the real connector. Acceptance performs network I/O outside
+the database transaction, then locks and rechecks the invitation, capacity,
+grant and first assignment materialization before atomically copying the digest
+to a `token_digest` runtime binding. The stored readiness time is the probe's
+actual completion time.
+
+After assignment, every token-digest run re-attests the fixed managed process
+and the agent's current explicit assignment before provider submission. This
+allows reviewed P1.8 or Finance transitions without weakening source, origin,
+artifact or tool checks. A managed flag, origin, plugin source, assignment or
+inventory mismatch blocks execution. Existing fixed Iris bindings keep their
+legacy HMAC and compatibility readiness behavior.
+
+**Why.** A connector control secret proves access to the dashboard route but
+does not prove which Enterprise identity or governed profile the native process
+will load. A discovery credential lets the native initializer read only the
+configuration it must validate, without creating an agent, granting execution
+or exposing a reusable plaintext secret in the database. Linking readiness to
+the same grant prevents synthetic or unclaimable capacity rows from satisfying
+an invitation.
+
+**Operational consequence.** The generated discovery bearer and the existing
+Cloud connector control secret are separate Admin inputs. No Cloud lifecycle,
+wallet funding or paid provider call occurs in prepare, registration or
+acceptance. Revoking available capacity quarantines it; reserved capacity must
+first be released by withdrawing its invitation. Existing opaque
+`HERMES_RUNTIME_AGENTS` credentials are left unchanged.
