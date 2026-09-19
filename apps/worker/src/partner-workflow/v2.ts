@@ -119,7 +119,7 @@ async function requireAdmission(tx: Tx, workspaceId: string): Promise<void> {
           WHEN 'partnerships' THEN 'partner-program-screening' ELSE 'partner-invoice-review' END
        JOIN enterprise_skill_artifacts artifact ON artifact.id=esa.artifact_id
       WHERE eta.workspace_id=$1 AND et.slug IN ('partnerships','finance')
-      FOR SHARE OF eta,esa,artifact`,
+      FOR SHARE OF eta,esa`,
     [workspaceId],
   );
   const expected = {
