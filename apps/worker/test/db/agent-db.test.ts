@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
+import { SYSTEM_USER_ID } from '../../src/jobs.js';
 import { APP_URL, AGENT_URL } from '../../scripts/db-config.mjs';
 import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 
@@ -54,6 +55,36 @@ const APPLICATION = {
 };
 
 describe('PgAgentDb on the agent role', () => {
+  it('keeps batched context tenant-scoped and transaction-local after commit and rollback', async () => {
+    const first = await seedWorkspace();
+    const second = await seedWorkspace();
+    const firstRun = await seedRun(first);
+    const secondRun = await seedRun(second);
+    const identitySql = `SELECT NULLIF(current_setting('app.workspace_id', true), '') AS workspace,
+                               NULLIF(current_setting('app.user_id', true), '') AS actor`;
+    for (const [fx, ownRun, foreignRun] of [[first, firstRun, secondRun], [second, secondRun, firstRun]] as const) {
+      const db = new PgAgentDb(env, fx.workspaceId, 'context-roundtrip-test');
+      try {
+        // Return the query only to inspect the same physical connection after
+        // COMMIT. Production callers never use tenant queries outside runtimeTx.
+        const query = await db.runtimeTx(async (q) => {
+          expect((await q(identitySql)).rows).toEqual([{ workspace: fx.workspaceId, actor: SYSTEM_USER_ID }]);
+          expect((await db.loadRun(ownRun))?.id).toBe(ownRun);
+          expect(await db.loadRun(foreignRun)).toBeNull();
+          return q;
+        });
+        expect((await query(identitySql)).rows).toEqual([{ workspace: null, actor: null }]);
+        await expect(db.runtimeTx(async (q) => {
+          expect((await q(identitySql)).rows).toEqual([{ workspace: fx.workspaceId, actor: SYSTEM_USER_ID }]);
+          throw new Error('rollback context');
+        })).rejects.toThrow('rollback context');
+        expect((await query(identitySql)).rows).toEqual([{ workspace: null, actor: null }]);
+        expect((await db.loadRun(ownRun))?.id).toBe(ownRun);
+        expect(await db.loadRun(foreignRun)).toBeNull();
+      } finally { await db.close(); }
+    }
+  });
+
   it('reads the run, its session mode and the workspace agent', async () => {
     const fx = await seedWorkspace();
     const runId = await seedRun(fx);

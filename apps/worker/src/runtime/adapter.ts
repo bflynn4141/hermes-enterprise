@@ -338,6 +338,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       let reading = !terminalHermesStatus(status.status);
       let readerFailure: unknown = null;
       const controlWake: { current: (() => void) | null } = { current: null };
+      // EOF can arrive during a control/status RPC, before a waiter exists.
+      // Retain that one notification rather than sleeping another poll interval.
+      let streamWakePending = false;
       const reader = (async () => {
         if (!reading) return;
         latency.mark('stream_subscribe_started');
@@ -393,6 +396,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           reading = false;
           previews.flush(true);
           checkpoints.flush(true);
+          streamWakePending = true;
           controlWake.current?.();
         }
       })();
@@ -423,11 +427,20 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           }
           status = await client.status(id);
           if (terminalHermesStatus(status.status)) break;
+          if (streamWakePending) {
+            streamWakePending = false;
+            continue;
+          }
           // EOF wakes an in-progress wait once. A disconnected stream keeps
           // the bounded status polling cadence rather than spinning on EOF.
           await new Promise<void>((resolve) => {
             const timer = setTimeout(() => { controlWake.current = null; resolve(); }, pollMs);
-            controlWake.current = () => { clearTimeout(timer); controlWake.current = null; resolve(); };
+            controlWake.current = () => {
+              clearTimeout(timer);
+              controlWake.current = null;
+              streamWakePending = false;
+              resolve();
+            };
           });
         }
         latency.mark('native_status_terminal');
