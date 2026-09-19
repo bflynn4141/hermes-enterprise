@@ -264,24 +264,27 @@ export async function getTrace(c: Context<{ Bindings: Env }>): Promise<Response>
       };
     });
 
-    // The allowlist as it was for this run: the agent's capability rows
-    // intersected with the run's mode, which is `runs.mode` and not the
-    // session's, for the reason the engine gives — a person switching the
-    // selector mid-run does not change what the run already in flight may do.
-    const allowed = await work.tx.query<{ name: string }>(
-      `SELECT unnest(c.tool_names) AS name
-         FROM agent_capabilities c
-        WHERE c.workspace_id = $1 AND c.agent_id = $2
-        ORDER BY name`,
-      [work.workspaceId, run.agent_id],
-    );
+    // Hermes runs freeze the exact allowlist into `runtime_request` before
+    // submission. Read current capability rows only for runs created before
+    // that snapshot existed; later assignment edits must not rewrite history.
+    let allowedTools = run.runtime_tools;
+    if (allowedTools === null) {
+      const allowed = await work.tx.query<{ name: string }>(
+        `SELECT unnest(c.tool_names) AS name
+           FROM agent_capabilities c
+          WHERE c.workspace_id = $1 AND c.agent_id = $2
+          ORDER BY name`,
+        [work.workspaceId, run.agent_id],
+      );
+      allowedTools = [...new Set(allowed.rows.map((r) => r.name))].slice(0, 40);
+    }
 
     return toTraceEntity(run, steps.rows, {
       error: run.error,
       tool_calls: toolCalls,
       fetched_urls: fetchedUrls(turns.rows),
       focus,
-      allowed_tools: [...new Set(allowed.rows.map((r) => r.name))].slice(0, 40),
+      allowed_tools: allowedTools,
     });
   });
 
