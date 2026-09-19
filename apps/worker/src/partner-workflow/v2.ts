@@ -347,7 +347,12 @@ export async function materializePartnerEngagementAuthorization(
     source_session_id: string; source_run_id: string; status: string;
     input_provenance: 'sample' | 'customer';
   }>(
-    `SELECT * FROM partner_engagement_authorizations
+    `SELECT id,reviewer_user_id,engagement_record_id,partner_id,partner_name,
+            engagement_reference,purpose,currency,authorized_total_minor,
+            valid_from::text AS valid_from,valid_until::text AS valid_until,one_invoice,
+            permitted_evidence_excerpt,source_attachment_id,source_sha256,
+            source_session_id,source_run_id,status,input_provenance
+       FROM partner_engagement_authorizations
       WHERE workspace_id=$1 AND approval_request_id=$2 AND authorization_revision=$3
         AND authorization_hash=$4 FOR UPDATE`,
     [input.workspaceId, input.requestId, input.authorizationRevision, input.authorizationHash],
