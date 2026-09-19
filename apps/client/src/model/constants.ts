@@ -16,6 +16,7 @@ export const SETTINGS_TABS = [
   'Slack',
   'Email',
   'Provider keys',
+  'Runtime capacity',
   'Usage',
   'Notifications',
   'Data and privacy',
