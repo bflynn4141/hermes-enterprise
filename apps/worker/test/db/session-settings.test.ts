@@ -9,8 +9,10 @@ async function fixture() {
   const fx = await seedWorkspace();
   const modelId = `session-test-${randomUUID()}`;
   await withClient('owner', async client => {
-    await client.query(`INSERT INTO catalog(model_id,provider,label,transport,effort_map,default_effort,pricing_per_million,pricing_verified_on)
-      SELECT $1,provider,'Session test',transport,'{"low":"low","high":"high"}'::jsonb,'low',pricing_per_million,pricing_verified_on
+    // These test models outlive their referenced runs; they must never expand
+    // the four immutable seed rows checked by the full database suite.
+    await client.query(`INSERT INTO catalog(model_id,provider,label,transport,effort_map,default_effort,pricing_per_million,pricing_verified_on,source)
+      SELECT $1,provider,'Session test',transport,'{"low":"low","high":"high"}'::jsonb,'low',pricing_per_million,pricing_verified_on,'provider_list'
       FROM catalog WHERE model_id='deepseek-flash'`, [modelId]);
   });
   const create = vi.fn().mockResolvedValue({ id: 'recorded' });
