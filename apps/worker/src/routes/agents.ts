@@ -74,6 +74,21 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
     if (!await ensureAgentOwner(work.tx, work.workspaceId, work.userId, agentId)) {
       throw new RouteError('this agent is not bound to your profile', 'agent_not_bound', 403);
     }
+    // Enterprise role setup and first-run onboarding both replace the active
+    // prompt and tool surface. Serialize them on one agent-scoped lock, then
+    // reject generic onboarding once a reviewed role owns that configuration.
+    await work.tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`agent-setup:${agentId}`]);
+    const governed = await work.tx.query(
+      `SELECT 1 FROM enterprise_team_agents WHERE workspace_id=$1 AND agent_id=$2 LIMIT 1`,
+      [work.workspaceId, agentId],
+    );
+    if (governed.rows[0]) {
+      throw new RouteError(
+        'This agent is managed by a reviewed Enterprise role. Edit that role assignment instead of reopening first-run setup.',
+        'agent_role_managed',
+        409,
+      );
+    }
 
     if (parsed.data.setup_step !== undefined && !parsed.data.first_run) {
       await work.tx.query(
@@ -85,7 +100,6 @@ export async function patchAgent(c: Context<{ Bindings: Env }>): Promise<Respons
 
     const setup = parsed.data.first_run!;
     const body = instructions(setup);
-    await work.tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`agent-setup:${agentId}`]);
     const provisioning = await work.tx.query<{ status: string }>(
       `SELECT status FROM agent_provisioning WHERE workspace_id=$1 AND agent_id=$2 FOR UPDATE`,
       [work.workspaceId, agentId],

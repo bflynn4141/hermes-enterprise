@@ -23,6 +23,10 @@ import {
   enterpriseSkillDefinition,
   type EnterpriseSkillDefinition,
 } from '../enterprise-skills/registry.js';
+import {
+  FINANCE_ROLE_INSTRUCTIONS,
+  PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS,
+} from '../enterprise-skills/role-instructions.js';
 
 export class PartnerWorkflowError extends Error {
   constructor(readonly reason: string, message: string) {
@@ -258,6 +262,176 @@ async function bindConnector(
   );
 }
 
+function invitationBootstrapSource(value: unknown, invitationId: string): boolean {
+  if (!Array.isArray(value)) return false;
+  // Invitations created before explicit provenance shipped used an empty
+  // source list. The accepted invitation + owner + exact untouched bootstrap
+  // fields below are the compatibility identity for those rows.
+  if (value.length === 0) return true;
+  return value.some((source) => {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return false;
+    const row = source as Record<string, unknown>;
+    return row.kind === 'invitation_bootstrap' && row.invitation_id === invitationId
+      && row.role_template_key === 'partner-program-compatibility'
+      && row.role_template_version === '1.0.0';
+  });
+}
+
+function financeRoleSource(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  return value.some((source) => {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return false;
+    const row = source as Record<string, unknown>;
+    return row.kind === 'enterprise_role_template'
+      && row.role_template_key === 'finance-agent'
+      && row.role_template_version === '1.0.0';
+  });
+}
+
+async function applyFinanceRoleInstructions(
+  tx: Tx,
+  workspaceId: string,
+  agentId: string,
+  principalUserId: string,
+  configuredBy: string,
+): Promise<void> {
+  const agent = (await tx.query<{
+    responsibility: string | null; instructions_active: string | null;
+    status: string; setup_step: string | null;
+  }>(
+    `SELECT responsibility,instructions_active,status,setup_step
+       FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+    [workspaceId, agentId],
+  )).rows[0];
+  if (!agent) throw new PartnerWorkflowError('invalid_principal_binding', 'The Finance agent no longer exists.');
+  const latest = (await tx.query<{
+    id: string; body: string; status: string; proposed_by: string | null; sources: unknown;
+  }>(
+    `SELECT id,body,status,proposed_by,sources
+       FROM instruction_versions
+      WHERE workspace_id=$1 AND agent_id=$2 AND status<>'discarded'
+      ORDER BY created_at DESC,id DESC LIMIT 1`,
+    [workspaceId, agentId],
+  )).rows[0] ?? null;
+  const acceptedInvitation = (await tx.query<{ id: string }>(
+    `SELECT i.id
+       FROM agent_owners ao
+       JOIN members m ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+       JOIN invitations i ON i.workspace_id=m.workspace_id AND i.accepted_by=m.user_id
+      WHERE ao.workspace_id=$1 AND ao.agent_id=$2 AND m.user_id=$3
+        AND m.status='active' AND i.status='accepted'
+      ORDER BY i.created_at DESC LIMIT 1`,
+    [workspaceId, agentId, principalUserId],
+  )).rows[0]?.id ?? null;
+
+  const blank = !agent.instructions_active?.trim() && latest === null;
+  const alreadyFinance = agent.instructions_active === FINANCE_ROLE_INSTRUCTIONS
+    && latest?.status === 'saved'
+    && latest.body === FINANCE_ROLE_INSTRUCTIONS
+    && financeRoleSource(latest.sources);
+  const exactInvitationBootstrap = Boolean(
+    acceptedInvitation
+    && agent.responsibility === 'Partner Program'
+    && agent.instructions_active === PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS
+    && agent.status === 'draft'
+    && agent.setup_step === 'identity'
+    && latest?.status === 'saved'
+    && latest.body === PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS
+    && latest.proposed_by === principalUserId
+    && invitationBootstrapSource(latest.sources, acceptedInvitation!),
+  );
+  if (!blank && !alreadyFinance && !exactInvitationBootstrap) {
+    throw new PartnerWorkflowError(
+      'finance_instruction_conflict',
+      'The Finance profile has custom or partially completed instructions. Use a dedicated empty profile or restore the untouched invitation profile before assigning the Finance role.',
+    );
+  }
+
+  // Closing onboarding is safe only for the exact invitation bootstrap whose
+  // purpose this role assignment replaces. A generic empty profile may accept
+  // the Finance prompt, but its independent operational state is preserved.
+  const replaceInvitationBootstrap = exactInvitationBootstrap;
+  await tx.query(
+    `UPDATE agents
+        SET responsibility='Finance invoice review',instructions_active=$3,
+            setup_step=CASE WHEN $4::boolean THEN NULL ELSE setup_step END,
+            status=CASE WHEN $4::boolean AND EXISTS (
+              SELECT 1 FROM agent_provisioning ap
+               WHERE ap.workspace_id=$1 AND ap.agent_id=$2 AND ap.status<>'ready'
+            ) THEN 'provisioning'
+              WHEN $4::boolean THEN 'started'
+              ELSE status END,
+            started_at=CASE WHEN $4::boolean AND EXISTS (
+              SELECT 1 FROM agent_provisioning ap
+               WHERE ap.workspace_id=$1 AND ap.agent_id=$2 AND ap.status<>'ready'
+            ) THEN NULL
+              WHEN $4::boolean THEN COALESCE(started_at,now())
+              ELSE started_at END
+      WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId, agentId, FINANCE_ROLE_INSTRUCTIONS, replaceInvitationBootstrap],
+  );
+  if (latest?.body !== FINANCE_ROLE_INSTRUCTIONS) {
+    await tx.query(
+      `INSERT INTO instruction_versions
+         (workspace_id,agent_id,body,status,proposed_by,sources,saved_at)
+       VALUES ($1,$2,$3,'saved',$4,$5::jsonb,now())`,
+      [workspaceId, agentId, FINANCE_ROLE_INSTRUCTIONS, configuredBy, JSON.stringify([{
+        kind: 'enterprise_role_template', role_template_key: 'finance-agent', role_template_version: '1.0.0',
+        replaces_instruction_version_id: latest?.id ?? null,
+      }])],
+    );
+  }
+}
+
+async function retireInvitationFirstSearch(
+  tx: Tx,
+  workspaceId: string,
+  agentId: string,
+): Promise<void> {
+  const policyKey = `partner-first-search-${agentId}`;
+  const pending = await tx.query<{ request_id: string }>(
+    `SELECT ar.request_id
+       FROM approval_requests ar
+       JOIN approval_policies ap ON ap.workspace_id=ar.workspace_id AND ap.id=ar.policy_id
+       JOIN requests r ON r.workspace_id=ar.workspace_id AND r.id=ar.request_id
+      WHERE ar.workspace_id=$1 AND ar.requester_agent_id=$2 AND ar.status='pending'
+        AND ap.key=$3 AND ap.version=1 AND ap.approval_type='run_plan'
+        AND ap.requester_agent_id=$2
+        AND r.status='pending' AND r.tool_call_id=ar.proposal_idempotency_key
+        AND r.tool_call_id LIKE 'partner-first-search:%'
+        AND r.payload #>> '{context,source,trigger,kind}'='member_agent_joined'
+        AND r.payload #>> '{context,source,trigger,agent_id}'=$2::text
+      FOR UPDATE OF ar,ap,r`,
+    [workspaceId, agentId, policyKey],
+  );
+  const requestIds = pending.rows.map((row) => row.request_id);
+  if (requestIds.length > 0) {
+    await tx.query(
+      `UPDATE approval_requests
+          SET status='withdrawn',work_status='cancelled',
+              work_reason='The agent was assigned to the Finance role before this search was approved.'
+        WHERE workspace_id=$1 AND request_id=ANY($2::uuid[]) AND status='pending'`,
+      [workspaceId, requestIds],
+    );
+    await tx.query(
+      `UPDATE approval_revisions SET status='withdrawn'
+        WHERE workspace_id=$1 AND request_id=ANY($2::uuid[]) AND status='pending'`,
+      [workspaceId, requestIds],
+    );
+    await tx.query(
+      `UPDATE requests SET status='withdrawn'
+        WHERE workspace_id=$1 AND id=ANY($2::uuid[]) AND status='pending'`,
+      [workspaceId, requestIds],
+    );
+  }
+  await tx.query(
+    `UPDATE approval_policies SET active=false
+      WHERE workspace_id=$1 AND key=$2 AND version=1 AND approval_type='run_plan'
+        AND requester_agent_id=$3 AND active`,
+    [workspaceId, policyKey, agentId],
+  );
+}
+
 export async function configurePartnerWorkflow(
   tx: Tx,
   workspaceId: string,
@@ -270,8 +444,14 @@ export async function configurePartnerWorkflow(
   // compatible with pg 9, which rejects overlapping `client.query` calls.
   const partnershipsArtifact = await artifact(tx, PARTNER_PROGRAM_MULTI_PARTY_DEFINITION);
   const financeArtifact = await artifact(tx, PARTNER_INVOICE_REVIEW_DEFINITION);
+  for (const agentId of [input.partnerships.agent_id, input.finance.agent_id].sort()) {
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`agent-setup:${agentId}`]);
+  }
   await bindPrincipal(tx, workspaceId, partnershipsTeam.id, input.partnerships.agent_id, input.partnerships.principal_user_id, 'partnerships-agent');
   await bindPrincipal(tx, workspaceId, financeTeam.id, input.finance.agent_id, input.finance.principal_user_id, 'finance-agent');
+  await applyFinanceRoleInstructions(
+    tx, workspaceId, input.finance.agent_id, input.finance.principal_user_id, configuredBy,
+  );
   // Applying the Finance role template is the explicit Admin action that
   // grants this human the existing Finance reviewer role. It does not grant
   // the agent approval authority; the guarded human route still records every
@@ -292,6 +472,7 @@ export async function configurePartnerWorkflow(
     PARTNER_PROGRAM_MULTI_PARTY_DEFINITION, partnershipsArtifact, DEFAULT_PARTNERSHIPS_CONFIG);
   await assignRoleSkill(tx, workspaceId, financeTeam.id, input.finance.agent_id, configuredBy,
     PARTNER_INVOICE_REVIEW_DEFINITION, financeArtifact, DEFAULT_FINANCE_CONFIG);
+  await retireInvitationFirstSearch(tx, workspaceId, input.finance.agent_id);
   await bindConnector(tx, workspaceId, partnershipsTeam.id, configuredBy, ROLE_SCOPES.partnerships);
   await bindConnector(tx, workspaceId, financeTeam.id, configuredBy, ROLE_SCOPES.finance);
   const financeMember = await tx.query<{ id: string }>(
