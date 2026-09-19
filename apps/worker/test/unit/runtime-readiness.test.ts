@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { EnterpriseSkillAssignment } from '@hermes/shared';
-import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
+import { HermesClient, type HermesEnterpriseReadiness } from '../../src/runtime/client.js';
+import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
 import {
+  AGENTCASH_MCP_TOOL,
   ENTERPRISE_BRIDGE_VERSION,
   HERMES_NATIVE_REVISION,
   enterpriseReadinessToolNames,
@@ -13,9 +15,14 @@ import {
   matchesLegacyCapacityAttestation,
   matchesExactEnterpriseAttestation,
   matchesEnterpriseReadiness,
+  matchesManagedRuntimeAttestation,
   requiresExactEnterpriseAttestation,
 } from '../../src/runtime/readiness.js';
-import { PARTNER_PROGRAM_DEFINITION, PARTNER_PROGRAM_TOOLS } from '../../src/enterprise-skills/registry.js';
+import {
+  PARTNER_INVOICE_REVIEW_DEFINITION,
+  PARTNER_PROGRAM_DEFINITION,
+  PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+} from '../../src/enterprise-skills/registry.js';
 
 const PLUGIN_REVISION = 'a'.repeat(40);
 const PLUGIN_DIGEST = `sha256:${'d'.repeat(64)}`;
@@ -57,10 +64,38 @@ function readiness(overrides: Partial<HermesEnterpriseReadiness> = {}): HermesEn
   };
 }
 
+function manifest(row: EnterpriseSkillAssignment): RuntimeSkillManifest {
+  return {
+    name: row.runtime_name,
+    skill_key: row.skill_key,
+    runtime_name: row.runtime_name,
+    version: row.version,
+    artifact_digest: row.artifact_digest!,
+    state: 'active',
+    assignment_revision: row.revision,
+    grant_revision: null,
+    binding_source: 'enterprise_assignment',
+    binding_state: null,
+    grant_expires_at: null,
+    capability_grants: row.capability_grants,
+    auto_load: true,
+    config: row.config,
+  };
+}
+
+const managedIdentity = {
+  workspaceId: 'workspace',
+  agentId: '22222222-2222-4222-8222-222222222222',
+  enterpriseUrl: 'https://enterprise.example',
+  pluginRevision: PLUGIN_REVISION,
+  pluginArtifactDigest: PLUGIN_DIGEST,
+};
+
 describe('role-aware native readiness', () => {
   it('accepts exact Finance attestation without AgentCash or a wallet', () => {
     const finance = assignment();
     expect(requiresExactEnterpriseAttestation(finance)).toBe(true);
+    expect(enterpriseReadinessToolNames(finance)).not.toContain(AGENTCASH_MCP_TOOL);
     expect(matchesEnterpriseReadiness(
       readiness({ toolNames: enterpriseReadinessToolNames(finance) }), finance,
     )).toBe(true);
@@ -74,6 +109,7 @@ describe('role-aware native readiness', () => {
       { ...exact, skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1',
         artifactDigest: `sha256:${'0'.repeat(64)}`, contentDigest: `sha256:${'b'.repeat(64)}` }] },
       { ...exact, toolNames: [...exact.toolNames!, 'publish_partner_invoice_review'] },
+      { ...exact, toolNames: [...exact.toolNames!, AGENTCASH_MCP_TOOL] },
       { ...exact, agentCashEnabled: true },
     ];
     expect(invalid.every((candidate) => !matchesEnterpriseReadiness(candidate, finance))).toBe(true);
@@ -97,6 +133,11 @@ describe('role-aware native readiness', () => {
       agentCashEnabled: true, agentCashWalletPresent: true,
     });
     expect(matchesEnterpriseReadiness(attested, partnerships)).toBe(true);
+    expect(attested.toolNames).toContain(AGENTCASH_MCP_TOOL);
+    expect(matchesEnterpriseReadiness({
+      ...attested,
+      toolNames: attested.toolNames!.filter((name) => name !== AGENTCASH_MCP_TOOL),
+    }, partnerships)).toBe(false);
     expect(matchesEnterpriseReadiness({ ...attested, agentCashWalletPresent: false }, partnerships)).toBe(false);
   });
 
@@ -114,23 +155,20 @@ describe('role-aware native readiness', () => {
     expect(matchesExactEnterpriseAttestation(oldPayload, null)).toBe(false);
   });
 
-  it('requires exact P1.7 source bytes and native inventory for newly registered capacity', () => {
-    const exact = readiness({
-      skills: [{
-        name: PARTNER_PROGRAM_DEFINITION.runtimeName,
-        version: PARTNER_PROGRAM_DEFINITION.version,
-        artifactDigest: PARTNER_PROGRAM_DEFINITION.artifactDigest,
-        contentDigest: LEGACY_PARTNER_CONTENT_DIGEST,
-      }],
-      toolNames: [...PARTNER_PROGRAM_TOOLS, 'skill_view'],
-      agentCashEnabled: true,
-      agentCashWalletPresent: true,
-    });
+  it('accepts a captured managed P1.7 native connector attestation', async () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const nativePayload = JSON.parse(readFileSync(join(
+      root, 'apps/worker/test/fixtures/managed-p17-native-readiness.json',
+    ), 'utf8')) as Record<string, unknown>;
+    const send = vi.fn<typeof fetch>().mockResolvedValue(Response.json(nativePayload));
+    const exact = await new HermesClient(
+      'https://connector.example/control', 'control-secret', send, 'dashboard_connector',
+    ).enterpriseReadiness();
     expect(matchesLegacyCapacityAttestation(exact)).toBe(true);
     const expected = {
       workspaceId: exact.workspaceId, agentId: exact.agentId,
       enterpriseUrl: exact.enterpriseUrl,
-      pluginRevision: PLUGIN_REVISION, pluginArtifactDigest: PLUGIN_DIGEST,
+      pluginRevision: exact.plugin!.revision!, pluginArtifactDigest: exact.plugin!.artifactDigest!,
     };
     expect(matchesLegacyCapacityAttestation(exact, expected)).toBe(true);
     expect(matchesLegacyCapacityAttestation({
@@ -144,7 +182,79 @@ describe('role-aware native readiness', () => {
     expect(matchesLegacyCapacityAttestation({ ...exact, runtimeRevision: null })).toBe(false);
     expect(matchesLegacyCapacityAttestation({ ...exact, version: '1.6.0' })).toBe(false);
     expect(matchesLegacyCapacityAttestation({ ...exact, skills: [{ ...exact.skills![0]!, contentDigest: `sha256:${'0'.repeat(64)}` }] })).toBe(false);
+    expect(matchesLegacyCapacityAttestation({
+      ...exact,
+      toolNames: exact.toolNames!.filter((name) => name !== AGENTCASH_MCP_TOOL),
+    })).toBe(false);
     expect(matchesLegacyCapacityAttestation({ ...exact, toolNames: [...exact.toolNames!, 'publish_partner_invoice_review'] })).toBe(false);
+  });
+
+  it('matches managed P1.7 and P1.8 run attestations only with their native MCP tool', () => {
+    const partnerships = [
+      assignment({
+        skill_key: PARTNER_PROGRAM_DEFINITION.key,
+        runtime_name: PARTNER_PROGRAM_DEFINITION.runtimeName,
+        name: PARTNER_PROGRAM_DEFINITION.name,
+        version: PARTNER_PROGRAM_DEFINITION.version,
+        artifact_digest: PARTNER_PROGRAM_DEFINITION.artifactDigest,
+        capability_grants: [...PARTNER_PROGRAM_DEFINITION.defaultCapabilityGrants],
+      }),
+      assignment({
+        skill_key: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.key,
+        runtime_name: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.runtimeName,
+        name: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.name,
+        version: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.version,
+        artifact_digest: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.artifactDigest,
+        capability_grants: [...PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.defaultCapabilityGrants],
+      }),
+    ];
+    for (const role of partnerships) {
+      const exact = readiness({
+        skills: [{
+          name: role.runtime_name,
+          version: role.version,
+          artifactDigest: role.artifact_digest!,
+          contentDigest: role.version === PARTNER_PROGRAM_DEFINITION.version
+            ? LEGACY_PARTNER_CONTENT_DIGEST
+            : role.artifact_digest!,
+        }],
+        toolNames: enterpriseReadinessToolNames(role),
+        agentCashEnabled: true,
+        agentCashWalletPresent: true,
+      });
+      expect(matchesManagedRuntimeAttestation(exact, managedIdentity, [manifest(role)])).toBe(true);
+      expect(matchesManagedRuntimeAttestation({
+        ...exact,
+        toolNames: exact.toolNames!.filter((name) => name !== AGENTCASH_MCP_TOOL),
+      }, managedIdentity, [manifest(role)])).toBe(false);
+    }
+  });
+
+  it('keeps managed Finance runs MCP-free', () => {
+    const finance = assignment({
+      skill_key: PARTNER_INVOICE_REVIEW_DEFINITION.key,
+      runtime_name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+      name: PARTNER_INVOICE_REVIEW_DEFINITION.name,
+      version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+      artifact_digest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+      capability_grants: [...PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants],
+    });
+    const exact = readiness({
+      skills: [{
+        name: finance.runtime_name,
+        version: finance.version,
+        artifactDigest: finance.artifact_digest!,
+        contentDigest: finance.artifact_digest!,
+      }],
+      toolNames: enterpriseReadinessToolNames(finance),
+      agentCashEnabled: false,
+      agentCashWalletPresent: false,
+    });
+    expect(matchesManagedRuntimeAttestation(exact, managedIdentity, [manifest(finance)])).toBe(true);
+    expect(matchesManagedRuntimeAttestation({
+      ...exact,
+      toolNames: [...exact.toolNames!, AGENTCASH_MCP_TOOL],
+    }, managedIdentity, [manifest(finance)])).toBe(false);
   });
 
   it('pins the strict P1.7 content attestation to the packaged SKILL.md bytes', () => {

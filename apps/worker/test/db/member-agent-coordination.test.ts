@@ -8,6 +8,7 @@ import { discoveryConfigDigest } from '../../src/runtime/discovery-grants.js';
 import { runtimeCredentialDigest } from '../../src/runtime/credentials.js';
 import { PARTNER_PROGRAM_DEFINITION, PARTNER_PROGRAM_TOOLS } from '../../src/enterprise-skills/registry.js';
 import {
+  AGENTCASH_MCP_TOOL,
   ENTERPRISE_BRIDGE_VERSION,
   HERMES_NATIVE_REVISION,
   LEGACY_PARTNER_CONTENT_DIGEST,
@@ -59,7 +60,7 @@ function readinessBody(workspaceId: string, agentId: string): Record<string, unk
       artifact_digest: PARTNER_PROGRAM_DEFINITION.artifactDigest,
       content_digest: LEGACY_PARTNER_CONTENT_DIGEST,
     }],
-    tools: [...PARTNER_PROGRAM_TOOLS, 'skill_view'],
+    tools: [...PARTNER_PROGRAM_TOOLS, 'skill_view', AGENTCASH_MCP_TOOL],
     agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
   };
 }
