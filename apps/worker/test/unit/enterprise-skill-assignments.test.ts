@@ -7,7 +7,12 @@ import {
   resolvePartnerSkillAssignment,
   type SkillQuery,
 } from '../../src/enterprise-skills/service.js';
-import { PARTNER_INVOICE_REVIEW_DEFINITION, PARTNER_PROGRAM_DEFINITION } from '../../src/enterprise-skills/registry.js';
+import {
+  PARTNER_INVOICE_REVIEW_DEFINITION,
+  PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION,
+  PARTNER_PROGRAM_DEFINITION,
+  PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+} from '../../src/enterprise-skills/registry.js';
 import { runtimeSkillManifestsForAgent } from '../../src/runtime/skills.js';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
@@ -23,11 +28,12 @@ const config = {
 
 function queryFor(state: 'active' | 'paused'): SkillQuery {
   return {
-    async query<T>() {
+    async query<T>(_statement: string, values: readonly unknown[] = []) {
+      if (values[2] === PARTNER_INVOICE_REVIEW_DEFINITION.key) return { rows: [] as T[] };
       return { rows: [{
         id: '33333333-3333-4333-8333-333333333333', agent_id: agentId,
         skill_key: 'partner-program-screening', skill_version: '1.7.0', state, config,
-        capability_grants: ['partner.discovery.read', 'partner.outreach.draft'],
+        capability_grants: ['partner.discovery.read', 'partner.outreach.draft', 'partner.handoff.publish'],
         schedule: { enabled: true, interval_minutes: 360 }, approval_policy: { human_review_required: true },
         revision: 3, updated_at: new Date('2026-09-18T12:00:00Z'),
       }] as T[] };
@@ -78,6 +84,35 @@ describe('enterprise skill assignments', () => {
     expect(resolved.config).toBeNull();
     expect(assignmentToolNames(resolved.assignment)).toEqual([]);
     await expect(runtimeSkillManifestsForAgent({} as Env, queryFor('paused'), workspaceId, agentId)).resolves.toEqual([]);
+  });
+
+  it('keeps deployed legacy artifact identities and tool inventories while new versions opt in', async () => {
+    expect(PARTNER_PROGRAM_DEFINITION.artifactDigest).toBe(
+      'sha256:9f124ce44aa318b13e9f8ccfd92072d8b3ba6a22030eaad31cfafbfda3a1e2a9',
+    );
+    const legacyFinance: SkillQuery = {
+      async query<T>() {
+        return { rows: [{
+          id: '33333333-3333-4333-8333-333333333333', agent_id: agentId,
+          artifact_id: '55555555-5555-4555-8555-555555555555',
+          artifact_digest: PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION.artifactDigest,
+          skill_key: PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION.key,
+          skill_version: PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION.version,
+          state: 'active', config: { duplicate_window_days: 365, require_engagement_evidence: true },
+          capability_grants: [...PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION.defaultCapabilityGrants],
+          schedule: { enabled: false, interval_minutes: 360 }, approval_policy: { human_review_required: true },
+          revision: 1, updated_at: new Date('2026-09-18T12:00:00Z'),
+        }] as T[] };
+      },
+    };
+    const legacy = await resolveEnterpriseSkillAssignment(
+      legacyFinance, workspaceId, agentId, PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION.key,
+    );
+    expect(legacy.problem).toBeNull();
+    expect(assignmentToolNames(legacy.assignment)).not.toContain('get_partner_handoff_result');
+    expect(PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.runtimeName).toBe('enterprise_bridge:partner-program-screening-v1-8');
+    expect(PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.version).toBe('1.8.0');
+    expect(PARTNER_INVOICE_REVIEW_DEFINITION.version).toBe('1.0.1');
   });
 
   it('does not attach the deployment-wide legacy Partnerships policy to a Finance-governed agent', async () => {

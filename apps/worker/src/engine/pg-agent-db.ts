@@ -383,6 +383,19 @@ export class PgAgentDb implements AgentDb {
     });
   }
 
+  async getPartnerHandoffResult(input: {
+    runId: string;
+    agentId: string;
+    handoffId: string;
+  }) {
+    const { getPartnerHandoffResult } = await import('../partner-workflow/v2.js');
+    return withWorkspaceTransaction(this.env, this.workspaceId, (tx) =>
+      getPartnerHandoffResult(tx, this.workspaceId, input.handoffId, {
+        runId: input.runId,
+        agentId: input.agentId,
+      }));
+  }
+
   // -------------------------------------------------------------------------
   // Run bookkeeping
   // -------------------------------------------------------------------------
@@ -582,6 +595,22 @@ export class PgAgentDb implements AgentDb {
       }
       return { approval, continuationId };
     });
+  }
+
+  async publishPartnerInvoiceReview(input: {
+    runId: string;
+    agentId: string;
+    arguments: { intake_event_id: string; expected_payload_hash: string };
+  }): Promise<{ handoff_id: string; job_id: string | null; created: boolean }> {
+    const { publishConfirmedPartnerInvoiceReview } = await import('../partner-workflow/v2.js');
+    return withWorkspaceTransaction(this.env, this.workspaceId, (tx) =>
+      publishConfirmedPartnerInvoiceReview(
+        tx,
+        this.workspaceId,
+        input.runId,
+        input.agentId,
+        input.arguments,
+      ));
   }
 
   /**
@@ -821,6 +850,11 @@ export class PgAgentDb implements AgentDb {
       const { rows } = await q<Record<string, unknown>>(
         `SELECT id, kind, status, label, created_at FROM requests
           WHERE workspace_id = $1 AND ($2::text IS NULL OR status = $2)
+            AND NOT EXISTS (
+              SELECT 1 FROM request_audiences audience
+               WHERE audience.workspace_id=requests.workspace_id
+                 AND audience.request_id=requests.id
+            )
           ORDER BY created_at DESC LIMIT $3`,
         [this.workspaceId, status, Math.min(50, Math.max(1, limit))],
       );
@@ -831,8 +865,15 @@ export class PgAgentDb implements AgentDb {
   async getRequest(requestId: string): Promise<unknown | null> {
     return this.tx(async (q) => {
       const { rows } = await q<Record<string, unknown>>(
-        `SELECT id, kind, status, label, payload, created_at FROM requests WHERE id = $1`,
-        [requestId],
+        `SELECT id, kind, status, label, payload, created_at
+           FROM requests
+          WHERE workspace_id=$1 AND id=$2
+            AND NOT EXISTS (
+              SELECT 1 FROM request_audiences audience
+               WHERE audience.workspace_id=requests.workspace_id
+                 AND audience.request_id=requests.id
+            )`,
+        [this.workspaceId, requestId],
       );
       const row = rows[0];
       if (!row) return null;
@@ -855,8 +896,15 @@ export class PgAgentDb implements AgentDb {
   ): Promise<{ text: string; next_offset: number | null; total_chars: number } | null> {
     return this.tx(async (q) => {
       const { rows } = await q<{ body: string | null }>(
-        `SELECT payload->>'text' AS body FROM documents WHERE id = $1`,
-        [documentId],
+        `SELECT document.payload->>'text' AS body
+           FROM documents document
+          WHERE document.workspace_id=$1 AND document.id=$2
+            AND NOT EXISTS (
+              SELECT 1 FROM request_audiences audience
+               WHERE audience.workspace_id=document.workspace_id
+                 AND audience.request_id=document.request_id
+            )`,
+        [this.workspaceId, documentId],
       );
       const body = rows[0]?.body;
       if (body === undefined) return null;

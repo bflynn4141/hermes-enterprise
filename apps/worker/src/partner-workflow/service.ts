@@ -19,6 +19,8 @@ import { submitTurn, type RunInstanceParams, type TurnSession } from '../runs/su
 import {
   PARTNER_INVOICE_REVIEW_DEFINITION,
   PARTNER_PROGRAM_DEFINITION,
+  PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+  enterpriseSkillDefinition,
   type EnterpriseSkillDefinition,
 } from '../enterprise-skills/registry.js';
 
@@ -181,9 +183,9 @@ async function assignRoleSkill(
   defaultConfig: Record<string, unknown>,
 ): Promise<void> {
   const current = await tx.query<{
-    id: string; team_id: string | null; artifact_id: string | null; capability_grants: string[];
+    id: string;
   }>(
-    `SELECT id, team_id, artifact_id, capability_grants FROM enterprise_skill_assignments
+    `SELECT id FROM enterprise_skill_assignments
       WHERE workspace_id=$1 AND agent_id=$2 AND skill_key=$3 FOR UPDATE`,
     [workspaceId, agentId, definition.key],
   );
@@ -201,20 +203,35 @@ async function assignRoleSkill(
     );
     return;
   }
-  // Applying a reviewed role template replaces semantic authority. Keeping
-  // arbitrary historic grants would let CAPABILITY_TO_TOOLS expand the model's
-  // surface even when the connector binding later intersects a narrower set.
+  // Applying a reviewed role template replaces semantic authority, config and
+  // schedule. In particular, an invitation's compatibility profile must not
+  // carry its discovery schedule into a Finance assignment.
   const grants = [...definition.defaultCapabilityGrants];
-  const grantsMatch = row.capability_grants.length === grants.length
-    && row.capability_grants.every((grant, index) => grant === grants[index]);
-  if (row.team_id === teamId && row.artifact_id === artifactRow.id
-      && grantsMatch) return;
+  const config = definition.configSchema.parse(defaultConfig);
   await tx.query(
     `UPDATE enterprise_skill_assignments
-        SET team_id=$4, artifact_id=$5, skill_version=$6, capability_grants=$7,
-            assigned_by=$8, revision=revision+1
+        SET team_id=$4,artifact_id=$5,skill_version=$6,state='active',config=$7::jsonb,
+            capability_grants=$8,schedule='{"enabled":false,"interval_minutes":360}'::jsonb,
+            approval_policy='{"human_review_required":true}'::jsonb,
+            assigned_by=$9,revision=revision+1
       WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
-    [workspaceId, agentId, row.id, teamId, artifactRow.id, definition.version, grants, assignedBy],
+    [workspaceId, agentId, row.id, teamId, artifactRow.id, definition.version,
+      JSON.stringify(config), grants, assignedBy],
+  );
+}
+
+async function pauseOtherRoleSkills(
+  tx: Tx,
+  workspaceId: string,
+  agentId: string,
+  keepSkillKey: string,
+): Promise<void> {
+  await tx.query(
+    `UPDATE enterprise_skill_assignments
+        SET state='paused',schedule=jsonb_set(schedule,'{enabled}','false'::jsonb),revision=revision+1
+      WHERE workspace_id=$1 AND agent_id=$2 AND skill_key<>$3
+        AND (state<>'paused' OR COALESCE((schedule->>'enabled')::boolean,false))`,
+    [workspaceId, agentId, keepSkillKey],
   );
 }
 
@@ -246,7 +263,7 @@ export async function configurePartnerWorkflow(
   const financeTeam = await team(tx, workspaceId, 'finance');
   // `pg` clients serialize one transaction. Await each lookup so this remains
   // compatible with pg 9, which rejects overlapping `client.query` calls.
-  const partnershipsArtifact = await artifact(tx, PARTNER_PROGRAM_DEFINITION);
+  const partnershipsArtifact = await artifact(tx, PARTNER_PROGRAM_MULTI_PARTY_DEFINITION);
   const financeArtifact = await artifact(tx, PARTNER_INVOICE_REVIEW_DEFINITION);
   await bindPrincipal(tx, workspaceId, partnershipsTeam.id, input.partnerships.agent_id, input.partnerships.principal_user_id, 'partnerships-agent');
   await bindPrincipal(tx, workspaceId, financeTeam.id, input.finance.agent_id, input.finance.principal_user_id, 'finance-agent');
@@ -260,12 +277,53 @@ export async function configurePartnerWorkflow(
       WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
     [workspaceId, input.finance.principal_user_id],
   );
+  await pauseOtherRoleSkills(
+    tx, workspaceId, input.partnerships.agent_id, PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.key,
+  );
+  await pauseOtherRoleSkills(
+    tx, workspaceId, input.finance.agent_id, PARTNER_INVOICE_REVIEW_DEFINITION.key,
+  );
   await assignRoleSkill(tx, workspaceId, partnershipsTeam.id, input.partnerships.agent_id, configuredBy,
-    PARTNER_PROGRAM_DEFINITION, partnershipsArtifact, DEFAULT_PARTNERSHIPS_CONFIG);
+    PARTNER_PROGRAM_MULTI_PARTY_DEFINITION, partnershipsArtifact, DEFAULT_PARTNERSHIPS_CONFIG);
   await assignRoleSkill(tx, workspaceId, financeTeam.id, input.finance.agent_id, configuredBy,
     PARTNER_INVOICE_REVIEW_DEFINITION, financeArtifact, DEFAULT_FINANCE_CONFIG);
   await bindConnector(tx, workspaceId, partnershipsTeam.id, configuredBy, ROLE_SCOPES.partnerships);
   await bindConnector(tx, workspaceId, financeTeam.id, configuredBy, ROLE_SCOPES.finance);
+  const financeMember = await tx.query<{ id: string }>(
+    `SELECT id FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+    [workspaceId, input.finance.principal_user_id],
+  );
+  const financeMemberId = financeMember.rows[0]?.id;
+  if (!financeMemberId) throw new PartnerWorkflowError('invalid_principal_binding', 'The Finance principal is not an active member.');
+  await tx.query(
+    `INSERT INTO approval_resources
+       (workspace_id, resource_key, kind, label, owner_member_id, version, sha256, executor_available, active)
+     VALUES ($1,'enterprise-partner-records','system','Authorized partner engagement records',$2,'engagement-authorization/v1',
+             '21e2c6e6bf07bab2f7dd4dfa8163f5705cd3f9b853c0c43c32e9275ba14d5496',true,true)
+     ON CONFLICT (workspace_id, resource_key)
+     DO UPDATE SET owner_member_id=EXCLUDED.owner_member_id, version=EXCLUDED.version,
+                   sha256=EXCLUDED.sha256, executor_available=true, active=true`,
+    [workspaceId, financeMemberId],
+  );
+  await tx.query(
+    `INSERT INTO approval_policies
+       (workspace_id,key,version,approval_type,requester_agent_id,target_resource_ids,priority,
+        mode,prevent_self_review,require_distinct_reviewers,max_duration_seconds,steps,active)
+     VALUES ($1,'partner-engagement-authorization',1,'record_change',$2,
+             ARRAY['enterprise-partner-records']::text[],1000,'sequential',true,true,604800,$3::jsonb,true)
+     ON CONFLICT (workspace_id,key,version)
+     DO UPDATE SET requester_agent_id=EXCLUDED.requester_agent_id,
+                   target_resource_ids=EXCLUDED.target_resource_ids,steps=EXCLUDED.steps,active=true`,
+    [workspaceId, input.partnerships.agent_id, JSON.stringify([{
+      id: 'finance-review', label: 'Finance verifies externally agreed terms', order: 0,
+      reviewers: [{ kind: 'member', member_id: financeMemberId }], quorum: 1,
+    }])],
+  );
+  await tx.query(
+    `INSERT INTO partner_workflow_settings (workspace_id,admission_state)
+     VALUES ($1,'disabled') ON CONFLICT (workspace_id) DO NOTHING`,
+    [workspaceId],
+  );
   return loadPartnerWorkflowView(tx, workspaceId);
 }
 
@@ -377,12 +435,12 @@ export async function snapshotPartnerRunGrants(
 ): Promise<number> {
   const { rows } = await tx.query<{
     team_id: string; assignment_id: string; revision: number; artifact_id: string | null;
-    artifact_digest: string | null; skill_key: string; capability_grants: string[];
+    artifact_digest: string | null; skill_key: string; skill_version: string; capability_grants: string[];
     binding_id: string; binding_grants: string[]; binding_denies: string[];
     resource_scope: { fields?: string[]; shared_fields?: string[]; actions?: string[] };
   }>(
     `SELECT eta.team_id, esa.id AS assignment_id, esa.revision, esa.artifact_id,
-            art.digest AS artifact_digest, esa.skill_key, esa.capability_grants,
+            art.digest AS artifact_digest, esa.skill_key, esa.skill_version, esa.capability_grants,
             ecb.id AS binding_id, ecb.capability_grants AS binding_grants,
             ecb.capability_denies AS binding_denies, ecb.resource_scope
        FROM runs r
@@ -402,11 +460,7 @@ export async function snapshotPartnerRunGrants(
   if (!row || !row.artifact_id || !row.artifact_digest) {
     throw new PartnerWorkflowError('run_grant_unavailable', 'This run has no active, artifact-bound partner connector assignment.');
   }
-  const definition = row.skill_key === PARTNER_PROGRAM_DEFINITION.key
-    ? PARTNER_PROGRAM_DEFINITION
-    : row.skill_key === PARTNER_INVOICE_REVIEW_DEFINITION.key
-      ? PARTNER_INVOICE_REVIEW_DEFINITION
-      : null;
+  const definition = enterpriseSkillDefinition(row.skill_key, row.skill_version);
   if (!definition || definition.artifactDigest !== row.artifact_digest) {
     throw new PartnerWorkflowError('skill_artifact_mismatch', 'The run skill artifact does not match this build.');
   }
@@ -832,6 +886,12 @@ export async function preparePartnerInvoiceReviewModelTurn(
       WHERE handoff_id=$1`,
     [handoffId, session.id, submitted.run.id],
   );
+  await tx.query(
+    `UPDATE partner_handoffs
+        SET delivery_status='delivered',validation_status='checking',agent_explanation_status='running'
+      WHERE workspace_id=$1 AND id=$2 AND superseded_by_handoff_id IS NULL`,
+    [workspaceId, handoffId],
+  );
   if (!submitted.duplicate) return submitted.create;
   if (['completed', 'error', 'stopped'].includes(submitted.run.status)) return null;
   const trace = await tx.query<{ trace_id: string }>(
@@ -884,14 +944,82 @@ export async function processPartnerInvoiceReview(
   if (row.invoice_current_revision !== row.invoice_record_revision
       || row.engagement_current_revision !== row.source_record_revision) {
     await tx.query(
-      `UPDATE partner_handoffs SET status='stale', result_reason='Source record changed after handoff.', completed_at=now() WHERE id=$1`,
-      [handoffId],
+      `UPDATE partner_handoffs
+          SET status='stale',result_reason='Source record changed after handoff.',completed_at=now(),
+              validation_status='stale',human_decision_status='not_ready',
+              checks=$2::jsonb
+        WHERE id=$1`,
+      [handoffId, JSON.stringify([{
+        code: 'engagement_authorization', status: 'stale',
+        message: 'A frozen source record changed after the handoff was confirmed.',
+      }])],
     );
     await tx.query(
       `UPDATE partner_workflow_executions SET status='stale', result_reason='Source record changed after handoff.' WHERE handoff_id=$1`,
       [handoffId],
     );
     return 'stale';
+  }
+  const governed = (await tx.query<{
+    payload_hash: string; intake_payload_hash: string; expected_authorization_hash: string;
+    authorization_hash: string; authorization_status: string; approval_status: string;
+    valid_from: string; valid_until: string; engagement_source_status: string;
+    engagement_source_deleted_at: Date | null; engagement_source_sha256: string;
+    recorded_engagement_sha256: string; invoice_source_status: string;
+    invoice_source_deleted_at: Date | null; invoice_source_sha256: string; recorded_invoice_sha256: string;
+  }>(
+    `SELECT h.payload_hash,pii.payload_hash AS intake_payload_hash,pii.expected_authorization_hash,
+            pea.authorization_hash,pea.status AS authorization_status,approval.status AS approval_status,
+            pea.valid_from::text,pea.valid_until::text,
+            engagement_source.status AS engagement_source_status,
+            engagement_source.deleted_at AS engagement_source_deleted_at,
+            engagement_source.sha256 AS engagement_source_sha256,pea.source_sha256 AS recorded_engagement_sha256,
+            invoice_source.status AS invoice_source_status,invoice_source.deleted_at AS invoice_source_deleted_at,
+            invoice_source.sha256 AS invoice_source_sha256,pii.invoice_source_sha256 AS recorded_invoice_sha256
+       FROM partner_handoffs h
+       JOIN partner_invoice_intakes pii ON pii.workspace_id=h.workspace_id AND pii.handoff_id=h.id
+       JOIN partner_engagement_authorizations pea
+         ON pea.workspace_id=h.workspace_id AND pea.engagement_record_id=h.source_record_id
+       JOIN approval_requests approval
+         ON approval.workspace_id=pea.workspace_id AND approval.request_id=pea.approval_request_id
+       JOIN attachments engagement_source
+         ON engagement_source.workspace_id=h.workspace_id AND engagement_source.id=pea.source_attachment_id
+       JOIN attachments invoice_source
+         ON invoice_source.workspace_id=h.workspace_id AND invoice_source.id=pii.invoice_source_attachment_id
+      WHERE h.workspace_id=$1 AND h.id=$2
+      FOR SHARE OF pea,approval,engagement_source,invoice_source`,
+    [workspaceId, handoffId],
+  )).rows[0];
+  const hasGovernedIntake = (await tx.query(
+    `SELECT 1 FROM partner_invoice_intakes WHERE workspace_id=$1 AND handoff_id=$2`, [workspaceId, handoffId],
+  )).rows[0];
+  if (hasGovernedIntake) {
+    const today = new Date().toISOString().slice(0, 10);
+    const valid = governed && governed.payload_hash === governed.intake_payload_hash
+      && governed.expected_authorization_hash === governed.authorization_hash
+      && governed.authorization_status === 'authorized' && governed.approval_status === 'approved'
+      && today >= governed.valid_from && today <= governed.valid_until
+      && governed.engagement_source_status === 'ready' && !governed.engagement_source_deleted_at
+      && governed.engagement_source_sha256 === governed.recorded_engagement_sha256
+      && governed.invoice_source_status === 'ready' && !governed.invoice_source_deleted_at
+      && governed.invoice_source_sha256 === governed.recorded_invoice_sha256;
+    if (!valid) {
+      const reason = 'Governed authorization or frozen source changed before Finance review.';
+      await tx.query(
+        `UPDATE partner_handoffs
+            SET status='stale',result_reason=$2,completed_at=now(),validation_status='stale',
+                human_decision_status='not_ready',checks=$3::jsonb
+          WHERE id=$1`,
+        [handoffId, reason, JSON.stringify([{
+          code: 'engagement_authorization', status: 'stale', message: reason,
+        }])],
+      );
+      await tx.query(
+        `UPDATE partner_workflow_executions SET status='stale',result_reason=$2 WHERE handoff_id=$1`,
+        [handoffId, reason],
+      );
+      return 'stale';
+    }
   }
   const projection = partnerInvoiceHandoffProjectionSchema.parse(row.projection);
   const invoice = invoicePayloadSchema.parse(row.invoice_data);
@@ -1010,6 +1138,19 @@ export async function processPartnerInvoiceReview(
   if (invoice.total_minor !== projection.engagement.authorized_total_minor) missing.push('invoice total does not match the authorized engagement amount');
   if (duplicate.rows[0]) missing.push('possible duplicate invoice');
   if (missing.length > 0) {
+    const checks = [
+      { code: 'engagement_authorization', status: 'passed', message: 'The handoff is bound to the frozen engagement revision.' },
+      { code: 'engagement_validity', status: 'passed', message: 'The recorded engagement was valid when the intake was confirmed.' },
+      { code: 'engagement_source', status: projection.engagement.evidence_ids.length ? 'passed' : 'needs_information',
+        message: projection.engagement.evidence_ids.length ? 'Engagement evidence is frozen.' : 'Engagement evidence is missing.' },
+      { code: 'invoice_source', status: 'passed', message: 'The invoice record is frozen to this handoff.' },
+      { code: 'currency', status: invoice.currency === projection.engagement.currency ? 'passed' : 'needs_information',
+        message: invoice.currency === projection.engagement.currency ? 'Invoice currency matches.' : 'Invoice currency does not match the engagement.' },
+      { code: 'amount', status: invoice.total_minor === projection.engagement.authorized_total_minor ? 'passed' : 'needs_information',
+        message: invoice.total_minor === projection.engagement.authorized_total_minor ? 'Invoice total matches.' : 'Invoice total does not match the authorized amount.' },
+      { code: 'duplicate', status: duplicate.rows[0] ? 'needs_information' : 'passed',
+        message: duplicate.rows[0] ? 'A possible duplicate invoice exists.' : 'No duplicate invoice was found in the configured window.' },
+    ];
     const result = await tx.query<{ id: string }>(
       `INSERT INTO partner_records
          (workspace_id, team_id, owner_agent_id, kind, partner_id, data, evidence_ids,
@@ -1024,8 +1165,12 @@ export async function processPartnerInvoiceReview(
     );
     const reason = missing.join('; ');
     await tx.query(
-      `UPDATE partner_handoffs SET status='needs_information', result_reason=$2, completed_at=now() WHERE id=$1`,
-      [handoffId, reason],
+      `UPDATE partner_handoffs
+          SET status='needs_information',result_reason=$2,completed_at=now(),validation_status='needs_information',
+              human_decision_status='not_ready',checks=$3::jsonb,
+              agent_explanation_status=CASE WHEN $4::boolean THEN 'completed' ELSE agent_explanation_status END
+        WHERE id=$1`,
+      [handoffId, reason, JSON.stringify(checks), row.simulated],
     );
     await tx.query(
       `UPDATE partner_workflow_executions
@@ -1037,6 +1182,15 @@ export async function processPartnerInvoiceReview(
   }
 
   const financeSessionExcerpt = `Invoice ${invoice.number}: ${invoice.currency} ${(invoice.total_minor / 100).toFixed(2)} from ${invoice.payee.name}.`;
+  const passedChecks = [
+    { code: 'engagement_authorization', status: 'passed', message: 'The exact Finance-authorized engagement is current.' },
+    { code: 'engagement_validity', status: 'passed', message: 'The engagement is within its recorded validity period.' },
+    { code: 'engagement_source', status: 'passed', message: 'The authorized engagement evidence is frozen.' },
+    { code: 'invoice_source', status: 'passed', message: 'The confirmed invoice source is frozen.' },
+    { code: 'currency', status: 'passed', message: 'Invoice currency matches the engagement.' },
+    { code: 'amount', status: 'passed', message: 'Invoice total matches the authorized amount.' },
+    { code: 'duplicate', status: 'passed', message: 'No duplicate invoice was found in the configured window.' },
+  ];
   const payload = invoicePayloadSchema.parse({
     ...invoice,
     workflow_provenance: {
@@ -1100,8 +1254,12 @@ export async function processPartnerInvoiceReview(
     [workspaceId, row.finance_team_id, row.finance_agent_id, `invoice-review:${handoffId}:completed`],
   )).rows[0]?.id ?? null;
   await tx.query(
-    `UPDATE partner_handoffs SET status='completed', result_reason='Prepared for Finance human review.', completed_at=now() WHERE id=$1`,
-    [handoffId],
+    `UPDATE partner_handoffs
+        SET status='completed',result_reason='Prepared for Finance human review.',completed_at=now(),
+            validation_status='passed',human_decision_status='pending',checks=$2::jsonb,
+            agent_explanation_status=CASE WHEN $3::boolean THEN 'completed' ELSE agent_explanation_status END
+      WHERE id=$1`,
+    [handoffId, JSON.stringify(passedChecks), row.simulated],
   );
   await tx.query(
     `UPDATE partner_workflow_executions

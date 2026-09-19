@@ -29,7 +29,7 @@ export async function resolveEnterpriseReadinessAssignment(
 ): Promise<EnterpriseSkillAssignment | null> {
   const { rows } = await tx.query<{ skill_key: string }>(
     `SELECT skill_key FROM enterprise_skill_assignments
-      WHERE workspace_id=$1 AND agent_id=$2 ORDER BY skill_key`,
+      WHERE workspace_id=$1 AND agent_id=$2 AND state='active' ORDER BY skill_key`,
     [workspaceId, agentId],
   );
   if (rows.length === 0) return null;

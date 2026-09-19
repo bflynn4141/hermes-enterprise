@@ -172,8 +172,42 @@ async function resourceBindingDrift(tx: Tx, view: ApprovalView): Promise<string 
       }
       case 'document': {
         const row = (await tx.query<{ version: number; payload: unknown }>(
-          `SELECT version, payload FROM documents WHERE workspace_id = $1 AND id = $2`,
-          [view.workspace_id, binding.id],
+          `SELECT document.version,document.payload
+             FROM documents document
+            WHERE document.workspace_id=$1 AND document.id=$2
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM request_audiences audience
+                   WHERE audience.workspace_id=document.workspace_id
+                     AND audience.request_id=document.request_id
+                )
+                OR (
+                  $3::uuid IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM request_audiences audience
+                     WHERE audience.workspace_id=document.workspace_id
+                       AND audience.request_id=document.request_id AND audience.user_id=$3
+                  )
+                  AND (
+                    $4::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM partner_workflow_executions execution
+                      JOIN enterprise_run_grants grant
+                        ON grant.workspace_id=execution.workspace_id
+                       AND grant.resource_kind='handoff' AND grant.resource_id=execution.handoff_id
+                      JOIN enterprise_skill_assignments assignment ON assignment.id=grant.assignment_id
+                      JOIN enterprise_connection_bindings connector ON connector.id=grant.connection_binding_id
+                      WHERE execution.workspace_id=document.workspace_id
+                        AND execution.request_id=document.request_id
+                        AND grant.run_id=$4 AND grant.capability='partner.shared.read'
+                        AND grant.effect='allow' AND grant.revoked_at IS NULL
+                        AND 'read_shared'=ANY(grant.allowed_actions)
+                        AND assignment.state='active' AND assignment.revision=grant.assignment_revision
+                        AND connector.state='active' AND NOT (grant.capability=ANY(connector.capability_denies))
+                    )
+                  )
+                )
+              )`,
+          [view.workspace_id, binding.id, view.payload.context.requester.user_id, view.payload.context.source.run_id],
         )).rows[0];
         currentVersion = row ? String(row.version) : null;
         currentHash = row ? await sha256(row.payload) : null;
@@ -181,8 +215,41 @@ async function resourceBindingDrift(tx: Tx, view: ApprovalView): Promise<string 
       }
       case 'request': {
         const row = (await tx.query<{ updated_at: Date | string; payload: unknown }>(
-          `SELECT updated_at, payload FROM requests WHERE workspace_id = $1 AND id = $2`,
-          [view.workspace_id, binding.id],
+          `SELECT request.updated_at,request.payload
+             FROM requests request
+            WHERE request.workspace_id=$1 AND request.id=$2
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM request_audiences audience
+                   WHERE audience.workspace_id=request.workspace_id AND audience.request_id=request.id
+                )
+                OR (
+                  $3::uuid IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM request_audiences audience
+                     WHERE audience.workspace_id=request.workspace_id
+                       AND audience.request_id=request.id AND audience.user_id=$3
+                  )
+                  AND (
+                    $4::uuid IS NULL OR EXISTS (
+                      SELECT 1 FROM partner_workflow_executions execution
+                      JOIN enterprise_run_grants grant
+                        ON grant.workspace_id=execution.workspace_id
+                       AND grant.resource_kind='handoff' AND grant.resource_id=execution.handoff_id
+                      JOIN enterprise_skill_assignments assignment ON assignment.id=grant.assignment_id
+                      JOIN enterprise_connection_bindings connector ON connector.id=grant.connection_binding_id
+                      WHERE execution.workspace_id=request.workspace_id
+                        AND execution.request_id=request.id
+                        AND grant.run_id=$4 AND grant.capability='partner.shared.read'
+                        AND grant.effect='allow' AND grant.revoked_at IS NULL
+                        AND 'read_shared'=ANY(grant.allowed_actions)
+                        AND assignment.state='active' AND assignment.revision=grant.assignment_revision
+                        AND connector.state='active' AND NOT (grant.capability=ANY(connector.capability_denies))
+                    )
+                  )
+                )
+              )`,
+          [view.workspace_id, binding.id, view.payload.context.requester.user_id, view.payload.context.source.run_id],
         )).rows[0];
         currentVersion = row ? version(row.updated_at) : null;
         currentHash = row ? await sha256(row.payload) : null;

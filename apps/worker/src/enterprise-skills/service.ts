@@ -4,9 +4,10 @@ import type { Env } from '../env.js';
 import { partnerAgentConfig, type PartnerAgentConfig } from '../partner-screening/config.js';
 import {
   ENTERPRISE_SKILL_REGISTRY,
+  enterpriseSkillDefinition,
   PARTNER_INVOICE_REVIEW_DEFINITION,
   PARTNER_PROGRAM_DEFINITION,
-  toolsForCapabilityGrants,
+  toolsForSkillVersion,
   type EnterpriseSkillDefinition,
 } from './registry.js';
 
@@ -148,6 +149,7 @@ export async function materializeLegacyPartnerAssignment(
   workspaceId: string,
   agentId: string,
   assignedBy: string | null,
+  options: { scheduleEnabled?: boolean } = {},
 ): Promise<EnterpriseSkillAssignment | null> {
   const existing = await selectAssignment(tx, workspaceId, agentId, PARTNER_PROGRAM_DEFINITION.key);
   if (existing) return publicAssignment(existing, PARTNER_PROGRAM_DEFINITION);
@@ -157,7 +159,7 @@ export async function materializeLegacyPartnerAssignment(
   if (await hasEnterpriseGovernance(tx, workspaceId, agentId)) return null;
   const legacy = partnerAgentConfig(env, agentId);
   if (!legacy.config) return null;
-  const schedule = { enabled: true, interval_minutes: 360 };
+  const schedule = { enabled: options.scheduleEnabled ?? true, interval_minutes: 360 };
   const approvalPolicy = { human_review_required: true };
   await tx.query(
     `INSERT INTO enterprise_skill_assignments
@@ -189,7 +191,7 @@ export async function listEnterpriseSkillAssignments(
     [workspaceId, agentId],
   );
   return rows.flatMap((row) => {
-    const definition = ENTERPRISE_SKILL_REGISTRY.get(row.skill_key);
+    const definition = enterpriseSkillDefinition(row.skill_key, row.skill_version);
     return definition ? [publicAssignment(row, definition)] : [];
   });
 }
@@ -200,10 +202,12 @@ export async function resolveEnterpriseSkillAssignment(
   agentId: string,
   skillKey: string,
 ): Promise<ResolvedEnterpriseSkillAssignment> {
-  const definition = ENTERPRISE_SKILL_REGISTRY.get(skillKey);
-  if (!definition) return { assignment: null, config: null, problem: 'This enterprise skill is not supported.' };
+  const fallbackDefinition = ENTERPRISE_SKILL_REGISTRY.get(skillKey);
+  if (!fallbackDefinition) return { assignment: null, config: null, problem: 'This enterprise skill is not supported.' };
   const row = await selectAssignment(tx, workspaceId, agentId, skillKey);
-  if (!row) return { assignment: null, config: null, problem: `${definition.name} is not assigned.` };
+  if (!row) return { assignment: null, config: null, problem: `${fallbackDefinition.name} is not assigned.` };
+  const definition = enterpriseSkillDefinition(row.skill_key, row.skill_version);
+  if (!definition) return { assignment: null, config: null, problem: `Unsupported ${fallbackDefinition.name} version ${row.skill_version}.` };
   const assignment = publicAssignment(row, definition);
   if (row.state === 'paused') return { assignment, config: null, problem: `${definition.name} is paused.` };
   const identityProblem = assignmentProblem(row, definition);
@@ -232,11 +236,13 @@ export async function resolvePartnerSkillAssignment(
     const legacy = partnerAgentConfig(env, agentId);
     return { assignment: null, config: legacy.config, problem: legacy.problem, source: legacy.config ? 'legacy' : 'none' };
   }
-  const assignment = publicAssignment(row, PARTNER_PROGRAM_DEFINITION);
+  const definition = enterpriseSkillDefinition(row.skill_key, row.skill_version);
+  if (!definition) return { assignment: null, config: null, problem: `Unsupported Partner Program version ${row.skill_version}.`, source: 'assignment' };
+  const assignment = publicAssignment(row, definition);
   if (row.state === 'paused') return { assignment, config: null, problem: 'Partner screening is paused.', source: 'assignment' };
-  const identityProblem = assignmentProblem(row, PARTNER_PROGRAM_DEFINITION);
+  const identityProblem = assignmentProblem(row, definition);
   if (identityProblem) return { assignment, config: null, problem: identityProblem, source: 'assignment' };
-  const parsed = PARTNER_PROGRAM_DEFINITION.configSchema.safeParse(row.config);
+  const parsed = definition.configSchema.safeParse(row.config);
   if (!parsed.success) return { assignment, config: null, problem: 'The assigned Partner Program skill configuration is invalid.', source: 'assignment' };
   return { assignment, config: parsed.data as PartnerAgentConfig, problem: null, source: 'assignment' };
 }
@@ -258,7 +264,7 @@ export async function updateEnterpriseSkillAssignment(
   const current = locked.rows[0];
   if (!current) throw new Error('enterprise_skill_assignment_not_found');
   if (current.revision !== patch.revision) throw new Error('enterprise_skill_assignment_stale');
-  const definition = ENTERPRISE_SKILL_REGISTRY.get(current.skill_key);
+  const definition = enterpriseSkillDefinition(current.skill_key, current.skill_version);
   if (!definition) throw new Error('enterprise_skill_not_supported');
   const config = patch.config === undefined ? current.config : definition.configSchema.parse(patch.config);
   const schedule = patch.schedule === undefined ? enterpriseSkillScheduleSchema.parse(current.schedule) : enterpriseSkillScheduleSchema.parse(patch.schedule);
@@ -276,5 +282,7 @@ export async function updateEnterpriseSkillAssignment(
 }
 
 export function assignmentToolNames(assignment: EnterpriseSkillAssignment | null): string[] {
-  return assignment?.state === 'active' ? toolsForCapabilityGrants(assignment.capability_grants) : [];
+  return assignment?.state === 'active'
+    ? toolsForSkillVersion(assignment.skill_key, assignment.version, assignment.capability_grants)
+    : [];
 }

@@ -174,6 +174,7 @@ export type PartnerRecord = z.infer<typeof partnerRecordSchema>;
 
 /** The complete and exclusive cross-team field allowlist. */
 export const partnerInvoiceHandoffProjectionSchema = z.object({
+  input_provenance: z.enum(['sample', 'customer', 'unknown']).default('unknown'),
   partner: z.object({ id: uuidSchema, name: z.string().min(1).max(200) }).strict(),
   engagement: z.object({
     reference: z.string().min(1).max(200),
@@ -471,6 +472,7 @@ export const PARTNER_WORKFLOW_ERROR_REASONS = [
   'idempotency_conflict', 'correction_successor_exists', 'request_binding_stale', 'run_grant_missing',
   'workflow_not_configured', 'workflow_admission_disabled', 'workflow_readiness_incomplete',
   'skill_artifact_mismatch', 'legacy_handoff_input_forbidden',
+  'input_provenance_mismatch',
 ] as const;
 export const partnerWorkflowErrorReasonSchema = z.enum(PARTNER_WORKFLOW_ERROR_REASONS);
 export type PartnerWorkflowErrorReason = z.infer<typeof partnerWorkflowErrorReasonSchema>;

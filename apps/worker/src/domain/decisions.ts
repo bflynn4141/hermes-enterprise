@@ -42,6 +42,7 @@ import type { Tx } from '../db/client.js';
 import { RouteError, type TenantWork } from '../routes/tenant.js';
 import { plannedEffects } from './effects.js';
 import { REQUEST_AUDIENCE_PREDICATE } from './requests.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';
 
 export interface DecisionOutcome {
   readonly decision_id: string;
@@ -61,6 +62,122 @@ interface RequestRow {
   label: string;
   payload: unknown;
   version: number;
+  subject_key: string | null;
+}
+
+interface PartnerDecisionBinding {
+  handoffId: string;
+  authorizationId: string;
+  partnerId: string;
+  partnerName: string;
+  engagementReference: string;
+  reviewerDisplay: string;
+  lineageRootId: string;
+}
+
+async function lockPartnerDecisionBinding(
+  tx: Tx,
+  workspaceId: string,
+  requestId: string,
+  userId: string,
+): Promise<PartnerDecisionBinding | null> {
+  const mapping = await tx.query<{ handoff_id: string }>(
+    `SELECT handoff_id FROM partner_workflow_executions
+      WHERE workspace_id=$1 AND request_id=$2`, [workspaceId, requestId],
+  );
+  const handoffId = mapping.rows[0]?.handoff_id;
+  if (!handoffId) return null;
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`partner-handoff:${workspaceId}:${handoffId}`]);
+  const result = await tx.query<{
+    handoff_id: string; authorization_id: string; finance_principal_id: string;
+    reviewer_display: string; partner_id: string; partner_name: string; engagement_reference: string;
+    lineage_root_id: string; superseded_by_handoff_id: string | null; validation_status: string; human_decision_status: string;
+    source_record_revision: number; engagement_revision: number;
+    invoice_record_revision: number; invoice_revision: number;
+    expected_authorization_hash: string; authorization_hash: string; authorization_status: string;
+    authorization_in_window: boolean;
+    approval_status: string; engagement_source_status: string; engagement_source_sha256: string;
+    engagement_source_deleted_at: Date | null;
+    recorded_engagement_sha256: string; invoice_source_status: string; invoice_source_sha256: string;
+    invoice_source_deleted_at: Date | null;
+    recorded_invoice_sha256: string;
+  }>(
+    `SELECT h.id AS handoff_id,pea.id AS authorization_id,finance_eta.principal_user_id AS finance_principal_id,
+            COALESCE(u.name,u.email) AS reviewer_display,pea.partner_id,pea.partner_name,
+            pea.engagement_reference,h.lineage_root_id,h.superseded_by_handoff_id,h.validation_status,h.human_decision_status,
+            h.source_record_revision,engagement.revision AS engagement_revision,
+            h.invoice_record_revision,invoice.revision AS invoice_revision,
+            pii.expected_authorization_hash,pea.authorization_hash,pea.status AS authorization_status,
+            CURRENT_DATE BETWEEN pea.valid_from AND pea.valid_until AS authorization_in_window,
+            approval.status AS approval_status,engagement_source.status AS engagement_source_status,
+            engagement_source.sha256 AS engagement_source_sha256,
+            engagement_source.deleted_at AS engagement_source_deleted_at,
+            pea.source_sha256 AS recorded_engagement_sha256,
+            invoice_source.status AS invoice_source_status,invoice_source.sha256 AS invoice_source_sha256,
+            invoice_source.deleted_at AS invoice_source_deleted_at,
+            pii.invoice_source_sha256 AS recorded_invoice_sha256
+       FROM partner_workflow_executions execution
+       JOIN partner_handoffs h ON h.workspace_id=execution.workspace_id AND h.id=execution.handoff_id
+       JOIN partner_invoice_intakes pii ON pii.workspace_id=h.workspace_id AND pii.handoff_id=h.id
+       JOIN partner_engagement_authorizations pea
+         ON pea.workspace_id=h.workspace_id AND pea.engagement_record_id=h.source_record_id
+       JOIN approval_requests approval
+         ON approval.workspace_id=pea.workspace_id AND approval.request_id=pea.approval_request_id
+       JOIN partner_records engagement ON engagement.workspace_id=h.workspace_id AND engagement.id=h.source_record_id
+       JOIN partner_records invoice ON invoice.workspace_id=h.workspace_id AND invoice.id=h.invoice_record_id
+       JOIN attachments engagement_source
+         ON engagement_source.workspace_id=h.workspace_id AND engagement_source.id=pea.source_attachment_id
+       JOIN attachments invoice_source
+         ON invoice_source.workspace_id=h.workspace_id AND invoice_source.id=pii.invoice_source_attachment_id
+       JOIN enterprise_team_agents finance_eta
+         ON finance_eta.workspace_id=h.workspace_id AND finance_eta.team_id=h.to_team_id
+        AND finance_eta.agent_id=execution.finance_agent_id
+       JOIN enterprise_run_grants finance_grant
+         ON finance_grant.workspace_id=execution.workspace_id
+        AND finance_grant.run_id=execution.finance_run_id
+        AND finance_grant.agent_id=execution.finance_agent_id
+        AND finance_grant.resource_kind='handoff' AND finance_grant.resource_id=h.id
+        AND finance_grant.capability='partner.invoice.review.prepare'
+        AND finance_grant.effect='allow' AND finance_grant.revoked_at IS NULL
+        AND 'prepare_review'=ANY(finance_grant.allowed_actions)
+       JOIN enterprise_skill_assignments finance_skill
+         ON finance_skill.id=finance_grant.assignment_id
+        AND finance_skill.workspace_id=finance_eta.workspace_id
+        AND finance_skill.agent_id=finance_eta.agent_id AND finance_skill.team_id=finance_eta.team_id
+        AND finance_skill.skill_key='partner-invoice-review' AND finance_skill.skill_version=$4
+        AND finance_skill.state='active' AND finance_skill.revision=finance_grant.assignment_revision
+        AND finance_skill.artifact_id=finance_grant.artifact_id
+       JOIN enterprise_skill_artifacts finance_artifact
+         ON finance_artifact.id=finance_skill.artifact_id AND finance_artifact.digest=$5
+        AND finance_artifact.digest=finance_grant.artifact_digest
+       JOIN enterprise_connection_bindings finance_connector
+         ON finance_connector.id=finance_grant.connection_binding_id AND finance_connector.state='active'
+        AND NOT (finance_grant.capability=ANY(finance_connector.capability_denies))
+       JOIN users u ON u.id=finance_eta.principal_user_id
+      WHERE execution.workspace_id=$1 AND execution.request_id=$2 AND h.id=$3
+      FOR UPDATE OF h,pea,engagement,invoice,engagement_source,invoice_source`,
+    [workspaceId, requestId, handoffId,
+      PARTNER_INVOICE_REVIEW_DEFINITION.version, PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest],
+  );
+  const row = result.rows[0];
+  const current = row && row.finance_principal_id === userId
+    && row.superseded_by_handoff_id === null
+    && row.validation_status === 'passed' && row.human_decision_status === 'pending'
+    && row.source_record_revision === row.engagement_revision
+    && row.invoice_record_revision === row.invoice_revision
+    && row.expected_authorization_hash === row.authorization_hash
+    && row.authorization_status === 'authorized' && row.authorization_in_window
+    && row.approval_status === 'approved'
+    && row.engagement_source_status === 'ready' && !row.engagement_source_deleted_at
+    && row.engagement_source_sha256 === row.recorded_engagement_sha256
+    && row.invoice_source_status === 'ready' && !row.invoice_source_deleted_at
+    && row.invoice_source_sha256 === row.recorded_invoice_sha256;
+  if (!current) throw new RouteError('The governed invoice evidence or role binding changed; review a fresh handoff.', 'request_binding_stale', 409);
+  return {
+    handoffId: row.handoff_id, authorizationId: row.authorization_id, partnerId: row.partner_id,
+    partnerName: row.partner_name, engagementReference: row.engagement_reference,
+    reviewerDisplay: row.reviewer_display.slice(0, 120), lineageRootId: row.lineage_root_id,
+  };
 }
 
 /**
@@ -123,11 +240,23 @@ export async function recordDecision(
   note: string | null,
   review: { expected_version?: unknown; expected_payload_hash?: unknown } = {},
 ): Promise<DecisionOutcome> {
+  // Partner corrections use the same advisory lock before touching the
+  // handoff/request pair. Taking it before the request row prevents an
+  // opposite lock order between a correction and a Finance decision.
+  const partnerMapping = await work.tx.query<{ handoff_id: string }>(
+    `SELECT handoff_id FROM partner_workflow_executions
+      WHERE workspace_id=$1 AND request_id=$2`, [work.workspaceId, requestId],
+  );
+  if (partnerMapping.rows[0]?.handoff_id) {
+    await work.tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+      `partner-handoff:${work.workspaceId}:${partnerMapping.rows[0].handoff_id}`,
+    ]);
+  }
   // FOR UPDATE, so the second of two concurrent tabs waits here rather than
   // racing the status check. When it wakes, the row it re-reads is the one this
   // transaction committed, and it takes the conflict path below.
   const found = await work.tx.query<RequestRow>(
-    `SELECT id, kind, status, session_id, label, payload,
+    `SELECT id, kind, status, session_id, label, payload, subject_key,
             GREATEST(0, EXTRACT(EPOCH FROM updated_at)::int) AS version
        FROM requests r WHERE r.id = $1 AND ${REQUEST_AUDIENCE_PREDICATE} FOR UPDATE OF r`,
     [requestId, work.userId],
@@ -173,6 +302,10 @@ export async function recordDecision(
       throw new RouteError('this document changed; review it again before deciding', 'stale_request', 409);
     }
   }
+
+  const partnerBinding = request.kind === 'invoice'
+    ? await lockPartnerDecisionBinding(work.tx, work.workspaceId, requestId, work.userId)
+    : null;
 
   const resulting = RESULTING_STATUS[request.kind][decision];
 
@@ -274,6 +407,43 @@ export async function recordDecision(
       );
       if (renderJob) work.jobs.push(renderJob);
     }
+  }
+
+  if (partnerBinding) {
+    const consumed = await work.tx.query(
+      `UPDATE partner_engagement_authorizations
+          SET status='consumed'
+        WHERE workspace_id=$1 AND id=$2 AND status='authorized' AND consumed_handoff_id=$3`,
+      [work.workspaceId, partnerBinding.authorizationId, partnerBinding.lineageRootId],
+    );
+    if (consumed.rowCount !== 1) {
+      throw new RouteError('The engagement authorization was consumed or revoked while deciding.', 'request_binding_stale', 409);
+    }
+    await work.tx.query(
+      `UPDATE partner_handoffs
+          SET human_decision_status=$3,acknowledgment_status='pending'
+        WHERE workspace_id=$1 AND id=$2 AND human_decision_status='pending'`,
+      [work.workspaceId, partnerBinding.handoffId, decision === 'approve' ? 'approved' : 'declined'],
+    );
+    await work.tx.query(
+      `INSERT INTO partner_decision_acknowledgments
+         (workspace_id,handoff_id,decision_id,partner_id,partner_name,engagement_reference,
+          outcome,result_code,finance_reviewer_display,recorded_at,delivery_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),'pending')
+       ON CONFLICT (workspace_id,decision_id) DO NOTHING`,
+      [work.workspaceId, partnerBinding.handoffId, decisionId, partnerBinding.partnerId,
+        partnerBinding.partnerName, partnerBinding.engagementReference,
+        decision === 'approve' ? 'invoice_draft_saved' : 'declined',
+        decision === 'approve' ? 'approved' : 'declined', partnerBinding.reviewerDisplay],
+    );
+    const acknowledgmentJob = await enqueueJob(
+      work.tx,
+      work.workspaceId,
+      'partner_acknowledgment',
+      `partner-acknowledgment:${decisionId}`,
+      { handoff_id: partnerBinding.handoffId, decision_id: decisionId },
+    );
+    if (acknowledgmentJob) work.jobs.push(acknowledgmentJob);
   }
 
   // ---------------------------------------------------------------------

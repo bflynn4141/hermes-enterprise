@@ -34,6 +34,8 @@ import {
   REQ,
   REQUEST_KINDS,
   proposeApprovalInputSchema,
+  getPartnerHandoffResultInputSchema,
+  publishPartnerInvoiceReviewInputSchema,
   setFocusInputSchema,
   viewFocusRef,
   type Ref,
@@ -71,6 +73,7 @@ export type AgentReads = Pick<
   | 'loadFetchAllowlist'
   | 'listPartnerCandidates'
   | 'getPartnerCandidate'
+  | 'getPartnerHandoffResult'
 >;
 
 /**
@@ -444,6 +447,44 @@ const getPartnerCandidate: ToolDefinitionEntry = {
     const candidate = await ctx.reads.getPartnerCandidate(ctx.run.agentId, str(args.candidate_id));
     if (!candidate) return { ok: false, error: 'No such partner candidate is available to this agent.' };
     return { ok: true, data: candidate };
+  },
+};
+
+const getPartnerHandoffResult: ToolDefinitionEntry = {
+  name: 'get_partner_handoff_result',
+  kind: 'read',
+  description: 'Read the authoritative result for this exact Finance handoff, including frozen source versions, deterministic checks and human-decision state. This cannot list handoffs, approve, pay, send, or change policy.',
+  input_schema: z.toJSONSchema(getPartnerHandoffResultInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
+  async run(args, ctx) {
+    const parsed = getPartnerHandoffResultInputSchema.safeParse(args);
+    if (!parsed.success || !ctx.run.agentId) return { ok: false, error: 'handoff_id must identify this Finance run handoff.', permanent: true };
+    try {
+      if (!ctx.reads.getPartnerHandoffResult) return { ok: false, error: 'partner handoff reader unavailable', permanent: true };
+      return { ok: true, data: await ctx.reads.getPartnerHandoffResult({
+        runId: ctx.run.id, agentId: ctx.run.agentId, handoffId: parsed.data.handoff_id,
+      }) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'The handoff result is unavailable.' };
+    }
+  },
+};
+
+const publishPartnerInvoiceReview: ToolDefinitionEntry = {
+  name: 'publish_partner_invoice_review',
+  kind: 'propose',
+  description: 'Publish one immutable user-confirmed invoice intake to its server-selected Finance recipient. Accepts only the intake id and exact payload hash; invoice fields, provenance, recipient and replay identity are server-owned.',
+  input_schema: z.toJSONSchema(publishPartnerInvoiceReviewInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
+  async run(args, ctx) {
+    const parsed = publishPartnerInvoiceReviewInputSchema.safeParse(args);
+    if (!parsed.success || !ctx.run.agentId) return { ok: false, error: 'Use the exact intake_event_id and expected_payload_hash from the confirmed intake.', permanent: true };
+    try {
+      if (!ctx.writes.publishPartnerInvoiceReview) return { ok: false, error: 'partner handoff publisher unavailable', permanent: true };
+      return { ok: true, data: await ctx.writes.publishPartnerInvoiceReview({
+        runId: ctx.run.id, agentId: ctx.run.agentId, arguments: parsed.data,
+      }) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'The confirmed invoice intake could not be published.' };
+    }
   },
 };
 
@@ -851,9 +892,11 @@ export const TOOLS: readonly ToolDefinitionEntry[] = [
   listMembers,
   listPartnerCandidates,
   getPartnerCandidate,
+  getPartnerHandoffResult,
   fetchUrlTool,
   proposeRequest,
   proposeApproval,
+  publishPartnerInvoiceReview,
   saveReviewNote,
   setContextField,
   proposeInstruction,
@@ -879,6 +922,8 @@ export const TOOL_SOURCE: Readonly<Record<string, string>> = {
   list_members: 'workspace.members',
   list_partner_candidates: 'workspace.partner_candidates',
   get_partner_candidate: 'workspace.partner_source_artifacts',
+  get_partner_handoff_result: 'workspace.partner_handoff_results',
+  publish_partner_invoice_review: 'workspace.partner_invoice_intakes',
   fetch_url: 'web.fetch_url',
   propose_request: 'engine',
   propose_approval: 'engine',

@@ -69,6 +69,7 @@ export const JOB_KINDS = [
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
   'partner_invoice_review',
+  'partner_acknowledgment',
   'run_recovery',
   'run_launch',
   // Warm-pool invitation expiry and operator capacity alerts. Assignment is
@@ -647,6 +648,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'partner_invoice_review':
       await (await import('./partner-workflow/job.js')).runPartnerInvoiceReviewJob(env, job);
+      return;
+    case 'partner_acknowledgment':
+      await (await import('./partner-workflow/acknowledgment.js')).runPartnerAcknowledgmentJob(env, job);
       return;
     case 'hermes_invitation_expire':
       await (await import('./hermes-cloud/capacity.js')).runInvitationExpirationJob(env, job);

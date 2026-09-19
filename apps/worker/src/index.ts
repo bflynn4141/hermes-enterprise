@@ -147,8 +147,13 @@ import {
 import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
 import {
   configurePartnerWorkflowRoute,
+  correctPartnerInvoice,
+  createPartnerInvoiceIntake,
   createPartnerInvoiceReviewHandoff,
+  getPartnerHandoffResultRoute,
   getPartnerWorkflow,
+  proposePartnerEngagement,
+  setPartnerWorkflowAdmission,
 } from './routes/partner-workflow.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
@@ -447,6 +452,11 @@ app.patch('/w/:ws/agents/:agentId/skill-assignments/:id', patchSkillAssignment);
 app.get('/w/:ws/partner-workflow', getPartnerWorkflow);
 app.post('/w/:ws/partner-workflow/configure', configurePartnerWorkflowRoute);
 app.post('/w/:ws/partner-workflow/invoice-review-handoffs', createPartnerInvoiceReviewHandoff);
+app.post('/w/:ws/partner-workflow/engagement-authorizations', proposePartnerEngagement);
+app.post('/w/:ws/partner-workflow/invoice-intakes', createPartnerInvoiceIntake);
+app.get('/w/:ws/partner-workflow/handoffs/:handoffId/result', getPartnerHandoffResultRoute);
+app.post('/w/:ws/partner-workflow/handoffs/:handoffId/corrections', correctPartnerInvoice);
+app.post('/w/:ws/partner-workflow/admission', setPartnerWorkflowAdmission);
 app.get('/w/:ws/instructions', listInstructions);
 app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
 app.post('/w/:ws/instructions/:id/save', acceptInstruction);

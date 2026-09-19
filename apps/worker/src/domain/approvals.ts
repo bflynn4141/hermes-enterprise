@@ -348,6 +348,7 @@ async function resolveResourceBindings(
   workspaceId: string,
   proposal: ApprovalProposal,
   resources: Map<string, { owner_member_id: string; version: string | null; sha256: string | null; executor_available: boolean }>,
+  requester: { userId: string | null; runId: string | null },
 ): Promise<ApprovalResourceBinding[]> {
   const bindings: ApprovalResourceBinding[] = [];
   for (const resourceId of sortedUnique(proposalResourceIds(proposal))) {
@@ -399,20 +400,102 @@ async function resolveResourceBindings(
   }
 
   for (const evidence of proposal.evidence) {
-    if (!UUID.test(evidence.id) || !['document', 'request', 'run'].includes(evidence.kind)) continue;
-    if (evidence.kind === 'document') {
+    if (!UUID.test(evidence.id)) continue;
+    if (evidence.kind === 'source') {
+      const found = await tx.query<{ version: string | null; sha256: string | null }>(
+        `SELECT completed_at::text AS version,sha256 FROM attachments
+          WHERE workspace_id=$1 AND id=$2 AND status='ready' AND deleted_at IS NULL`,
+        [workspaceId, evidence.id],
+      );
+      const source = found.rows[0];
+      bindings.push({
+        kind: 'attachment', id: evidence.id, version: source?.version ?? null,
+        sha256: source?.sha256 ?? null, immutable: Boolean(source?.version && source.sha256),
+        executor_available: false,
+        reason: source?.sha256 ? null : 'The source attachment is not ready with an immutable digest.',
+      });
+    } else if (evidence.kind === 'document') {
       const found = await tx.query<{ version: number; payload: unknown }>(
-        `SELECT version, payload FROM documents WHERE workspace_id = $1 AND id = $2`, [workspaceId, evidence.id],
+        `SELECT document.version,document.payload
+           FROM documents document
+          WHERE document.workspace_id=$1 AND document.id=$2
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM request_audiences audience
+                 WHERE audience.workspace_id=document.workspace_id
+                   AND audience.request_id=document.request_id
+              )
+              OR (
+                $3::uuid IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM request_audiences audience
+                   WHERE audience.workspace_id=document.workspace_id
+                     AND audience.request_id=document.request_id AND audience.user_id=$3
+                )
+                AND (
+                  $4::uuid IS NULL OR EXISTS (
+                    SELECT 1 FROM partner_workflow_executions execution
+                    JOIN enterprise_run_grants grant
+                      ON grant.workspace_id=execution.workspace_id
+                     AND grant.resource_kind='handoff' AND grant.resource_id=execution.handoff_id
+                    JOIN enterprise_skill_assignments assignment ON assignment.id=grant.assignment_id
+                    JOIN enterprise_connection_bindings binding ON binding.id=grant.connection_binding_id
+                    WHERE execution.workspace_id=document.workspace_id
+                      AND execution.request_id=document.request_id
+                      AND grant.run_id=$4 AND grant.capability='partner.shared.read'
+                      AND grant.effect='allow' AND grant.revoked_at IS NULL
+                      AND 'read_shared'=ANY(grant.allowed_actions)
+                      AND assignment.state='active' AND assignment.revision=grant.assignment_revision
+                      AND binding.state='active' AND NOT (grant.capability=ANY(binding.capability_denies))
+                  )
+                )
+              )
+            )`,
+        [workspaceId, evidence.id, requester.userId, requester.runId],
       );
       const row = found.rows[0];
       bindings.push({ kind: 'document', id: evidence.id, version: row ? String(row.version) : null, sha256: row ? await sha256(row.payload) : null, immutable: Boolean(row), executor_available: false, reason: row ? null : 'The evidence document was not found.' });
     } else if (evidence.kind === 'request') {
       const found = await tx.query<{ updated_at: Date; payload: unknown }>(
-        `SELECT updated_at, payload FROM requests WHERE workspace_id = $1 AND id = $2`, [workspaceId, evidence.id],
+        `SELECT request.updated_at,request.payload
+           FROM requests request
+          WHERE request.workspace_id=$1 AND request.id=$2
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM request_audiences audience
+                 WHERE audience.workspace_id=request.workspace_id AND audience.request_id=request.id
+              )
+              OR (
+                $3::uuid IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM request_audiences audience
+                   WHERE audience.workspace_id=request.workspace_id
+                     AND audience.request_id=request.id AND audience.user_id=$3
+                )
+                AND (
+                  $4::uuid IS NULL OR EXISTS (
+                    SELECT 1 FROM partner_workflow_executions execution
+                    JOIN enterprise_run_grants grant
+                      ON grant.workspace_id=execution.workspace_id
+                     AND grant.resource_kind='handoff' AND grant.resource_id=execution.handoff_id
+                    JOIN enterprise_skill_assignments assignment ON assignment.id=grant.assignment_id
+                    JOIN enterprise_connection_bindings binding ON binding.id=grant.connection_binding_id
+                    WHERE execution.workspace_id=request.workspace_id
+                      AND execution.request_id=request.id
+                      AND grant.run_id=$4 AND grant.capability='partner.shared.read'
+                      AND grant.effect='allow' AND grant.revoked_at IS NULL
+                      AND 'read_shared'=ANY(grant.allowed_actions)
+                      AND assignment.state='active' AND assignment.revision=grant.assignment_revision
+                      AND binding.state='active' AND NOT (grant.capability=ANY(binding.capability_denies))
+                  )
+                )
+              )
+            )`,
+        [workspaceId, evidence.id, requester.userId, requester.runId],
       );
       const row = found.rows[0];
       bindings.push({ kind: 'request', id: evidence.id, version: row?.updated_at.toISOString() ?? null, sha256: row ? await sha256(row.payload) : null, immutable: Boolean(row), executor_available: false, reason: row ? null : 'The evidence request was not found.' });
-    } else {
+    } else if (evidence.kind === 'run') {
       const found = await tx.query<{ status: string; ended_at: Date | null; runtime_request: unknown }>(
         `SELECT status, ended_at, runtime_request FROM runs WHERE workspace_id = $1 AND id = $2`, [workspaceId, evidence.id],
       );
@@ -901,7 +984,10 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
     throw new RouteError('the requested expiry is outside the selected policy limit', 'invalid_expiry', 422);
   }
   const expiresAt = new Date(requestedExpiry).toISOString();
-  const bindings = await resolveResourceBindings(context.tx, context.workspaceId, input.proposal, targets.resources);
+  const bindings = await resolveResourceBindings(
+    context.tx, context.workspaceId, input.proposal, targets.resources,
+    { userId: requester.userId, runId: requester.runId },
+  );
   const serverContext = {
     requester: { agent_id: context.agentId, member_id: requester.memberId, user_id: requester.userId },
     target_agent_ids: targets.targetAgentIds,
@@ -984,6 +1070,11 @@ async function markExpired(work: ApprovalWork, row: ApprovalRow): Promise<void> 
   await work.tx.query(`UPDATE approval_requests SET status = 'expired', work_status = 'cancelled', work_reason = 'The authorization expired.' WHERE request_id = $1`, [row.request_id]);
   await work.tx.query(`UPDATE approval_revisions SET status = 'expired' WHERE request_id = $1 AND revision = $2`, [row.request_id, row.authorization_revision]);
   await work.tx.query(`UPDATE requests SET status = 'expired' WHERE id = $1`, [row.request_id]);
+  await work.tx.query(
+    `UPDATE partner_engagement_authorizations SET status='expired'
+      WHERE workspace_id=$1 AND approval_request_id=$2 AND status='pending'`,
+    [row.workspace_id, row.request_id],
+  );
   await audit(work.tx, row.workspace_id, 'system', null, 'approval.expired', row.request_id, row.source_session_id);
   await publishRequestChanged(work, row.request_id);
 }
@@ -1004,6 +1095,25 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
   await work.tx.query(`UPDATE approval_revisions SET status = 'approved' WHERE request_id = $1 AND revision = $2`, [row.request_id, row.authorization_revision]);
   await work.tx.query(`UPDATE requests SET status = 'approved' WHERE id = $1 AND status = 'pending'`, [row.request_id]);
   await audit(work.tx, row.workspace_id, 'system', null, 'approval.finalized', row.request_id, row.source_session_id);
+  // This one record_change has an allowlisted internal materializer. It
+  // rechecks the exact approval/source bindings and commits the engagement in
+  // this same human-finalization transaction. Returning here is deliberate:
+  // approval_continue would admit an unrelated model run for a change the
+  // server has already applied atomically.
+  if (payload.approval_type === 'record_change'
+      && payload.details.system_id === 'enterprise-partner-records') {
+    const materialized = await (await import('../partner-workflow/v2.js')).materializePartnerEngagementAuthorization(
+      work.tx,
+      {
+        workspaceId: row.workspace_id,
+        requestId: row.request_id,
+        authorizationRevision: row.authorization_revision,
+        authorizationHash: row.authorization_hash,
+        payload,
+      },
+    );
+    if (materialized) return;
+  }
   const queuedEmail = await queueApprovedEmail(work.tx, {
     workspaceId: row.workspace_id,
     requestId: row.request_id,
@@ -1093,6 +1203,11 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
   if (row.status !== 'pending') throw new RouteError(`this approval is ${row.status}`, 'approval_not_pending', 409);
 
   const payload = approvalPayloadSchema.parse(row.payload);
+  const partnerEngagementChange = payload.approval_type === 'record_change'
+    && payload.details.system_id === 'enterprise-partner-records';
+  if (partnerEngagementChange && input.decision === 'request_changes') {
+    throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  }
   const members = await activeMembers(context.tx, context.workspaceId);
   const reviewer = members.find((member) => member.user_id === context.userId);
   if (!reviewer) throw new RouteError('the reviewer is not an active workspace member', 'reviewer_not_active', 403);
@@ -1127,6 +1242,14 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
       `UPDATE partner_engagements SET stage=$3 WHERE workspace_id=$1 AND request_id=$2`,
       [context.workspaceId, requestId, input.decision === 'decline' ? 'declined' : 'changes_requested'],
     );
+    if (partnerEngagementChange) {
+      await context.tx.query(
+        `UPDATE partner_engagement_authorizations SET status='declined'
+          WHERE workspace_id=$1 AND approval_request_id=$2 AND authorization_revision=$3
+            AND authorization_hash=$4 AND status='pending'`,
+        [context.workspaceId, requestId, row.authorization_revision, row.authorization_hash],
+      );
+    }
   } else {
     const refreshedVotes = await votesFor(context.tx, row);
     const refreshed = progress(row, payload, members, refreshedVotes, assignments);
@@ -1146,6 +1269,10 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   assertBinding(row, input.expected_authorization_revision, input.expected_authorization_hash);
   if (!['pending', 'changes_requested'].includes(row.status)) throw new RouteError(`this approval is ${row.status}`, 'approval_not_revisable', 409);
   const oldPayload = approvalPayloadSchema.parse(row.payload);
+  if (oldPayload.approval_type === 'record_change'
+      && oldPayload.details.system_id === 'enterprise-partner-records') {
+    throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  }
   if (oldPayload.approval_type !== input.proposal.approval_type) throw new RouteError('a revision cannot change approval type', 'approval_type_changed', 422);
   const members = await activeMembers(context.tx, context.workspaceId);
   const actor = members.find((member) => member.user_id === context.userId);
@@ -1167,7 +1294,10 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   const expiry = input.requested_expires_at ? Date.parse(input.requested_expires_at) : maximumExpiry;
   if (!Number.isFinite(expiry) || expiry <= Date.now() || expiry > maximumExpiry) throw new RouteError('the requested expiry is outside the selected policy limit', 'invalid_expiry', 422);
   const expiresAt = new Date(expiry).toISOString();
-  const bindings = await resolveResourceBindings(context.tx, context.workspaceId, input.proposal, targets.resources);
+  const bindings = await resolveResourceBindings(
+    context.tx, context.workspaceId, input.proposal, targets.resources,
+    { userId: oldPayload.context.requester.user_id, runId: oldPayload.context.source.run_id },
+  );
   const serverContext = { ...oldPayload.context, target_agent_ids: targets.targetAgentIds, target_member_ids: targets.targetMemberIds, target_resource_ids: targets.targetResourceIds, source: { ...oldPayload.context.source, dependent_request_ids: targets.dependentRequestIds } };
   const nextRevision = row.authorization_revision + 1;
   const hash = await authorizationHash({ proposal: input.proposal, context: serverContext, policy: selected.policy, resource_bindings: bindings, expires_at: expiresAt });

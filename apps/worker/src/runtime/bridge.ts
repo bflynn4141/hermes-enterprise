@@ -377,7 +377,49 @@ export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<
 async function publish(env: Env, workspaceId: string, result: CallResult): Promise<void> {
   const rows = result.events.map((event) => ({ id: event.id, workspace_id: workspaceId, session_id: event.sessionId, kind: event.kind, payload: event.payload, schema_version: 1, trace_id: event.traceId, at: event.at }));
   const session = rows.filter((event) => event.session_id !== null);
-  const workspace = rows.filter((event) => event.session_id === null);
+  const workspaceRows = rows.filter((event) => event.session_id === null);
+  // Runtime tools commit directly through the Agent DB, outside the normal
+  // publish job. Re-read those exact outbox ids with the app role so scoped
+  // request/document/effect events carry a delivery-only audience. The
+  // WorkspaceHub enforces and strips this metadata per socket.
+  const workspace = workspaceRows.length === 0 ? workspaceRows : await withWorkspaceTransaction(
+    env, workspaceId, async (tx) => {
+      const scoped = await tx.query<{ id: string; audience_user_ids: string[] | null }>(
+        `SELECT event.id::text,
+                array_remove(array_agg(DISTINCT audience.user_id),NULL) AS audience_user_ids
+           FROM stream_events event
+           LEFT JOIN LATERAL (
+             SELECT CASE
+               WHEN event.kind IN ('request.created','decision.recorded')
+                 THEN event.payload->>'request_id'
+               WHEN event.kind='entity.updated' AND event.payload->>'entity_type'='request'
+                 THEN event.payload->>'entity_id'
+               WHEN event.kind='entity.updated' AND event.payload->>'entity_type'='document'
+                 THEN (SELECT document.request_id::text FROM documents document
+                        WHERE document.workspace_id=event.workspace_id
+                          AND document.id=(event.payload->>'entity_id')::uuid)
+               WHEN event.kind='entity.updated' AND event.payload->>'entity_type'='effect'
+                 THEN (SELECT decision.request_id::text FROM effects effect
+                        JOIN decisions decision ON decision.id=effect.decision_id
+                        WHERE effect.workspace_id=event.workspace_id
+                          AND effect.id=(event.payload->>'entity_id')::uuid)
+               ELSE NULL
+             END AS request_id
+           ) target ON true
+           LEFT JOIN request_audiences audience
+             ON audience.workspace_id=event.workspace_id
+            AND audience.request_id=target.request_id::uuid
+          WHERE event.workspace_id=$1 AND event.id=ANY($2::bigint[])
+          GROUP BY event.id`,
+        [workspaceId, workspaceRows.map((event) => event.id)],
+      );
+      const audienceByEvent = new Map(scoped.rows.map((row) => [row.id, row.audience_user_ids ?? []]));
+      return workspaceRows.map((event) => {
+        const audience = audienceByEvent.get(event.id) ?? [];
+        return audience.length > 0 ? { ...event, audience_user_ids: audience } : event;
+      });
+    },
+  );
   // Delivery failure leaves a committed outbox for the existing replay route.
   try {
     if (session.length) await env.SESSION_HUB.get(env.SESSION_HUB.idFromName(result.run.sessionId)).forward(result.run.id, session);

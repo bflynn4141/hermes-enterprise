@@ -170,12 +170,30 @@ export async function runReceiptJob(env: Env, job: Pick<Job, 'workspace_id' | 'k
       `SELECT r.label,
               r.payload,
               COALESCE(u.name, 'An Admin') AS actor,
-              COALESCE((SELECT pending FROM v_inbox_count WHERE workspace_id = $2), 0) AS pending
+              (
+                SELECT count(*)::integer
+                  FROM requests pending_request
+                 WHERE pending_request.workspace_id=$2 AND pending_request.status='pending'
+                   AND (
+                     NOT EXISTS (
+                       SELECT 1 FROM request_audiences audience
+                        WHERE audience.workspace_id=pending_request.workspace_id
+                          AND audience.request_id=pending_request.id
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM request_audiences audience
+                        WHERE audience.workspace_id=pending_request.workspace_id
+                          AND audience.request_id=pending_request.id
+                          AND audience.user_id=origin.owner_id
+                     )
+                   )
+              ) AS pending
          FROM requests r
+         JOIN sessions origin ON origin.workspace_id=r.workspace_id AND origin.id=$3
          LEFT JOIN decisions d ON d.request_id = r.id
          LEFT JOIN users u ON u.id = d.decided_by
-        WHERE r.id = $1`,
-      [parsed.request_id, job.workspace_id],
+        WHERE r.workspace_id=$2 AND r.id=$1`,
+      [parsed.request_id, job.workspace_id, sessionId],
     );
     const row = context.rows[0];
     if (!row) return [];
