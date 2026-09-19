@@ -1021,6 +1021,12 @@ export async function executeTool(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolOutcome> {
+  // Plan produces previews, not effects. Approval covers the actual operation.
+  if (!(ctx.mode === 'plan' && PREPARED_TOOLS.has(tool.name)) && ctx.run.agentId) {
+    const consent = await ctx.writes.operationConsent({ runId: ctx.run.id, agentId: ctx.run.agentId, toolCallId: ctx.toolCallId, toolName: tool.name, arguments: args });
+    if (consent?.status === 'pending') return { ok: true, data: { approval_id: consent.id, status: 'awaiting_human_approval' }, waiting: { key: `operation_approval:${consent.id}`, label: `Approve ${tool.name} in Permissions` } };
+    if (consent?.status === 'denied') return { ok: false, error: 'The human declined this operation. Do not retry it without a new request.' };
+  }
   if (ctx.mode !== 'plan' || !PREPARED_TOOLS.has(tool.name)) return tool.run(args, ctx);
 
   if (tool.name === 'propose_request') {

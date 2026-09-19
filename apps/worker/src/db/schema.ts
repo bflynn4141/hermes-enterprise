@@ -291,6 +291,21 @@ export const agentCapabilities = pgTable('agent_capabilities', {
   createdAt: now('created_at'),
 });
 
+export const agentOperationPolicies = pgTable('agent_operation_policies', {
+  agentId: uuid('agent_id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  revision: integer('revision').notNull().default(0), operations: jsonb('operations').notNull().default({}), updatedAt: now('updated_at'),
+});
+export const agentOperationApprovals = pgTable('agent_operation_approvals', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  runId: uuid('run_id').notNull(), toolCallId: text('tool_call_id').notNull(), operationId: text('operation_id').notNull(),
+  toolName: text('tool_name').notNull(), arguments: jsonb('arguments').notNull(), policyRevision: integer('policy_revision').notNull(),
+  status: text('status').notNull().default('pending'), decidedBy: uuid('decided_by'), decidedAt: ts('decided_at'), createdAt: now('created_at'),
+});
+export const agentOperationPolicyRevisions = pgTable('agent_operation_policy_revisions', {
+  workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(), revision: integer('revision').notNull(),
+  operationId: text('operation_id').notNull(), requireHumanApproval: boolean('require_human_approval').notNull(),
+  changedBy: uuid('changed_by').notNull(), createdAt: now('created_at'),
+}, table => [primaryKey({columns:[table.agentId,table.revision]})]);
 export const agentFiles = pgTable('agent_files', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1933,6 +1948,9 @@ export const ALL_TABLES = {
   agent_runtime_bindings: agentRuntimeBindings,
   hermes_cloud_capacity: hermesCloudCapacity,
   agent_capabilities: agentCapabilities,
+  agent_operation_policies: agentOperationPolicies,
+  agent_operation_approvals: agentOperationApprovals,
+  agent_operation_policy_revisions: agentOperationPolicyRevisions,
   agent_files: agentFiles,
   agent_context_notes: agentContextNotes,
   agent_context_fields: agentContextFields,

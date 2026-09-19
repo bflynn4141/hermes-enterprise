@@ -305,6 +305,14 @@ export async function dispatchRuntimeCall(
     let content: string;
     if (outcome.ok && outcome.waiting) {
       const { key, label } = outcome.waiting;
+      if (key.startsWith('operation_approval:')) {
+        await db.startRuntimeWait(run.id, run.attempt);
+        if (run.status !== 'waiting') {
+          await db.setRunStatus(run.id, 'waiting', { waitingFor: key, waitingLabel: label });
+          await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'waiting', waiting_for: key, waiting_label: label } }]);
+        }
+        return { run, events, reply: { status: 'pending' } };
+      }
       await db.ensureContextField({ runId: run.id, toolCallId: callId, agentId, key });
       const answer = await db.readContextField(agentId, key);
       if (!answer?.trim()) {
@@ -322,6 +330,11 @@ export async function dispatchRuntimeCall(
         await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'working' } }]);
       }
     } else {
+      if (run.status === 'waiting' && run.waitingFor?.startsWith('operation_approval:')) {
+        await db.endRuntimeWait(run.id, run.attempt);
+        await db.setRunStatus(run.id, 'working', { waitingFor: null, waitingLabel: null });
+        await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'working' } }]);
+      }
       content = outcome.ok ? toolResultEnvelope(call.name, TOOL_SOURCE[call.name] ?? 'engine', outcome.data, now()) : toolResultEnvelope(call.name, 'engine', { error: outcome.error }, now());
     }
     // The result id is reserved by this transaction's lock. A disconnected

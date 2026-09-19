@@ -10,6 +10,7 @@
 // uploads routes and the `extract` consumer; M4 filled in the decision route,
 // the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
+import { getAgentPermissions, patchAgentPermissions, decideAgentOperation } from './routes/agent-permissions.js';
 import { withSentry } from '@sentry/cloudflare';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
@@ -452,6 +453,9 @@ app.post('/w/:ws/admin/hermes-capacity', registerHermesCapacity);
 app.get('/w/:ws/traces', listTraces);
 app.get('/w/:ws/traces/:runId', getTrace);
 app.get('/w/:ws/skills', listSkills);
+app.get('/w/:ws/agents/:agent/permissions', getAgentPermissions);
+app.patch('/w/:ws/agents/:agent/permissions', patchAgentPermissions);
+app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOperation);
 app.post('/w/:ws/skills', adoptSkill);
 app.post('/w/:ws/skills/:id/adopt', adoptSkill);
 app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);

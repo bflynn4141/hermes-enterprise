@@ -111,6 +111,23 @@ describe('official runtime configuration and authentication', () => {
 });
 
 describe('enterprise runtime tool boundary', () => {
+  it('parks exact operation consent without creating spoofable context and resumes once', async () => {
+    const store = db();
+    let status: 'pending' | 'approved' = 'pending';
+    Object.assign(store, { operationConsent: async () => ({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status }) });
+    const input = call('propose_instruction', { body: 'Approved once.' });
+    expect((await dispatchRuntimeCall(store, workspaceId, agentId, input)).reply).toEqual({ status: 'pending' });
+    expect(store.instructions).toHaveLength(0);
+    expect(store.contextFields.size).toBe(0);
+    expect((await store.loadRun())!.status).toBe('waiting');
+    status = 'approved';
+    const result = await dispatchRuntimeCall(store, workspaceId, agentId, input);
+    expect(result.reply).toMatchObject({ ok: true });
+    expect(store.instructions).toHaveLength(1);
+    expect((await store.loadRun())!.status).toBe('working');
+    expect((await dispatchRuntimeCall(store, workspaceId, agentId, input)).reply).toEqual(result.reply);
+    expect(store.instructions).toHaveLength(1);
+  });
   it('executes the app-role approval domain outside the agent run-row lock', async () => {
     const store = db();
     store.capabilities = ['propose_approval'];

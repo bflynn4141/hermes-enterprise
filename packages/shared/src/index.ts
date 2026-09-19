@@ -28,3 +28,4 @@ export * from './recovery.js';
 export * from './request-review.js';
 export * from './agent-context.js';
 export * from './agent-instructions.js';
+export * from './agent-permissions.js';
