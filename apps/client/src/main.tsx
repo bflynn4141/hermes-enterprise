@@ -66,6 +66,10 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
       email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
+      workflowRole: params.get('workflowRole') === 'partnerships' ? 'partnerships'
+        : params.get('workflowRole') === 'finance' ? 'finance'
+          : params.get('workflowRole') === 'unrelated' ? 'unrelated'
+            : params.get('workflowRole') === 'admin' ? 'admin' : undefined,
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }

@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
@@ -24,6 +24,7 @@ const WS = mockUuid(1);
 const USER = mockUuid(100);
 const MEMBER_USER = mockUuid(101);
 const AGENT = mockUuid(102);
+const FINANCE_AGENT = mockUuid(103);
 const MAYA_MEMBER = mockUuid(200);
 const ALEX_MEMBER = mockUuid(201);
 const SESSION_A = mockUuid(2);
@@ -82,6 +83,7 @@ interface MockSession {
 
 const iso = (offsetMinutes = 0) => new Date(Date.UTC(2026, 9, 12, 9, 49 + offsetMinutes, 0)).toISOString();
 const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toString(16).padStart(64, '0')}`;
+const moneyForMock = (minor: number, currency: string): string => `${currency} ${(minor / 100).toFixed(2)}`;
 
 interface MockOptions {
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
@@ -121,6 +123,8 @@ interface MockOptions {
   email?: 'disconnected' | 'connected';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
+  /** Explicit authorization view for the local multi-party fixture. */
+  workflowRole?: PartnerWorkflowViewerRole;
 }
 
 type MockRequest = RequestEntity;
@@ -155,6 +159,7 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
 
 export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
+  const workflowRole = options.workflowRole ?? (seat === 'member' ? 'finance' : 'admin');
   const empty = options.data === 'empty';
   const approvalScenario = options.scenario === 'approvals' && !empty;
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
@@ -223,17 +228,17 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
-        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', {
-          number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026',
-          notes: 'Fictional demo invoice. No provider is connected.',
-          lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }],
+        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Studio', 'INV-SAMPLE-014', {
+          kind: 'invoice', number: 'INV-SAMPLE-014', total_minor: 120000, currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-12', due_date: '2026-09-26',
+          notes: 'Sample invoice for the local fixture. No provider call, payment, or email occurs.',
+          lines: [{ id: 'l1', label: 'Partner enablement workshop', short: 'Workshop', qty: 1, amount_minor: 120000, date: '2026-09-08', source_ids: [mockUuid(619)] }],
           ...(options.partnerWorkflow ? {
             workflow_provenance: {
               handoff_id: mockUuid(610),
-              shared_partner: { id: mockUuid(611), name: 'Robin Ellis', engagement_reference: 'ENG-DEMO-42' },
+              shared_partner: { id: mockUuid(611), name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42' },
               source_sessions: [
-                { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Illustrative approved engagement excerpt only.', simulated: true },
-                { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Illustrative invoice matched the authorized amount.', simulated: true },
+                { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
+                { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Sample invoice fields matched the authorized amount.', simulated: true },
               ],
               source_record_revisions: { engagement: 1, invoice: 1 },
               checks: { duplicate: 'clear', engagement_match: 'matched', missing_context: [] },
@@ -256,6 +261,47 @@ export function createMockBackend(options: MockOptions = {}) {
   });
   const approvalViews = approvalScenario ? approvalDemo.views : new Map<string, ApprovalView>();
   const requests: MockRequest[] = approvalScenario ? [...legacyRequests, ...approvalDemo.requests] : legacyRequests;
+  if (options.partnerWorkflow && approvalScenario) {
+    const requestId = APPROVAL_DEMO_REQUEST_IDS.record_change;
+    const view = approvalViews.get(requestId);
+    const row = requests.find((item) => item.id === requestId);
+    if (view && row && view.payload.approval_type === 'record_change') {
+      view.payload = {
+        ...view.payload,
+        summary: 'Sample fixture: record the externally agreed Robin Studio terms for invoice checking.',
+        consequence: 'Approval records only these terms for one invoice check. It does not sign an agreement, approve payment, or confirm delivery.',
+        evidence: [{ id: 'sample-engagement-source', kind: 'source', label: 'Sample engagement terms.txt', ref: `attachment:${mockUuid(616)}` }],
+        details: {
+          system_id: 'enterprise-partner-records',
+          system_label: 'Enterprise partner records',
+          changes: [
+            { record_id: 'partner:robin-studio', field: 'purpose', before: null, after: 'Partner enablement workshop' },
+            { record_id: 'partner:robin-studio', field: 'authorized_total', before: null, after: 'USD 1,200.00' },
+            { record_id: 'partner:robin-studio', field: 'invoice_scope', before: null, after: 'One invoice' },
+          ],
+          validation: ['Stored source is readable and unchanged', 'Alex Rivera is the named Finance reviewer'],
+          rollback: 'Revoke this exact authorization revision before an invoice is accepted.',
+        },
+        context: { ...view.payload.context, target_member_ids: [ALEX_MEMBER], target_resource_ids: ['enterprise-partner-records'] },
+        policy: {
+          ...view.payload.policy,
+          steps: view.payload.policy.steps.map((step, index) => index === 0 ? { ...step, label: 'Finance reviewer', reviewers: [{ kind: 'member' as const, member_id: ALEX_MEMBER }] } : step),
+        },
+      };
+      view.steps = view.steps.map((step, index) => index === 0 ? { ...step, label: 'Finance reviewer', current_reviewer_member_ids: [ALEX_MEMBER] } : step);
+      row.subject = 'Record Robin Studio engagement terms';
+      row.label = 'Engagement terms';
+      row.title = 'Record agreed engagement terms';
+      row.payload = view.payload as unknown as Record<string, unknown>;
+      row.approval = { ...row.approval!, current_reviewer_names: ['Alex Rivera'], current_steps: [{ label: 'Finance reviewer', approvals_recorded: 0, quorum: 1 }], pending_for_viewer: false, waiting_on_others: true };
+      row.decision_summary = {
+        ...row.decision_summary!,
+        primary: view.payload.summary,
+        consequence: view.payload.consequence,
+        approval_requirement: { ...row.decision_summary!.approval_requirement, current: [{ label: 'Finance reviewer', approvals_recorded: 0, quorum: 1 }], pending_for_viewer: false, waiting_on_others: true },
+      };
+    }
+  }
 
   const members: MemberEntity[] = [
     { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
@@ -359,13 +405,19 @@ export function createMockBackend(options: MockOptions = {}) {
   const sessions: MockSession[] = empty
     ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
-        { id: SESSION_B, agent_id: AGENT, title: 'Provider documents', mode: 'plan', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Drafts ready', last_activity_at: iso(-10), share: null, context: null, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: options.partnerWorkflow ? 'Robin Studio · invoice source' : 'Partner applications', mode: 'work', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: options.partnerWorkflow ? false : true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: options.partnerWorkflow ? 'Invoice received' : 'Needs review', last_activity_at: iso(0), share: null, context: { label: options.partnerWorkflow ? 'ENG-SAMPLE-42' : 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_B, agent_id: options.partnerWorkflow ? FINANCE_AGENT : AGENT, title: options.partnerWorkflow ? 'Robin Studio · Finance review' : 'Provider documents', mode: 'plan', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: options.partnerWorkflow ? 'Awaiting Finance review' : 'Drafts ready', last_activity_at: options.partnerWorkflow ? iso(1) : iso(-10), share: null, context: null, version: 1 },
       ];
+  if (options.partnerWorkflow) {
+    const visibleSessionId = workflowRole === 'partnerships' ? SESSION_A : workflowRole === 'finance' ? SESSION_B : null;
+    sessions.splice(0, sessions.length, ...sessions.filter((session) => session.id === visibleSessionId));
+  }
 
   const messages: Record<string, unknown[]> = {
     [SESSION_A]: empty
       ? []
+      : options.partnerWorkflow
+        ? [{ id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'Sample fixture input — no model call: received INV-SAMPLE-014 for the authorized Robin Studio workshop.', blocks: [], status: 'complete', run_id: null, at: iso(-2) }]
       : [
           { id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'What needs me before the partner work can move forward?', blocks: [], status: 'complete', run_id: null, at: iso(-2) },
           {
@@ -392,7 +444,7 @@ export function createMockBackend(options: MockOptions = {}) {
             at: iso(-1),
           },
         ],
-    [SESSION_B]: [],
+    [SESSION_B]: options.partnerWorkflow ? [{ id: mockUuid(302), session_id: SESSION_B, seq: 1, role: 'user', kind: null, text: 'Message from 🤖 Iris (@agent-partnerships): Sample fixture — no model call. Review INV-SAMPLE-014 against ENG-SAMPLE-42.', blocks: [], status: 'complete', run_id: null, at: iso(0) }] : [],
   };
 
   const documents = empty
@@ -651,6 +703,78 @@ export function createMockBackend(options: MockOptions = {}) {
   const viewerUserId = seat === 'member' ? MEMBER_USER : USER;
   const viewerMemberId = seat === 'member' ? ALEX_MEMBER : MAYA_MEMBER;
   const viewerName = seat === 'member' ? 'Alex Rivera' : 'Maya Chen';
+  let partnerConfigured = options.partnerWorkflow === true;
+  let partnerAdmissionEnabled = options.partnerWorkflow === true;
+  const sourceDigest = (23).toString(16).padStart(64, '0');
+  const declaredUploads = new Map<string, { name: string; size: number; mime: string }>();
+  const engagementHash = hashForMock(42);
+  const partnerEngagements: PartnerEngagementSummary[] = options.partnerWorkflow ? [
+    {
+      id: mockUuid(613), revision: 1, authorization_hash: engagementHash, authorization_status: 'authorized',
+      partner: { id: mockUuid(611), name: 'Robin Studio' }, reference: 'ENG-SAMPLE-42',
+      purpose: 'Partner enablement workshop', currency: 'USD', authorized_total_minor: 120000,
+      valid_from: '2026-09-01', valid_until: '2026-10-31', one_invoice: true,
+      source: { attachment_id: mockUuid(616), name: 'Sample engagement terms.txt', sha256: sourceDigest, created_at: iso(-180), author_name: 'Maya Chen', excerpt: 'Sample terms: one partner enablement workshop for USD 1,200.' },
+    },
+    {
+      id: mockUuid(614), revision: 1, authorization_hash: hashForMock(43), authorization_status: 'authorized',
+      partner: { id: mockUuid(617), name: 'Northstar Labs' }, reference: 'ENG-SAMPLE-43',
+      purpose: 'Partner technical review', currency: 'USD', authorized_total_minor: 80000,
+      valid_from: '2026-09-01', valid_until: '2026-10-31', one_invoice: true,
+      source: { attachment_id: mockUuid(618), name: 'Sample Northstar terms.md', sha256: sourceDigest, created_at: iso(-160), author_name: 'Maya Chen', excerpt: 'Sample terms: one technical review for USD 800.' },
+    },
+  ] : [];
+  const partnerHandoffs: PartnerWorkflowHandoffV2[] = options.partnerWorkflow ? [
+    {
+      id: mockUuid(610), revision: 1, supersedes_handoff_id: null, superseded_by_handoff_id: null, current: true,
+      partner_id: mockUuid(611), partner_name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42',
+      invoice_number: 'INV-SAMPLE-014', invoice_currency: 'USD', invoice_total_minor: 120000,
+      source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: REQ_INVOICE,
+      outcome: { delivery: 'delivered', validation: 'passed', agent_explanation: 'completed', human_decision: 'pending', acknowledgment: 'pending' },
+      result_kind: 'checks_passed', result_reason: 'All server checks passed. Finance must record the human decision.',
+      checks: [
+        { code: 'duplicate', status: 'passed', message: 'No unrelated invoice uses this engagement.' },
+        { code: 'currency', status: 'passed', message: 'USD matches the authorized terms.' },
+        { code: 'amount', status: 'passed', message: 'USD 1,200.00 matches the authorized total.' },
+        { code: 'invoice_source', status: 'passed', message: 'The confirmed invoice source is readable and unchanged.' },
+      ],
+      acknowledgment: null, simulated: true, created_at: iso(-10), decided_at: null,
+    },
+    {
+      id: mockUuid(615), revision: 1, supersedes_handoff_id: null, superseded_by_handoff_id: null, current: true,
+      partner_id: mockUuid(617), partner_name: 'Northstar Labs', engagement_reference: 'ENG-SAMPLE-43',
+      invoice_number: 'INV-SAMPLE-013', invoice_currency: 'USD', invoice_total_minor: 95000,
+      source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: null,
+      outcome: { delivery: 'delivered', validation: 'needs_information', agent_explanation: 'completed', human_decision: 'not_ready', acknowledgment: 'pending' },
+      result_kind: 'needs_information', result_reason: 'The invoice is USD 150.00 above the authorized amount. Submit a corrected source and confirmed fields.',
+      checks: [
+        { code: 'currency', status: 'passed', message: 'USD matches the authorized terms.' },
+        { code: 'amount', status: 'needs_information', message: 'USD 950.00 exceeds the authorized USD 800.00 total.' },
+      ],
+      acknowledgment: null, simulated: true, created_at: iso(-20), decided_at: null,
+    },
+  ] : [];
+
+  function workflowResult(handoff: PartnerWorkflowHandoffV2): PartnerHandoffResult {
+    const engagement = partnerEngagements.find((item) => item.reference === handoff.engagement_reference) ?? partnerEngagements[0]!;
+    return {
+      kind: handoff.result_kind,
+      handoff_id: handoff.id,
+      handoff_revision: handoff.revision,
+      supersedes_handoff_id: handoff.supersedes_handoff_id,
+      engagement_record_id: engagement.id,
+      engagement_revision: engagement.revision,
+      authorization_hash: engagement.authorization_hash,
+      request_id: handoff.request_id,
+      source_versions: {
+        engagement: engagement.source,
+        invoice: { attachment_id: mockUuid(619), name: `${handoff.invoice_number}.pdf`, sha256: sourceDigest, created_at: handoff.created_at, author_name: handoff.partner_name, excerpt: `Sample invoice ${handoff.invoice_number}: ${moneyForMock(handoff.invoice_total_minor, handoff.invoice_currency)} for ${engagement.purpose}.` },
+      },
+      checks: handoff.checks,
+      outcome: handoff.outcome,
+      ...(handoff.result_kind === 'failed_processing' ? { failure_code: 'sample_processing_failure' } : {}),
+    } as PartnerHandoffResult;
+  }
 
   function approvalForViewer(source: ApprovalView): ApprovalView {
     const current = source.steps.filter((step) => step.status === 'current');
@@ -797,7 +921,9 @@ export function createMockBackend(options: MockOptions = {}) {
       settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
     },
     viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-    agent: { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+    agent: workflowRole === 'finance'
+      ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
+      : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
     capabilities: { email_ingress: false, turn_attachments: false, automated_triggers: false },
     heads: { session: head.toString(), workspace: head.toString() },
     counts: {
@@ -830,7 +956,9 @@ export function createMockBackend(options: MockOptions = {}) {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://mock.local');
     const path = url.pathname;
     const method = (init?.method ?? 'GET').toUpperCase();
-    const body: Record<string, unknown> = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    const body: Record<string, unknown> = typeof init?.body === 'string'
+      ? (JSON.parse(init.body) as Record<string, unknown>)
+      : {};
     const p = (suffix: string) => path === `/w/${WS}${suffix}`;
     const match = (pattern: RegExp) => pattern.exec(path);
 
@@ -1058,6 +1186,29 @@ export function createMockBackend(options: MockOptions = {}) {
         row.version += 1;
         row.decided_at = iso(1);
         row.decided_by_name = viewerName;
+        if (id === REQ_INVOICE && options.partnerWorkflow) {
+          const handoff = partnerHandoffs.find((item) => item.request_id === id && item.current);
+          if (handoff) {
+            handoff.outcome = {
+              ...handoff.outcome,
+              human_decision: decision === 'approve' ? 'approved' : 'declined',
+              acknowledgment: 'delivered',
+            };
+            handoff.decided_at = iso(1);
+            handoff.result_reason = decision === 'approve' ? 'Finance saved the invoice draft. No payment or email was sent.' : 'Finance declined the invoice draft.';
+            handoff.acknowledgment = {
+              handoff_id: handoff.id,
+              partner_id: handoff.partner_id,
+              partner_name: handoff.partner_name,
+              engagement_reference: handoff.engagement_reference,
+              outcome: decision === 'approve' ? 'invoice_draft_saved' : 'declined',
+              result_code: decision === 'approve' ? 'approved' : 'declined',
+              finance_reviewer_display: viewerName,
+              recorded_at: iso(1),
+              delivery_status: 'delivered',
+            };
+          }
+        }
         const decisionId = mockUuid(600 + requests.indexOf(row));
         row.decision_id = decisionId;
         publish({
@@ -1150,48 +1301,118 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/instructions')) return page(instructions);
     if (p('/skills')) return page(skills);
-    if (p('/partner-workflow') && method === 'GET') return json(options.partnerWorkflow ? {
-      configured: true,
-      teams: [
-        { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
-        { id: mockUuid(621), slug: 'finance', name: 'Finance' },
-      ],
-      agents: [
-        {
-          id: AGENT, name: 'Iris', principal_user_id: USER, principal_name: 'Maya Chen',
-          team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
-          role_template: { key: 'partnerships-agent', name: 'Partnerships agent', version: '1.0.0' },
-          skill_key: 'partner-program-screening', skill_name: 'Partner program screening', skill_version: '1.7.0',
-          assignment_id: mockUuid(622), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
-          capabilities: ['partner.discovery.read', 'partner.review.prepare', 'partner.outreach.draft'],
+    if (p('/partner-workflow/configure') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      partnerConfigured = true;
+      return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
+    }
+    if (p('/partner-workflow/admission') && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
+      if (body.enabled === true && !partnerConfigured) return fail(409, 'workflow_readiness_incomplete', 'Complete both native profile attestations before enabling this workflow.');
+      partnerAdmissionEnabled = body.enabled === true;
+      return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
+    }
+    if (p('/partner-workflow') && method === 'GET') {
+      const configured = partnerConfigured;
+      const canSeeWork = configured && (workflowRole === 'partnerships' || workflowRole === 'finance');
+      return json({
+        configured,
+        admission_state: partnerAdmissionEnabled ? 'enabled' : 'disabled',
+        viewer_role: configured ? workflowRole : seat === 'admin' ? 'admin' : 'unrelated',
+        actions: {
+          configure: seat === 'admin',
+          set_admission: seat === 'admin',
+          propose_engagement: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          submit_invoice: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          correct_invoice: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          view_finance_review: configured && partnerAdmissionEnabled && workflowRole === 'finance',
         },
-        {
-          id: mockUuid(103), name: 'Ledger', principal_user_id: MEMBER_USER, principal_name: 'Alex Rivera',
-          team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
-          role_template: { key: 'finance-agent', name: 'Finance agent', version: '1.0.0' },
-          skill_key: 'partner-invoice-review', skill_name: 'Partner invoice review', skill_version: '1.0.0',
-          assignment_id: mockUuid(623), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
-          capabilities: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
+        teams: configured && workflowRole !== 'unrelated' ? [
+          { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
+          { id: mockUuid(621), slug: 'finance', name: 'Finance' },
+        ] : [],
+        agents: configured && workflowRole !== 'unrelated' ? [
+          {
+            id: AGENT, name: 'Iris', principal_user_id: USER, principal_name: 'Maya Chen',
+            team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
+            role_template: { key: 'partnerships-agent', name: 'Partnerships agent', version: '1.8.0' },
+            skill_key: 'partner-program-screening', skill_name: 'Partner program screening', skill_version: '1.8.0',
+            assignment_id: mockUuid(622), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
+            capabilities: ['partner.discovery.read', 'partner.review.prepare', 'partner.handoff.publish'],
+          },
+          {
+            id: FINANCE_AGENT, name: 'Ledger', principal_user_id: MEMBER_USER, principal_name: 'Alex Rivera',
+            team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
+            role_template: { key: 'finance-agent', name: 'Finance agent', version: '1.0.1' },
+            skill_key: 'partner-invoice-review', skill_name: 'Partner invoice review', skill_version: '1.0.1',
+            assignment_id: mockUuid(623), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
+            capabilities: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
+          },
+        ] : [],
+        readiness: workflowRole === 'unrelated' ? [] : configured ? [
+          { role: 'partnerships', configured: true, assignment_state: 'active', native_status: 'ready', skill_key: 'partner-program-screening', skill_version: '1.8.0', artifact_digest: hashForMock(71), missing: [] },
+          { role: 'finance', configured: true, assignment_state: 'active', native_status: 'ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: [] },
+        ] : [
+          { role: 'partnerships', configured: false, assignment_state: 'missing', native_status: 'unknown', skill_key: 'partner-program-screening', skill_version: null, artifact_digest: null, missing: ['principal', 'agent', 'assignment', 'skill', 'tools', 'provider'] },
+          { role: 'finance', configured: false, assignment_state: 'missing', native_status: 'unknown', skill_key: 'partner-invoice-review', skill_version: null, artifact_digest: null, missing: ['principal', 'agent', 'assignment', 'skill', 'tools', 'provider'] },
+        ],
+        partner_options: canSeeWork ? [
+          { id: mockUuid(611), name: 'Robin Studio', source: 'engagement' },
+          { id: mockUuid(617), name: 'Northstar Labs', source: 'candidate' },
+        ] : [],
+        engagements: canSeeWork ? partnerEngagements : [],
+        handoffs: canSeeWork ? partnerHandoffs : [],
+        connector: {
+          name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
+          summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
         },
-      ],
-      handoffs: [{
-        id: mockUuid(610), status: 'completed', partner_id: mockUuid(611), partner_name: 'Robin Ellis',
-        engagement_reference: 'ENG-DEMO-42', source_session_id: SESSION_A, finance_session_id: SESSION_B,
-        invoice_request_id: REQ_INVOICE, result_reason: 'Prepared for Finance human review.', simulated: true,
-        delivery_protocol: 'hermes-bot-mode/v1', message_status: 'delivered',
-        created_at: iso(-10), completed_at: iso(-9),
-      }],
-      connector: {
-        name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
-        summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
-      },
-    } : {
-      configured: false, teams: [], agents: [], handoffs: [],
-      connector: {
-        name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
-        summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
-      },
-    });
+      });
+    }
+    if (p('/partner-workflow/engagement-authorizations') && method === 'POST') {
+      if (workflowRole !== 'partnerships') return fail(403, 'forbidden_partner_workflow_action');
+      return json({ approval_request_id: APPROVAL_DEMO_REQUEST_IDS.record_change, authorization_revision: 1, authorization_hash: hashForMock(80), engagement_record_id: null, status: 'pending', created: true }, 201);
+    }
+    if (p('/partner-workflow/invoice-intakes') && method === 'POST') {
+      if (workflowRole !== 'partnerships') return fail(403, 'partnerships_principal_required');
+      const id = mockUuid(630 + partnerHandoffs.length);
+      const engagement = partnerEngagements.find((item) => item.id === body.engagement_record_id);
+      const invoice = body.invoice as Record<string, unknown>;
+      partnerHandoffs.unshift({
+        id, revision: 1, supersedes_handoff_id: null, superseded_by_handoff_id: null, current: true,
+        partner_id: engagement?.partner.id ?? mockUuid(611), partner_name: engagement?.partner.name ?? 'Sample partner',
+        engagement_reference: engagement?.reference ?? 'ENG-SAMPLE', invoice_number: String(invoice.number ?? 'INV-SAMPLE'),
+        invoice_currency: String(invoice.currency ?? 'USD'), invoice_total_minor: Number(invoice.total_minor ?? 0),
+        source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: null,
+        outcome: { delivery: 'queued', validation: 'queued', agent_explanation: 'queued', human_decision: 'not_ready', acknowledgment: 'pending' },
+        result_kind: 'pending_checks', result_reason: 'Sample invoice received. No model call was made in this fixture.', checks: [], acknowledgment: null,
+        simulated: true, created_at: iso(0), decided_at: null,
+      });
+      return json({ intake_event_id: mockUuid(640), payload_hash: hashForMock(81), handoff_id: id, handoff_revision: 1, source_run_id: RUN, finance_run_id: null, created: true }, 201);
+    }
+    const partnerHandoffMatch = match(new RegExp(`^/w/${WS}/partner-workflow/handoffs/([^/]+)/(result|corrections)$`));
+    if (partnerHandoffMatch) {
+      const handoff = partnerHandoffs.find((item) => item.id === partnerHandoffMatch[1]);
+      if (!handoff) return fail(404, 'handoff_not_found');
+      if (partnerHandoffMatch[2] === 'result' && method === 'GET') return json(workflowResult(handoff));
+      if (partnerHandoffMatch[2] === 'corrections' && method === 'POST') {
+        if (workflowRole !== 'partnerships') return fail(403, 'partnerships_principal_required');
+        handoff.current = false;
+        const successorId = mockUuid(650 + partnerHandoffs.length);
+        handoff.superseded_by_handoff_id = successorId;
+        handoff.outcome = { ...handoff.outcome, human_decision: 'superseded' };
+        const invoice = body.invoice as Record<string, unknown>;
+        const successor: PartnerWorkflowHandoffV2 = {
+          ...handoff, id: successorId, revision: 1, supersedes_handoff_id: handoff.id, superseded_by_handoff_id: null, current: true,
+          invoice_number: String(invoice.number ?? handoff.invoice_number), invoice_currency: String(invoice.currency ?? handoff.invoice_currency),
+          invoice_total_minor: Number(invoice.total_minor ?? handoff.invoice_total_minor), request_id: REQ_INVOICE,
+          outcome: { delivery: 'delivered', validation: 'passed', agent_explanation: 'completed', human_decision: 'pending', acknowledgment: 'pending' },
+          result_kind: 'checks_passed', result_reason: 'Sample corrected invoice passed deterministic checks. No model call was made in this fixture.',
+          checks: [{ code: 'amount', status: 'passed', message: 'The corrected amount matches the authorized total.' }], simulated: true, created_at: iso(1), decided_at: null,
+        };
+        partnerHandoffs.unshift(successor);
+        return json({ superseded_handoff_id: handoff.id, handoff_id: successor.id, handoff_revision: 1, intake_event_id: mockUuid(651), payload_hash: hashForMock(82), source_run_id: RUN, finance_run_id: mockUuid(652), created: true }, 201);
+      }
+    }
     const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/skill-assignments(?:/([^/]+))?$`));
     if (skillAssignmentsMatch) {
       if (!skillAssignmentsMatch[1] && method === 'GET') return page([skillAssignment]);
@@ -1294,6 +1515,7 @@ export function createMockBackend(options: MockOptions = {}) {
     // Uploads: declare, PUT the bytes at the dev-direct URL, complete.
     if ((p('/attachments') || p('/files')) && method === 'POST') {
       const attachment = { id: mockUuid(800), name: String(body.name ?? 'file.pdf'), size: Number(body.size ?? 1), mime: String(body.mime ?? 'application/pdf'), sha256: null, status: 'uploading' };
+      declaredUploads.set(attachment.id, { name: attachment.name, size: attachment.size, mime: attachment.mime });
       return json(
         { attachment, upload: { method: 'PUT', url: `/w/${WS}/attachments/${attachment.id}/upload`, expires_at: iso(900), headers: {}, direct: true } },
         201,
@@ -1302,7 +1524,8 @@ export function createMockBackend(options: MockOptions = {}) {
     if (path.endsWith('/upload') && method === 'PUT') return json({ ok: true, size: 1 });
     if (path.endsWith('/complete') && method === 'POST') {
       const id = path.split('/')[4] ?? mockUuid(800);
-      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
+      const upload = declaredUploads.get(id) ?? { name: 'Invoice.pdf', size: 1, mime: 'application/pdf' };
+      return json({ id, ...upload, sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
     }
 
     if (p('/usage')) return json(usage);

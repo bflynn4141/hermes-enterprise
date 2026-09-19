@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type PartnerWorkflowView, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -23,6 +23,7 @@ import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
+import { PartnerWorkflow } from './PartnerWorkflow.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -471,7 +472,6 @@ function LibrarySkills() {
   const lists = useWorkspaceLists();
   const [ack, setAck] = useState(false);
   const [assignments, setAssignments] = useState<EnterpriseSkillAssignment[]>([]);
-  const [workflow, setWorkflow] = useState<PartnerWorkflowView | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const agentId = state.agent.id;
   useEffect(() => {
@@ -482,41 +482,9 @@ function LibrarySkills() {
       .catch(() => undefined);
     return () => { current = false; };
   }, [adapter.rest, agentId, state.workspace.id]);
-  useEffect(() => {
-    let current = true;
-    void adapter.rest.partnerWorkflow(state.workspace.id)
-      .then((view) => { if (current) setWorkflow(view); })
-      .catch(() => undefined);
-    return () => { current = false; };
-  }, [adapter.rest, state.workspace.id]);
   return (
     <div className="col">
-      {workflow && (
-        <Panel
-          icon="people"
-          title={workflow.configured ? 'Partnerships + Finance' : 'Employee role templates not configured'}
-          subtitle={workflow.configured
-            ? 'One agent per employee. Shared partner identity and approved engagement evidence only.'
-            : 'An Admin assigns one Partnerships agent and one Finance agent. New schedules stay off.'}
-        >
-          {workflow.agents.map((agent) => (
-            <div className="kv" key={agent.id}>
-              <span className="grow"><strong>{agent.team.name}</strong> · {agent.principal_name}</span>
-              <span className="meta">{agent.name} · {agent.role_template.name} · {agent.assignment_state === 'active' ? 'Active' : 'Paused'} · schedule {agent.schedule_enabled ? 'on' : 'off'}</span>
-            </div>
-          ))}
-          <div className="kv">
-            <span className="grow">Enterprise partner records</span>
-            <span className="meta">Server-enforced · private by team</span>
-          </div>
-          {workflow.handoffs[0] && (
-            <div className="kv">
-              <span className="grow">Latest handoff · {workflow.handoffs[0].partner_name}</span>
-              <span className="meta">{workflow.handoffs[0].status.replace('_', ' ')}</span>
-            </div>
-          )}
-        </Panel>
-      )}
+      <PartnerWorkflow />
       {lists.skills.length === 0 && <EmptyState icon="skill" title="No shared skills yet" />}
       {lists.skills.map((skill) => {
         const assignment = assignments.find((item) => `managed:${item.skill_key}` === skill.id);

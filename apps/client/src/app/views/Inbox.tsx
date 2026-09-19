@@ -11,9 +11,9 @@
 //     re-renders in a "Re-authenticated — confirm to continue" state that
 //     requires a second, deliberate click. The client never auto-replays a
 //     decision.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
+import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type PartnerHandoffResult, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
@@ -682,6 +682,74 @@ const documentSourceIds = (value: unknown): string[] => Array.isArray(value)
   ? value.filter((id): id is string => typeof id === 'string' && id.length > 0)
   : [];
 
+function PartnerResultEvidence({ handoffId, fallback }: { handoffId: string; fallback: ReactNode }) {
+  const adapter = useAdapter();
+  const state = useAppState();
+  const [result, setResult] = useState<PartnerHandoffResult | null>(null);
+  const [failed, setFailed] = useState(false);
+  const load = (): void => {
+    setFailed(false);
+    void adapter.rest.partnerHandoffResult(state.workspace.id, handoffId)
+      .then(setResult)
+      .catch(() => setFailed(true));
+  };
+  useEffect(load, [adapter.rest, state.workspace.id, handoffId]);
+
+  if (failed) return <><div className="partner-evidence-unavailable"><p>Authorized workflow evidence is unavailable for this account or changed after review.</p><Button small onClick={load}>Try again</Button></div>{fallback}</>;
+  if (!result) return fallback || <Skeleton rows={3} label="Loading authorized workflow evidence" />;
+  const explanation = result.outcome.agent_explanation === 'completed'
+    ? 'Finance agent explanation ready'
+    : result.outcome.agent_explanation === 'failed' || result.outcome.agent_explanation === 'stopped'
+      ? 'Agent explanation unavailable'
+      : result.outcome.agent_explanation === 'running' ? 'Finance agent is reviewing' : 'Finance agent review queued';
+  return (
+    <details className="legacy-disclosure">
+      <summary>Authorized workflow evidence ({result.checks.length} checks)</summary>
+      <p className="meta">{explanation} · Human decision {result.outcome.human_decision.replaceAll('_', ' ')}</p>
+      <ul className="partner-result-checks">
+        {result.checks.map((check) => <li key={check.code} data-state={check.status}><strong>{check.code.replaceAll('_', ' ')}</strong><span>{check.message}</span></li>)}
+      </ul>
+      <div className="partner-evidence-grid">
+        {([
+          ['Authorized engagement source', result.source_versions.engagement],
+          ['Confirmed invoice source', result.source_versions.invoice],
+        ] as const).map(([label, source]) => (
+          <section key={label}>
+            <span className="partner-card-kicker">{label}</span>
+            <h4>{source.name}</h4>
+            <p className="meta">{source.author_name ? `${source.author_name} · ` : ''}<time dateTime={source.created_at}>{new Date(source.created_at).toLocaleString()}</time></p>
+            <blockquote>{source.excerpt}</blockquote>
+          </section>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function documentReviewerSummary(request: RequestEntity, financeScoped: boolean, resolved: boolean): string {
+  const requirement = request.decision_summary?.approval_requirement;
+  if (resolved) {
+    const completed = requirement?.completed_steps ?? 1;
+    const total = requirement?.total_steps ?? 1;
+    return financeScoped
+      ? `${completed} of ${total} Finance review${total === 1 ? '' : ' steps'}`
+      : `${completed} of ${total} Admin approval${total === 1 ? '' : ' steps'}`;
+  }
+  const current = requirement?.current[0];
+  if (current) {
+    const label = current.label === 'Finance reviewer'
+      ? `Finance review${current.quorum === 1 ? '' : 's'}`
+      : current.label === 'Workspace Admin'
+        ? `Admin approval${current.quorum === 1 ? '' : 's'}`
+        : current.label;
+    return `${current.approvals_recorded} of ${current.quorum} ${label}`;
+  }
+  const remaining = requirement?.remaining_approvals ?? 1;
+  return financeScoped
+    ? `0 of ${remaining} Finance review${remaining === 1 ? '' : 's'}`
+    : `0 of ${remaining} Admin approval${remaining === 1 ? '' : 's'}`;
+}
+
 export function DocumentView({
   request,
   document: doc,
@@ -699,7 +767,6 @@ export function DocumentView({
   const state = useAppState();
   const nav = useNav();
   const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
-  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
   const [mode, setMode] = useState<'preview' | 'render' | 'pdf'>('preview');
   const [line, setLine] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
@@ -743,6 +810,9 @@ export function DocumentView({
     : [];
   const sourceIds = [...new Set([...lines.flatMap((item) => item.sourceIds), ...sections.flatMap((item) => item.sourceIds)])];
   const workflowProvenance = record(payload.workflow_provenance);
+  const handoffId = text(workflowProvenance.handoff_id);
+  const financeScoped = request.decision_summary?.approval_requirement.current.some((step) => step.label === 'Finance reviewer') === true
+    || Object.keys(workflowProvenance).length > 0;
   const sharedPartner = record(workflowProvenance.shared_partner);
   const workflowSessions = Array.isArray(workflowProvenance.source_sessions)
     ? workflowProvenance.source_sessions.flatMap((item) => {
@@ -763,6 +833,27 @@ export function DocumentView({
   const status = declined ? 'Declined' : saved ? isInvoice ? 'Saved in Library' : 'Saved unsigned' : request.status === 'withdrawn' ? 'Withdrawn' : 'Draft awaiting approval';
   const consequence = isInvoice ? 'Saves the invoice in Library. No payment or email is sent.' : 'Saves an unsigned agreement in Library. Nothing is signed or sent.';
   const decisionLabel = requestActionLabel(request);
+  const reviewerSummary = documentReviewerSummary(request, financeScoped, resolved);
+  const legacyWorkflowEvidence = workflowSessions.length === 0 ? <p className="meta">No source messages linked.</p> : (
+    <details className="legacy-disclosure">
+      <summary>Workflow evidence ({workflowSessions.length} sources)</summary>
+      {text(sharedPartner.name) && <p className="meta">
+        {text(sharedPartner.name)} · Engagement {text(sharedPartner.engagement_reference) ?? 'reference not supplied'}
+      </p>}
+      <ul>
+        {workflowSessions.map((source) => (
+          <li key={`${source.role}:${source.sessionId}`}>
+            <strong>{source.role === 'partnerships' ? 'Partnerships' : 'Finance'} · {source.agentName}</strong>
+            {source.simulated && <span className="pill illustrative">Simulated</span>}
+            <p>{source.excerpt}</p>
+            {source.role === 'finance'
+              ? <a href={`/workspace/${state.workspace.id}/s/${source.sessionId}`}>Open Finance review session</a>
+              : <span className="meta">Shared excerpt only · Full Partnerships session remains private.</span>}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 
   return (
     <div className={`legacy-document-view${embedded ? ' embedded-document-view' : ''}`}>
@@ -784,8 +875,8 @@ export function DocumentView({
               {totalMinor !== null && <div><dt>Amount</dt><dd>{amount}</dd></div>}
             </>}
           </dl>
-          {!resolved && <p className="legacy-reviewer"><span>{financeScoped ? '0 of 1 Finance review' : '0 of 1 Admin approval'}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
-          {resolved && <p className="legacy-reviewer"><span>{saved ? '1 of 1 Admin approval' : declined ? 'Draft declined' : 'No approval recorded'}</span>{request.decided_by_name && <span>{request.decided_by_name}</span>}</p>}
+          {!resolved && <p className="legacy-reviewer"><span>{reviewerSummary}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
+          {resolved && <p className="legacy-reviewer"><span>{saved ? reviewerSummary : declined ? 'Draft declined' : 'No approval recorded'}</span>{request.decided_by_name && <span>{request.decided_by_name}</span>}</p>}
         </section>
 
         <section className="legacy-context" aria-labelledby={`document-purpose-${request.id}`}>
@@ -797,26 +888,7 @@ export function DocumentView({
 
         <section className="legacy-context" aria-labelledby={`document-sources-${request.id}`}>
           <h2 id={`document-sources-${request.id}`}>Related messages &amp; documents</h2>
-          {workflowSessions.length === 0 ? <p className="meta">No source messages linked.</p> : (
-            <details className="legacy-disclosure" open>
-              <summary>Workflow evidence ({workflowSessions.length} sources)</summary>
-              {text(sharedPartner.name) && <p className="meta">
-                {text(sharedPartner.name)} · Engagement {text(sharedPartner.engagement_reference) ?? 'reference not supplied'}
-              </p>}
-              <ul>
-                {workflowSessions.map((source) => (
-                  <li key={`${source.role}:${source.sessionId}`}>
-                    <strong>{source.role === 'partnerships' ? 'Partnerships' : 'Finance'} · {source.agentName}</strong>
-                    {source.simulated && <span className="pill illustrative">Simulated</span>}
-                    <p>{source.excerpt}</p>
-                    {source.role === 'finance'
-                      ? <a href={`/workspace/${state.workspace.id}/s/${source.sessionId}`}>Open Finance review session</a>
-                      : <span className="meta">Shared excerpt only · Full Partnerships session remains private.</span>}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          {handoffId ? <PartnerResultEvidence handoffId={handoffId} fallback={legacyWorkflowEvidence} /> : legacyWorkflowEvidence}
           {sourceIds.length > 0 && <details className="legacy-disclosure">
             <summary>{sourceIds.length} unresolved source reference{sourceIds.length === 1 ? '' : 's'}</summary>
             <p className="meta">These references are stored on the draft. Their source content and dates are not available here.</p>

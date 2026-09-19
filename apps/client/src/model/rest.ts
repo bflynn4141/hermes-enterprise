@@ -43,7 +43,11 @@ import {
   directUploadResultSchema,
   enterpriseSkillAssignmentPageSchema,
   enterpriseSkillAssignmentSchema,
-  partnerWorkflowViewSchema,
+  partnerWorkflowViewV2Schema,
+  partnerEngagementAuthorizationResultSchema,
+  partnerInvoiceIntakeResultSchema,
+  partnerInvoiceCorrectionResultSchema,
+  partnerHandoffResultSchema,
   type AttachmentUpload,
   type AgentWakeInput,
   type ApprovalView,
@@ -56,6 +60,16 @@ import {
   type RunView,
   type WorkspaceCreateInput,
   type EnterpriseSkillAssignmentUpdate,
+  type PartnerWorkflowViewV2,
+  type PartnerWorkflowSetup,
+  type PartnerWorkflowAdmissionInput,
+  type PartnerEngagementAuthorizationInput,
+  type PartnerEngagementAuthorizationResult,
+  type PartnerInvoiceIntakeInput,
+  type PartnerInvoiceIntakeResult,
+  type PartnerInvoiceCorrectionInput,
+  type PartnerInvoiceCorrectionResult,
+  type PartnerHandoffResult,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -369,10 +383,19 @@ export function createRest(options: RestOptions) {
     updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
       request('PATCH', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`, enterpriseSkillAssignmentSchema, body),
     partnerWorkflow: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/partner-workflow`, partnerWorkflowViewSchema), {
+      optional(() => request('GET', `${ws(workspaceId)}/partner-workflow`, partnerWorkflowViewV2Schema), {
         configured: false,
+        admission_state: 'disabled' as const,
+        viewer_role: 'unrelated' as const,
+        actions: { configure: false, set_admission: false, propose_engagement: false, submit_invoice: false, correct_invoice: false, view_finance_review: false },
         teams: [],
         agents: [],
+        readiness: [
+          { role: 'partnerships' as const, configured: false, assignment_state: 'missing' as const, native_status: 'unknown' as const, skill_key: 'partner-program-screening' as const, skill_version: null, artifact_digest: null, missing: ['principal' as const, 'agent' as const, 'assignment' as const, 'skill' as const, 'tools' as const, 'provider' as const] },
+          { role: 'finance' as const, configured: false, assignment_state: 'missing' as const, native_status: 'unknown' as const, skill_key: 'partner-invoice-review' as const, skill_version: null, artifact_digest: null, missing: ['principal' as const, 'agent' as const, 'assignment' as const, 'skill' as const, 'tools' as const, 'provider' as const] },
+        ],
+        partner_options: [],
+        engagements: [],
         handoffs: [],
         connector: {
           name: 'enterprise-partner-records' as const,
@@ -380,7 +403,19 @@ export function createRest(options: RestOptions) {
           enforcement: 'server' as const,
           summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.' as const,
         },
-      }),
+      }) as Promise<PartnerWorkflowViewV2>,
+    configurePartnerWorkflow: (workspaceId: string, body: PartnerWorkflowSetup) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/configure`, partnerWorkflowViewV2Schema, body) as Promise<PartnerWorkflowViewV2>,
+    setPartnerWorkflowAdmission: (workspaceId: string, body: PartnerWorkflowAdmissionInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/admission`, partnerWorkflowViewV2Schema, body) as Promise<PartnerWorkflowViewV2>,
+    proposePartnerEngagement: (workspaceId: string, body: PartnerEngagementAuthorizationInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/engagement-authorizations`, partnerEngagementAuthorizationResultSchema, body) as Promise<PartnerEngagementAuthorizationResult>,
+    submitPartnerInvoice: (workspaceId: string, body: PartnerInvoiceIntakeInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/invoice-intakes`, partnerInvoiceIntakeResultSchema, body) as Promise<PartnerInvoiceIntakeResult>,
+    correctPartnerInvoice: (workspaceId: string, handoffId: string, body: PartnerInvoiceCorrectionInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/corrections`, partnerInvoiceCorrectionResultSchema, body) as Promise<PartnerInvoiceCorrectionResult>,
+    partnerHandoffResult: (workspaceId: string, handoffId: string) =>
+      request('GET', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/result`, partnerHandoffResultSchema) as Promise<PartnerHandoffResult>,
 
     // --- members and invitations ---
     invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
