@@ -217,6 +217,23 @@ test('a no-output failed turn retains its explanation and retry after reload', a
   expect(server.turns).toHaveLength(1);
 });
 
+test('authoritative reconciliation repairs late committed text without a newer replay cursor', async ({ page }) => {
+  const server = new SessionServer(page); await server.mount();
+  await send(page, 'Continue despite a delayed checkpoint');
+  await expect.poll(() => server.turns.length).toBe(1);
+  await server.beginText(A, 'Durable prefix');
+  await expect(page.locator('.stream-text')).toContainText('Durable prefix');
+  const unchangedHead = server.head();
+  // Mirrors a lower-ID transaction committing after another publication has
+  // moved the replay head. The DB suite verifies that real commit ordering;
+  // here only the snapshot changes, so event-only reconciliation cannot pass.
+  const stream = server.streams.get(A)!;
+  stream.text += ' and a late committed suffix'; stream.seq += 1;
+  await expect(page.locator('.stream-text')).toContainText('Durable prefix and a late committed suffix');
+  expect(server.head()).toBe(unchangedHead);
+  expect(server.turns).toHaveLength(1);
+});
+
 test('immediate Send waits for the selected model and effort to be saved', async ({ page }) => {
   const server = new SessionServer(page); await server.mount();
   server.settingsGate = deferred();
