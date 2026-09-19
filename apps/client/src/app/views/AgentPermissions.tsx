@@ -28,7 +28,7 @@ function PermissionsContents() {
   const workspaceId = state.workspace.id;
   const refresh = useCallback(async () => {
     if (!agentId || lock.current) return;
-    const version = generation.current;
+    const version = ++generation.current;
     const data = await adapter.rest.agentPermissions(workspaceId, agentId);
     if (mounted.current && version === generation.current) setPermissions(data);
   }, [adapter, workspaceId, agentId]);

@@ -884,6 +884,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
       }
       if (projected) dispatch({ type: 'turn/rejected', sessionId: id, clientTurnId: turnId });
       dispatch({ type: 'session/draft', id, text: trimmed });
+      // A rejected turn must not silently become a source-free retry.
+      for (const source of attachments) {
+        if (source.kind === 'source' && source.sha256) dispatch({ type: 'session/attach', id, attachment: { id: source.id, label: source.label, kind: 'source', sha256: source.sha256, icon: 'context' } });
+      }
       // And the name goes back, unless a person has renamed it in between: a
       // manual rename wins permanently (decision C34), and that is still true
       // when the thing being undone is the client's own guess.

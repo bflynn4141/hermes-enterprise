@@ -675,7 +675,10 @@ export async function admitApprovalContinuation(
   let continuationMessage: { id: string; seq: number; text: string } | null = null;
   if (insertedRunId) {
     if (intent.source_run_id) {
-      await tx.query(`UPDATE runs SET context_snapshot=(SELECT context_snapshot FROM runs WHERE id=$2) WHERE id=$1`, [insertedRunId,intent.source_run_id]);
+      await tx.query(`UPDATE runs next SET context_snapshot=original.context_snapshot,
+        instruction_snapshot=original.instruction_snapshot, instruction_version_id=original.instruction_version_id
+        FROM runs original WHERE next.id=$1 AND original.id=$2
+        AND next.workspace_id=original.workspace_id AND next.agent_id=original.agent_id`, [insertedRunId,intent.source_run_id]);
     }
     const sequence = await tx.query<{ seq: number }>(
       `UPDATE sessions SET next_seq = next_seq + 1, last_activity_at = now()

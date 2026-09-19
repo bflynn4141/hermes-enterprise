@@ -331,7 +331,7 @@ export function Composer({ session }: { session: SessionState }) {
           }}
         />
         <div className="tools">
-          {attachmentsAvailable && (
+          {attachmentsAvailable && !active && !admitting && (
             <span style={{ position: 'relative', display: 'inline-flex' }}>
               <button ref={attachBtn} type="button" className="text-btn light" aria-label="Add context" aria-expanded={menu === 'attach'} onClick={() => setMenu(menu === 'attach' ? null : 'attach')}>
                 <Icon name="plus" />
