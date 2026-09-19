@@ -73,6 +73,23 @@ test('members can inspect context and permissions but cannot change them', async
   await expect(page.getByRole('switch').first()).toBeDisabled();
 });
 
+test('standing instructions save for the selected agent and survive navigation', async ({ page }) => {
+  await page.goto('/?agentSettings=1');
+  await openTab(page, 'Skills');
+  await expect(page.getByRole('heading', { name: 'How Iris works' })).toBeVisible();
+  await page.getByRole('button', { name: 'Review & edit' }).click();
+  await page.getByRole('textbox', { name: 'Standing instructions' }).fill('Cite the evidence and lead with missing information.');
+  await openTab(page, 'Context');
+  await openTab(page, 'Skills');
+  await expect(page.getByRole('textbox', { name: 'Standing instructions' })).toHaveValue('Cite the evidence and lead with missing information.');
+  await page.getByRole('button', { name: 'Save instructions' }).click();
+  await expect(page.getByRole('status')).toContainText('Saved');
+  await openTab(page, 'Context');
+  await openTab(page, 'Skills');
+  await expect(page.getByText('Cite the evidence and lead with missing information.', { exact: true })).toBeVisible();
+  await page.screenshot({ path: 'qa/agent-skills-settings-desktop.png', fullPage: true });
+});
+
 test('only extracted sources can be selected, and selection does not send a turn', async ({ page }) => {
   await page.goto('/?agentSettings=1');
   await openTab(page, 'Context');

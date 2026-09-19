@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -494,7 +494,7 @@ export function createMockBackend(options: MockOptions = {}) {
     { id: 'destination', field: 'destination', label: 'Feedback destination', value: null, scope: null, version: 1 },
   ];
 
-  const instructions = empty
+  const instructions: InstructionVersion[] = empty
     ? [{ id: mockUuid(70), state: 'current' as const, text: 'Screen applications against the partner criteria and show the evidence you used.', before: null, provenance: null, created_at: iso(-9000), version: 1 }]
     : [
         { id: mockUuid(70), state: 'current' as const, text: 'Screen applications against the partner criteria and show the evidence you used.', before: null, provenance: null, created_at: iso(-9000), version: 1 },
@@ -1397,7 +1397,18 @@ export function createMockBackend(options: MockOptions = {}) {
       field.version += 1;
       return json(field);
     }
-    if (p('/instructions')) return page(instructions);
+    if (p('/instructions')) {
+      if (method === 'POST') {
+        if (seat !== 'admin') return fail(403, 'not_admin');
+        if (options.agentSettings === 'fail') return fail(503, 'fixture_write_failed');
+        const current = instructions.find((row) => row.state === 'current');
+        if (options.agentSettings === 'conflict' || body.expected_current_id !== (current?.id ?? null)) return fail(409, 'stale_revision');
+        if (current) current.state = 'saved';
+        const saved: InstructionVersion = { id: mockUuid(820 + instructions.length), state: 'current', text: String(body.text), before: current?.text ?? null, provenance: 'written by Brian', created_at: iso(), version: 1 };
+        instructions.unshift(saved); return json(saved, 201);
+      }
+      return page(instructions);
+    }
     if (p('/skills')) return page(skills);
     if (p('/partner-workflow/configure') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');

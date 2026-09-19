@@ -11,7 +11,8 @@ import type { RequestEntity } from '@hermes/shared';
 import { useAppState, useDispatch } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
 import { Button, IconButton } from '../ui/primitives.js';
-import { AgentOverview, AgentContext, AgentSkills, AgentTraces, TraceDetail, Setup } from './Agent.js';
+import { AgentOverview, AgentTraces, TraceDetail, Setup } from './Agent.js';
+import { AgentSkillsSettings } from './AgentSkillsSettings.js';
 import { AgentContextSettings } from './AgentContextSettings.js';
 import { AgentPermissions } from './AgentPermissions.js';
 import { InboxList, RequestReview } from './Inbox.js';
@@ -71,7 +72,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
       if (app.view === 'setup') return <Setup step={app.step ?? 'ready'} />;
       if (app.view === 'context') return <AgentContextSettings field={app.field ?? null} />;
       if (app.view === 'permissions') return <AgentPermissions />;
-      if (app.view === 'skills') return <AgentSkills />;
+      if (app.view === 'skills') return <AgentSkillsSettings />;
       if (app.view === 'traces') return <AgentTraces />;
       if (app.view === 'trace') return <TraceDetail id={app.id ?? null} />;
       return <AgentOverview />;
