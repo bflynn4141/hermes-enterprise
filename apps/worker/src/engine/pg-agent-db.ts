@@ -39,7 +39,8 @@ import type {
   StepProgress,
 } from './agent-db.js';
 import { persistApprovalContinuation } from '../runtime/continuation-intent.js';
-import { partnerAgentConfig } from '../partner-screening/config.js';
+import { assignmentToolNames, resolveEnterpriseSkillAssignment, resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';
 import {
   agentCashContactEnrichmentArguments,
   agentCashEmailVerificationArguments,
@@ -282,18 +283,35 @@ export class PgAgentDb implements AgentDb {
   async loadToolNames(agentId: string | null): Promise<string[]> {
     if (!agentId) return [];
     return this.tx(async (q) => {
-      const { rows } = await q<{ tool_names: string[] }>(
-        `SELECT tool_names FROM agent_capabilities WHERE agent_id = $1 ORDER BY position`,
+      const { rows } = await q<{ tool_names: string[]; scope: string | null }>(
+        `SELECT tool_names, scope FROM agent_capabilities WHERE agent_id = $1 ORDER BY position`,
         [agentId],
       );
-      const configured = [...new Set(rows.flatMap((row) => row.tool_names ?? []))];
-      // A valid per-agent public-source config is also the explicit enablement
-      // for the two read tools and the existing pending-only proposal tool.
-      // It does not add any decision, contact or external-write ability.
-      const partnerTools = partnerAgentConfig(this.env, agentId).config
-        ? ['list_partner_candidates', 'get_partner_candidate', 'propose_request']
-        : [];
-      if (configured.length > 0 || partnerTools.length > 0) return [...new Set([...configured, ...partnerTools])];
+      // Enterprise skill assignments are the reviewed source of the skill's
+      // semantic grants. They map to exact runtime tools here; a paused
+      // assignment contributes no authority.
+      const skillQuery = { query: <T extends import('pg').QueryResultRow>(text: string, values: readonly unknown[] = []) => q<T>(text, values) };
+      const assigned = await resolvePartnerSkillAssignment(this.env, skillQuery, this.workspaceId, agentId);
+      const finance = await resolveEnterpriseSkillAssignment(skillQuery, this.workspaceId, agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key);
+      // Once an assignment exists, its semantic grants replace the legacy
+      // Partner Program capability row. Other capability rows still compose
+      // normally. This is what makes pause remove authority rather than only
+      // hiding the skill instructions.
+      const configuredRows = assigned.assignment || finance.assignment
+        ? rows.filter((row) => row.scope !== 'Partner Program')
+        : rows;
+      const configured = [...new Set(configuredRows.flatMap((row) => row.tool_names ?? []))];
+      const partnerTools = assignmentToolNames(assigned.config ? assigned.assignment : null);
+      const financeTools = assignmentToolNames(finance.config ? finance.assignment : null);
+      // During rolling deployment, an env-only policy retains its previous
+      // read/draft surface until an app-role request materializes revision 1.
+      if (assigned.source === 'legacy' && assigned.config) {
+        partnerTools.push('list_partner_candidates', 'get_partner_candidate', 'propose_request');
+      }
+      const granted = [...new Set([...configured, ...partnerTools, ...financeTools])];
+      // An assignment is explicit configuration. Its empty result (paused or
+      // zero grants) must stay empty even in local development.
+      if (assigned.assignment || finance.assignment || granted.length > 0) return granted;
       // No capability rows at all means nobody configured this agent. In a
       // deployed environment that is the answer — an unconfigured agent gets no
       // tools, which fails closed. In development it would mean a freshly
@@ -882,11 +900,11 @@ export class PgAgentDb implements AgentDb {
                 ce.status AS contact_status,
                 COALESCE(jsonb_array_length(ce.contact_data->'phones'), 0) AS phone_count,
                 COALESCE(ce.draft_eligible, false) AS verified_email,
-                (SELECT r.id FROM requests r
-                  WHERE r.workspace_id = c.workspace_id
-                    AND r.subject_key = 'partner-candidate:' || c.id::text
-                  ORDER BY r.created_at LIMIT 1) AS existing_request_id
+                pe.stage AS engagement_stage,
+                pe.request_id AS existing_request_id
            FROM partner_candidates c
+           LEFT JOIN partner_engagements pe
+             ON pe.workspace_id=c.workspace_id AND pe.agent_id=c.agent_id AND pe.candidate_id=c.id
            LEFT JOIN LATERAL (
              SELECT status, contact_data, draft_eligible
                FROM partner_contact_enrichments e
@@ -895,6 +913,7 @@ export class PgAgentDb implements AgentDb {
            ) ce ON true
           WHERE c.workspace_id = $1 AND c.agent_id = $2
             AND c.deterministic_priority >= $3
+            AND pe.id IS NULL
           ORDER BY c.deterministic_priority DESC, c.last_seen_at DESC
           LIMIT $4`,
         [this.workspaceId, agentId, Math.max(0, Math.min(100, minimumPriority)), Math.max(1, Math.min(10, limit))],

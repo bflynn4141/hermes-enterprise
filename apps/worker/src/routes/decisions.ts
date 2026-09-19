@@ -13,8 +13,10 @@
 //      it. A custom header also forces a CORS preflight, so a cross-site form
 //      post or a link cannot reach this route at all (src/domain/guards.ts).
 //   3. **Double-submit CSRF.** The cookie and the header must agree.
-//   4. **An Admin session.** Read inside the transaction, from `members`, keyed
-//      on the workspace in the path. A Member gets "Admin decision required".
+//   4. **An authorized human session.** Legacy requests still require the
+//      workspace Admin. A Finance-workflow invoice is additionally decidable
+//      by its named active audience member when that person holds the Finance
+//      reviewer role. The agent is never an eligible reviewer.
 //   5. **Step-up.** WorkOS `auth_time` must be within five minutes. The callback
 //      persists it in `auth_sessions.authenticated_at`; token `iat` moves on
 //      ordinary refresh and is not evidence of a new challenge. Otherwise 401
@@ -65,7 +67,19 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
   const note = typeof input.note === 'string' && input.note.trim().length > 0 ? input.note.slice(0, 4000) : null;
 
   const outcome = await inWorkspace(c, async (work) => {
-    work.requireAdmin('recording a decision');
+    if (work.role !== 'admin') {
+      const finance = await work.tx.query(
+        `SELECT 1
+           FROM requests r
+           JOIN request_audiences ra ON ra.workspace_id=r.workspace_id AND ra.request_id=r.id
+           JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=ra.user_id
+          WHERE r.workspace_id=$1 AND r.id=$2 AND r.kind='invoice'
+            AND r.payload ? 'workflow_provenance'
+            AND ra.user_id=$3 AND 'finance'=ANY(m.reviewer_roles) AND m.status='active'`,
+        [work.workspaceId, requestId, work.userId],
+      );
+      if (!finance.rows[0]) work.requireAdmin('recording a decision');
+    }
     requireStepUp(work.session);
     return recordDecision(work, requestId, decision, note, input);
   });

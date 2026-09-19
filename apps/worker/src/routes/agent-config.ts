@@ -32,7 +32,8 @@ import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 import { requireRequestedFrom, SKILLS_SURFACE } from '../domain/guards.js';
-import { runtimeSkillCards } from '../runtime/skills.js';
+import { runtimeSkillCard } from '../runtime/skills.js';
+import { listEnterpriseSkillAssignments } from '../enterprise-skills/service.js';
 
 const skillPage = paginatedSchema(skillVersionSchema);
 const instructionPage = paginatedSchema(instructionVersionSchema);
@@ -48,6 +49,17 @@ async function agentId(work: TenantWork): Promise<string> {
   const id = rows[0]?.id;
   if (!id) throw new RouteError('this workspace has no agent', 'no_agent', 409);
   return id;
+}
+
+async function selectedAgentId(c: Context<{ Bindings: Env }>, work: TenantWork): Promise<string> {
+  const requested = c.req.query('agent_id')?.trim();
+  if (!requested) return agentId(work);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requested)) {
+    throw new RouteError('agent_id is not a uuid', 'bad_id', 400);
+  }
+  const { rows } = await work.tx.query(`SELECT id FROM agents WHERE workspace_id=$1 AND id=$2`, [work.workspaceId, requested]);
+  if (!rows[0]) throw new RouteError('no such agent', 'not_found', 404);
+  return requested;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,13 +99,16 @@ const SKILL_SELECT = `
 
 export async function listSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
   const items = await inWorkspace(c, async (work) => {
-    const agent = await agentId(work);
+    const agent = await selectedAgentId(c, work);
     const { rows } = await work.tx.query<SkillRow>(
       `${SKILL_SELECT} ORDER BY sv.name, sv.version DESC LIMIT $3`,
       [work.workspaceId, agent, LIST_LIMIT],
     );
     const stored = rows.map(toSkill);
-    const managed = runtimeSkillCards(c.env, agent);
+    const assignments = await listEnterpriseSkillAssignments(
+      c.env, work.tx, work.workspaceId, agent, work.role === 'admin' ? work.userId : null,
+    );
+    const managed = assignments.map(runtimeSkillCard);
     return [...managed, ...stored.filter((item) => {
       const named = item as { name?: unknown };
       return !managed.some((skill) => skill.name === named.name);

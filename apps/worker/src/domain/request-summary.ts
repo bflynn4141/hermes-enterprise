@@ -111,12 +111,15 @@ export function decisionSummary(row: RequestRow, approval: ApprovalListProjectio
   }
   const payload = record(row.payload);
   const needsDecision = row.status === 'pending' && ['application', 'invoice', 'agreement'].includes(row.kind);
+  const legacyReviewerLabel = row.kind === 'invoice' && 'workflow_provenance' in payload
+    ? 'Finance reviewer'
+    : 'Workspace Admin';
   const single = {
     mode: 'single' as const,
     completed_steps: row.status === 'pending' ? 0 : 1,
     total_steps: 1,
     remaining_approvals: needsDecision ? 1 : 0,
-    current: needsDecision ? [{ label: 'Workspace Admin', approvals_recorded: 0, quorum: 1 }] : [],
+    current: needsDecision ? [{ label: legacyReviewerLabel, approvals_recorded: 0, quorum: 1 }] : [],
     pending_for_viewer: needsDecision && canDecideLegacy,
     waiting_on_others: needsDecision && !canDecideLegacy,
     expires_at: null,

@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type PartnerWorkflowView, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -470,38 +470,216 @@ function LibrarySkills() {
   const admin = useIsAdmin();
   const lists = useWorkspaceLists();
   const [ack, setAck] = useState(false);
-  if (lists.skills.length === 0) return <EmptyState icon="skill" title="No shared skills yet" />;
+  const [assignments, setAssignments] = useState<EnterpriseSkillAssignment[]>([]);
+  const [workflow, setWorkflow] = useState<PartnerWorkflowView | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const agentId = state.agent.id;
+  useEffect(() => {
+    if (!agentId) return;
+    let current = true;
+    void adapter.rest.listSkillAssignments(state.workspace.id, agentId)
+      .then((page) => { if (current) setAssignments(page.items); })
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [adapter.rest, agentId, state.workspace.id]);
+  useEffect(() => {
+    let current = true;
+    void adapter.rest.partnerWorkflow(state.workspace.id)
+      .then((view) => { if (current) setWorkflow(view); })
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [adapter.rest, state.workspace.id]);
   return (
     <div className="col">
-      {lists.skills.map((skill) => (
-        <div className="list-row" key={skill.id} style={{ minHeight: 112 }}>
-          <Glass name="skill" size={32} className="row-icon" />
-          <div className="row-main">
-            <span className="t">
-              {skill.name} · {skill.version}
-            </span>
-            <span className="s">
-              {skill.description} · Shared by {skill.shared_by}
-            </span>
+      {workflow && (
+        <Panel
+          icon="people"
+          title={workflow.configured ? 'Partnerships + Finance' : 'Employee role templates not configured'}
+          subtitle={workflow.configured
+            ? 'One agent per employee. Shared partner identity and approved engagement evidence only.'
+            : 'An Admin assigns one Partnerships agent and one Finance agent. New schedules stay off.'}
+        >
+          {workflow.agents.map((agent) => (
+            <div className="kv" key={agent.id}>
+              <span className="grow"><strong>{agent.team.name}</strong> · {agent.principal_name}</span>
+              <span className="meta">{agent.name} · {agent.role_template.name} · {agent.assignment_state === 'active' ? 'Active' : 'Paused'} · schedule {agent.schedule_enabled ? 'on' : 'off'}</span>
+            </div>
+          ))}
+          <div className="kv">
+            <span className="grow">Enterprise partner records</span>
+            <span className="meta">Server-enforced · private by team</span>
           </div>
-          <span style={{ position: 'relative' }}>
-            <Button
-              disabled={skill.adopted || !admin}
-              onClick={() => {
-                void adapter.rest.adoptSkill(state.workspace.id, skill.id).catch(() => undefined);
-                setAck(true);
-                setTimeout(() => setAck(false), 1600);
-              }}
-            >
-              {skill.adopted ? 'In use' : admin ? 'Add' : EMPTY.adminOnly}
-            </Button>
-            <Ack show={ack} style={{ right: 0, top: -40 }}>
-              Added
-            </Ack>
-          </span>
-        </div>
-      ))}
+          {workflow.handoffs[0] && (
+            <div className="kv">
+              <span className="grow">Latest handoff · {workflow.handoffs[0].partner_name}</span>
+              <span className="meta">{workflow.handoffs[0].status.replace('_', ' ')}</span>
+            </div>
+          )}
+        </Panel>
+      )}
+      {lists.skills.length === 0 && <EmptyState icon="skill" title="No shared skills yet" />}
+      {lists.skills.map((skill) => {
+        const assignment = assignments.find((item) => `managed:${item.skill_key}` === skill.id);
+        return (
+          <div key={skill.id} className="skill-assignment-shell">
+            <div className="list-row" style={{ minHeight: 112 }}>
+              <Glass name="skill" size={32} className="row-icon" />
+              <div className="row-main">
+                <span className="t">
+                  {skill.name} · {skill.version}
+                </span>
+                <span className="s">
+                  {skill.description} · Shared by {skill.shared_by}
+                  {assignment ? ` · ${assignment.state === 'active' ? 'Active' : 'Paused'} · revision ${assignment.revision}` : ''}
+                </span>
+              </div>
+              <span style={{ position: 'relative', display: 'flex', gap: 8 }}>
+                {assignment && (
+                  <Button disabled={!admin} onClick={() => setEditing(editing === assignment.id ? null : assignment.id)}>
+                    {editing === assignment.id ? 'Close' : admin ? 'Configure' : EMPTY.adminOnly}
+                  </Button>
+                )}
+                {!assignment && (
+                  <Button
+                    disabled={skill.adopted || !admin}
+                    onClick={() => {
+                      void adapter.rest.adoptSkill(state.workspace.id, skill.id).catch(() => undefined);
+                      setAck(true);
+                      setTimeout(() => setAck(false), 1600);
+                    }}
+                  >
+                    {skill.adopted ? 'In use' : admin ? 'Add' : EMPTY.adminOnly}
+                  </Button>
+                )}
+                <Ack show={ack} style={{ right: 0, top: -40 }}>Added</Ack>
+              </span>
+            </div>
+            {assignment && editing === assignment.id && agentId && (
+              <SkillAssignmentEditor
+                assignment={assignment}
+                onCancel={() => setEditing(null)}
+                onSave={async (patch) => {
+                  const next = await adapter.rest.updateSkillAssignment(state.workspace.id, agentId, assignment.id, patch);
+                  setAssignments((items) => items.map((item) => item.id === next.id ? next : item));
+                  setEditing(null);
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
+  );
+}
+
+function valueAt(config: Record<string, unknown>, path: string): unknown {
+  return path.split('.').reduce<unknown>((value, key) =>
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined, config);
+}
+
+function valueWith(config: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
+  const next = structuredClone(config);
+  const keys = path.split('.');
+  let cursor = next;
+  keys.slice(0, -1).forEach((key) => {
+    const child = cursor[key];
+    if (!child || typeof child !== 'object' || Array.isArray(child)) cursor[key] = {};
+    cursor = cursor[key] as Record<string, unknown>;
+  });
+  cursor[keys.at(-1)!] = value;
+  return next;
+}
+
+function SkillAssignmentEditor({
+  assignment,
+  onCancel,
+  onSave,
+}: {
+  assignment: EnterpriseSkillAssignment;
+  onCancel: () => void;
+  onSave: (patch: { revision: number; state: 'active' | 'paused'; config: Record<string, unknown>; schedule: { enabled: boolean; interval_minutes: number } }) => Promise<void>;
+}) {
+  const [config, setConfig] = useState<Record<string, unknown>>(() => structuredClone(assignment.config));
+  const [state, setState] = useState<'active' | 'paused'>(assignment.state);
+  const [schedule, setSchedule] = useState(assignment.schedule);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <form
+      className="skill-config-panel"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setSaving(true);
+        setError(null);
+        void onSave({ revision: assignment.revision, state, config, schedule }).catch(() => {
+          setSaving(false);
+          setError('Check the configuration and try again.');
+        });
+      }}
+    >
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div className="t">How Iris performs this skill</div>
+          <div className="s">Configuration is versioned. Outreach remains a draft until a person approves it.</div>
+        </div>
+        <label className="skill-config-compact-field">
+          <span>Status</span>
+          <select value={state} onChange={(event) => setState(event.target.value as 'active' | 'paused')}>
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+          </select>
+        </label>
+      </div>
+      <div className="skill-config-grid">
+        {assignment.config_fields.map((field) => {
+          const current = valueAt(config, field.path);
+          const update = (value: unknown) => setConfig((previous) => valueWith(previous, field.path, value));
+          return (
+            <label key={field.path} className="skill-config-field">
+              <span>{field.label}</span>
+              {field.kind === 'select' ? (
+                <select value={String(current ?? '')} onChange={(event) => update(event.target.value)}>
+                  {field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              ) : field.kind === 'integer' ? (
+                <input type="number" min={field.minimum ?? undefined} max={field.maximum ?? undefined} value={Number(current ?? 0)} onChange={(event) => update(Number(event.target.value))} />
+              ) : field.kind === 'string_list' ? (
+                <input value={Array.isArray(current) ? current.join(', ') : ''} onChange={(event) => update(event.target.value.split(',').map((part) => part.trim()).filter(Boolean))} />
+              ) : (
+                <input value={String(current ?? '')} onChange={(event) => update(event.target.value)} />
+              )}
+              <small>{field.description}</small>
+            </label>
+          );
+        })}
+        <label className="skill-config-field">
+          <span>Run every</span>
+          <select
+            disabled={!schedule.enabled}
+            value={schedule.interval_minutes}
+            onChange={(event) => setSchedule({ ...schedule, interval_minutes: Number(event.target.value) })}
+          >
+            {![60, 360, 720, 1440].includes(schedule.interval_minutes) && (
+              <option value={schedule.interval_minutes}>{schedule.interval_minutes} minutes</option>
+            )}
+            <option value={60}>Hour</option>
+            <option value={360}>6 hours</option>
+            <option value={720}>12 hours</option>
+            <option value={1440}>Day</option>
+          </select>
+          <small>Controls proactive discovery; manual runs remain available.</small>
+        </label>
+        <label className="skill-config-check">
+          <input type="checkbox" checked={schedule.enabled} onChange={(event) => setSchedule({ ...schedule, enabled: event.target.checked })} />
+          <span>Run proactive discovery on this schedule</span>
+        </label>
+      </div>
+      {error && <div className="danger-note">{error}</div>}
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+        <Button quiet onClick={onCancel}>Cancel</Button>
+        <Button primary type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save revision'}</Button>
+      </div>
+    </form>
   );
 }
 
@@ -599,12 +777,91 @@ export function Settings({ view }: { view: string }) {
         {view === 'Inbox rules' && <InboxRulesTab />}
         {view === 'Agents' && <AgentsTab />}
         {view === 'Slack' && <SlackTab />}
+        {view === 'Email' && <EmailTab />}
         {view === 'Provider keys' && <ProviderKeysTab />}
         {view === 'Usage' && <UsageTab />}
         {view === 'Notifications' && <NotificationsTab />}
         {view === 'Data and privacy' && <PrivacyTab />}
       </div>
     </div>
+  );
+}
+
+function EmailTab() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const admin = useIsAdmin();
+  const [connection, setConnection] = useState<OutboundEmailConnection | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!state.workspace.id) return;
+    void adapter.rest.outboundEmailConnection(state.workspace.id).then(setConnection).catch(() => {
+      setNotice('Email status could not be loaded. Try again.');
+    });
+  }, [adapter, state.workspace.id]);
+
+  const connect = async (): Promise<void> => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const started = await adapter.rest.startGmailOAuth(state.workspace.id);
+      window.location.assign(started.authorize_url);
+    } catch (caught) {
+      const error = caught as { status?: number; reason?: string };
+      if (error.status === 401 && error.reason === 'reauth_required') {
+        const url = adapter.auth.stepUpUrl(window.location.href, 'gmail');
+        if (url) window.location.assign(url);
+        else setNotice('This needs a recent sign-in. Sign in again to continue.');
+      } else {
+        setNotice(error.reason === 'gmail_unavailable'
+          ? 'Gmail outreach is not configured for this Hermes deployment.'
+          : error.reason === 'admin_required' ? EMPTY.adminOnly : 'Gmail authorization could not be started. Try again.');
+      }
+      setBusy(false);
+    }
+  };
+
+  if (!connection) return <Skeleton rows={4} label="Loading email connection" />;
+  const connected = connection.status === 'connected';
+  const sendingEnabled = connection.mode === 'send_after_approval';
+  const discoveryCadence = connection.discovery_interval_minutes % 60 === 0
+    ? `${connection.discovery_interval_minutes / 60} hours`
+    : `${connection.discovery_interval_minutes} minutes`;
+  return (
+    <>
+      <div className="row">
+        <div>
+          <h2 className="section-title">Email</h2>
+          <p className="meta">Connect one dedicated Gmail sender for reviewed partner outreach.</p>
+        </div>
+        <span className="grow" />
+        {admin && connection.configured && (
+          <Button primary={!connected} disabled={busy} onClick={connect}>
+            {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
+          </Button>
+        )}
+      </div>
+      {notice && <Ack show>{notice}</Ack>}
+      {!connection.configured ? (
+        <EmptyState icon="context" title="Email is not configured" detail="An operator must configure the Google OAuth app before an Admin can connect the outreach mailbox." />
+      ) : (
+        <Panel
+          icon="context"
+          title={connected ? `Connected as ${connection.address}` : connection.status === 'error' ? 'Gmail needs to be reconnected' : 'Connect a dedicated Gmail sender'}
+          subtitle={connected
+            ? 'Hermes can use this identity only for the exact message revision a reviewer approves.'
+            : 'A workspace Admin completes Google OAuth. The Gmail credential stays encrypted on the server.'}
+        >
+          <div className="kv"><span className="grow">Discovery</span><span className="meta">{connection.discovery_enabled ? `New candidates every ${discoveryCadence}` : 'Automated discovery is off'}</span></div>
+          <div className="kv"><span className="grow">Drafts</span><span className="meta">Iris prepares personalized copy for Inbox review</span></div>
+          <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'Exact approved revision only' : 'Draft-only until enabled by the operator'}</span></div>
+          <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{connection.pending_messages}</span></div>
+          {!admin && <p className="meta">A workspace Admin manages this connection.</p>}
+        </Panel>
+      )}
+    </>
   );
 }
 

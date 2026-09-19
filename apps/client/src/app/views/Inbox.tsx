@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
-import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
+import { useAdapter, useAppState, useDispatch, useEntity, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
@@ -380,7 +380,8 @@ function TaskView({ request }: { request: RequestEntity }) {
 /** Shared decision footer. The only place in the client that calls `decide`. */
 function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: { request: RequestEntity; title: string; detail: string; approveLabel: string; declineLabel: string }) {
   const adapter = useAdapter();
-  const admin = useIsAdmin();
+  const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
+  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
   const [confirmDecline, setConfirmDecline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -396,12 +397,12 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
     }
   }, [adapter, request.id]);
 
-  if (!admin) {
+  if (!eligible) {
     return (
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{EMPTY.adminOnly}</span>
-          <span className="f-sub">You can read the request and its evidence. An Admin records the decision.</span>
+          <span className="f-title">{financeScoped ? 'Finance reviewer required' : EMPTY.adminOnly}</span>
+          <span className="f-sub">You can read the request and its evidence. {financeScoped ? 'The assigned Finance reviewer' : 'An Admin'} records the decision.</span>
         </div>
       </div>
     );
@@ -697,7 +698,8 @@ export function DocumentView({
   const adapter = useAdapter();
   const state = useAppState();
   const nav = useNav();
-  const admin = useIsAdmin();
+  const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
+  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
   const [mode, setMode] = useState<'preview' | 'render' | 'pdf'>('preview');
   const [line, setLine] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
@@ -740,6 +742,18 @@ export function DocumentView({
       })
     : [];
   const sourceIds = [...new Set([...lines.flatMap((item) => item.sourceIds), ...sections.flatMap((item) => item.sourceIds)])];
+  const workflowProvenance = record(payload.workflow_provenance);
+  const sharedPartner = record(workflowProvenance.shared_partner);
+  const workflowSessions = Array.isArray(workflowProvenance.source_sessions)
+    ? workflowProvenance.source_sessions.flatMap((item) => {
+        const source = record(item);
+        const role = source.role === 'partnerships' || source.role === 'finance' ? source.role : null;
+        const sessionId = text(source.session_id);
+        const excerpt = text(source.excerpt);
+        const agentName = text(source.agent_name);
+        return role && sessionId && excerpt && agentName ? [{ role, sessionId, excerpt, agentName, simulated: source.simulated === true }] : [];
+      })
+    : [];
   const selected = lines.find((row) => row.id === line) ?? null;
   const scope = sections.find((section) => /scope|purpose|services/i.test(section.heading)) ?? sections[0];
   const saved = Boolean(doc) || request.status === 'created' || request.status === 'drafted';
@@ -770,7 +784,7 @@ export function DocumentView({
               {totalMinor !== null && <div><dt>Amount</dt><dd>{amount}</dd></div>}
             </>}
           </dl>
-          {!resolved && <p className="legacy-reviewer"><span>0 of 1 Admin approval</span><span>{admin && !readOnly ? 'You can approve' : admin ? 'Approve from Inbox' : 'Admin required'}</span></p>}
+          {!resolved && <p className="legacy-reviewer"><span>{financeScoped ? '0 of 1 Finance review' : '0 of 1 Admin approval'}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
           {resolved && <p className="legacy-reviewer"><span>{saved ? '1 of 1 Admin approval' : declined ? 'Draft declined' : 'No approval recorded'}</span>{request.decided_by_name && <span>{request.decided_by_name}</span>}</p>}
         </section>
 
@@ -783,7 +797,26 @@ export function DocumentView({
 
         <section className="legacy-context" aria-labelledby={`document-sources-${request.id}`}>
           <h2 id={`document-sources-${request.id}`}>Related messages &amp; documents</h2>
-          <p className="meta">No source messages linked.</p>
+          {workflowSessions.length === 0 ? <p className="meta">No source messages linked.</p> : (
+            <details className="legacy-disclosure" open>
+              <summary>Workflow evidence ({workflowSessions.length} sources)</summary>
+              {text(sharedPartner.name) && <p className="meta">
+                {text(sharedPartner.name)} · Engagement {text(sharedPartner.engagement_reference) ?? 'reference not supplied'}
+              </p>}
+              <ul>
+                {workflowSessions.map((source) => (
+                  <li key={`${source.role}:${source.sessionId}`}>
+                    <strong>{source.role === 'partnerships' ? 'Partnerships' : 'Finance'} · {source.agentName}</strong>
+                    {source.simulated && <span className="pill illustrative">Simulated</span>}
+                    <p>{source.excerpt}</p>
+                    {source.role === 'finance'
+                      ? <a href={`/workspace/${state.workspace.id}/s/${source.sessionId}`}>Open Finance review session</a>
+                      : <span className="meta">Shared excerpt only · Full Partnerships session remains private.</span>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {sourceIds.length > 0 && <details className="legacy-disclosure">
             <summary>{sourceIds.length} unresolved source reference{sourceIds.length === 1 ? '' : 's'}</summary>
             <p className="meta">These references are stored on the draft. Their source content and dates are not available here.</p>

@@ -67,6 +67,7 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
+  'partner_invoice_review',
   'run_recovery',
   'run_launch',
   // Warm-pool invitation expiry and operator capacity alerts. Assignment is
@@ -75,6 +76,9 @@ export const JOB_KINDS = [
   'hermes_capacity_alert',
   // Advisory Jev assessment for Inbox ordering. Approval policy remains the authority.
   'request_triage',
+  // Exact revision-bound outreach after a human approves and a dedicated
+  // sender account is connected.
+  'outbound_email_send',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -641,6 +645,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
       return;
+    case 'partner_invoice_review':
+      await (await import('./partner-workflow/job.js')).runPartnerInvoiceReviewJob(env, job);
+      return;
     case 'hermes_invitation_expire':
       await (await import('./hermes-cloud/capacity.js')).runInvitationExpirationJob(env, job);
       return;
@@ -649,6 +656,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'request_triage':
       await (await import('./inbox-triage/service.js')).runRequestTriageJob(env, job);
+      return;
+    case 'outbound_email_send':
+      await (await import('./outbound-email/send-job.js')).runOutboundEmailSendJob(env, job);
       return;
     case 'reverify':
       {

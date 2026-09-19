@@ -64,6 +64,8 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       workspaceName: readMockWorkspaceName(),
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
+      email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
+      partnerWorkflow: params.get('partnerWorkflow') === '1',
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }

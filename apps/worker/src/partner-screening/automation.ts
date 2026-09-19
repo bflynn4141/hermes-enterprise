@@ -5,7 +5,8 @@ import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } fr
 import { allowedProviders } from '../model/allowed.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../runs/submit.js';
-import { partnerAgentConfig, partnerScreeningAgentIds } from './config.js';
+import { partnerScreeningAgentIds, type PartnerAgentConfig } from './config.js';
+import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 import { discoverGitHubOrganizations, PartnerSourceError, type PartnerFetch } from './github.js';
 import {
   beginPartnerScreening,
@@ -84,7 +85,7 @@ export async function enqueueAutomatedPartnerScreening(
   const agentIds = partnerScreeningAgentIds(env);
   const useDefaultPolicy = env.PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS === '1';
   const paidEnabled = paidPartnerScreeningEnabled(env);
-  if (!automatedTriggersEnabled(env) || (agentIds.length === 0 && !useDefaultPolicy)) {
+  if (!automatedTriggersEnabled(env)) {
     return {
       enabled: automatedTriggersEnabled(env), paidEnabled, workspaces: 0,
       candidateAgents: 0, startedAgents: 0, activeOwnedAgents: 0,
@@ -145,7 +146,13 @@ export async function enqueueAutomatedPartnerScreening(
               m.id
               LIMIT 1
            ) owner ON true
-          WHERE a.workspace_id=$1 AND ($3::boolean OR a.id=ANY($2::uuid[]))
+          WHERE a.workspace_id=$1 AND (
+            $3::boolean OR a.id=ANY($2::uuid[]) OR EXISTS (
+              SELECT 1 FROM enterprise_skill_assignments esa
+               WHERE esa.workspace_id=a.workspace_id AND esa.agent_id=a.id
+                 AND esa.skill_key='partner-program-screening' AND esa.state='active'
+            )
+          )
           ORDER BY a.id`,
         [workspaceId, agentIds, useDefaultPolicy],
       );
@@ -155,8 +162,10 @@ export async function enqueueAutomatedPartnerScreening(
         startedAgents += 1;
         if (!candidate.user_id) continue;
         activeOwnedAgents += 1;
-        const configured = partnerAgentConfig(env, candidate.agent_id).config;
+        const assigned = await resolvePartnerSkillAssignment(env, tx, workspaceId, candidate.agent_id, { materialize: true });
+        const configured = assigned.config;
         if (!configured) continue;
+        if (assigned.assignment && !assigned.assignment.schedule.enabled) continue;
         configuredAgents += 1;
         if (configured.source === 'agentcash_people' && !paidEnabled) {
           skippedPaid += 1;
@@ -164,12 +173,14 @@ export async function enqueueAutomatedPartnerScreening(
         }
         // A failed cycle is recovered in place, never replaced by a new paid allowance.
         if (await unresolvedPartnerWork(tx, workspaceId, candidate.agent_id)) continue;
+        const candidateInterval = assigned.assignment?.schedule.interval_minutes ?? interval;
+        const candidateBucket = `${candidateInterval}m-${Math.floor(now.getTime() / (candidateInterval * 60_000))}`;
         const id = await enqueueJob(
           tx,
           workspaceId,
           'partner_screening',
-          `partner-screening:auto:${workspaceId}:${candidate.agent_id}:${bucket}`,
-          { agent_id: candidate.agent_id, owner_user_id: candidate.user_id, bucket },
+          `partner-screening:auto:${workspaceId}:${candidate.agent_id}:${candidateBucket}`,
+          { agent_id: candidate.agent_id, owner_user_id: candidate.user_id, bucket: candidateBucket },
         );
         if (id) queued += 1;
       }
@@ -185,10 +196,12 @@ interface DraftPolicyContext {
   readonly memberId: string;
   readonly senderAddress: string;
   readonly policyKey: string;
+  readonly sendAfterApproval: boolean;
 }
 
 async function ensurePartnerOutreachDraftPolicy(
   tx: Tx,
+  env: Env,
   workspaceId: string,
   ownerUserId: string,
   agentId: string,
@@ -205,9 +218,10 @@ async function ensurePartnerOutreachDraftPolicy(
   const row = owner.rows[0];
   if (!row) throw new Error('partner_outreach_verified_owner_missing');
 
-  const policyKey = `partner-outreach-draft-${agentId}`;
+  const sendAfterApproval = env.PARTNER_OUTREACH_EMAIL_MODE === 'send_after_approval';
+  const policyKey = `partner-outreach-${sendAfterApproval ? 'send' : 'draft'}-${agentId}`;
   const steps = [{
-    id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+    id: 'owner-review', label: sendAfterApproval ? 'Approve personalized outreach email' : 'Review personalized outreach draft', order: 0,
     reviewers: [{ kind: 'member', member_id: row.member_id }], quorum: 1,
   }];
   await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${workspaceId}:${policyKey}`]);
@@ -228,7 +242,7 @@ async function ensurePartnerOutreachDraftPolicy(
       && current.requester_agent_id === agentId
       && current.step_count === 1
       && current.reviewer_member_id === row.member_id) {
-    return { memberId: row.member_id, senderAddress: row.email, policyKey };
+    return { memberId: row.member_id, senderAddress: row.email, policyKey, sendAfterApproval };
   }
 
   await tx.query(
@@ -247,18 +261,30 @@ async function ensurePartnerOutreachDraftPolicy(
      VALUES ($1,$2,$3,'communication',$4,1000000,'sequential',false,true,604800,$5::jsonb,true)`,
     [workspaceId, policyKey, version.rows[0]?.version ?? 1, agentId, JSON.stringify(steps)],
   );
-  return { memberId: row.member_id, senderAddress: row.email, policyKey };
+  return { memberId: row.member_id, senderAddress: row.email, policyKey, sendAfterApproval };
 }
 
 function outreachDraftInstructions(context: DraftPolicyContext): string {
+  const disposition = context.sendAfterApproval
+    ? [
+        'Set details.channel to email and details.draft_only to false.',
+        'Use preferred_verified_email as the recipient address. If it is null, stop without proposing approval.',
+        'State in summary and consequence that approval authorizes this exact email for the server-side outbox. Do not claim it has already been sent.',
+      ]
+    : [
+        'Set details.channel to email and details.draft_only to true.',
+        'Set the address only to preferred_verified_email; otherwise set it to null.',
+        'State in summary and consequence that this is a draft only: approval records reviewed copy and sends nothing.',
+      ];
   return [
-    'Choose exactly one strongest prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
+    'Choose exactly one strongest previously unengaged prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
     'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. Never alter an argument, repeat a completed paid call, or use another contact source.',
     `Call propose_approval with policy_key ${JSON.stringify(context.policyKey)}, approval_type communication, illustrative false, target_member_ids [${JSON.stringify(context.memberId)}], and no target agents, resources, dependent requests, continuation, or scheduled_for.`,
-    `Set details.channel to email, details.draft_only to true, and details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
-    'Set one recipient with candidate_id and the candidate name. Set address only to preferred_verified_email; otherwise set it to null. Copy only the stored phone_numbers and social_profiles into the recipient for human review.',
+    ...disposition,
+    `Set details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
+    'Set one recipient with candidate_id and the candidate name. Copy only stored phone_numbers and social_profiles into the recipient for human review.',
     'Write a concise subject and body grounded in the cited professional evidence. Invite the person to explore or apply to the configured Partner Program without claiming prior interest, approval, benefits, or terms.',
-    'Cite the stored candidate artifacts and the contact enrichment id in proposal.evidence. State in summary and consequence that this is a draft only: approval records reviewed copy and does not send, call, text, or message anyone.',
+    'Cite the stored candidate artifacts and the contact enrichment id in proposal.evidence.',
     'Do not use propose_request for a discovered prospect. A prospect has not submitted an application.',
   ].join(' ');
 }
@@ -349,7 +375,7 @@ export async function handoffPartnerScreeningToIris(
     const snapshot = await loadPartnerScreeningSnapshot(scoped, screeningRunId);
     if (snapshot.run.agent_id !== agentId ||
         (snapshot.run.source !== 'agentcash_people' && snapshot.handoff.candidate_ids.length === 0)) return;
-    const draftContext = await ensurePartnerOutreachDraftPolicy(tx, workspaceId, ownerUserId, agentId);
+    const draftContext = await ensurePartnerOutreachDraftPolicy(tx, env, workspaceId, ownerUserId, agentId);
     const session = await automationSession(tx, env, workspaceId, ownerUserId, agentId);
     const submitted = await submitTurn({
       tx,
@@ -410,14 +436,16 @@ export async function runPartnerScreeningAutomationJob(env: Env, job: Job): Prom
   if (!payload.agent_id || !payload.owner_user_id || !payload.bucket) {
     throw new Error('partner_screening_payload_invalid');
   }
-  const configured = partnerAgentConfig(env, payload.agent_id);
-  if (!configured.config) throw new Error('partner_screening_config_missing');
-  if (!automatedTriggersEnabled(env) || (configured.config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env))) return;
+  if (!automatedTriggersEnabled(env)) return;
   const idempotencyKey = `auto:${payload.bucket}`;
-  const authentication = configured.config.source === 'agentcash_people'
-    ? 'wallet' as const
-    : env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
-  const started = await withWorkspaceTransaction(env, job.workspace_id, async tx => {
+  const admitted = await withWorkspaceTransaction(env, job.workspace_id, async tx => {
+    const configured = await resolvePartnerSkillAssignment(env, tx, job.workspace_id, payload.agent_id!, { materialize: true });
+    if (!configured.config) throw new Error('partner_screening_config_missing');
+    if (configured.assignment && !configured.assignment.schedule.enabled) return null;
+    if (configured.config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env)) return null;
+    const authentication = configured.config.source === 'agentcash_people'
+      ? 'wallet' as const
+      : env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
     await tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [job.workspace_id,payload.agent_id]);
     const unresolved = await unresolvedPartnerWork(tx,job.workspace_id,payload.agent_id!);
     if (unresolved) {
@@ -427,14 +455,35 @@ export async function runPartnerScreeningAutomationJob(env: Env, job: Job): Prom
         [unresolved,job.workspace_id,idempotencyKey]);
       if (!same.rows.length) return null;
     }
-    return beginPartnerScreening(work(tx, job.workspace_id, payload.owner_user_id!),
-      { agentId: payload.agent_id!, idempotencyKey, config: configured.config!, authentication });
+    let runConfig: PartnerAgentConfig = configured.config!;
+    if (runConfig.source === 'agentcash_people' && runConfig.people_search) {
+      const cursor = await tx.query<{ next_offset: number; search_after: string | null }>(
+        `SELECT next_offset, search_after
+           FROM partner_discovery_cursors
+          WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_people'
+          FOR UPDATE`,
+        [job.workspace_id, payload.agent_id],
+      );
+      const position = cursor.rows[0];
+      runConfig = {
+        ...runConfig,
+        people_search: {
+          ...runConfig.people_search,
+          offset: position?.next_offset ?? 0,
+          search_after: position?.search_after ?? null,
+        },
+      };
+    }
+    const started = await beginPartnerScreening(work(tx, job.workspace_id, payload.owner_user_id!),
+      { agentId: payload.agent_id!, idempotencyKey, config: runConfig, authentication });
+    return { started, config: runConfig };
   });
-  if (!started) return;
+  if (!admitted) return;
+  const { started, config } = admitted;
 
-  if (configured.config.source === 'github' && started.run.status !== 'completed') {
+  if (config.source === 'github' && started.run.status !== 'completed') {
     try {
-      const result = await discoverGitHubOrganizations(configured.config, {
+      const result = await discoverGitHubOrganizations(config, {
         fetcher: sourceFetcher(env), token: env.PARTNER_GITHUB_TOKEN,
       });
       await withWorkspaceTransaction(env, job.workspace_id, (tx) => completePartnerScreening(

@@ -252,6 +252,26 @@ describe('durable run recovery admission', () => {
 });
 
 describe('agent recovery HTTP controls', () => {
+  it('keeps the completed-run GET view read-only under legacy default policy', async () => {
+    const fx = await fixture();
+    const { env } = environment();
+    await work(fx, (context) => context.tx.query(
+      `UPDATE runs SET status='completed', error=NULL, recovery_next_at=NULL, ended_at=now() WHERE id=$1`,
+      [fx.runId],
+    ));
+    const state = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${fx.agentId}/recovery`);
+    expect(state.status).toBe(200);
+    expect(await state.json()).toMatchObject({ state: 'idle', can_run_now: true });
+    await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const result = await client.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM enterprise_skill_assignments
+          WHERE workspace_id=$1 AND agent_id=$2`,
+        [fx.workspaceId, fx.agentId],
+      );
+      expect(result.rows[0]?.count).toBe(0);
+    });
+  });
+
   it('returns owner-scoped state and rejects malformed or foreign actions', async () => {
     const fx = await fixture();
     const { env } = environment();

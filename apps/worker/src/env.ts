@@ -88,6 +88,16 @@ export interface Env {
   PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
   /** Separate spend gate for recurring AgentCash discovery. Manual onboarding keeps its one-use allowance. */
   PARTNER_SCREENING_PAID_AUTOMATION_ENABLED?: string;
+  /** Draft-only by default. send_after_approval creates an exact, revision-bound email outbox after approval. */
+  PARTNER_OUTREACH_EMAIL_MODE?: 'draft_only' | 'send_after_approval';
+  /** Dedicated Gmail sender used only for exact, human-approved outreach. */
+  GMAIL_OUTREACH_ENABLED?: string;
+  GMAIL_CLIENT_ID?: string;
+  GMAIL_CLIENT_SECRET?: string;
+  GMAIL_STATE_SECRET?: string;
+  GMAIL_REDIRECT_URI?: string;
+  /** Test-only HTTP injection; production uses Google endpoints directly. */
+  GMAIL_FETCHER?: Fetcher;
   /** Jev Inbox ranking rollout: off, shadow (store only), or active (serve ranking). */
   INBOX_TRIAGE_MODE?: 'off' | 'shadow' | 'active';
   /** Versioned scoring rubric, persisted beside each append-only assessment. */

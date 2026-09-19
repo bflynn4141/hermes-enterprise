@@ -132,6 +132,7 @@ describe('official Hermes Runs transport', () => {
       input: 'Review this application.', session_id: 'session-1', provider: 'custom',
       _enterprise_tool_names: ['propose_request'],
       _enterprise_skills: [{ name: 'enterprise_bridge:partner-program-screening', version: '1.1.0' }],
+      _enterprise_turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
     };
     expect(await client.submit(body, 'enterprise-local-a1')).toBe(RUN_ID);
     expect(send).toHaveBeenCalledOnce();
@@ -144,8 +145,18 @@ describe('official Hermes Runs transport', () => {
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
     expect(JSON.parse(String(init?.body))).toEqual({
       input: 'Review this application.', session_id: 'session-1', provider: 'custom',
+      turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
     });
     expect(String(init?.body)).not.toContain(SECRET);
+  });
+
+  it('rejects malformed internal bot attribution before contacting Hermes', async () => {
+    const { client, send } = transport(() => json({ run_id: RUN_ID, status: 'started' }, 202));
+    await expect(client.submit({
+      input: 'Review.',
+      _enterprise_turn_author: { id: 'human:someone', name: 'Iris', is_bot: true },
+    }, 'stable-key')).rejects.toThrow('invalid enterprise turn author');
+    expect(send).not.toHaveBeenCalled();
   });
 
   it.each([{}, { run_id: '' }, { run_id: 42 }, { run_id: '../another/run' }])(

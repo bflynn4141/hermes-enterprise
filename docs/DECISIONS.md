@@ -5506,3 +5506,118 @@ draft receipts. Browser checks cover all ten governed previews at desktop and na
 widths, plus phone review with the existing sidebar collapsed. This change does not
 redesign the phone navigation shell. The client requires the matching backend
 review-binding helper and typed evidence endpoint; integrate and release together.
+
+---
+
+## C81. Proactive outreach advances through new candidates and sends only an exact approved email
+
+**Decided September 18, 2026.** Recurring AgentCash People Search keeps the
+existing six-hour cadence, one request per run and `$0.15` discovery ceiling.
+The Worker, not the model, owns the provider page cursor. It advances only after
+an exact paid response is imported and cycles after the final page. A durable
+engagement ledger removes any candidate already drafted, declined, queued,
+sent, or suppressed from later Iris candidate lists.
+
+Iris may use only contact fields copied from stored professional enrichment and
+verification evidence. Draft-only remains the default in every environment.
+When an operator enables approved sending, the human decision creates a durable
+outbox row bound to the request id, authorization revision and hash, and
+recipient index. The sender must be a matching dedicated Gmail OAuth account;
+credentials are envelope-encrypted and the connector requests `gmail.send`
+plus OpenID identity without mailbox-read scope.
+
+Delivery rechecks the approval, sender identity and suppression list. A
+confirmed Gmail response records its message and thread ids and marks the
+engagement sent. A network error or server response that cannot prove delivery
+becomes `ambiguous` and stops automatic retries, because avoiding duplicate
+unsolicited outreach is more important than hiding a manual review. Settings →
+Email exposes connection, cadence, rollout mode, and waiting work.
+
+**Evidence.** Unit coverage fixes OAuth scope/state, verified account identity,
+header-safe MIME generation, provider requests, pagination and end-of-results
+cycling. PostgreSQL coverage proves cursor persistence, repeat-candidate
+exclusion, exact authorization binding, pending-mailbox behavior, encrypted
+credential resolution, one confirmed send, receipt persistence and engagement
+transition. Migration replay, the typed schema/grant matrix, client render and
+the full database suite include the new boundary.
+
+---
+
+## C82. Modular workflows are Hermes skills with Enterprise assignments
+
+**Decided September 18, 2026.** Hermes Enterprise uses Hermes's existing
+extension model instead of introducing a parallel “Program” package type. A
+skill is the versioned procedure. A plugin supplies trusted tools and hooks. An
+Enterprise skill assignment binds one reviewed skill version to one agent's
+validated non-secret config, semantic capability grants, proactive schedule,
+approval policy and active/paused state.
+
+The Partner Program is the first implementation. Existing environment policy
+is imported once as assignment revision 1 so deployed agents keep working.
+After materialization the database assignment is authoritative. The native
+runtime derives both `skills.auto_load` and assignment tools from the active
+row; pause removes both. Cron discovers persisted assignments and uses each
+assignment's enabled flag and interval. Library → Skills renders the registry's
+field metadata and lets an Admin save a new revision.
+
+The assignment and its append-only revisions are tenant-isolated. The app role
+may create and update an assignment; the agent role has read-only access. The
+database enforces monotonic revisions and records every snapshot. Secrets,
+provider credentials, evidence, Inbox approvals, external effects and receipts
+remain in their existing control-plane stores. A skill still cannot grant
+itself decision or send authority.
+
+Runtime discovery and recovery status reads never materialize an assignment or
+enable a schedule. The deployment-wide legacy Partner Program fallback is a
+rollout compatibility projection only for an agent with no Enterprise team or
+skill governance. Any explicit Enterprise role/assignment suppresses that
+fallback, so a Finance agent cannot inherit Partnerships manifests or tools.
+Applying a reviewed role template also replaces capability grants with the
+template's exact allowlist instead of preserving arbitrary historic grants.
+
+**Evidence.** Migration replay applies 46 migrations twice from a blank shadow
+database. Unit tests prove active and paused runtime boundaries. PostgreSQL
+coverage proves legacy import, revision history and agent-role visibility. The
+full shared, client, Worker unit and database suites pass, and the production
+client and Worker dry-run builds succeed. A mock browser check opens the
+schema-driven editor, saves a changed priority and observes revision 2 without
+console errors.
+
+---
+
+## C83. Cross-team agent coordination uses a governed Bot Mode bridge
+
+**Decided September 19, 2026.** Partnerships-to-Finance coordination is hybrid.
+The authenticated, revision-pinned database handoff remains the authority. The
+recipient Finance session also receives one durable user-role turn using Hermes
+0.21.3's canonical Bot Mode envelope,
+`Message from 🤖 <display> (@<profile>): <body>`, with native `turn_author` bot
+attribution. The transcript
+renders that exact envelope as an agent timeline notice instead of a human
+message bubble.
+
+The Enterprise Worker generates the message from the allowlisted handoff and
+Finance-private invoice record; neither model can alter the envelope or select a
+recipient. A non-simulated handoff admits an actual Finance run, while the same
+transaction performs the authoritative duplicate, evidence, currency and amount
+checks and creates the only request. The Finance model gets read-only request
+tools and may explain the result. It cannot call native `message_agent`, create
+or mutate a request, approve, pay or send. There is no automatic reply to
+Partnerships, which prevents acknowledgement loops. Simulated fixtures keep the
+same visible envelope but explicitly make no model call.
+
+**Why.** Native Bot Mode's message shape and attribution make agent coordination
+legible and compatible with the Hermes client, but unrestricted peer tools would
+bypass Enterprise team scopes. Keeping transport visible and authority on the
+server preserves both behaviors.
+
+**Evidence.** Shared tests pin the current and legacy Bot Mode parsers. Runtime
+tests require validated native bot attribution and reject malformed authors
+before network I/O. PostgreSQL coverage proves a non-simulated handoff creates a
+working Finance run, one delivered agent-message row, one server-owned request
+and no synthetic assistant answer. Additional route/database regressions prove
+runtime and recovery GETs create no assignment/schedule, a governed Finance
+agent receives only the Finance manifest/tools even when the deployment-wide
+legacy policy is set, and reviewed template reapplication removes stray grants.
+The complete unit, database, browser, typecheck, build and 48-migration replay
+gates pass.

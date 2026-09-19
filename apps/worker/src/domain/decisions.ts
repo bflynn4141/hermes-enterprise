@@ -41,6 +41,7 @@ import { publishEvents, enqueueJob } from '../jobs.js';
 import type { Tx } from '../db/client.js';
 import { RouteError, type TenantWork } from '../routes/tenant.js';
 import { plannedEffects } from './effects.js';
+import { REQUEST_AUDIENCE_PREDICATE } from './requests.js';
 
 export interface DecisionOutcome {
   readonly decision_id: string;
@@ -128,8 +129,8 @@ export async function recordDecision(
   const found = await work.tx.query<RequestRow>(
     `SELECT id, kind, status, session_id, label, payload,
             GREATEST(0, EXTRACT(EPOCH FROM updated_at)::int) AS version
-       FROM requests WHERE id = $1 FOR UPDATE`,
-    [requestId],
+       FROM requests r WHERE r.id = $1 AND ${REQUEST_AUDIENCE_PREDICATE} FOR UPDATE OF r`,
+    [requestId, work.userId],
   );
   const request = found.rows[0];
   if (!request) throw new RouteError('no such request', 'unknown_request', 404);

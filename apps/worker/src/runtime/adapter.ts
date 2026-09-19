@@ -150,6 +150,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const body = await withRuntimeTransaction(async () => {
         const history = await db.loadHistory(run.id, 100);
         const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
+        const turnAuthor = [...history.recent].reverse()
+          .find((row) => row.role === 'user')?.providerMessage.enterprise_turn_author;
         const recoveryInput = await db.recoveryInput?.(run.id, run.attempt);
         const previous = await db.loadBootstrapHistory(run);
         const model = await db.loadModel(run.modelId);
@@ -166,6 +168,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
           _enterprise_skills: deps.skillSnapshot ?? [],
         };
+        if (turnAuthor) proposed._enterprise_turn_author = turnAuthor;
         if (previous.length) proposed.conversation_history = previous;
         if (run.effort) proposed.model_options = { reasoning_effort: run.effort };
         return db.snapshotRequest(run.id, run.attempt, proposed);

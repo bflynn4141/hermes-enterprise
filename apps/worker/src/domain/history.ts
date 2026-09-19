@@ -333,6 +333,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       break;
     }
 
+    case 'gmail.connected':
+      text = `${actor} connected a Gmail outreach sender`;
+      detail = 'Dedicated sender · Exact approved email revisions only';
+      status = 'Connected';
+      ref = { section: 'settings', view: 'Email' };
+      break;
+
+    case 'outbound_email.sent':
+      text = `${actor} sent ${subject}`;
+      detail = 'Exact approved email revision · Gmail delivery confirmed';
+      status = 'Sent';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
     default:
       text = `${actor} · ${row.kind}`;
       detail = '';

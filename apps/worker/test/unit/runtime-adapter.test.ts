@@ -157,6 +157,22 @@ async function execute(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('carries trusted Bot Mode attribution from the durable user turn', async () => {
+    const db = new FakeRuntimeDb();
+    db.turns.splice(0, 1, {
+      ...db.turns[0]!,
+      providerMessage: {
+        role: 'user',
+        content: 'Message from 🤖 Iris (@agent-partnerships): Review this handoff.',
+        enterprise_turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
+      },
+    });
+    const { client } = await execute(db);
+    expect(client.submissions[0]?.body._enterprise_turn_author).toEqual({
+      id: 'bot:agent-partnerships', name: 'Iris', is_bot: true,
+    });
+  });
+
   it('submits exact governed creator calls for an explicit channel test', async () => {
     const db = new FakeRuntimeDb();
     db.turns.splice(0, 1, {

@@ -19,6 +19,7 @@ import { authorizeAgentCashContact, authorizeAgentCashCreatorSearch, authorizeAg
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
+import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -33,6 +34,7 @@ import {
   listSkills,
   patchContextField,
 } from './routes/agent-config.js';
+import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
 import { KeyCryptoError } from './keys/envelope.js';
@@ -143,6 +145,11 @@ import {
   startPartnerScreening,
 } from './routes/partner-screening.js';
 import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
+import {
+  configurePartnerWorkflowRoute,
+  createPartnerInvoiceReviewHandoff,
+  getPartnerWorkflow,
+} from './routes/partner-workflow.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -279,6 +286,7 @@ app.post('/invitations/:token/accept', acceptInvitation);
 // is bound to a short-lived, single-use signed state row; Events API requests
 // are verified against the raw request bytes before JSON parsing.
 app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
+app.get('/integrations/gmail/oauth/callback', gmailOAuthCallback);
 app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
 // authorisation — and the only route in the system that answers without a
@@ -311,6 +319,8 @@ app.get('/w/:ws/integrations/slack', getSlackConnection);
 app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
 app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
+app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
+app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
 app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
@@ -431,6 +441,12 @@ app.get('/w/:ws/traces/:runId', getTrace);
 app.get('/w/:ws/skills', listSkills);
 app.post('/w/:ws/skills', adoptSkill);
 app.post('/w/:ws/skills/:id/adopt', adoptSkill);
+app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);
+app.get('/w/:ws/agents/:agentId/skill-assignments/:id', getSkillAssignment);
+app.patch('/w/:ws/agents/:agentId/skill-assignments/:id', patchSkillAssignment);
+app.get('/w/:ws/partner-workflow', getPartnerWorkflow);
+app.post('/w/:ws/partner-workflow/configure', configurePartnerWorkflowRoute);
+app.post('/w/:ws/partner-workflow/invoice-review-handoffs', createPartnerInvoiceReviewHandoff);
 app.get('/w/:ws/instructions', listInstructions);
 app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
 app.post('/w/:ws/instructions/:id/save', acceptInstruction);

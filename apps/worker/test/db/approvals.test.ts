@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApprovalProposal, ApprovalView } from '@hermes/shared';
 import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
+import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
 import { installApprovalDemoFixture } from '../../src/domain/approval-fixtures.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
+import { storeGmailAccount } from '../../src/outbound-email/gmail-store.js';
+import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
 
 interface ApprovalFixture extends Fixture {
   readonly adminMemberId: string;
@@ -291,11 +294,203 @@ describe('enterprise approval policy and voting', () => {
     const accepted = await propose(fx, proposal, `proposal:${randomUUID()}`, policyKey);
     expect(accepted.payload.approval_type).toBe('communication');
 
+    const engagement = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ stage: string; request_id: string }>(
+        `SELECT stage, request_id FROM partner_engagements WHERE candidate_id=$1`,
+        [seeded.candidateId],
+      )).rows[0],
+    );
+    expect(engagement).toEqual({ stage: 'draft_pending', request_id: accepted.request_id });
+
+    const db = new PgAgentDb(env().env, fx.workspaceId, `engagement-${randomUUID()}`);
+    try {
+      expect(await db.listPartnerCandidates(fx.agentId, 0, 10)).toEqual([]);
+    } finally {
+      await db.close();
+    }
+
+    await expect(propose(fx, proposal, `proposal:${randomUUID()}`, policyKey)).rejects.toMatchObject({
+      reason: 'partner_candidate_already_engaged',
+    });
+
     const forged = structuredClone(proposal);
     forged.details.recipients[0]!.address = 'invented@example.net';
     await expect(propose(fx, forged, `proposal:${randomUUID()}`, policyKey)).rejects.toMatchObject({
       reason: 'invalid_partner_outreach_contact',
     });
+
+    const e = env();
+    const approved = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${accepted.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(accepted, `vote:${randomUUID()}`),
+    });
+    expect(approved.status).toBe(201);
+    const approvedStage = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ stage: string }>(
+        `SELECT stage FROM partner_engagements WHERE candidate_id=$1`,
+        [seeded.candidateId],
+      )).rows[0]?.stage,
+    );
+    expect(approvedStage).toBe('draft_approved');
+  });
+
+  it('binds an approved partner email to one outbox row and sends only that approved revision', async () => {
+    const seeded = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const screening = await client.query<{ id: string }>(
+        `INSERT INTO partner_screening_runs
+           (workspace_id,agent_id,created_by,idempotency_key,status,source,authentication,
+            config_snapshot,api_requests_max,api_requests_used,agentcash_tool_call_id,
+            candidates_discovered,monetary_cost_usd,completed_at)
+         VALUES ($1,$2,$3,$4,'completed','agentcash_people','wallet','{}',1,1,'seed',1,0.15,now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, fx.adminId, `approval-send:${randomUUID()}`],
+      );
+      const candidate = await client.query<{ id: string }>(
+        `INSERT INTO partner_candidates
+           (workspace_id,agent_id,source,source_key,display_name,profile_url,
+            deterministic_priority,priority_breakdown,confidence,evidence_gaps,
+            latest_run_id,first_seen_at,last_seen_at)
+         VALUES ($1,$2,'agentcash_people',$3,'Jordan Lee','https://www.linkedin.com/in/jordan-lee',
+                 94,'[]','high','{}',$4,now(),now()) RETURNING id`,
+        [fx.workspaceId, fx.agentId, `approval-send:${randomUUID()}`, screening.rows[0]!.id],
+      );
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode)
+         VALUES ($1,$2,$3,'completed','deepseek-flash',$4,$5,'work') RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID()],
+      );
+      const enrichment = await client.query<{ id: string }>(
+        `INSERT INTO partner_contact_enrichments
+           (workspace_id,agent_id,candidate_id,run_id,runtime_run_id,status,contact_data,
+            preferred_email,verification_status,verification_checks,draft_eligible,
+            monetary_cost_usd,fetched_at,verified_at)
+         VALUES ($1,$2,$3,$4,$5,'completed',$6::jsonb,'jordan@example.com','valid',$7::jsonb,true,0.08,now(),now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, candidate.rows[0]!.id, run.rows[0]!.id, `run_${'e'.repeat(32)}`,
+          JSON.stringify({ professional_emails: ['jordan@example.com'], phones: [], social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/jordan-lee' }] }),
+          JSON.stringify({ regexp: true, mx_records: true, smtp_server: true, smtp_check: true, disposable: false, block: false })],
+      );
+      await client.query(
+        `INSERT INTO approval_policies
+          (workspace_id,key,version,approval_type,requester_agent_id,priority,mode,
+           prevent_self_review,steps)
+         VALUES ($1,$2,1,'communication',$3,1000000,'sequential',false,$4::jsonb)`,
+        [fx.workspaceId, `partner-outreach-send-${fx.agentId}`, fx.agentId, JSON.stringify([{
+          id: 'owner-review', label: 'Approve partner email', order: 0,
+          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+        }])],
+      );
+      await client.query('COMMIT');
+      return { candidateId: candidate.rows[0]!.id, enrichmentId: enrichment.rows[0]!.id };
+    });
+
+    const proposal = outreachDraft(fx);
+    proposal.summary = 'Approve a personalized partner invitation.';
+    proposal.consequence = 'Approval places this exact message in the outbound email queue.';
+    proposal.evidence.push({ id: seeded.enrichmentId, kind: 'artifact', label: 'Verified professional contact' });
+    proposal.details.draft_only = false;
+    proposal.details.recipients = [{
+      name: 'Jordan Lee', address: 'jordan@example.com', candidate_id: seeded.candidateId,
+      phone_numbers: [], social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/jordan-lee' }],
+    }];
+    const proposed = await propose(
+      fx, proposal, `proposal:${randomUUID()}`, `partner-outreach-send-${fx.agentId}`,
+    );
+    expect(proposed.effect).toMatchObject({ kind: 'communication', status: 'waiting' });
+
+    const e = env();
+    const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`),
+    });
+    expect(response.status).toBe(201);
+
+    const persisted = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const outbox = await client.query<{
+        id: string; state: string; authorization_revision: number; authorization_hash: string;
+        sender_address: string; recipient_address: string; subject: string; body: string;
+      }>(`SELECT id,state,authorization_revision,authorization_hash,sender_address,
+                  recipient_address,subject,body
+             FROM outbound_email_outbox WHERE request_id=$1`, [proposed.request_id]);
+      const engagement = await client.query<{ stage: string }>(
+        `SELECT stage FROM partner_engagements WHERE request_id=$1`, [proposed.request_id],
+      );
+      return { outbox: outbox.rows, stage: engagement.rows[0]?.stage };
+    });
+    expect(persisted.outbox).toEqual([expect.objectContaining({
+      state: 'pending_connection',
+      authorization_revision: proposed.payload.authorization.revision,
+      authorization_hash: proposed.payload.authorization.hash,
+      sender_address: 'maya@example.test', recipient_address: 'jordan@example.com',
+      subject: 'Explore the Hermes Partner Program',
+      body: expect.stringContaining('Hermes Partner Program'),
+    })]);
+    expect(persisted.stage).toBe('pending_connection');
+
+    const sentRequests: Request[] = [];
+    const emailEnv = makeEnv({
+      KEK_V1: Buffer.alloc(32, 31).toString('base64'),
+      GMAIL_FETCHER: {
+        fetch: async (request: Request) => {
+          sentRequests.push(request.clone());
+          return new Response(JSON.stringify({ id: 'gmail-message-1', threadId: 'gmail-thread-1' }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        },
+      } as Fetcher,
+    }).env;
+    const outboxId = persisted.outbox[0]!.id;
+    await withTenantTransaction(
+      emailEnv,
+      'app',
+      { workspaceId: fx.workspaceId, userId: fx.adminId },
+      async (tx) => {
+        const account = await storeGmailAccount(tx, emailEnv, {
+          workspaceId: fx.workspaceId,
+          connectedBy: fx.adminId,
+          address: 'maya@example.test',
+          token: {
+            access_token: 'test-access-token',
+            refresh_token: 'test-refresh-token',
+            expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+            scope: 'https://www.googleapis.com/auth/gmail.send openid email',
+            token_type: 'Bearer',
+          },
+        });
+        await tx.query(
+          `UPDATE outbound_email_outbox SET account_id=$2,state='queued' WHERE id=$1`,
+          [outboxId, account.id],
+        );
+      },
+    );
+    await runOutboundEmailSendJob(emailEnv, {
+      id: randomUUID(), workspace_id: fx.workspaceId, kind: 'outbound_email_send',
+      key: `outbound-email:${outboxId}`, payload: { outbox_id: outboxId }, attempts: 1,
+    });
+
+    expect(sentRequests).toHaveLength(1);
+    const gmailRequest = sentRequests[0]!;
+    expect(gmailRequest.url).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/send');
+    const gmailBody = await gmailRequest.json() as { raw: string };
+    const mime = Buffer.from(gmailBody.raw, 'base64url').toString('utf8');
+    expect(mime).toContain('From: maya@example.test');
+    expect(mime).toContain('jordan@example.com');
+    expect(mime).toContain('Subject: =?UTF-8?B?');
+
+    const sent = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const outbox = await client.query(
+        `SELECT state,provider_message_id,provider_thread_id,attempt_count FROM outbound_email_outbox WHERE id=$1`,
+        [outboxId],
+      );
+      const engagement = await client.query(`SELECT stage,last_outreach_at FROM partner_engagements WHERE request_id=$1`, [proposed.request_id]);
+      const approval = await client.query(`SELECT effect_status,work_status FROM approval_requests WHERE request_id=$1`, [proposed.request_id]);
+      return { outbox: outbox.rows[0], engagement: engagement.rows[0], approval: approval.rows[0] };
+    });
+    expect(sent.outbox).toMatchObject({
+      state: 'sent', provider_message_id: 'gmail-message-1', provider_thread_id: 'gmail-thread-1', attempt_count: 1,
+    });
+    expect(sent.engagement).toMatchObject({ stage: 'sent', last_outreach_at: expect.any(Date) });
+    expect(sent.approval).toEqual({ effect_status: 'executed', work_status: 'completed' });
   });
 
   it('requires two distinct current reviewers and prevents requester self-review', async () => {
@@ -559,6 +754,10 @@ describe('enterprise approval policy and voting', () => {
       'deliverable', 'data_disclosure', 'record_change', 'exception', 'agent_governance',
     ]);
     expect(views.every((view) => view.payload.illustrative)).toBe(true);
-    expect(views.filter((view) => view.effect.kind !== 'none').every((view) => view.effect.status === 'unavailable')).toBe(true);
+    expect(views.filter((view) => view.effect.kind !== 'none').every((view) =>
+      view.effect.kind === 'communication'
+        ? view.effect.status === 'waiting'
+        : view.effect.status === 'unavailable',
+    )).toBe(true);
   });
 });

@@ -36,6 +36,18 @@ function request(id: number, subject: string, kind: RequestEntity['kind'], statu
     id: mockUuid(id), kind, status, subject, label: subject, title: subject,
     session_id: null, run_id: null, created_at: '2026-09-15T12:00:00.000Z',
     version: 1, payload, sources, missing: [],
+    decision_summary: {
+      action: kind === 'application' ? 'Review applicant' : kind === 'invoice' ? 'Approve invoice draft' : 'Approve agreement draft',
+      primary: subject,
+      facts: [],
+      consequence: null,
+      approval_requirement: {
+        mode: 'single', completed_steps: status === 'pending' ? 0 : 1, total_steps: 1,
+        remaining_approvals: status === 'pending' ? 1 : 0,
+        current: status === 'pending' ? [{ label: 'Workspace Admin', approvals_recorded: 0, quorum: 1 }] : [],
+        pending_for_viewer: status === 'pending', waiting_on_others: false, expires_at: null,
+      },
+    },
   };
 }
 
@@ -62,10 +74,29 @@ function render(ref: Ref, selectedId?: string): string {
 }
 
 function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', readOnly = false): string {
-  const state = { ...initialState(), user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role } };
+  const state = {
+    ...initialState(),
+    workspace: { ...initialState().workspace, id: mockUuid(1) },
+    user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role },
+  };
+  const reviewer = row.payload.workflow_provenance ? 'Finance reviewer' : 'Workspace Admin';
+  const requestWithEligibility: RequestEntity = {
+    ...row,
+    decision_summary: {
+      action: row.decision_summary?.action ?? (row.kind === 'invoice' ? 'Approve invoice draft' : 'Approve agreement draft'),
+      primary: row.decision_summary?.primary ?? row.label,
+      facts: row.decision_summary?.facts ?? [],
+      consequence: row.decision_summary?.consequence ?? null,
+      approval_requirement: {
+        mode: 'single', completed_steps: 0, total_steps: 1, remaining_approvals: 1,
+        current: [{ label: reviewer, approvals_recorded: 0, quorum: 1 }],
+        pending_for_viewer: role === 'admin', waiting_on_others: role !== 'admin', expires_at: null,
+      },
+    },
+  };
   return renderToStaticMarkup(
     <StoreProvider store={createStore(state)} adapter={{} as Adapter}>
-      <DocumentView request={row} readOnly={readOnly} />
+      <DocumentView request={requestWithEligibility} readOnly={readOnly} />
     </StoreProvider>,
   );
 }
@@ -181,6 +212,34 @@ describe('the Inbox renders the focused view', () => {
     expect(invoice).toContain('2 unresolved source references');
     expect(invoice).toContain('message-1');
     expect(invoice).not.toContain('href="https://unverified.example/source"');
+  });
+
+  it('shows the scoped workflow excerpts and links only the Finance-owned source session', () => {
+    const base = requests[3]!;
+    const partnershipsSession = mockUuid(301);
+    const financeSession = mockUuid(302);
+    const invoice = renderDocument({
+      ...base,
+      payload: {
+        ...base.payload,
+        workflow_provenance: {
+          handoff_id: mockUuid(303),
+          shared_partner: { id: mockUuid(304), name: 'Robin Studio', engagement_reference: 'ENG-42' },
+          source_sessions: [
+            { role: 'partnerships', agent_name: 'Iris', session_id: partnershipsSession, run_id: mockUuid(305), excerpt: 'Approved engagement excerpt only.', simulated: true },
+            { role: 'finance', agent_name: 'Ledger', session_id: financeSession, run_id: mockUuid(306), excerpt: 'Invoice matched the authorized amount.', simulated: true },
+          ],
+          source_record_revisions: { engagement: 1, invoice: 1 },
+          checks: { duplicate: 'clear', engagement_match: 'matched', missing_context: [] },
+        },
+      },
+    });
+    expect(invoice).toContain('Workflow evidence (2 sources)');
+    expect(invoice).toContain('Approved engagement excerpt only.');
+    expect(invoice).toContain('Full Partnerships session remains private.');
+    expect(invoice).toContain(`href="/workspace/${mockUuid(1)}/s/${financeSession}"`);
+    expect(invoice).not.toContain(`href="/workspace/${mockUuid(1)}/s/${partnershipsSession}"`);
+    expect(invoice).toContain('Simulated');
   });
 
   it('shows the actual legacy reviewer eligibility and does not give members a draft approval action', () => {

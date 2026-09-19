@@ -29,7 +29,7 @@
 // that cannot be read while it works.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
-import type { Message, RequestEntity } from '@hermes/shared';
+import { parseBotModeAgentMessage, type Message, type RequestEntity } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Block, ReceiptBlock } from './Blocks.js';
 import { IrisText } from './IrisText.js';
@@ -356,16 +356,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 
           {before.map((message) =>
             message.role === 'user' ? (
-              <div key={message.id} className="msg-user" data-message-id={message.id}>
-                {message.text}
-                {message.attachments?.length ? (
-                  <span className="att">
-                    {message.attachments.map((a) => (
-                      <Chip key={a.id}>{a.label}</Chip>
-                    ))}
-                  </span>
-                ) : null}
-              </div>
+              <UserMessage key={message.id} message={message} />
             ) : message.role === 'human' ? (
               <div key={message.id} className="msg-human" data-message-id={message.id}>
                 <Avatar person={{ name: state.user.name }} size={24} />
@@ -429,6 +420,32 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+function UserMessage({ message }: { message: Message }) {
+  const bot = parseBotModeAgentMessage(message.text);
+  if (bot) {
+    return (
+      <details className="msg-agent-handoff" data-message-id={message.id}>
+        <summary>
+          <span>Message from</span>
+          <strong>{bot.display}</strong>
+          {bot.profile && <code>@{bot.profile}</code>}
+        </summary>
+        <div className="msg-agent-handoff-body">{bot.body}</div>
+      </details>
+    );
+  }
+  return (
+    <div className="msg-user" data-message-id={message.id}>
+      {message.text}
+      {message.attachments?.length ? (
+        <span className="att">
+          {message.attachments.map((attachment) => <Chip key={attachment.id}>{attachment.label}</Chip>)}
+        </span>
+      ) : null}
     </div>
   );
 }

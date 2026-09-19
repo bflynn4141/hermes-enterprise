@@ -26,8 +26,8 @@ import {
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
-import { loadRequest, toRequestEntity, REQUEST_SELECT, type RequestRow } from '../domain/requests.js';
+import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { loadRequest, toRequestEntity, REQUEST_AUDIENCE_PREDICATE, REQUEST_SELECT, type RequestRow } from '../domain/requests.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { DOCUMENT_SELECT, toDocumentEntity, type DocumentRow } from '../documents/service.js';
@@ -49,6 +49,21 @@ function statusFilter(raw: string | undefined): string[] {
     .filter((value): value is string => (REQUEST_STATUSES as readonly string[]).includes(value));
 }
 
+const financeWorkflowRequest = (row: RequestRow): boolean =>
+  row.kind === 'invoice'
+  && !!row.payload
+  && typeof row.payload === 'object'
+  && !Array.isArray(row.payload)
+  && 'workflow_provenance' in row.payload;
+
+async function financeReviewer(work: TenantWork): Promise<boolean> {
+  const { rows } = await work.tx.query<{ reviewer_roles: string[] }>(
+    `SELECT reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+    [work.workspaceId, work.userId],
+  );
+  return rows[0]?.reviewer_roles.includes('finance') ?? false;
+}
+
 export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Response> {
   const statuses = statusFilter(c.req.query('status'));
   const kindRaw = c.req.query('kind');
@@ -59,8 +74,8 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const triageActive = c.env.INBOX_TRIAGE_MODE === 'active';
 
   const rows = await inWorkspace(c, async (work) => {
-    const where: string[] = [];
-    const values: unknown[] = [];
+    const values: unknown[] = [work.workspaceId, work.userId];
+    const where: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE];
     if (statuses.length > 0) {
       values.push(statuses);
       where.push(`r.status = ANY ($${values.length}::text[])`);
@@ -80,7 +95,7 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
 
     const result = await work.tx.query<RequestRow>(
       `${REQUEST_SELECT}
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        WHERE ${where.join(' AND ')}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT $${values.length}`,
       values,
@@ -107,10 +122,15 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         if (jobId) jobs.push(jobId);
       }
     }
-    return { rows: result.rows, projections, canDecideLegacy: work.role === 'admin' };
+    return { rows: result.rows, projections, role: work.role, financeReviewer: await financeReviewer(work) };
   });
 
-  const items = rows.rows.map((row) => toRequestEntity(row, rows.projections.get(row.id) ?? null, triageActive, rows.canDecideLegacy));
+  const items = rows.rows.map((row) => toRequestEntity(
+    row,
+    rows.projections.get(row.id) ?? null,
+    triageActive,
+    rows.role === 'admin' || (rows.financeReviewer && financeWorkflowRequest(row)),
+  ));
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
     items.sort((left, right) => {
@@ -136,23 +156,32 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
 export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
   const result = await inWorkspace(c, async (work) => {
-    const row = await loadRequest(work.tx, requestId);
+    const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, canDecideLegacy: work.role === 'admin' };
+    return { row, approval, role: work.role, financeReviewer: await financeReviewer(work) };
   });
   if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(result.row, result.approval, c.env.INBOX_TRIAGE_MODE === 'active', result.canDecideLegacy)));
+  return c.json(requestEntitySchema.parse(toRequestEntity(
+    result.row,
+    result.approval,
+    c.env.INBOX_TRIAGE_MODE === 'active',
+    result.role === 'admin' || (result.financeReviewer && financeWorkflowRequest(result.row)),
+  )));
 }
 
 export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
-  const rows = await inWorkspace(c, (work) => effectRows(work.tx, { requestId }));
+  const rows = await inWorkspace(c, async (work) => {
+    if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
+    return effectRows(work.tx, { requestId });
+  });
   return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
 }
 
 export async function listRequestDocuments(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
   const rows = await inWorkspace(c, async (work) => {
+    if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
     const result = await work.tx.query<DocumentRow>(
       `${DOCUMENT_SELECT} WHERE d.request_id = $1 ORDER BY d.version DESC`,
       [requestId],
@@ -182,19 +211,23 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
   if (!body) throw new RouteError('a note needs a body', 'empty_note', 422);
 
   const row = await inWorkspace(c, async (work) => {
-    const exists = await work.tx.query(`SELECT 1 FROM requests WHERE id = $1`, [requestId]);
-    if (exists.rowCount !== 1) throw new RouteError('no such request', 'unknown_request', 404);
+    if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
 
     await work.tx.query(
       `INSERT INTO request_notes (workspace_id, request_id, body, author_type, author_id)
        VALUES ($1, $2, $3, 'user', $4)`,
       [work.workspaceId, requestId, body.slice(0, 4000), work.userId],
     );
-    const row = await loadRequest(work.tx, requestId);
+    const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, canDecideLegacy: work.role === 'admin' };
+    return { row, approval, role: work.role, financeReviewer: await financeReviewer(work) };
   });
 
   if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
-  return c.json(requestEntitySchema.parse(toRequestEntity(row.row, row.approval, c.env.INBOX_TRIAGE_MODE === 'active', row.canDecideLegacy)), 201);
+  return c.json(requestEntitySchema.parse(toRequestEntity(
+    row.row,
+    row.approval,
+    c.env.INBOX_TRIAGE_MODE === 'active',
+    row.role === 'admin' || (row.financeReviewer && financeWorkflowRequest(row.row)),
+  )), 201);
 }
