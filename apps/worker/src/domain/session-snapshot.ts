@@ -1,6 +1,8 @@
 // Recover a conversation entirely from committed rows. A single SQL statement
 // gives history, checkpoints, run state and cursor the same MVCC boundary.
-// Session ownership and agent binding are checked inside that same statement.
+// Session ownership and tenant/agent identities share that same statement.
+// Agent ownership can change without transferring a person's conversation:
+// hydration follows the owner rule used by session reads, replay and sockets.
 import {
   messageSchema, sessionSnapshotSchema, streamEventSchema,
   type Message, type SessionSnapshot, type SessionSnapshotStream, type StreamEvent,
@@ -9,6 +11,7 @@ import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { runtimeLocation } from '../runtime/config.js';
 import { RouteError } from '../routes/tenant.js';
+import { VISIBLE } from './session-visibility.js';
 
 export function projectSessionMessage(row: Record<string, unknown>): Message {
   const created = row.created_at;
@@ -93,10 +96,7 @@ export async function loadSessionSnapshot(
     `WITH visible_session AS MATERIALIZED (
        SELECT s.* FROM sessions s
         JOIN agents a ON a.workspace_id=s.workspace_id AND a.id=s.agent_id
-        WHERE s.workspace_id=$1 AND s.id=$3 AND s.owner_id=$2
-          AND (NOT EXISTS (SELECT 1 FROM agent_owners ao WHERE ao.workspace_id=$1 AND ao.agent_id=a.id)
-            OR EXISTS (SELECT 1 FROM agent_owners ao JOIN members m ON m.id=ao.member_id AND m.workspace_id=ao.workspace_id
-                        WHERE ao.workspace_id=$1 AND ao.agent_id=a.id AND m.user_id=$2 AND m.status='active'))
+        WHERE s.workspace_id=$1 AND s.id=$3 AND ${VISIBLE}
      ), selected_run AS MATERIALIZED (
        SELECT r.* FROM runs r JOIN visible_session s
          ON r.workspace_id=s.workspace_id AND r.session_id=s.id AND r.agent_id=s.agent_id
@@ -117,6 +117,12 @@ export async function loadSessionSnapshot(
          'started_at',clock.admitted_at,'admitted_at',clock.admitted_at,
          'execution_started_at',CASE WHEN r.runtime_request_attempt=r.attempt THEN r.runtime_started_at ELSE started.created_at END,
          'ended_at',r.ended_at,'waiting_for',r.waiting_for,'waiting_label',r.waiting_label,'active_ms',r.active_ms,'error',r.error,
+         'guidance',(SELECT jsonb_build_object('id',g.id,'text',g.text,
+           'status',CASE WHEN g.status='streaming' THEN 'pending' ELSE 'applied' END)
+           FROM messages g WHERE g.workspace_id=$1 AND g.session_id=s.id AND g.role='user' AND g.kind='guidance'
+             AND g.status IN ('streaming','complete')
+             AND (g.run_id=r.id OR (g.run_id IS NULL AND g.status='streaming' AND g.created_at<=r.created_at))
+           ORDER BY g.seq DESC LIMIT 1),
          'steps',COALESCE((SELECT jsonb_agg(to_jsonb(step)-'turn' ORDER BY step.turn,step.id) FROM (
            SELECT rs.step_id AS id,rs.turn,rs.label,rs.state,rs.tool_call_id,rs.step_attempt
              FROM run_steps rs WHERE rs.workspace_id=$1 AND rs.run_id=r.id AND rs.started_at>=clock.admitted_at

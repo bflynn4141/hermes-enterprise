@@ -119,10 +119,11 @@ describe('selected-session snapshot HTTP boundary', () => {
     expect(retry.stream).toBeNull();
   });
 
-  it('enforces tenant, session owner, and assigned agent instead of treating shares or Admin as an override', async () => {
+  it('preserves session-owner hydration after agent reassignment without granting the agent owner or another tenant access', async () => {
     const fx = await fixture();
     const other = await fixture();
     const { env } = makeEnv();
+    await checkpoint(fx);
     await mutate(fx, async tx => {
       await tx.query(`INSERT INTO session_shares(workspace_id,session_id,created_by,token_hash,audience,message_cutoff_seq)
         VALUES($1,$2,$3,$4,'link',10)`, [fx.workspaceId, fx.sessionId, fx.adminId, randomUUID()]);
@@ -132,7 +133,52 @@ describe('selected-session snapshot HTTP boundary', () => {
     expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/sessions/${other.sessionId}/snapshot`)).status).toBe(404);
     await mutate(fx, tx => tx.query(`INSERT INTO agent_owners(workspace_id,agent_id,member_id)
       SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`, [fx.workspaceId, fx.agentId, fx.memberId]));
-    expect((await asUser(env, fx.adminId, path(fx))).status).toBe(404);
+    const owned = await get(fx, env);
+    expect(owned.session.id).toBe(fx.sessionId);
+    expect(owned.run?.id).toBe(fx.runId);
+    expect(owned.stream?.text).toBe('saved prefix');
+    expect((await asUser(env, fx.memberId, path(fx))).status).toBe(404);
+    expect((await asUser(env, other.adminId, path(fx))).status).toBe(404);
+    expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/sessions/${other.sessionId}/snapshot`)).status).toBe(404);
+  });
+
+  it('hydrates pending and applied guidance independently of the latest fifty messages', async () => {
+    const fx = await fixture();
+    const guidanceId = randomUUID();
+    await mutate(fx, async tx => {
+      await tx.query(`INSERT INTO messages(id,workspace_id,session_id,seq,role,kind,text,status,run_id)
+        VALUES($1,$2,$3,3,'user','guidance','Keep the original scope.','streaming',$4),
+          (gen_random_uuid(),$2,$3,2,'user','guidance','Earlier instruction.','complete',$4)`,
+      [guidanceId, fx.workspaceId, fx.sessionId, fx.runId]);
+      await tx.query(`INSERT INTO messages(workspace_id,session_id,seq,role,text,status)
+        SELECT $1,$2,seq,'system','Later transcript entry','complete' FROM generate_series(4,56) seq`,
+      [fx.workspaceId, fx.sessionId]);
+    });
+    const pending = await get(fx);
+    expect(pending.messages.items).toHaveLength(50);
+    expect(pending.messages.items.some(message => message.id === guidanceId)).toBe(false);
+    expect(pending.run?.guidance).toEqual({ id: guidanceId, text: 'Keep the original scope.', status: 'pending' });
+    await mutate(fx, tx => tx.query("UPDATE messages SET status='complete' WHERE id=$1", [guidanceId]));
+    const applied = await get(fx);
+    expect(applied.run?.guidance).toEqual({ id: guidanceId, text: 'Keep the original scope.', status: 'applied' });
+  });
+
+  it('hydrates only carried guidance eligible when the selected run was admitted', async () => {
+    const fx = await fixture();
+    const carriedId = randomUUID();
+    await mutate(fx, async tx => {
+      await tx.query(`INSERT INTO messages(id,workspace_id,session_id,seq,role,kind,text,status,created_at)
+        VALUES($1,$2,$3,2,'user','guidance','Carried instruction.','streaming',$4::timestamptz-interval '1 second')`,
+      [carriedId, fx.workspaceId, fx.sessionId, admittedAt]);
+      await tx.query(`INSERT INTO messages(workspace_id,session_id,seq,role,kind,text,status,created_at)
+        VALUES($1,$2,3,'user','guidance','For the next run.','streaming',$3::timestamptz+interval '1 second')`,
+      [fx.workspaceId, fx.sessionId, admittedAt]);
+      await tx.query(`INSERT INTO messages(workspace_id,session_id,seq,role,kind,text,status,run_id)
+        VALUES($1,$2,4,'user','guidance','Another run instruction.','streaming',$3)`,
+      [fx.workspaceId, fx.sessionId, randomUUID()]);
+    });
+    const snapshot = await get(fx);
+    expect(snapshot.run?.guidance).toEqual({ id: carriedId, text: 'Carried instruction.', status: 'pending' });
   });
 
   it('uses one SQL visibility boundary even when another commit lands before serialization', async () => {

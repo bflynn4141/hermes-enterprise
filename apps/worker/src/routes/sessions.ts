@@ -30,6 +30,7 @@ import { requireCsrf, requireOrigin } from '../auth.js';
 import { requireAllowedProvider } from '../model/allowed.js';
 import { loadSessionSnapshot, projectSessionMessage } from '../domain/session-snapshot.js';
 import { parseExpectedSettings, requireExpectedSettings, validateSessionEffort } from '../domain/session-settings.js';
+import { VISIBLE } from '../domain/session-visibility.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 
 const MAX_PAGE = 100;
@@ -56,7 +57,7 @@ const MAX_PAGE = 100;
  * It binds `$2` to the caller's user id and expects the sessions table aliased
  * `s`.
  */
-export const VISIBLE = `(s.owner_id = $2)`;
+export { VISIBLE };
 
 const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
        s.pinned, s.archived, s.read_only, s.focus_ref, s.last_activity_at`;
