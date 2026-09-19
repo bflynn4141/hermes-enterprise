@@ -69,6 +69,20 @@ describe('invitation diagnostics copy', () => {
       delivery_reason: 'workos_invitation_delivery_unavailable',
       delivery_trace_id: TRACE,
     })).toBe(`Email delivery will retry automatically. Reference: ${TRACE}.`);
+    expect(invitationDeliveryMessage({
+      ...INVITATION,
+      delivery_status: 'failed',
+      delivery_reason: 'workos_invitation_local_commit_failed',
+      delivery_trace_id: TRACE,
+    })).toBe(
+      `WorkOS accepted the request, but Hermes could not save confirmation. Check WorkOS before resending. Reference: ${TRACE}.`,
+    );
+    expect(invitationDeliveryMessage({
+      ...INVITATION,
+      delivery_status: 'failed',
+      delivery_reason: 'workos_invitation_delivery_outcome_unknown',
+      delivery_trace_id: TRACE,
+    })).toBe(`WorkOS may have accepted the email. Check WorkOS before resending. Reference: ${TRACE}.`);
   });
 
   it('uses safe fallback copy for an unknown historical failure category', () => {

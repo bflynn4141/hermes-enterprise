@@ -34,6 +34,8 @@ const DIAGNOSTIC_CHECKPOINTS = new Set([
   'job_payload_invalid',
   'provider_unavailable',
   'reservation_recheck_failed',
+  'ambiguous_delivery_detected',
+  'terminal_delivery_replayed',
   'delivery_already_resolved',
   'pending_and_reservation_rechecked',
   'provider_attempted',
@@ -50,7 +52,8 @@ const DIAGNOSTIC_REASONS = new Set([
   'bad_workspace_id', 'invitation_failed', 'already_member', 'duplicate', 'delivery_queued',
   'workos_invitation_delivery_not_configured', 'workos_invitation_payload_invalid',
   'iris_capacity_reservation_missing', 'workos_invitation_delivery_rejected',
-  'workos_invitation_delivery_unavailable', 'workos_invitation_local_commit_failed',
+  'workos_invitation_delivery_unavailable', 'workos_invitation_delivery_outcome_unknown',
+  'workos_invitation_local_commit_failed',
 ]);
 
 export function invitationCorrelationId(value?: unknown): string {
@@ -168,12 +171,30 @@ export function trackInvitationRequestFailure(input: {
 }
 
 export interface InvitationDeliveryFailure {
-  readonly reason: 'workos_invitation_delivery_rejected' | 'workos_invitation_delivery_unavailable';
+  readonly reason:
+    | 'workos_invitation_delivery_rejected'
+    | 'workos_invitation_delivery_unavailable'
+    | 'workos_invitation_delivery_outcome_unknown';
   readonly retryAfterSeconds: number;
   readonly retryable: boolean;
 }
 
 export function classifyInvitationDeliveryFailure(error: unknown): InvitationDeliveryFailure {
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status !== 'number' || status <= 0) {
+    return {
+      reason: 'workos_invitation_delivery_outcome_unknown',
+      retryAfterSeconds: 0,
+      retryable: false,
+    };
+  }
+  if (status >= 400 && status < 500 && status !== 429) {
+    return {
+      reason: 'workos_invitation_delivery_rejected',
+      retryAfterSeconds: 0,
+      retryable: false,
+    };
+  }
   const classified = classifyWorkOSError(error);
   return classified.terminal
     ? { reason: 'workos_invitation_delivery_rejected', retryAfterSeconds: 0, retryable: false }

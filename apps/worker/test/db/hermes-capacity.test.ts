@@ -4,6 +4,7 @@ import type { Env } from '../../src/env.js';
 import { POOL_CONTROL_NAMESPACE } from '../../src/hermes-cloud/capacity.js';
 import { sealSecret } from '../../src/keys/envelope.js';
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../../src/auth/cookies.js';
+import { runJobsAfterCommit } from '../../src/jobs.js';
 import { FakeWorkOS, FakeWorkOSError, seal, signAccessToken } from '../stubs/fake-workos.js';
 import {
   asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv,
@@ -314,6 +315,141 @@ describe('Hermes Cloud invitation capacity', () => {
       ready: 0,
     });
     expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
+  });
+
+  it('does not repeat a provider write after WorkOS accepts but local confirmation fails', async () => {
+    const fixture = await seedWorkspace();
+    const organizationId = `org_${randomUUID().slice(0, 12)}`;
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1,$2)
+       ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id=EXCLUDED.workos_organization_id`,
+      [fixture.workspaceId, organizationId],
+    ));
+    const env = workosEnv({ AGENT_RUNTIME: 'hermes', KEK_V1 }).env;
+    await seedCapacity(fixture, env);
+    const email = `accepted-unpersisted-${randomUUID()}@example.test`;
+    const suffix = randomUUID().replaceAll('-', '');
+    const functionName = `test_invitation_commit_failure_${suffix}`;
+    const triggerName = `test_invitation_commit_failure_${suffix}`;
+    const safeEmail = email.replaceAll("'", "''");
+    await withClient('owner', async (client) => {
+      await client.query(
+        `CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+             IF NEW.email='${safeEmail}' AND NEW.delivery_status='delivered' THEN
+               RAISE EXCEPTION 'forced local invitation confirmation failure';
+             END IF;
+             RETURN NEW;
+           END
+         $$`,
+      );
+      await client.query(
+        `CREATE TRIGGER ${triggerName} BEFORE UPDATE ON invitations
+           FOR EACH ROW EXECUTE FUNCTION ${functionName}()`,
+      );
+    });
+
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const response = await asWorkOSAdmin(
+        fixture, env, `/w/${fixture.workspaceId}/invitations`, { email },
+      );
+      expect(response.status).toBe(201);
+      const invitation = await response.json() as { id: string };
+      const state = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+        const delivery = await client.query<{
+          workos_invitation_id: string | null; delivery_status: string; delivery_error: string | null;
+        }>(
+          `SELECT workos_invitation_id,delivery_status,delivery_error FROM invitations WHERE id=$1`,
+          [invitation.id],
+        );
+        const job = await client.query<{ id: string; done: boolean; last_error: string | null }>(
+          `SELECT id,done_at IS NOT NULL AS done,last_error FROM jobs
+            WHERE workspace_id=$1 AND kind='workos_sync' AND payload->>'invitation_id'=$2`,
+          [fixture.workspaceId, invitation.id],
+        );
+        const ready = await client.query(
+          `SELECT 1 FROM job_ready r JOIN jobs j ON j.id=r.job_id
+            WHERE j.workspace_id=$1 AND j.kind='workos_sync' AND j.payload->>'invitation_id'=$2`,
+          [fixture.workspaceId, invitation.id],
+        );
+        return { delivery: delivery.rows[0]!, job: job.rows[0]!, ready: ready.rowCount };
+      });
+      expect(state.delivery).toMatchObject({
+        delivery_status: 'failed',
+        delivery_error: 'workos_invitation_local_commit_failed',
+      });
+      expect(state.delivery.workos_invitation_id).toBe(fake.invitations[0]?.id);
+      expect(state.job).toMatchObject({ done: true, last_error: 'workos_invitation_local_commit_failed' });
+      expect(state.ready).toBe(0);
+      expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
+
+      await runJobsAfterCommit(env, fixture.workspaceId, [state.job.id]);
+      expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
+
+      for (const replayCase of [
+        {
+          deliveryStatus: 'sending',
+          seededReason: null,
+          expectedReason: 'workos_invitation_delivery_outcome_unknown',
+        },
+        {
+          deliveryStatus: 'failed',
+          seededReason: 'workos_invitation_delivery_outcome_unknown',
+          expectedReason: 'workos_invitation_delivery_outcome_unknown',
+        },
+        {
+          deliveryStatus: 'failed',
+          seededReason: 'workos_invitation_delivery_rejected',
+          expectedReason: 'workos_invitation_delivery_rejected',
+        },
+      ]) {
+        await withClient('owner', async (client) => {
+          await client.query('BEGIN');
+          await setTenant(client, fixture.workspaceId, fixture.adminId);
+          await client.query(
+            `UPDATE invitations
+                SET workos_invitation_id=NULL,delivery_status=$2,delivery_error=$3
+              WHERE id=$1`,
+            [invitation.id, replayCase.deliveryStatus, replayCase.seededReason],
+          );
+          await client.query(
+            `UPDATE jobs SET done_at=NULL,locked_until=NULL,last_error=NULL WHERE id=$1`,
+            [state.job.id],
+          );
+          await client.query(
+            `INSERT INTO job_ready (job_id,workspace_id) VALUES ($1,$2)
+             ON CONFLICT (job_id) DO NOTHING`,
+            [state.job.id, fixture.workspaceId],
+          );
+          await client.query('COMMIT');
+        });
+
+        await runJobsAfterCommit(env, fixture.workspaceId, [state.job.id]);
+        expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
+        const replay = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+          const invitationState = await client.query<{ delivery_error: string | null }>(
+            `SELECT delivery_error FROM invitations WHERE id=$1`, [invitation.id],
+          );
+          const jobState = await client.query<{ done: boolean }>(
+            `SELECT done_at IS NOT NULL AS done FROM jobs WHERE id=$1`, [state.job.id],
+          );
+          const ready = await client.query(`SELECT 1 FROM job_ready WHERE job_id=$1`, [state.job.id]);
+          return {
+            reason: invitationState.rows[0]!.delivery_error,
+            done: jobState.rows[0]!.done,
+            ready: ready.rowCount,
+          };
+        });
+        expect(replay).toEqual({ reason: replayCase.expectedReason, done: true, ready: 0 });
+      }
+    } finally {
+      await withClient('owner', async (client) => {
+        await client.query(`DROP TRIGGER IF EXISTS ${triggerName} ON invitations`);
+        await client.query(`DROP FUNCTION IF EXISTS ${functionName}()`);
+      });
+    }
   });
 
   it('delivers through WorkOS only after the exact invitation has reserved capacity', async () => {

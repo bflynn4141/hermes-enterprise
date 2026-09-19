@@ -472,8 +472,13 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
       const { expireInvitationReservations } = await import('./hermes-cloud/capacity.js');
       const deliverable = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
         await expireInvitationReservations(tx, job.workspace_id);
-        const invitation = await tx.query<{ status: string; workos_invitation_id: string | null }>(
-          `SELECT status, workos_invitation_id FROM invitations
+        const invitation = await tx.query<{
+          status: string;
+          workos_invitation_id: string | null;
+          delivery_status: string;
+          delivery_error: string | null;
+        }>(
+          `SELECT status, workos_invitation_id, delivery_status, delivery_error FROM invitations
             WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
           [job.workspace_id, payload.invitation_id],
         );
@@ -485,6 +490,22 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
             [payload.invitation_id],
           );
           return { deliver: false, done: true, failure: null };
+        }
+        if (row.delivery_status === 'sending') {
+          return {
+            deliver: false,
+            done: false,
+            failure: 'workos_invitation_delivery_outcome_unknown',
+          };
+        }
+        const persistedTerminalReason = row.delivery_error;
+        if (row.delivery_status === 'failed' && persistedTerminalReason && [
+          'workos_invitation_delivery_outcome_unknown',
+          'workos_invitation_delivery_rejected',
+          'workos_invitation_local_commit_failed',
+          'iris_capacity_reservation_missing',
+        ].includes(persistedTerminalReason)) {
+          return { deliver: false, done: false, failure: persistedTerminalReason };
         }
         if (env.AGENT_RUNTIME === 'hermes') {
           const capacity = await tx.query(
@@ -508,9 +529,18 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
             WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
           [job.workspace_id, payload.invitation_id, deliverable.failure],
         ));
-        await mark('failed', deliverable.failure);
-        invitationLog('reservation_recheck_failed', false, deliverable.failure);
-        throw new InvitationDeliveryError(deliverable.failure);
+        try { await mark('failed', deliverable.failure); }
+        catch { /* The terminal delivery state remains authoritative. */ }
+        const checkpoint = deliverable.failure === 'workos_invitation_delivery_outcome_unknown'
+          ? 'ambiguous_delivery_detected'
+          : deliverable.failure === 'iris_capacity_reservation_missing'
+            ? 'reservation_recheck_failed'
+            : 'terminal_delivery_replayed';
+        try { invitationLog(checkpoint, false, deliverable.failure); }
+        catch { /* Logging cannot make a terminal delivery retryable. */ }
+        // These states require Admin reconciliation. The persisted terminal
+        // reason also prevents a later claim from re-entering provider send.
+        throw new InvitationDeliveryError(deliverable.failure, 0, false);
       }
       invitationLog(deliverable.done ? 'delivery_already_resolved' : 'pending_and_reservation_rechecked', true);
       if (deliverable.deliver) {
@@ -534,8 +564,13 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
               WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
             [job.workspace_id, payload.invitation_id, failure.reason],
           ));
-          await mark('failed', failure.reason);
-          invitationLog('provider_failed', false, failure.reason);
+          if (failure.retryable) {
+            await mark('failed', failure.reason);
+          } else {
+            try { await mark('failed', failure.reason); } catch { /* Preserve the terminal provider outcome. */ }
+          }
+          try { invitationLog('provider_failed', false, failure.reason); }
+          catch { /* Logging cannot change provider retry safety. */ }
           throw new InvitationDeliveryError(failure.reason, failure.retryAfterSeconds, failure.retryable);
         }
 
@@ -562,14 +597,32 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
           invitationLog('local_delivery_committed', true);
         } catch {
           const reason = 'workos_invitation_local_commit_failed';
-          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
-            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
-              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
-            [job.workspace_id, payload.invitation_id, reason],
-          ));
-          await mark('failed', reason);
-          invitationLog('local_delivery_commit_failed', false, reason);
-          throw new InvitationDeliveryError(reason, 5);
+          try {
+            await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+              `UPDATE invitations
+                  SET workos_invitation_id=$3, expires_at=$4, delivery_status='failed', delivery_error=$5
+                WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+              [job.workspace_id, payload.invitation_id, sent.id, sent.expiresAt, reason],
+            ));
+          } catch {
+            // The provider response is still never replayed automatically. A
+            // later Admin reconciliation can use the shared correlation id.
+          }
+          try {
+            await mark('failed', reason);
+          } catch {
+            // Do not turn a post-acceptance bookkeeping failure into another
+            // provider call. The terminal error below remains authoritative.
+          }
+          try {
+            invitationLog('local_delivery_commit_failed', false, reason);
+          } catch {
+            // Logging cannot make an accepted provider write retryable.
+          }
+          // WorkOS already accepted the write. Replaying this job could send a
+          // second email because the provider id was the value we failed to
+          // persist, so keep the uncertainty visible for manual reconciliation.
+          throw new InvitationDeliveryError(reason, 0, false);
         }
       }
       break;

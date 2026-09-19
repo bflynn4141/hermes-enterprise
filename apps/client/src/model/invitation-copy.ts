@@ -45,9 +45,13 @@ export function invitationDeliveryMessage(invitation: InvitationEntity): string 
     : invitation.delivery_reason === 'workos_invitation_payload_invalid'
       ? 'Email delivery needs Admin attention.'
       : invitation.delivery_reason === 'iris_capacity_reservation_missing'
-        ? 'Email delivery is waiting for reserved Iris capacity.'
+        ? 'Reserved Iris capacity is missing. Add capacity, then resend.'
         : invitation.delivery_reason === 'workos_invitation_delivery_not_configured'
           ? 'Email delivery is waiting for WorkOS configuration.'
-          : 'Email delivery will retry automatically.';
+          : invitation.delivery_reason === 'workos_invitation_delivery_outcome_unknown'
+            ? 'WorkOS may have accepted the email. Check WorkOS before resending.'
+            : invitation.delivery_reason === 'workos_invitation_local_commit_failed'
+              ? 'WorkOS accepted the request, but Hermes could not save confirmation. Check WorkOS before resending.'
+              : 'Email delivery will retry automatically.';
   return invitation.delivery_trace_id ? `${message} Reference: ${invitation.delivery_trace_id}.` : message;
 }

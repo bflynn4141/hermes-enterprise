@@ -277,6 +277,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
                   'iris_capacity_reservation_missing',
                   'workos_invitation_delivery_rejected',
                   'workos_invitation_delivery_unavailable',
+                  'workos_invitation_delivery_outcome_unknown',
                   'workos_invitation_local_commit_failed'
                 ) THEN i.delivery_error
                 ELSE 'invitation_delivery_failed'
