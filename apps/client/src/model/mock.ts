@@ -1313,13 +1313,26 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/invitations') && method === 'GET') return page(invitations);
     if (p('/invitations') && method === 'POST') {
-      if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
+      if (options.memberWrites === 'fail') {
+        return json({
+          error: 'No verified Iris profile is available',
+          reason: 'iris_capacity_unavailable',
+          trace_id: mockUuid(399),
+        }, 409);
+      }
       const row: InvitationEntity = { id: mockUuid(220 + invitations.length), email: String(body.email ?? ''), role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0), version: 1 };
       invitations.push(row);
       return json(row, 201);
     }
     const invitationMatch = match(new RegExp(`^/w/${WS}/invitations/([^/]+)/(resend|withdraw)$`));
     if (invitationMatch) {
+      if (options.memberWrites === 'fail' && invitationMatch[2] === 'resend') {
+        return json({
+          error: 'No verified Iris profile is available',
+          reason: 'iris_capacity_unavailable',
+          trace_id: mockUuid(399),
+        }, 409);
+      }
       if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Invitation write fixture failed');
       const row = invitations.find((item) => item.id === invitationMatch[1]);
       if (!row) return fail(404, 'not_found');
