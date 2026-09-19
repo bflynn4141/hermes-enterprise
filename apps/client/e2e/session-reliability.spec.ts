@@ -294,6 +294,6 @@ test('a rejected model save cannot silently send through the previous model', as
   await send(page, 'Keep this draft if model selection fails');
   server.settingsGate.release();
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toHaveValue('Keep this draft if model selection fails');
-  await expect(page.getByText(/selected model could not be saved/)).toBeVisible();
+  await expect(page.getByText(/model choice could not be saved/)).toBeVisible();
   expect(server.turns).toHaveLength(0);
 });
