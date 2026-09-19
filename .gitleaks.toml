@@ -2,11 +2,12 @@
 #
 # The default ruleset, plus one allowlist. Nothing in this repository is a real
 # credential; the only strings that look like one are the local Docker Postgres
-# password in the example env files and test helpers, plus an explicitly
-# invalid mock Nous key used to exercise the rejected-credential state.
+# password in the example env files and test helpers, an explicitly invalid
+# mock Nous key used to exercise the rejected-credential state, one public
+# control-secret test vector, and one pinned public-source checksum.
 #
-# The allowlist is deliberately narrow: it matches that one literal, not a
-# pattern, so a real secret pasted next to it still fails the scan.
+# The allowlist is deliberately narrow: each credential-shaped entry matches
+# one exact public literal, so a real secret pasted next to it still fails.
 
 title = "hermes-enterprise"
 
@@ -14,13 +15,15 @@ title = "hermes-enterprise"
 useDefault = true
 
 [allowlist]
-description = "The local-only Docker Postgres password, and generated lockfiles"
+description = "Exact public test literals and source checksums, plus generated lockfiles"
 regexTarget = "match"
 regexes = [
   '''postgres://(app|agent|owner|postgres):(localdev|postgres)@127\.0\.0\.1:5433/hermes''',
   '''PGLOCALPASSWORD''',
   '''POSTGRES_PASSWORD: postgres''',
   '''nous-invalid-test-key-0000''',
+  '''0123456789abcdefghijklmnopqrstuvwxyzABCDEFG''',
+  '''800b15a537c24636509187ddfd850eadec94873f18dec633466604d525403fce''',
 ]
 paths = [
   '''pnpm-lock\.yaml''',
