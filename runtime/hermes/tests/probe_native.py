@@ -60,6 +60,27 @@ def tool_schema(name):
                 "additionalProperties": False,
             },
         }
+    if name == "list_requests":
+        return {
+            "name": name,
+            "description": "List requests visible to the current governed role.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+    if name == "get_request":
+        return {
+            "name": name,
+            "description": "Read one request visible to the current governed role.",
+            "parameters": {
+                "type": "object",
+                "properties": {"request_id": {"type": "string", "format": "uuid"}},
+                "required": ["request_id"],
+                "additionalProperties": False,
+            },
+        }
     return {
         "name": "list_partner_candidates",
         "description": "List candidates collected under the approved source policy.",
@@ -103,6 +124,7 @@ def main():
             "agent_id": partner_agent_id,
             "package": PARTNER_PACKAGE,
             "tool": "publish_partner_invoice_review",
+            "tools": ["publish_partner_invoice_review"],
             "arguments": {"intake_event_id": INTAKE_EVENT_ID, "expected_payload_hash": PAYLOAD_HASH},
             "skill_heading": "Partner Program Screening",
             "config": {"partner_program": {
@@ -121,6 +143,7 @@ def main():
             "agent_id": finance_agent_id,
             "package": FINANCE_PACKAGE,
             "tool": "get_partner_handoff_result",
+            "tools": ["get_partner_handoff_result", "list_requests", "get_request"],
             "arguments": {"handoff_id": HANDOFF_ID},
             "skill_heading": "Partner Invoice Review",
             "config": {"invoice_review": {
@@ -135,6 +158,7 @@ def main():
             "agent_id": legacy_agent_id,
             "package": LEGACY_PARTNER_PACKAGE,
             "tool": "list_partner_candidates",
+            "tools": ["list_partner_candidates"],
             "arguments": {},
             "skill_heading": "Partner Program Screening",
             "config": {"partner_program": {
@@ -171,7 +195,7 @@ def main():
             if not self.authorized():
                 self.reply(401, {})
             elif self.path.endswith("/tools"):
-                self.reply(200, {"tools": [tool_schema(role_contracts[role]["tool"])]} if role else {})
+                self.reply(200, {"tools": [tool_schema(name) for name in role_contracts[role]["tools"]]} if role else {})
             elif self.path.endswith("/skills"):
                 contract = role_contracts.get(role)
                 if contract is None:
@@ -423,7 +447,9 @@ def main():
             assert finance_calls[0]["runtime_run_id"] == finance_run_id, finance_calls
             assert finance_calls[0]["name"] == "get_partner_handoff_result", finance_calls
             assert finance_calls[0]["arguments"] == {"handoff_id": HANDOFF_ID}, finance_calls
-            assert catalog_names["finance"] == {"get_partner_handoff_result", "skill_view"}, catalog_names
+            assert catalog_names["finance"] == {
+                "get_partner_handoff_result", "list_requests", "get_request", "skill_view",
+            }, catalog_names
             assert any(
                 "Partner Invoice Review" in str(message.get("content", ""))
                 for call in model_calls if call["role"] == "finance"
@@ -436,7 +462,9 @@ def main():
                 "artifact_digest": FINANCE_PACKAGE["artifact_digest"],
                 "content_digest": FINANCE_PACKAGE["content_digest"],
             }], finance_readiness
-            assert set(finance_readiness["tools"]) == {"get_partner_handoff_result", "skill_view"}
+            assert set(finance_readiness["tools"]) == {
+                "get_partner_handoff_result", "list_requests", "get_request", "skill_view",
+            }
             assert finance_readiness["agentcash_enabled"] is False, finance_readiness
 
             before_forbidden = len(tool_calls)

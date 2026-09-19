@@ -14,7 +14,7 @@ Before changing a runtime, verify these fixed prerequisites through the Enterpri
 - for a Cloud connector, one unique control secret per profile and a loopback native API key;
 - schedules disabled for the rehearsal.
 
-New multi-party Partnerships requires `enterprise_bridge:partner-program-screening-v1-8` version `1.8.0` and `publish_partner_invoice_review`. Finance requires `enterprise_bridge:partner-invoice-review` version `1.0.1` and `get_partner_handoff_result`. Finance does not require AgentCash, an AgentCash wallet or any MCP server. The bundle also preserves the original `enterprise_bridge:partner-program-screening` version `1.7.0` package for existing discovery assignments; that legacy name never attests as the new multi-party package.
+New multi-party Partnerships requires `enterprise_bridge:partner-program-screening-v1-8` version `1.8.0` and `publish_partner_invoice_review`. Finance requires `enterprise_bridge:partner-invoice-review` version `1.0.1` with the exact governed tools `get_partner_handoff_result`, `list_requests` and `get_request`. Finance does not require AgentCash, an AgentCash wallet or any MCP server. The bundle also preserves the original `enterprise_bridge:partner-program-screening` version `1.7.0` package for existing discovery assignments; that legacy name never attests as the new multi-party package.
 
 The reviewed native artifacts are the exact `SKILL.md` bytes reported by `enterprise_bridge.packages.packaged_skills()`. Copy those versions and digests into the Worker registry and migration; do not transcribe a placeholder digest.
 
@@ -69,7 +69,7 @@ jq '{runtime_revision,plugin,workspace_id,agent_id,skills,tools,agentcash_enable
   /short/path/he-finance/AGENT_UUID/home/runtime-readiness.json
 ```
 
-The Finance attestation must contain only its assigned Finance skill, `get_partner_handoff_result` and `skill_view`, with `agentcash_enabled: false`. The Partnerships attestation must contain only its assigned Partnerships skill and granted tools plus `skill_view`. A missing, stale, differently bound or differently hashed package fails startup.
+The Finance attestation must contain only its assigned Finance skill, `get_partner_handoff_result`, `list_requests`, `get_request` and `skill_view`, with `agentcash_enabled: false`. The generic request reads remain server-scoped to the Finance audience; their presence does not widen record visibility. The Partnerships attestation must contain only its assigned Partnerships skill and granted tools plus `skill_view`. A missing, stale, differently bound or differently hashed package fails startup.
 
 ## Local native acceptance
 
@@ -90,7 +90,7 @@ The native probe launches the actual pinned HTTP gateway and AIAgent under dispo
 2. On a quiet legacy profile, retain the complete profile directory, supervisor definition and previous runtime bundle. Install the additive bundle and restart with the existing agent, workspace and 1.7 assignment. Read readiness and confirm the legacy name, version, digest and tool grants are unchanged. Existing discovery/chat may continue in legacy mode.
 3. If the legacy check fails, stop that process, restore the retained bundle and profile directory, and restart its unchanged assignment. New admission remains closed, so this rollback does not reinterpret or delete existing history.
 4. Configure one selected new Partnerships profile with the distinct `partner-program-screening-v1-8` assignment. Confirm its `/skills` manifest has the exact 1.8 identity and `/tools` includes `publish_partner_invoice_review`; never mutate the legacy assignment in place.
-5. Configure the selected Finance profile with `partner-invoice-review@1.0.1`. Confirm its `/tools` contains only its role grants and that readiness reports `agentcash_enabled: false`.
+5. Configure the selected Finance profile with `partner-invoice-review@1.0.1`. Confirm its `/tools` is exactly `get_partner_handoff_result`, `list_requests`, `get_request` and `skill_view`, and that readiness reports `agentcash_enabled: false`.
 6. Read both connector readiness documents and compare workspace, agent, runtime revision, plugin, skill artifacts, tool inventory, native-cron policy and role-specific AgentCash state with the fixed bindings. A database assignment, host health or an online Cloud badge is not native readiness.
 7. Enable the selected workspace only after both new profiles pass. Rehearse with two independently authenticated user contexts and retain the native run, handoff, request, decision and source-version identifiers.
 8. If readiness, privacy, evidence or provider checks fail, stop new admission and keep existing legacy profiles, history and receipts readable. Do not reverse additive migrations.
