@@ -1,7 +1,13 @@
 // Runtime callbacks must retain tenant, attempt, mode, replay and BYOK gates.
 import { describe, expect, it, vi } from 'vitest';
 import { bridgeToken, requireBridgeAuth, runtimeBinding } from '../../src/runtime/config.js';
-import { dispatchRuntimeCall, parseRuntimeCall, proxyRuntimeModel, type RuntimeCall } from '../../src/runtime/bridge.js';
+import {
+  dispatchRuntimeCall,
+  parseRuntimeCall,
+  proxyRuntimeModel,
+  runtimeModelList,
+  type RuntimeCall,
+} from '../../src/runtime/bridge.js';
 import type { RuntimeCallRecord } from '../../src/runtime/store.js';
 import type { Env } from '../../src/env.js';
 import { FakeAgentDb } from './engine/fake-db.js';
@@ -442,5 +448,25 @@ describe('workspace model credential proxy', () => {
     expect(store.resolveCredential).not.toHaveBeenCalled();
     expect(store.reserveRuntimeBudget).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('Hermes model metadata contract', () => {
+  it('publishes a known context window and omits unknown or invalid windows', () => {
+    expect(runtimeModelList([
+      { model_id: 'nous:nousresearch/hermes-4', provider: 'nous_portal', context_length: 131_072 },
+      { model_id: 'openrouter:fixture/unknown', provider: 'openrouter', context_length: null },
+      { model_id: 'openrouter:fixture/invalid', provider: 'openrouter', context_length: 0 },
+    ])).toEqual({
+      object: 'list',
+      data: [
+        {
+          id: 'nousresearch/hermes-4', object: 'model', created: 0,
+          owned_by: 'nous_portal', context_length: 131_072,
+        },
+        { id: 'fixture/unknown', object: 'model', created: 0, owned_by: 'openrouter' },
+        { id: 'fixture/invalid', object: 'model', created: 0, owned_by: 'openrouter' },
+      ],
+    });
   });
 });

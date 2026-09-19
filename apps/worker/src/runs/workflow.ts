@@ -351,14 +351,17 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         } satisfies import('../engine/engine.js').EngineDeps;
       const runInput = { runId: params.runId, attempt: params.attempt, traceId: params.traceId };
       if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
-        const run = await db.loadRun(params.runId);
-        if (!run?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
-        const binding = await resolveRuntimeBinding(
-          this.env,
-          { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
-          params.workspaceId,
-          run.agentId,
-        );
+        const { run, binding } = await db.withRuntimeTransaction(async () => {
+          const loaded = await db.loadRun(params.runId);
+          if (!loaded?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
+          const resolved = await resolveRuntimeBinding(
+            this.env,
+            { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
+            params.workspaceId,
+            loaded.agentId,
+          );
+          return { run: loaded, binding: resolved };
+        });
         checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
         const onLatency = (measurement: import('../runtime/latency.js').RuntimeLatency) => {
           recordHermesLatency(this.env, params.workspaceId, {
@@ -391,7 +394,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
             at: 'hermes.terminal_failure', run_id: run.id, attempt: params.attempt,
             trace_id: params.traceId, ...failure,
           }),
-          skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
+          skillSnapshot: runtimeSkillManifests(this.env, binding.agentId),
         }, engineStep(step), runInput);
         // The terminal message and status have already been committed and sent
         // to the session hub. Raindrop is a post-run observer: a timeout,

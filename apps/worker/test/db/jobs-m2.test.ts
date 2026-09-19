@@ -9,7 +9,15 @@
 import { describe, expect, it } from 'vitest';
 import { seedWorkspace } from './helpers.js';
 import { clearFakeWorkOS, makeEnv, readTenant } from './harness.js';
-import { drainJobs, publishEvents, runJob, withWorkspaceTransaction } from '../../src/jobs.js';
+import {
+  deliverPreparedPublications,
+  drainJobs,
+  finishJobsAfterCommit,
+  publishEvents,
+  publishEventsForImmediateDelivery,
+  runJob,
+  withWorkspaceTransaction,
+} from '../../src/jobs.js';
 
 /**
  * `drainJobs` is cross-tenant by design — that is the whole point of the
@@ -26,6 +34,40 @@ async function drainBacklog(env: Parameters<typeof drainJobs>[0]): Promise<void>
 }
 
 describe('the outbox', () => {
+  it('directly delivers the committed envelope and retires its durable retry afterward', async () => {
+    const fixture = await seedWorkspace();
+    const { env, hubCalls } = makeEnv();
+    await drainBacklog(env);
+    hubCalls.length = 0;
+
+    const prepared = await withWorkspaceTransaction(env, fixture.workspaceId, (tx) =>
+      publishEventsForImmediateDelivery(tx, fixture.workspaceId, [{
+        kind: 'message.appended',
+        sessionId: fixture.sessionId,
+        traceId: 'trace-fast-path',
+        payload: { message_id: 'message-fast-path' },
+      }]),
+    );
+    expect(prepared).toHaveLength(1);
+
+    await deliverPreparedPublications(env, fixture.workspaceId, prepared);
+    expect(hubCalls).toHaveLength(1);
+    expect(hubCalls[0]).toMatchObject({ namespace: 'session', name: fixture.sessionId, method: 'publish' });
+    expect((hubCalls[0]!.argument as { id: string; kind: string; trace_id: string }[])[0]).toMatchObject({
+      id: expect.any(String), kind: 'message.appended', trace_id: 'trace-fast-path',
+    });
+
+    await finishJobsAfterCommit(env, fixture.workspaceId, prepared.map((item) => item.jobId));
+    const remaining = await readTenant(fixture.workspaceId, fixture.adminId, async (c) => {
+      const { rows } = await c.query<{ count: string }>(
+        `SELECT count(*) AS count FROM jobs WHERE workspace_id=$1 AND id=$2 AND done_at IS NULL`,
+        [fixture.workspaceId, prepared[0]!.jobId],
+      );
+      return Number(rows[0]?.count ?? '0');
+    });
+    expect(remaining).toBe(0);
+  });
+
   it('writes the event and the job that delivers it in one transaction', async () => {
     const fixture = await seedWorkspace();
     const { env, hubCalls } = makeEnv();

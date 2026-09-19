@@ -183,9 +183,9 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
       Math.max(0, end - Math.max(begun, clock.runtime_wait_started_at.getTime()));
     return Math.max(0, end - begun - Number(clock.runtime_wait_ms) - pendingWait);
   }
-  async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
-    const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
-      `SELECT model_id, provider FROM catalog
+  async allowedRuntimeModels(): Promise<{ model_id: string; provider: string; context_length: number | null }[]> {
+    const { rows } = await this.runtimeQuery<{ model_id: string; provider: string; context_length: number | null }>(
+      `SELECT model_id, provider, context_length FROM catalog
          WHERE (provider, transport) IN (('openrouter', 'openrouter_chat'), ('nous_portal', 'nous_chat'))
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;

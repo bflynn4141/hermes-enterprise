@@ -181,21 +181,49 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
      JSON.stringify([{attempt:run.attempt,model_id:run.model_id,effort:run.effort,trace_id:run.trace_id,status:run.status,reason:run.error?.reason ?? null,ended_at:run.ended_at?.toISOString() ?? null,next_model_id:model.model_id,trigger:automatic?'automatic':'manual'}])]);
   await work.tx.query(`UPDATE sessions SET last_activity_at=now() WHERE workspace_id=$1 AND id=$2`,[work.workspaceId,run.session_id]);
   const params:RunInstanceParams={runId:run.id,workspaceId:work.workspaceId,sessionId:run.session_id,attempt,engineVersion,traceId};
-  const jobId=await enqueueJob(work.tx,work.workspaceId,'run_launch',`run-launch:${run.id}:${attempt}`,params);
+  const publishJobIds=await publishEvents(work.tx,work.workspaceId,[{kind:'run.status',sessionId:run.session_id,traceId,payload:{run_id:run.id,attempt,status:'working'}}]);
+  work.jobs.push(...publishJobIds);
+  const jobId=await enqueueJob(work.tx,work.workspaceId,'run_launch',`run-launch:${run.id}:${attempt}`,{
+    ...params,
+    ...(publishJobIds[0] ? {afterPublishJobId:publishJobIds[0]} : {}),
+  });
   if(jobId) work.jobs.push(jobId);
-  work.jobs.push(...await publishEvents(work.tx,work.workspaceId,[{kind:'run.status',sessionId:run.session_id,traceId,payload:{run_id:run.id,attempt,status:'working'}}]));
   await work.tx.query(`INSERT INTO events(workspace_id,actor_type,actor_user_id,kind,run_id,session_id,agent_id) VALUES($1,$2,$3,'run.retried',$4,$5,$6)`,[work.workspaceId,automatic?'system':'user',automatic?null:work.userId,run.id,run.session_id,agentId]);
   return {...run,attempt,status:'working',model_id:model.model_id,effort};
 }
 
 export async function runLaunchJob(env:Env,job:Job):Promise<void> {
-  const params=job.payload as RunInstanceParams;
+  const params=job.payload as RunInstanceParams & {afterPublishJobId?:string};
   if (!params?.runId || params.workspaceId!==job.workspace_id) throw new Error('run_launch_payload_invalid');
-  const allowed=await withWorkspaceTransaction(env,job.workspace_id,async tx=>{
-    const {rows}=await tx.query<{status:string;attempt:number;owner_id:string}>(`SELECT r.status,r.attempt,s.owner_id FROM runs r JOIN sessions s ON s.id=r.session_id JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=s.owner_id AND m.status='active' WHERE r.workspace_id=$1 AND r.id=$2 AND NOT r.stop_requested AND NOT s.archived AND NOT s.read_only`,[job.workspace_id,params.runId]);
-    return rows[0]?.status==='working' && rows[0].attempt===params.attempt;
+  const state=await withWorkspaceTransaction(env,job.workspace_id,async tx=>{
+    const {rows}=await tx.query<{status:string;attempt:number;owner_id:string;publish_done:boolean}>(
+      `SELECT r.status,r.attempt,s.owner_id,
+              ($3::uuid IS NULL OR EXISTS(
+                SELECT 1 FROM jobs dependency
+                 WHERE dependency.workspace_id=$1 AND dependency.id=$3 AND dependency.done_at IS NOT NULL
+              )) AS publish_done
+         FROM runs r
+         JOIN sessions s ON s.id=r.session_id
+         JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=s.owner_id AND m.status='active'
+        WHERE r.workspace_id=$1 AND r.id=$2 AND NOT r.stop_requested AND NOT s.archived AND NOT s.read_only`,
+      [job.workspace_id,params.runId,params.afterPublishJobId ?? null],
+    );
+    return {
+      // If the run is no longer launchable, this job is a completed no-op and
+      // must not remain blocked forever behind an obsolete dependency.
+      publishDone: rows[0]?.publish_done ?? true,
+      allowed: rows[0]?.status==='working' && rows[0].attempt===params.attempt,
+    };
   });
-  if(allowed) await createRunInstance(env,params);
+  if(!state.publishDone) {
+    const pending = new Error('run_launch_waiting_for_initial_publish') as Error & {retryAfterSeconds?:number};
+    pending.retryAfterSeconds=1;
+    throw pending;
+  }
+  if(state.allowed) {
+    const {afterPublishJobId: _dependency, ...instanceParams}=params;
+    await createRunInstance(env,instanceParams);
+  }
 }
 
 export async function runRecoveryJob(env:Env,job:Job):Promise<void> {

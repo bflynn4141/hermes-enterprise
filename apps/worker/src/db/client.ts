@@ -85,7 +85,7 @@ export async function withTenantTransaction<T>(
   env: Env,
   role: Role,
   ctx: TenantContext,
-  fn: (tx: Tx) => Promise<T>,
+  fn: (tx: Tx, memberRole: string) => Promise<T>,
 ): Promise<T> {
   if (!UUID.test(ctx.workspaceId)) {
     throw new TenancyError(`workspace id is not a uuid: ${ctx.workspaceId}`, 'bad_workspace_id');
@@ -114,7 +114,7 @@ export async function withTenantTransaction<T>(
         throw new TenancyError('not a member of this workspace', 'not_a_member');
       }
 
-      const result = await fn(client);
+      const result = await fn(client, membership.rows[0]!.role);
       await client.query('COMMIT');
       return result;
     } catch (error) {

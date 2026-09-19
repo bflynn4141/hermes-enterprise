@@ -202,9 +202,11 @@ describe('official runtime on the restricted agent role', () => {
   it('lists only enabled OpenRouter catalog entries with the native chat transport', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx); const model = `openrouter:runtime-test/${crypto.randomUUID()}`;
     try {
-      await withClient('owner', (c) => c.query(`INSERT INTO catalog (model_id,provider,label,transport,pricing_per_million,pricing_verified_on)
-        VALUES ($1,'openrouter','Runtime test model','openrouter_chat','{}'::jsonb,now())`, [model]));
-      expect(await store.allowedRuntimeModels()).toContainEqual({ model_id: model, provider: 'openrouter' });
+      await withClient('owner', (c) => c.query(`INSERT INTO catalog (model_id,provider,label,transport,pricing_per_million,pricing_verified_on,context_length)
+        VALUES ($1,'openrouter','Runtime test model','openrouter_chat','{}'::jsonb,now(),16384)`, [model]));
+      expect(await store.allowedRuntimeModels()).toContainEqual({
+        model_id: model, provider: 'openrouter', context_length: 16_384,
+      });
       await withClient('owner', (c) => c.query('UPDATE catalog SET supports_tools=false WHERE model_id=$1', [model]));
       expect((await store.allowedRuntimeModels()).some((row) => row.model_id === model)).toBe(false);
     } finally {
