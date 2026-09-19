@@ -1,3 +1,5 @@
+// Deterministic decision facts and policy counts for the Inbox. Viewer eligibility
+// comes from the authenticated tenant role or the snapshotted approval policy.
 import { approvalPayloadSchema, type ApprovalListProjection, type RequestDecisionSummary } from '@hermes/shared';
 import type { RequestRow } from './requests.js';
 
@@ -10,6 +12,10 @@ const date = (value: string): string => {
   return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' });
 };
 const money = (minor: number, currency: string): string => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(minor / 100);
+const dateOnly = (value: string): string => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+};
 
 type Fact = RequestDecisionSummary['facts'][number];
 const fact = (label: string, value: string | number, emphasis: Fact['emphasis'] = 'default'): Fact =>
@@ -98,20 +104,24 @@ function approvalSummary(row: RequestRow, approval: ApprovalListProjection): Req
   };
 }
 
-export function decisionSummary(row: RequestRow, approval: ApprovalListProjection | null): RequestDecisionSummary {
+export function decisionSummary(row: RequestRow, approval: ApprovalListProjection | null, canDecideLegacy = false): RequestDecisionSummary {
   if (row.kind === 'approval' && approval) {
     const summary = approvalSummary(row, approval);
     if (summary) return summary;
   }
   const payload = record(row.payload);
+  const needsDecision = row.status === 'pending' && ['application', 'invoice', 'agreement'].includes(row.kind);
+  const legacyReviewerLabel = row.kind === 'invoice' && 'workflow_provenance' in payload
+    ? 'Finance reviewer'
+    : 'Workspace Admin';
   const single = {
     mode: 'single' as const,
     completed_steps: row.status === 'pending' ? 0 : 1,
     total_steps: 1,
-    remaining_approvals: row.status === 'pending' ? 1 : 0,
-    current: row.status === 'pending' ? [{ label: 'Human review', approvals_recorded: 0, quorum: 1 }] : [],
-    pending_for_viewer: row.status === 'pending',
-    waiting_on_others: false,
+    remaining_approvals: needsDecision ? 1 : 0,
+    current: needsDecision ? [{ label: legacyReviewerLabel, approvals_recorded: 0, quorum: 1 }] : [],
+    pending_for_viewer: needsDecision && canDecideLegacy,
+    waiting_on_others: needsDecision && !canDecideLegacy,
     expires_at: null,
   };
   if (row.kind === 'application') {
@@ -120,12 +130,24 @@ export function decisionSummary(row: RequestRow, approval: ApprovalListProjectio
     return { action: 'Review applicant', primary: clip(text(payload.proposed_role) ?? text(payload.role) ?? 'Partner program application'), facts: [...(score === null ? [] : [fact('Evidence score', `${score}/${maximum}`)]), fact('Sources', Array.isArray(payload.sources) ? payload.sources.length : 0), fact('Missing', Array.isArray(payload.missing) ? payload.missing.length : 0, Array.isArray(payload.missing) && payload.missing.length ? 'attention' : 'default')], consequence: null, approval_requirement: single };
   }
   if (row.kind === 'invoice') {
-    const payer = text(record(payload.payer).name) ?? text(record(payload.payee).name) ?? row.label;
+    const payee = text(record(payload.payee).name) ?? row.label;
+    const payer = text(record(payload.payer).name);
     const total = typeof payload.total_minor === 'number' ? payload.total_minor : null;
-    return { action: 'Review invoice', primary: `Approve invoice for ${payer}`, facts: [...(total === null ? [] : [fact('Total', money(total, text(payload.currency) ?? 'USD'), 'risk')]), ...(text(payload.due_at) ? [fact('Due', date(text(payload.due_at)!), 'attention')] : [])], consequence: null, approval_requirement: single };
+    const due = text(payload.due_date);
+    return {
+      action: 'Approve invoice draft',
+      primary: clip(`Invoice from ${payee}`),
+      facts: [
+        ...(total === null ? [] : [fact('Total', money(total, text(payload.currency) ?? 'USD'), 'risk')]),
+        ...(payer ? [fact('Bill to', payer)] : []),
+        ...(due ? [fact('Due', dateOnly(due), 'attention')] : []),
+      ],
+      consequence: 'Saves the invoice in Library. No payment or email is sent.',
+      approval_requirement: single,
+    };
   }
   if (row.kind === 'agreement') {
-    return { action: 'Review agreement', primary: clip(text(payload.title) ?? text(payload.number) ?? row.label), facts: [fact('Version', text(payload.version_label) ?? 'Unsigned'), fact('Parties', Array.isArray(payload.parties) ? payload.parties.length : 0)], consequence: null, approval_requirement: single };
+    return { action: 'Approve agreement draft', primary: clip(text(payload.title) ?? text(payload.number) ?? row.label), facts: [fact('Version', text(payload.version_label) ?? 'Unsigned'), fact('Parties', Array.isArray(payload.parties) ? payload.parties.length : 0)], consequence: 'Saves an unsigned agreement. Nothing is signed or sent.', approval_requirement: single };
   }
   return { action: row.kind === 'task' ? 'Continue setup' : 'Review request', primary: clip(text(payload.description) ?? row.label), facts: [], consequence: null, approval_requirement: single };
 }

@@ -19,7 +19,7 @@ import { createRunInstance, type RunInstanceParams } from './submit.js';
 import { runAttemptInstanceId } from './instance-id.js';
 import { inspectRecoverySafety } from './recovery-safety.js';
 import { automatedTriggersEnabled, automationIntervalMinutes, paidPartnerScreeningEnabled, unresolvedPartnerWork } from '../partner-screening/automation.js';
-import { partnerAgentConfig } from '../partner-screening/config.js';
+import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 
 export const MAX_AUTOMATIC_ATTEMPTS = 3;
 const TRANSIENT_REASONS = new Set(['hermes_provider_unavailable', 'hermes_provider_rate_limited']);
@@ -67,7 +67,11 @@ async function wakePolicy(work:RecoveryWork,env:Env,agentId:string):Promise<stri
   if (!automatedTriggersEnabled(env)) return 'Scheduled work is not enabled in this environment.';
   const agent = await requireRecoveryAgent(work,agentId);
   if (agent.status !== 'started') return 'Finish setting up Iris before starting work.';
-  const config = partnerAgentConfig(env,agentId).config;
+  // This policy check is shared with the GET recovery view, so it must remain
+  // read-only. The POST/job execution path materializes legacy assignments at
+  // its explicit admission boundary when needed.
+  const resolved = await resolvePartnerSkillAssignment(env, work.tx, work.workspaceId, agentId);
+  const config = resolved.config;
   if (!config) return 'Partner screening needs a configured source.';
   if (config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env)) return 'A new paid search needs an approved allowance.';
   return null;

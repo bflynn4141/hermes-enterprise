@@ -291,6 +291,21 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .field:focus-within { border-color: #9B9AE0; }
 .field input, .field textarea { flex: 1; background: transparent; border: 0; outline: 0; font-size: 12.8px; line-height: 19.2px; color: var(--body); min-width: 0; }
 .field input::placeholder, .field textarea::placeholder { color: var(--muted); }
+
+.skill-assignment-shell { border-bottom: 1px solid var(--line); }
+.skill-assignment-shell > .list-row { border-bottom: 0; }
+.skill-config-panel { margin: 0 0 16px 56px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--context); animation: skill-config-in 160ms ease-out both; }
+.skill-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 18px 0; }
+.skill-config-field, .skill-config-compact-field { display: flex; flex-direction: column; gap: 6px; color: var(--body); font-size: 12px; }
+.skill-config-compact-field { min-width: 132px; }
+.skill-config-field small { color: var(--muted); line-height: 1.45; }
+.skill-config-field input, .skill-config-field select, .skill-config-compact-field select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); outline: none; }
+.skill-config-field input:focus, .skill-config-field select:focus, .skill-config-compact-field select:focus { border-color: #9B9AE0; }
+.skill-config-check { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 12px; }
+.skill-config-check input { accent-color: #6E64FF; }
+@keyframes skill-config-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 720px) { .skill-config-panel { margin-left: 0; } .skill-config-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .skill-config-panel { animation: none; } }
 .radio { display: inline-flex; align-items: center; gap: 10px; font-size: 12.8px; line-height: 19.2px; color: var(--muted); cursor: pointer; }
 .radio[aria-checked="true"] { color: var(--body); }
 .radio .dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid currentColor; display: grid; place-items: center; }
@@ -672,6 +687,15 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .msg-user { align-self: flex-end; max-width: 610px; padding: 14px 18px; border-radius: 10px; border: 1px solid var(--line); background: var(--chip-bg); font-size: 12.8px; line-height: 19.2px; white-space: pre-wrap; }
 .msg-user .meta-tag { display: block; font-size: 10.4px; line-height: 14.4px; color: var(--muted); margin-bottom: 4px; }
 .msg-user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg-agent-handoff { align-self: center; width: min(100%, 640px); color: var(--muted); font-size: 11.2px; line-height: 17.6px; }
+.msg-agent-handoff summary { display: flex; justify-content: center; align-items: baseline; gap: 6px; cursor: pointer; list-style: none; }
+.msg-agent-handoff summary::-webkit-details-marker { display: none; }
+.msg-agent-handoff summary::before { content: '↔'; color: var(--muted); }
+.msg-agent-handoff summary::after { content: '›'; transition: transform var(--dur-disclosure) var(--ease-out); }
+.msg-agent-handoff[open] summary::after { transform: rotate(90deg); }
+.msg-agent-handoff summary strong { color: var(--body); font-weight: 500; }
+.msg-agent-handoff summary code { color: var(--muted); font: inherit; }
+.msg-agent-handoff-body { margin: 10px auto 0; max-width: 560px; padding: 12px 14px; border-left: 1px solid var(--line); color: var(--body); white-space: pre-wrap; }
 .msg-iris { display: flex; flex-direction: column; gap: 16px; }
 .msg-iris .lead { display: flex; align-items: flex-start; gap: 14px; }
 .msg-iris .lead .mark { width: 26px; height: 26px; flex-shrink: 0; margin-top: 1px; }

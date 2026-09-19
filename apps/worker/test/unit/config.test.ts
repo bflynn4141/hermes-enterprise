@@ -107,6 +107,10 @@ describe('wrangler.jsonc', () => {
     expect((config.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('0');
     expect((envs.staging!.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('1');
     expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('0');
+    for (const scope of [config, ...Object.values(envs)]) {
+      expect((scope.vars as Record<string, string>).PARTNER_OUTREACH_EMAIL_MODE).toBe('draft_only');
+      expect((scope.vars as Record<string, string>).GMAIL_OUTREACH_ENABLED).toBe('0');
+    }
   });
 
   it('keeps the first member-approved search bounded in every environment', () => {
@@ -151,6 +155,8 @@ describe('wrangler.jsonc', () => {
       'WORKOS_COOKIE_PASSWORD',
       'KEK_V1',
       'HERMES_BRIDGE_SECRET',
+      'GMAIL_CLIENT_SECRET',
+      'GMAIL_STATE_SECRET',
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',

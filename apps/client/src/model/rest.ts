@@ -13,6 +13,8 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  approvalEvidenceViewSchema,
+  type ApprovalEvidenceView,
   agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
   catalogPageSchema,
@@ -27,6 +29,8 @@ import {
   slackDisconnectSchema,
   slackLinkCodeSchema,
   slackOAuthStartSchema,
+  outboundEmailConnectionSchema,
+  outboundEmailOAuthStartSchema,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
   runViewSchema,
@@ -37,6 +41,9 @@ import {
   attachmentUploadSchema,
   approvalViewSchema,
   directUploadResultSchema,
+  enterpriseSkillAssignmentPageSchema,
+  enterpriseSkillAssignmentSchema,
+  partnerWorkflowViewSchema,
   type AttachmentUpload,
   type AgentWakeInput,
   type ApprovalView,
@@ -48,6 +55,7 @@ import {
   type ReplayStream,
   type RunView,
   type WorkspaceCreateInput,
+  type EnterpriseSkillAssignmentUpdate,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -300,10 +308,12 @@ export function createRest(options: RestOptions) {
     // The decisions route is M4's and may not exist yet; `optional` is not used
     // here on purpose. A decision that silently did nothing is the one failure
     // this product cannot have, so a missing route surfaces as an error.
-    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
+    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string; expected_version?: number; expected_payload_hash?: `sha256:${string}` }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
     getApproval: (workspaceId: string, requestId: string) =>
       request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
+    getApprovalEvidence: (workspaceId: string, requestId: string, evidenceId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/approval/evidence/${encodeURIComponent(evidenceId)}`, approvalEvidenceViewSchema) as Promise<ApprovalEvidenceView>,
     decideApproval: (workspaceId: string, requestId: string, body: DecideApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
@@ -351,9 +361,26 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
     discardInstruction: (workspaceId: string, id: string) =>
       request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
-    listSkills: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)), emptyPage()),
+    listSkills: (workspaceId: string, agentId?: string | null) =>
+      optional(() => request('GET', `${ws(workspaceId)}/skills${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(skillVersionSchema)), emptyPage()),
     adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
+    listSkillAssignments: (workspaceId: string, agentId: string) =>
+      request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
+    updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
+      request('PATCH', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`, enterpriseSkillAssignmentSchema, body),
+    partnerWorkflow: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/partner-workflow`, partnerWorkflowViewSchema), {
+        configured: false,
+        teams: [],
+        agents: [],
+        handoffs: [],
+        connector: {
+          name: 'enterprise-partner-records' as const,
+          shared_code: true as const,
+          enforcement: 'server' as const,
+          summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.' as const,
+        },
+      }),
 
     // --- members and invitations ---
     invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
@@ -422,6 +449,8 @@ export function createRest(options: RestOptions) {
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
+    outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
+    startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
     pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */

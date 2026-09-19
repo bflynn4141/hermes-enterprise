@@ -21,6 +21,7 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   finalizations = 0;
   finalizing = false;
   bootstrap: ProviderMessage[] = [];
+  submissionSessionId: string | null = null;
   acceptBinding = true;
   resumeInput: string | null = null;
   runtimeTransactions = 0;
@@ -55,6 +56,10 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   }
 
   loadBootstrapHistory() { return Promise.resolve(this.bootstrap); }
+
+  resolveRuntimeSessionId(run: EngineRunRow) {
+    return Promise.resolve(this.submissionSessionId ?? run.id);
+  }
 
   nextRuntimeSequence() {
     return Promise.resolve(Math.max(-1, ...this.turns.filter((turn) => turn.turn === 0).map((turn) => turn.seq)) + 1);
@@ -157,6 +162,22 @@ async function execute(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('carries trusted Bot Mode attribution from the durable user turn', async () => {
+    const db = new FakeRuntimeDb();
+    db.turns.splice(0, 1, {
+      ...db.turns[0]!,
+      providerMessage: {
+        role: 'user',
+        content: 'Message from 🤖 Iris (@agent-partnerships): Review this handoff.',
+        enterprise_turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
+      },
+    });
+    const { client } = await execute(db);
+    expect(client.submissions[0]?.body._enterprise_turn_author).toEqual({
+      id: 'bot:agent-partnerships', name: 'Iris', is_bot: true,
+    });
+  });
+
   it('submits exact governed creator calls for an explicit channel test', async () => {
     const db = new FakeRuntimeDb();
     db.turns.splice(0, 1, {
@@ -557,14 +578,22 @@ describe('official Hermes enterprise projection', () => {
     expect(client.submissions[0]).toMatchObject({
       key: `enterprise-${run.id}-a1`,
       body: {
-        input: 'Here is the programme and the application.', session_id: run.sessionId,
+        input: 'Here is the programme and the application.', session_id: run.id,
         provider: 'custom', model: 'anthropic/claude-sonnet-4',
         model_options: { reasoning_effort: 'high' }, conversation_history: db.bootstrap,
       },
     });
     expect(client.submissions[0]?.body.instructions).toContain('Admit applicants who meet the published bar.');
-    expect(db.bindings).toEqual([{ runId: run.id, attempt: 1, remoteId: NATIVE_ID, sessionId: run.sessionId, profile: PROFILE }]);
+    expect(db.bindings).toEqual([{ runId: run.id, attempt: 1, remoteId: NATIVE_ID, sessionId: run.id, profile: PROFILE }]);
     expect(JSON.stringify(client.submissions)).not.toContain('sk-test');
+  });
+
+  it('reuses the prior native conversation id for a later Enterprise turn', async () => {
+    const db = new FakeRuntimeDb();
+    db.submissionSessionId = 'native-session-root';
+    const { client } = await execute(db);
+    expect(client.submissions[0]?.body.session_id).toBe('native-session-root');
+    expect(db.bindings[0]?.sessionId).toBe('native-session-root');
   });
 
   it.each([

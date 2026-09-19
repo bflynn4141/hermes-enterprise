@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { requestEntitySchema } from '@hermes/shared';
-import { toRequestEntity, type RequestRow } from '../../src/domain/requests.js';
+import { subjectOf, toRequestEntity, type RequestRow } from '../../src/domain/requests.js';
 
 describe('request entity shaping', () => {
+  it('shows the invoice payee rather than the billed workspace as its subject', () => {
+    expect(subjectOf({ kind: 'invoice', label: 'Invoice INV-42', payload: { payee: { name: 'Harborline' }, payer: { name: 'Nous Research' } } })).toBe('Harborline');
+  });
+
   it('bounds approval labels and summaries before validating an Inbox row', () => {
     const row: RequestRow = {
       id: '00000000-0000-4000-8000-000000000001',

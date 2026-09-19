@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type {
   ApprovalProposal,
-  ApprovalType,
   ApprovalView,
   RequestEntity,
 } from '@hermes/shared';
@@ -10,25 +9,13 @@ import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Avatar, Button, EmptyState, MenuItem, Popover, Skeleton } from '../ui/primitives.js';
 import { LIST_KEYS } from '../selectors.js';
-
-interface ApprovalMeta {
-  label: string;
-  action: string;
-  icon: string;
-}
-
-export const APPROVAL_META: Record<ApprovalType, ApprovalMeta> = {
-  run_plan: { label: 'Plan and budget', action: 'Approve plan', icon: 'loop' },
-  team_commitment: { label: 'Team commitment', action: 'Accept task', icon: 'people' },
-  access: { label: 'Temporary access', action: 'Allow access', icon: 'context' },
-  communication: { label: 'Communication', action: 'Approve send', icon: 'inbox' },
-  shared_learning: { label: 'Shared learning', action: 'Publish skill', icon: 'skill' },
-  deliverable: { label: 'Deliverable', action: 'Accept result', icon: 'agreement' },
-  data_disclosure: { label: 'Data disclosure', action: 'Allow sharing', icon: 'context' },
-  record_change: { label: 'Record change', action: 'Approve change', icon: 'trace' },
-  exception: { label: 'Exception', action: 'Allow exception', icon: 'admission' },
-  agent_governance: { label: 'Agent governance', action: 'Approve configuration', icon: 'settings' },
-};
+import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy } from '../approval-copy.js';
+export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, approvalPrimaryAction, approvalIcon, approvalReviewerLabel, matchesReviewerFilter, approvalPreview } from '../approval-copy.js';
+import './approval-review.css';
+import { ApprovalEvidence } from './ApprovalEvidence.js';
+export { ApprovalEvidence } from './ApprovalEvidence.js';
+import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
+import { RestError } from '../../model/rest.js';
 
 const shortDateTime = (value: string): string => {
   const date = new Date(value);
@@ -45,60 +32,6 @@ const displayValue = (value: string | number | boolean | null): string => {
   if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
   return String(value);
 };
-
-export function approvalType(request: RequestEntity): ApprovalType | null {
-  return request.kind === 'approval' ? request.approval?.approval_type ?? null : null;
-}
-
-export function approvalTypeLabel(request: RequestEntity): string {
-  const type = approvalType(request);
-  return type ? APPROVAL_META[type].label : 'Approval';
-}
-
-export function approvalActionLabel(request: RequestEntity): string {
-  const type = approvalType(request);
-  return type ? APPROVAL_META[type].action : 'Review request';
-}
-
-export function approvalPrimaryAction(view: ApprovalView): string {
-  if (view.payload.approval_type !== 'team_commitment'
-    || view.payload.context.source.trigger?.kind !== 'member_agent_joined') {
-    return APPROVAL_META[view.payload.approval_type].action;
-  }
-  const currentStep = view.steps.find((step) => step.status === 'current');
-  return currentStep?.step_id === 'receiving-owner' ? 'Accept collaboration' : 'Approve proposal';
-}
-
-export function approvalIcon(request: RequestEntity): string {
-  const type = approvalType(request);
-  return type ? APPROVAL_META[type].icon : 'context';
-}
-
-export function approvalReviewerLabel(request: RequestEntity): string {
-  const projection = request.approval;
-  if (!projection) return 'Reviewer unavailable';
-  if (projection.pending_for_viewer) return 'Needs your decision';
-  if (projection.waiting_on_others) {
-    return projection.current_reviewer_names.length > 0
-      ? `Waiting for ${projection.current_reviewer_names.join(', ')}`
-      : 'Waiting on others';
-  }
-  if (projection.authorization_status === 'approved' && projection.effect_status === 'unavailable') return 'Approved · Effect unavailable';
-  if (projection.authorization_status === 'approved' && projection.work_status === 'waiting') return 'Approved · Work waiting';
-  return projection.authorization_status.replaceAll('_', ' ');
-}
-
-export function matchesReviewerFilter(request: RequestEntity, reviewer: 'for_me' | 'waiting' | 'all'): boolean {
-  if (reviewer === 'all') return true;
-  if (request.kind !== 'approval') return reviewer === 'for_me';
-  return reviewer === 'for_me' ? request.approval?.pending_for_viewer === true : request.approval?.waiting_on_others === true;
-}
-
-export function approvalPreview(request: RequestEntity): string {
-  const payload = request.payload as { summary?: unknown };
-  const summary = typeof payload.summary === 'string' ? payload.summary : null;
-  return summary ?? request.subject ?? request.label;
-}
 
 function Fact({ label, children, strong }: { label: string; children: ReactNode; strong?: boolean }) {
   return (
@@ -220,7 +153,7 @@ function CommunicationPreview({ view }: { view: ApprovalView }) {
     <div className="approval-preview">
       <article className="approval-message">
         <dl>
-          <div><dt>From</dt><dd>{details.sender.address}</dd></div>
+          <div><dt>From</dt><dd>{details.sender.address ?? 'Sender address not provided'}</dd></div>
           <div><dt>To</dt><dd>{details.recipients.map((item) => item.address ? `${item.name} <${item.address}>` : `${item.name} · email address needed`).join(', ')}</dd></div>
           {details.recipients.some((item) => item.phone_numbers?.length) && <div><dt>Phone</dt><dd>{details.recipients.flatMap((item) => item.phone_numbers ?? []).map((phone) => phone.type ? `${phone.number} · ${phone.type}` : phone.number).join(', ')}</dd></div>}
           {details.recipients.some((item) => item.social_profiles?.length) && <div><dt>Profiles</dt><dd>{details.recipients.flatMap((item) => item.social_profiles ?? []).map((profile) => <a key={`${profile.network}:${profile.url}`} href={profile.url} target="_blank" rel="noreferrer">{profile.network}</a>).reduce<ReactNode[]>((items, link, index) => index === 0 ? [link] : [...items, ', ', link], [])}</dd></div>}
@@ -229,7 +162,7 @@ function CommunicationPreview({ view }: { view: ApprovalView }) {
         <div className="approval-message-body">{details.body}</div>
         {details.attachments.length > 0 && <div className="approval-attachments">{details.attachments.map((item) => <span key={item.id}><Icon name="doc" size={15} /> {item.label}</span>)}</div>}
       </article>
-      <p className="meta">{details.draft_only ? 'Draft only · No message will be sent.' : `${details.scheduled_for ? `Scheduled for ${shortDateTime(details.scheduled_for)}` : 'Send after approval'} · Sending remains a separate provider effect.`}</p>
+      {!details.draft_only && details.scheduled_for && <p className="meta">Requested schedule · {shortDateTime(details.scheduled_for)}</p>}
     </div>
   );
 }
@@ -254,7 +187,7 @@ function DeliverablePreview({ view }: { view: ApprovalView }) {
     <div className="approval-preview">
       <article className="approval-artifact"><span className="approval-kicker">{details.version} · {details.artifact_id}</span><h2>{details.title}</h2><div>{details.content}</div></article>
       <div className="approval-two-col"><section><span className="approval-kicker">Evidence</span><CheckList items={details.evidence_ids} empty="No linked evidence" /></section><section><span className="approval-kicker">Missing information</span><CheckList items={details.missing_information} empty="Nothing marked missing" /></section></div>
-      <p className="meta">Accepting releases {details.releases_dependent_request_ids.length} linked request{details.releases_dependent_request_ids.length === 1 ? '' : 's'}.</p>
+      <p className="meta">{details.releases_dependent_request_ids.length} dependent request reference{details.releases_dependent_request_ids.length === 1 ? '' : 's'}.</p>
     </div>
   );
 }
@@ -330,20 +263,19 @@ function ApprovalPreview({ view }: { view: ApprovalView }) {
   }
 }
 
-function ReviewerSequence({ view }: { view: ApprovalView }) {
-  const voteByStep = new Map(view.votes.map((vote) => [vote.step_id, vote]));
+export function ReviewerSequence({ view }: { view: ApprovalView }) {
   return (
     <section className="approval-reviewers" aria-labelledby="approval-reviewers-heading">
       <div className="row"><h2 className="section-title" id="approval-reviewers-heading">Reviewers</h2><span className="grow" /><span className="meta">{view.payload.policy.mode === 'sequential' ? 'In order' : 'Parallel'}</span></div>
       <ol>
         {[...view.steps].sort((a, b) => a.order - b.order).map((step, index) => {
-          const voter = voteByStep.get(step.step_id);
+          const votes = view.votes.filter((vote) => vote.step_id === step.step_id);
           const currentNames = step.current_reviewer_member_ids.map((id) => view.identities.reviewers.find((item) => item.member_id === id)?.name).filter(Boolean);
           return (
             <li key={step.step_id} data-state={step.status}>
               <span className="approval-reviewer-index">{step.status === 'approved' ? <Icon name="check" size={13} /> : index + 1}</span>
-              <Avatar person={{ name: voter?.reviewer_name ?? currentNames[0] ?? '?' }} size={28} />
-              <span className="col grow" style={{ gap: 2 }}><strong>{step.label}</strong><span className="meta">{voter ? `${voter.reviewer_name} · ${voter.decision.replace('_', ' ')}` : currentNames.length > 0 ? currentNames.join(', ') : step.status === 'blocked' ? 'Waits for the prior step' : 'Eligible reviewer required'}</span></span>
+              <Avatar person={{ name: votes[0]?.reviewer_name ?? currentNames[0] ?? '?' }} size={28} />
+              <span className="col grow" style={{ gap: 2 }}><strong>{step.label}</strong><span className="meta">{currentNames.length > 0 ? currentNames.join(', ') : step.status === 'blocked' ? 'Waits for the prior step' : step.status.replaceAll('_', ' ')}{votes.map((vote) => <span className="approval-vote" key={vote.id}>{vote.reviewer_name} · {vote.decision.replaceAll('_', ' ')} · {shortDateTime(vote.recorded_at)}{vote.note && <span>{vote.note}</span>}</span>)}</span></span>
               <span className="approval-quorum">{step.approvals_recorded}/{step.quorum}</span>
             </li>
           );
@@ -351,6 +283,21 @@ function ReviewerSequence({ view }: { view: ApprovalView }) {
       </ol>
     </section>
   );
+}
+
+export function ApprovalDecisionHeader({ view }: { view: ApprovalView }) {
+  const pending = view.status === 'pending';
+  return <header className="approval-decision-header">
+    <div className="row"><h1>{pending ? 'Your decision' : ['approved', 'declined', 'changes_requested'].includes(view.status) ? 'Decision recorded' : view.status.replaceAll('_', ' ')}</h1><span className="grow" />{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
+    <p>{pending ? approvalDecisionPrompt(view) : `${view.status.replaceAll('_', ' ')} · Revision ${view.payload.authorization.revision}`}</p>
+    <div className="approval-thresholds" aria-label="Required approvals">
+      {[...view.steps].sort((a, b) => a.order - b.order).map((step) => <span key={step.step_id} data-state={step.status}>
+        <strong>{step.label}</strong> {step.approvals_recorded}/{step.quorum} approved{step.status === 'current' ? ' · Current' : step.status === 'blocked' ? ' · Next' : ''}
+      </span>)}
+    </div>
+    <p className="meta">{view.payload.policy.mode === 'sequential' ? 'Review in order' : 'Parallel review'} · Expires {shortDateTime(view.payload.authorization.expires_at)}</p>
+    {pending && view.capabilities.reason && <p className="approval-eligibility">{view.capabilities.reason}</p>}
+  </header>;
 }
 
 function ResultState({ view }: { view: ApprovalView }) {
@@ -371,17 +318,21 @@ function ResultState({ view }: { view: ApprovalView }) {
   );
 }
 
-function proposalFrom(view: ApprovalView, summary: string): ApprovalProposal {
+export function proposalFrom(view: ApprovalView, summary: string, draft?: { subject: string; body: string }): ApprovalProposal {
   const { context: _context, authorization: _authorization, policy: _policy, resource_bindings: _resourceBindings, ...proposal } = view.payload;
+  if (draft && proposal.approval_type === 'communication' && proposal.details.draft_only && proposal.details.channel === 'email') {
+    return { ...proposal, summary, details: { ...proposal.details, subject: draft.subject.trim(), body: draft.body.trim() } };
+  }
   return { ...proposal, summary } as ApprovalProposal;
 }
 
-function decisionError(caught: unknown): string {
+export function decisionError(caught: unknown): string {
   const reason = (caught as { reason?: string }).reason;
   if (reason === 'stale_authorization') return 'This proposal changed. Review the current version before deciding.';
-  if (reason === 'expired') return 'This request expired and cannot be approved.';
-  if (reason === 'not_eligible' || reason === 'self_review') return 'You are not eligible for the current review step.';
-  if (reason === 'already_voted' || reason === 'duplicate') return 'This decision was already recorded.';
+  if (reason === 'reauth_required') return 'Sign in again, then review and confirm. Nothing will be submitted automatically.';
+  if (['expired', 'approval_expired'].includes(reason ?? '')) return 'This request expired and cannot be approved.';
+  if (['not_eligible', 'self_review', 'reviewer_not_eligible', 'self_review_forbidden'].includes(reason ?? '')) return 'You are not eligible for the current review step.';
+  if (['already_voted', 'duplicate', 'duplicate_reviewer'].includes(reason ?? '')) return 'This decision was already recorded.';
   return 'Could not update this approval. Try again.';
 }
 
@@ -389,7 +340,8 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const adapter = useAdapter();
   const state = useAppState();
   const dispatch = useDispatch();
-  const reduceMotion = useReducedMotion();
+  const systemReduceMotion = useReducedMotion();
+  const reduceMotion = systemReduceMotion || state.ui.reduceMotion;
   const [view, setView] = useState<ApprovalView | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
   const [busy, setBusy] = useState(false);
@@ -399,20 +351,53 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const [revisionMode, setRevisionMode] = useState(false);
   const [revisionSummary, setRevisionSummary] = useState('');
   const [revisionNote, setRevisionNote] = useState('');
+  const [revisionSubject, setRevisionSubject] = useState('');
+  const [revisionBody, setRevisionBody] = useState('');
+  const [needsReauth, setNeedsReauth] = useState(false);
+  const [expiredHash, setExpiredHash] = useState<string | null>(null);
   const [routeMode, setRouteMode] = useState(false);
   const [routeMember, setRouteMember] = useState('');
   const [routeReason, setRouteReason] = useState('');
   const [menu, setMenu] = useState(false);
   const menuAnchor = useRef<HTMLButtonElement>(null);
 
+  const revisionScope = (approval: ApprovalView): ApprovalRevisionScope => ({
+    viewerId: state.user.id, workspaceId: state.workspace.id, requestId: approval.request_id,
+    revision: approval.payload.authorization.revision, hash: approval.payload.authorization.hash,
+    authorizationExpiresAt: approval.payload.authorization.expires_at,
+    canRevise: approval.capabilities.can_submit_revision && ['pending', 'changes_requested'].includes(approval.status)
+      && approval.payload.approval_type === 'communication' && approval.payload.details.draft_only && approval.payload.details.channel === 'email',
+  });
+
   useEffect(() => {
     let live = true;
     setLoadState('loading');
+    setRevisionMode(false);
+    setRevisionNote('');
+    setChangeMode(false);
+    setChangeNote('');
+    setRouteMode(false);
+    setRouteReason('');
+    setNeedsReauth(false);
+    setError(null);
     void adapter.rest.getApproval(state.workspace.id, request.id).then(
       (approval) => {
         if (!live) return;
         setView(approval);
         setRevisionSummary(approval.payload.summary);
+        if (approval.payload.approval_type === 'communication') {
+          setRevisionSubject(approval.payload.details.subject ?? '');
+          setRevisionBody(approval.payload.details.body);
+        }
+        const restored = state.user.id ? takeApprovalRevisionDraft(revisionDraftStorage(), revisionScope(approval)) : null;
+        if (restored) {
+          setRevisionSubject(restored.subject);
+          setRevisionBody(restored.body);
+          setRevisionSummary(restored.summary);
+          setRevisionNote(restored.changeNote);
+          setRevisionMode(true);
+          setError('Your unsaved rewrite is restored. Review it and explicitly save the new revision.');
+        }
         setLoadState('ready');
       },
       (caught: unknown) => {
@@ -422,7 +407,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
       },
     );
     return () => { live = false; };
-  }, [adapter, state.workspace.id, request.id]);
+  }, [adapter, state.workspace.id, state.user.id, request.id]);
 
   const syncRequest = async (): Promise<void> => {
     const updated = await adapter.rest.getRequest(state.workspace.id, request.id);
@@ -447,14 +432,34 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     setError(null);
     try {
       const updated = await operation(view);
+      clearApprovalRevisionDraft(revisionDraftStorage());
+      setNeedsReauth(false);
       setView(updated);
       setRevisionSummary(updated.payload.summary);
+      if (updated.payload.approval_type === 'communication') {
+        setRevisionSubject(updated.payload.details.subject ?? '');
+        setRevisionBody(updated.payload.details.body);
+      }
       setChangeMode(false);
       setRevisionMode(false);
       setRouteMode(false);
-      await syncRequest();
+      await syncRequest().catch(() => setError('Update saved. The Inbox could not refresh; reload to see its latest status.'));
     } catch (caught) {
       setError(decisionError(caught));
+      if (caught instanceof RestError && caught.reauthRequired) setNeedsReauth(true);
+      if (['expired', 'approval_expired'].includes((caught as { reason?: string }).reason ?? '')) setExpiredHash(view.payload.authorization.hash);
+      if (['stale_authorization', 'expired', 'approval_expired'].includes((caught as { reason?: string }).reason ?? '')) clearApprovalRevisionDraft(revisionDraftStorage());
+      if (['stale_authorization', 'expired', 'approval_expired', 'reviewer_not_eligible', 'self_review_forbidden', 'duplicate_reviewer'].includes((caught as { reason?: string }).reason ?? '')) {
+        await adapter.rest.getApproval(state.workspace.id, request.id).then((fresh) => {
+          setView(fresh);
+          setRevisionMode(false);
+          setRevisionSummary(fresh.payload.summary);
+          if (fresh.payload.approval_type === 'communication') {
+            setRevisionSubject(fresh.payload.details.subject ?? '');
+            setRevisionBody(fresh.payload.details.body);
+          }
+        }).catch(() => setLoadState('error'));
+      }
     } finally {
       setBusy(false);
     }
@@ -471,35 +476,42 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     }));
   };
 
+  const signInAgain = (): void => {
+    if (!view) return;
+    const url = adapter.auth.stepUpUrl(window.location.href, 'decision');
+    if (url) {
+      if (revisionMode && revisionScope(view).canRevise) {
+        const saved = saveApprovalRevisionDraft(revisionDraftStorage(), revisionScope(view), {
+          subject: revisionSubject, body: revisionBody, summary: revisionSummary, changeNote: revisionNote,
+        });
+        if (!saved) { setError('Your browser could not preserve this rewrite for sign-in. Copy your edits before reloading.'); return; }
+      }
+      window.location.assign(url);
+    } else {
+      void adapter.refreshAuth().then(() => { setNeedsReauth(false); setError('Authentication refreshed. Review this request and confirm again.'); })
+        .catch(() => setError('Could not refresh authentication. Reload and sign in again.'));
+    }
+  };
+
   if (loadState === 'loading') return <div className="scroll"><div className="app-body"><Skeleton rows={6} label="Loading approval" /></div></div>;
   if (loadState === 'missing') return <div className="scroll"><div className="app-body"><EmptyState icon="admission" title="Approval not found" detail="It may have been withdrawn or you may no longer be eligible to read it." /></div></div>;
   if (loadState === 'error' || !view) return <div className="scroll"><div className="app-body"><EmptyState icon="trace" title="Could not load this approval" action={<Button onClick={() => window.location.reload()}>Reload</Button>} /></div></div>;
 
-  const meta = APPROVAL_META[view.payload.approval_type];
-  const canApprove = view.capabilities.allowed_decisions.includes('approve');
-  const canDecline = view.capabilities.allowed_decisions.includes('decline');
-  const canRequestChanges = view.capabilities.allowed_decisions.includes('request_changes');
+  const authorizationExpired = expiredHash === view.payload.authorization.hash || Date.parse(view.payload.authorization.expires_at) <= Date.now();
+  const canApprove = !authorizationExpired && view.capabilities.allowed_decisions.includes('approve');
+  const canDecline = !authorizationExpired && view.capabilities.allowed_decisions.includes('decline');
+  const canRequestChanges = !authorizationExpired && view.capabilities.allowed_decisions.includes('request_changes');
+  const canRevise = !authorizationExpired && view.capabilities.can_submit_revision;
   const resolved = view.status !== 'pending';
-  const currentReviewerIds = view.steps.flatMap((step) => step.status === 'current' ? step.current_reviewer_member_ids : []);
-  const currentReviewers = currentReviewerIds.map((id) => view.identities.reviewers.find((reviewer) => reviewer.member_id === id)).filter((reviewer): reviewer is NonNullable<typeof reviewer> => !!reviewer);
+  const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
+  const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
+  const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
 
   return (
     <div className="app-pane-body request-pane approval-shell">
       <div className="scroll request-scroll">
         <div className="col request-content">
-          <header className="approval-header">
-            <AgentIdentity name={view.identities.requester_agent.name} email={view.identities.requester_agent.email} label="Proposer" />
-            <div className="approval-heading">
-              <div className="row"><span className="pill">{meta.label}</span><span className="pill">v{view.payload.authorization.revision}</span>{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
-              <h1 className="display-32">{request.subject ?? request.label}</h1>
-              <p>{view.payload.summary}</p>
-            </div>
-            <div className="approval-current-reviewer">
-              <span className="approval-kicker">{canApprove ? 'Your decision' : 'Current reviewer'}</span>
-              {currentReviewers.length > 0 ? currentReviewers.map((reviewer) => <span className="row" key={reviewer.member_id}><Avatar person={{ name: reviewer.name }} /><span><strong>{reviewer.name}</strong><small>{reviewer.authority_roles.join(', ') || 'Eligible reviewer'}</small></span></span>) : <span className="meta">{view.capabilities.reason ?? 'Review complete'}</span>}
-              <span className="meta">Expires {shortDateTime(view.payload.authorization.expires_at)}</span>
-            </div>
-          </header>
+          <ApprovalDecisionHeader view={view} />
 
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={`${view.payload.approval_type}:${view.payload.authorization.revision}`} initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
@@ -507,13 +519,18 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
             </motion.div>
           </AnimatePresence>
 
-          {view.payload.evidence.length > 0 && (
-            <section className="approval-evidence"><div className="row"><h2 className="section-title">Evidence</h2><span className="grow" /><span className="meta">{view.payload.evidence.length} linked</span></div>{view.payload.evidence.map((item) => {
-              const binding = view.payload.resource_bindings.find((candidate) => candidate.id === item.id);
-              return <div key={item.id}><Glass name={item.kind === 'document' ? 'agreement' : 'context'} size={24} /><span className="col grow"><strong>{item.label}</strong><small>{item.note ?? item.ref ?? item.kind}</small>{binding && <small className={binding.executor_available ? undefined : 'approval-binding-warning'}>{binding.version ?? 'Unversioned'} · {binding.sha256 ? `SHA-256 ${binding.sha256.slice(0, 10)}…` : 'Digest unavailable'}{binding.reason ? ` · ${binding.reason}` : ''}</small>}</span></div>;
-            })}</section>
-          )}
-          <ReviewerSequence view={view} />
+          <details className="approval-disclosure">
+            <summary>Request details <span>{APPROVAL_META[view.payload.approval_type].label} · v{view.payload.authorization.revision}</span></summary>
+            <div className="approval-request-details">
+              <h2 className="section-title">{request.subject ?? request.label}</h2>
+              <AgentIdentity name={view.identities.requester_agent.name} email={view.identities.requester_agent.email} label="Proposer" />
+              <p>{view.payload.summary}</p><p>{view.payload.consequence}</p>
+              <p className="meta">Request {request.id} · Policy {view.payload.policy.key} v{view.payload.policy.version}</p>
+              <p className="meta">Source run {view.payload.context.source.run_id} · Source session {view.payload.context.source.session_id}</p>
+            </div>
+          </details>
+          <ApprovalEvidence key={view.payload.authorization.revision} view={view} load={(id) => adapter.rest.getApprovalEvidence(state.workspace.id, request.id, id)} />
+          <details className="approval-disclosure"><summary>Review history <span>Current revision</span></summary><ReviewerSequence view={view} /></details>
           {resolved && <ResultState view={view} />}
           {view.payload.illustrative && <p className="approval-simulation-note">Illustrative scenario. Names, prices, sources and effects shown here are fictional; no external message, access grant, disclosure or system change occurs.</p>}
         </div>
@@ -521,41 +538,44 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
 
       <div className="app-footer approval-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{resolved ? `${view.status.replaceAll('_', ' ')} · authorization v${view.payload.authorization.revision}` : view.payload.consequence}</span>
-          <span className="f-sub">{error ?? (resolved ? `${view.work.reason ?? `Work ${view.work.status}`} · ${view.effect.reason ?? `Effect ${view.effect.status}`}` : view.capabilities.reason ?? 'The decision is bound to this version, scope and expiry.')}</span>
+          <span className="f-title">{resolved ? `${view.status.replaceAll('_', ' ')} · authorization v${view.payload.authorization.revision}` : revisionMode ? 'Editing draft · Save a new revision to continue' : approvalEffectCopy(view)}</span>
+          {error && <span className="f-sub" role="alert">{error}</span>}
         </div>
-        {!resolved && canRequestChanges && <Button disabled={busy} onClick={() => setChangeMode((open) => !open)}>Request changes</Button>}
-        {!resolved && canApprove && <Button primary disabled={busy} onClick={() => decide('approve')}>{busy ? 'Recording…' : approvalPrimaryAction(view)}</Button>}
-        {!resolved && (canDecline || view.capabilities.can_route) && (
+        {needsReauth && <Button onClick={signInAgain}>Sign in again</Button>}
+        {!resolved && !revisionMode && canRequestChanges && <Button disabled={busy} onClick={() => setChangeMode((open) => !open)}>Request changes</Button>}
+        {!resolved && !revisionMode && canApprove && <Button primary disabled={busy} onClick={() => decide('approve')}>{busy ? 'Recording…' : approvalPrimaryAction(view)}</Button>}
+        {!resolved && !revisionMode && !authorizationExpired && (canDecline || view.capabilities.can_route || view.capabilities.can_submit_revision) && (
           <span className="approval-more">
             <button ref={menuAnchor} type="button" className="icon-btn" aria-label="More approval actions" aria-expanded={menu} onClick={() => setMenu((open) => !open)}><Icon name="more" /></button>
             <Popover open={menu} onClose={() => setMenu(false)} anchorRef={menuAnchor} align="right" above width={240} label="Approval actions" portal className="menu">
+              {canRevise && <MenuItem icon="doc" onClick={() => { setMenu(false); setRevisionMode(true); }}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</MenuItem>}
               {canDecline && <MenuItem icon="close" onClick={() => { setMenu(false); decide('decline'); }}>Decline</MenuItem>}
               {view.capabilities.can_route && <MenuItem icon="users" onClick={() => { setMenu(false); setRouteMode(true); }}>Route reviewer</MenuItem>}
             </Popover>
           </span>
         )}
-        {resolved && view.capabilities.can_submit_revision && <Button primary onClick={() => setRevisionMode((open) => !open)}>Revise proposal</Button>}
+        {resolved && canRevise && <Button primary={resolved} disabled={busy} onClick={() => setRevisionMode((open) => !open)}>{editableDraft ? 'Revise draft' : 'Revise proposal'}</Button>}
       </div>
 
       {changeMode && (
         <div className="approval-inline-form" role="region" aria-label="Request changes">
           <label><span>What needs to change</span><textarea value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={4000} autoFocus /></label>
-          <Button onClick={() => setChangeMode(false)}>Cancel</Button><Button primary disabled={busy || changeNote.trim().length === 0} onClick={() => decide('request_changes', changeNote.trim())}>Send back for changes</Button>
+          <Button onClick={() => setChangeMode(false)}>Cancel</Button><Button primary disabled={busy || !canRequestChanges || changeNote.trim().length === 0} onClick={() => decide('request_changes', changeNote.trim())}>Send back for changes</Button>
         </div>
       )}
       {revisionMode && (
-        <div className="approval-inline-form" role="region" aria-label="Revise proposal">
+        <div className={`approval-inline-form${editableDraft ? ' approval-draft-revision' : ''}`} role="region" aria-label="Revise proposal">
+          {editableDraft && <><label><span>Revised email subject</span><input value={revisionSubject} onChange={(event) => setRevisionSubject(event.target.value)} maxLength={500} /></label><label className="approval-revision-body"><span>Revised email body</span><textarea value={revisionBody} onChange={(event) => setRevisionBody(event.target.value)} maxLength={20000} /></label></>}
           <label><span>Revised proposal summary</span><textarea value={revisionSummary} onChange={(event) => setRevisionSummary(event.target.value)} maxLength={1000} autoFocus /></label>
           <label><span>What changed</span><input value={revisionNote} onChange={(event) => setRevisionNote(event.target.value)} maxLength={2000} /></label>
-          <Button onClick={() => setRevisionMode(false)}>Cancel</Button><Button primary disabled={busy || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || revisionSummary.trim() === view.payload.summary} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim()), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Submit v{view.payload.authorization.revision + 1}</Button>
+          <Button onClick={() => { clearApprovalRevisionDraft(revisionDraftStorage()); setRevisionMode(false); setRevisionNote(''); setRevisionSummary(view.payload.summary); if (view.payload.approval_type === 'communication') { setRevisionSubject(view.payload.details.subject ?? ''); setRevisionBody(view.payload.details.body); } }}>Cancel</Button><Button primary disabled={invalidRevision} onClick={() => void mutate((approval) => adapter.rest.reviseApproval(state.workspace.id, request.id, { proposal: proposalFrom(approval, revisionSummary.trim(), editableDraft ? { subject: revisionSubject, body: revisionBody } : undefined), change_summary: revisionNote.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('revision') }))}>Submit v{view.payload.authorization.revision + 1}</Button>
         </div>
       )}
       {routeMode && (
         <div className="approval-inline-form" role="region" aria-label="Route reviewer">
           <label><span>Eligible reviewer</span><select value={routeMember} onChange={(event) => setRouteMember(event.target.value)}><option value="">Choose reviewer</option>{view.identities.reviewers.map((reviewer) => <option key={reviewer.member_id} value={reviewer.member_id}>{reviewer.name} · {reviewer.authority_roles.join(', ') || 'member'}</option>)}</select></label>
           <label><span>Routing reason</span><input value={routeReason} onChange={(event) => setRouteReason(event.target.value)} maxLength={1000} /></label>
-          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Route review</Button>
+          <Button onClick={() => setRouteMode(false)}>Cancel</Button><Button primary disabled={busy || authorizationExpired || !view.capabilities.can_route || !routeMember || !routeReason.trim()} onClick={() => void mutate((approval) => adapter.rest.routeApproval(state.workspace.id, request.id, { step_id: approval.steps.find((step) => step.status === 'current')?.step_id ?? approval.capabilities.eligible_step_ids[0] ?? '', reviewer_member_id: routeMember, reason: routeReason.trim(), expected_authorization_revision: approval.payload.authorization.revision, expected_authorization_hash: approval.payload.authorization.hash, idempotency_key: idempotencyKey('route') }))}>Route review</Button>
         </div>
       )}
     </div>

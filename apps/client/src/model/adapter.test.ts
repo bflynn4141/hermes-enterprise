@@ -4,7 +4,7 @@
 // browser: the keepalive cadence, the reconnect ordering, what a 401 does to
 // drafts, and the rule that a decision is never replayed after a redirect.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mockUuid, SCHEMA_VERSION } from '@hermes/shared';
+import { mockUuid, requestReviewBinding, SCHEMA_VERSION } from '@hermes/shared';
 import { createAdapter } from './adapter.js';
 import { createHub, PING_MS, SILENCE_MS, type SocketLike } from './hub.js';
 import { createStore, initialState, type AppState } from './store.js';
@@ -928,6 +928,21 @@ describe('the adapter', () => {
     [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () =>
       new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),
   };
+
+  it.each(['invoice', 'agreement'] as const)('binds the reviewed %s payload and refetches a stale decision without replay', async (kind) => {
+    const reviewed = { id: REQUEST, kind, version: 7, payload: { number: 'REVIEW-7', currency: 'EUR', total_minor: 12500 } };
+    const { adapter, store, calls } = makeAdapter({
+      [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () => new Response(JSON.stringify({ error: 'Changed', reason: 'stale_request' }), { status: 409, headers: { 'content-type': 'application/json' } }),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'entity/upsert', kind: 'request', id: REQUEST, version: 8, data: { ...reviewed, version: 8, payload: { ...reviewed.payload, total_minor: 99000 } } });
+    await expect(adapter.decide(REQUEST, 'approve', undefined, reviewed)).rejects.toMatchObject({ reason: 'stale_request' });
+    const decisions = calls.filter((call) => call.path.endsWith('/decisions'));
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.body).toEqual({ decision: 'approve', ...await requestReviewBinding(reviewed) });
+    expect(calls.some((call) => call.method === 'GET' && call.path.endsWith(`/requests/${REQUEST}`))).toBe(true);
+    adapter.dispose();
+  });
 
   it('a decision that needs step-up stores the intent and never replays it', async () => {
     // Fake auth has a step-up of its own now (server decision F4), so the

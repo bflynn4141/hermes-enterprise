@@ -40,4 +40,21 @@ describe('Iris welcome', () => {
     expect(html).toContain('No completed actions were replayed.');
     expect(html).not.toContain('chat-welcome');
   });
+
+  it('renders a Hermes Bot Mode handoff as an agent notice instead of a human bubble', () => {
+    const current = session();
+    const html = render(<Transcript session={{
+      ...current,
+      messages: [{
+        id: mockUuid(90), session_id: current.id, seq: 0, role: 'user', kind: null,
+        text: 'Message from 🤖 Iris (@agent-partnerships): Review the Finance handoff.',
+        blocks: [], status: 'complete', run_id: null,
+      }],
+    }} find={null} />);
+    expect(html).toContain('msg-agent-handoff');
+    expect(html).toContain('Message from');
+    expect(html).toContain('@agent-partnerships');
+    expect(html).toContain('Review the Finance handoff.');
+    expect(html).not.toContain('class="msg-user"');
+  });
 });

@@ -67,7 +67,7 @@ export function useWorkspaceLists(): Loaded {
     adapter.ensureList(LIST_KEYS.agentFiles, async () => page('agent_file', (await rest.listAgentFiles(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.contextFields, async () => page('context_field', (await rest.listContextFields(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.instructions, async () => page('instruction_version', (await rest.listInstructions(workspaceId)).items));
-    adapter.ensureList(LIST_KEYS.skills, async () => page('skill_version', (await rest.listSkills(workspaceId)).items));
+    adapter.ensureList(LIST_KEYS.skills, async () => page('skill_version', (await rest.listSkills(workspaceId, agentId)).items));
     adapter.ensureList(LIST_KEYS.providerKeys, async () => page('provider_key', (await rest.providerKeys(workspaceId)).keys));
   }, [adapter, workspaceId, agentId, loadedKeys]);
 

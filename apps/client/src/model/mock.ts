@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 
@@ -110,12 +110,17 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  communicationDraft?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected';
+  /** Explicitly labeled Gmail fixture for Settings browser coverage. */
+  email?: 'disconnected' | 'connected';
+  /** Labeled two-team fixture for the role-template and invoice provenance UI. */
+  partnerWorkflow?: boolean;
 }
 
 type MockRequest = RequestEntity;
@@ -218,10 +223,27 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
-        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', { number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026', notes: 'Fictional demo invoice. No provider is connected.', lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }] }),
+        request(REQ_INVOICE, 'invoice', 'pending', 'Robin Ellis', 'INV-2026-014', {
+          number: 'INV-2026-014', total_minor: 120000, currency: 'USD', issued: 'Oct 12, 2026', due: 'Oct 26, 2026',
+          notes: 'Fictional demo invoice. No provider is connected.',
+          lines: [{ id: 'l1', label: 'Partner workshop · Oct 8', short: 'Workshop', qty: 1, amount_minor: 90000, date: 'Oct 8' }, { id: 'l2', label: 'Resource pack & follow-up · Oct 9', short: 'Resource pack', qty: 1, amount_minor: 30000, date: 'Oct 9' }],
+          ...(options.partnerWorkflow ? {
+            workflow_provenance: {
+              handoff_id: mockUuid(610),
+              shared_partner: { id: mockUuid(611), name: 'Robin Ellis', engagement_reference: 'ENG-DEMO-42' },
+              source_sessions: [
+                { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Illustrative approved engagement excerpt only.', simulated: true },
+                { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Illustrative invoice matched the authorized amount.', simulated: true },
+              ],
+              source_record_revisions: { engagement: 1, invoice: 1 },
+              checks: { duplicate: 'clear', engagement_match: 'matched', missing_context: [] },
+            },
+          } : {}),
+        }),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
+    communicationDraft: options.communicationDraft,
     workspaceId: WS,
     sessionId: SESSION_A,
     runId: mockUuid(1_030),
@@ -399,9 +421,41 @@ export function createMockBackend(options: MockOptions = {}) {
       ];
 
   const skills = [
-    { id: 'partner-operations', name: 'Partner operations', version: 'v3', shared_by: 'Maya Chen', description: 'How the Partner Program screens, drafts and routes partner work.', detail: 'Adopted by Iris. Review rules are unchanged by adoption.', adopted: true },
+    { id: 'managed:partner-program-screening', name: 'Partner program screening', version: 'v1.7.0', shared_by: 'Hermes Enterprise', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', detail: 'Adopted by Iris. Review rules are unchanged by configuration.', adopted: true },
     { id: 'feedback-synthesis', name: 'Feedback synthesis', version: 'v2', shared_by: 'Alex Rivera', description: 'Turn partner feedback into a routed, reviewable summary.', detail: null, adopted: false },
   ];
+  let skillAssignment: EnterpriseSkillAssignment = {
+    id: mockUuid(72),
+    agent_id: AGENT,
+    agent_name: 'Iris',
+    team: null,
+    skill_key: 'partner-program-screening',
+    runtime_name: 'enterprise_bridge:partner-program-screening',
+    name: 'Partner program screening',
+    version: '1.7.0',
+    artifact_digest: null,
+    description: 'Screen public partner prospects and prepare cited outreach drafts for human review.',
+    state: 'active',
+    revision: 1,
+    config: {
+      source: 'agentcash_people', program_name: 'Hermes Partner Program', source_purpose: 'person_partner_research',
+      organization_only: false, no_outreach: true, role_label: 'Hermes consultant', search_queries: [], intake_urls: [],
+      keywords: ['Hermes', 'AI agents', 'consulting'], ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
+      minimum_priority: 50, lookback_days: 365, max_candidates: 5, max_api_requests: 1, minimum_rate_remaining: 5,
+      max_spend_usd: 0.15, people_search: { current_position_seniority_level: ['Founder'], person_skills: ['AI agents'], current_position_titles: ['Consultant'], person_locations: [], offset: 0, search_after: null },
+    },
+    capability_grants: ['partner.discovery.read', 'partner.review.prepare', 'partner.outreach.draft'],
+    schedule: { enabled: true, interval_minutes: 360 },
+    human_review_required: true,
+    config_fields: [
+      { path: 'program_name', label: 'Program name', description: 'The name Iris uses in prospect briefs and drafts.', kind: 'text', required: true, minimum: null, maximum: null, options: [] },
+      { path: 'role_label', label: 'Partner profile', description: 'A short description of the partner role Iris is screening for.', kind: 'text', required: true, minimum: null, maximum: null, options: [] },
+      { path: 'keywords', label: 'Signals and keywords', description: 'Evidence Iris should look for when ranking candidates.', kind: 'string_list', required: true, minimum: null, maximum: null, options: [] },
+      { path: 'minimum_priority', label: 'Minimum priority', description: 'Only candidates at or above this score enter review.', kind: 'integer', required: true, minimum: 0, maximum: 100, options: [] },
+      { path: 'max_candidates', label: 'Candidates per run', description: 'Maximum candidates per discovery run.', kind: 'integer', required: true, minimum: 1, maximum: 10, options: [] },
+    ],
+    updated_at: iso(),
+  };
 
   const history = empty
     ? []
@@ -559,6 +613,7 @@ export function createMockBackend(options: MockOptions = {}) {
   };
 
   let slackConnected = options.slack === 'connected';
+  let emailConnected = options.email === 'connected';
 
   const dataPrivacy = {
     keys: providerKeys.map((key) => ({
@@ -610,7 +665,7 @@ export function createMockBackend(options: MockOptions = {}) {
         : source.status !== 'pending'
           ? { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: 'Review complete.' }
           : canDecide
-            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: false, reason: null }
+            ? { allowed_decisions: ['approve', 'decline', 'request_changes'], eligible_step_ids: eligible, can_route: true, can_submit_revision: seat === 'admin' && source.payload.approval_type === 'communication' && source.payload.details.draft_only, reason: null }
             : { allowed_decisions: [], eligible_step_ids: [], can_route: false, can_submit_revision: false, reason: `Waiting for ${current.flatMap((step) => step.current_reviewer_member_ids).map((id) => source.identities.reviewers.find((reviewer) => reviewer.member_id === id)?.name).filter(Boolean).join(', ') || 'an eligible reviewer'}.` },
     };
   }
@@ -642,7 +697,29 @@ export function createMockBackend(options: MockOptions = {}) {
 
   function requestForViewer(row: MockRequest): MockRequest {
     const approval = approvalViews.get(row.id);
-    return approval ? { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) } : row;
+    if (approval) return { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) };
+    const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+    // Preserve the older Worker response shape for the existing legacy Member
+    // browser fixture. The scoped Finance fixture exercises the new projection.
+    if (!financeScoped && seat === 'member') return row;
+    const pending = row.status === 'pending';
+    const eligible = pending && (financeScoped ? seat === 'member' : seat === 'admin');
+    return {
+      ...row,
+      decision_summary: {
+        action: row.kind === 'application' ? 'Review applicant' : row.kind === 'invoice' ? 'Approve invoice draft' : 'Approve agreement draft',
+        primary: row.kind === 'application'
+          ? String(row.payload.proposed_role ?? 'Partner program application')
+          : row.kind === 'invoice' ? `Invoice from ${row.subject ?? row.label}` : row.label,
+        facts: [], consequence: null,
+        approval_requirement: {
+          mode: 'single', completed_steps: pending ? 0 : 1, total_steps: 1,
+          remaining_approvals: pending ? 1 : 0,
+          current: pending ? [{ label: financeScoped ? 'Finance reviewer' : 'Workspace Admin', approvals_recorded: 0, quorum: 1 }] : [],
+          pending_for_viewer: eligible, waiting_on_others: pending && !eligible, expires_at: null,
+        },
+      },
+    };
   }
 
   function approvalResult(view: ApprovalView, decision: 'approve' | 'decline' | 'request_changes', note: string | null, idempotencyKey: string): ApprovalView {
@@ -905,6 +982,12 @@ export function createMockBackend(options: MockOptions = {}) {
         row.decided_at = approval.finalized_at;
         row.decided_by_name = approval.votes.at(-1)?.reviewer_name ?? null;
       };
+      if (rest.startsWith('/approval/evidence/') && method === 'GET') {
+        if (options.communicationDraft && id === APPROVAL_DEMO_REQUEST_IDS.communication && decodeURIComponent(rest.slice('/approval/evidence/'.length)) === mockUuid(1900)) {
+          return json({ id: mockUuid(1900), kind: 'partner_source', label: 'Illustrative partner source', note: 'Illustrative note from Iris about the pilot.', source_url: 'https://example.invalid/illustrative-pilot', fetched_at: iso(-60), source_updated_at: null, verified_at: null, sha256: (23).toString(16).padStart(64, '0'), facts: [{ label: 'Organization', value: 'Fictional Partner Cooperative' }, { label: 'Source excerpt', value: 'Illustrative stored fact: the cooperative runs small onboarding pilots.' }] });
+        }
+        return fail(404, 'approval_evidence_unavailable');
+      }
       if (rest === '/approval' && method === 'GET') return approval ? json(approvalForViewer(approval)) : fail(404, 'not_found');
       if (rest === '/approval/decisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');
@@ -922,7 +1005,7 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       if (rest === '/approval/revisions' && method === 'POST') {
         if (!approval || !row) return fail(404, 'not_found');
-        if (seat !== 'admin' || approval.status !== 'changes_requested') return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
+        if (seat !== 'admin' || !['pending', 'changes_requested'].includes(approval.status)) return fail(403, 'not_eligible', 'Only the proposal owner can revise this request');
         if (Number(body.expected_authorization_revision) !== approval.payload.authorization.revision || String(body.expected_authorization_hash ?? '') !== approval.payload.authorization.hash) return fail(409, 'stale_authorization', 'The authorization changed');
         const proposal = body.proposal as Record<string, unknown> | undefined;
         if (!proposal || proposal.approval_type !== approval.payload.approval_type) return fail(422, 'invalid_revision', 'The revised approval type must not change');
@@ -935,6 +1018,7 @@ export function createMockBackend(options: MockOptions = {}) {
           authorization: { ...approval.payload.authorization, revision: nextRevision, hash: hashForMock(nextRevision + [...approvalViews.keys()].indexOf(id) * 100) },
         } as ApprovalView['payload'];
         approval.status = 'pending';
+        approval.votes = [];
         approval.finalized_at = null;
         approval.steps = approval.payload.policy.steps.map((step, index) => ({
           step_id: step.id,
@@ -964,15 +1048,16 @@ export function createMockBackend(options: MockOptions = {}) {
         return json(approvalForViewer(approval));
       }
       if (rest === '/decisions' && method === 'POST') {
-        if (seat !== 'admin') return fail(403, 'not_admin', 'Admin decision required');
         if (!row) return fail(404, 'not_found');
+        const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+        if (seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
         if (row.status !== 'pending') return fail(409, 'already_decided', 'Already decided');
         const decision = body.decision === 'decline' ? 'decline' : 'approve';
         const resulting = decision === 'decline' ? 'declined' : row.kind === 'application' ? 'admitted' : row.kind === 'invoice' ? 'created' : 'drafted';
         row.status = resulting;
         row.version += 1;
         row.decided_at = iso(1);
-        row.decided_by_name = 'Maya Chen';
+        row.decided_by_name = viewerName;
         const decisionId = mockUuid(600 + requests.indexOf(row));
         row.decision_id = decisionId;
         publish({
@@ -983,7 +1068,7 @@ export function createMockBackend(options: MockOptions = {}) {
           schema_version: SCHEMA_VERSION,
           trace_id: 'trace-mock-decide',
           at: iso(1),
-          payload: { request_id: id, decision_id: decisionId, decision, resulting_status: resulting, decided_by: USER, decided_at: iso(1), effect_ids: [] },
+          payload: { request_id: id, decision_id: decisionId, decision, resulting_status: resulting, decided_by: viewerUserId, decided_at: iso(1), effect_ids: [] },
         } as StreamEvent);
         return json({ decision_id: decisionId, request_id: id, resulting_status: resulting, effect_ids: [] });
       }
@@ -1065,6 +1150,65 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/instructions')) return page(instructions);
     if (p('/skills')) return page(skills);
+    if (p('/partner-workflow') && method === 'GET') return json(options.partnerWorkflow ? {
+      configured: true,
+      teams: [
+        { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
+        { id: mockUuid(621), slug: 'finance', name: 'Finance' },
+      ],
+      agents: [
+        {
+          id: AGENT, name: 'Iris', principal_user_id: USER, principal_name: 'Maya Chen',
+          team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
+          role_template: { key: 'partnerships-agent', name: 'Partnerships agent', version: '1.0.0' },
+          skill_key: 'partner-program-screening', skill_name: 'Partner program screening', skill_version: '1.7.0',
+          assignment_id: mockUuid(622), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
+          capabilities: ['partner.discovery.read', 'partner.review.prepare', 'partner.outreach.draft'],
+        },
+        {
+          id: mockUuid(103), name: 'Ledger', principal_user_id: MEMBER_USER, principal_name: 'Alex Rivera',
+          team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
+          role_template: { key: 'finance-agent', name: 'Finance agent', version: '1.0.0' },
+          skill_key: 'partner-invoice-review', skill_name: 'Partner invoice review', skill_version: '1.0.0',
+          assignment_id: mockUuid(623), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
+          capabilities: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
+        },
+      ],
+      handoffs: [{
+        id: mockUuid(610), status: 'completed', partner_id: mockUuid(611), partner_name: 'Robin Ellis',
+        engagement_reference: 'ENG-DEMO-42', source_session_id: SESSION_A, finance_session_id: SESSION_B,
+        invoice_request_id: REQ_INVOICE, result_reason: 'Prepared for Finance human review.', simulated: true,
+        delivery_protocol: 'hermes-bot-mode/v1', message_status: 'delivered',
+        created_at: iso(-10), completed_at: iso(-9),
+      }],
+      connector: {
+        name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
+        summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
+      },
+    } : {
+      configured: false, teams: [], agents: [], handoffs: [],
+      connector: {
+        name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
+        summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
+      },
+    });
+    const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/skill-assignments(?:/([^/]+))?$`));
+    if (skillAssignmentsMatch) {
+      if (!skillAssignmentsMatch[1] && method === 'GET') return page([skillAssignment]);
+      if (skillAssignmentsMatch[1] === skillAssignment.id && method === 'PATCH') {
+        if (body.revision !== skillAssignment.revision) return fail(409, 'stale_revision');
+        skillAssignment = {
+          ...skillAssignment,
+          ...(body.state ? { state: body.state as 'active' | 'paused' } : {}),
+          ...(body.config && typeof body.config === 'object' ? { config: body.config as Record<string, unknown> } : {}),
+          ...(body.schedule && typeof body.schedule === 'object' ? { schedule: body.schedule as EnterpriseSkillAssignment['schedule'] } : {}),
+          revision: skillAssignment.revision + 1,
+          updated_at: new Date().toISOString(),
+        };
+        return json(skillAssignment);
+      }
+      return fail(404, 'not_found');
+    }
     if (path.startsWith(`/w/${WS}/integrations/slack`)) {
       if (method === 'POST' && path.endsWith('/oauth/start')) {
         return json({ authorize_url: 'https://slack.com/oauth/v2/authorize?client_id=fixture', expires_at: iso(600) }, 201);
@@ -1088,6 +1232,23 @@ export function createMockBackend(options: MockOptions = {}) {
         can_manage: seat === 'admin',
         reconnect_required: false,
         behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
+      });
+    }
+    if (path.startsWith(`/w/${WS}/integrations/email`)) {
+      if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
+        emailConnected = true;
+        return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=fixture', expires_at: iso(600) }, 201);
+      }
+      return json({
+        configured: true,
+        status: emailConnected ? 'connected' : 'disconnected',
+        address: emailConnected ? 'iris-partners@example.com' : null,
+        connected_at: emailConnected ? iso(0) : null,
+        pending_messages: emailConnected ? 2 : 0,
+        can_manage: seat === 'admin',
+        mode: 'draft_only',
+        discovery_enabled: true,
+        discovery_interval_minutes: 360,
       });
     }
     if (p('/provider-connections/nous/start') && method === 'POST') {
@@ -1141,7 +1302,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (path.endsWith('/upload') && method === 'PUT') return json({ ok: true, size: 1 });
     if (path.endsWith('/complete') && method === 'POST') {
       const id = path.split('/')[4] ?? mockUuid(800);
-      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: 'a'.repeat(64), status: 'ready' });
+      return json({ id, name: 'Invoice.pdf', size: 1, mime: 'application/pdf', sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
     }
 
     if (p('/usage')) return json(usage);

@@ -85,6 +85,29 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
         RETURNING id`, [runId, attempt, remoteRunId, sessionId, profile]);
     return rows.length === 1;
   }
+  async resolveRuntimeSessionId(run: EngineRunRow): Promise<string> {
+    if (!run.agentId) throw new RouteError('The run has no runtime agent.', 'runtime_run_inactive', 409);
+    const { rows } = await this.runtimeQuery<{ runtime_session_id: string }>(
+      `SELECT COALESCE((
+          SELECT prior.runtime_session_id
+            FROM runs prior
+           WHERE prior.workspace_id = $1
+             AND prior.session_id = $2
+             AND prior.agent_id = $4
+             AND prior.id <> $3
+             AND prior.created_at < (SELECT created_at FROM runs WHERE id = $3)
+             AND prior.runtime_kind = 'hermes'
+             AND prior.runtime_session_id IS NOT NULL
+           ORDER BY prior.created_at DESC, prior.id DESC
+           LIMIT 1
+        ), $3::text) AS runtime_session_id`,
+      [run.workspaceId, run.sessionId, run.id, run.agentId],
+    );
+    // The run id is globally fresh even when a deterministic staging seed
+    // recreates the same Enterprise session id. This prevents the native
+    // SessionDB from attaching an old transcript to a new conversation.
+    return rows[0]?.runtime_session_id ?? run.id;
+  }
   async snapshotRequest(runId: string, attempt: number, proposed: Record<string, unknown>): Promise<Record<string, unknown>> {
     const run = await this.loadRun(runId);
     if (!run?.agentId) throw new RouteError('The run has no runtime agent.', 'runtime_run_inactive', 409);

@@ -25,7 +25,7 @@ import {
 import { logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
-import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
+import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifestsForAgent } from './skills.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
@@ -369,8 +369,10 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
   } finally { await db.close(); }
 }
 export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { agentId } = await authenticate(c);
-  return c.json({ skills: runtimeSkillManifests(c.env, agentId) });
+  const { workspaceId, agentId } = await authenticate(c);
+  const skills = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+    runtimeSkillManifestsForAgent(c.env, tx, workspaceId, agentId));
+  return c.json({ skills });
 }
 async function publish(env: Env, workspaceId: string, result: CallResult): Promise<void> {
   const rows = result.events.map((event) => ({ id: event.id, workspace_id: workspaceId, session_id: event.sessionId, kind: event.kind, payload: event.payload, schema_version: 1, trace_id: event.traceId, at: event.at }));
@@ -535,9 +537,10 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       candidates_discovered: number;
       api_requests_used: number;
       agentcash_tool_call_id: string | null;
+      idempotency_key: string;
     }>(
       `SELECT created_by, status, source, config_snapshot, candidates_discovered,
-              api_requests_used, agentcash_tool_call_id
+              api_requests_used, agentcash_tool_call_id, idempotency_key
          FROM partner_screening_runs
         WHERE workspace_id=$1 AND id=$2 AND agent_id=$3
         FOR UPDATE`,
@@ -574,6 +577,19 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       { tx, workspaceId, userId: row.created_by, role: 'admin', requireAdmin: () => undefined },
       { runId: screeningRunId, agentId, result },
     );
+    if (row.idempotency_key.startsWith('auto:')) {
+      await tx.query(
+        `INSERT INTO partner_discovery_cursors
+           (workspace_id, agent_id, source, next_offset, search_after, page_size, last_run_id)
+         VALUES ($1,$2,'agentcash_people',$3,$4,$5,$6)
+         ON CONFLICT (workspace_id, agent_id, source) DO UPDATE SET
+           next_offset=EXCLUDED.next_offset,
+           search_after=EXCLUDED.search_after,
+           page_size=EXCLUDED.page_size,
+           last_run_id=EXCLUDED.last_run_id`,
+        [workspaceId, agentId, result.nextOffset, result.nextSearchAfter, config.max_candidates, screeningRunId],
+      );
+    }
   });
   return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }

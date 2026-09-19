@@ -217,7 +217,7 @@ test.describe('P2 · triage', () => {
     // card above it now — two places, deliberately, and one of them is the
     // list this assertion is about.
     const needsYou = appPane.getByRole('list', { name: 'Requests that need you' });
-    await expect(needsYou.getByRole('button', { name: /^Review/ })).toHaveCount(4);
+    await expect(needsYou.getByRole('button', { name: /^(Review|Approve .* draft)/ })).toHaveCount(4);
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
@@ -273,5 +273,34 @@ test.describe('P3 · review and admit', () => {
     await expect(appPane.getByText('Admin decision required')).toBeVisible();
     await expect(appPane.getByRole('button', { name: 'Admit' })).toHaveCount(0);
     await expect(appPane.getByText('You can read the request and its evidence. An Admin records the decision.')).toBeVisible();
+  });
+});
+
+
+test.describe('legacy document draft decisions', () => {
+  test('invoice approval saves a draft without a payment ceremony', async ({ page }) => {
+    await page.goto('/#inbox/request/00000000-0000-4000-8000-00000000000d');
+    const appPane = page.getByRole('region', { name: 'Application' });
+    await expect(appPane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
+    await expect(appPane.getByText('0 of 1 Admin approval', { exact: true })).toBeVisible();
+    await expect(appPane.getByText('No source messages linked.', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Review payment' })).toHaveCount(0);
+    await appPane.getByRole('button', { name: 'Approve invoice draft', exact: true }).click();
+    await expect(appPane.getByRole('heading', { name: 'Saved in Library', exact: true })).toBeVisible();
+    await expect(appPane.getByText('Invoice saved. No payment or email is sent.', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);
+  });
+
+  test('agreement review stays unsigned and members see who can approve', async ({ page }) => {
+    await page.goto('/?seat=member#inbox/request/00000000-0000-4000-8000-00000000000e');
+    const appPane = page.getByRole('region', { name: 'Application' });
+    await expect(appPane.getByText('0 of 1 Admin approval', { exact: true })).toBeVisible();
+    await expect(appPane.getByText('Admin required', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Approve agreement draft', exact: true })).toHaveCount(0);
+    await expect(appPane.getByRole('textbox', { name: 'Full legal name' })).toHaveCount(0);
+    await page.goto('/#inbox/request/00000000-0000-4000-8000-00000000000e');
+    await appPane.getByRole('button', { name: 'Approve agreement draft', exact: true }).click();
+    await expect(appPane.getByRole('heading', { name: 'Saved unsigned', exact: true })).toBeVisible();
+    await expect(appPane.getByText('Agreement saved unsigned. Nothing is signed or sent.', { exact: true })).toBeVisible();
   });
 });

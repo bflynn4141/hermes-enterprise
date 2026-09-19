@@ -21,6 +21,7 @@ import {
 } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
+import { queueApprovedEmail } from '../outbound-email/outbox.js';
 import { RouteError } from '../routes/tenant.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -437,6 +438,9 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
   if (proposal.approval_type === 'communication' && proposal.details.draft_only) {
     return { kind, status: 'not_required', reason: 'Draft only. Approval records the reviewed copy and does not send it.' };
   }
+  if (proposal.approval_type === 'communication' && proposal.details.channel === 'email') {
+    return { kind, status: 'waiting', reason: 'Approval queues this exact revision for the configured sender; it waits safely if that mailbox is not connected.' };
+  }
   const unbound = bindings.find((binding) => !binding.immutable);
   return { kind, status: 'unavailable', reason: unbound?.reason ?? NO_EXECUTOR };
 }
@@ -774,10 +778,13 @@ async function publishRequestChanged(
 }
 
 async function validatePartnerOutreachContact(
-  context: ApprovalProposerContext,
+  tx: Tx,
+  workspaceId: string,
+  agentId: string,
   policyKey: string,
   proposal: ApprovalProposal,
-): Promise<void> {
+  existingRequestId: string | null = null,
+): Promise<{ candidateId: string; stage: 'draft_pending' | 'send_pending' } | null> {
   const canonicalJson = (value: unknown): string => {
     if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
     if (value && typeof value === 'object') {
@@ -786,16 +793,19 @@ async function validatePartnerOutreachContact(
     }
     return JSON.stringify(value);
   };
-  if (policyKey !== `partner-outreach-draft-${context.agentId}`) return;
-  if (proposal.approval_type !== 'communication' || !proposal.details.draft_only
+  const draftPolicy = policyKey === `partner-outreach-draft-${agentId}`;
+  const sendPolicy = policyKey === `partner-outreach-send-${agentId}`;
+  if (!draftPolicy && !sendPolicy) return null;
+  if (proposal.approval_type !== 'communication'
+      || proposal.details.draft_only !== draftPolicy
       || proposal.details.recipients.length !== 1) {
-    throw new RouteError('partner outreach must remain one draft-only communication', 'invalid_partner_outreach', 422);
+    throw new RouteError('partner outreach must match its configured draft or approved-send policy', 'invalid_partner_outreach', 422);
   }
   const recipient = proposal.details.recipients[0]!;
   if (!recipient.candidate_id) {
     throw new RouteError('partner outreach must name the stored candidate', 'invalid_partner_outreach_contact', 422);
   }
-  const result = await context.tx.query<{
+  const result = await tx.query<{
     enrichment_id: string; display_name: string; contact_data: {
       phones?: { number: string; type?: string | null }[];
       social_profiles?: { network: string; url: string }[];
@@ -811,7 +821,7 @@ async function validatePartnerOutreachContact(
           ORDER BY updated_at DESC LIMIT 1
        ) e ON true
       WHERE c.workspace_id=$1 AND c.agent_id=$2 AND c.id=$3`,
-    [context.workspaceId, context.agentId, recipient.candidate_id],
+    [workspaceId, agentId, recipient.candidate_id],
   );
   const stored = result.rows[0];
   const expectedAddress = stored?.draft_eligible ? stored.preferred_email : null;
@@ -823,6 +833,18 @@ async function validatePartnerOutreachContact(
       || !proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact')) {
     throw new RouteError('partner outreach contact fields must match stored verified evidence', 'invalid_partner_outreach_contact', 422);
   }
+  if (sendPolicy && !recipient.address) {
+    throw new RouteError('approved partner email requires a verified professional address', 'invalid_partner_outreach_contact', 422);
+  }
+  await idempotencyLock(tx, workspaceId, `partner-engagement:${agentId}:${recipient.candidate_id}`);
+  const prior = await tx.query<{ request_id: string }>(
+    `SELECT request_id FROM partner_engagements WHERE workspace_id=$1 AND agent_id=$2 AND candidate_id=$3`,
+    [workspaceId, agentId, recipient.candidate_id],
+  );
+  if (prior.rows[0] && prior.rows[0].request_id !== existingRequestId) {
+    throw new RouteError('this candidate already has an outreach engagement', 'partner_candidate_already_engaged', 409);
+  }
+  return { candidateId: recipient.candidate_id, stage: draftPolicy ? 'draft_pending' : 'send_pending' };
 }
 
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
@@ -866,7 +888,9 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   }
   const targets = await validatedTargetContext(context.tx, context.workspaceId, input.proposal, input);
   const selected = await selectPolicy(context.tx, context.workspaceId, input.proposal, context.agentId, targets.targetResourceIds, input.policy_key);
-  await validatePartnerOutreachContact(context, selected.row.key, input.proposal);
+  const partnerEngagement = await validatePartnerOutreachContact(
+    context.tx, context.workspaceId, context.agentId, selected.row.key, input.proposal,
+  );
   const members = await activeMembers(context.tx, context.workspaceId);
   validatePolicyFeasibility(selected.policy, members, requester.memberId, targets.requiredOwnerIds);
 
@@ -911,6 +935,13 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
      VALUES ($1,$2,$3,$4,1,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [requestId, context.workspaceId, selected.row.id, selected.row.version, hash, expiresAt, context.agentId, requester.memberId, requester.userId, requester.sessionId, requester.runId, input.idempotency_key, proposalIdempotencyHash, effect.kind, effect.status, effect.reason],
   );
+  if (partnerEngagement) {
+    await context.tx.query(
+      `INSERT INTO partner_engagements (workspace_id,agent_id,candidate_id,request_id,stage)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [context.workspaceId, context.agentId, partnerEngagement.candidateId, requestId, partnerEngagement.stage],
+    );
+  }
   await context.tx.query(
     `INSERT INTO approval_revisions
        (workspace_id, request_id, revision, authorization_hash, payload, status,
@@ -973,6 +1004,35 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
   await work.tx.query(`UPDATE approval_revisions SET status = 'approved' WHERE request_id = $1 AND revision = $2`, [row.request_id, row.authorization_revision]);
   await work.tx.query(`UPDATE requests SET status = 'approved' WHERE id = $1 AND status = 'pending'`, [row.request_id]);
   await audit(work.tx, row.workspace_id, 'system', null, 'approval.finalized', row.request_id, row.source_session_id);
+  const queuedEmail = await queueApprovedEmail(work.tx, {
+    workspaceId: row.workspace_id,
+    requestId: row.request_id,
+    authorizationRevision: row.authorization_revision,
+    authorizationHash: row.authorization_hash,
+    payload,
+  });
+  if (queuedEmail?.state === 'queued') {
+    for (const outboxId of queuedEmail.ids) {
+      const emailJob = await enqueueJob(
+        work.tx,
+        row.workspace_id,
+        'outbound_email_send',
+        `outbound-email:${outboxId}`,
+        { outbox_id: outboxId },
+      );
+      if (emailJob) work.jobs.push(emailJob);
+    }
+  }
+  if (payload.approval_type === 'communication' && payload.details.recipients[0]?.candidate_id) {
+    const nextStage = payload.details.draft_only
+      ? 'draft_approved'
+      : queuedEmail?.state === 'queued' ? 'queued' : 'pending_connection';
+    await work.tx.query(
+      `UPDATE partner_engagements SET stage=$3
+        WHERE workspace_id=$1 AND request_id=$2`,
+      [row.workspace_id, row.request_id, nextStage],
+    );
+  }
   const hook: ApprovalFinalizedHook = {
     event: 'approval.finalized', request_id: row.request_id, workspace_id: row.workspace_id,
     approval_type: payload.approval_type, authorization_revision: row.authorization_revision,
@@ -1063,6 +1123,10 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
     await context.tx.query(`UPDATE approval_requests SET status = $2, work_status = 'cancelled', work_reason = $3 WHERE request_id = $1`, [requestId, status, status === 'declined' ? 'The proposal was declined.' : 'A material revision is required.']);
     await context.tx.query(`UPDATE approval_revisions SET status = $3 WHERE request_id = $1 AND revision = $2`, [requestId, row.authorization_revision, status]);
     await context.tx.query(`UPDATE requests SET status = $2 WHERE id = $1`, [requestId, status]);
+    await context.tx.query(
+      `UPDATE partner_engagements SET stage=$3 WHERE workspace_id=$1 AND request_id=$2`,
+      [context.workspaceId, requestId, input.decision === 'decline' ? 'declined' : 'changes_requested'],
+    );
   } else {
     const refreshedVotes = await votesFor(context.tx, row);
     const refreshed = progress(row, payload, members, refreshedVotes, assignments);
@@ -1095,6 +1159,9 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   };
   const targets = await validatedTargetContext(context.tx, context.workspaceId, input.proposal, targetInput);
   const selected = await selectPolicy(context.tx, context.workspaceId, input.proposal, row.requester_agent_id, targets.targetResourceIds, oldPayload.policy.key);
+  await validatePartnerOutreachContact(
+    context.tx, context.workspaceId, row.requester_agent_id, selected.row.key, input.proposal, requestId,
+  );
   validatePolicyFeasibility(selected.policy, members, row.requester_member_id, targets.requiredOwnerIds);
   const maximumExpiry = Date.now() + selected.row.max_duration_seconds * 1000;
   const expiry = input.requested_expires_at ? Date.parse(input.requested_expires_at) : maximumExpiry;

@@ -356,10 +356,12 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const now = new Date('2026-09-16T19:00:00Z');
     const first = await enqueueAutomatedPartnerScreening(env, now);
     const replay = await enqueueAutomatedPartnerScreening(env, now);
-    expect(first).toMatchObject({
-      enabled: true, candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
-      configuredAgents: 1, queued: 1,
-    });
+    expect(first.enabled).toBe(true);
+    expect(first.candidateAgents).toBeGreaterThanOrEqual(1);
+    expect(first.startedAgents).toBeGreaterThanOrEqual(1);
+    expect(first.activeOwnedAgents).toBeGreaterThanOrEqual(1);
+    expect(first.configuredAgents).toBeGreaterThanOrEqual(1);
+    expect(first.queued).toBeGreaterThanOrEqual(1);
     expect(replay.queued).toBe(0);
 
     const queuedJob = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
@@ -430,18 +432,22 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     };
     const now = new Date('2026-09-16T19:00:00Z');
     const gated = await enqueueAutomatedPartnerScreening(makeEnv(base).env, now);
-    expect(gated).toMatchObject({
-      enabled: true, paidEnabled: false,
-      candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
-      configuredAgents: 1, skippedPaid: 1, queued: 0,
-    });
+    // The scheduler now discovers persisted enterprise skill assignments in
+    // every workspace, so earlier fixtures can legitimately contribute to the
+    // global scan counters. This workspace's paid assignment is still gated.
+    expect(gated).toMatchObject({ enabled: true, paidEnabled: false, queued: 0 });
+    expect(gated.skippedPaid).toBeGreaterThanOrEqual(1);
+    expect(gated.candidateAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.startedAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.activeOwnedAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.configuredAgents).toBeGreaterThanOrEqual(1);
 
     const admitted = await enqueueAutomatedPartnerScreening(makeEnv({
       ...base, PARTNER_SCREENING_PAID_AUTOMATION_ENABLED: '1',
     }).env, now);
-    expect(admitted).toMatchObject({
-      enabled: true, paidEnabled: true, configuredAgents: 1, skippedPaid: 0, queued: 1,
-    });
+    expect(admitted).toMatchObject({ enabled: true, paidEnabled: true, skippedPaid: 0 });
+    expect(admitted.queued).toBeGreaterThanOrEqual(1);
+    expect(admitted.configuredAgents).toBeGreaterThanOrEqual(1);
   });
 
   it('imports one run-bound AgentCash People Search response as sanitized Inbox evidence', async () => {
@@ -474,7 +480,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       PARTNER_SCREENING_CONFIG_JSON: JSON.stringify({ [fx.agentId]: rawConfig }),
     });
     const startedResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/partner-screening/runs`, {
-      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `agentcash-${randomUUID()}` },
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `auto:${randomUUID()}` },
     });
     expect(startedResponse.status).toBe(201);
     const started = await startedResponse.json() as { run: { id: string; status: string; source: string }; candidates: unknown[] };
@@ -591,7 +597,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
               employment: { current: { title: 'Founder', seniority: 'Founder', company_id: 'company-1' } },
             }],
             companies: { 'company-1': { id: 'company-1', name: 'PR for AI', domain: 'prfor.ai' } },
-            metadata: { total: 1, credits: 1, offset: 0 },
+            metadata: { total: 50, credits: 1, offset: 0, search_after: 'cursor-after-person-1' },
           }),
         },
       },
@@ -609,13 +615,25 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       const run = await client.query(`SELECT status, source, monetary_cost_usd, api_requests_used, agentcash_tool_call_id FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
       const candidates = await client.query(`SELECT source, display_name, profile_url FROM partner_candidates WHERE latest_run_id=$1`, [started.run.id]);
       const artifacts = await client.query<{ body: string }>(`SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts WHERE run_id=$1`, [started.run.id]);
-      return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '' };
+      const cursor = await client.query(
+        `SELECT next_offset, search_after, page_size, last_run_id
+           FROM partner_discovery_cursors
+          WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_people'`,
+        [fx.workspaceId, fx.agentId],
+      );
+      return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '', cursor: cursor.rows[0] };
     });
     expect(stored.run).toMatchObject({ status: 'completed', source: 'agentcash_people', api_requests_used: 1, agentcash_tool_call_id: 'call_people_1' });
     expect(Number(stored.run.monetary_cost_usd)).toBe(0.15);
     expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
     expect(stored.artifacts).not.toContain('must-not-persist');
     expect(stored.artifacts).not.toContain('+15551234567');
+    expect(stored.cursor).toMatchObject({
+      next_offset: 1,
+      search_after: 'cursor-after-person-1',
+      page_size: 5,
+      last_run_id: started.run.id,
+    });
   });
 
   it('leases an explicit one-time creator search and imports only bounded public evidence', async () => {

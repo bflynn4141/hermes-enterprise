@@ -5,18 +5,22 @@ professional evidence from AgentCash People Search, save immutable source
 artifacts, and hand the candidates to the bound Iris agent for judgment. Source
 collection never creates an application by itself.
 Iris must inspect the stored evidence and may use `propose_approval` to create a
-personalized, draft-only email in the Inbox. Discovery removes contact details.
+personalized email in the Inbox. Discovery removes contact details.
 After Iris selects one strongest prospect, it may run one bounded professional
 contact lookup and email verification. The Inbox shows stored phones and public
 profiles for human review and uses an email only after verification passes.
-Approval records reviewed copy and never sends, calls, texts, or messages anyone.
+Draft-only approval records reviewed copy and sends nothing. When the separate
+outreach-email rollout is enabled, a send approval can queue only its exact
+reviewed revision through a dedicated Gmail sender. Calls, texts, and social
+messages remain unavailable.
 
-Iris now receives this procedure as the native, read-only Hermes skill
+Iris receives this procedure as the native, read-only Hermes skill
 `enterprise_bridge:partner-program-screening` version `1.7.0`. Its approved
 non-secret program settings are injected through `skills.config`; source and
-model credentials remain server-side. The skill is automatically in use when
-this agent has a valid policy. It describes the review workflow but grants no
-tool or decision authority. See [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md).
+model credentials remain server-side. A versioned Enterprise skill assignment
+controls whether the skill is active, its bounded settings, semantic capability
+grants and proactive schedule. It describes the review workflow but grants no
+decision authority. See [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md).
 
 The connector's `deterministic_priority` is triage, not an Iris or Hermes
 decision. Its four configurable criteria are keyword relevance, recent
@@ -59,8 +63,9 @@ Source policy and quota references were checked on 2026-09-18:
 
 1. An Admin or Cloudflare Cron starts a run for an agent with an idempotency key. A newly invited
    member receives one onboarding run for their own explicitly configured AgentCash profile; later
-   paid runs require an Admin. The server reads that agent's non-secret policy from
-   `PARTNER_SCREENING_CONFIG_JSON`.
+   paid runs require an Admin. The server reads that agent's active Enterprise
+   skill assignment. A valid `PARTNER_SCREENING_CONFIG_JSON` policy is imported
+   once as revision 1 for rolling-deployment compatibility.
 2. For GitHub, the server calls only fixed `https://api.github.com` endpoints. It has a
    10-second timeout, a 1 MB response cap, a per-run request cap, and a
    configurable minimum remaining-rate reserve. It does not retry a `403` or
@@ -87,6 +92,9 @@ Source policy and quota references were checked on 2026-09-18:
    artifacts are append-only. A SHA-256 content hash, fetch time, source update
    time, URL, API request count, rate-limit snapshot, score criteria,
    confidence, and gaps are preserved.
+   Recurring People Search also advances a server-owned page cursor. The model
+   cannot change it, and candidates already present in the engagement ledger
+   are omitted from later discovery lists.
 6. Iris selects exactly one stored candidate. Each Minerva or Hunter request is
    reconstructed from database state, leased to one native run/tool-call ID,
    and imported through the same spill-recovery boundary. The Worker stores no
@@ -100,12 +108,21 @@ Source policy and quota references were checked on 2026-09-18:
    are read-only and restricted to its own candidates.
 8. Before handing work to Iris, the Worker installs an agent-specific
    communication policy reviewed by the responsible member. Iris may call
-   `propose_approval` only with `draft_only: true`, the verified sender, and
+   `propose_approval` only under the deployment's draft or approved-send mode,
+   with the verified sender, and
    contact fields that exactly match stored evidence. The recipient address is
-   null unless the professional email passed verification. The resulting Inbox
-   item has no delivery effect. Discovered prospects are never represented as applicants.
+   null unless the professional email passed verification. Discovered prospects
+   are never represented as applicants.
+9. An approved send becomes an exact outbox row bound to the request,
+   authorization revision and hash, and recipient index. A connected Gmail
+   account must match the approved sender address. Suppressions are checked
+   again immediately before delivery. A confirmed send stores the provider
+   message and thread ids; an uncertain network or provider result stops as
+   `ambiguous` rather than retrying into a possible duplicate.
 
-Cloudflare Cron uses six-hour idempotency buckets. Paid AgentCash runs have a
+Cloudflare Cron uses the active assignment's schedule, defaulting to six-hour
+idempotency buckets. Pausing the assignment or disabling its schedule prevents
+new proactive jobs. Paid AgentCash runs have a
 second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`. Local and
 production keep it at `0`; staging is `1` under Brian's 2026-09-17 approval for
 the existing Iris demo. The approved staging maximum is $0.23 per six-hour run
@@ -132,6 +149,11 @@ PARTNER_SCREENING_CONFIG_JSON='{"44444444-4444-4444-8444-444444444444":{"source_
 PARTNER_GITHUB_TOKEN=""
 ```
 
+The legacy environment policy is imported once. After startup, an Admin can
+edit the assignment under **Library → Skills → Partner program screening →
+Configure**. Every save creates an immutable revision; the database policy wins
+over later environment changes.
+
 The ranking weights must total 100. A run supports at most three search queries,
 ten explicit URLs, ten candidates, and thirty API requests. Keep the candidate
 limit small: one enriched candidate normally costs two core API calls after the
@@ -139,7 +161,7 @@ search call. The source-matrix route is read-only and reports credentials only
 as `authenticated`, `unauthenticated`, or `not_applicable`.
 
 Start the Worker after applying migrations through
-`0036_partner_contact_enrichment.sql`, then:
+`0046_enterprise_skill_assignments.sql`, then:
 
 ```sh
 WS=11111111-1111-4111-8111-111111111111
@@ -166,9 +188,10 @@ JSON policy. Run the migration before enabling the route.
 ### Proactive demo
 
 `AUTOMATED_TRIGGERS_ENABLED=1` makes the existing every-minute Cloudflare Cron
-admit one durable screening job per configured, started, admin-owned agent and
-cadence bucket. `PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES` defaults to 360
-and is clamped to 5–1440. In staging,
+admit one durable screening job per active, scheduled, started, owned agent and
+assignment cadence bucket. The assignment defaults to 360 minutes and is
+validated between 5 and 1440. `PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES`
+remains the compatibility default for a policy that has not yet materialized. In staging,
 `PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS=1` applies the bounded onboarding
 policy to started admin-owned agents without an agent-specific override. The
 durable job creates/reuses an `Iris · Automated partner
@@ -179,6 +202,29 @@ proposing twice. Staging enables this gate; production leaves it off.
 Cloudflare is the business-trigger scheduler. Native Hermes cron may be exposed
 for a demo profile, but it should not schedule this same screening flow; doing so
 would create two scheduler owners even though downstream ids are defensive.
+
+## Dedicated Gmail sender
+
+Email remains off unless both deployment gates are changed deliberately:
+
+```dotenv
+GMAIL_OUTREACH_ENABLED="1"
+PARTNER_OUTREACH_EMAIL_MODE="send_after_approval"
+```
+
+The server also needs `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
+`GMAIL_STATE_SECRET`, and the exact `GMAIL_REDIRECT_URI`. The Google OAuth web
+client must enable the Gmail API and register the callback. Hermes requests the
+narrow `gmail.send` sensitive scope plus OpenID email identity; it does not ask
+to read the mailbox. Admins connect the dedicated address in Settings → Email.
+Refresh credentials use the same envelope-encryption boundary as other provider
+credentials.
+
+Keep `PARTNER_OUTREACH_EMAIL_MODE=draft_only` while connecting and testing the
+mailbox. Use a controlled recipient for the first approved message, inspect the
+Gmail sent folder and Hermes outbox receipt, then enable send-after-approval.
+Google may require OAuth app verification before use beyond configured test
+users.
 
 ## Live onboarding
 

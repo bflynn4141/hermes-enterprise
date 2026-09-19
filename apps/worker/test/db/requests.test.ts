@@ -6,6 +6,7 @@
 // in the mode it applies to costs a sealed cookie and is the only way the test
 // is about the guard rather than about the early return.
 import { randomUUID } from 'node:crypto';
+import { paginatedSchema, requestEntitySchema } from '@hermes/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
@@ -17,6 +18,33 @@ import { INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
 const env = () => makeEnv({ RENDERS_QUEUE: new FakeQueue() } as never);
 
 describe('GET /w/:ws/requests', () => {
+  it('projects legacy decision eligibility for the actual viewer on list, detail and note responses', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    const requestId = await seedRequest(fx, 'invoice');
+    for (const [viewer, canDecide] of [[fx.adminId, true], [fx.memberId, false]] as const) {
+      const path = `/w/${fx.workspaceId}/requests`;
+      const listResponse = await asUser(e, viewer, path);
+      expect(listResponse.status).toBe(200);
+      const list = paginatedSchema(requestEntitySchema).parse(await listResponse.json());
+      const detailResponse = await asUser(e, viewer, `${path}/${requestId}`);
+      expect(detailResponse.status).toBe(200);
+      const detail = requestEntitySchema.parse(await detailResponse.json());
+      const noteResponse = await asUser(e, viewer, `${path}/${requestId}/notes`, { method: 'POST', body: { body: 'Reviewing source context.' } });
+      expect(noteResponse.status).toBe(201);
+      const note = requestEntitySchema.parse(await noteResponse.json());
+      for (const entity of [list.items.find((item) => item.id === requestId), detail, note]) {
+        expect(entity?.subject).toBe('Robin Ellis');
+        expect(entity?.decision_summary?.approval_requirement).toMatchObject({
+          pending_for_viewer: canDecide,
+          waiting_on_others: !canDecide,
+          remaining_approvals: 1,
+          current: [{ label: 'Workspace Admin', approvals_recorded: 0, quorum: 1 }],
+        });
+      }
+    }
+  });
+
   it('filters by status, by kind and by label', async () => {
     const fx = await seedWorkspace();
     const { env: e } = env();

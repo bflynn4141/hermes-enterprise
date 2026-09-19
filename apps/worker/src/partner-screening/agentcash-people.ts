@@ -73,6 +73,8 @@ export interface AgentCashPeopleResult {
   readonly apiRequestsUsed: 1;
   readonly rateLimits: readonly [];
   readonly monetaryCostUsd: 0 | 0.15;
+  readonly nextOffset: number;
+  readonly nextSearchAfter: string | null;
 }
 
 function peopleConfig(config: PartnerAgentConfig) {
@@ -98,8 +100,10 @@ export function agentCashPeopleSearchArguments(config: PartnerAgentConfig): {
     excludeFields: ['educations', 'languages'],
     include_employment_history: false,
     verbose: false,
-    offset: 0,
+    limit: config.max_candidates,
   });
+  if (policy.search_after) body.search_after = policy.search_after;
+  else body.offset = policy.offset;
   return { url: AGENTCASH_PEOPLE_SEARCH_URL, method: 'POST', maxAmount: 0.15, body };
 }
 
@@ -220,5 +224,18 @@ export function parseAgentCashPeopleSearch(value: unknown, config: PartnerAgentC
     candidates.push({ sourceKey: String(person.id), displayName: person.full_name, profileUrl, priority: priority(person, config, company?.name ?? null), artifacts: [artifact] });
   }
   if (response.people.length > 0 && candidates.length === 0) throw new Error('AgentCash returned no usable people with a trustworthy professional profile URL.');
-  return { candidates, artifacts, apiRequestsUsed: 1, rateLimits: [], monetaryCostUsd: response.people.length > 0 ? 0.15 : 0 };
+  const currentOffset = response.metadata.offset ?? peopleConfig(config).offset;
+  const followingOffset = Math.min(10_000, currentOffset + response.people.length);
+  const reachedEnd = response.people.length === 0 ||
+    (typeof response.metadata.total === 'number' && followingOffset >= response.metadata.total) ||
+    followingOffset >= 10_000;
+  return {
+    candidates,
+    artifacts,
+    apiRequestsUsed: 1,
+    rateLimits: [],
+    monetaryCostUsd: response.people.length > 0 ? 0.15 : 0,
+    nextOffset: reachedEnd ? 0 : followingOffset,
+    nextSearchAfter: reachedEnd ? null : response.metadata.search_after ?? null,
+  };
 }

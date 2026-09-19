@@ -3,6 +3,7 @@ import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
 import { consumeReservedCapacity, reservedCapacityAgentId } from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
+import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 
@@ -193,6 +194,13 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
     `INSERT INTO instruction_versions (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
      VALUES ($1,$2,$3,'saved',$4,'[]'::jsonb,now())`,
     [input.workspaceId, agentId, PARTNER_PROGRAM_INSTRUCTIONS, input.joiningUserId],
+  );
+  await materializeLegacyPartnerAssignment(
+    input.env,
+    input.tx,
+    input.workspaceId,
+    agentId,
+    input.joiningUserId,
   );
 
   if (input.env.AGENT_RUNTIME === 'hermes') {

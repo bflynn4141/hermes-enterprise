@@ -31,6 +31,11 @@ TYPESAFE_API_KEY=""
 # The redirect URI and Events API Request URL must exactly match the public
 # Worker origin. Leave disabled to render the truthful unconfigured state.
 SLACK_ENABLED="0"
+GMAIL_OUTREACH_ENABLED="0"
+# GMAIL_CLIENT_ID=""
+# GMAIL_CLIENT_SECRET=""
+# GMAIL_STATE_SECRET=""
+# GMAIL_REDIRECT_URI="http://localhost:8787/integrations/gmail/oauth/callback"
 SLACK_CLIENT_ID=""
 SLACK_CLIENT_SECRET=""
 SLACK_SIGNING_SECRET=""

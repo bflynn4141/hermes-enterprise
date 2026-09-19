@@ -11,15 +11,17 @@
 //     re-renders in a "Re-authenticated — confirm to continue" state that
 //     requires a second, deliberate click. The client never auto-replays a
 //     decision.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
-import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
+import { useAdapter, useAppState, useDispatch, useEntity, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
+import './legacy-documents.css';
+import { requestActionLabel } from '../approval-copy.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 import {
@@ -117,21 +119,21 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 function approvalThreshold(request: RequestEntity): string | null {
+  if (request.kind === 'task') return null;
   const requirement = request.decision_summary?.approval_requirement;
   if (!requirement) return null;
   if (request.status !== 'pending') return `${requirement.completed_steps}/${requirement.total_steps} steps complete`;
-  const current = requirement.current[0];
-  if (current) return `${current.approvals_recorded}/${current.quorum} ${current.label}`;
+  if (requirement.current.length) return requirement.current.map((step) => `${step.approvals_recorded}/${step.quorum} ${step.label}`).join(' · ');
   return requirement.remaining_approvals === 1 ? '1 approval required' : `${requirement.remaining_approvals} approvals required`;
 }
 
 function requestAction(request: RequestEntity): string {
   if (request.status !== 'pending') return requestStatusLabel(request);
   if (request.kind === 'application') return 'Review applicant';
-  if (request.kind === 'invoice') return 'Review invoice';
+  if (request.kind === 'invoice' || request.kind === 'agreement') return requestActionLabel(request);
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
   if (request.kind === 'task') return 'Work with Iris';
-  return 'Review for signature';
+  return 'Review request';
 }
 
 function shortDate(value: string): string {
@@ -376,11 +378,10 @@ function TaskView({ request }: { request: RequestEntity }) {
 }
 
 /** Shared decision footer. The only place in the client that calls `decide`. */
-function DecisionFooter({ request, title, detail, approveLabel, declineLabel, approveNote }: { request: RequestEntity; title: string; detail: string; approveLabel: string; declineLabel: string; approveNote?: string }) {
+function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: { request: RequestEntity; title: string; detail: string; approveLabel: string; declineLabel: string }) {
   const adapter = useAdapter();
-  const state = useAppState();
-  const dispatch = useDispatch();
-  const admin = useIsAdmin();
+  const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
+  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
   const [confirmDecline, setConfirmDecline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -396,12 +397,12 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel, ap
     }
   }, [adapter, request.id]);
 
-  if (!admin) {
+  if (!eligible) {
     return (
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{EMPTY.adminOnly}</span>
-          <span className="f-sub">You can read the request and its evidence. An Admin records the decision.</span>
+          <span className="f-title">{financeScoped ? 'Finance reviewer required' : EMPTY.adminOnly}</span>
+          <span className="f-sub">You can read the request and its evidence. {financeScoped ? 'The assigned Finance reviewer' : 'An Admin'} records the decision.</span>
         </div>
       </div>
     );
@@ -411,23 +412,17 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel, ap
     setBusy(true);
     setError(null);
     try {
-      const result = await adapter.decide(request.id, decision, decision === 'approve' ? approveNote : undefined);
+      const result = await adapter.decide(request.id, decision);
       if (result === 'reauth_required') return;
-      if (decision === 'approve' && approveNote && state.workspace.id) {
-        try {
-          const saved = await adapter.rest.addRequestNote(state.workspace.id, request.id, { body: approveNote });
-          dispatch({ type: 'entity/upsert', kind: 'request', id: saved.id, version: saved.version, data: saved });
-        } catch {
-          // The decision is already durable. The resolved document deliberately
-          // offers the same authorization control so this partial success is
-          // recoverable without replaying the decision.
-          setError('Approved, but the authorization record was not saved. Open the resolved item to retry.');
-        }
-      }
       adapter.ensure('request', request.id);
     } catch (caught) {
       const reason = (caught as { reason?: string }).reason;
-      setError(reason === 'already_decided' ? 'Already decided' : reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record the decision. Try again.');
+      if (reason === 'stale_request' || reason === 'review_binding_required') {
+        adapter.ensure('request', request.id);
+        setError('This draft needs a fresh review. Review the latest version before deciding again.');
+      } else {
+        setError(reason === 'already_decided' ? 'Already decided' : reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record the decision. Try again.');
+      }
     } finally {
       setBusy(false);
       setConfirmDecline(false);
@@ -672,485 +667,233 @@ function ApplicationView({ request }: { request: RequestEntity }) {
  * prepared" while the render job runs, and the failure reason with a Retry when
  * it does not.
  */
-type DocumentStage = 'review' | 'prepare' | 'confirm';
-
-function DocumentSteps({ kind, stage, onChange }: { kind: 'invoice' | 'agreement'; stage: DocumentStage; onChange: (stage: DocumentStage) => void }) {
-  const labels = kind === 'invoice'
-    ? { review: 'Review invoice', prepare: 'Payment', confirm: 'Confirm' }
-    : { review: 'Review agreement', prepare: 'Signature', confirm: 'Confirm' };
-  const order: DocumentStage[] = ['review', 'prepare', 'confirm'];
-  const active = order.indexOf(stage);
-  return (
-    <ol className="document-steps" aria-label={kind === 'invoice' ? 'Invoice approval steps' : 'Signature approval steps'}>
-      {order.map((item, index) => (
-        <li key={item} data-state={index < active ? 'complete' : index === active ? 'current' : 'upcoming'}>
-          <button type="button" onClick={() => onChange(item)} aria-current={index === active ? 'step' : undefined}>
-            <span className="document-step-index">{index < active ? <Icon name="check" size={13} /> : index + 1}</span>
-            <span>{labels[item]}</span>
-          </button>
-          {index < order.length - 1 && <span className="document-step-line" aria-hidden="true" />}
-        </li>
-      ))}
-    </ol>
-  );
+/** Amounts retain the invoice currency at every decision and document surface. */
+function documentMoney(minor: number | null, currency: string | null): string {
+  if (minor === null) return 'Not supplied';
+  if (!currency || !/^[A-Z]{3}$/.test(currency)) return `${(minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} · Currency not supplied`;
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay: 'code', minimumFractionDigits: 2 }).format(minor / 100);
+  } catch {
+    return `${currency} ${(minor / 100).toFixed(2)}`;
+  }
 }
+
+const documentSourceIds = (value: unknown): string[] => Array.isArray(value)
+  ? value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  : [];
 
 export function DocumentView({
   request,
   document: doc,
   readOnly,
   embedded,
-  onAuthorizationChange,
+  effects = [],
 }: {
   request: RequestEntity;
   document?: DocumentEntity | null;
   readOnly?: boolean;
   embedded?: boolean;
-  onAuthorizationChange?: (saved: boolean) => void;
+  effects?: EffectEntity[];
 }) {
   const adapter = useAdapter();
   const state = useAppState();
-  const dispatch = useDispatch();
   const nav = useNav();
-  const reducedMotion = useReducedMotion();
-  const noteHasAuthorization = request.kind === 'invoice'
-    ? /^Payment authorization\b/i.test(request.note ?? '')
-    : /^Electronic signature authorization\b/i.test(request.note ?? '');
+  const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
+  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
   const [mode, setMode] = useState<'preview' | 'render' | 'pdf'>('preview');
-  const [stage, setStage] = useState<DocumentStage>(readOnly ? 'prepare' : 'review');
-  const [zoom, setZoom] = useState(100);
   const [line, setLine] = useState<string | null>(null);
   const [ack, setAck] = useState(false);
-  const [paymentAuthorized, setPaymentAuthorized] = useState(noteHasAuthorization);
-  const [signatureName, setSignatureName] = useState(state.user.name);
-  const [signatureConsent, setSignatureConsent] = useState(noteHasAuthorization);
-  const [authorizationSaved, setAuthorizationSaved] = useState(noteHasAuthorization);
-  const [authorizationBusy, setAuthorizationBusy] = useState(false);
-  const [authorizationError, setAuthorizationError] = useState<string | null>(null);
-  const signatureRef = useRef<HTMLDivElement>(null);
-  const payload = record(request.payload);
+  // Library can show an older saved version. Always review the supplied document,
+  // rather than silently replacing its content with the request's latest payload.
+  const payload = record(doc?.payload ?? request.payload);
+  const isInvoice = request.kind === 'invoice';
   const number = text(payload.number) ?? request.label;
-  const currency = text(payload.currency) ?? 'USD';
+  const currency = text(payload.currency);
   const payer = record(payload.payer);
   const payee = record(payload.payee);
-  const payloadParties = Array.isArray(payload.parties) ? payload.parties.map(record) : [];
-  const parties = payloadParties.length > 0
-    ? payloadParties
-    : [{ name: state.workspace.name }, { name: request.subject ?? request.label }];
-  const payeeName = text(payee.name) ?? request.subject ?? request.label;
-  const payerName = text(payer.name) ?? state.workspace.name;
-  const issueDate = text(payload.issue_date) ?? text(payload.issued) ?? '—';
-  const dueDate = text(payload.due_date) ?? text(payload.due) ?? '—';
-  const versionLabel = text(payload.version_label) ?? 'v1';
-  const totalMinor = typeof payload.total_minor === 'number' ? payload.total_minor : 0;
+  const parties = Array.isArray(payload.parties) ? payload.parties.map(record) : [];
+  const payeeName = text(payee.name) ?? request.subject ?? 'Not supplied';
+  const payerName = text(payer.name) ?? 'Not supplied';
+  const issueDate = text(payload.issue_date) ?? text(payload.issued);
+  const dueDate = text(payload.due_date) ?? text(payload.due);
+  const workPeriod = record(payload.work_period);
+  const effectiveDates = record(payload.effective_dates);
+  const versionLabel = text(payload.version_label) ?? (doc ? `v${doc.version}` : 'Version not supplied');
+  const totalMinor = typeof payload.total_minor === 'number' ? payload.total_minor : null;
+  const amount = documentMoney(totalMinor, currency);
   const lines = Array.isArray(payload.lines)
     ? payload.lines.flatMap((item) => {
         const row = record(item);
         const id = text(row.id);
         const label = text(row.label);
         if (!id || !label || typeof row.qty !== 'number' || typeof row.amount_minor !== 'number') return [];
-        return [{ id, label, qty: row.qty, amount_minor: row.amount_minor, date: text(row.date) ?? 'No service date' }];
+        return [{ id, label, qty: row.qty, amount_minor: row.amount_minor, date: text(row.date), sourceIds: documentSourceIds(row.source_ids) }];
       })
     : [];
   const sections = Array.isArray(payload.sections)
-    ? payload.sections.flatMap((item) => {
-        if (Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'string') return [{ heading: item[0], body: item[1] }];
+    ? payload.sections.flatMap((item, index) => {
+        if (Array.isArray(item) && typeof item[0] === 'string' && typeof item[1] === 'string') {
+          return [{ id: `section-${index}`, heading: item[0], body: item[1], sourceIds: [] as string[] }];
+        }
         const section = record(item);
         const heading = text(section.heading);
         const body = text(section.body);
-        return heading && body ? [{ heading, body }] : [];
+        return heading && body ? [{ id: text(section.id) ?? `section-${index}`, heading, body, sourceIds: documentSourceIds(section.source_ids) }] : [];
+      })
+    : [];
+  const sourceIds = [...new Set([...lines.flatMap((item) => item.sourceIds), ...sections.flatMap((item) => item.sourceIds)])];
+  const workflowProvenance = record(payload.workflow_provenance);
+  const sharedPartner = record(workflowProvenance.shared_partner);
+  const workflowSessions = Array.isArray(workflowProvenance.source_sessions)
+    ? workflowProvenance.source_sessions.flatMap((item) => {
+        const source = record(item);
+        const role = source.role === 'partnerships' || source.role === 'finance' ? source.role : null;
+        const sessionId = text(source.session_id);
+        const excerpt = text(source.excerpt);
+        const agentName = text(source.agent_name);
+        return role && sessionId && excerpt && agentName ? [{ role, sessionId, excerpt, agentName, simulated: source.simulated === true }] : [];
       })
     : [];
   const selected = lines.find((row) => row.id === line) ?? null;
-  const isInvoice = request.kind === 'invoice';
-  const isDemo = /\b(demo|fictional|illustrative)\b/i.test(`${request.label} ${text(payload.notes) ?? ''}`);
-  const bankReady = isDemo;
-  const prepareReady = isInvoice ? bankReady && paymentAuthorized : signatureName.trim().length >= 2 && signatureConsent;
-  const approvalNote = isInvoice
-    ? `Payment authorization prepared for ${fmtMoney(totalMinor)} from ${isDemo ? 'demo Operating account ending 4242' : 'the selected bank connection'} to ${payeeName}. Bank execution remains pending.`
-    : `Electronic signature authorization recorded for ${signatureName.trim()} on ${number} ${versionLabel}. Signature-provider execution remains pending.`;
-
-  useEffect(() => {
-    if (!noteHasAuthorization) return;
-    setAuthorizationSaved(true);
-    setPaymentAuthorized(true);
-    setSignatureConsent(true);
-    onAuthorizationChange?.(true);
-  }, [noteHasAuthorization, onAuthorizationChange]);
-
-  useEffect(() => {
-    if (readOnly || stage !== 'prepare' || isInvoice) return;
-    signatureRef.current?.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
-  }, [isInvoice, readOnly, reducedMotion, stage]);
-
-  const advance = (): void => {
-    if (stage === 'review') setStage('prepare');
-    else if (stage === 'prepare' && prepareReady) setStage('confirm');
-  };
-
-  const saveAuthorization = async (): Promise<void> => {
-    if (!prepareReady || authorizationSaved || !state.workspace.id) return;
-    setAuthorizationBusy(true);
-    setAuthorizationError(null);
-    try {
-      const saved = await adapter.rest.addRequestNote(state.workspace.id, request.id, { body: approvalNote });
-      dispatch({ type: 'entity/upsert', kind: 'request', id: saved.id, version: saved.version, data: saved });
-      setAuthorizationSaved(true);
-      onAuthorizationChange?.(true);
-      adapter.ensure('request', request.id);
-    } catch {
-      setAuthorizationError('Could not save this authorization. Try again.');
-    } finally {
-      setAuthorizationBusy(false);
-    }
-  };
+  const scope = sections.find((section) => /scope|purpose|services/i.test(section.heading)) ?? sections[0];
+  const saved = Boolean(doc) || request.status === 'created' || request.status === 'drafted';
+  const declined = request.status === 'declined';
+  const resolved = request.status !== 'pending';
+  const readonly = Boolean(readOnly || resolved);
+  const status = declined ? 'Declined' : saved ? isInvoice ? 'Saved in Library' : 'Saved unsigned' : request.status === 'withdrawn' ? 'Withdrawn' : 'Draft awaiting approval';
+  const consequence = isInvoice ? 'Saves the invoice in Library. No payment or email is sent.' : 'Saves an unsigned agreement in Library. Nothing is signed or sent.';
+  const decisionLabel = requestActionLabel(request);
 
   return (
-    <div className={`app-pane-body request-pane${embedded ? ' embedded-document-view' : ''}`}>
-      {!embedded && (
-        <div className="row" style={{ gap: 14 }}>
-          <Glass name={request.kind === 'invoice' ? 'invoice' : 'agreement'} size={38} />
-          <div className="col grow" style={{ gap: 3 }}>
-            <h1 className="display-32">{request.kind === 'invoice' ? `Invoice ${number}` : 'Services agreement'}</h1>
-            <span className="meta">
-              {request.kind === 'invoice'
-                ? [payeeName, fmtMoney(totalMinor), currency].filter(Boolean).join(' · ')
-                : [parties.map((party) => text(party.name)).filter(Boolean).join(' ↔ '), versionLabel].filter(Boolean).join(' · ')}
-            </span>
-          </div>
-          <span className="pill">{request.kind === 'invoice' ? 'Invoice approval' : 'Signature approval'}</span>
-        </div>
-      )}
-      {!readOnly && (
-        <DocumentSteps
-          kind={isInvoice ? 'invoice' : 'agreement'}
-          stage={stage}
-          onChange={(next) => {
-            setStage(next);
-            if (!isInvoice && next === 'prepare') setMode('preview');
-          }}
-        />
-      )}
-      <AnimatePresence mode="wait" initial={false}>
-        {stage === 'prepare' && isInvoice && (
-          <motion.section
-            key="payment-setup"
-            className="panel document-action-card"
-            aria-labelledby="payment-setup-heading"
-            initial={reducedMotion ? false : { opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
-            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <div className="document-action-heading">
-              <Glass name="invoice" size={30} />
-              <div className="col grow" style={{ gap: 3 }}>
-                <h2 className="section-title" id="payment-setup-heading">Payment authorization</h2>
-                <span className="meta">Choose where the transfer will come from.</span>
-              </div>
-              <span className="pill">{isDemo ? 'Demo connection' : 'Bank required'}</span>
-            </div>
-            <div className="payment-account" data-ready={bankReady ? 'true' : 'false'}>
-              <span className="payment-account-icon"><Icon name="card" size={18} /></span>
-              <span className="col grow" style={{ gap: 2 }}>
-                <strong>{isDemo ? 'Operating account · ••4242' : 'Connect a bank account'}</strong>
-                <span className="meta">{isDemo ? 'Prototype bank API · funds are not connected' : 'A provider connection is required before money can move.'}</span>
-              </span>
-              {bankReady && <Icon name="check" size={16} className="payment-ready-check" />}
-            </div>
-            <div className="payment-facts">
-              <span><small>To</small><strong>{payeeName}</strong></span>
-              <span><small>Amount</small><strong>{fmtMoney(totalMinor)}</strong></span>
-              <span><small>Timing</small><strong>After final approval</strong></span>
-            </div>
-            <label className="authorization-check">
-              <input type="checkbox" checked={paymentAuthorized} disabled={!bankReady || authorizationSaved} onChange={(event) => setPaymentAuthorized(event.target.checked)} />
-              <span>I authorize this payment instruction. The bank transfer remains a separate audited action.</span>
-            </label>
-          </motion.section>
-        )}
-        {stage === 'confirm' && (
-          <motion.section
-            key="document-confirm"
-            className="panel document-confirm-card"
-            aria-labelledby="document-confirm-heading"
-            initial={reducedMotion ? false : { opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
-            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <Glass name={isInvoice ? 'invoice' : 'agreement'} size={32} />
-            <div className="col grow" style={{ gap: 5 }}>
-              <span className="evidence-kicker" id="document-confirm-heading">Ready for final approval</span>
-              <strong>{isInvoice ? `${fmtMoney(totalMinor)} to ${payeeName}` : `${signatureName.trim()} · ${number} ${versionLabel}`}</strong>
-              <span className="meta">
-                {isInvoice
-                  ? 'Creates the invoice and payment instruction. The provider executes the transfer separately.'
-                  : 'Records your signature authorization. The provider applies and sends the signature separately.'}
-              </span>
-            </div>
-            <Icon name="shield" size={20} className="document-confirm-shield" />
-          </motion.section>
-        )}
-      </AnimatePresence>
-      <div className="doc-frame">
-        <div className="doc-toolbar">
-          <span>{number}.pdf</span>
-          <span className="seg" role="group" aria-label="Document view">
-            <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>
-              Full document
-            </button>
-            <button type="button" aria-pressed={mode === 'render'} onClick={() => setMode('render')} disabled={!doc}>
-              HTML render
-            </button>
-            <button type="button" aria-pressed={mode === 'pdf'} onClick={() => setMode('pdf')}>
-              PDF
-            </button>
-          </span>
-          <span className="grow" />
-          <span>1 / 1</span>
-          <button type="button" className="text-btn" aria-label="Zoom" onClick={() => setZoom((value) => (value === 100 ? 115 : 100))}>
-            {zoom}%
-          </button>
-        </div>
-        {mode === 'render' ? (
-          <div className="col grow" style={{ minHeight: 0, gap: 8, padding: 0 }}>
-            {doc ? (
-              // The saved render, served by `GET /w/:ws/documents/:id/render`
-              // as `text/html` under this workspace's key. Sandboxed with no
-              // `allow-scripts` and no `allow-same-origin`: it is a document
-              // the product produced, and it still does not get to run.
-              <iframe
-                className="pdf-embed"
-                sandbox=""
-                src={`/w/${state.workspace.id}/documents/${doc.id}/render`}
-                title={`${doc.title} · saved render`}
-              />
-            ) : (
-              <EmptyState icon="invoice" title="No saved render yet" detail="A render is written when the document is created." />
-            )}
-          </div>
-        ) : mode === 'pdf' ? (
-          <div className="col grow" style={{ minHeight: 0, gap: 8, padding: 24 }}>
-            {doc?.pdf_status === 'ready' && doc.pdf_url ? (
-              <iframe className="pdf-embed" src={`${doc.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`${number}.pdf`} />
-            ) : doc?.pdf_status === 'failed' ? (
-              <EmptyState icon="invoice" title={EMPTY.pdfFailed(doc.pdf_error ?? 'unknown')} action={<Button onClick={() => adapter.ensure('document', doc.id)}>Retry</Button>} />
-            ) : doc?.pdf_status === 'none' && doc.pdf_error ? (
-              // The honest one. `none` with a reason means there is no renderer
-              // in this build and nobody is preparing anything.
-              <EmptyState
-                icon="invoice"
-                title={EMPTY.pdfUnavailable}
-                detail={doc.pdf_error}
-                action={<Button onClick={() => setMode('render')}>Open the HTML render</Button>}
-              />
-            ) : (
-              <EmptyState icon="invoice" title={EMPTY.pdfPreparing} detail="The preview below is the same content." />
-            )}
-          </div>
-        ) : (
-          <div className="doc-scroll">
-            <div className="doc-page" style={{ zoom: zoom / 100 }}>
-              {request.kind === 'invoice' ? (
-                <>
-                  <div className="row doc-rule" style={{ justifyContent: 'space-between', paddingBottom: 18, alignItems: 'center' }}>
-                    <div className="col" style={{ gap: 6 }}>
-                      <span className="doc-h">Invoice</span>
-                      <span className="doc-meta">{number} · Review copy</span>
-                    </div>
-                  </div>
-                  <div className="doc-parties">
-                    <div className="col"><span className="doc-label">From</span><strong>{payeeName}</strong><span>{text(payee.email)}</span></div>
-                    <span className="doc-arrow">→</span>
-                    <div className="col"><span className="doc-label">Bill to</span><strong>{payerName}</strong><span>{text(payer.email)}</span></div>
-                  </div>
-                  <div className="row doc-rule" style={{ gap: 24, padding: '12px 0', fontSize: 11.2, color: '#000' }}>
-                    <span style={{ width: 208 }}>Issued · {issueDate}</span>
-                    <span style={{ width: 208 }}>Due · {dueDate}</span>
-                  </div>
-                  <div className="doc-head-row">
-                    <span className="c1" style={{ flex: 1 }}>
-                      Services delivered
-                    </span>
-                    <span style={{ width: 80, textAlign: 'right' }}>Qty</span>
-                    <span style={{ width: 140, textAlign: 'right' }}>Amount · {currency}</span>
-                  </div>
-                  {lines.map((row) => (
-                    <button type="button" key={row.id} className="doc-line" aria-pressed={line === row.id} onClick={() => setLine(line === row.id ? null : row.id)}>
-                      <span className="c1">{row.label}</span>
-                      <span className="c2">{row.qty}</span>
-                      <span className="c3">{(row.amount_minor / 100).toFixed(2)}</span>
-                    </button>
-                  ))}
-                  <div className="doc-total">
-                    <span className="k">Total</span>
-                    <span className="v">{fmtMoney(totalMinor)}</span>
-                  </div>
-                  <div className="doc-foot">
-                    <span>Not sent · No money moved</span>
-                    <span>{number} · 1 / 1</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="row doc-rule" style={{ justifyContent: 'space-between', paddingBottom: 18, alignItems: 'center' }}>
-                    <div className="col" style={{ gap: 6 }}>
-                      <span className="doc-h">Services Agreement</span>
-                      <span className="doc-meta">{number} · {versionLabel} · Unsigned</span>
-                    </div>
-                  </div>
-                  {parties.length > 0 && (
-                    <div className="doc-parties">
-                      {parties.slice(0, 2).map((party, index) => (
-                        <div className="col" key={`${text(party.name) ?? 'party'}-${index}`}>
-                          <span className="doc-label">{index === 0 ? 'Prepared for' : 'Counterparty'}</span>
-                          <strong>{text(party.name) ?? '—'}</strong>
-                          <span>{text(party.email)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {sections.map((section) => (
-                    <div className="col" key={section.heading} style={{ gap: 6 }}>
-                      <span className="doc-sec-h">{section.heading}</span>
-                      <p>{section.body}</p>
-                    </div>
-                  ))}
-                  <div
-                    className="signature-preview signature-field"
-                    data-active={stage === 'prepare' ? 'true' : 'false'}
-                    ref={signatureRef}
-                  >
-                    <div className="signature-field-heading">
-                      <span className="doc-label">Nous Research signature</span>
-                      <span className="signature-state">{authorizationSaved ? 'Authorized' : signatureConsent ? 'Prepared' : 'Unsigned'}</span>
-                    </div>
-                    {stage === 'prepare' || signatureConsent ? (
-                      <>
-                        <input
-                          className="signature-name-input"
-                          aria-label="Full legal name"
-                          value={signatureName}
-                          maxLength={120}
-                          placeholder="Full legal name"
-                          disabled={authorizationSaved}
-                          onChange={(event) => setSignatureName(event.target.value)}
-                        />
-                        <span className="signature-render" aria-hidden="true">{signatureName.trim() || 'Sign here'}</span>
-                        <label className="signature-consent">
-                          <input type="checkbox" checked={signatureConsent} disabled={authorizationSaved} onChange={(event) => setSignatureConsent(event.target.checked)} />
-                          <span>I agree to use this as my electronic signature for this document.</span>
-                        </label>
-                      </>
-                    ) : (
-                      <span>Review the agreement, then add your signature directly here.</span>
-                    )}
-                    <span className="signature-provider-note">Provider execution remains separate and audited.</span>
-                  </div>
-                  <div className="doc-foot" style={{ borderTop: 0 }}>
-                    <span>{authorizationSaved ? 'Signature authorized · Provider pending' : signatureConsent ? 'Signature prepared · Not applied or sent' : 'Nothing signed · Nothing sent'}</span>
-                    <span>{number} · {versionLabel} · 1 / 1</span>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-      {selected && (
-        // `SelectionActions` over the selected invoice line (plan 10b).
-        //
-        // Every string it shows is composed here, locally, from the line the
-        // person clicked: `onRequestEdit` never reaches a model, which is why
-        // it is supplied at all — without it the component streams its own
-        // demo rewrite, and a fabricated sentence on an invoice is exactly the
-        // thing this product must not do. Keeping the draft puts it in the
-        // composer, where the person still has to press send.
-        <div className="hermes-ui selection-host">
-          <SelectionActions
-            text={{
-              lead: `Selected line on ${number}:`,
-              original: `${selected.label} · ${selected.qty} × ${fmtMoney(selected.amount_minor)}`,
-              rewrite: `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${number}: `,
-            }}
-            labels={{ keep: 'Add to the composer', discard: 'Clear', placeholder: 'Ask about this line' }}
-            explanation={`This line is ${selected.label}, ${selected.qty} × ${fmtMoney(selected.amount_minor)}, dated ${selected.date}. It is read from the document payload; nothing here was generated.`}
-            actions={{
-              primary: [
-                { id: 'Ask', icon: <Icon name="search" size={14} />, action: 'Ask', busyLabel: 'Composing' },
-                { id: 'Explain', icon: <Icon name="check" size={14} />, action: 'Explain' },
-              ],
-              more: [],
-            }}
-            onRequestEdit={async (action) =>
-              action === 'Explain'
-                ? `${selected.label}: ${selected.qty} × ${fmtMoney(selected.amount_minor)} on ${selected.date}.`
-                : `About ${selected.label} (${fmtMoney(selected.amount_minor)}) on ${number}: `
-            }
-            onKeep={(text) => {
-              if (!state.activeSessionId) return;
-              adapter.applyCommand(state.activeSessionId, { type: 'chat/prompt', text });
-              setAck(true);
-              setTimeout(() => setAck(false), 1600);
-            }}
-            onDiscard={() => setLine(null)}
-          />
-          <Ack show={ack} style={{ right: 0, top: -12, position: 'relative' }}>
-            Added to the composer
-          </Ack>
-        </div>
-      )}
-      {readOnly ? (
-        <div className="app-footer document-authorization-footer" style={{ marginInline: embedded ? 0 : -28 }}>
-          <div className="col grow" style={{ gap: 3 }}>
-            <span className="f-title">
-              {authorizationSaved
-                ? isInvoice ? 'Payment authorized' : 'Signature authorized'
-                : isInvoice ? 'Authorize this payment instruction' : 'Authorize your signature'}
-            </span>
-            <span className="f-sub">
-              {authorizationError ?? (authorizationSaved
-                ? 'Saved to the audit record. The connected provider still completes the external action.'
-                : 'This records your intent in Hermes. It does not move money, apply a signature, or send the document.')}
-            </span>
-          </div>
-          {authorizationSaved ? (
-            <span className="authorization-saved"><Icon name="check" size={14} /> Saved</span>
-          ) : (
-            <Button primary disabled={!prepareReady || authorizationBusy} onClick={() => void saveAuthorization()}>
-              {authorizationBusy ? 'Saving…' : isInvoice ? 'Save payment authorization' : 'Save signature authorization'}
-            </Button>
+    <div className={`legacy-document-view${embedded ? ' embedded-document-view' : ''}`}>
+      <div className="legacy-document-scroll">
+        <section className="legacy-decision" aria-labelledby={`document-decision-${request.id}`}>
+          <h1 id={`document-decision-${request.id}`}>{readonly ? status : 'Your decision'}</h1>
+          <h2>{isInvoice ? `Invoice from ${payeeName}` : `Agreement ${number}`}</h2>
+          <span className="meta">{isInvoice ? number : versionLabel}</span>
+          <dl className="legacy-document-facts">
+            {isInvoice ? <>
+              <div><dt>Amount</dt><dd>{amount}</dd></div>
+              <div><dt>Bill to</dt><dd>{payerName}</dd></div>
+              <div><dt>Issued</dt><dd>{issueDate ?? 'Not supplied'}</dd></div>
+              <div><dt>Due</dt><dd>{dueDate ?? 'Not supplied'}</dd></div>
+              {(text(workPeriod.from) || text(workPeriod.to)) && <div><dt>Work period</dt><dd>{text(workPeriod.from) ?? 'Not supplied'} – {text(workPeriod.to) ?? 'Not supplied'}</dd></div>}
+            </> : <>
+              <div className="legacy-fact-wide"><dt>Parties</dt><dd>{parties.length ? parties.map((party, index) => <span key={index}>{text(party.name) ?? 'Name not supplied'}</span>) : 'Not supplied'}</dd></div>
+              {(text(effectiveDates.from) || text(effectiveDates.to)) && <div><dt>Effective dates</dt><dd>{text(effectiveDates.from) ?? 'Not supplied'} – {text(effectiveDates.to) ?? 'Not supplied'}</dd></div>}
+              {totalMinor !== null && <div><dt>Amount</dt><dd>{amount}</dd></div>}
+            </>}
+          </dl>
+          {!resolved && <p className="legacy-reviewer"><span>{financeScoped ? '0 of 1 Finance review' : '0 of 1 Admin approval'}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
+          {resolved && <p className="legacy-reviewer"><span>{saved ? '1 of 1 Admin approval' : declined ? 'Draft declined' : 'No approval recorded'}</span>{request.decided_by_name && <span>{request.decided_by_name}</span>}</p>}
+        </section>
+
+        <section className="legacy-context" aria-labelledby={`document-purpose-${request.id}`}>
+          <h2 id={`document-purpose-${request.id}`}>What is this for?</h2>
+          {isInvoice ? lines.length ? <ul>{lines.slice(0, 3).map((item) => <li key={item.id}><span>{item.label}</span><span className="meta">{item.qty} × {documentMoney(item.amount_minor, currency)}{item.date ? ` · ${item.date}` : ''}</span></li>)}</ul> : <p>No service details supplied.</p> : scope ? <p className="legacy-excerpt">{scope.body}</p> : <p>No scope supplied.</p>}
+          {isInvoice && lines.length > 3 && <p className="meta">{lines.length - 3} more line items in the full document below.</p>}
+          {isInvoice && text(payload.notes) && <p className="legacy-excerpt">{text(payload.notes)}</p>}
+        </section>
+
+        <section className="legacy-context" aria-labelledby={`document-sources-${request.id}`}>
+          <h2 id={`document-sources-${request.id}`}>Related messages &amp; documents</h2>
+          {workflowSessions.length === 0 ? <p className="meta">No source messages linked.</p> : (
+            <details className="legacy-disclosure" open>
+              <summary>Workflow evidence ({workflowSessions.length} sources)</summary>
+              {text(sharedPartner.name) && <p className="meta">
+                {text(sharedPartner.name)} · Engagement {text(sharedPartner.engagement_reference) ?? 'reference not supplied'}
+              </p>}
+              <ul>
+                {workflowSessions.map((source) => (
+                  <li key={`${source.role}:${source.sessionId}`}>
+                    <strong>{source.role === 'partnerships' ? 'Partnerships' : 'Finance'} · {source.agentName}</strong>
+                    {source.simulated && <span className="pill illustrative">Simulated</span>}
+                    <p>{source.excerpt}</p>
+                    {source.role === 'finance'
+                      ? <a href={`/workspace/${state.workspace.id}/s/${source.sessionId}`}>Open Finance review session</a>
+                      : <span className="meta">Shared excerpt only · Full Partnerships session remains private.</span>}
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
-          {!embedded && <Button onClick={() => nav(LIB('documents'))}>Open Library</Button>}
-        </div>
-      ) : stage !== 'confirm' ? (
-        <div className="app-footer document-flow-footer" style={{ marginInline: -28 }}>
-          <div className="col grow" style={{ gap: 3 }}>
-            <span className="f-title">{stage === 'review' ? 'Review the complete document.' : isInvoice ? 'Authorize the payment instruction.' : 'Add your signature in the document.'}</span>
-            <span className="f-sub">
-              {stage === 'review'
-                ? 'Nothing is approved, signed, sent, or paid yet.'
-                : isInvoice
-                  ? bankReady ? 'This prototype connection records approval; it cannot move funds.' : 'Connect a bank before continuing.'
-                  : 'Your signature is prepared here and applied only by the signing provider.'}
-            </span>
+          {sourceIds.length > 0 && <details className="legacy-disclosure">
+            <summary>{sourceIds.length} unresolved source reference{sourceIds.length === 1 ? '' : 's'}</summary>
+            <p className="meta">These references are stored on the draft. Their source content and dates are not available here.</p>
+            <ul>{sourceIds.map((id) => <li key={id}><code>{id}</code></li>)}</ul>
+          </details>}
+          {request.sources.length > 0 && <details className="legacy-disclosure">
+            <summary>Stored citations ({request.sources.length})</summary>
+            <p className="meta">Citations supplied with this draft; source messages have not been linked.</p>
+            <ul>{request.sources.map((source) => <li key={source.id}><strong>{source.name}</strong>{source.note && <p>{source.note}</p>}</li>)}</ul>
+          </details>}
+          {request.missing.length > 0 && <ul className="legacy-missing">{request.missing.map((item) => <li key={item}>{item}</li>)}</ul>}
+        </section>
+
+        <details className="legacy-disclosure legacy-full-document" open>
+          <summary>Full document</summary>
+          <div className="doc-frame">
+            <div className="doc-toolbar">
+              <span>{number}{!isInvoice ? ` · ${versionLabel}` : ''}</span>
+              {doc && <span className="seg" role="group" aria-label="Document view">
+                <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}>Preview</button>
+                <button type="button" aria-pressed={mode === 'render'} onClick={() => setMode('render')}>HTML render</button>
+                <button type="button" aria-pressed={mode === 'pdf'} onClick={() => setMode('pdf')}>PDF</button>
+              </span>}
+            </div>
+            {mode === 'render' && doc ? <iframe className="pdf-embed" sandbox="" src={`/w/${state.workspace.id}/documents/${doc.id}/render`} title={`${doc.title} · saved render`} />
+              : mode === 'pdf' && doc ? doc.pdf_status === 'ready' && doc.pdf_url ? <iframe className="pdf-embed" src={`${doc.pdf_url}#toolbar=0&navpanes=0&view=FitH`} title={`${number}.pdf`} />
+                : <EmptyState icon="invoice" title={doc.pdf_status === 'failed' ? 'PDF could not be prepared' : doc.pdf_status === 'none' ? 'PDF unavailable' : 'PDF is being prepared'} detail={doc.pdf_error ?? 'The document preview is available.'} action={<Button onClick={() => setMode('preview')}>View preview</Button>} />
+              : <div className="doc-page">
+                <div className="legacy-document-heading"><h3>{isInvoice ? 'Invoice' : 'Agreement'}</h3><span>{number} · {isInvoice ? 'Review copy' : `${versionLabel} · Unsigned`}</span></div>
+                <div className="doc-parties">
+                  {isInvoice ? <>
+                    <div className="col"><span className="doc-label">From</span><strong>{payeeName}</strong>{text(payee.email) && <span>{text(payee.email)}</span>}{text(payee.address) && <span>{text(payee.address)}</span>}</div>
+                    <div className="col"><span className="doc-label">Bill to</span><strong>{payerName}</strong>{text(payer.email) && <span>{text(payer.email)}</span>}{text(payer.address) && <span>{text(payer.address)}</span>}</div>
+                  </> : parties.map((party, index) => <div className="col" key={index}><span className="doc-label">Party {index + 1}</span><strong>{text(party.name) ?? 'Not supplied'}</strong>{text(party.email) && <span>{text(party.email)}</span>}{text(party.address) && <span>{text(party.address)}</span>}</div>)}
+                </div>
+                {isInvoice ? <>
+                  <p>Issued · {issueDate ?? 'Not supplied'}<br />Due · {dueDate ?? 'Not supplied'}</p>
+                  <div className="legacy-invoice-lines">
+                    <div className="legacy-line-head"><span>Description</span><span>Qty</span><span>Line total</span></div>
+                    {lines.map((item) => <button type="button" key={item.id} className="legacy-invoice-line" aria-pressed={line === item.id} onClick={() => setLine(line === item.id ? null : item.id)}><span>{item.label}{item.date && <small>{item.date}</small>}</span><span>{item.qty}</span><span>{documentMoney(item.qty * item.amount_minor, currency)}</span></button>)}
+                  </div>
+                  <div className="doc-total"><span className="k">Total</span><span className="v">{amount}</span></div>
+                  {text(payload.notes) && <p>{text(payload.notes)}</p>}
+                </> : <>
+                  {(text(effectiveDates.from) || text(effectiveDates.to)) && <p>Effective · {text(effectiveDates.from) ?? 'Not supplied'} – {text(effectiveDates.to) ?? 'Not supplied'}</p>}
+                  {totalMinor !== null && <p>Amount · {amount}</p>}
+                  {sections.map((section) => <section className="legacy-agreement-section" key={section.id}><h4>{section.heading}</h4><p>{section.body}</p>{section.sourceIds.length > 0 && <details><summary>{section.sourceIds.length} source reference{section.sourceIds.length === 1 ? '' : 's'}</summary><p>Source content not available here.</p>{section.sourceIds.map((id) => <code key={id}>{id}</code>)}</details>}</section>)}
+                </>}
+                <div className="doc-foot"><span>{isInvoice ? 'Not sent · No money moved' : 'Unsigned · Not sent'}</span><span>{number}</span></div>
+              </div>}
           </div>
-          {stage === 'prepare' && <Button onClick={() => setStage('review')}>Back</Button>}
-          <Button primary disabled={stage === 'prepare' && !prepareReady} onClick={advance}>
-            {stage === 'review' ? (isInvoice ? 'Review payment' : 'Add signature') : 'Review authorization'}
-          </Button>
-        </div>
-      ) : (
-        <DecisionFooter
-          request={request}
-          title={isInvoice ? `Authorize ${fmtMoney(totalMinor)} payment.` : `Approve and sign ${number}.`}
-          detail={isInvoice ? 'Creates the invoice and queues the bank payment. Transfer execution stays separate.' : 'Records your signature authorization and queues the signing provider. Nothing is sent yet.'}
-          approveLabel={isInvoice ? 'Authorize payment' : 'Approve & sign'}
-          declineLabel="Decline"
-          approveNote={approvalNote}
-        />
-      )}
+        </details>
+        {selected && <div className="hermes-ui selection-host">
+          <SelectionActions
+            text={{ lead: `Selected line on ${number}:`, original: `${selected.label} · ${selected.qty} × ${documentMoney(selected.amount_minor, currency)}`, rewrite: `About ${selected.label} on ${number}: ` }}
+            labels={{ keep: 'Add to the composer', discard: 'Clear', placeholder: 'Ask about this line' }}
+            explanation={`${selected.label}: ${selected.qty} × ${documentMoney(selected.amount_minor, currency)}${selected.date ? `, dated ${selected.date}` : ''}. Read from the document payload.`}
+            actions={{ primary: [{ id: 'Ask', icon: <Icon name="search" size={14} />, action: 'Ask', busyLabel: 'Composing' }], more: [] }}
+            onRequestEdit={async () => `About ${selected.label} on ${number}: `}
+            onKeep={(value) => { if (state.activeSessionId) { adapter.applyCommand(state.activeSessionId, { type: 'chat/prompt', text: value }); setAck(true); } }}
+            onDiscard={() => { setLine(null); setAck(false); }}
+          />
+          {selected.sourceIds.length > 0 && <p className="meta">{selected.sourceIds.length} unresolved source reference{selected.sourceIds.length === 1 ? '' : 's'} for this line.</p>}
+          <Ack show={ack}>Added to the composer</Ack>
+        </div>}
+        {request.note && <details className="legacy-disclosure"><summary>Review note</summary><p className="legacy-excerpt">{request.note}</p><p className="meta">Internal note. This does not record a payment or an applied signature.</p></details>}
+        <details className="legacy-disclosure">
+          <summary>History</summary>
+          <dl className="legacy-document-facts"><div><dt>Requested</dt><dd><time dateTime={request.created_at}>{new Date(request.created_at).toLocaleString()}</time></dd></div>
+            {request.decided_at && <div><dt>{declined ? 'Declined' : 'Approved'}</dt><dd>{request.decided_by_name ?? 'Admin'} · <time dateTime={request.decided_at}>{new Date(request.decided_at).toLocaleString()}</time></dd></div>}
+          </dl>
+          <Button link onClick={() => nav(HISTORY())}>Open workspace History</Button>
+        </details>
+        {readonly && saved && !declined && <details className="legacy-disclosure"><summary>Downstream actions unavailable</summary><p className="meta">{isInvoice ? 'Payment and email execution are unavailable. No money was moved or email sent.' : 'Signing and email execution are unavailable. No signature was applied or email sent.'}</p>{effects.length > 0 && <ul>{effects.map((effect) => <li key={effect.id}><span>{effect.label}</span><span className="meta">{effect.status === 'cancelled' ? 'Cancelled' : 'Not executed'}</span></li>)}</ul>}</details>}
+      </div>
+      {readonly ? <div className="app-footer legacy-document-footer"><div className="col grow"><span className="f-title">{status}</span><span className="f-sub">{resolved && !saved ? 'No document was approved, signed, paid or sent.' : saved ? isInvoice ? 'Invoice saved. No payment or email is sent.' : 'Agreement saved unsigned. Nothing is signed or sent.' : consequence}</span></div><Button onClick={() => nav(LIB('documents'))}>Open Library</Button></div>
+        : <DecisionFooter request={request} title={decisionLabel} detail={consequence} approveLabel={decisionLabel} declineLabel="Decline" />}
     </div>
   );
 }
@@ -1180,10 +923,6 @@ export function Receipt({ request }: { request: RequestEntity }) {
   const [reauthed, setReauthed] = useState(false);
   const declined = request.status === 'declined';
   const documentRequest = request.kind === 'invoice' || request.kind === 'agreement';
-  const requestHasAuthorization = request.kind === 'invoice'
-    ? /^Payment authorization\b/i.test(request.note ?? '')
-    : request.kind === 'agreement' && /^Electronic signature authorization\b/i.test(request.note ?? '');
-  const [authorizationSaved, setAuthorizationSaved] = useState(requestHasAuthorization);
 
   const load = (): void => {
     if (!state.workspace.id) return;
@@ -1194,9 +933,6 @@ export function Receipt({ request }: { request: RequestEntity }) {
   };
   useEffect(load, [adapter, state.workspace.id, request.id]);
 
-  useEffect(() => {
-    if (requestHasAuthorization) setAuthorizationSaved(true);
-  }, [requestHasAuthorization]);
 
   // Back from a step-up: say so, and wait for a second, deliberate click.
   useEffect(() => {
@@ -1236,6 +972,8 @@ export function Receipt({ request }: { request: RequestEntity }) {
       .finally(() => setBusy(null));
   };
 
+  if (documentRequest) return <DocumentView request={request} readOnly effects={effects} />;
+
   const title = declined ? `${request.subject ?? request.label} · Declined` : requestStatusLabel(request).split(' · ')[0]!;
   const sub = requestStatusLabel(request).split(' · ').slice(1).join(' · ');
 
@@ -1252,40 +990,24 @@ export function Receipt({ request }: { request: RequestEntity }) {
           <span className="meta">{request.decided_by_name ?? state.user.name} · Reviewer</span>
         </div>
         <Panel selected icon={KIND_ICON[request.kind] ?? 'context'} title={title} subtitle={sub} right={<span className="meta">{request.decided_at ? new Date(request.decided_at).toLocaleString() : ''}</span>} />
-        {!declined && documentRequest && (
-          <section className="receipt-document" aria-labelledby="receipt-document-heading">
-            <div className="receipt-document-heading">
-              <div className="col" style={{ gap: 3 }}>
-                <h2 className="section-title" id="receipt-document-heading">Complete document</h2>
-                <span className="meta">Review the source and record the authorization in one place.</span>
-              </div>
-              <span className="pill">{request.kind === 'invoice' ? 'Payment' : 'Signature'}</span>
-            </div>
-            <DocumentView request={request} readOnly embedded onAuthorizationChange={setAuthorizationSaved} />
-          </section>
-        )}
-        <h2 className="section-title">{documentRequest && !declined ? 'Provider actions' : 'What this implies'}</h2>
+        <h2 className="section-title">What this implies</h2>
         {reauthed && <p className="meta">Re-authenticated — press Execute again to continue.</p>}
         <div className="col">
           {effects.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>Nothing else is required.</div>}
           {effects.map((effect) => {
-            const requiresDocumentAuthorization = effect.kind === 'payment' || effect.kind === 'signature';
-            const waitingForAuthorization = requiresDocumentAuthorization && !authorizationSaved;
             return (
               <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
                 <Glass name="context" size={22} className="row-icon" />
                 <div className="row-main">
                   <span className="t">{effect.label}</span>
                   <span className="s">
-                    {waitingForAuthorization
-                      ? 'Waiting for the authorization above'
-                      : effect.status === 'unavailable' ? 'Unavailable' : effect.status === 'cancelled' ? 'Cancelled' : `Pending · needs the ${effect.required_role} role`}
+                    {effect.status === 'unavailable' ? 'Unavailable' : effect.status === 'cancelled' ? 'Cancelled' : `Pending · needs the ${effect.required_role} role`}
                     {effect.reason ? ` · ${effect.reason}` : ''}
                   </span>
                 </div>
                 {effect.status === 'pending' && (
-                  <Button disabled={waitingForAuthorization || busy === effect.id} onClick={() => execute(effect)}>
-                    {waitingForAuthorization ? 'Authorize above' : busy === effect.id ? 'Recording…' : 'Execute'}
+                  <Button disabled={busy === effect.id} onClick={() => execute(effect)}>
+                    {busy === effect.id ? 'Recording…' : 'Execute'}
                   </Button>
                 )}
               </div>

@@ -77,6 +77,19 @@ export const REQUEST_SELECT = `
        LIMIT 1
     ) ta ON true`;
 
+/**
+ * Legacy requests with no audience rows remain workspace-visible. A scoped
+ * request is visible only to a named human principal, including direct-id
+ * reads. Keep this predicate beside REQUEST_SELECT so list and detail cannot
+ * drift.
+ */
+export const REQUEST_AUDIENCE_PREDICATE = `(NOT EXISTS (
+  SELECT 1 FROM request_audiences audience_any WHERE audience_any.request_id=r.id
+) OR EXISTS (
+  SELECT 1 FROM request_audiences audience_me
+   WHERE audience_me.request_id=r.id AND audience_me.user_id=$2
+))`;
+
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
@@ -90,7 +103,7 @@ export function subjectOf(row: Pick<RequestRow, 'kind' | 'payload' | 'label'>): 
     case 'application':
       return text(asRecord(payload.applicant).name) ?? text(row.label);
     case 'invoice':
-      return text(asRecord(payload.payer).name) ?? text(asRecord(payload.payee).name) ?? text(row.label);
+      return text(asRecord(payload.payee).name) ?? text(row.label);
     case 'agreement': {
       const parties = Array.isArray(payload.parties) ? payload.parties : [];
       return text(asRecord(parties[0]).name) ?? text(row.label);
@@ -178,7 +191,7 @@ function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjec
   return result;
 }
 
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false): Record<string, unknown> {
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
@@ -201,13 +214,16 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
-    decision_summary: decisionSummary(row, approval),
+    decision_summary: decisionSummary(row, approval, canDecideLegacy),
     triage: triageOf(row, triageActive, approval),
   };
 }
 
 /** One request, or null. Runs under the caller's tenant transaction. */
-export async function loadRequest(tx: Tx, requestId: string): Promise<RequestRow | null> {
-  const { rows } = await tx.query<RequestRow>(`${REQUEST_SELECT} WHERE r.id = $1`, [requestId]);
+export async function loadRequest(tx: Tx, requestId: string, userId?: string): Promise<RequestRow | null> {
+  const { rows } = await tx.query<RequestRow>(
+    `${REQUEST_SELECT} WHERE r.id = $1${userId ? ` AND ${REQUEST_AUDIENCE_PREDICATE}` : ''}`,
+    userId ? [requestId, userId] : [requestId],
+  );
   return rows[0] ?? null;
 }

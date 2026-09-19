@@ -21,6 +21,11 @@ export interface RuntimePersistence extends AgentDb {
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string): Promise<boolean>;
   snapshotRequest(runId: string, attempt: number, body: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /**
+   * Resolve the runtime-owned conversation id for this Enterprise session.
+   * A first run gets a fresh id; later turns reuse the prior native mapping.
+   */
+  resolveRuntimeSessionId(run: EngineRunRow): Promise<string>;
   loadBootstrapHistory(run: EngineRunRow): Promise<ProviderMessage[]>;
   recoveryInput?(runId: string, attempt: number): Promise<string | null>;
   nextRuntimeSequence(runId: string): Promise<number>;
@@ -150,8 +155,11 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const body = await withRuntimeTransaction(async () => {
         const history = await db.loadHistory(run.id, 100);
         const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
+        const turnAuthor = [...history.recent].reverse()
+          .find((row) => row.role === 'user')?.providerMessage.enterprise_turn_author;
         const recoveryInput = await db.recoveryInput?.(run.id, run.attempt);
         const previous = await db.loadBootstrapHistory(run);
+        const runtimeSessionId = await db.resolveRuntimeSessionId(run);
         const model = await db.loadModel(run.modelId);
         if (!model || !['openrouter', 'nous_portal'].includes(model.provider)) {
           throw new Error('Hermes requires a runtime-supported model');
@@ -159,20 +167,27 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         const wireModel = model.model_id.replace(/^(?:openrouter|nous):/, '');
         const proposed: Record<string, unknown> = {
           input: recoveryInput ?? governedCreatorSearchInput(userInput),
-          session_id: run.sessionId,
+          session_id: runtimeSessionId,
           model: wireModel,
           provider: 'custom',
           instructions: await buildSystemPrompt(db, run, []),
           _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
           _enterprise_skills: deps.skillSnapshot ?? [],
         };
+        if (turnAuthor) proposed._enterprise_turn_author = turnAuthor;
         if (previous.length) proposed.conversation_history = previous;
         if (run.effort) proposed.model_options = { reasoning_effort: run.effort };
         return db.snapshotRequest(run.id, run.attempt, proposed);
       });
       latency.mark('submit_preparation', preparationStartedAt);
       const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
-      if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, run.sessionId, deps.profile))) {
+      // Bind the exact snapshotted value. A Workflow replay may carry a request
+      // created by an older release, and changing its session id would violate
+      // the native idempotency fingerprint.
+      const runtimeSessionId = typeof body.session_id === 'string' && body.session_id.trim()
+        ? body.session_id
+        : run.id;
+      if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, runtimeSessionId, deps.profile))) {
         await client.stop(id);
         throw new Error('Hermes run attempt was superseded');
       }

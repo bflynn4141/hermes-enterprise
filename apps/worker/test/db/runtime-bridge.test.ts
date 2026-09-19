@@ -177,11 +177,14 @@ describe('official runtime on the restricted agent role', () => {
           ($1,$2,3,'iris','Incomplete text','incomplete',NULL,now()-interval '1 minute'),
           ($1,$2,4,'user','Guidance','complete','guidance',now()-interval '1 minute')`, [fx.workspaceId, fx.sessionId]));
       const id = await seedRun(fx); const run = (await store.loadRun(id))!;
+      expect(await store.resolveRuntimeSessionId(run)).toBe(id);
       expect(await store.loadBootstrapHistory(run)).toEqual([{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }]);
-      await store.bindRun(id, run.attempt, 'history-run', fx.sessionId, `agent-${fx.agentId}`);
+      await store.bindRun(id, run.attempt, 'history-run', 'native-session-root', `agent-${fx.agentId}`);
       await owner(fx, (q) => q("UPDATE runs SET status='completed',ended_at=now() WHERE id=$1", [id]));
       const next = await seedRun(fx);
-      expect(await store.loadBootstrapHistory((await store.loadRun(next))!)).toEqual([]);
+      const nextRun = (await store.loadRun(next))!;
+      expect(await store.loadBootstrapHistory(nextRun)).toEqual([]);
+      expect(await store.resolveRuntimeSessionId(nextRun)).toBe('native-session-root');
     } finally { await store.close(); }
   });
   it('allows only one active native submission per agent profile across sessions', async () => {

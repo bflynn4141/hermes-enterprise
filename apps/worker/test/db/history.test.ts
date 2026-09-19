@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, type Fixture } from './helpers.js';
 import { FakeQueue, FakeR2 } from '../stubs/fake-r2.js';
-import { INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
+import { fetchReviewBinding, INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
 
 function env() {
   const bucket = new FakeR2();
@@ -18,11 +18,11 @@ function env() {
   return { ...made, bucket };
 }
 
-const decide = (e: ReturnType<typeof env>, fx: Fixture, requestId: string, decision = 'approve') =>
+const decide = async (e: ReturnType<typeof env>, fx: Fixture, requestId: string, decision = 'approve') =>
   asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
     method: 'POST',
     headers: INBOX_HEADERS,
-    body: { decision },
+    body: { decision, ...await fetchReviewBinding(e.env, fx, requestId) },
   });
 
 interface Row {

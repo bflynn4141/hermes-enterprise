@@ -6,7 +6,7 @@
 // object or its empty copy — never "Request not found" as a first impression.
 // Follow/pin behaviour is unchanged from the demo.
 import { useMemo, type ReactNode, type RefObject } from 'react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import type { RequestEntity } from '@hermes/shared';
 import { useAppState, useDispatch } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
@@ -37,7 +37,7 @@ function describe(state: AppState): [string, string] {
   if (section === 'inbox') {
     if (view === 'request') {
       const request = entityData<RequestEntity>(state, 'request', app.id);
-      return [request?.label ?? 'Request', request?.title ?? 'Review'];
+      return [request?.kind === 'approval' ? 'Approval' : request?.kind === 'invoice' ? 'Invoice' : request?.kind === 'agreement' ? 'Agreement' : request?.label ?? 'Request', 'Review'];
     }
     const label = state.ui.inboxTab === 'resolved' ? 'Resolved' : state.ui.inboxTab === 'rules' ? 'Rules' : 'Needs review';
     return [label, label];
@@ -54,6 +54,7 @@ function describe(state: AppState): [string, string] {
 
 export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: boolean; active: boolean; paneRef?: RefObject<HTMLElement | null>; firstRun?: ReactNode }) {
   const state = useAppState();
+  const systemReduceMotion = useReducedMotion();
   const dispatch = useDispatch();
   const app = state.ui.app;
   const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
@@ -80,18 +81,33 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  const requestView = app.section === 'inbox' && app.view === 'request';
+  const followControl = following ? (
+    <button type="button" className="follow-btn" aria-label={`Following ${agent}`} aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { follow: false } })} title={`The app follows ${agent}'s object changes · Click to pin this view`}>
+      Following {agent}
+    </button>
+  ) : (
+    <>
+      <span className="follow-btn" title="Manual navigation pinned this view">View pinned</span>
+      <button type="button" className="follow-btn ghost" aria-label={`Follow ${agent}`} onClick={() => dispatch({ type: 'follow/resume' })} title={session?.focus ? `Return to the object ${agent} is working on` : `Resume following ${agent}`}>
+        Follow {agent}
+      </button>
+    </>
+  );
+
   return (
     // `tabIndex={-1}` is not decoration: collapsing the panel with the composer
     // focused has to put focus somewhere, and "the thing that now owns the
     // screen" is the only defensible answer.
     <section ref={paneRef} tabIndex={-1} className="pane pane-app" data-active={active} aria-label="Application">
-      <header className="pane-header">
+      <header className={`pane-header${requestView ? ' request-pane-header' : ''}`}>
         <span className="breadcrumb">
           <span>{SECTION_LABEL[app.section] ?? 'Agents'}</span>
           <span>/</span>
           <span className="current truncate">{crumb}</span>
         </span>
         <span className="grow" />
+        {requestView && followControl}
         {narrow && (
           <span className="pane-switch" role="group" aria-label="Pane">
             <button type="button" aria-pressed={false} onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'chat' } })}>
@@ -110,25 +126,12 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
           </Button>
         )}
       </header>
-      <div className="pane-subheader">
+      {!requestView && <div className="pane-subheader">
         <span className="truncate">{sub}</span>
         <span className="grow" />
-        {following ? (
-          <button type="button" className="follow-btn" aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { follow: false } })} title={`The app follows ${agent}'s object changes · Click to pin this view`}>
-            Following {agent}
-          </button>
-        ) : (
-          <>
-            <span className="follow-btn" title="Manual navigation pinned this view">
-              View pinned
-            </span>
-            <button type="button" className="follow-btn ghost" onClick={() => dispatch({ type: 'follow/resume' })} title={session?.focus ? `Return to the object ${agent} is working on` : `Resume following ${agent}`}>
-              Follow {agent}
-            </button>
-          </>
-        )}
-      </div>
-      <motion.div key={key} className={`object-view${firstRun ? ' object-view-first-run' : ''}`} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
+        {followControl}
+      </div>}
+      <motion.div key={key} className={`object-view${firstRun ? ' object-view-first-run' : ''}`} initial={systemReduceMotion || state.ui.reduceMotion ? false : { opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
         {firstRun ?? view}
       </motion.div>
     </section>

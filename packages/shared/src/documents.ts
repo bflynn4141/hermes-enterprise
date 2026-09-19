@@ -58,6 +58,31 @@ export const invoicePayloadSchema = z
     lines: z.array(invoiceLineSchema).min(1).max(200),
     total_minor: z.number().int().min(0).max(1_000_000_000),
     notes: z.string().max(4000).optional(),
+    workflow_provenance: z.object({
+      handoff_id: z.uuid(),
+      shared_partner: z.object({
+        id: z.uuid(),
+        name: z.string().min(1).max(200),
+        engagement_reference: z.string().min(1).max(200),
+      }).strict(),
+      source_sessions: z.array(z.object({
+        role: z.enum(['partnerships', 'finance']),
+        agent_name: z.string().min(1).max(120),
+        session_id: z.uuid(),
+        run_id: z.uuid(),
+        excerpt: z.string().min(1).max(2000),
+        simulated: z.boolean(),
+      }).strict()).length(2),
+      source_record_revisions: z.object({
+        engagement: z.number().int().positive(),
+        invoice: z.number().int().positive(),
+      }).strict(),
+      checks: z.object({
+        duplicate: z.literal('clear'),
+        engagement_match: z.literal('matched'),
+        missing_context: z.array(z.string().min(1).max(200)).max(50),
+      }).strict(),
+    }).strict().optional(),
   })
   .strict()
   .refine(

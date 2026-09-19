@@ -18,7 +18,7 @@ import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { BrokenBlock, Button, Skeleton } from '../ui/primitives.js';
 import { requestStatusLabel } from '../selectors.js';
 import type { Message } from '@hermes/shared';
-import { approvalActionLabel, approvalIcon, approvalReviewerLabel, approvalTypeLabel } from '../views/Approval.js';
+import { requestActionLabel, approvalActionLabel, approvalIcon, approvalReviewerLabel, approvalTypeLabel } from '../approval-copy.js';
 
 interface BlockProps {
   block: BlockType;
@@ -198,7 +198,7 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
   const action = request.status !== 'pending'
     ? 'Open request'
     : request.kind !== 'approval'
-      ? 'Review'
+      ? ['invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : 'Review'
       : request.approval?.pending_for_viewer
         ? approvalActionLabel(request)
         : 'Open request';

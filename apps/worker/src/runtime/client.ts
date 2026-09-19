@@ -63,6 +63,17 @@ const REQUIRED_RUN_ENDPOINTS = {
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 
+function nativeTurnAuthor(value: unknown): { id: string; name: string; is_bot: true } | null {
+  if (value === undefined) return null;
+  const author = record(value);
+  if (!author || author.is_bot !== true || typeof author.id !== 'string' || typeof author.name !== 'string'
+      || !/^bot:[a-z0-9][a-z0-9_-]{0,63}$/.test(author.id)
+      || author.name.length < 1 || author.name.length > 64 || /[:\n(]/.test(author.name)) {
+    throw new Error('invalid enterprise turn author');
+  }
+  return { id: author.id, name: author.name, is_bot: true };
+}
+
 export class HermesClient {
   constructor(
     private readonly baseUrl: string,
@@ -159,7 +170,9 @@ export class HermesClient {
   async submit(body: Record<string, unknown>, key: string): Promise<string> {
     // Audit-only fields stay in the Worker's immutable runtime request. The
     // native API sees the procedure through its governed profile instead.
-    const { _enterprise_tool_names, _enterprise_skills, ...nativeBody } = body;
+    const { _enterprise_tool_names, _enterprise_skills, _enterprise_turn_author, ...rest } = body;
+    const author = nativeTurnAuthor(_enterprise_turn_author);
+    const nativeBody = { ...rest, ...(author ? { turn_author: author } : {}) };
     const response = this.transport === 'dashboard_connector'
       ? await this.connector('submit', { idempotency_key: key, body: nativeBody })
       : await this.request('/v1/runs', { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(nativeBody) });

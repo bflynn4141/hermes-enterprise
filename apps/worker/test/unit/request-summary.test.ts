@@ -10,6 +10,33 @@ const baseRow = (payload: Record<string, unknown>): RequestRow => ({
 });
 
 describe('decision summaries', () => {
+  it('identifies the invoice vendor, bill-to party, currency and schema due date', () => {
+    const row = { ...baseRow({ payee: { name: 'Harborline' }, payer: { name: 'Nous Research' }, total_minor: 123456, currency: 'EUR', due_date: '2026-09-30' }), kind: 'invoice' as const };
+    const summary = decisionSummary(row, null, true);
+    expect(summary.action).toBe('Approve invoice draft');
+    expect(summary.primary).toBe('Invoice from Harborline');
+    expect(summary.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Bill to', value: 'Nous Research' }),
+      expect.objectContaining({ label: 'Total', value: '€1,234.56' }),
+      expect.objectContaining({ label: 'Due', value: 'Sep 30, 2026' }),
+    ]));
+    expect(summary.consequence).toBe('Saves the invoice in Library. No payment or email is sent.');
+  });
+
+  it('keeps legacy review pending for an Admin and waiting on others for a Member', () => {
+    const row = { ...baseRow({ number: 'AGR-42', version_label: 'v3', parties: [{ name: 'Nous' }, { name: 'Vendor' }] }), kind: 'agreement' as const };
+    expect(decisionSummary(row, null, true).approval_requirement).toMatchObject({ pending_for_viewer: true, waiting_on_others: false, current: [{ label: 'Workspace Admin', approvals_recorded: 0, quorum: 1 }] });
+    const member = decisionSummary(row, null, false);
+    expect(member.approval_requirement).toMatchObject({ pending_for_viewer: false, waiting_on_others: true });
+    expect(member.action).toBe('Approve agreement draft');
+    expect(member.consequence).toBe('Saves an unsigned agreement. Nothing is signed or sent.');
+  });
+
+  it('does not assign an approval vote to a setup task', () => {
+    const row = { ...baseRow({ description: 'Connect the workspace provider' }), kind: 'task' as const };
+    expect(decisionSummary(row, null, true).approval_requirement).toMatchObject({ pending_for_viewer: false, waiting_on_others: false, remaining_approvals: 0, current: [] });
+  });
+
   it('derives disclosure facts and exact current quorum from validated policy data', () => {
     const payload = {
       kind: 'approval', approval_type: 'data_disclosure', summary: 'Share partner data', consequence: 'The recipient can retain the approved fields.', evidence: [], illustrative: false,
