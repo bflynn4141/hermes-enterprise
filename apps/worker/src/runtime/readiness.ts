@@ -16,8 +16,9 @@ const CURRENT_ASSIGNMENTS = new Map<string, { version: string; agentCash: boolea
 
 /** New multi-party assignments require the expanded, exact native inventory. */
 export function requiresExactEnterpriseAttestation(assignment: EnterpriseSkillAssignment | null): boolean {
-  const current = assignment && CURRENT_ASSIGNMENTS.get(assignment.skill_key);
-  return current?.version === assignment?.version;
+  if (!assignment) return false;
+  const current = CURRENT_ASSIGNMENTS.get(assignment.skill_key);
+  return current !== undefined && current.version === assignment.version;
 }
 
 /** Resolve the single configured role whose native inventory must be checked. */

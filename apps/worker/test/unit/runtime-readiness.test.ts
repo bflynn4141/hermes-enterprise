@@ -100,4 +100,18 @@ describe('role-aware native readiness', () => {
     expect(matchesExactEnterpriseAttestation(oldPayload, legacy)).toBe(false);
     expect(matchesExactEnterpriseAttestation(oldPayload, null)).toBe(false);
   });
+
+  it.each([
+    ['no assignment', null],
+    ['unknown skill', assignment({ skill_key: 'unrecognized-skill', version: '1.0.0' })],
+    ['unknown Partnerships version', assignment({ skill_key: 'partner-program-screening', version: '9.9.9' })],
+    ['unknown Finance version', assignment({ skill_key: 'partner-invoice-review', version: '9.9.9' })],
+  ])('never treats %s as an exact multi-party assignment', (_label, candidate) => {
+    const legacyReady = readiness({
+      runtimeRevision: null, plugin: null, skills: null, toolNames: null,
+      agentCashEnabled: true, agentCashWalletPresent: true,
+    });
+    expect(requiresExactEnterpriseAttestation(candidate)).toBe(false);
+    expect(matchesExactEnterpriseAttestation(legacyReady, candidate)).toBe(false);
+  });
 });
