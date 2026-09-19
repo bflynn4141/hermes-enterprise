@@ -6,6 +6,10 @@ import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
 import { HermesClient, HermesCapabilitiesError, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
+import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
+import { ENTERPRISE_BRIDGE_VERSION, HERMES_NATIVE_REVISION } from '../../src/runtime/readiness.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
@@ -148,7 +152,15 @@ async function execute(
   client = new FakeHermesClient(),
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
-  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview']; onTerminalFailure?: RuntimeDeps['onTerminalFailure']; onLatency?: RuntimeDeps['onLatency'] } = {},
+  timing: {
+    pollMs?: number;
+    batchMs?: number;
+    preview?: RuntimeDeps['preview'];
+    onTerminalFailure?: RuntimeDeps['onTerminalFailure'];
+    onLatency?: RuntimeDeps['onLatency'];
+    managedRuntimeIdentity?: RuntimeDeps['managedRuntimeIdentity'];
+    skillSnapshot?: readonly RuntimeSkillManifest[];
+  } = {},
 ) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
@@ -157,6 +169,8 @@ async function execute(
     ...(timing.preview ? { preview: timing.preview } : {}),
     ...(timing.onTerminalFailure ? { onTerminalFailure: timing.onTerminalFailure } : {}),
     ...(timing.onLatency ? { onLatency: timing.onLatency } : {}),
+    ...(timing.managedRuntimeIdentity ? { managedRuntimeIdentity: timing.managedRuntimeIdentity } : {}),
+    ...(timing.skillSnapshot ? { skillSnapshot: timing.skillSnapshot } : {}),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
 }
@@ -207,6 +221,73 @@ describe('official Hermes enterprise projection', () => {
     const client = new FakeHermesClient();
     await execute(new FakeRuntimeDb(), client);
     expect(client.capabilityReads).toBe(1);
+    expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('blocks token-digest execution before native submit when managed readiness is absent after restart', async () => {
+    class UnmanagedClient extends FakeHermesClient {
+      override enterpriseReadiness() {
+        return Promise.reject(new HermesCapabilitiesError());
+      }
+    }
+    const client = new UnmanagedClient();
+    const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      managedRuntimeIdentity: {
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        agentId: '22222222-2222-4222-8222-222222222222',
+        enterpriseUrl: 'https://enterprise.example.test',
+        pluginRevision: 'a'.repeat(40),
+        pluginArtifactDigest: `sha256:${'d'.repeat(64)}`,
+      },
+    });
+    expect(client.capabilityReads).toBeGreaterThan(0);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.eventSubscriptions).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
+  });
+
+  it('runs a promoted digest binding after its explicit assignment changes to Finance', async () => {
+    const skill: RuntimeSkillManifest = {
+      name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+      skill_key: PARTNER_INVOICE_REVIEW_DEFINITION.key,
+      runtime_name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+      version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+      artifact_digest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+      state: 'active', assignment_revision: 2, grant_revision: null,
+      binding_source: 'enterprise_assignment', binding_state: null, grant_expires_at: null,
+      capability_grants: [...PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants],
+      auto_load: true,
+      config: { invoice_review: { duplicate_window_days: 365, require_engagement_evidence: true } },
+    };
+    class FinanceClient extends FakeHermesClient {
+      override enterpriseReadiness(): Promise<HermesEnterpriseReadiness> {
+        return Promise.resolve({
+          object: 'hermes.enterprise_bridge.readiness', version: ENTERPRISE_BRIDGE_VERSION,
+          runtimeRevision: HERMES_NATIVE_REVISION,
+          plugin: { name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION,
+            revision: 'a'.repeat(40), artifactDigest: `sha256:${'d'.repeat(64)}` },
+          workspaceId: '11111111-1111-4111-8111-111111111111',
+          agentId: '22222222-2222-4222-8222-222222222222',
+          enterpriseUrl: 'https://enterprise.example.test',
+          skills: [{ name: skill.runtime_name, version: skill.version,
+            artifactDigest: skill.artifact_digest, contentDigest: skill.artifact_digest }],
+          toolNames: ['get_partner_handoff_result', 'list_requests', 'get_request', 'skill_view'],
+          agentCashEnabled: false, agentCashWalletPresent: false, nativeCronDisabled: true,
+        });
+      }
+    }
+    const client = new FinanceClient();
+    await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      managedRuntimeIdentity: {
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        agentId: '22222222-2222-4222-8222-222222222222',
+        enterpriseUrl: 'https://enterprise.example.test',
+        pluginRevision: 'a'.repeat(40),
+        pluginArtifactDigest: `sha256:${'d'.repeat(64)}`,
+      },
+      skillSnapshot: [skill],
+    });
+    expect(client.submissions).toHaveLength(1);
     expect(client.eventSubscriptions).toBe(1);
   });
 

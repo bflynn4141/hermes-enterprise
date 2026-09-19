@@ -385,6 +385,15 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           onLatency,
           client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport),
           profile: binding.profile,
+          ...(binding.runtimeAuthMode === 'token_digest' ? {
+            managedRuntimeIdentity: {
+              workspaceId: binding.workspaceId,
+              agentId: binding.agentId,
+              enterpriseUrl: this.env.HERMES_ENTERPRISE_PUBLIC_URL,
+              pluginRevision: this.env.HERMES_ENTERPRISE_PLUGIN_REVISION,
+              pluginArtifactDigest: this.env.HERMES_ENTERPRISE_PLUGIN_SHA256,
+            },
+          } : {}),
           forward: deps.forward,
           checkpoint: (events) => checkpointDb!.emit(events),
           preview: (frame) =>

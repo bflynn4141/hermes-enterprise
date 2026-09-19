@@ -135,3 +135,6 @@ RAINDROP_OBSERVABILITY_MODE="off"
 HERMES_BRIDGE_SECRET=""
 HERMES_POOL_LOW_CAPACITY_THRESHOLD="1"
 HERMES_ENTERPRISE_PUBLIC_URL="https://staging.example.com"
+# Exact values produced and reviewed with the installed enterprise_bridge build.
+HERMES_ENTERPRISE_PLUGIN_REVISION=""
+HERMES_ENTERPRISE_PLUGIN_SHA256=""

@@ -25,6 +25,7 @@ import { DocumentView } from './Inbox.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import { PartnerWorkflow } from './PartnerWorkflow.js';
 import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
+import { RuntimeCapacityTab } from './RuntimeCapacity.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -741,7 +742,7 @@ export function Settings({ view }: { view: string }) {
   const nav = useNav();
   return (
     <div className="scroll">
-      <div className="app-body" style={{ minHeight: '100%' }}>
+      <div className="app-body settings-page" style={{ minHeight: '100%' }}>
         <div className="row" style={{ height: 42 }}>
           <h1 className="display-32">Settings</h1>
         </div>
@@ -752,6 +753,7 @@ export function Settings({ view }: { view: string }) {
         {view === 'Slack' && <SlackTab />}
         {view === 'Email' && <EmailTab />}
         {view === 'Provider keys' && <ProviderKeysTab />}
+        {view === 'Runtime capacity' && <RuntimeCapacityTab />}
         {view === 'Usage' && <UsageTab />}
         {view === 'Notifications' && <NotificationsTab />}
         {view === 'Data and privacy' && <PrivacyTab />}

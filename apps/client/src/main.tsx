@@ -58,6 +58,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       data: params.get('data') === 'empty' ? 'empty' : 'seeded',
       providerKey: params.get('key') === 'none' ? 'none' : params.get('key') === 'invalid' ? 'invalid' : 'verified',
       providerKeysLocked: params.get('providerKeys') === 'locked',
+      runtimeCapacityStepUp: params.get('runtimeCapacity') === 'stepup',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
       communicationDraft: params.get('communicationDraft') === '1',

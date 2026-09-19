@@ -1,7 +1,11 @@
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
-import { consumeReservedCapacity, reservedCapacityAgentId } from '../hermes-cloud/capacity.js';
+import {
+  consumeReservedCapacity,
+  reservedCapacityAgentId,
+  type CapacityAcceptanceProof,
+} from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service.js';
 import { PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS } from '../enterprise-skills/role-instructions.js';
@@ -15,6 +19,7 @@ interface JoinCoordinationInput {
   readonly joiningUserId: string;
   readonly joiningMemberId: string;
   readonly invitationId: string;
+  readonly capacityProof?: CapacityAcceptanceProof | null;
   readonly jobs: string[];
 }
 
@@ -205,7 +210,14 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
   );
 
   if (input.env.AGENT_RUNTIME === 'hermes') {
-    await consumeReservedCapacity(input.env, input.tx, input.workspaceId, input.invitationId, agentId);
+    await consumeReservedCapacity(
+      input.env,
+      input.tx,
+      input.workspaceId,
+      input.invitationId,
+      agentId,
+      input.capacityProof ?? null,
+    );
   }
 
   const sessionId = crypto.randomUUID();
