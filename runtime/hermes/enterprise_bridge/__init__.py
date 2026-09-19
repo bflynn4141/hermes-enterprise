@@ -10,6 +10,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .packages import packaged_skills
+
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 CONTROL_ROUTE = "/api/plugins/enterprise_bridge/control"
@@ -638,13 +640,18 @@ def register(ctx):
 
     ctx.register_hook("post_tool_call", import_agentcash_result)
     ctx.register_hook("pre_tool_call", guard)
-    skill_path = pathlib.Path(__file__).parent / "skills" / "partner-program-screening" / "SKILL.md"
-    ctx.register_skill(
-        name="partner-program-screening",
-        path=skill_path,
-        description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.7.0", "metadata": {"hermes": {"category": "enterprise"}}},
-    )
+    for package in packaged_skills(pathlib.Path(__file__).parent).values():
+        ctx.register_skill(
+            name=package["bare_name"],
+            path=package["path"],
+            description=package["description"],
+            frontmatter={
+                "version": package["version"],
+                "artifact_digest": package["artifact_digest"],
+                "content_digest": package["content_digest"],
+                "metadata": {"hermes": {"category": "enterprise"}},
+            },
+        )
     for schema in bridge.tools():
         name = schema["name"]
         handle = ctx.register_tool(name=name, toolset=TOOLSET, schema=schema,

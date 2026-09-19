@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import json
 import pathlib
+import tempfile
 import threading
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -46,14 +47,40 @@ class CloudControlTests(unittest.TestCase):
         request.assert_not_called()
 
     def test_readiness_identifies_the_streaming_connector_release(self):
-        with patch.dict(cloud.os.environ, {
-            "ENTERPRISE_WORKSPACE_ID": "workspace",
-            "ENTERPRISE_AGENT_ID": "agent",
-            "ENTERPRISE_URL": "https://enterprise.example",
-        }):
-            status, body = self.control().dispatch({"operation": "readiness"})
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, cloud.RUNTIME_READINESS_FILENAME).write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+                "plugin": {"name": "enterprise_bridge", "version": "1.7.0"},
+                "workspace_id": "workspace",
+                "agent_id": "agent",
+                "enterprise_url": "https://enterprise.example",
+                "skills": [{
+                    "name": "enterprise_bridge:partner-invoice-review",
+                    "version": "1.0.1",
+                    "artifact_digest": "sha256:" + "a" * 64,
+                    "content_digest": "sha256:" + "a" * 64,
+                }],
+                "tools": ["get_partner_handoff_result", "skill_view"],
+                "agentcash_enabled": False,
+                "native_cron_disabled": True,
+            }))
+            with patch.dict(cloud.os.environ, {"HERMES_HOME": directory}):
+                status, body = self.control().dispatch({"operation": "readiness"})
         self.assertEqual(status, 200)
-        self.assertEqual(body["version"], "1.6.3")
+        self.assertEqual(body["version"], "1.7.0")
+        self.assertEqual(body["runtime_revision"], "5d59366010640c1d6b8f170d8a4ee109db2bbdef")
+        self.assertEqual(body["skills"][0]["name"], "enterprise_bridge:partner-invoice-review")
+        self.assertEqual(body["tools"], ["get_partner_handoff_result", "skill_view"])
+        self.assertFalse(body["agentcash_enabled"])
+
+    def test_readiness_fails_closed_without_the_native_attestation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            cloud.os.environ, {"HERMES_HOME": directory}, clear=False,
+        ):
+            status, body = self.control().dispatch({"operation": "readiness"})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["code"], "native_readiness_unavailable")
 
     def test_post_events_envelope_opens_the_native_stream(self):
         class Request:

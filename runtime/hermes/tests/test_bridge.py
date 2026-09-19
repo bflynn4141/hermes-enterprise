@@ -22,6 +22,9 @@ from start import (
 )
 
 RUN_ID = "run_" + "a" * 32
+PARTNER_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-program-screening"]
+MULTI_PARTY_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-program-screening-v1-8"]
+FINANCE_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-invoice-review"]
 PEOPLE_PROGRAM = {
     "source": "agentcash_people",
     "max_spend_usd": 0.15,
@@ -71,15 +74,27 @@ class BridgeTests(unittest.TestCase):
             wallet = pathlib.Path(directory) / ".agentcash" / "wallet.json"
             wallet.parent.mkdir()
             wallet.write_text('{"private":"never-return-this"}')
+            pathlib.Path(directory, "runtime-readiness.json").write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+                "plugin": {"name": "enterprise_bridge", "version": "1.7.0"},
+                "workspace_id": "workspace-1",
+                "agent_id": "agent-1",
+                "enterprise_url": "https://enterprise.example",
+                "skills": [{
+                    "name": FINANCE_PACKAGE["name"],
+                    "version": FINANCE_PACKAGE["version"],
+                    "artifact_digest": FINANCE_PACKAGE["artifact_digest"],
+                    "content_digest": FINANCE_PACKAGE["content_digest"],
+                }],
+                "tools": ["get_partner_handoff_result", "skill_view"],
+                "agentcash_enabled": True,
+                "native_cron_disabled": True,
+            }))
             with patch.dict(plugin.os.environ, {}, clear=False), patch.dict(
                 __import__("os").environ,
                 {
-                    "API_SERVER_KEY": "native-token",
-                    "ENTERPRISE_WORKSPACE_ID": "workspace-1",
-                    "ENTERPRISE_AGENT_ID": "agent-1",
-                    "ENTERPRISE_URL": "https://enterprise.example",
-                    "HERMES_AGENTCASH_MCP_ENABLED": "1",
-                    "HERMES_NATIVE_CRON_ENABLED": "0",
+                    "API_SERVER_KEY": "native-token", "HERMES_HOME": directory,
                     "AGENTCASH_HOME": directory,
                 },
                 clear=False,
@@ -247,8 +262,11 @@ class BridgeTests(unittest.TestCase):
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]):
             plugin.register(context)
-        self.assertEqual(context.skills[0]["name"], "partner-program-screening")
-        self.assertTrue(context.skills[0]["path"].is_file())
+        self.assertEqual(
+            [skill["name"] for skill in context.skills],
+            ["partner-program-screening", "partner-program-screening-v1-8", "partner-invoice-review"],
+        )
+        self.assertTrue(all(skill["path"].is_file() for skill in context.skills))
         self.assertIsNone(context.hook("skill_view", {"name": "enterprise_bridge:partner-program-screening"}))
         self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
         self.assertEqual(context.hook("skill_manage", {})["action"], "block")
@@ -277,7 +295,8 @@ class BridgeTests(unittest.TestCase):
 
         manifest = {
             "name": "enterprise_bridge:partner-program-screening",
-            "version": "1.7.0",
+            "version": PARTNER_PACKAGE["version"],
+            "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
             "auto_load": True,
             "config": {"partner_program": PEOPLE_PROGRAM},
         }
@@ -291,7 +310,10 @@ class BridgeTests(unittest.TestCase):
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
                 patch.object(plugin.Bridge, "authorize_people_search"):
             plugin.register(context)
-            self.assertEqual([skill["name"] for skill in context.skills], ["partner-program-screening"])
+            self.assertEqual(
+                [skill["name"] for skill in context.skills],
+                ["partner-program-screening", "partner-program-screening-v1-8", "partner-invoice-review"],
+            )
             self.assertIsNone(context.hook("skill_view", {"name": manifest["name"]}))
             self.assertIsNone(context.hook("mcp__agentcash__fetch", PEOPLE_ARGS, tool_call_id="unused"))
 
@@ -580,7 +602,8 @@ class BridgeTests(unittest.TestCase):
 
     def test_enterprise_skill_manifest_is_bounded_and_non_secret(self):
         payload = {"skills": [{
-            "name": "enterprise_bridge:partner-program-screening", "version": "1.7.0",
+            "name": "enterprise_bridge:partner-program-screening", "version": PARTNER_PACKAGE["version"],
+            "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
             "auto_load": True, "config": {"partner_program": {"no_outreach": True}},
         }]}
 
@@ -604,6 +627,11 @@ class BridgeTests(unittest.TestCase):
         opener = Opener(payload)
         result = load_enterprise_skills("https://enterprise.example/internal/runtime/w/w/agents/a", "token", opener)
         self.assertEqual(result["auto_load"], ["enterprise_bridge:partner-program-screening"])
+        self.assertEqual(result["manifests"], [{
+            "name": "enterprise_bridge:partner-program-screening",
+            "version": PARTNER_PACKAGE["version"],
+            "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
+        }])
         self.assertEqual(result["config"]["partner_program"]["no_outreach"], True)
         self.assertEqual(opener.request.get_header("Authorization"), "Bearer token")
         self.assertEqual(opener.request.get_header("User-agent"), "Hermes-Enterprise-Bridge/1.0")
@@ -612,8 +640,56 @@ class BridgeTests(unittest.TestCase):
                 "https://enterprise.example/internal/runtime/w/w/agents/a", "token",
                 Opener({"skills": [{**payload["skills"][0], "config": {"api_key": "no"}}]}),
             )
+        with self.assertRaisesRegex(RuntimeError, "reviewed native package"):
+            load_enterprise_skills(
+                "https://enterprise.example/internal/runtime/w/w/agents/a", "token",
+                Opener({"skills": [{**payload["skills"][0], "artifact_digest": "sha256:" + "0" * 64}]}),
+            )
         with self.assertRaisesRegex(RuntimeError, "HTTPS"):
             load_enterprise_skills("http://enterprise.example/runtime", "token", opener)
+
+    def test_versioned_multi_party_skill_is_a_distinct_opt_in_package(self):
+        payload = {"skills": [{
+            "name": MULTI_PARTY_PACKAGE["name"],
+            "version": MULTI_PARTY_PACKAGE["version"],
+            "artifact_digest": MULTI_PARTY_PACKAGE["artifact_digest"],
+            "auto_load": True,
+            "config": {"partner_program": {"no_outreach": True}},
+        }]}
+
+        class Response(io.BytesIO):
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        class Opener:
+            def open(self, _request, timeout=0):
+                return Response(json.dumps(payload).encode())
+
+        result = load_enterprise_skills(
+            "https://enterprise.example/internal/runtime/w/w/agents/a", "token", Opener(),
+        )
+        self.assertEqual(result["auto_load"], ["enterprise_bridge:partner-program-screening-v1-8"])
+        self.assertEqual(result["manifests"], [{
+            "name": MULTI_PARTY_PACKAGE["name"],
+            "version": "1.8.0",
+            "artifact_digest": MULTI_PARTY_PACKAGE["artifact_digest"],
+        }])
+        self.assertEqual(PARTNER_PACKAGE["version"], "1.7.0")
+        self.assertEqual(
+            PARTNER_PACKAGE["artifact_digest"],
+            "sha256:9f124ce44aa318b13e9f8ccfd92072d8b3ba6a22030eaad31cfafbfda3a1e2a9",
+        )
+        self.assertEqual(
+            PARTNER_PACKAGE["content_digest"],
+            "sha256:cd26e70aa49de223f28216ea579d33c610305d3184a6c592c7841fa12aca6ddf",
+        )
+        self.assertNotEqual(PARTNER_PACKAGE["artifact_digest"], MULTI_PARTY_PACKAGE["artifact_digest"])
+        self.assertEqual(FINANCE_PACKAGE["version"], "1.0.1")
 
     def test_enterprise_profile_removes_unmanaged_bundled_skills(self):
         with tempfile.TemporaryDirectory() as temporary:

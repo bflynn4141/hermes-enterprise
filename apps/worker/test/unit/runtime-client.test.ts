@@ -49,17 +49,76 @@ function connectorTransport(response: () => Response) {
 }
 
 describe('official Hermes Runs transport', () => {
-  it('reads the Enterprise and AgentCash readiness attestation through the fixed connector', async () => {
+  it('reads the checked native identity, skill and tool inventory through the fixed connector', async () => {
     const { client } = connectorTransport(() => json({
-      object: 'hermes.enterprise_bridge.readiness', version: '1.4.0',
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0' },
       workspace_id: '11111111-1111-4111-8111-111111111111',
       agent_id: '22222222-2222-4222-8222-222222222222',
       enterprise_url: 'https://staging.example', agentcash_enabled: true,
       agentcash_wallet_present: true, native_cron_disabled: true,
+      skills: [{
+        name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
+        artifact_digest: `sha256:${'a'.repeat(64)}`,
+        content_digest: `sha256:${'a'.repeat(64)}`,
+      }],
+      tools: ['publish_partner_invoice_review', 'skill_view'],
     }));
     await expect(client.enterpriseReadiness()).resolves.toMatchObject({
-      version: '1.4.0', agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
+      version: '1.7.0', runtimeRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0' },
+      skills: [{
+        name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
+        artifactDigest: `sha256:${'a'.repeat(64)}`,
+        contentDigest: `sha256:${'a'.repeat(64)}`,
+      }],
+      toolNames: ['publish_partner_invoice_review', 'skill_view'],
+      agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
     });
+  });
+
+  it.each([
+    ['stale plugin', { plugin: { name: 'enterprise_bridge', version: '1.6.3' } }],
+    ['invalid skill digest', { skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'G'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }] }],
+    ['duplicate tool inventory', { tools: ['skill_view', 'skill_view'] }],
+  ])('rejects a %s readiness attestation', async (_label, changed) => {
+    const body = {
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0' },
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'a'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }],
+      tools: ['get_partner_handoff_result', 'skill_view'], agentcash_enabled: false,
+      agentcash_wallet_present: false, native_cron_disabled: true, ...changed,
+    };
+    const { client } = connectorTransport(() => json(body));
+    await expect(client.enterpriseReadiness()).rejects.toEqual(new HermesCapabilitiesError());
+  });
+
+  it('keeps the pre-attestation readiness payload available to legacy provisioning', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.6.3',
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).resolves.toEqual({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.6.3',
+      runtimeRevision: null, plugin: null,
+      workspaceId: 'workspace', agentId: 'agent', enterpriseUrl: 'https://staging.example',
+      skills: null, toolNames: null,
+      agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
+    });
+  });
+
+  it('rejects a partial attestation instead of downgrading it to legacy readiness', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      agentcash_enabled: false, agentcash_wallet_present: false, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).rejects.toEqual(new HermesCapabilitiesError());
   });
 
   it('uses one fixed service-authenticated route for a Hermes Cloud connector', async () => {

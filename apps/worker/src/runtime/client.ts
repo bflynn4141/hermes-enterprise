@@ -33,9 +33,13 @@ export interface HermesCapabilities {
 export interface HermesEnterpriseReadiness {
   object: 'hermes.enterprise_bridge.readiness';
   version: string;
+  runtimeRevision: string | null;
+  plugin: { name: string; version: string } | null;
   workspaceId: string;
   agentId: string;
   enterpriseUrl: string;
+  skills: readonly { name: string; version: string; artifactDigest: string; contentDigest: string }[] | null;
+  toolNames: readonly string[] | null;
   agentCashEnabled: boolean;
   agentCashWalletPresent: boolean;
   nativeCronDisabled: boolean;
@@ -154,15 +158,47 @@ export class HermesClient {
     if (this.transport !== 'dashboard_connector') throw new HermesCapabilitiesError();
     const response = await this.connector('readiness');
     const body = record(await response.json());
+    const hasAnyAttestation = body !== null && [
+      body.runtime_revision, body.plugin, body.skills, body.tools,
+    ].some((value) => value !== undefined);
+    const plugin = hasAnyAttestation ? record(body?.plugin) : null;
+    const skillRows = hasAnyAttestation && Array.isArray(body?.skills) ? body.skills : null;
+    const toolRows = hasAnyAttestation && Array.isArray(body?.tools) ? body.tools : null;
+    const skills = skillRows?.map((value) => {
+      const skill = record(value);
+      return skill && typeof skill.name === 'string' && /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/.test(skill.name) &&
+        typeof skill.version === 'string' && /^\d+\.\d+\.\d+$/.test(skill.version) &&
+        typeof skill.artifact_digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(skill.artifact_digest) &&
+        typeof skill.content_digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(skill.content_digest)
+        ? { name: skill.name, version: skill.version, artifactDigest: skill.artifact_digest,
+            contentDigest: skill.content_digest }
+        : null;
+    }) ?? null;
+    const toolNames = toolRows?.every((value) => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value))
+      ? toolRows as string[] : null;
     if (body?.object !== 'hermes.enterprise_bridge.readiness' || typeof body.version !== 'string' ||
-        typeof body.workspace_id !== 'string' || typeof body.agent_id !== 'string' ||
-        typeof body.enterprise_url !== 'string' || typeof body.agentcash_enabled !== 'boolean' ||
-        typeof body.agentcash_wallet_present !== 'boolean' || typeof body.native_cron_disabled !== 'boolean') {
+        !/^\d+\.\d+\.\d+$/.test(body.version) ||
+        typeof body.workspace_id !== 'string' || body.workspace_id.length === 0 ||
+        typeof body.agent_id !== 'string' || body.agent_id.length === 0 ||
+        typeof body.enterprise_url !== 'string' || body.enterprise_url.length === 0 ||
+        typeof body.agentcash_enabled !== 'boolean' ||
+        typeof body.agentcash_wallet_present !== 'boolean' || typeof body.native_cron_disabled !== 'boolean' ||
+        (hasAnyAttestation && (
+          typeof body.runtime_revision !== 'string' || !/^[0-9a-f]{40}$/.test(body.runtime_revision) ||
+          plugin?.name !== 'enterprise_bridge' || plugin.version !== body.version ||
+          !skillRows || skillRows.length > 16 || !toolRows || toolRows.length > 128 ||
+          !skills || skills.some((skill) => skill === null) || new Set(skills.map((skill) => skill!.name)).size !== skills.length ||
+          !toolNames || !toolNames.includes('skill_view') || new Set(toolNames).size !== toolNames.length
+        ))) {
       throw new HermesCapabilitiesError();
     }
     return {
       object: 'hermes.enterprise_bridge.readiness', version: body.version,
+      runtimeRevision: hasAnyAttestation ? body.runtime_revision as string : null,
+      plugin: hasAnyAttestation ? { name: plugin!.name as string, version: plugin!.version as string } : null,
       workspaceId: body.workspace_id, agentId: body.agent_id, enterpriseUrl: body.enterprise_url,
+      skills: hasAnyAttestation ? skills as NonNullable<HermesEnterpriseReadiness['skills']> : null,
+      toolNames: hasAnyAttestation ? toolNames : null,
       agentCashEnabled: body.agentcash_enabled, agentCashWalletPresent: body.agentcash_wallet_present,
       nativeCronDisabled: body.native_cron_disabled,
     };

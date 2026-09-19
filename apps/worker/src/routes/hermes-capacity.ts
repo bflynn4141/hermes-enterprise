@@ -4,6 +4,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { sealSecret } from '../keys/envelope.js';
 import { HermesClient } from '../runtime/client.js';
+import { matchesEnterpriseReadiness, resolveEnterpriseReadinessAssignment } from '../runtime/readiness.js';
 import { POOL_CONTROL_NAMESPACE } from '../hermes-cloud/capacity.js';
 import { inWorkspace, jsonBody, RouteError } from './tenant.js';
 
@@ -18,7 +19,7 @@ const inputSchema = z.object({
 /**
  * Register existing, already-paid capacity only after the authenticated
  * Enterprise connector proves the real native runtime, permanent identity,
- * plugin and wallet are ready. The interactive Hermes Cloud management API is
+ * plugin and role-specific native inventory are ready. The interactive Hermes Cloud management API is
  * deliberately not part of the invitation path. This route never creates or
  * funds an instance.
  */
@@ -36,7 +37,10 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
   const verified = await inWorkspace(c, async (work) => {
     work.requireAdmin('Registering Hermes capacity');
     requireStepUp(work.session);
-    return { workspaceId: work.workspaceId };
+    const readinessAssignment = await resolveEnterpriseReadinessAssignment(
+      work.tx, work.workspaceId, input.preflight_agent_id,
+    );
+    return { workspaceId: work.workspaceId, readinessAssignment };
   });
 
   let readiness;
@@ -51,8 +55,8 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
     throw new RouteError('The instance did not pass the Cloud and Enterprise readiness checks.', 'capacity_not_ready', 409);
   }
   if (!capabilities.durableIdempotency || readiness.workspaceId !== verified.workspaceId ||
-      readiness.agentId !== input.preflight_agent_id || !readiness.agentCashEnabled ||
-      !readiness.agentCashWalletPresent || !readiness.nativeCronDisabled) {
+      readiness.agentId !== input.preflight_agent_id ||
+      !matchesEnterpriseReadiness(readiness, verified.readinessAssignment)) {
     throw new RouteError('The instance did not pass the Cloud and Enterprise readiness checks.', 'capacity_not_ready', 409);
   }
 
@@ -71,12 +75,13 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
           ciphertext, iv, wrapped_dek, wrap_iv, kek_version, plugin_version,
           agentcash_enabled, agentcash_wallet_present, native_cron_disabled,
           readiness_checked_at, last_health_checked_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'available',$8,$9,$10,$11,$12,$13,true,true,true,now(),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'available',$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now())
        ON CONFLICT DO NOTHING
        RETURNING id, created_at`,
       [capacityId, work.workspaceId, input.cloud_agent_id, input.instance_name, input.preflight_agent_id,
        url.origin, url.toString(), Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv),
-       Buffer.from(envelope.wrappedDek), Buffer.from(envelope.wrapIv), envelope.kekVersion, readiness.version],
+       Buffer.from(envelope.wrappedDek), Buffer.from(envelope.wrapIv), envelope.kekVersion, readiness.version,
+       readiness.agentCashEnabled, readiness.agentCashWalletPresent, readiness.nativeCronDisabled],
     );
     const row = inserted.rows[0];
     if (!row) throw new RouteError('that Cloud instance is already registered', 'capacity_exists', 409);
@@ -87,9 +92,9 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
       preflight_agent_id: input.preflight_agent_id,
       state: 'available' as const,
       plugin_version: readiness.version,
-      agentcash_enabled: true,
-      agentcash_wallet_present: true,
-      native_cron_disabled: true,
+      agentcash_enabled: readiness.agentCashEnabled,
+      agentcash_wallet_present: readiness.agentCashWalletPresent,
+      native_cron_disabled: readiness.nativeCronDisabled,
       verified_at: row.created_at.toISOString(),
     };
   });

@@ -56,6 +56,8 @@ When relocating an existing profile, first stop its gateway and verify the proce
 
 Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. By default it also refuses a profile whose native cron store is nonempty. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
 
+Startup requires every assigned skill manifest's version and immutable `artifact_digest` to match a reviewed package, then independently checks the installed `SKILL.md` `content_digest`. New artifacts use the same SHA-256 for both fields. The original Partnerships 1.7 tuple is the sole compatibility exception because deployed migration 0047 registered a historical artifact identity before native byte attestation; its exact content hash is still checked and reported. After plugin discovery the launcher verifies the live plugin registry, resolved tool definitions and provider, then writes a non-secret `home/runtime-readiness.json`. The authenticated Cloud connector returns this checked runtime revision, plugin identity, assigned skill identities, installed content digests and exact tool names. A database assignment or reachable process alone is not Ready. See [MULTI_PARTY_RUNBOOK.md](MULTI_PARTY_RUNBOOK.md) for the two-profile rollout and acceptance sequence.
+
 ## Supported configuration and scope
 
 The generated config sets:
@@ -165,7 +167,7 @@ python3 runtime/hermes/tests/probe_native.py \
   --python runtime/hermes/.state/venv/bin/python
 ```
 
-The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under a disposable isolated home. It checks the durable capability contract, exact model/tool boundary, admission replay/conflict, a full gateway restart followed by durable replay, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
+The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under disposable isolated homes. It starts dedicated opt-in Partnerships and Finance profiles, verifies each exact skill version/digest and tool inventory, exercises the real `publish_partner_invoice_review` and `get_partner_handoff_result` bridge calls, proves Finance has no AgentCash dependency, and proves a Finance attempt to call the Partnerships tool never reaches Enterprise. It also starts and restarts an existing Partnerships profile with the original byte-identical 1.7 package and discovery tool, checks the durable capability contract, admission replay/conflict, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
 
 ## Official source anchors
 

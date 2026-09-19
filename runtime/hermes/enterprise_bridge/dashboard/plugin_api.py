@@ -51,10 +51,16 @@ except Exception:  # Unit tests exercise the transport helper without FastAPI.
 
 router = APIRouter()
 
-CONNECTOR_VERSION = "1.6.3"
+CONNECTOR_VERSION = "1.7.0"
 MAX_BODY_BYTES = 2 * 1024 * 1024
+READINESS_MAX_BYTES = 64 * 1024
+RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
+SKILL_NAME = re.compile(r"[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\Z")
+SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
+SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+TOOL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
 SSE_CONNECTED = b": enterprise-bridge-connected\n\n"
 SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
@@ -65,6 +71,55 @@ SSE_HEADERS = {
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise RuntimeError("native redirect refused")
+
+
+def load_runtime_attestation(home: pathlib.Path | None = None) -> dict[str, Any]:
+    """Read the inventory written only after native plugin/tool preflight."""
+    root = home or pathlib.Path(os.environ.get("HERMES_HOME", ""))
+    path = root / RUNTIME_READINESS_FILENAME
+    try:
+        unavailable = (not str(root) or path.is_symlink() or not path.is_file()
+                       or path.stat().st_size > READINESS_MAX_BYTES)
+    except OSError as error:
+        raise RuntimeError("native readiness attestation is unavailable") from error
+    if unavailable:
+        raise RuntimeError("native readiness attestation is unavailable")
+    try:
+        document = json.loads(path.read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("native readiness attestation is invalid") from error
+    if not isinstance(document, dict):
+        raise RuntimeError("native readiness attestation is invalid")
+    plugin = document.get("plugin")
+    skills, tools = document.get("skills"), document.get("tools")
+    if (document.get("schema_version") != 1
+            or not isinstance(document.get("runtime_revision"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", document["runtime_revision"])
+            or plugin != {"name": "enterprise_bridge", "version": CONNECTOR_VERSION}
+            or not all(isinstance(document.get(key), str) and document[key]
+                       for key in ("workspace_id", "agent_id", "enterprise_url"))
+            or not isinstance(skills, list) or len(skills) > 16
+            or not isinstance(tools, list) or len(tools) > 128
+            or not isinstance(document.get("agentcash_enabled"), bool)
+            or not isinstance(document.get("native_cron_disabled"), bool)):
+        raise RuntimeError("native readiness attestation is invalid")
+    seen_skills = set()
+    for skill in skills:
+        if (not isinstance(skill, dict)
+                or set(skill) != {"name", "version", "artifact_digest", "content_digest"}
+                or not isinstance(skill.get("name"), str) or not SKILL_NAME.fullmatch(skill["name"])
+                or skill["name"] in seen_skills
+                or not isinstance(skill.get("version"), str) or not SEMVER.fullmatch(skill["version"])
+                or not isinstance(skill.get("artifact_digest"), str)
+                or not SHA256.fullmatch(skill["artifact_digest"])
+                or not isinstance(skill.get("content_digest"), str)
+                or not SHA256.fullmatch(skill["content_digest"])):
+            raise RuntimeError("native readiness attestation is invalid")
+        seen_skills.add(skill["name"])
+    if (len(set(tools)) != len(tools) or "skill_view" not in tools
+            or any(not isinstance(tool, str) or not TOOL_NAME.fullmatch(tool) for tool in tools)):
+        raise RuntimeError("native readiness attestation is invalid")
+    return document
 
 
 class NativeControl:
@@ -113,17 +168,28 @@ class NativeControl:
     def dispatch(self, payload: dict[str, Any]):
         operation = payload.get("operation")
         if operation == "readiness":
+            try:
+                attestation = load_runtime_attestation()
+            except RuntimeError:
+                return 503, {
+                    "error": "native readiness attestation is unavailable",
+                    "code": "native_readiness_unavailable",
+                }
             agentcash_home = os.environ.get("AGENTCASH_HOME", "").strip()
             wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
             return 200, {
                 "object": "hermes.enterprise_bridge.readiness",
                 "version": CONNECTOR_VERSION,
-                "workspace_id": os.environ.get("ENTERPRISE_WORKSPACE_ID", ""),
-                "agent_id": os.environ.get("ENTERPRISE_AGENT_ID", ""),
-                "enterprise_url": os.environ.get("ENTERPRISE_URL", ""),
-                "agentcash_enabled": os.environ.get("HERMES_AGENTCASH_MCP_ENABLED", "") == "1",
+                "runtime_revision": attestation["runtime_revision"],
+                "plugin": attestation["plugin"],
+                "workspace_id": attestation["workspace_id"],
+                "agent_id": attestation["agent_id"],
+                "enterprise_url": attestation["enterprise_url"],
+                "skills": attestation["skills"],
+                "tools": attestation["tools"],
+                "agentcash_enabled": attestation["agentcash_enabled"],
                 "agentcash_wallet_present": bool(wallet_path and wallet_path.is_file()),
-                "native_cron_disabled": os.environ.get("HERMES_NATIVE_CRON_ENABLED", "") != "1",
+                "native_cron_disabled": attestation["native_cron_disabled"],
             }
         if operation == "capabilities":
             return self._request("GET", "/v1/capabilities")
