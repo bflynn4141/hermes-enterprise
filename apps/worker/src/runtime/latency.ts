@@ -1,8 +1,10 @@
 // Relative, content-free timings. Each Workflow invocation owns its clock;
 // replayed checkpoints must never masquerade as freshly measured work.
 export type RuntimeLatencyPhase =
-  | 'workflow_setup' | 'submit_capabilities' | 'submit_preparation'
+  | 'workflow_setup' | 'startup_read' | 'startup_event_persistence' | 'startup_delivery'
+  | 'submit_capabilities' | 'submit_preparation'
   | 'native_submit' | 'native_binding' | 'execute_capabilities'
+  | 'execute_persistence' | 'execute_delivery'
   | 'stream_subscribe_started' | 'first_delta' | 'first_preview' | 'first_checkpoint';
 
 export interface RuntimeLatency {

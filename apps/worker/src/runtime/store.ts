@@ -29,6 +29,15 @@ export interface RuntimeCallRecord {
   readonly ok: boolean | null;
 }
 export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
+  /**
+   * Group runtime-only reads and bookkeeping that already use this request-local
+   * database instance. This removes repeated BEGIN / tenant-context / COMMIT
+   * round trips while preserving the single-client, serial-query invariant.
+   */
+  async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    return this.runtimeTx(work);
+  }
+
   override async setRunStatus(
     runId: string,
     status: string,
