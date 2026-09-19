@@ -17,6 +17,22 @@ const render = (node: React.ReactNode) => renderToStaticMarkup(
 );
 
 describe('Iris welcome', () => {
+  it.each([
+    { status: 'streaming' as const, runId: mockUuid(3), label: 'Guidance queued' },
+    { status: 'complete' as const, runId: mockUuid(3), label: 'Guidance applied' },
+    { status: 'streaming' as const, runId: null, label: 'Queued for next message' },
+  ])('renders the durable guidance state: $label', ({ status, runId, label }) => {
+    const current = session();
+    const html = render(<Transcript session={{ ...current, messages: [{
+      id: mockUuid(90), session_id: current.id, seq: 0, role: 'user', kind: 'guidance',
+      text: 'Use the newer source', blocks: [], status, run_id: runId,
+    }] }} find={null} />);
+    expect(html).toContain(`data-message-id="${mockUuid(90)}"`);
+    expect(html.match(/Use the newer source/g)).toHaveLength(1);
+    expect(html).toContain(`<div class="meta">${label}</div>`);
+    if (status === 'streaming') expect(html).not.toContain('Guidance applied');
+  });
+
   it('uses one centered prompt with the icon above it in an empty conversation', () => {
     const html = render(<Transcript session={session()} find={null} />);
     expect(html).toContain('transcript-empty');

@@ -500,7 +500,7 @@ export type Action =
   | { type: 'run/step'; sessionId: string; stepId: string; label: string; state: Run['steps'][number]['state']; stepAttempt?: number; toolCallId?: string | null }
   | { type: 'run/status'; sessionId: string; runId: string; status: Run['status']; patch?: Partial<Run> }
   | { type: 'run/guide'; sessionId: string; text: string; id: string }
-  | { type: 'run/guide-apply'; sessionId: string }
+  | { type: 'run/guide-apply'; sessionId: string; runId: string; guidanceId: string }
   | { type: 'run/guide-remove'; sessionId: string }
   | { type: 'run/queue'; sessionId: string; items: RunQueueItem[] }
   | { type: 'run/queue-edit'; sessionId: string; id: string; text: string }
@@ -702,14 +702,37 @@ export function reduce(state: AppState, action: Action): AppState {
         // An admission in flight may postdate the snapshot transaction. Keep
         // its projection until admission or its own run appears in a snapshot.
         const pendingNewer = Boolean(session.pendingTurn && session.pendingTurn.runId !== snapshot.run?.id);
-        const run = pendingNewer ? session.run : snapshot.run ? mergeRun(session.run, snapshot.run) : session.run;
+        let run = pendingNewer ? session.run : snapshot.run ? mergeRun(session.run, snapshot.run) : session.run;
         const messages = new Map(session.messages.map((message) => [message.id, message]));
         for (const message of snapshot.messages.items) {
           const previous = messages.get(message.id);
           if (previous?.status === 'complete' && (message.status !== 'complete' || previous.text.length > message.text.length)) continue;
-          // The streaming placeholder is represented by the accumulator.
-          if (message.status === 'streaming') continue;
+          // Only the assistant placeholder belongs to the accumulator. User
+          // guidance uses streaming to mean durably queued, not partial text.
+          if (message.role === 'iris' && message.status === 'streaming') continue;
           messages.set(message.id, message.status === 'incomplete' ? { ...message, incomplete: true } : message);
+        }
+        if (!pendingNewer && run && snapshot.run) {
+          let guidance = snapshot.run.guidance;
+          if (guidance === undefined) {
+            // Legacy responses lack the explicit projection. Never attribute
+            // unassigned guidance to a run merely because it is in its page.
+            const latest = [...messages.values()].filter((message) => message.role === 'user' && message.kind === 'guidance' && message.run_id === run!.id)
+              .sort((a, b) => b.seq - a.seq)[0];
+            guidance = latest ? { id: latest.id, text: latest.text, status: latest.status === 'complete' ? 'applied' : 'pending' } : null;
+          }
+          const current = session.run?.id === run.id && session.run.attempt === run.attempt ? session.run.guidance : null;
+          // A snapshot taken before the guidance POST must not erase local
+          // intent; explicit null otherwise clears the durable projection.
+          if (guidance === null && current?.id.startsWith('pending-')) guidance = current;
+          if (guidance && (messages.get(guidance.id)?.status === 'complete' || (current?.id === guidance.id && current.status === 'applied'))) {
+            guidance = { ...guidance, status: 'applied' };
+          }
+          if (guidance?.status === 'applied') {
+            const message = messages.get(guidance.id);
+            if (message?.role === 'user' && message.kind === 'guidance') messages.set(message.id, { ...message, status: 'complete', run_id: run.id });
+          }
+          run = { ...run, guidance };
         }
         let stream = session.stream;
         const incoming = snapshot.stream;
@@ -1036,7 +1059,13 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'run/guide':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: { id: action.id, text: action.text, status: 'pending' } }));
     case 'run/guide-apply':
-      return withRun(state, action.sessionId, (run) => (run.guidance ? { ...run, guidance: { ...run.guidance, status: 'applied' } } : run));
+      return withSession(state, action.sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((message) => message.id === action.guidanceId && message.role === 'user' && message.kind === 'guidance'
+          ? { ...message, status: 'complete', run_id: action.runId } : message),
+        run: session.run?.id === action.runId && session.run.guidance?.id === action.guidanceId
+          ? { ...session.run, guidance: { ...session.run.guidance, status: 'applied' } } : session.run,
+      }));
     case 'run/guide-remove':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: null }));
     case 'run/queue':
@@ -1362,7 +1391,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       break;
     }
     case 'run.guidance.applied':
-      if (sessionId) out.push({ type: 'run/guide-apply', sessionId });
+      if (sessionId) out.push({ type: 'run/guide-apply', sessionId, runId: event.payload.run_id, guidanceId: event.payload.guidance_id });
       break;
     case 'run.queue.updated':
       if (sessionId) out.push({ type: 'run/queue', sessionId, items: event.payload.items });

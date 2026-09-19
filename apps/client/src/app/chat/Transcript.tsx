@@ -441,6 +441,11 @@ function UserMessage({ message }: { message: Message }) {
   return (
     <div className="msg-user" data-message-id={message.id}>
       {message.text}
+      {message.kind === 'guidance' ? <div className="meta">
+        {message.status === 'complete' ? 'Guidance applied' : message.status === 'streaming'
+          ? message.run_id ? 'Guidance queued' : 'Queued for next message'
+          : 'Guidance incomplete'}
+      </div> : null}
       {message.attachments?.length ? (
         <span className="att">
           {message.attachments.map((attachment) => <Chip key={attachment.id}>{attachment.label}</Chip>)}
