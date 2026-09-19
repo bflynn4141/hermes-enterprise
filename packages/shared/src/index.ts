@@ -27,3 +27,4 @@ export * from './wire.js';
 export * from './recovery.js';
 export * from './request-review.js';
 export * from './agent-context.js';
+export * from './agent-instructions.js';

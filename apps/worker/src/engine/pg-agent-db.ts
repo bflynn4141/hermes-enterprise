@@ -327,7 +327,7 @@ export class PgAgentDb implements AgentDb {
   async loadSystemPrompt(runId: string): Promise<string> {
     return this.tx(async (q) => {
       const { rows } = await q<{ body: string | null }>(
-        `SELECT COALESCE(iv.body, a.instructions_active) AS body
+        `SELECT COALESCE(r.instruction_snapshot, iv.body, a.instructions_active) AS body
            FROM runs r
            JOIN sessions s ON s.id = r.session_id
            JOIN agents a ON a.id = COALESCE(r.agent_id, s.agent_id)

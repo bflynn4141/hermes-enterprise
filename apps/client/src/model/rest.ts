@@ -64,6 +64,7 @@ import {
   type RunView,
   type WorkspaceCreateInput,
   type EnterpriseSkillAssignmentUpdate,
+  type SaveAgentInstruction,
   type PartnerWorkflowViewV2,
   type PartnerWorkflowSetup,
   type PartnerWorkflowAdmissionInput,
@@ -374,26 +375,17 @@ export function createRest(options: RestOptions) {
     decideOperationApproval: (workspaceId: string, agentId: string, id: string, decision: 'approved' | 'denied') => request('POST', `${ws(workspaceId)}/agents/${agentId}/permissions/approvals/${id}`, agentPermissionsSchema, { decision }),
     setContextField: (workspaceId: string, field: string, body: { value: string; scope: 'reply' | 'future' }) =>
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
-    listInstructions: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)), emptyPage()),
-    /**
-     * Accept and discard, and no `propose`.
-     *
-     * `POST /w/:ws/instructions` does not exist on the server — the routing
-     * table has `:id/accept`, `:id/save`, `:id/discard` and the DELETE, and
-     * nothing that creates a version. A proposal is written by a run, through
-     * the engine, which is the design: an instruction the agent proposes is a
-     * thing a person reviews. The client used to offer "Propose a change" and
-     * it could only ever have 404ed, so the button is gone (decision C26) and
-     * the finding is in the README's table.
-     */
-    acceptInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
-    discardInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    listInstructions: (workspaceId: string, agentId?: string | null) =>
+      request('GET', `${ws(workspaceId)}/instructions${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(instructionVersionSchema)),
+    saveInstruction: (workspaceId: string, agentId: string, body: SaveAgentInstruction) =>
+      request('POST', `${ws(workspaceId)}/instructions?agent_id=${encodeURIComponent(agentId)}`, instructionVersionSchema, body, { requestedFrom: 'skills' }),
+    acceptInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/accept${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    discardInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/discard${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
     listSkills: (workspaceId: string, agentId?: string | null) =>
       optional(() => request('GET', `${ws(workspaceId)}/skills${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(skillVersionSchema)), emptyPage()),
-    adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
+    adoptSkill: (workspaceId: string, id: string, agentId?: string | null) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, skillVersionSchema, {}),
     listSkillAssignments: (workspaceId: string, agentId: string) =>
       request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
     updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>

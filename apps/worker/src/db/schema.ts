@@ -593,6 +593,7 @@ export const runs = pgTable(
     activeMs: integer('active_ms').notNull().default(0),
     interrupted: boolean('interrupted').notNull().default(false),
     instructionVersionId: uuid('instruction_version_id'),
+    instructionSnapshot: text('instruction_snapshot'),
     skillVersionIds: uuid('skill_version_ids').array().notNull().default([]),
     maxTurns: integer('max_turns').notNull().default(12),
     modelId: text('model_id').notNull(),

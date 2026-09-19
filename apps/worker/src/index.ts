@@ -33,6 +33,7 @@ import {
   listInstructions,
   listSkills,
   patchContextField,
+  saveInstruction,
 } from './routes/agent-config.js';
 import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
 import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
@@ -465,6 +466,7 @@ app.get('/w/:ws/partner-workflow/handoffs/:handoffId/result', getPartnerHandoffR
 app.post('/w/:ws/partner-workflow/handoffs/:handoffId/corrections', correctPartnerInvoice);
 app.post('/w/:ws/partner-workflow/admission', setPartnerWorkflowAdmission);
 app.get('/w/:ws/instructions', listInstructions);
+app.post('/w/:ws/instructions', saveInstruction);
 app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
 app.post('/w/:ws/instructions/:id/save', acceptInstruction);
 app.post('/w/:ws/instructions/:id/discard', discardInstruction);
