@@ -71,6 +71,9 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
         : params.get('workflowRole') === 'finance' ? 'finance'
           : params.get('workflowRole') === 'unrelated' ? 'unrelated'
             : params.get('workflowRole') === 'admin' ? 'admin' : undefined,
+      workflowActivation: params.get('workflowActivation') === 'native-mismatch' ? 'native-mismatch'
+        : params.get('workflowActivation') === 'binding-drift' ? 'binding-drift'
+          : params.get('workflowActivation') === 'success' ? 'success' : undefined,
     });
     return createAdapter({ store, workspaceId: backend.workspaceId, auth: createAuth('fake'), fetchImpl: backend.fetchImpl, socketFactory: backend.socketFactory, baseUrl: '' });
   }

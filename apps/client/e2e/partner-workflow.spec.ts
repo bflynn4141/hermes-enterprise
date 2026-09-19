@@ -168,7 +168,7 @@ test('an admin sees actionable native profile setup without a fake role switch',
   await expect(pane.getByText('Upgrade the native profile to Partnerships1.8', { exact: true })).toBeVisible();
   await expect(pane.getByText('Upgrade the native profile to Finance1.0.1', { exact: true })).toBeVisible();
   await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
-  await expect(pane.getByRole('button', { name: 'Enable workflow' })).toBeDisabled();
+  await expect(pane.getByRole('button', { name: 'Verify and enable workflow' })).toBeDisabled();
   await pane.getByRole('button', { name: 'Configure roles' }).click();
   await expect(pane.getByRole('form', { name: 'Configure employee roles' })).toBeVisible();
   await expect(pane.getByText('Bind two existing users to two dedicated native Hermes profiles. Saving role assignments does not make a missing skill, tool, or provider ready.', { exact: true })).toBeVisible();
@@ -178,7 +178,40 @@ test('an admin sees actionable native profile setup without a fake role switch',
   await expect(pane.getByRole('button', { name: 'Disable workflow' })).toBeEnabled();
   await pane.getByRole('button', { name: 'Disable workflow' }).click();
   await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
-  await expect(pane.getByRole('button', { name: 'Enable workflow' })).toBeEnabled();
-  await pane.getByRole('button', { name: 'Enable workflow' }).click();
+  await expect(pane.getByRole('button', { name: 'Verify and enable workflow' })).toBeEnabled();
+  await pane.getByRole('button', { name: 'Verify and enable workflow' }).click();
   await expect(pane.getByText('Workflow enabled', { exact: true })).toBeVisible();
 });
+
+test('an admin can verify and enable configured roles before readiness has been saved', async ({ page }) => {
+  await page.goto('/?workflowRole=admin&seat=admin&workflowActivation=success');
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  const pane = app(page);
+  await expect(pane.getByText('Needs attention', { exact: true })).toHaveCount(2);
+  await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Verification checks both native profiles against the exact reviewed role bindings, skills, tools, and provider attestations before any new work is admitted.', { exact: true })).toBeVisible();
+  const enable = pane.getByRole('button', { name: 'Verify and enable workflow' });
+  await expect(enable).toBeEnabled();
+  await enable.click();
+  await expect(pane.getByText('Workflow enabled', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Ready', { exact: true })).toHaveCount(2);
+  await expect(pane.getByText('Partnerships + Finance is enabled for new governed work.', { exact: true })).toBeVisible();
+});
+
+for (const fixture of [
+  { scenario: 'native-mismatch', label: 'native profile mismatch' },
+  { scenario: 'binding-drift', label: 'post-probe role binding drift' },
+] as const) {
+  test(`${fixture.label} leaves first activation safely disabled`, async ({ page }) => {
+    await page.goto(`/?workflowRole=admin&seat=admin&workflowActivation=${fixture.scenario}`);
+    await page.getByRole('button', { name: 'Library', exact: true }).click();
+    const pane = app(page);
+    const enable = pane.getByRole('button', { name: 'Verify and enable workflow' });
+    await expect(enable).toBeEnabled();
+    await enable.click();
+    await expect(pane.getByRole('alert')).toHaveText('The native profiles did not match the reviewed role bindings, versions, tools, and provider attestations. The workflow remains disabled.');
+    await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
+    await expect(pane.getByText('Needs attention', { exact: true })).toHaveCount(2);
+    await expect(enable).toBeEnabled();
+  });
+}
