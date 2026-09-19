@@ -428,6 +428,11 @@ export const partnerWorkflowViewV2Schema = z.object({
   teams: z.array(partnerTeamSchema).max(2),
   agents: z.array(partnerWorkflowAgentSchema).max(2),
   readiness: z.array(partnerRoleReadinessSchema).length(2),
+  partner_options: z.array(z.object({
+    id: uuidSchema,
+    name: z.string().min(1).max(200),
+    source: z.enum(['candidate', 'engagement']),
+  }).strict()).max(50),
   engagements: z.array(partnerEngagementSummarySchema).max(25),
   handoffs: z.array(partnerWorkflowHandoffV2Schema).max(25),
   connector: z.object({
