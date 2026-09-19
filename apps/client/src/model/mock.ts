@@ -1103,7 +1103,7 @@ export function createMockBackend(options: MockOptions = {}) {
           messages: { items: current.messages, cursor: null, total: current.messages.length },
           run: run ? { ...run, model_id: row.model_id, effort: row.effort, started_at: current.run?.started_at ?? iso(), admitted_at: current.run?.started_at ?? iso(), execution_started_at: null, ended_at: null } : null,
           stream: current.stream && run ? { run_id: run.id, attempt: run.attempt, turn: current.stream.turn, step_attempt: current.stream.stepAttempt,
-            message_id: null, text: current.stream.durableText, seq: -1, status: current.stream.status === 'streaming' ? 'streaming' : 'final' } : null,
+            message_id: null, text: current.stream.durableText, seq: current.stream.seq ?? -1, status: current.stream.status === 'streaming' ? 'streaming' : 'final' } : null,
           recovery: null,
         });
       }

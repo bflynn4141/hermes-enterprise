@@ -8,6 +8,9 @@ export const runClockKey = (sessionId: string, runId: string, attempt: number): 
 function load(): void {
   if (loaded) return;
   loaded = true;
+  // A reload flushes the precise visible high-water mark; routine ticks only
+  // persist once per second to avoid serializing all clocks every animation tick.
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', persist);
   try {
     const entries: unknown = JSON.parse(sessionStorage.getItem(STORAGE) ?? '[]');
     if (!Array.isArray(entries)) return;
@@ -40,8 +43,9 @@ export function waitingElapsed(key: string, startedAt: string, now: number): num
   const current = clocks.get(key)!;
   const elapsed = Math.max(current.elapsed, Math.max(0, now - Date.parse(origin)));
   if (elapsed !== current.elapsed) {
+    const crossedSecond = Math.floor(elapsed / 1000) !== Math.floor(current.elapsed / 1000);
     current.elapsed = elapsed;
-    persist();
+    if (crossedSecond) persist();
   }
   return elapsed;
 }

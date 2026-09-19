@@ -174,6 +174,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   let disposed = false;
   const inFlight = new Set<string>();
   const turnIds = new Map<string, string>();
+  const retryRequests = new Map<string, Promise<void>>();
   const sessionSnapshots = new Map<string, Promise<void>>();
   const reconciledRuns = new Set<string>();
 
@@ -1006,7 +1007,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
       return await beginSessionCreation(localId, createOpts);
     } catch (error) {
       const local = state().sessions[localId];
-      const hasRecoverableWork = Boolean(local?.pendingTurn || local?.draft.text.trim() || local?.draft.attachments.length);
+      const hasRecoverableWork = Boolean(local?.pendingTurn || local?.draft.text.trim() || local?.draft.attachments.length || local?.settingsPending || local?.settingsError);
       if (hasRecoverableWork) dispatch({ type: 'session/set', id: localId, patch: { pending: false } });
       else dispatch({ type: 'session/rollback', id: localId });
       throw error;
@@ -1047,6 +1048,32 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const runId = currentRunId(sessionId);
     if (!runId) return;
     await rest.stop(workspaceId, sessionId, runId);
+  }
+
+  function retry(sessionId: string, runId: string): Promise<void> {
+    const key = `${sessionId}:${runId}`;
+    const existing = retryRequests.get(key);
+    if (existing) return existing;
+    const task = (async () => {
+      const settings = await confirmedSessionSettings(sessionId);
+      const current = state().sessions[sessionId]?.run;
+      const expected = current?.id === runId ? current.attempt : (await rest.run(workspaceId, sessionId, runId)).attempt;
+      const admittedAt = new Date(now()).toISOString();
+      const accepted = await rest.retry(workspaceId, sessionId, runId, expected, settings);
+      dispatch({ type: 'run/status', sessionId, runId, status: accepted.status, patch: { attempt: accepted.attempt,
+        ...(accepted.attempt > expected ? { started_at: admittedAt, error: null, active_ms: null } : {}) } });
+      if (state().activeSessionId === sessionId) {
+        // Admission succeeded even if its following read fails. Keep the new
+        // attempt visible and let reconciliation recover without a second POST.
+        await reconcileSessionSnapshot(sessionId, true).catch(() => {
+          dispatch({ type: 'session/set', id: sessionId, patch: { hydrationError: 'Retry was accepted, but its details could not refresh. Select this conversation again to refresh.' } });
+        });
+      }
+    })();
+    retryRequests.set(key, task);
+    const clear = () => { if (retryRequests.get(key) === task) retryRequests.delete(key); };
+    void task.then(clear, clear);
+    return task;
   }
 
   async function guide(sessionId: string, text: string): Promise<void> {
@@ -1196,16 +1223,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     start,
     send,
     stop,
-    retry: async (sessionId, runId) => {
-      const settings = await confirmedSessionSettings(sessionId);
-      const current = state().sessions[sessionId]?.run;
-      const expected = current?.id === runId ? current.attempt : (await rest.run(workspaceId, sessionId, runId)).attempt;
-      const admittedAt = new Date(now()).toISOString();
-      const accepted = await rest.retry(workspaceId, sessionId, runId, expected, settings);
-      dispatch({ type: 'run/status', sessionId, runId, status: accepted.status, patch: { attempt: accepted.attempt,
-        ...(accepted.attempt > expected ? { started_at: admittedAt, error: null, active_ms: null } : {}) } });
-      if (state().activeSessionId === sessionId) await reconcileSessionSnapshot(sessionId, true);
-    },
+    retry,
     guide,
     queue: enqueue,
     editQueued,

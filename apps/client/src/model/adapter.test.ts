@@ -649,9 +649,12 @@ describe('the adapter', () => {
     });
     try {
       await adapter.start();
-      await adapter.retry(SESSION, RUN);
+      const retry = adapter.retry(SESSION, RUN);
+      expect(adapter.retry(SESSION, RUN)).toBe(retry);
+      await retry;
       expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
       expect(calls.find((call) => call.path.endsWith('/retry'))?.body).toMatchObject({ expected_attempt: 1, expected_settings: { model_id: 'deepseek-flash', effort: 'high' } });
+      expect(calls.filter((call) => call.path.endsWith('/retry'))).toHaveLength(1);
       const socket = FakeSocket.instances.at(-1)!;
       socket.open();
       await vi.advanceTimersByTimeAsync(0);
@@ -659,6 +662,29 @@ describe('the adapter', () => {
       socket.deliver({ type: 'message.preview', session_id: SESSION, run_id: RUN, attempt: 1, turn: 0, step_attempt: 1, offset: 0, delta: 'old' });
       expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
       expect(state().sessions[SESSION]!.stream).toBeNull();
+    } finally { adapter.dispose(); }
+  });
+
+  it('keeps accepted retry admission when its hydration fails and allows same-session refresh', async () => {
+    let retryAccepted = false;
+    let snapshots = 0;
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        snapshots += 1;
+        if (retryAccepted && snapshots === 2) return Response.json({ reason: 'unavailable', message: 'Read failed' }, { status: 409 });
+        const snapshot = snapshotBody([], retryAccepted ? 'working' : 'error');
+        return Response.json({ ...snapshot, run: { ...snapshot.run, attempt: retryAccepted ? 2 : 1 }, stream: null });
+      },
+      [`POST /w/${WS}/sessions/${SESSION}/runs/${RUN}/retry`]: () => { retryAccepted = true; return Response.json({ run_id: RUN, status: 'working', attempt: 2 }); },
+    });
+    try {
+      await adapter.start();
+      await adapter.retry(SESSION, RUN);
+      expect(state().sessions[SESSION]!.run).toMatchObject({ attempt: 2, status: 'working' });
+      expect(state().sessions[SESSION]!.hydrationError).toContain('Retry was accepted');
+      await adapter.activateSession(SESSION);
+      expect(snapshots).toBe(3);
+      expect(state().sessions[SESSION]!.hydrationError).toBeNull();
     } finally { adapter.dispose(); }
   });
 

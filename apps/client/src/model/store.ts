@@ -86,6 +86,8 @@ export interface StreamAccumulator {
   text: string;
   /** Prefix reconstructed from committed `message.delta` events. */
   durableText: string;
+  /** Last contiguous committed delta; previews never advance this sequence. */
+  seq?: number;
   blocks: Block[];
   status: 'streaming' | 'complete' | 'incomplete';
 }
@@ -108,6 +110,7 @@ export interface PendingTurn {
   runId: string | null;
   message: Message;
   previousStatus: string;
+  previousRun?: Run | null;
 }
 
 /** Local sequence numbers are layout hints, never proof of turn identity. */
@@ -505,7 +508,7 @@ export type Action =
   | { type: 'run/queue-status'; sessionId: string; status: RunQueueItem['status'] }
   | { type: 'run/clear'; sessionId: string }
   | { type: 'stream/reset'; sessionId: string; runId: string; turn: number; stepAttempt: number }
-  | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string }
+  | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string; seq?: number }
   | { type: 'stream/preview'; sessionId: string; runId: string; turn: number; stepAttempt: number; offset: number; delta: string }
   | { type: 'stream/final'; sessionId: string; message: Message }
   | { type: 'stream/reveal-complete'; sessionId: string; runId: string }
@@ -703,7 +706,7 @@ export function reduce(state: AppState, action: Action): AppState {
         const messages = new Map(session.messages.map((message) => [message.id, message]));
         for (const message of snapshot.messages.items) {
           const previous = messages.get(message.id);
-          if (previous?.status === 'complete' && message.status !== 'complete') continue;
+          if (previous?.status === 'complete' && (message.status !== 'complete' || previous.text.length > message.text.length)) continue;
           // The streaming placeholder is represented by the accumulator.
           if (message.status === 'streaming') continue;
           messages.set(message.id, message.status === 'incomplete' ? { ...message, incomplete: true } : message);
@@ -719,10 +722,13 @@ export function reduce(state: AppState, action: Action): AppState {
             if (!newerPreview) stream = { runId: incoming.run_id, turn: incoming.turn, stepAttempt: incoming.step_attempt,
               text: sameStream && stream!.text.startsWith(incoming.text) ? stream!.text : incoming.text,
               durableText: sameStream && stream!.durableText.startsWith(incoming.text) ? stream!.durableText : incoming.text,
+              seq: sameStream ? Math.max(stream!.seq ?? -1, incoming.seq) : incoming.seq,
               blocks: [], status: 'streaming' };
           } else if (incoming?.status === 'final') {
             const message = incoming.message_id ? messages.get(incoming.message_id) : null;
-            if (stream?.runId === incoming.run_id) stream = { ...stream, text: incoming.text, durableText: incoming.text,
+            const text = message?.status === 'complete' ? message.text : incoming.text;
+            const olderTurn = sameAttempt && stream?.runId === incoming.run_id && (stream.turn > incoming.turn || (stream.turn === incoming.turn && stream.stepAttempt > incoming.step_attempt));
+            if (!olderTurn && stream?.runId === incoming.run_id) stream = { ...stream, text, durableText: text,
               blocks: message?.blocks ?? [], status: message?.status === 'incomplete' ? 'incomplete' : 'complete' };
           } else if (terminalRun(run?.status ?? 'completed')) stream = null;
         }
@@ -900,7 +906,7 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'turn/optimistic':
       return withSession(state, action.sessionId, (s) => ({
         ...s,
-        pendingTurn: { clientTurnId: action.clientTurnId, runId: null, message: action.message, previousStatus: s.status },
+        pendingTurn: { clientTurnId: action.clientTurnId, runId: null, message: action.message, previousStatus: s.status, previousRun: s.run },
         run: action.run,
         status: 'Working',
         lastActivity: Date.now(),
@@ -924,7 +930,7 @@ export function reduce(state: AppState, action: Action): AppState {
         return {
           ...s,
           pendingTurn: null,
-          run: optimisticRun ? null : s.run,
+          run: optimisticRun ? s.pendingTurn.previousRun ?? null : s.run,
           status: optimisticRun ? s.pendingTurn.previousStatus : s.status,
         };
       });
@@ -1046,38 +1052,46 @@ export function reduce(state: AppState, action: Action): AppState {
 
     // --- streaming text, keyed by step_attempt (spec §4.5) ---
     case 'stream/reset':
-      return withSession(state, action.sessionId, (s) => ({
-        ...s,
-        stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', blocks: [], status: 'streaming' },
-      }));
+      return withSession(state, action.sessionId, (s) => {
+        if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
+        if (s.stream?.runId === action.runId && (s.stream.turn > action.turn || (s.stream.turn === action.turn && s.stream.stepAttempt >= action.stepAttempt))) return s;
+        return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', seq: -1, blocks: [], status: 'streaming' } };
+      });
     case 'stream/delta':
       return withSession(state, action.sessionId, (s) => {
         const current = s.stream;
+        if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
+        if (current?.runId === action.runId && current.turn > action.turn) return s;
         // A delta from a superseded attempt is discarded; a delta from a *higher*
         // attempt is an implicit reset, in case the reset was lost across a hub
         // restart.
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
-          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, blocks: [], status: 'streaming' } };
+          if (action.seq !== undefined && action.seq !== 0) return s;
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: action.delta, seq: action.seq, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt) return s;
         if (current.status !== 'streaming') return s;
+        // A gap cannot be appended safely. Keep the visible preview and let
+        // the next cumulative snapshot repair the missing committed prefix.
+        if (action.seq !== undefined && action.seq !== (current.seq ?? -1) + 1) return s;
         const durableText = current.durableText + action.delta;
         const text = current.text.startsWith(durableText) ? current.text : durableText;
-        return { ...s, stream: { ...current, text, durableText } };
+        return { ...s, stream: { ...current, text, durableText, seq: action.seq ?? current.seq } };
       });
     case 'stream/preview':
       return withSession(state, action.sessionId, (s) => {
         const current = s.stream;
         // Best-effort RPCs may finish after the final's reveal was cleared or
         // after a new run started. They must not resurrect an old accumulator.
-        if (s.run && s.run.id !== action.runId && !['completed', 'stopped', 'error'].includes(s.run.status)) return s;
+        if (s.run && s.run.id !== action.runId) return s;
         const terminalRun = s.run?.id === action.runId && ['completed', 'stopped', 'error'].includes(s.run.status);
         const savedFinal = s.messages.some((m) => m.run_id === action.runId && m.role === 'iris' && m.status !== 'streaming');
         const matchingLiveStream = current?.runId === action.runId && current.turn === action.turn && current.status === 'streaming';
         if (terminalRun || (savedFinal && !matchingLiveStream)) return s;
+        if (current?.runId === action.runId && current.turn > action.turn) return s;
         if (!current || current.runId !== action.runId || current.turn !== action.turn || action.stepAttempt > current.stepAttempt) {
           if (action.offset !== 0) return s;
-          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', blocks: [], status: 'streaming' } };
+          return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: action.delta, durableText: '', seq: -1, blocks: [], status: 'streaming' } };
         }
         if (action.stepAttempt < current.stepAttempt || action.offset > current.text.length) return s;
         if (current.status !== 'streaming') return s;
@@ -1231,6 +1245,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     : { type: 'cursor/advance', stream: 'workspace', id };
 
   if (id <= (sessionId ? state.cursors.session[sessionId] ?? 0n : state.cursors.workspace)) return [];
+  if (sessionId && event.kind === 'run.step' && state.sessions[sessionId]?.run?.id !== event.payload.run_id) return [advance];
   // Run attempts are independent of provider step attempts. Never let a late
   // frame from the previous retry reintroduce its text, steps, or failure.
   if (sessionId && 'run_id' in event.payload && 'attempt' in event.payload) {
@@ -1369,7 +1384,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     }
     case 'message.delta': {
       const p = event.payload;
-      if (sessionId) out.push({ type: 'stream/delta', sessionId, runId: p.run_id, turn: p.turn, stepAttempt: p.step_attempt, delta: p.delta });
+      if (sessionId) out.push({ type: 'stream/delta', sessionId, runId: p.run_id, turn: p.turn, stepAttempt: p.step_attempt, delta: p.delta, seq: p.seq });
       break;
     }
     case 'message.final': {
