@@ -98,6 +98,27 @@ test.describe('final handoff event ordering', () => {
   }
 
   for (const reducedMotion of [false, true]) {
+    test(`restored text is visible immediately on remount, then new deltas finish normally (reduced motion: ${reducedMotion})`, async ({ page }) => {
+      await mount(page, answer, reducedMotion);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const immediate = await page.evaluate(() => {
+          window.streamHandoffFixture.remount();
+          return document.querySelector('.stream-text .lead-text')?.textContent ?? '';
+        });
+        expect(immediate).toBe(answer.replace(/\n\n/g, ''));
+      }
+      const suffix = '\n\nA newly received ending.';
+      await page.evaluate((text) => window.streamHandoffFixture.append(text), suffix);
+      await expect(page.locator('.stream-text .lead-text')).toHaveText((answer + suffix).replace(/\n\n/g, ''));
+      await page.evaluate((text) => {
+        window.streamHandoffFixture.finalize(text);
+        window.streamHandoffFixture.terminal();
+      }, answer + suffix);
+      await expect(page.locator('.stream-text')).toHaveCount(0);
+      await expect(page.locator('.msg-iris .lead-text')).toHaveText((answer + suffix).replace(/\n\n/g, ''));
+      await expect(page.locator('.msg-iris')).toHaveCount(1);
+    });
+
     test(`keeps the answer visible until delayed run completion (reduced motion: ${reducedMotion})`, async ({ page }, testInfo) => {
       await mount(page, answer, reducedMotion);
       const missingFrames = await page.evaluate(async (text) => {
