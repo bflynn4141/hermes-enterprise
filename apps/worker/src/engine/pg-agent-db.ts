@@ -850,11 +850,7 @@ export class PgAgentDb implements AgentDb {
       const { rows } = await q<Record<string, unknown>>(
         `SELECT id, kind, status, label, created_at FROM requests
           WHERE workspace_id = $1 AND ($2::text IS NULL OR status = $2)
-            AND NOT EXISTS (
-              SELECT 1 FROM request_audiences audience
-               WHERE audience.workspace_id=requests.workspace_id
-                 AND audience.request_id=requests.id
-            )
+            AND agent_request_is_unscoped(requests.id)
           ORDER BY created_at DESC LIMIT $3`,
         [this.workspaceId, status, Math.min(50, Math.max(1, limit))],
       );
@@ -868,11 +864,7 @@ export class PgAgentDb implements AgentDb {
         `SELECT id, kind, status, label, payload, created_at
            FROM requests
           WHERE workspace_id=$1 AND id=$2
-            AND NOT EXISTS (
-              SELECT 1 FROM request_audiences audience
-               WHERE audience.workspace_id=requests.workspace_id
-                 AND audience.request_id=requests.id
-            )`,
+            AND agent_request_is_unscoped(requests.id)`,
         [this.workspaceId, requestId],
       );
       const row = rows[0];
@@ -899,11 +891,7 @@ export class PgAgentDb implements AgentDb {
         `SELECT document.payload->>'text' AS body
            FROM documents document
           WHERE document.workspace_id=$1 AND document.id=$2
-            AND NOT EXISTS (
-              SELECT 1 FROM request_audiences audience
-               WHERE audience.workspace_id=document.workspace_id
-                 AND audience.request_id=document.request_id
-            )`,
+            AND agent_request_is_unscoped(document.request_id)`,
         [this.workspaceId, documentId],
       );
       const body = rows[0]?.body;

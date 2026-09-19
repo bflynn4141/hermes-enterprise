@@ -295,6 +295,27 @@ GRANT SELECT, INSERT ON partner_invoice_intakes, partner_record_revisions TO app
 REVOKE ALL ON partner_workflow_settings, partner_engagement_authorizations,
   partner_record_revisions, partner_invoice_intakes, partner_decision_acknowledgments FROM agent;
 
+-- Agent tools may read legacy workspace-visible requests, but must not learn
+-- scoped audience principals. Expose only the one fail-closed visibility bit.
+CREATE OR REPLACE FUNCTION agent_request_is_unscoped(target_request_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM requests request
+     WHERE request.workspace_id=app_workspace_id() AND request.id=target_request_id
+       AND NOT EXISTS (
+         SELECT 1 FROM request_audiences audience
+          WHERE audience.workspace_id=request.workspace_id AND audience.request_id=request.id
+       )
+  )
+$$;
+REVOKE ALL ON FUNCTION agent_request_is_unscoped(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION agent_request_is_unscoped(uuid) TO app,agent;
+
 ALTER TABLE events DROP CONSTRAINT IF EXISTS events_kind_check;
 ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
   'decision.recorded', 'request.created', 'effect.assigned', 'effect.executed', 'effect.cancelled',
