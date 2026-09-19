@@ -22,6 +22,7 @@ import {
   type Run,
   type RunQueueItem,
   type StreamEvent,
+  type SessionSnapshot,
 } from '@hermes/shared';
 
 // ---------------------------------------------------------------------------
@@ -164,6 +165,24 @@ export interface SessionState {
    * people stop trusting with names.
    */
   titleSource: 'auto' | 'manual';
+  settingsPending?: boolean;
+  settingsError?: string | null;
+  hydrationError?: string | null;
+  recovery?: SessionSnapshot['recovery'];
+}
+
+const terminalRun = (status: Run['status']): boolean => ['completed', 'stopped', 'error'].includes(status);
+
+/** The waiting clock may move earlier, but never later within one attempt. */
+function mergeRun(current: Run | null, incoming: Run, sameTurn = false): Run {
+  if (!current || (!sameTurn && current.id !== incoming.id) || current.attempt < incoming.attempt) return incoming;
+  if (current.attempt > incoming.attempt) return current;
+  const started = [current.started_at, incoming.started_at].filter((value): value is string => Boolean(value));
+  return {
+    ...incoming,
+    ...(started.length ? { started_at: started.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! } : {}),
+    ...(terminalRun(current.status) && !terminalRun(incoming.status) ? { status: current.status, error: current.error, active_ms: current.active_ms } : {}),
+  };
 }
 
 export type LinkStatus = 'idle' | 'connecting' | 'open' | 'replaying' | 'reconnecting' | 'signed-out' | 'evicted';
@@ -453,6 +472,7 @@ export type Action =
   | { type: 'session/rollback'; id: string }
   | { type: 'session/upsert'; session: Session }
   | { type: 'session/select'; id: string }
+  | { type: 'session/snapshot'; snapshot: SessionSnapshot }
   | { type: 'session/rename'; id: string; title: string }
   | { type: 'session/auto-title'; id: string; title: string }
   | { type: 'session/pin'; id: string; pinned?: boolean }
@@ -667,6 +687,55 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, ui: { ...state.ui, ...action.patch } };
 
     // --- sessions ---
+    case 'session/snapshot': {
+      const { snapshot } = action;
+      const id = snapshot.session.id;
+      const current = state.sessions[id];
+      const watermark = BigInt(snapshot.watermark);
+      if (snapshot.workspace_id !== state.workspace.id || !current || watermark < (state.cursors.session[id] ?? 0n)) return state;
+      if (current.run?.id === snapshot.run?.id && current.run && snapshot.run && current.run.attempt > snapshot.run.attempt) return state;
+      let next = reduce(state, { type: 'session/upsert', session: snapshot.session });
+      next = withSession(next, id, (session) => {
+        // An admission in flight may postdate the snapshot transaction. Keep
+        // its projection until admission or its own run appears in a snapshot.
+        const pendingNewer = Boolean(session.pendingTurn && session.pendingTurn.runId !== snapshot.run?.id);
+        const run = pendingNewer ? session.run : snapshot.run ? mergeRun(session.run, snapshot.run) : session.run;
+        const messages = new Map(session.messages.map((message) => [message.id, message]));
+        for (const message of snapshot.messages.items) {
+          const previous = messages.get(message.id);
+          if (previous?.status === 'complete' && message.status !== 'complete') continue;
+          // The streaming placeholder is represented by the accumulator.
+          if (message.status === 'streaming') continue;
+          messages.set(message.id, message.status === 'incomplete' ? { ...message, incomplete: true } : message);
+        }
+        let stream = session.stream;
+        const incoming = snapshot.stream;
+        if (!pendingNewer && run?.id === snapshot.run?.id) {
+          const sameAttempt = session.run?.id === run?.id && session.run?.attempt === run?.attempt;
+          if (!sameAttempt) stream = null;
+          if (incoming && incoming.status === 'streaming' && !terminalRun(run!.status)) {
+            const sameStream = sameAttempt && stream?.runId === incoming.run_id && stream.turn === incoming.turn && stream.stepAttempt === incoming.step_attempt;
+            const newerPreview = sameAttempt && stream?.runId === incoming.run_id && (stream.turn > incoming.turn || (stream.turn === incoming.turn && stream.stepAttempt > incoming.step_attempt));
+            if (!newerPreview) stream = { runId: incoming.run_id, turn: incoming.turn, stepAttempt: incoming.step_attempt,
+              text: sameStream && stream!.text.startsWith(incoming.text) ? stream!.text : incoming.text,
+              durableText: sameStream && stream!.durableText.startsWith(incoming.text) ? stream!.durableText : incoming.text,
+              blocks: [], status: 'streaming' };
+          } else if (incoming?.status === 'final') {
+            const message = incoming.message_id ? messages.get(incoming.message_id) : null;
+            if (stream?.runId === incoming.run_id) stream = { ...stream, text: incoming.text, durableText: incoming.text,
+              blocks: message?.blocks ?? [], status: message?.status === 'incomplete' ? 'incomplete' : 'complete' };
+          } else if (terminalRun(run?.status ?? 'completed')) stream = null;
+        }
+        const ordered = [...messages.values()];
+        const order = (message: Message): number => message.seq < Number.MAX_SAFE_INTEGER ? message.seq
+          : (ordered.find((item) => item.role === 'user' && item.run_id === message.run_id)?.seq ?? Number.MAX_SAFE_INTEGER - 1) + 0.5;
+        ordered.sort((a, b) => order(a) - order(b));
+        const pendingTurn = session.pendingTurn && ordered.some((message) => confirmsPendingTurn(session.pendingTurn, message)) ? null : session.pendingTurn;
+        return { ...session, messages: ordered, oldestSeq: ordered[0]?.seq ?? null, hasEarlier: snapshot.messages.cursor !== null,
+          run, stream, pendingTurn, status: run?.status ?? session.status, recovery: snapshot.recovery, hydrationError: null };
+      });
+      return { ...next, cursors: { ...next.cursors, session: { ...next.cursors.session, [id]: watermark } } };
+    }
     case 'session/create': {
       const session: SessionState = {
         id: action.id,
@@ -753,6 +822,7 @@ export function reduce(state: AppState, action: Action): AppState {
             stream: existing.stream,
             scrollTop: existing.scrollTop,
             unread: existing.unread,
+            ...(existing.settingsPending || existing.settingsError ? { model: existing.model, effort: existing.effort } : {}),
             // Two title races, both lost without this (decision C34). A manual
             // rename is sticky: the row that re-delivers the old title must not
             // undo it. And a local auto-title beats the server's placeholder,
@@ -904,22 +974,20 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'message/prepend':
       return withSession(state, action.sessionId, (s) => ({
         ...s,
-        messages: [...action.messages, ...s.messages],
+        messages: [...action.messages.filter((message) => !s.messages.some((current) => current.id === message.id)), ...s.messages].sort((a, b) => a.seq - b.seq),
         oldestSeq: action.messages[0]?.seq ?? s.oldestSeq,
         hasEarlier: action.hasEarlier,
       }));
 
     // --- runs ---
     case 'run/start':
-      return withSession(state, action.sessionId, (s) => ({
-        ...s,
-        pendingTurn:
-          action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId
-            ? admitPendingTurn(s, action.run.id)
-            : s.pendingTurn,
-        run: action.run,
-        status: 'Working',
-      }));
+      return withSession(state, action.sessionId, (s) => {
+        const sameTurn = Boolean(action.clientTurnId && s.pendingTurn?.clientTurnId === action.clientTurnId);
+        const run = mergeRun(s.run, action.run, sameTurn);
+        const changedAttempt = s.run?.id !== run.id || s.run.attempt !== run.attempt;
+        return { ...s, pendingTurn: sameTurn ? admitPendingTurn(s, run.id) : s.pendingTurn,
+          run, status: run.status, stream: changedAttempt ? null : s.stream };
+      });
     case 'run/step':
       return withRun(state, action.sessionId, (run) => {
         const found = run.steps.some((step) => step.id === action.stepId);
@@ -952,11 +1020,13 @@ export function reduce(state: AppState, action: Action): AppState {
       // already painted. Status belongs to the run named by the event; letting
       // a late completion mutate whichever run is current removes Thinking
       // from the new turn and leaves only its user bubble on screen.
-      return withSession(state, action.sessionId, (s) =>
-        s.run?.id === action.runId
-          ? { ...s, status: action.status, run: { ...s.run, status: action.status, ...(action.patch ?? {}) } }
-          : s,
-      );
+      return withSession(state, action.sessionId, (s) => {
+        if (s.run?.id !== action.runId) return s;
+        const newer = (action.patch?.attempt ?? s.run.attempt) > s.run.attempt;
+        const incoming = { ...s.run, ...(newer ? { steps: [], queue: [], error: null, started_at: undefined } : {}), status: action.status, ...action.patch };
+        const run = mergeRun(s.run, incoming);
+        return { ...s, status: run.status, run, stream: newer ? null : s.stream };
+      });
     case 'run/guide':
       return withRun(state, action.sessionId, (run) => ({ ...run, guidance: { id: action.id, text: action.text, status: 'pending' } }));
     case 'run/guide-apply':
@@ -1034,7 +1104,7 @@ export function reduce(state: AppState, action: Action): AppState {
               text: action.message.text,
               durableText: action.message.text,
               blocks: action.message.blocks,
-              status: action.message.incomplete ? 'incomplete' : 'complete',
+              status: action.message.status === 'incomplete' || action.message.incomplete ? 'incomplete' : 'complete',
             }
           : s.stream,
         lastActivity: Date.now(),
@@ -1160,6 +1230,20 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     ? { type: 'cursor/advance', stream: 'session', sessionId, id }
     : { type: 'cursor/advance', stream: 'workspace', id };
 
+  if (id <= (sessionId ? state.cursors.session[sessionId] ?? 0n : state.cursors.workspace)) return [];
+  // Run attempts are independent of provider step attempts. Never let a late
+  // frame from the previous retry reintroduce its text, steps, or failure.
+  if (sessionId && 'run_id' in event.payload && 'attempt' in event.payload) {
+    const current = state.sessions[sessionId]?.run;
+    const payload = event.payload;
+    if (current?.id === payload.run_id && typeof payload.attempt === 'number') {
+      if (payload.attempt < current.attempt) return [advance];
+      if (payload.attempt > current.attempt && event.kind !== 'run.started' && event.kind !== 'run.status') {
+        out.push({ type: 'run/start', sessionId, run: { ...current, attempt: payload.attempt, status: 'working', steps: [], queue: [], error: null, started_at: event.at } });
+      }
+    }
+  }
+
   switch (event.kind) {
     case 'run.started': {
       const p = event.payload;
@@ -1222,6 +1306,8 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
           runId: p.run_id,
           status: p.status,
           patch: {
+            attempt: p.attempt,
+            ...(state.sessions[sessionId]?.run?.attempt !== p.attempt ? { started_at: event.at } : {}),
             waiting_for: p.waiting_for ?? null,
             waiting_label: p.waiting_label ?? null,
             active_ms: p.active_ms ?? null,

@@ -453,6 +453,7 @@ function UserMessage({ message }: { message: Message }) {
 function IrisMessage({ message, session }: { message: Message; session: SessionState }) {
   const adapter = useAdapter();
   const state = useAppState();
+  const [retryError, setRetryError] = useState<string | null>(null);
   const requests = Object.values(state.entities.request)
     .map((record) => record.data as RequestEntity | null)
     .filter((request): request is RequestEntity => request !== null);
@@ -491,17 +492,19 @@ function IrisMessage({ message, session }: { message: Message; session: SessionS
           {receipts.map((requestId) => <ReceiptBlock key={requestId} requestId={requestId} />)}
         </div>
       )}
-      {message.incomplete && (
+      {(message.incomplete || message.status === 'incomplete') && (
         <div className="incomplete-footer" role="status" style={{ paddingLeft: 40 }}>
           <span>{EMPTY.incomplete}</span>
-          <Button
+          {(session.run?.id !== message.run_id || (session.run.status !== 'working' && session.run.status !== 'completed' && session.run.error?.retryable !== false)) && <Button
             small
             onClick={() => {
-              if (message.run_id) void adapter.retry(session.id, message.run_id);
+              setRetryError(null);
+              if (message.run_id) void adapter.retry(session.id, message.run_id).catch(() => setRetryError('Could not retry this response. Check the selected model and try again.'));
             }}
           >
             Retry
-          </Button>
+          </Button>}
+          {retryError && <span role="alert">{retryError}</span>}
         </div>
       )}
       {message.worked_ms != null && <ResponseFooter message={message} session={session} workspaceId={state.workspace.id} />}

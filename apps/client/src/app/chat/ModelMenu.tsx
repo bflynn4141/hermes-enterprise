@@ -196,8 +196,7 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
         disabled_reason: row.disabled_reason,
       },
     });
-    dispatch({ type: 'session/set', id: session.id, patch: { model: row.model_id, effort } });
-    void adapter.rest.patchSession(state.workspace.id, session.id, { model_id: row.model_id }).catch(() => undefined);
+    void adapter.updateSessionSettings(session.id, { model_id: row.model_id, effort }).catch(() => undefined);
   };
 
   /**

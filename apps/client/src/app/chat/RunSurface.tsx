@@ -28,6 +28,7 @@ import { readableTool } from '../tool-copy.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
 import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
+import { runClockKey, waitingElapsed } from '../../model/run-clock.js';
 
 const systemNow = (): number => Date.now();
 
@@ -40,19 +41,20 @@ export function formatRunElapsed(startedAt: string, now: number): string {
   return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(1)}s`;
 }
 
-function RunElapsed({ startedAt, active, now }: { startedAt: string; active: boolean; now: () => number }) {
-  const [current, setCurrent] = useState(() => now());
+function RunElapsed({ clockId, startedAt, active, now }: { clockId: string; startedAt: string; active: boolean; now: () => number }) {
+  const read = () => waitingElapsed(clockId, startedAt, now());
+  const [current, setCurrent] = useState(read);
 
   useEffect(() => {
-    setCurrent(now());
+    setCurrent(read());
     if (!active) return;
-    const timer = window.setInterval(() => setCurrent(now()), 100);
+    const timer = window.setInterval(() => setCurrent(read()), 100);
     return () => window.clearInterval(timer);
-  }, [active, now, startedAt]);
+  }, [active, now, startedAt, clockId]);
 
   return (
     <span className="live-run-elapsed" aria-hidden="true">
-      {formatRunElapsed(startedAt, current)}
+      {formatRunElapsed('1970-01-01T00:00:00.000Z', current)}
     </span>
   );
 }
@@ -156,7 +158,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
               label={`${phaseLabel}…`}
               variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
             />
-            {run.started_at && <RunElapsed startedAt={run.started_at} active={working} now={now} />}
+            {run.started_at && <RunElapsed key={runClockKey(session.id, run.id, run.attempt)} clockId={runClockKey(session.id, run.id, run.attempt)} startedAt={run.started_at} active={working} now={now} />}
           </div>
           {liveTools.length > 0 && (
             <div className="live-tool-list" role="list" aria-label="Tool activity">

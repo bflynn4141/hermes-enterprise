@@ -364,11 +364,11 @@ function RequestDetail({ id }: { id: string | null }) {
 
 function TaskView({ request }: { request: RequestEntity }) {
   const nav = useNav();
-  const dispatch = useDispatch();
+  const adapter = useAdapter();
   const payload = record(request.payload);
   const openIris = (): void => {
     const sessionId = text(payload.session_id);
-    if (sessionId) dispatch({ type: 'session/select', id: sessionId });
+    if (sessionId) void adapter.activateSession(sessionId).catch(() => undefined);
     nav(CTX);
   };
   return <div className="scroll"><div className="app-body">

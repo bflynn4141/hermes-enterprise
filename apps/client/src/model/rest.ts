@@ -34,6 +34,8 @@ import {
   providerOAuthStartSchema,
   providerOAuthPollSchema,
   runViewSchema,
+  sessionSnapshotSchema,
+  type SessionSettings,
   guidanceAcceptedSchema,
   queueStateSchema,
   attachmentSchema,
@@ -287,12 +289,14 @@ export function createRest(options: RestOptions) {
     // Every control is scoped to a run, not to a session: the Worker's routes
     // are `/sessions/:id/runs/:runId/...`, because "the session's current run"
     // is a race the client would have to win and the server already knows.
-    sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null }) =>
+    sessionSnapshot: (workspaceId: string, sessionId: string) =>
+      request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
+    sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
-    retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt }) as Promise<RunView>,
+    retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt, ...(expectedSettings ? { expected_settings: expectedSettings } : {}) }) as Promise<RunView>,
     agentRecovery: (workspaceId: string, agentId: string, runId?: string) =>
       request('GET', `${ws(workspaceId)}/agents/${agentId}/recovery${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`, agentRecoveryViewSchema),
     wakeAgent: (workspaceId: string, agentId: string, body: AgentWakeInput) =>

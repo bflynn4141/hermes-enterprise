@@ -75,24 +75,15 @@ export async function refreshRecoveryContext(adapter: Adapter, store: Store, wor
   if (store.getState().workspace.id !== workspaceId) return;
   for (const session of sessions.items) store.dispatch({ type: 'session/upsert', session });
   if (!view.run_id || !view.session_id || view.attempt === null) return;
-  const run = await adapter.rest.run(workspaceId, view.session_id, view.run_id);
+  const snapshot = await adapter.rest.sessionSnapshot(workspaceId, view.session_id);
+  const run = snapshot.run;
   if (store.getState().workspace.id !== workspaceId) return;
   const current = store.getState().sessions[view.session_id];
-  if (!current || run.attempt < view.attempt) return;
+  if (!current || !run || run.id !== view.run_id || run.agent_id !== agentId || run.attempt < view.attempt) return;
   // A newer stream event or another task must not be overwritten by this GET.
   if (current.run && current.run.id !== view.run_id && current.run !== before) return;
   if (current.run?.id === view.run_id && current.run.attempt > run.attempt) return;
-  if (current.run?.id === view.run_id && current.run.attempt === run.attempt) {
-    if (!['completed', 'stopped', 'error'].includes(current.run.status) && current.run.status !== run.status) {
-      store.dispatch({ type: 'run/status', sessionId: view.session_id, runId: run.run_id, status: run.status });
-    }
-    return;
-  }
-  store.dispatch({ type: 'run/start', sessionId: view.session_id, run: {
-    id: run.run_id, session_id: view.session_id, agent_id: agentId,
-    status: run.status, attempt: run.attempt, title: current.title, steps: [], queue: [],
-  } });
-  store.dispatch({ type: 'run/status', sessionId: view.session_id, runId: run.run_id, status: run.status });
+  store.dispatch({ type: 'session/snapshot', snapshot });
 }
 
 export function useAgentRecovery(runId?: string) {

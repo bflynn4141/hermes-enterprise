@@ -15,10 +15,11 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
+import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
@@ -1084,6 +1085,28 @@ export function createMockBackend(options: MockOptions = {}) {
       const sessionId = sessionMatch[1]!;
       const rest = sessionMatch[2] ?? '';
       const row = sessions.find((s) => s.id === sessionId);
+      if (rest === '/snapshot' && row) {
+        const session = sessionFrom(sessionSchema.parse(row));
+        session.messages = (messages[sessionId] ?? []).map((message) => messageSchema.parse(message));
+        let snapshotState = { ...initialState(), sessions: { [sessionId]: session } };
+        for (const event of backlog.filter((item) => item.session_id === sessionId)) {
+          for (const action of actionsFor(event, snapshotState)) snapshotState = reduce(snapshotState, action);
+        }
+        const current = snapshotState.sessions[sessionId]!;
+        const recovered = options.recovery && recoveryView.session_id === sessionId && recoveryView.run_id ? {
+          id: recoveryView.run_id, session_id: sessionId, agent_id: row.agent_id, attempt: recoveryView.attempt ?? 1,
+          status: recoveryView.state === 'working' || recoveryView.state === 'queued' ? 'working' : recoveryView.state === 'idle' ? 'completed' : recoveryView.state === 'stopped' ? 'stopped' : 'error',
+          title: null, steps: [], queue: [], error: recoveryView.state === 'retryable' || recoveryView.state === 'blocked' ? { class: 'provider', retryable: recoveryView.can_retry, reason: 'provider_error', message: recoveryView.message } : null,
+        } : null;
+        const run = current.run ?? recovered;
+        return json({ workspace_id: WS, session: row, watermark: head.toString(),
+          messages: { items: current.messages, cursor: null, total: current.messages.length },
+          run: run ? { ...run, model_id: row.model_id, effort: row.effort, started_at: current.run?.started_at ?? iso(), admitted_at: current.run?.started_at ?? iso(), execution_started_at: null, ended_at: null } : null,
+          stream: current.stream && run ? { run_id: run.id, attempt: run.attempt, turn: current.stream.turn, step_attempt: current.stream.stepAttempt,
+            message_id: null, text: current.stream.durableText, seq: -1, status: current.stream.status === 'streaming' ? 'streaming' : 'final' } : null,
+          recovery: null,
+        });
+      }
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
@@ -1114,7 +1137,8 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       if (rest.startsWith('/queue/')) return new Response(null, { status: 204 });
       if (method === 'PATCH' && row) {
-        Object.assign(row, body);
+        const { expected_settings: _expected, ...patch } = body;
+        Object.assign(row, patch);
         return json(row);
       }
       if (method === 'DELETE') return new Response(null, { status: 204 });

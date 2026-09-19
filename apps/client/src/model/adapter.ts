@@ -19,6 +19,7 @@ import {
   type BlockCommand,
   type Ref,
   type StreamEvent,
+  type SessionSettings,
 } from '@hermes/shared';
 import type {
   Attachment,
@@ -60,6 +61,7 @@ import {
 } from './store.js';
 import { clearStepUp, createAuth, readStepUp, storeStepUp, type AuthAdapter, type StepUpIntent } from './auth.js';
 import { draftsKey } from './constants.js';
+import { runClockKey, waitingOrigin } from './run-clock.js';
 
 export const AUTH_REFRESH_MS = 4 * 60 * 1000;
 export const SESSION_RECONCILE_ACTIVE_MS = 2_000;
@@ -100,6 +102,8 @@ export interface Adapter {
   upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string }): Promise<Attachment>;
   decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | 'reauth_required'>;
   applyCommand(sessionId: string, command: BlockCommand): void;
+  activateSession(sessionId: string): Promise<void>;
+  updateSessionSettings(sessionId: string, settings: SessionSettings): Promise<void>;
   openSession(sessionId: string): void;
   ensure(kind: EntityKind, id: string, force?: boolean): void;
   ensureList(key: string, load: () => Promise<{ ids: string[]; cursor: string | null; total: number | null; rows: { kind: EntityKind; id: string; data: unknown; version?: number }[] }>): void;
@@ -147,16 +151,26 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
   const state = (): AppState => store.getState();
   const dispatch = (action: Action): void => {
+    const stableRun = <T extends Run>(run: T): T => run.started_at ? {
+      ...run, started_at: waitingOrigin(runClockKey(run.session_id, run.id, run.attempt), run.started_at),
+    } : run;
+    if (action.type === 'run/start' || action.type === 'turn/optimistic') action = { ...action, run: stableRun(action.run) };
+    if (action.type === 'session/snapshot' && action.snapshot.run) action = { ...action, snapshot: { ...action.snapshot, run: stableRun(action.snapshot.run) } };
     store.dispatch(action);
+    // Admission replaces the optimistic id without changing the waiting origin.
+    if (action.type === 'turn/accepted') {
+      const run = state().sessions[action.sessionId]?.run;
+      if (run?.started_at) waitingOrigin(runClockKey(run.session_id, run.id, run.attempt), run.started_at);
+    }
   };
 
   let workspaceHub: Hub | null = null;
   let sessionHub: Hub | null = null;
   let sessionHubId: string | null = null;
+  let activationGeneration = 0;
+  let activation: { id: string; promise: Promise<void> } | null = null;
   let refreshHandle: unknown = null;
   let ticket = '';
-  /** `heads.session` from the last bootstrap; where a new session hub starts. */
-  let sessionHead = 0n;
   let disposed = false;
   const inFlight = new Set<string>();
   const turnIds = new Map<string, string>();
@@ -195,7 +209,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // A terminal status can be the later half of a partially delivered
       // terminal batch. Force one authoritative snapshot even if an earlier
       // provider-turn message makes the local transcript look non-empty.
-      void reconcileSessionSnapshot(event.session_id, true);
+      void reconcileSessionSnapshot(event.session_id, true).catch(() => {
+        dispatch({ type: 'session/set', id: event.session_id!, patch: { hydrationError: 'Could not refresh this conversation. Select it again to retry.' } });
+      });
     }
   }
 
@@ -238,7 +254,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
   function sessionNeedsSnapshot(sessionId: string): boolean {
     const session = state().sessions[sessionId];
     const run = session?.run;
-    if (!session || !run) return false;
+    if (!session) return false;
+    if (!run) return false;
     const hasAnswer = session.messages.some((message) => message.role === 'iris' && message.run_id === run.id);
     return (
       session.pendingTurn?.runId === run.id ||
@@ -257,7 +274,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
   function reconcileSessionSnapshot(sessionId: string, force = false): Promise<void> {
     const active = sessionSnapshots.get(sessionId);
     if (active) return active;
-    if (!force && !sessionNeedsSnapshot(sessionId)) return Promise.resolve();
+    // A sequence id is allocated before commit. A lower-id transaction can
+    // become visible after replay reached a higher id, so even an unchanged
+    // idle watermark needs the periodic authoritative state check.
+    void force;
     const task = reconcileSessionSnapshotOnce(sessionId);
     sessionSnapshots.set(sessionId, task);
     const clear = (): void => {
@@ -268,45 +288,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function reconcileSessionSnapshotOnce(sessionId: string): Promise<void> {
-    const expectedRunId = state().sessions[sessionId]?.run?.id;
-    if (!expectedRunId) return;
-    const [runView, page] = await Promise.all([
-      rest.run(workspaceId, sessionId, expectedRunId),
-      rest.messages(workspaceId, sessionId, null, 100),
-    ]);
-    if (disposed) return;
-    const latestRun = state().sessions[sessionId]?.run;
-    // A retry can reuse a run id while this snapshot is in flight. Its older
-    // message and status must not overwrite the newer attempt's stream.
-    if (latestRun?.id === runView.run_id && latestRun.attempt !== runView.attempt) return;
-
-    for (const message of page.items) {
-      const current = state().sessions[sessionId];
-      if (!current) return;
-      const seen = current.messages.some((item) => item.id === message.id);
-      if (message.role === 'iris') {
-        // The message row exists while native deltas are still arriving. Its
-        // placeholder text is not a final answer and may lag the live preview.
-        if (message.status === 'streaming') continue;
-        const ownsUnsettledStream = Boolean(message.run_id && current.stream?.runId === message.run_id && current.stream.status === 'streaming');
-        if (!seen || ownsUnsettledStream) dispatch({ type: 'stream/final', sessionId, message });
-      } else if (message.role === 'user' && (!seen || current.pendingTurn)) {
-        dispatch({ type: 'message/confirm-turn', sessionId, message });
-      } else if (!seen) {
-        dispatch({ type: 'message/add', sessionId, message });
-      }
-    }
-
-    const current = state().sessions[sessionId];
-    const run = current?.run;
-    if (!current || !run || run.id !== runView.run_id) return;
-    const answer = [...current.messages].reverse().find((message) => message.role === 'iris' && message.run_id === run.id);
-    // A live terminal event can beat a snapshot taken while the run was still
-    // working. Terminal state is monotonic within this same attempt.
-    if (!['completed', 'stopped', 'error'].includes(run.status) && run.status !== runView.status) {
-      dispatch({ type: 'run/status', sessionId, runId: run.id, status: runView.status, patch: { active_ms: answer?.worked_ms ?? null } });
-    }
-    reconciledRuns.add(expectedRunId);
+    const generation = activationGeneration;
+    const before = state().sessions[sessionId]?.run;
+    const snapshot = await rest.sessionSnapshot(workspaceId, sessionId);
+    if (disposed || generation !== activationGeneration || state().activeSessionId !== sessionId) return;
+    if (snapshot.workspace_id !== workspaceId || snapshot.session.id !== sessionId) throw new Error('The session response did not match the selected conversation.');
+    const latest = state().sessions[sessionId]?.run;
+    if (latest && latest !== before && latest.id !== snapshot.run?.id && !state().sessions[sessionId]?.pendingTurn) return;
+    dispatch({ type: 'session/snapshot', snapshot });
+    if (snapshot.run) reconciledRuns.add(snapshot.run.id);
   }
 
   function attachWorkspaceHub(): void {
@@ -334,20 +324,42 @@ export function createAdapter(options: AdapterOptions): Adapter {
     });
   }
 
-  function openSession(sessionId: string): void {
-    // Opening a session loads its most recent window once; "Load earlier" pages
-    // backwards from `oldestSeq` after that.
-    const session = state().sessions[sessionId];
-    if (session && session.messages.length === 0 && !inFlight.has(`messages:${sessionId}`)) {
-      inFlight.add(`messages:${sessionId}`);
-      void rest
-        .messages(workspaceId, sessionId, null, 100)
-        .then((page) => dispatch({ type: 'message/prepend', sessionId, messages: page.items, hasEarlier: page.cursor !== null }))
-        .catch(() => undefined)
-        .finally(() => inFlight.delete(`messages:${sessionId}`));
-    }
-    if (sessionHubId === sessionId && sessionHub) return;
+  function activateSession(sessionId: string): Promise<void> {
+    if (!state().sessions[sessionId] || disposed) return Promise.resolve();
+    if (activation?.id === sessionId && state().activeSessionId === sessionId) return activation.promise;
+    dispatch({ type: 'session/select', id: sessionId });
+    if (sessionHubId === sessionId && sessionHub && !state().sessions[sessionId]?.hydrationError) return Promise.resolve();
+    const generation = ++activationGeneration;
     sessionHub?.close();
+    sessionHub = null;
+    sessionHubId = null;
+    const promise = (async () => {
+      if (sessionId.startsWith('local-')) return;
+      dispatch({ type: 'session/set', id: sessionId, patch: { hydrationError: null } });
+      try {
+        // Hydrate first, then replay after precisely that committed boundary.
+        // Anything that happens during this GET remains in durable replay.
+        await reconcileSessionSnapshotOnce(sessionId);
+        if (disposed || generation !== activationGeneration || state().activeSessionId !== sessionId) return;
+        attachSessionHub(sessionId, generation);
+      } catch (error) {
+        if (generation !== activationGeneration || disposed) return;
+        dispatch({ type: 'session/set', id: sessionId, patch: { hydrationError: 'Could not load this conversation. Select it again to retry.' } });
+        throw error;
+      }
+    })();
+    activation = { id: sessionId, promise };
+    const clear = () => { if (activation?.promise === promise) activation = null; };
+    void promise.then(clear, clear);
+    return promise;
+  }
+
+  function openSession(sessionId: string): void {
+    // The adapter stores the actionable error beside the selected transcript.
+    void activateSession(sessionId).catch(() => undefined);
+  }
+
+  function attachSessionHub(sessionId: string, generation: number): void {
     sessionHubId = sessionId;
     sessionHub = createHub({
       kind: 'session',
@@ -361,11 +373,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // rows at a time, before it can deliver anything live. The transcript
       // itself comes from `GET .../messages`; the socket only ever needs what
       // happens from now on.
-      after: state().cursors.session[sessionId] ?? sessionHead,
+      after: state().cursors.session[sessionId] ?? 0n,
       accept: (event) => event.session_id === sessionId,
-      onEvent: (event) => applyEvent(event),
+      onEvent: (event) => { if (!disposed && generation === activationGeneration) applyEvent(event); },
       onPreview: (frame) => {
-        if (frame.session_id !== sessionId) return;
+        if (disposed || generation !== activationGeneration || frame.session_id !== sessionId) return;
+        const run = state().sessions[sessionId]?.run;
+        if (run?.id === frame.run_id && frame.attempt !== run.attempt) return;
         dispatch({
           type: 'stream/preview',
           sessionId,
@@ -376,7 +390,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
           delta: frame.delta,
         });
       },
-      onState: (link) => dispatch({ type: 'link/state', kind: 'session', patch: link }),
+      onState: (link) => { if (!disposed && generation === activationGeneration) dispatch({ type: 'link/state', kind: 'session', patch: link }); },
       onResync: () => void resync(),
       replay: async (after) => {
         const page = await rest.events(workspaceId, 'session', after);
@@ -566,7 +580,6 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const boot = await rest.bootstrap(workspaceId);
     const extra = await loadExtra();
     ticket = extra.hubTicket;
-    sessionHead = BigInt(boot.heads.session);
 
     // A re-bootstrap (a resync) must not take the draft with it: what the
     // person typed is theirs, and the server has never seen it.
@@ -604,7 +617,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         },
         sessions,
         sessionOrder: boot.sessions.map((row) => row.id),
-        activeSessionId: boot.sessions[0]?.id ?? null,
+        activeSessionId: state().activeSessionId && sessions[state().activeSessionId!] ? state().activeSessionId : boot.sessions[0]?.id ?? null,
         counts: {
           inbox: boot.counts.inbox,
           pendingForMe: boot.counts.pending_for_me ?? boot.counts.inbox,
@@ -639,8 +652,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
     restoreDrafts();
     attachWorkspaceHub();
+    // Resync replaces the snapshot boundary, so its hub must be replaced too.
+    sessionHub?.close();
+    sessionHub = null;
     const active = state().activeSessionId;
-    if (active) openSession(active);
+    if (active) await activateSession(active);
     refreshHandle = setIntervalImpl(() => void refreshAuth(), AUTH_REFRESH_MS);
     const doc = options.visibility ?? (typeof document === 'undefined' ? null : document);
     doc?.addEventListener('visibilitychange', onVisibility);
@@ -784,13 +800,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
     let routeId = sessionId;
     try {
       routeId = await serverSessionId(sessionId);
+      if (activation?.id === routeId) await activation.promise;
+      const settings = await confirmedSessionSettings(routeId);
       const accepted = await rest.sendTurn(workspaceId, routeId, {
         text: trimmed,
         client_turn_id: turnId,
         attachments,
         mode: session.mode,
-        model_id: session.model,
-        effort: session.effort,
+        ...settings,
+        expected_settings: settings,
       });
       const id = state().sessions[routeId] ? routeId : sessionId;
       dispatch({
@@ -845,9 +863,69 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * failure was a turn that vanished (decision C34).
    */
   const creating = new Map<string, Promise<string>>();
+  const createdIds = new Map<string, string>();
+
+  interface SettingsMutation {
+    confirmed: SessionSettings;
+    version: number;
+    pending: Promise<void> | null;
+  }
+  const settingsMutations = new Map<string, SettingsMutation>();
+
+  function updateSessionSettings(sessionId: string, settings: SessionSettings): Promise<void> {
+    const id = createdIds.get(sessionId) ?? sessionId;
+    const session = state().sessions[id];
+    if (!session) return Promise.reject(new Error('This session is no longer available.'));
+    const lane = settingsMutations.get(id) ?? { confirmed: { model_id: session.model, effort: session.effort }, version: 0, pending: null };
+    settingsMutations.set(id, lane);
+    const version = ++lane.version;
+    dispatch({ type: 'session/set', id, patch: { model: settings.model_id, effort: settings.effort, settingsPending: true, settingsError: null } });
+    const previous = lane.pending;
+    const task = (async () => {
+      // A newer explicit choice may recover a rejected earlier choice, while
+      // Send/Retry still observe the rejection of the latest pending choice.
+      if (previous) await previous.catch(() => undefined);
+      let routeId = id;
+      try {
+        routeId = await serverSessionId(id);
+        const row = await rest.patchSession(workspaceId, routeId, { ...settings, expected_settings: lane.confirmed });
+        lane.confirmed = { model_id: row.model_id, effort: row.effort };
+        if (version === lane.version) dispatch({ type: 'session/set', id: routeId, patch: { model: row.model_id, effort: row.effort, settingsPending: false, settingsError: null } });
+      } catch (error) {
+        if (error instanceof RestError && error.reason === 'settings_changed' && !routeId.startsWith('local-')) {
+          // Another tab changed the row. Recover the actual choice so the next
+          // explicit selection has a correct compare-and-set baseline.
+          const snapshot = await rest.sessionSnapshot(workspaceId, routeId).catch(() => null);
+          if (snapshot?.workspace_id === workspaceId && snapshot.session.id === routeId) lane.confirmed = { model_id: snapshot.session.model_id, effort: snapshot.session.effort };
+        }
+        if (version === lane.version) dispatch({ type: 'session/set', id: routeId, patch: { model: lane.confirmed.model_id, effort: lane.confirmed.effort, settingsPending: false,
+          settingsError: 'The model choice could not be saved. Choose the model again before sending.' } });
+        throw error;
+      }
+    })();
+    lane.pending = task;
+    // Attach an observer for event-handler callers; failures remain observable
+    // through this promise, the state banner, and Send/Retry's admission gate.
+    void task.catch(() => undefined);
+    return task;
+  }
+
+  async function confirmedSessionSettings(sessionId: string): Promise<SessionSettings> {
+    const lane = settingsMutations.get(sessionId);
+    if (lane) {
+      let pending: Promise<void> | null;
+      do { pending = lane.pending; if (pending) await pending; } while (pending !== lane.pending);
+    }
+    const session = state().sessions[sessionId];
+    if (!session) throw new Error('This session is no longer available.');
+    if (session.settingsError) throw new Error(session.settingsError);
+    return { model_id: session.model, effort: session.effort };
+  }
 
   /** The server id for a session, waiting for its creation if it is still local. */
   async function serverSessionId(sessionId: string): Promise<string> {
+    const created = createdIds.get(sessionId);
+    if (created) return created;
     if (!sessionId.startsWith('local-')) return sessionId;
     const pending = creating.get(sessionId);
     if (pending) return pending;
@@ -874,9 +952,16 @@ export function createAdapter(options: AdapterOptions): Adapter {
       try {
         const agentId = state().agent.id;
         const row = await rest.createSession(workspaceId, { ...opts, ...(agentId ? { agent_id: agentId } : {}) });
+        createdIds.set(localId, row.id);
+        const lane = settingsMutations.get(localId);
+        if (lane) {
+          lane.confirmed = { model_id: row.model_id, effort: row.effort };
+          settingsMutations.set(row.id, lane);
+          settingsMutations.delete(localId);
+        }
         dispatch({ type: 'session/reconcile', localId, serverId: row.id });
         dispatch({ type: 'session/upsert', session: row });
-        openSession(row.id);
+        if (state().activeSessionId === row.id) openSession(row.id);
         // A title chosen while the row was still local (decision C34). Somebody
         // who types their first sentence fast enough beats this POST, and the
         // PATCH that would have persisted their title had nowhere to go.
@@ -909,13 +994,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // create a twin — which is exactly the bug this rule exists to stop.
       const blank = visibleSessions(state()).find(isBlankSession);
       if (blank) {
-        dispatch({ type: 'session/select', id: blank.id });
-        if (!blank.pending) openSession(blank.id);
+        openSession(blank.id);
         return blank.id;
       }
     }
     const localId = `local-${uuid()}`;
     dispatch({ type: 'session/create', id: localId, ...opts, pending: true });
+    openSession(localId);
     const createOpts = { title: opts.title, mode: opts.mode, runtime: opts.runtime };
     try {
       return await beginSessionCreation(localId, createOpts);
@@ -1112,9 +1197,14 @@ export function createAdapter(options: AdapterOptions): Adapter {
     send,
     stop,
     retry: async (sessionId, runId) => {
+      const settings = await confirmedSessionSettings(sessionId);
       const current = state().sessions[sessionId]?.run;
       const expected = current?.id === runId ? current.attempt : (await rest.run(workspaceId, sessionId, runId)).attempt;
-      await rest.retry(workspaceId, sessionId, runId, expected);
+      const admittedAt = new Date(now()).toISOString();
+      const accepted = await rest.retry(workspaceId, sessionId, runId, expected, settings);
+      dispatch({ type: 'run/status', sessionId, runId, status: accepted.status, patch: { attempt: accepted.attempt,
+        ...(accepted.attempt > expected ? { started_at: admittedAt, error: null, active_ms: null } : {}) } });
+      if (state().activeSessionId === sessionId) await reconcileSessionSnapshot(sessionId, true);
     },
     guide,
     queue: enqueue,
@@ -1125,6 +1215,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
     decide,
     applyCommand,
     openSession,
+    activateSession,
+    updateSessionSettings,
     ensure,
     ensureList,
     invalidateList: (key: string) => dispatch({ type: 'list/invalidate', key }),

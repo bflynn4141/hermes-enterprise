@@ -135,7 +135,7 @@ export function Sidebar() {
           if (key === 'inbox') dispatch({ type: 'nav/tab', key: 'inboxTab', value: 'needs-review' });
         }}
         onPick={(id) => {
-          dispatch({ type: 'session/select', id });
+          void adapter.activateSession(id).catch(() => undefined);
           dispatch({ type: 'iris/panel', panel: 'open' });
           requestComposerFocus();
         }}
