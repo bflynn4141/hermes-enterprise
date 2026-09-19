@@ -4140,6 +4140,12 @@ rather than per-turn.
 
 ## C41. `StreamingText` is the third component not adopted
 
+**September 19, 2026 clarification:** The current incremental reveal starts from
+the text already present when its component mounts. Restored checkpoints are
+visible immediately, never replayed from blank after navigation. Only subsequent
+deltas use the existing reveal loop; reduced motion remains immediate. Mount,
+remount, appended-delta and durable-final handoff regressions cover this boundary.
+
 **Context.** A turn whose reply was the word "testing" rendered "3 sources" and
 offered "Show the application evidence" and "Draft a follow-up for missing
 details". Nothing had gone wrong: `StreamingText`'s `sources` and `followUps`

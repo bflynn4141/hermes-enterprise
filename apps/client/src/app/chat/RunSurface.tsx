@@ -235,7 +235,9 @@ function FluidRunStream({ session, stream, canRelease }: { session: SessionState
   const systemReducedMotion = useReducedMotion() ?? false;
   const reducedMotion = systemReducedMotion || appReducedMotion;
   const graphemes = useMemo(() => splitGraphemes(stream.text), [stream.text]);
-  const [visibleText, setVisibleText] = useState(() => (reducedMotion ? stream.text : ''));
+  // A mount can restore an already received checkpoint after navigation. Show
+  // that prefix immediately; only subsequent deltas need incremental reveal.
+  const [visibleText, setVisibleText] = useState(() => stream.text);
   const final = stream.status !== 'streaming';
   const completionSent = useRef(false);
 
