@@ -79,7 +79,7 @@ describe('model proxy preparation transaction boundaries', () => {
     expect(response.status).toBe(200);
     const begins = h.statements.filter((statement) => statement.sql === 'BEGIN');
     expect(begins).toHaveLength(budget ? 3 : 2);
-    expect(h.statements).toHaveLength(budget ? 18 : 13);
+    expect(h.statements).toHaveLength(budget ? 15 : 11);
     const groupedReads = h.statements.filter((statement) =>
       statement.sql.includes('FROM runs') || statement.sql.includes('FROM catalog') || statement.sql.includes('FROM approval_continuations'));
     expect(groupedReads).toHaveLength(4);
@@ -89,7 +89,7 @@ describe('model proxy preparation transaction boundaries', () => {
     for (const begin of begins) {
       const context = h.statements.filter((statement) => statement.transaction === begin.transaction && statement.sql.startsWith('SELECT set_config'));
       expect(context.map((statement) => statement.values)).toEqual([
-        ['app.workspace_id', workspaceId], ['app.user_id', SYSTEM_USER_ID],
+        ['app.workspace_id', workspaceId, 'app.user_id', SYSTEM_USER_ID],
       ]);
     }
     expect(h.statements.at(-1)?.sql).toBe('COMMIT');
@@ -140,5 +140,54 @@ describe('model proxy preparation transaction boundaries', () => {
     expect(h.statements.at(-1)?.sql).toBe(failure === 'foreign' ? 'COMMIT' : 'ROLLBACK');
     expect(h.active()).toBe(false);
     await h.store.close();
+  });
+});
+
+describe('runtime tenant context initialization', () => {
+  it('sets both transaction-local identities before nested work without another transaction', async () => {
+    const h = fixture();
+    await h.store.withRuntimeTransaction(async () => {
+      await h.store.runtimeQuery('SELECT outer_read');
+      await h.store.withRuntimeTransaction(() => h.store.runtimeQuery('SELECT nested_read'));
+      await h.store.runtimeQuery('SELECT trailing_read');
+    });
+    expect(h.statements.map((row) => row.sql)).toEqual([
+      'BEGIN', 'SELECT set_config($1, $2, true), set_config($3, $4, true)',
+      'SELECT outer_read', 'SELECT nested_read', 'SELECT trailing_read', 'COMMIT',
+    ]);
+    expect(h.statements[1]?.values).toEqual(['app.workspace_id', workspaceId, 'app.user_id', SYSTEM_USER_ID]);
+    expect(h.active()).toBe(false);
+    await h.store.close();
+  });
+
+  it('rolls back nested failures and resets context for the next transaction', async () => {
+    const h = fixture();
+    await expect(h.store.withRuntimeTransaction(async () => {
+      await h.store.withRuntimeTransaction(async () => { throw new Error('read failed'); });
+    })).rejects.toThrow('read failed');
+    expect(h.statements.at(-1)?.sql).toBe('ROLLBACK');
+    await h.store.runtimeQuery('SELECT fresh_read');
+    expect(h.statements.filter((row) => row.sql === 'BEGIN')).toHaveLength(2);
+    expect(h.statements.filter((row) => row.sql.startsWith('SELECT set_config')).map((row) => row.values))
+      .toEqual(Array.from({ length: 2 }, () => ['app.workspace_id', workspaceId, 'app.user_id', SYSTEM_USER_ID]));
+    expect(h.statements.at(-1)?.sql).toBe('COMMIT');
+    await h.store.close();
+  });
+
+  it('never invokes work if tenant initialization fails', async () => {
+    const calls: string[] = [];
+    vi.spyOn(database, 'connect').mockResolvedValue({
+      query: async (sql: string) => {
+        calls.push(sql);
+        if (sql.startsWith('SELECT set_config')) throw new Error('context unavailable');
+        return { rows: [] };
+      }, end: vi.fn(),
+    } as unknown as Client);
+    const db = new RuntimeDb(env, workspaceId, 'test-trace');
+    const work = vi.fn();
+    await expect(db.withRuntimeTransaction(work)).rejects.toThrow('context unavailable');
+    expect(work).not.toHaveBeenCalled();
+    expect(calls).toEqual(['BEGIN', 'SELECT set_config($1, $2, true), set_config($3, $4, true)', 'ROLLBACK']);
+    await db.close();
   });
 });

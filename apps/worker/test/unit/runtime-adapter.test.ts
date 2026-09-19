@@ -570,6 +570,81 @@ describe('official Hermes enterprise projection', () => {
     expect(secondDeltaAt).toBeLessThan(150);
   });
 
+  it('does not lose stream completion while a stale status read is in flight', async () => {
+    vi.useFakeTimers();
+    let statusStarted!: () => void;
+    const statusPending = new Promise<void>((resolve) => { statusStarted = resolve; });
+    let streamEnded!: () => void;
+    const streamFinished = new Promise<void>((resolve) => { streamEnded = resolve; });
+    let releaseStatus!: (value: HermesStatus) => void;
+    class RacedTerminalClient extends FakeHermesClient {
+      override status() {
+        this.statusReads += 1;
+        if (this.statusReads !== 1) return Promise.resolve({ ...this.current });
+        statusStarted();
+        return new Promise<HermesStatus>((resolve) => { releaseStatus = resolve; });
+      }
+      override async *events(): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        await statusPending;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Complete answer.' };
+        this.current = this.final;
+        streamEnded();
+        yield { event: 'run.completed', ...this.final };
+      }
+    }
+    const db = new FakeRuntimeDb();
+    const client = new RacedTerminalClient();
+    const task = execute(db, client, new FakeStep(), undefined, { pollMs: 1000 });
+    try {
+      await streamFinished;
+      await vi.advanceTimersByTimeAsync(1);
+      releaseStatus({ run_id: NATIVE_ID, status: 'running' });
+      await vi.advanceTimersByTimeAsync(25);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+      expect(client.statusReads).toBe(2);
+      expect(client.submissions).toHaveLength(1);
+    } finally {
+      await vi.runAllTimersAsync();
+      await task;
+      vi.useRealTimers();
+    }
+  });
+
+  it('consumes an EOF wake only once and retains bounded polling after disconnect', async () => {
+    vi.useFakeTimers();
+    class DisconnectedRunningClient extends FakeHermesClient {
+      override status() {
+        this.statusReads += 1;
+        return Promise.resolve(this.statusReads >= 3 ? this.final : this.current);
+      }
+      override async *events(): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Partial answer.' };
+        // EOF is not terminal status. One prompt status check is useful, but
+        // repeatedly observing an ended stream must not produce a hot loop.
+      }
+    }
+    const db = new FakeRuntimeDb();
+    const client = new DisconnectedRunningClient();
+    const task = execute(db, client, new FakeStep(), undefined, { pollMs: 1000 });
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      expect(client.statusReads).toBe(2);
+      expect(db.statusChanges.at(-1)?.status).toBe('working');
+      await vi.advanceTimersByTimeAsync(1000);
+      await task;
+      expect(client.statusReads).toBe(3);
+      expect(client.eventSubscriptions).toBe(1);
+      expect(client.submissions).toHaveLength(1);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+    } finally {
+      await vi.runAllTimersAsync();
+      await task;
+      vi.useRealTimers();
+    }
+  });
+
   it('forwards the last delta before a slow terminal status reconciliation', async () => {
     class SlowTerminalClient extends FakeHermesClient {
       terminalStatusResolved = false;

@@ -30,7 +30,7 @@ import { RuntimeDb } from '../runtime/store.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
-import { runtimeSkillManifestsForAgent } from '../runtime/skills.js';
+import { loadRuntimeSkillSnapshot } from '../runtime/skills.js';
 import { runtimeLatency } from '../runtime/latency.js';
 import { logEvent } from '../keys/redact.js';
 import { recordHermesLatency } from '../ops/analytics.js';
@@ -373,13 +373,10 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
             ...measurement,
           });
         };
-        runtimeLatency(invocationStartedAt, params.receivedAt, onLatency).mark('workflow_setup');
-        const skillSnapshot = await runtimeSkillManifestsForAgent(
-          this.env,
-          { query: <T extends import('pg').QueryResultRow>(text: string, values: readonly unknown[] = []) => db.runtimeQuery<T>(text, values) },
-          params.workspaceId,
-          binding.agentId,
-        );
+        const startupLatency = runtimeLatency(invocationStartedAt, params.receivedAt, onLatency);
+        startupLatency.mark('workflow_setup');
+        const skillSnapshot = await startupLatency.measure('skill_discovery', () =>
+          loadRuntimeSkillSnapshot(this.env, db, params.workspaceId, binding.agentId));
         await runHermesAttempt({
           db,
           run,

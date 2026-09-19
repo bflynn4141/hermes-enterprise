@@ -92,8 +92,11 @@ export class PgAgentDb implements AgentDb {
     const client = await this.connection();
     await client.query('BEGIN');
     try {
-      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', this.workspaceId]);
-      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', SYSTEM_USER_ID]);
+      // Both identities remain transaction-local and are installed before any
+      // scoped query. One statement avoids an extra database round trip for
+      // every runtime read, checkpoint and finalization transaction.
+      await client.query('SELECT set_config($1, $2, true), set_config($3, $4, true)',
+        ['app.workspace_id', this.workspaceId, 'app.user_id', SYSTEM_USER_ID]);
       const result = await fn(
         <R,>(text: string, values?: readonly unknown[]) =>
           client.query(text, values ? [...values] : undefined) as unknown as Promise<QueryResultLike<R>>,

@@ -12,6 +12,7 @@ import {
 } from '../enterprise-skills/registry.js';
 import { resolveEnterpriseSkillAssignment, resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 import type { SkillQuery } from '../enterprise-skills/service.js';
+import type { RuntimeDb } from './store.js';
 
 export { PARTNER_PROGRAM_SKILL, PARTNER_PROGRAM_TOOLS };
 
@@ -70,6 +71,21 @@ export async function runtimeSkillManifestsForAgent(
     ...(partner.config ? [partnerManifest(partner.config, partner.assignment)] : []),
     ...(finance.config ? [financeManifest(finance.config, finance.assignment)] : []),
   ];
+}
+
+/** Workflow discovery uses one tenant-scoped transaction, not one per read. */
+export async function loadRuntimeSkillSnapshot(
+  env: Env,
+  db: Pick<RuntimeDb, 'withRuntimeTransaction' | 'runtimeQuery'>,
+  workspaceId: string,
+  agentId: string,
+): Promise<readonly RuntimeSkillManifest[]> {
+  return db.withRuntimeTransaction(() => runtimeSkillManifestsForAgent(
+    env,
+    { query: (text, values) => db.runtimeQuery(text, values) },
+    workspaceId,
+    agentId,
+  ));
 }
 
 /**
