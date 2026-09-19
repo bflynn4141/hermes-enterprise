@@ -26,6 +26,7 @@ import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
 import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
 import type { HubEvent } from './hubs.js';
+import { scopeWorkspaceHubEvents } from './domain/audience.js';
 
 export interface Job {
   readonly id: string;
@@ -300,7 +301,7 @@ export async function finishJobsAfterCommit(
  */
 async function runPublish(env: Env, job: Job): Promise<void> {
   const payload = (job.payload ?? {}) as { session_id?: string | null; first_id?: string; last_id?: string };
-  const rows = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+  const events = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const result = await tx.query<OutboxRow>(
       `SELECT id::text AS id, session_id, kind, payload, schema_version, trace_id, created_at
          FROM stream_events
@@ -310,20 +311,19 @@ async function runPublish(env: Env, job: Job): Promise<void> {
         ORDER BY id`,
       [job.workspace_id, payload.first_id ?? '0', payload.last_id ?? '0', payload.session_id ?? null],
     );
-    return result.rows;
+    const envelopes: HubEvent[] = result.rows.map((row) => ({
+      id: row.id,
+      workspace_id: job.workspace_id,
+      session_id: row.session_id,
+      kind: row.kind,
+      payload: row.payload,
+      schema_version: row.schema_version,
+      trace_id: row.trace_id ?? 'unknown',
+      at: row.created_at.toISOString(),
+    }));
+    return scopeWorkspaceHubEvents(tx, envelopes);
   });
-  if (rows.length === 0) return;
-
-  const events = rows.map((row) => ({
-    id: row.id,
-    workspace_id: job.workspace_id,
-    session_id: row.session_id,
-    kind: row.kind,
-    payload: row.payload,
-    schema_version: row.schema_version,
-    trace_id: row.trace_id ?? 'unknown',
-    at: row.created_at.toISOString(),
-  }));
+  if (events.length === 0) return;
 
   if (payload.session_id) {
     const stub = env.SESSION_HUB.get(env.SESSION_HUB.idFromName(payload.session_id));
@@ -816,19 +816,20 @@ async function preparePublications(
       last_id: last,
     });
     if (!jobId) continue;
+    const envelopes: HubEvent[] = rows.map((row) => ({
+      id: row.id,
+      workspace_id: workspaceId,
+      session_id: row.session_id,
+      kind: row.kind,
+      payload: row.payload,
+      schema_version: row.schema_version,
+      trace_id: row.trace_id ?? 'unknown',
+      at: row.created_at.toISOString(),
+    }));
     publications.push({
       jobId,
       sessionId,
-      events: rows.map((row) => ({
-        id: row.id,
-        workspace_id: workspaceId,
-        session_id: row.session_id,
-        kind: row.kind,
-        payload: row.payload,
-        schema_version: row.schema_version,
-        trace_id: row.trace_id ?? 'unknown',
-        at: row.created_at.toISOString(),
-      })),
+      events: await scopeWorkspaceHubEvents(tx, envelopes),
     });
   }
   return publications;

@@ -43,7 +43,7 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
     : undefined;
 
   const rows = await inWorkspace(c, (work) =>
-    effectRows(work.tx, status && status.length > 0 ? { status } : {}),
+    effectRows(work.tx, { ...(status && status.length > 0 ? { status } : {}), audienceUserId: work.userId }),
   );
   return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
 }
@@ -71,7 +71,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
 
   const row = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
-    const effect = await loadEffect(work.tx, effectId);
+    const effect = await loadEffect(work.tx, effectId, work.userId);
     if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
 
     if (!(await holdsRole(work.tx, work.workspaceId, work.userId, effect.required_role))) {
@@ -117,7 +117,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
       ])),
     );
 
-    const updated = await loadEffect(work.tx, effectId);
+    const updated = await loadEffect(work.tx, effectId, work.userId);
     return updated ?? effect;
   });
 

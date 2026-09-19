@@ -45,6 +45,7 @@ import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 import { runJobsAfterCommit } from '../jobs.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import { streamEventAudiencePredicate } from '../domain/audience.js';
 
 /**
  * Only same-origin paths may be used as a post-login destination. Anything
@@ -426,10 +427,16 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
         workspaceId,
       ]);
       const head = await tx.query<{ session_head: string; workspace_head: string }>(
-        `SELECT COALESCE(max(id) FILTER (WHERE session_id IS NOT NULL), 0)::text AS session_head,
-                COALESCE(max(id) FILTER (WHERE session_id IS NULL), 0)::text     AS workspace_head
-           FROM stream_events WHERE workspace_id = $1`,
-        [workspaceId],
+        `SELECT COALESCE(max(stream_row.id) FILTER (
+                  WHERE stream_row.session_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM sessions owned_session
+                                 WHERE owned_session.id = stream_row.session_id
+                                   AND owned_session.owner_id = $2)), 0)::text AS session_head,
+                COALESCE(max(stream_row.id) FILTER (
+                  WHERE stream_row.session_id IS NULL
+                    AND ${streamEventAudiencePredicate('stream_row', '$2')}), 0)::text AS workspace_head
+           FROM stream_events stream_row WHERE stream_row.workspace_id = $1`,
+        [workspaceId, session.userId],
       );
       return {
         role: member.rows[0]?.role ?? 'member',

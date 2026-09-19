@@ -20,6 +20,7 @@ import { allowedProviders } from '../model/allowed.js';
 import { runtimeLocation } from '../runtime/config.js';
 import { getSession } from '../auth.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
+import { requestAudiencePredicate, streamEventAudiencePredicate } from '../domain/audience.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -104,17 +105,29 @@ export async function loadBootstrap(
   const agent = agents.rows[0];
   if (!agent) throw new Error('workspace has no agent');
 
-  // Counts come from the views, never from a stored counter: the demo's rule
-  // that 4 -> 0 works in any order is a property of deriving them.
+  // Counts are derived from current rows and the document view, never stored.
+  // Audience filtering happens before aggregation so a private request does
+  // not change another member's badges.
   const counts = await tx.query<{ inbox: number; grants: number; documents: number; decisions: number }>(
     `SELECT (SELECT count(*)::int FROM requests r
               LEFT JOIN approval_requests ar ON ar.request_id = r.id
              WHERE r.workspace_id = $1 AND r.status = 'pending'
-               AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))) AS inbox,
-            COALESCE((SELECT pending FROM v_pending_grants WHERE workspace_id = $1), 0)  AS grants,
-            (SELECT count(*)::int FROM v_created_documents WHERE workspace_id = $1)      AS documents,
-            COALESCE((SELECT decisions FROM v_decision_count WHERE workspace_id = $1), 0) AS decisions`,
-    [workspaceId],
+               AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+               AND ${requestAudiencePredicate('r.id', '$2')}) AS inbox,
+            (SELECT count(*)::int FROM effects effect_row
+              JOIN requests r ON r.id = effect_row.request_id
+             WHERE effect_row.workspace_id = $1 AND effect_row.kind = 'access_grant'
+               AND effect_row.status IN ('pending', 'assigned')
+               AND ${requestAudiencePredicate('r.id', '$2')}) AS grants,
+            (SELECT count(*)::int FROM v_created_documents document_view
+              JOIN requests r ON r.id = document_view.request_id
+             WHERE document_view.workspace_id = $1
+               AND ${requestAudiencePredicate('r.id', '$2')}) AS documents,
+            (SELECT count(*)::int FROM decisions decision_row
+              JOIN requests r ON r.id = decision_row.request_id
+             WHERE decision_row.workspace_id = $1
+               AND ${requestAudiencePredicate('r.id', '$2')}) AS decisions`,
+    [workspaceId, userId],
   );
 
   const sessions = await tx.query<{
@@ -145,15 +158,20 @@ export async function loadBootstrap(
   const requests = await tx.query<{ id: string; kind: string; status: string; label: string }>(
     `SELECT r.id, r.kind, r.status, r.label FROM requests r
       LEFT JOIN approval_requests ar ON ar.request_id = r.id
-      WHERE r.status = 'pending'
+      WHERE r.workspace_id = $1 AND r.status = 'pending'
         AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+        AND ${requestAudiencePredicate('r.id', '$2')}
       ORDER BY r.created_at DESC LIMIT 100`,
+    [workspaceId, userId],
   );
 
   const approvalIds = await tx.query<{ request_id: string }>(
-    `SELECT request_id FROM approval_requests
-      WHERE workspace_id = $1 AND status = 'pending' AND expires_at > now()`,
-    [workspaceId],
+    `SELECT approval_row.request_id FROM approval_requests approval_row
+      JOIN requests r ON r.id = approval_row.request_id
+      WHERE approval_row.workspace_id = $1 AND approval_row.status = 'pending'
+        AND approval_row.expires_at > now()
+        AND ${requestAudiencePredicate('r.id', '$2')}`,
+    [workspaceId, userId],
   );
   let pendingForMe = 0;
   let pendingForOthers = 0;
@@ -205,10 +223,16 @@ export async function loadBootstrap(
   );
 
   const heads = await tx.query<{ session_head: string; workspace_head: string }>(
-    `SELECT COALESCE(max(id) FILTER (WHERE session_id IS NOT NULL), 0)::text AS session_head,
-            COALESCE(max(id) FILTER (WHERE session_id IS NULL), 0)::text     AS workspace_head
-       FROM stream_events WHERE workspace_id = $1`,
-    [workspaceId],
+    `SELECT COALESCE(max(stream_row.id) FILTER (
+              WHERE stream_row.session_id IS NOT NULL
+                AND EXISTS (SELECT 1 FROM sessions owned_session
+                             WHERE owned_session.id = stream_row.session_id
+                               AND owned_session.owner_id = $2)), 0)::text AS session_head,
+            COALESCE(max(stream_row.id) FILTER (
+              WHERE stream_row.session_id IS NULL
+                AND ${streamEventAudiencePredicate('stream_row', '$2')}), 0)::text AS workspace_head
+       FROM stream_events stream_row WHERE stream_row.workspace_id = $1`,
+    [workspaceId, userId],
   );
   const head = heads.rows[0] ?? { session_head: '0', workspace_head: '0' };
   const count = counts.rows[0] ?? { inbox: 0, grants: 0, documents: 0, decisions: 0 };
@@ -310,11 +334,19 @@ export async function events(c: Context<{ Bindings: Env }>): Promise<Response> {
     'app',
     { workspaceId, userId: session.userId },
     async (tx): Promise<EventsPage> => {
-      const headRow = await tx.query<{ head: string }>(
-        `SELECT COALESCE(max(id), 0)::text AS head FROM stream_events
-          WHERE workspace_id = $1 AND ($2 = 'workspace') = (session_id IS NULL)`,
-        [workspaceId, stream],
-      );
+      const headRow = stream === 'session'
+        ? await tx.query<{ head: string }>(
+            `SELECT COALESCE(max(e.id), 0)::text AS head FROM stream_events e
+              JOIN sessions s ON s.id = e.session_id
+             WHERE e.workspace_id = $1 AND s.owner_id = $2`,
+            [workspaceId, session.userId],
+          )
+        : await tx.query<{ head: string }>(
+            `SELECT COALESCE(max(e.id), 0)::text AS head FROM stream_events e
+             WHERE e.workspace_id = $1 AND e.session_id IS NULL
+               AND ${streamEventAudiencePredicate('e', '$2')}`,
+            [workspaceId, session.userId],
+          );
       const head = headRow.rows[0]?.head ?? '0';
 
       const rows =
@@ -334,11 +366,12 @@ export async function events(c: Context<{ Bindings: Env }>): Promise<Response> {
           : await tx.query(
               `SELECT id::text AS id, workspace_id, session_id, kind, payload,
                       schema_version, trace_id, created_at
-                 FROM stream_events
-                WHERE workspace_id = $1 AND session_id IS NULL AND id > $2::bigint
-                ORDER BY id
+                 FROM stream_events e
+                WHERE e.workspace_id = $1 AND e.session_id IS NULL AND e.id > $2::bigint
+                  AND ${streamEventAudiencePredicate('e', '$3')}
+                ORDER BY e.id
                 LIMIT ${MAX_REPLAY_PAGE}`,
-              [workspaceId, afterRaw],
+              [workspaceId, afterRaw, session.userId],
             );
 
       // A row that no longer parses (a migrated schema, a pruned payload) is
