@@ -417,9 +417,11 @@ export type PartnerWorkflowHandoffV2 = z.infer<typeof partnerWorkflowHandoffV2Sc
 
 export const partnerWorkflowViewV2Schema = z.object({
   configured: z.boolean(),
+  admission_state: z.enum(['disabled', 'enabled']),
   viewer_role: partnerWorkflowViewerRoleSchema,
   actions: z.object({
     configure: z.boolean(),
+    set_admission: z.boolean(),
     propose_engagement: z.boolean(),
     submit_invoice: z.boolean(),
     correct_invoice: z.boolean(),
@@ -427,7 +429,7 @@ export const partnerWorkflowViewV2Schema = z.object({
   }).strict(),
   teams: z.array(partnerTeamSchema).max(2),
   agents: z.array(partnerWorkflowAgentSchema).max(2),
-  readiness: z.array(partnerRoleReadinessSchema).length(2),
+  readiness: z.array(partnerRoleReadinessSchema).max(2),
   partner_options: z.array(z.object({
     id: uuidSchema,
     name: z.string().min(1).max(200),
@@ -444,6 +446,9 @@ export const partnerWorkflowViewV2Schema = z.object({
 }).strict();
 export type PartnerWorkflowViewV2 = z.infer<typeof partnerWorkflowViewV2Schema>;
 
+export const partnerWorkflowAdmissionInputSchema = z.object({ enabled: z.boolean() }).strict();
+export type PartnerWorkflowAdmissionInput = z.infer<typeof partnerWorkflowAdmissionInputSchema>;
+
 export const PARTNER_WORKFLOW_ERROR_REASONS = [
   'bad_engagement_authorization', 'bad_invoice_intake', 'bad_invoice_correction',
   'forbidden_partner_workflow_action', 'partnerships_principal_required', 'finance_recipient_unavailable',
@@ -452,6 +457,8 @@ export const PARTNER_WORKFLOW_ERROR_REASONS = [
   'authorization_revoked', 'authorization_expired', 'authorization_superseded', 'authorization_consumed',
   'handoff_not_found', 'handoff_revision_mismatch', 'handoff_superseded', 'handoff_already_decided',
   'idempotency_conflict', 'correction_successor_exists', 'request_binding_stale', 'run_grant_missing',
+  'workflow_not_configured', 'workflow_admission_disabled', 'workflow_readiness_incomplete',
+  'skill_artifact_mismatch', 'legacy_handoff_input_forbidden',
 ] as const;
 export const partnerWorkflowErrorReasonSchema = z.enum(PARTNER_WORKFLOW_ERROR_REASONS);
 export type PartnerWorkflowErrorReason = z.infer<typeof partnerWorkflowErrorReasonSchema>;
