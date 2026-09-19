@@ -5427,3 +5427,36 @@ boundaries. A real PostgreSQL test nests request snapshotting and native binding
 inside one runtime transaction, interrupts it, and proves that both writes roll
 back. Existing runtime, streaming, database, and Worker suites continue to
 exercise retries, stop fences, event order, and terminal persistence.
+
+---
+
+## C79. Interactive admission publishes in order before its durable launch
+
+**Decided September 18, 2026.** A new interactive turn commits its user message,
+stream event, publish retry job and Workflow launch retry job together. After
+commit, the request hands the exact returned event envelope directly to the
+Session Hub, then creates the Workflow only after the hub acknowledges it. The
+launch job names the publish job as a prerequisite, so background or Cron replay
+cannot create a higher-id run event before the lower-id user message is visible.
+Direct acknowledgements retire both idempotent jobs in one background tenant
+transaction; a crash or RPC failure leaves the jobs for recovery.
+
+Admission reuses the tenant transaction's membership result, reads session plus
+duplicate state together, reads model plus credential state together, and writes
+the initial message, engine turn and draft cleanup in one statement. Workflow
+startup loads the run and dynamic runtime binding in one serial agent-role
+transaction. Phase telemetry separates authentication, admission transaction,
+post-commit jobs, ordered publish and Workflow creation.
+
+The Enterprise model-list bridge now returns each catalog model's positive
+`context_length` and validates provider credentials serially inside one runtime
+transaction. Unknown context remains omitted rather than invented. This lets the
+pinned official Hermes metadata resolver use the authoritative OpenAI-compatible
+model record instead of making a failing `/api/show` probe on every warm turn.
+
+**Evidence.** PostgreSQL route regressions force both the direct publish and
+Workflow-create failure boundaries and prove publication precedes launch while
+the durable jobs finish. Outbox tests compare the directly delivered envelope
+with its committed id and trace. Unit/database tests cover known, null and invalid
+context windows. The native probe runs the exact pinned Hermes gateway and
+asserts a complete model/tool turn without any `/api/show` request.

@@ -1021,30 +1021,58 @@ const RUNTIME_PROVIDERS: Readonly<Record<string, RuntimeProviderConfig>> = {
   nous_portal: { base: NOUS_PORTAL_BASE, headers: NOUS_PORTAL_HEADERS, wireId: nousModelId },
 };
 
+export interface RuntimeModelRow {
+  readonly model_id: string;
+  readonly provider: string;
+  readonly context_length?: number | null;
+}
+
+/** OpenAI-compatible model metadata consumed by the pinned Hermes runtime. */
+export function runtimeModelList(models: readonly RuntimeModelRow[]): {
+  readonly object: 'list';
+  readonly data: readonly Record<string, unknown>[];
+} {
+  return {
+    object: 'list',
+    data: models.flatMap((model) => {
+      const config = RUNTIME_PROVIDERS[model.provider];
+      const id = config?.wireId(model.model_id);
+      if (!config || !id) return [];
+      return [{
+        id,
+        object: 'model',
+        created: 0,
+        owned_by: model.provider,
+        ...(Number.isSafeInteger(model.context_length) && Number(model.context_length) > 0
+          ? { context_length: model.context_length }
+          : {}),
+      }];
+    }),
+  };
+}
+
 export async function runtimeModels(c: Context<{ Bindings: Env }>): Promise<Response> {
   let db: RuntimeDb | undefined;
   try {
     const { workspaceId } = await authenticate(c);
     db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
-    const models = (await db.allowedRuntimeModels()).filter((model) => isProviderAllowed(c.env, model.provider));
-    const providers = [...new Set(models.map((model) => model.provider))];
-    if (providers.length === 0) return modelError('provider_not_allowed', 403);
-    await Promise.all(providers.map((provider) => db!.resolveCredential(provider)));
-    return c.json({
-      object: 'list',
-      data: models.flatMap((model) => {
-        const config = RUNTIME_PROVIDERS[model.provider];
-        const id = config?.wireId(model.model_id);
-        return config && id ? [{ id, object: 'model', created: 0, owned_by: model.provider }] : [];
-      }),
+    const models = await db.withRuntimeTransaction(async () => {
+      const allowed = (await db!.allowedRuntimeModels()).filter((model) => isProviderAllowed(c.env, model.provider));
+      const providers = [...new Set(allowed.map((model) => model.provider))];
+      if (providers.length === 0) throw new RouteError('No runtime model provider is allowed.', 'provider_not_allowed', 403);
+      // RuntimeDb owns one pg client. Keep credential reads serial while the
+      // outer transaction removes repeated BEGIN / tenant settings / COMMIT.
+      for (const provider of providers) await db!.resolveCredential(provider);
+      return allowed;
     });
+    return c.json(runtimeModelList(models));
   } catch (error) {
     return modelError(error instanceof RouteError ? error.reason : 'runtime_model_unavailable', error instanceof RouteError ? error.status : 503);
   } finally { await db?.close(); }
 }
 export interface ModelBridgeDb extends RuntimeBudgetDb {
   activeProfileRun(agentId: string): Promise<EngineRunRow | null>;
-  allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]>;
+  allowedRuntimeModels(): Promise<RuntimeModelRow[]>;
   resolveCredential: AgentDb['resolveCredential'];
   recordModelCall: AgentDb['recordModelCall'];
   recordProviderRetryAfter?(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void>;

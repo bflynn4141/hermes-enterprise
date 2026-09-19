@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--python", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    model_calls, tool_calls, catalog_names = [], [], set()
+    model_calls, tool_calls, catalog_names, metadata_fallback_calls = [], [], set(), []
     token = secrets.token_hex(32)
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -76,7 +76,12 @@ def main():
                     }},
                 }]})
             elif self.path.endswith("/models"):
-                self.reply(200, {"object": "list", "data": [{"id": "test/fixture", "object": "model"}]})
+                # The Enterprise bridge publishes the authoritative window in
+                # the OpenAI-compatible list. The pinned Hermes runtime must
+                # consume this without trying its Ollama `/api/show` fallback.
+                self.reply(200, {"object": "list", "data": [{
+                    "id": "test/fixture", "object": "model", "context_length": 131072,
+                }]})
             else:
                 self.reply(404, {})
 
@@ -91,6 +96,10 @@ def main():
                     self.reply(202, {"status": "pending"})
                 else:
                     self.reply(200, {"ok": True, "content": json.dumps({"value": body["arguments"].get("value")})})
+                return
+            if self.path.endswith("/api/show"):
+                metadata_fallback_calls.append(body)
+                self.reply(500, {"error": "metadata fallback must not be needed"})
                 return
             if not self.path.endswith("/chat/completions"):
                 self.reply(404, {})
@@ -204,6 +213,7 @@ def main():
             result = settle(run_id)
             assert result["status"] == "completed", result
             assert result["output"] == "Fixture complete.", result
+            assert metadata_fallback_calls == [], metadata_fallback_calls
             event_request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/runs/{run_id}/events",
                 headers={"Authorization": "Bearer " + native_key})
             with urllib.request.urlopen(event_request, timeout=10) as response:

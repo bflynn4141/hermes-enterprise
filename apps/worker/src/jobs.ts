@@ -25,6 +25,7 @@ import { runEventsExport } from './ops/events-export.js';
 import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
 import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
+import type { HubEvent } from './hubs.js';
 
 export interface Job {
   readonly id: string;
@@ -244,6 +245,48 @@ interface OutboxRow {
   schema_version: number;
   trace_id: string | null;
   created_at: Date;
+}
+
+/**
+ * A committed outbox batch that the request which created it can hand to the
+ * hub without re-reading it. The durable publish job remains the recovery
+ * path until the hub acknowledges and the job is marked done.
+ */
+export interface PreparedPublication {
+  readonly jobId: string;
+  readonly sessionId: string | null;
+  readonly events: readonly HubEvent[];
+}
+
+/** Deliver an already committed outbox batch without another database read. */
+export async function deliverPreparedPublications(
+  env: Env,
+  workspaceId: string,
+  publications: readonly PreparedPublication[],
+): Promise<void> {
+  for (const publication of publications) {
+    if (publication.sessionId) {
+      await env.SESSION_HUB.get(env.SESSION_HUB.idFromName(publication.sessionId)).publish(publication.events);
+    } else {
+      await env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(workspaceId)).publish(publication.events);
+    }
+  }
+}
+
+/**
+ * Retire jobs whose side effects were acknowledged on the request's fast path.
+ * One tenant transaction handles the whole handoff. If this background cleanup
+ * fails, Cron safely replays the idempotent publish / Workflow creation later.
+ */
+export async function finishJobsAfterCommit(
+  env: Env,
+  workspaceId: string,
+  jobIds: readonly string[],
+): Promise<void> {
+  if (jobIds.length === 0) return;
+  await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+    for (const jobId of jobIds) await finishJob(tx, jobId);
+  });
 }
 
 /**
@@ -732,6 +775,55 @@ export interface OutboxEvent {
   readonly traceId?: string | null;
 }
 
+async function preparePublications(
+  tx: Tx,
+  workspaceId: string,
+  events: readonly OutboxEvent[],
+): Promise<PreparedPublication[]> {
+  const byStream = new Map<string | null, OutboxRow[]>();
+
+  for (const event of events) {
+    const { rows } = await tx.query<OutboxRow>(
+      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       RETURNING id::text AS id, session_id, kind, payload, schema_version, trace_id, created_at`,
+      [workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), event.traceId ?? null],
+    );
+    const row = rows[0];
+    if (!row) continue;
+    const key = row.session_id ?? null;
+    byStream.set(key, [...(byStream.get(key) ?? []), row]);
+  }
+
+  const publications: PreparedPublication[] = [];
+  for (const [sessionId, rows] of byStream) {
+    const first = rows[0]?.id;
+    const last = rows[rows.length - 1]?.id;
+    if (!first || !last) continue;
+    const jobId = await enqueueJob(tx, workspaceId, 'publish', `publish:${sessionId ?? 'workspace'}:${first}-${last}`, {
+      session_id: sessionId,
+      first_id: first,
+      last_id: last,
+    });
+    if (!jobId) continue;
+    publications.push({
+      jobId,
+      sessionId,
+      events: rows.map((row) => ({
+        id: row.id,
+        workspace_id: workspaceId,
+        session_id: row.session_id,
+        kind: row.kind,
+        payload: row.payload,
+        schema_version: row.schema_version,
+        trace_id: row.trace_id ?? 'unknown',
+        at: row.created_at.toISOString(),
+      })),
+    });
+  }
+  return publications;
+}
+
 /**
  * Append to the outbox and queue its delivery, in the caller's transaction.
  *
@@ -744,34 +836,18 @@ export async function publishEvents(
   workspaceId: string,
   events: readonly OutboxEvent[],
 ): Promise<string[]> {
-  const jobIds: string[] = [];
-  // One job per stream: the hub for a session and the hub for the workspace are
-  // different objects, and a single job could only acknowledge one of them.
-  const byStream = new Map<string | null, string[]>();
+  return (await preparePublications(tx, workspaceId, events)).map((publication) => publication.jobId);
+}
 
-  for (const event of events) {
-    const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
-       VALUES ($1, $2, $3, $4::jsonb, $5)
-       RETURNING id::text AS id`,
-      [workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), event.traceId ?? null],
-    );
-    const id = rows[0]?.id;
-    if (!id) continue;
-    const key = event.sessionId ?? null;
-    byStream.set(key, [...(byStream.get(key) ?? []), id]);
-  }
-
-  for (const [sessionId, ids] of byStream) {
-    const first = ids[0];
-    const last = ids[ids.length - 1];
-    if (!first || !last) continue;
-    const jobId = await enqueueJob(tx, workspaceId, 'publish', `publish:${sessionId ?? 'workspace'}:${first}-${last}`, {
-      session_id: sessionId,
-      first_id: first,
-      last_id: last,
-    });
-    if (jobId) jobIds.push(jobId);
-  }
-  return jobIds;
+/**
+ * Append, queue and retain the exact committed envelopes for an ordered direct
+ * handoff. Callers must use this only after the surrounding transaction has
+ * committed; the durable jobs cover every crash before acknowledgement.
+ */
+export async function publishEventsForImmediateDelivery(
+  tx: Tx,
+  workspaceId: string,
+  events: readonly OutboxEvent[],
+): Promise<PreparedPublication[]> {
+  return preparePublications(tx, workspaceId, events);
 }

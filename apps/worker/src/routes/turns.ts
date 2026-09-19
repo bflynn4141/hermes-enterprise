@@ -24,15 +24,29 @@ import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
 import { consumeRate, type RateLimit } from '../auth/rate-limit.js';
-import { publishEvents } from '../jobs.js';
+import {
+  deliverPreparedPublications,
+  enqueueJob,
+  finishJobsAfterCommit,
+  publishEvents,
+  publishEventsForImmediateDelivery,
+  runJobsAfterCommit,
+} from '../jobs.js';
 import { checkCaps } from '../model/usage.js';
 import { maybeQueueCapWarning } from '../ops/cap-warning.js';
 import { requireInstanceCapacity } from '../ops/instance-cap.js';
-import { loadModel, providerLabel } from '../model/catalog.js';
+import { providerLabel } from '../model/catalog.js';
 import { requireAllowedProvider } from '../model/allowed.js';
 import { pickDevScript, runAttemptInstanceId } from '../runs/workflow.js';
+import { createRunInstance, type RunInstanceParams } from '../runs/submit.js';
 import { CONTEXT_ANSWERED_EVENT, DEFAULT_MAX_TURNS } from '../engine/constants.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import {
+  inWorkspace,
+  jsonBody,
+  pathUuid,
+  RouteError,
+  type TenantWork,
+} from './tenant.js';
 import { VISIBLE } from './sessions.js';
 import { logEvent } from '../keys/redact.js';
 
@@ -76,6 +90,74 @@ interface RunRow {
   session_id: string;
   model_id: string;
   waiting_for: string | null;
+  trace_id: string | null;
+}
+
+interface TurnAdmissionRow extends SessionRow {
+  existing_id: string | null;
+  existing_agent_id: string | null;
+  existing_status: string | null;
+  existing_attempt: number | null;
+  existing_engine_version: number | null;
+  existing_workflow_instance_id: string | null;
+  existing_session_id: string | null;
+  existing_model_id: string | null;
+  existing_waiting_for: string | null;
+  existing_trace_id: string | null;
+}
+
+async function loadTurnAdmission(
+  work: TenantWork,
+  sessionId: string,
+  clientTurnId: string,
+): Promise<{ session: SessionRow; existing: RunRow | null }> {
+  const { rows } = await work.tx.query<TurnAdmissionRow>(
+    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort,
+            existing.id AS existing_id, existing.agent_id AS existing_agent_id,
+            existing.status AS existing_status, existing.attempt AS existing_attempt,
+            existing.engine_version AS existing_engine_version,
+            existing.workflow_instance_id AS existing_workflow_instance_id,
+            existing.session_id AS existing_session_id, existing.model_id AS existing_model_id,
+            existing.waiting_for AS existing_waiting_for, existing.trace_id AS existing_trace_id
+       FROM sessions s
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.agent_id, r.status, r.attempt, r.engine_version,
+                r.workflow_instance_id, r.session_id, r.model_id, r.waiting_for, r.trace_id
+           FROM runs r
+          WHERE r.workspace_id=s.workspace_id AND r.session_id=s.id AND r.client_turn_id=$4
+          LIMIT 1
+       ) existing ON true
+      WHERE s.workspace_id=$1 AND s.id=$3 AND ${VISIBLE}`,
+    [work.workspaceId, work.userId, sessionId, clientTurnId],
+  );
+  const row = rows[0];
+  if (!row) throw new RouteError('no such session', 'unknown_session', 404);
+  if (row.owner_id !== work.userId) throw new RouteError('this is the owner\'s to do', 'not_owner', 403);
+  if (row.read_only) throw new RouteError('this session is read-only', 'read_only', 409);
+  const session: SessionRow = {
+    id: row.id,
+    agent_id: row.agent_id,
+    owner_id: row.owner_id,
+    read_only: row.read_only,
+    mode: row.mode,
+    model_id: row.model_id,
+    effort: row.effort,
+  };
+  return {
+    session,
+    existing: row.existing_id ? {
+      id: row.existing_id,
+      agent_id: row.existing_agent_id!,
+      status: row.existing_status!,
+      attempt: row.existing_attempt!,
+      engine_version: row.existing_engine_version!,
+      workflow_instance_id: row.existing_workflow_instance_id,
+      session_id: row.existing_session_id!,
+      model_id: row.existing_model_id!,
+      waiting_for: row.existing_waiting_for,
+      trace_id: row.existing_trace_id,
+    } : null,
+  };
 }
 
 /**
@@ -134,37 +216,6 @@ export async function getRunRoute(c: Context<{ Bindings: Env }>): Promise<Respon
   return c.json(body);
 }
 
-/**
- * Create the Workflow instance for a run that already has a row.
- *
- * A duplicate-id error is a no-op, not a failure: it means a concurrent POST
- * of the same `client_turn_id` won the race and already created it. Two tabs
- * therefore yield one instance and two 200s.
- */
-async function createInstance(
-  env: Env,
-  params: {
-    runId: string;
-    workspaceId: string;
-    sessionId: string;
-    attempt: number;
-    engineVersion: number;
-    traceId: string;
-    receivedAt?: number;
-    scriptedScript?: string;
-  },
-): Promise<{ created: boolean; instanceId: string }> {
-  const instanceId = runAttemptInstanceId(params.runId, params.attempt);
-  try {
-    await env.RUN_ATTEMPT.create({ id: instanceId, params });
-    return { created: true, instanceId };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/already exists|duplicate|instance.*id/i.test(message)) return { created: false, instanceId };
-    throw error;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // POST /w/:ws/sessions/:id/turns
 // ---------------------------------------------------------------------------
@@ -218,6 +269,11 @@ async function withRefusalMetered<T>(c: Context<{ Bindings: Env }>, work: () => 
 export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Response> {
   const receivedAt = Date.now();
   let capabilityMs: number | null = null;
+  const workspaceTimings = {
+    authenticationMs: null as number | null,
+    transactionMs: null as number | null,
+    afterCommitJobsMs: null as number | null,
+  };
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
@@ -245,16 +301,11 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   const text = (input.text ?? '').slice(0, 20_000);
 
   const outcome = await withRefusalMetered(c, async () => inWorkspace(c, async (work) => {
-    const session = await loadSessionForWrite(work, sessionId);
-
-    // The duplicate check comes before every refusal below: a re-POST of a turn
-    // that already started must return that run, not "you are over your cap".
-    const existing = await work.tx.query<RunRow>(
-      `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
-         FROM runs WHERE workspace_id = $1 AND session_id = $2 AND client_turn_id = $3`,
-      [work.workspaceId, sessionId, clientTurnId],
-    );
-    const already = existing.rows[0];
+    // Session authorization and the idempotency lookup share one round trip.
+    // The duplicate result still comes before every mutable cap or refusal.
+    const admission = await loadTurnAdmission(work, sessionId, clientTurnId);
+    const session = admission.session;
+    const already = admission.existing;
     if (already) return { status: 200 as const, run: already, duplicate: true };
 
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
@@ -310,17 +361,20 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     //   2. Is there a verified key for it? Refused at creation, which is the
     //      only place refusing is cheap: mid-run it would mean a half-written
     //      transcript (plan section 4, key failures).
-    const model = await loadModel(work.tx, session.model_id);
+    const modelResult = await work.tx.query<{ provider: string; key_status: string | null }>(
+      `SELECT c.provider,
+              (SELECT k.status FROM workspace_provider_keys k
+                WHERE k.workspace_id=$1 AND k.provider=c.provider AND k.revoked_at IS NULL
+                LIMIT 1) AS key_status
+         FROM catalog c WHERE c.model_id=$2`,
+      [work.workspaceId, session.model_id],
+    );
+    const model = modelResult.rows[0];
     if (!model) throw new RouteError('this session names a model the catalog does not have', 'unknown_model', 409);
     requireAllowedProvider(c.env, model.provider);
 
     if (c.env.MODEL_SCRIPTED !== '1') {
-      const key = await work.tx.query<{ status: string }>(
-        `SELECT status FROM workspace_provider_keys
-          WHERE workspace_id = $1 AND provider = $2 AND revoked_at IS NULL LIMIT 1`,
-        [work.workspaceId, model.provider],
-      );
-      const status = key.rows[0]?.status ?? null;
+      const status = model.key_status;
       // The provider's *label*, because this sentence is rendered verbatim in
       // the composer (decision C45) and "Add a openrouter key" is not a
       // sentence anybody wrote on purpose.
@@ -350,7 +404,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         `INSERT INTO runs (id, workspace_id, session_id, agent_id, status, model_id, effort, max_turns,
                            trace_id, workflow_instance_id, attempt, engine_version, client_turn_id, mode)
          VALUES ($1, $2, $3, $4, 'working', $5, $6, $7, $8, $9, 1, $10, $11, $12)
-         RETURNING id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for`,
+         RETURNING id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for, trace_id`,
         [
           runId,
           work.workspaceId,
@@ -375,7 +429,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         // Either the same client_turn_id raced us, or this session already has
         // a live run. The two are different answers to the caller.
         const raced = await work.tx.query<RunRow>(
-          `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for
+          `SELECT id, agent_id, status, attempt, engine_version, workflow_instance_id, session_id, model_id, waiting_for, trace_id
              FROM runs WHERE workspace_id = $1 AND session_id = $2 AND client_turn_id = $3`,
           [work.workspaceId, sessionId, clientTurnId],
         );
@@ -388,72 +442,184 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     const run = inserted;
     if (!run) throw new RouteError('the run was not created', 'create_failed', 409);
 
-    // The person's own message, and the first `run_turns` row the engine reads.
-    const seqRow = await work.tx.query<{ seq: number }>(
-      `UPDATE sessions SET next_seq = next_seq + 1, last_activity_at = now()
-        WHERE id = $1 RETURNING next_seq - 1 AS seq`,
-      [sessionId],
+    // The user message, engine turn and draft cleanup are one statement. This
+    // keeps their all-or-nothing transaction while removing three Hyperdrive
+    // round trips from the admission path.
+    const initial = await work.tx.query<{ id: string; seq: number }>(
+      `WITH next_message AS (
+         UPDATE sessions SET next_seq=next_seq+1, last_activity_at=now()
+          WHERE workspace_id=$1 AND id=$3
+          RETURNING next_seq-1 AS seq
+       ), new_message AS (
+         INSERT INTO messages (workspace_id, session_id, seq, role, text, status, client_id, run_id, turn)
+         SELECT $1, $3, seq, 'user', $4, 'complete', $5, $6, 0 FROM next_message
+         RETURNING id, seq
+       ), new_turn AS (
+         INSERT INTO run_turns (workspace_id, run_id, turn, seq, role, provider_message)
+         VALUES ($1, $6, 0, 0, 'user', $7::jsonb)
+         RETURNING 1
+       ), cleared_draft AS (
+         DELETE FROM session_drafts WHERE session_id=$3 AND user_id=$2 RETURNING 1
+       )
+       SELECT m.id, m.seq
+         FROM new_message m
+         CROSS JOIN (SELECT count(*) FROM new_turn) committed_turn
+         CROSS JOIN (SELECT count(*) FROM cleared_draft) cleared`,
+      [
+        work.workspaceId,
+        work.userId,
+        sessionId,
+        text,
+        clientTurnId,
+        runId,
+        JSON.stringify({ role: 'user', content: text }),
+      ],
     );
-    const seq = seqRow.rows[0]?.seq ?? 0;
-    const message = await work.tx.query<{ id: string }>(
-      `INSERT INTO messages (workspace_id, session_id, seq, role, text, status, client_id, run_id, turn)
-       VALUES ($1, $2, $3, 'user', $4, 'complete', $5, $6, 0) RETURNING id`,
-      [work.workspaceId, sessionId, seq, text, clientTurnId, runId],
-    );
-    await work.tx.query(
-      `INSERT INTO run_turns (workspace_id, run_id, turn, seq, role, provider_message)
-       VALUES ($1, $2, 0, 0, 'user', $3::jsonb)`,
-      [work.workspaceId, runId, JSON.stringify({ role: 'user', content: text })],
-    );
-    await work.tx.query(`DELETE FROM session_drafts WHERE session_id = $1 AND user_id = $2`, [sessionId, work.userId]);
+    const message = initial.rows[0];
+    if (!message) throw new RouteError('the user message was not created', 'create_failed', 409);
+    const seq = message.seq;
 
-    work.jobs.push(
-      ...(await publishEvents(work.tx, work.workspaceId, [
-        {
-          kind: 'message.appended',
-          sessionId,
-          traceId,
-          payload: {
-            message_id: message.rows[0]?.id ?? '',
-            session_id: sessionId,
-            seq,
-            role: 'user',
-            kind: null,
-            text,
-            blocks: [],
-            status: 'complete',
-            run_id: runId,
-            client_turn_id: clientTurnId,
-          },
+    // Keep the exact committed envelope so the request can publish it without
+    // three more claim/read transactions. The durable job remains queued until
+    // the hub acknowledges, covering a crash at every following boundary.
+    const publications = await publishEventsForImmediateDelivery(work.tx, work.workspaceId, [
+      {
+        kind: 'message.appended',
+        sessionId,
+        traceId,
+        payload: {
+          message_id: message.id,
+          session_id: sessionId,
+          seq,
+          role: 'user',
+          kind: null,
+          text,
+          blocks: [],
+          status: 'complete',
+          run_id: runId,
+          client_turn_id: clientTurnId,
         },
-      ])),
+      },
+    ]);
+    const publishJobId = publications[0]?.jobId;
+    if (!publishJobId) throw new RouteError('the message delivery was not queued', 'create_failed', 409);
+
+    const create: RunInstanceParams = {
+      runId,
+      workspaceId: work.workspaceId,
+      sessionId,
+      attempt: 1,
+      engineVersion,
+      traceId,
+      receivedAt,
+      ...(scriptedScript ? { scriptedScript } : {}),
+    };
+    // Workflow creation is durable too. A background/Cron retry is allowed
+    // only after the initial message publish job is done, preserving global
+    // stream ordering even when the direct handoff fails halfway through.
+    const launchJobId = await enqueueJob(
+      work.tx,
+      work.workspaceId,
+      'run_launch',
+      `run-launch:${runId}:1`,
+      { ...create, afterPublishJobId: publishJobId },
     );
+    if (!launchJobId) throw new RouteError('the run launch was not queued', 'create_failed', 409);
 
     return {
       status: 201 as const,
       run,
       duplicate: false,
-      create: {
-        runId,
-        workspaceId: work.workspaceId,
-        sessionId,
-        attempt: 1,
-        engineVersion,
-        traceId,
-        receivedAt,
-        ...(scriptedScript ? { scriptedScript } : {}),
-      },
+      create,
+      publications,
+      publishJobId,
+      launchJobId,
     };
+  }, {
+    onTimings: (timings) => {
+      workspaceTimings.authenticationMs = timings.authenticationMs;
+      workspaceTimings.transactionMs = timings.transactionMs;
+      workspaceTimings.afterCommitJobsMs = timings.afterCommitJobsMs;
+    },
   }));
 
   if (!outcome.duplicate && 'create' in outcome && outcome.create) {
     const admissionMs = Math.max(0, Date.now() - receivedAt);
-    await createInstance(c.env, outcome.create);
+    let orderedPublishMs: number | null = null;
+    let workflowCreateMs: number | null = null;
+    let handoffDeferred = false;
+    const background = (work: () => Promise<void>) => {
+      c.executionCtx.waitUntil(work().catch((error) => {
+        try {
+          logEvent({
+            at: 'hermes.turn_handoff_retry', run_id: outcome.run.id,
+            trace_id: outcome.create.traceId, ok: false, error: String(error),
+          });
+        } catch { /* Durable jobs remain for Cron even if logging fails. */ }
+      }));
+    };
+
+    const publishStartedAt = Date.now();
+    try {
+      await deliverPreparedPublications(c.env, outcome.create.workspaceId, outcome.publications);
+      orderedPublishMs = Math.max(0, Date.now() - publishStartedAt);
+    } catch (error) {
+      orderedPublishMs = Math.max(0, Date.now() - publishStartedAt);
+      handoffDeferred = true;
+      // The queued launch names the publish job as a prerequisite. Even if a
+      // Cron races this background attempt, it cannot create the Workflow
+      // before the lower stream id has been acknowledged.
+      background(() => runJobsAfterCommit(c.env, outcome.create.workspaceId, [
+        outcome.publishJobId,
+        outcome.launchJobId,
+      ]));
+      try {
+        logEvent({
+          at: 'hermes.turn_direct_publish', run_id: outcome.run.id,
+          trace_id: outcome.create.traceId, ok: false, error: String(error),
+        });
+      } catch { /* The durable handoff is already scheduled. */ }
+    }
+
+    if (!handoffDeferred) {
+      const workflowStartedAt = Date.now();
+      try {
+        await createRunInstance(c.env, outcome.create);
+        workflowCreateMs = Math.max(0, Date.now() - workflowStartedAt);
+        background(() => finishJobsAfterCommit(c.env, outcome.create.workspaceId, [
+          outcome.publishJobId,
+          outcome.launchJobId,
+        ]));
+      } catch (error) {
+        workflowCreateMs = Math.max(0, Date.now() - workflowStartedAt);
+        handoffDeferred = true;
+        // The message is already visible. Retire that publish job first, then
+        // let the durable launch runner retry the idempotent Workflow create.
+        background(async () => {
+          await finishJobsAfterCommit(c.env, outcome.create.workspaceId, [outcome.publishJobId]);
+          await runJobsAfterCommit(c.env, outcome.create.workspaceId, [outcome.launchJobId]);
+        });
+        try {
+          logEvent({
+            at: 'hermes.turn_direct_launch', run_id: outcome.run.id,
+            trace_id: outcome.create.traceId, ok: false, error: String(error),
+          });
+        } catch { /* The durable launch is already scheduled. */ }
+      }
+    }
+
     try {
       logEvent({
         at: 'hermes.turn_admitted', run_id: outcome.run.id, trace_id: outcome.create.traceId,
         model_id: outcome.run.model_id, capability_ms: capabilityMs,
-        admission_ms: admissionMs, workflow_create_ms: Math.max(0, Date.now() - receivedAt - admissionMs),
+        authentication_ms: workspaceTimings.authenticationMs,
+        transaction_ms: workspaceTimings.transactionMs,
+        after_commit_jobs_ms: workspaceTimings.afterCommitJobsMs,
+        admission_ms: admissionMs,
+        ordered_publish_ms: orderedPublishMs,
+        workflow_create_ms: workflowCreateMs,
+        handoff_deferred: handoffDeferred,
+        handoff_ms: Math.max(0, Date.now() - receivedAt - admissionMs),
       });
     } catch { /* Telemetry cannot turn an admitted run into a failed POST. */ }
   }

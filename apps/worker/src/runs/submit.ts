@@ -45,6 +45,7 @@ export interface RunInstanceParams {
   readonly attempt: number;
   readonly engineVersion: number;
   readonly traceId: string;
+  readonly receivedAt?: number;
   readonly scriptedScript?: string;
 }
 

@@ -11,7 +11,7 @@ import type { Env } from '../env.js';
 import { getSession } from '../auth.js';
 import type { Session } from '../auth/types.js';
 import { AuthError } from '../auth/types.js';
-import { memberRole, withTenantTransaction, type Tx } from '../db/client.js';
+import { withTenantTransaction, type Tx } from '../db/client.js';
 import { runJobsAfterCommit } from '../jobs.js';
 
 export class RouteError extends Error {
@@ -44,20 +44,37 @@ export interface TenantWork {
   requireAdmin(action: string): void;
 }
 
+export interface WorkspacePhaseTimings {
+  readonly authenticationMs: number;
+  readonly transactionMs: number;
+  readonly afterCommitJobsMs: number;
+}
+
+export interface InWorkspaceOptions {
+  readonly onTimings?: (timings: WorkspacePhaseTimings) => void;
+}
+
 export async function inWorkspace<T>(
   c: Context<{ Bindings: Env }>,
   fn: (work: TenantWork) => Promise<T>,
+  options: InWorkspaceOptions = {},
 ): Promise<T> {
+  const authenticationStartedAt = Date.now();
   const session = await getSession(c);
+  const authenticationMs = Math.max(0, Date.now() - authenticationStartedAt);
   const workspaceId = c.req.param('ws') ?? '';
   const jobs: string[] = [];
 
+  const transactionStartedAt = Date.now();
   const result = await withTenantTransaction(
     c.env,
     'app',
     { workspaceId, userId: session.userId },
-    async (tx) => {
-      const role = await memberRole(tx, workspaceId, session.userId) === 'admin' ? 'admin' as const : 'member' as const;
+    async (tx, membershipRole) => {
+      // `withTenantTransaction` already read this row under tenant RLS. Reusing
+      // its result avoids asking Postgres the identical membership question a
+      // second time on every authenticated route.
+      const role = membershipRole === 'admin' ? 'admin' as const : 'member' as const;
       const work: TenantWork = {
         tx,
         workspaceId,
@@ -74,8 +91,13 @@ export async function inWorkspace<T>(
       return fn(work);
     },
   );
+  const transactionMs = Math.max(0, Date.now() - transactionStartedAt);
 
+  const jobsStartedAt = Date.now();
   if (jobs.length > 0) await runJobsAfterCommit(c.env, workspaceId, jobs);
+  const afterCommitJobsMs = Math.max(0, Date.now() - jobsStartedAt);
+  try { options.onTimings?.({ authenticationMs, transactionMs, afterCommitJobsMs }); }
+  catch { /* Route telemetry must never change the committed response. */ }
   return result;
 }
 
