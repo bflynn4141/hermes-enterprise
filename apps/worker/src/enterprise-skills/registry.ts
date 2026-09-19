@@ -29,7 +29,7 @@ export const PARTNER_INVOICE_REVIEW_SKILL = {
   key: 'partner-invoice-review',
   version: '1.0.1',
   title: 'Partner invoice review',
-  description: 'Check authorized partner invoices and prepare a human payment decision. It cannot approve or pay.',
+  description: 'Check authorized partner invoices and prepare an invoice draft for human review. It cannot approve or pay.',
 } as const;
 
 export const PARTNER_INVOICE_REVIEW_CAPABILITY_GRANTS = [
