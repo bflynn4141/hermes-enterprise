@@ -379,6 +379,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
               void serialDb(recordReasoningBoundary).catch(() => undefined);
             }
             if (['run.completed', 'run.failed', 'run.cancelled'].includes(payload.event)) {
+              latency.mark('native_stream_terminal');
               metrics.stream_end = 'terminal';
               break;
             }
@@ -402,14 +403,22 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         while (!terminalHermesStatus(status.status)) {
           if (Date.now() >= deadline) throw new Error('Hermes run exceeded its execution time limit');
           if (readerFailure || dbFailure || checkpoints.failure) throw readerFailure ?? dbFailure ?? checkpoints.failure;
-          if (!stopped && (stopFromForward || await serialDb(() => db.stopRequested(run.id)))) {
-            await client.stop(id);
-            stopped = true;
-          }
           if (!stopped) {
-            for (const row of await serialDb(() => db.loadGuidance(run.id))) {
-              if (row.status !== 'queued' || sentGuidance.has(row.id)) continue;
-              if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
+            // One serial read transaction avoids repeated tenant setup each
+            // poll. Native Stop/Steer must run only after this commit so a slow
+            // RPC never holds our shared database connection's transaction.
+            const controls = await serialDb(() => withRuntimeTransaction(async () => {
+              const stop = stopFromForward || await db.stopRequested(run.id);
+              return { stop, guidance: stop ? [] : await db.loadGuidance(run.id) };
+            }));
+            if (controls.stop || stopFromForward) {
+              await client.stop(id);
+              stopped = true;
+            } else {
+              for (const row of controls.guidance) {
+                if (row.status !== 'queued' || sentGuidance.has(row.id)) continue;
+                if (await client.steer(id, row.text)) sentGuidance.set(row.id, row.text);
+              }
             }
           }
           status = await client.status(id);
@@ -421,14 +430,17 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             controlWake.current = () => { clearTimeout(timer); controlWake.current = null; resolve(); };
           });
         }
+        latency.mark('native_status_terminal');
         // Status may outrun the last SSE frame. Give the independent reader a
         // bounded tail window; completion must not discard already-sent text.
-        if (reading) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([reader, new Promise<void>((resolve) => { timer = setTimeout(resolve, drainMs); })]);
-          clearTimeout(timer);
-          if (reading) metrics.stream_end = 'drain_timeout';
-        }
+        await latency.measure('final_stream_drain', async () => {
+          if (reading) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([reader, new Promise<void>((resolve) => { timer = setTimeout(resolve, drainMs); })]);
+            clearTimeout(timer);
+            if (reading) metrics.stream_end = 'drain_timeout';
+          }
+        });
       } finally {
         controller.abort();
         // Reader callbacks check abort before touching state. Drain every
@@ -443,13 +455,15 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             previews.discard();
           }
         })();
-        const drained = await Promise.allSettled([previewDrain, checkpoints.drain(), dbTail]);
+        const drained = await latency.measure('final_checkpoint_drain', () =>
+          Promise.allSettled([previewDrain, checkpoints.drain(), dbTail]));
         try { deps.onStreamMetrics?.({ ...metrics }); } catch { /* Telemetry cannot change run outcome. */ }
         const rejected = drained.find((result) => result.status === 'rejected');
         if (rejected?.status === 'rejected') throw rejected.reason;
         if (readerFailure || dbFailure) throw readerFailure ?? dbFailure;
       }
       terminal = true;
+      const finalPreparationStartedAt = Date.now();
       visibleText = status.output ?? text;
       const workedMs = db.activeRuntimeMs ? await db.activeRuntimeMs(run.id, run.attempt, startedAt, Date.now()) : Math.max(0, Date.now() - startedAt);
       const finalText = status.output ?? text;
@@ -477,7 +491,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           });
         } catch { /* Telemetry cannot change run outcome. */ }
       }
-      const finalEvents = await db.finalizeRuntime(run.id, run.attempt, async () => {
+      latency.mark('final_preparation', finalPreparationStartedAt);
+      const finalEvents = await latency.measure('final_persistence', () => db.finalizeRuntime(run.id, run.attempt, async () => {
       const guidanceEvents: EmitInput[] = [];
       for (const [guidanceId, guidanceText] of sentGuidance) {
         if (status.status !== 'completed' || status.pending_steer?.includes(guidanceText)) continue;
@@ -496,8 +511,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         { kind: 'message.final', payload: { message_id: messageId, session_id: run.sessionId, run_id: run.id, turn: 0, attempt: run.attempt, text: parsed.text, blocks: parsed.blocks, incomplete: !completed, worked_ms: workedMs } },
         { kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: finalStatus, active_ms: activeMs, error } },
       ].map((event) => ({ ...event, sessionId: run.sessionId })));
-      });
-      if (finalEvents?.length) await deps.forward(run.sessionId, run.id, finalEvents).catch(() => undefined);
+      }));
+      if (finalEvents?.length) await latency.measure('final_delivery', () =>
+        deps.forward(run.sessionId, run.id, finalEvents)).catch(() => undefined);
       return { status: finalStatus };
     });
   } catch (error) {
@@ -506,7 +522,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
     const detail: RunErrorInput = { class: 'transient', retryable: true, reason: 'hermes_unavailable', message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.' };
     // Close the visible activity and preserve partial output even when the
     // runtime disappears. A stale attempt may not overwrite its successor.
-    const failedEvents = await db.finalizeRuntime(run.id, run.attempt, async () => {
+    const failedEvents = await latency.measure('final_persistence', () => db.finalizeRuntime(run.id, run.attempt, async () => {
       const events: EmitInput[] = [];
       if (currentMessageId) {
         const parsed = extractBlocks(visibleText);
@@ -521,7 +537,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await db.setRunStatus(run.id, 'error', { error: detail, waitingFor: null, waitingLabel: null });
       events.push({ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'error', error: detail } });
       return db.emit(events.map((event) => ({ ...event, sessionId: run.sessionId })));
-    });
-    if (failedEvents?.length) await deps.forward(run.sessionId, run.id, failedEvents).catch(() => undefined);
+    }));
+    if (failedEvents?.length) await latency.measure('final_delivery', () =>
+      deps.forward(run.sessionId, run.id, failedEvents)).catch(() => undefined);
   }
 }
