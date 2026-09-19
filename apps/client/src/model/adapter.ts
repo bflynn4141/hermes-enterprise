@@ -99,7 +99,7 @@ export interface Adapter {
   /** Answer the question an `ask_for_context` step parked the run on. */
   answerContext(sessionId: string, key: string, value: string): Promise<void>;
   /** Declare, put the bytes, complete. Returns the ready row. */
-  upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string }): Promise<Attachment>;
+  upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string; agentId?: string }): Promise<Attachment>;
   decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | 'reauth_required'>;
   applyCommand(sessionId: string, command: BlockCommand): void;
   activateSession(sessionId: string): Promise<void>;
@@ -785,7 +785,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
     turnIds.set(sessionId, turnId);
     const attachments = state().capabilities.turnAttachments
-      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
+      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: a.kind ?? 'file' as const, status: 'ready' as const, ...(a.sha256 ? { sha256: a.sha256 } : {}) }))
       : [];
     // Live finals lack a session sequence and use MAX_SAFE_INTEGER as an
     // ordering sentinel. Never propagate that sentinel into another turn.
@@ -1170,12 +1170,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * is the server telling the client which, so the client never parses a URL to
    * find out.
    */
-  async function upload(file: File, opts: { kind?: 'attachment' | 'agent_file'; sessionId?: string } = {}): Promise<Attachment> {
+  async function upload(file: File, opts: { kind?: 'attachment' | 'agent_file'; sessionId?: string; agentId?: string } = {}): Promise<Attachment> {
     const kind = opts.kind ?? 'attachment';
     const declared = await rest.declareUpload(workspaceId, kind, {
       name: file.name,
       size: file.size,
       mime: file.type || 'text/plain',
+      ...(opts.agentId && kind === 'agent_file' ? { agent_id: opts.agentId } : {}),
       ...(opts.sessionId && kind === 'attachment' ? { session_id: opts.sessionId } : {}),
     });
     dispatch({ type: 'entity/upsert', kind: 'attachment', id: declared.attachment.id, version: 1, data: declared.attachment });

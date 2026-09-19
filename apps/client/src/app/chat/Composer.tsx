@@ -8,7 +8,7 @@
 // composer until uploaded content can actually reach the agent runtime.
 //
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { SETTINGS } from '@hermes/shared';
+import { SETTINGS, type AttachmentDetail } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitives.js';
@@ -62,7 +62,8 @@ export function Composer({ session }: { session: SessionState }) {
   const waiting = run?.status === 'waiting';
   const active = working || waiting;
   const admitting = Boolean(session.pendingTurn && !session.pendingTurn.runId);
-  const contextKey = waiting ? run.waiting_for : null;
+  const approvalWaiting = waiting && run.waiting_for?.startsWith('operation_approval:');
+  const contextKey = waiting && !approvalWaiting ? run.waiting_for : null;
   const text = session.draft.text;
   const keys = hasVerifiedKey(state);
   const blocked = !keys.any;
@@ -72,6 +73,9 @@ export function Composer({ session }: { session: SessionState }) {
   const modelRoute = model ? modelRouteLabel(model) : null;
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
   const attachmentsAvailable = state.capabilities.turnAttachments;
+  // Only hash-bound stored sources have a runtime contract. Direct uploads
+  // and skill chips stay hidden until those paths can actually be consumed.
+  const directUploadsAvailable = false;
 
   useEffect(() => {
     const el = textarea.current;
@@ -209,6 +213,7 @@ export function Composer({ session }: { session: SessionState }) {
                   : `${status.error?.message ?? 'Error'} · Completed work kept`}
           </span>
           <span className="grow" />
+          {approvalWaiting && <Button onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
           {(status.status === 'working' || status.status === 'waiting') && !admitting && (
             <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
               Stop work
@@ -227,15 +232,15 @@ export function Composer({ session }: { session: SessionState }) {
         data-blocked={blocked}
         data-dragging={attachmentsAvailable && dragging}
         aria-busy={attachmentsAvailable && uploading > 0}
-        onDragEnter={attachmentsAvailable ? enterDropZone : undefined}
+        onDragEnter={directUploadsAvailable ? enterDropZone : undefined}
         onDragOver={(event) => {
-          if (!attachmentsAvailable) return;
+          if (!directUploadsAvailable) return;
           if (!carriesFiles(event)) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
         }}
-        onDragLeave={attachmentsAvailable ? leaveDropZone : undefined}
-        onDrop={attachmentsAvailable ? dropDocuments : undefined}
+        onDragLeave={directUploadsAvailable ? leaveDropZone : undefined}
+        onDrop={directUploadsAvailable ? dropDocuments : undefined}
       >
         {attachmentsAvailable && dragging && (
           <div className="composer-drop-hint" role="status">
@@ -332,7 +337,7 @@ export function Composer({ session }: { session: SessionState }) {
                 <Icon name="plus" />
                 <span className="chip-label"> Context</span>
               </button>
-              <AttachPopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} onUpload={uploadFiles} />
+              <SourcePopover open={menu === 'attach'} onClose={() => setMenu(null)} anchorRef={attachBtn} session={session} />
             </span>
           )}
           <span className="spacer" />
@@ -402,92 +407,38 @@ export function Composer({ session }: { session: SessionState }) {
  * the presign flow. Extraction status comes back as `entity.updated`, so a file
  * that is still being read says so instead of looking ready.
  */
-function AttachPopover({ open, onClose, anchorRef, session, onUpload }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState; onUpload: (files: FileList | readonly File[]) => Promise<void> }) {
+function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState }) {
   const state = useAppState();
+  const adapter = useAdapter();
   const dispatch = useDispatch();
-  const [tab, setTab] = useState('all');
+  const nav = useNav();
+  const [files, setFiles] = useState<AttachmentDetail[]>([]);
   const [query, setQuery] = useState('');
-  const fileInput = useRef<HTMLInputElement>(null);
-  const files = Object.values(state.entities.agent_file).map((record) => record.data as { id: string; name: string; subtitle: string; extraction: string } | null).filter(Boolean) as { id: string; name: string; subtitle: string; extraction: string }[];
-  const skills = Object.values(state.entities.skill_version).map((record) => record.data as { id: string; name: string; version: string; adopted: boolean } | null).filter(Boolean) as { id: string; name: string; version: string; adopted: boolean }[];
-
-  const items = [
-    ...files.map((file) => ({ id: `file:${file.id}`, kind: 'source', label: file.name, sub: file.extraction === 'ready' ? file.subtitle : file.extraction === 'failed' ? 'Extraction failed' : 'Being read…', icon: 'context' })),
-    ...skills.map((skill) => ({ id: `skill:${skill.id}`, kind: 'skill', label: `${skill.name} · ${skill.version}`, sub: skill.adopted ? 'Skill · Already used' : 'Skill · Shared', icon: 'skill' })),
-  ].filter((item) => (tab === 'all' || (tab === 'sources' ? item.kind === 'source' : item.kind === 'skill')) && item.label.toLowerCase().includes(query.toLowerCase()));
-
-  return (
-    <Popover open={open} onClose={onClose} anchorRef={anchorRef} width={440} label="Attach context" above align="left">
-      <div className="row">
-        <span className="p-title">Attach</span>
-        <span className="grow" />
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-          <Icon name="close" size={16} />
-        </button>
-      </div>
-      <Tabs
-        tabs={[
-          { id: 'all', label: 'All' },
-          { id: 'sources', label: 'Sources' },
-          { id: 'skills', label: 'Skills' },
-        ]}
-        value={tab}
-        onChange={setTab}
-        label="Attachment type"
-      />
-      <div className="search">
-        <Icon name="search" />
-        <input placeholder="Search context and skills…" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search context and skills" />
-      </div>
-      <div className="col" style={{ gap: 2, maxHeight: 260, overflowY: 'auto' }}>
-        {items.length === 0 && <div className="p-meta" style={{ padding: 12 }}>{EMPTY.attach}</div>}
-        {items.map((item) => {
-          const already = session.draft.attachments.some((a) => a.id === item.id);
-          return (
-            <button
-              type="button"
-              key={item.id}
-              className="menu-item small"
-              role="menuitemcheckbox"
-              aria-checked={already}
-              disabled={already}
-              onClick={() => {
-                dispatch({ type: 'session/attach', id: session.id, attachment: { id: item.id, label: item.label, icon: item.icon } });
-                onClose();
-              }}
-            >
-              <Glass name={item.icon} size={18} />
-              <span className="mi-body">
-                <span>{item.label}</span>
-                <span className="mi-sub">{item.sub}</span>
-              </span>
-              <span className="mi-check" aria-hidden="true">
-                {already ? 'attached' : '+'}
-              </span>
-            </button>
-          );
-        })}
-        <button type="button" className="menu-item small" onClick={() => fileInput.current?.click()}>
-          <Icon name="plus" />
-          <span className="mi-body">
-            <span>Upload a file</span>
-            <span className="mi-sub">pdf, md, txt · Read on the server, never sent elsewhere</span>
-          </span>
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          accept={DOCUMENT_ACCEPT}
-          hidden
-          aria-label="Upload a file"
-          onChange={(event) => {
-            const files = event.target.files ? Array.from(event.target.files) : [];
-            event.target.value = '';
-            if (files.length) void onUpload(files).finally(onClose);
-          }}
-        />
-      </div>
-    </Popover>
-  );
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!open || !session.agentId) return;
+    let live = true;
+    setFiles([]); setLoading(true); setError('');
+    void adapter.rest.listAgentFiles(state.workspace.id, session.agentId).then((page) => { if (live) setFiles(page.items); }).catch(() => { if (live) setError('Could not load sources. Close and reopen to try again.'); }).finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [open, adapter, state.workspace.id, session.agentId]);
+  return <Popover open={open} onClose={onClose} anchorRef={anchorRef} width={440} label="Select sources" above align="left">
+    <div className="row"><span className="p-title">Select sources</span><span className="grow" /><Button link onClick={onClose}>Close</Button></div>
+    <p className="meta">Choose up to five ready sources for your next message.</p>
+    <div className="search"><Icon name="search" /><input aria-label="Search sources" placeholder="Search sources…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+    {error && <p role="alert">{error}</p>}
+    {loading && <p role="status">Loading sources…</p>}
+    <div className="col" style={{ maxHeight: 260, overflowY: 'auto' }}>{files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())).map((file) => {
+      const already = session.draft.attachments.some((item) => item.id === file.id);
+      const ready = file.extraction_status === 'ready' && file.status === 'ready' && file.sha256;
+      return <button type="button" className="menu-item small" key={file.id} disabled={already || !ready || session.draft.attachments.length >= 5} onClick={() => {
+        if (!file.sha256) return;
+        dispatch({ type: 'session/attach', id: session.id, attachment: { id: file.id, label: file.name, icon: 'context', kind: 'source', sha256: file.sha256 } });
+        onClose();
+      }}><Glass name="context" size={18} /><span className="mi-body"><span>{file.name}</span><span className="mi-sub">{already ? 'Selected' : ready ? 'Available to select' : file.extraction_status === 'failed' ? 'Processing failed' : 'Processing…'}</span></span></button>;
+    })}</div>
+    {!loading && !error && files.length === 0 && <p className="meta">No stored sources yet.</p>}
+    <Button link onClick={() => { onClose(); nav({ section: 'agents', view: 'context' }); }}>Manage sources →</Button>
+  </Popover>;
 }

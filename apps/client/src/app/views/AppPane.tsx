@@ -12,6 +12,8 @@ import { useAppState, useDispatch } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
 import { Button, IconButton } from '../ui/primitives.js';
 import { AgentOverview, AgentContext, AgentSkills, AgentTraces, TraceDetail, Setup } from './Agent.js';
+import { AgentContextSettings } from './AgentContextSettings.js';
+import { AgentPermissions } from './AgentPermissions.js';
 import { InboxList, RequestReview } from './Inbox.js';
 import { History, Members, Library, Settings } from './Workspace.js';
 import { agentName } from '../selectors.js';
@@ -32,6 +34,7 @@ function describe(state: AppState): [string, string] {
     if (view === 'traces') return [agent, `${agent} / Traces`];
     if (view === 'context') return [agent, app.field ? `${agent} / ${app.field}` : `${agent} / Context`];
     if (view === 'skills') return [agent, `${agent} / Skills`];
+    if (view === 'permissions') return [agent, `${agent} / Permissions`];
     return [agent, `${agent} / Overview`];
   }
   if (section === 'inbox') {
@@ -66,7 +69,8 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
   const view = useMemo(() => {
     if (app.section === 'agents') {
       if (app.view === 'setup') return <Setup step={app.step ?? 'ready'} />;
-      if (app.view === 'context') return <AgentContext field={app.field ?? null} />;
+      if (app.view === 'context') return <AgentContextSettings field={app.field ?? null} />;
+      if (app.view === 'permissions') return <AgentPermissions />;
       if (app.view === 'skills') return <AgentSkills />;
       if (app.view === 'traces') return <AgentTraces />;
       if (app.view === 'trace') return <TraceDetail id={app.id ?? null} />;

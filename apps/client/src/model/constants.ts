@@ -84,6 +84,7 @@ export const AGENT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'context', label: 'Context' },
   { id: 'skills', label: 'Skills' },
+  { id: 'permissions', label: 'Permissions' },
   { id: 'traces', label: 'Traces' },
 ] as const;
 

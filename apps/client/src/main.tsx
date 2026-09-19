@@ -52,6 +52,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
     const params = new URL(window.location.href).searchParams;
     const recovery = params.get('recovery');
     const backend = createMockBackend({
+      agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
       recovery: recovery === 'working' || recovery === 'retryable' || recovery === 'retry_scheduled' || recovery === 'blocked' || recovery === 'stopped' || recovery === 'idle' ? recovery : undefined,
       activity: params.get('activity') === 'completed-tool' ? 'completed-tool' : params.get('activity') === 'completed' ? 'completed' : undefined,
       seat: params.get('seat') === 'member' ? 'member' : 'admin',

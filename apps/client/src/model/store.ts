@@ -94,7 +94,7 @@ export interface StreamAccumulator {
 
 export interface DraftState {
   text: string;
-  attachments: { id: string; label: string; icon?: string }[];
+  attachments: { id: string; label: string; icon?: string; kind?: 'source'; sha256?: string }[];
 }
 
 /**
@@ -485,7 +485,7 @@ export type Action =
   | { type: 'session/draft'; id: string; text: string }
   | { type: 'session/draft-clear'; id: string }
   | { type: 'session/drafts-restore'; drafts: Record<string, DraftState> }
-  | { type: 'session/attach'; id: string; attachment: { id: string; label: string; icon?: string } }
+  | { type: 'session/attach'; id: string; attachment: DraftState['attachments'][number] }
   | { type: 'session/detach'; id: string; attachmentId: string }
   | { type: 'session/set'; id: string; patch: Partial<SessionState> }
   | { type: 'session/scroll'; id: string; scrollTop: number }

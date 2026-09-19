@@ -13,6 +13,8 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  contextNoteSchema,
+  agentPermissionsSchema,
   approvalEvidenceViewSchema,
   type ApprovalEvidenceView,
   agentRecoveryViewSchema,
@@ -295,7 +297,7 @@ export function createRest(options: RestOptions) {
     sessionSnapshot: (workspaceId: string, sessionId: string) =>
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
     sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: body.attachments.map((source) => ({ id: source.id, sha256: source.sha256, kind: source.kind === 'source' ? 'agent_file' : source.kind })) }) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
@@ -363,6 +365,13 @@ export function createRest(options: RestOptions) {
     getTrace: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/traces/${id}`, traceEntitySchema),
     listContextFields: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/context-fields`, paginatedSchema(contextFieldSchema)), emptyPage()),
+    listContextNotes: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/context-notes`, paginatedSchema(contextNoteSchema)),
+    createContextNote: (workspaceId: string, agentId: string, body: { title: string; text: string }) => request('POST', `${ws(workspaceId)}/agents/${agentId}/context-notes`, contextNoteSchema, body),
+    updateContextNote: (workspaceId: string, agentId: string, id: string, body: { title: string; text: string; expected_revision: number }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, contextNoteSchema, body),
+    deleteContextNote: (workspaceId: string, agentId: string, id: string, expectedRevision: number) => send('DELETE', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, { expected_revision: expectedRevision }),
+    agentPermissions: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema),
+    setAgentPermission: (workspaceId: string, agentId: string, body: { revision: number; operation_id: string; require_human_approval: boolean }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema, body),
+    decideOperationApproval: (workspaceId: string, agentId: string, id: string, decision: 'approved' | 'denied') => request('POST', `${ws(workspaceId)}/agents/${agentId}/permissions/approvals/${id}`, agentPermissionsSchema, { decision }),
     setContextField: (workspaceId: string, field: string, body: { value: string; scope: 'reply' | 'future' }) =>
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
     listInstructions: (workspaceId: string) =>
@@ -459,7 +468,7 @@ export function createRest(options: RestOptions) {
     deleteUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
       send('DELETE', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`),
     /** The agent's Context sources, with their extraction status. */
-    listAgentFiles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/files`, paginatedSchema(attachmentDetailSchema)),
+    listAgentFiles: (workspaceId: string, agentId?: string | null) => request('GET', `${ws(workspaceId)}/files${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(attachmentDetailSchema)),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`
