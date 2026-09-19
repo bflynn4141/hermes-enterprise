@@ -56,7 +56,6 @@ describe('GET /health', () => {
     }));
     vi.stubGlobal('fetch', upstream);
     const { env } = makeEnv({
-      ...MANAGED_PLUGIN_ENV,
       AGENT_RUNTIME: 'hermes',
       HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
       HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example',
@@ -118,7 +117,7 @@ describe('GET /health', () => {
     expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: true, detail: 'configured' });
   });
 
-  it('fails readiness when the reviewed managed plugin identity is absent', async () => {
+  it('does not make managed warm-pool plugin identity a prerequisite for the legacy Iris health check', async () => {
     const { env } = makeEnv({
       AGENT_RUNTIME: 'hermes',
       HERMES_BRIDGE_SECRET: 'test-only-secret-longer-than-thirty-two-characters',
@@ -127,7 +126,7 @@ describe('GET /health', () => {
     } as Partial<Env>);
     const body = (await (await call(env, '/health')).json()) as HealthBody;
 
-    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: false, detail: 'misconfigured' });
+    expect(body.checks.find((check) => check.name === 'hermes:runs')).toMatchObject({ ok: true, detail: 'configured' });
   });
 
   it('fails readiness when the bridge signing secret is missing', async () => {

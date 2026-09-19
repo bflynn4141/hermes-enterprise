@@ -119,6 +119,7 @@ export class RestError extends Error {
     readonly reason: string,
     message: string,
     readonly retryAfter: number | null = null,
+    readonly traceId: string | null = null,
   ) {
     super(message);
     this.name = 'RestError';
@@ -198,11 +199,13 @@ export function createRest(options: RestOptions) {
       const retryAfter = Number(response.headers.get('Retry-After') ?? '') || null;
       let reason = 'http_error';
       let message = `${method} ${path} failed with ${response.status}`;
+      let traceId: string | null = null;
       try {
         const parsed = errorBodySchema.safeParse(await response.json());
         if (parsed.success) {
           reason = parsed.data.reason;
           message = parsed.data.error;
+          traceId = parsed.data.trace_id ?? null;
         }
       } catch {
         /* a non-JSON error body keeps the default reason */
@@ -214,7 +217,7 @@ export function createRest(options: RestOptions) {
         continue;
       }
 
-      const error = new RestError(response.status, reason, message, retryAfter);
+      const error = new RestError(response.status, reason, message, retryAfter, traceId);
       if (error.signedOut) options.onSignedOut?.();
       throw error;
     }

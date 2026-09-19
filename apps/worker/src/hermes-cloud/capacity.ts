@@ -57,7 +57,6 @@ class CapacityGrantDriftError extends RouteError {
       'iris_capacity_unavailable',
       409,
     );
-    this.name = 'CapacityGrantDriftError';
   }
 }
 

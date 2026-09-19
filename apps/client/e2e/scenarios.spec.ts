@@ -11,6 +11,7 @@
 // need the worker: they assert what the *server* does. They are listed in the
 // spec and land with the M2 routes; `E2E_BASE_URL` points this config at them.
 import { expect, test } from '@playwright/test';
+import { mockUuid } from '@hermes/shared';
 
 const EMPTY_WORKSPACE = '/?data=empty&key=none';
 const SEEDED = '/';
@@ -152,7 +153,9 @@ test.describe('members write feedback', () => {
 
     await app.getByRole('tab', { name: 'Invitations' }).click();
     await app.getByRole('button', { name: 'Resend' }).click();
-    await expect(app.getByRole('alert')).toHaveText('Could not resend that invitation. Try again.');
+    await expect(app.getByRole('alert')).toHaveText(
+      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+    );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
     await app.getByRole('button', { name: 'Withdraw' }).click();
@@ -163,7 +166,9 @@ test.describe('members write feedback', () => {
     const email = invite.getByRole('textbox', { name: 'Work email' });
     await email.fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Invite' }).click();
-    await expect(invite.getByRole('alert')).toHaveText('Could not send that invitation. Check the address and try again.');
+    await expect(invite.getByRole('alert')).toHaveText(
+      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+    );
     await expect(email).toHaveValue('new.member@example.com');
     await invite.getByRole('button', { name: 'Cancel' }).click();
 
@@ -190,7 +195,7 @@ test.describe('members write feedback', () => {
 
     await expect(invite).toHaveCount(0);
     await expect(app.getByText('new.member@example.com')).toBeVisible();
-    await expect(app.getByText('Invitation sent')).toBeVisible();
+    await expect(app.getByText('Invitation recorded · Email delivery queued')).toBeVisible();
   });
 });
 
