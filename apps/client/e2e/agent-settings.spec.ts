@@ -74,6 +74,44 @@ test('members can inspect context and permissions but cannot change them', async
   await expect(page.getByRole('switch').first()).toBeDisabled();
 });
 
+test('unsaved context survives leaving and returning to the tab', async ({ page }) => {
+  await page.goto('/?agentSettings=1');
+  await openTab(page, 'Context');
+  await page.getByRole('button', { name: '+ Add context', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Unsaved title');
+  await page.getByRole('textbox', { name: 'Context', exact: true }).fill('Unsaved context');
+  await openTab(page, 'Skills');
+  await openTab(page, 'Context');
+  await expect(page.getByRole('textbox', { name: 'Title', exact: true })).toHaveValue('Unsaved title');
+  await expect(page.getByRole('textbox', { name: 'Context', exact: true })).toHaveValue('Unsaved context');
+  await expect(page.getByText('No confirmed notes yet.')).toBeVisible();
+});
+
+for (const decision of ['Approve once', 'Decline']) test(`pending action can ${decision} without changing the standing policy`, async ({ page }) => {
+  await page.goto('/?agentSettings=1&pendingAgentApproval=1');
+  await openTab(page, 'Permissions');
+  const pending = page.getByRole('region', { name: 'Actions waiting for approval' });
+  await expect(pending).toContainText('Mock review: evidence is incomplete.');
+  const toggle = page.getByRole('switch', { name: 'Require human approval: Save review notes' });
+  await toggle.click();
+  await toggle.click();
+  await expect(pending).toBeVisible(); // Turning approval off never authorizes a waiting call.
+  await pending.getByRole('button', { name: decision, exact: true }).click();
+  await expect(pending).toHaveCount(0);
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByRole('status')).toContainText(decision === 'Decline' ? 'Action declined.' : 'Action approved once.');
+});
+
+test('failed action approval remains waiting and never shows success', async ({ page }) => {
+  await page.goto('/?agentSettings=fail&pendingAgentApproval=1');
+  await openTab(page, 'Permissions');
+  const pending = page.getByRole('region', { name: 'Actions waiting for approval' });
+  await pending.getByRole('button', { name: 'Approve once' }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(pending).toBeVisible();
+  await expect(page.getByRole('status')).not.toContainText('Action approved once.');
+});
+
 test('standing instructions save for the selected agent and survive navigation', async ({ page }) => {
   await page.goto('/?agentSettings=1');
   await openTab(page, 'Skills');
@@ -108,6 +146,7 @@ test('mobile sections and reduced-motion approval switch stay usable', async ({ 
   const appButton = page.getByRole('button', { name: 'App', exact: true });
   await expect(appButton).toBeVisible();
   await appButton.click();
+  await expect(page.getByRole('combobox', { name: 'Workspace section' })).toBeVisible();
   await openTab(page, 'Permissions');
   const toggle = page.getByRole('switch', { name: 'Require human approval: Save review notes' });
   await expect(toggle).toBeVisible();
@@ -116,4 +155,10 @@ test('mobile sections and reduced-motion approval switch stay usable', async ({ 
   expect(await toggle.locator('span').evaluate((element) => getComputedStyle(element).transitionDuration)).toBe('0s');
   expect(await page.locator('.pane-app').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: 'qa/agent-permissions-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: 'Your account', exact: true }).click();
+  const account = page.getByRole('dialog', { name: 'Your account', exact: true });
+  await expect(account).toBeVisible();
+  const bounds = await account.boundingBox();
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
 });

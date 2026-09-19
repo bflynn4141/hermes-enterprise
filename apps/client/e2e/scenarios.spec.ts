@@ -237,7 +237,10 @@ test.describe('P2 · triage', () => {
   test('a manual navigation pins the view, and Follow returns it', async ({ page }) => {
     await page.goto(SEEDED);
     const appPane = page.getByRole('region', { name: 'Application' });
-    await appPane.getByRole('tab', { name: 'Skills' }).click();
+    await expect(appPane.locator('.agent-tabs-navigation')).toBeVisible();
+    const sections = appPane.getByRole('combobox', { name: 'Agent view' });
+    if (await sections.isVisible()) await sections.selectOption('skills');
+    else await appPane.getByRole('tab', { name: 'Skills' }).click();
     await expect(appPane.getByText('View pinned')).toBeVisible();
     await appPane.getByRole('button', { name: /^Follow / }).click();
     await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();

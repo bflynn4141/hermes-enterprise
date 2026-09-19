@@ -106,6 +106,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
             ref={sessionsBtn}
             type="button"
             className="text-btn"
+            aria-label="Sessions"
             aria-haspopup="dialog"
             aria-expanded={sessionsOpen}
             onClick={() => {
@@ -113,7 +114,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
               setSessionsOpen((open) => !open);
             }}
           >
-            <Icon name="history" /> Sessions
+            <Icon name="history" /> <span className="header-action-label">Sessions</span>
           </button>
           <SessionsPopover open={sessionsOpen} onClose={() => setSessionsOpen(false)} anchorRef={sessionsBtn} focusSearch={focusSearch} />
         </span>
@@ -126,8 +127,8 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
             setSessionsOpen(true);
           }}
         />
-        <button type="button" className="text-btn" onClick={() => void adapter.createSession()}>
-          <Icon name="plus" /> New session
+        <button type="button" className="text-btn" aria-label="New session" onClick={() => void adapter.createSession()}>
+          <Icon name="plus" /> <span className="header-action-label">New session</span>
         </button>
         {narrow && (
           <span className="pane-switch" role="group" aria-label="Pane">

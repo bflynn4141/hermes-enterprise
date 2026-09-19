@@ -1599,3 +1599,19 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
    SidebarNav intentionally keeps its native 14 px scale and compact geometry,
    matching the Codex sidebar instead of inheriting the app-wide 80% reduction. */
 [data-workspace-menu] [data-menu-row] span { font-size: 10.8px; line-height: 14px; }
+
+/* Phones keep workspace navigation above the active pane, not in a 240px
+   column beside it. Desktop disclosure and pane widths remain unchanged. */
+.shell.is-phone { grid-template-rows: 48px minmax(0, 1fr); }
+.shell.is-phone > .sidebar { grid-column: 1; grid-row: 1; padding: 0 12px; }
+.shell.is-phone > .pane { grid-column: 1; grid-row: 2; min-height: 0; }
+.phone-navigation { display: flex; align-items: center; justify-content: space-between; height: 100%; }
+.phone-navigation select { color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+.shell.is-phone .pane-header { padding-inline: 12px; gap: 4px; }
+.shell.is-phone .iris-header .mark { display: none; }
+.shell.is-phone .header-action-label { display: none; }
+.shell.is-phone .pane-header .text-btn,
+.shell.is-phone .pane-header .icon-btn,
+.phone-navigation .icon-btn { min-width: 44px; min-height: 44px; justify-content: center; }
+.shell.is-phone .pane-switch { flex-shrink: 0; }
+.shell.is-phone .pane-switch button { min-width: 44px; min-height: 44px; padding-inline: 8px; }

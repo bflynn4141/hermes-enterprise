@@ -89,6 +89,7 @@ const moneyForMock = (minor: number, currency: string): string => `${currency} $
 interface MockOptions {
   /** Opt-in settings fixtures; never part of the live bundle. */
   agentSettings?: 'ok' | 'fail' | 'conflict';
+  pendingAgentApproval?: boolean;
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
   recovery?: 'working' | 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
   /** Terminal Hermes traces for the activity-card regression, never live data. */
@@ -489,6 +490,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const storedSources: AttachmentDetail[] = agentFiles.map((file) => ({ id: file.id, name: file.name, kind: 'agent_file', size: 160, mime: file.name.endsWith('.pdf') ? 'application/pdf' : 'text/markdown', sha256: 'a'.repeat(64), status: 'ready', extraction_status: file.extraction === 'ready' ? 'ready' : 'pending', extraction_error: null, text_length: file.body?.length ?? null, token_estimate: 30, created_at: iso(), url: null, url_expires_at: null }));
   const confirmedNotes: ContextNote[] = [];
   const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [] };
+  if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
 
   const contextFields: { id: string; field: string; label: string; value: string | null; scope: 'reply' | 'future' | null; version: number }[] = [
     { id: 'destination', field: 'destination', label: 'Feedback destination', value: null, scope: null, version: 1 },
