@@ -57,6 +57,7 @@ import {
   createShare,
   getDraft,
   getSessionRoute,
+  getSessionSnapshot,
   listMessages,
   listSessions,
   patchSession,
@@ -333,6 +334,7 @@ app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 app.get('/w/:ws/sessions', listSessions);
 app.post('/w/:ws/sessions', createSession);
 app.get('/w/:ws/sessions/:id', getSessionRoute);
+app.get('/w/:ws/sessions/:id/snapshot', getSessionSnapshot);
 app.patch('/w/:ws/sessions/:id', patchSession);
 app.get('/w/:ws/sessions/:id/draft', getDraft);
 app.put('/w/:ws/sessions/:id/draft', putDraft);

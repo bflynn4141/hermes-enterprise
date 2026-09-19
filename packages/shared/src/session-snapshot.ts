@@ -46,7 +46,11 @@ export const sessionSnapshotSchema = z.object({
     cancelled: z.boolean(),
     blocked_reason: z.string().max(128).nullable(),
   }).strict().nullable(),
-  /** Apply the snapshot atomically, then apply only events beyond this id. */
+  /**
+   * Highest visible session event at this read. Apply atomically, then replay
+   * after it. Allocation is not commit order: authoritative reconciliation must
+   * also accept equal-watermark snapshots to repair delayed lower-id commits.
+   */
   watermark: streamIdSchema,
 }).strict().superRefine((snapshot, context) => {
   if (snapshot.run && (snapshot.run.session_id !== snapshot.session.id || snapshot.run.agent_id !== snapshot.session.agent_id)) {

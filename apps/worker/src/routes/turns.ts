@@ -19,7 +19,7 @@ import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
-import { retryTask } from '../runs/recovery.js';
+import { requireRecoveryAgent, retryTask } from '../runs/recovery.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
@@ -49,6 +49,7 @@ import {
 } from './tenant.js';
 import { VISIBLE } from './sessions.js';
 import { logEvent } from '../keys/redact.js';
+import { parseExpectedSettings, requireExpectedSettings } from '../domain/session-settings.js';
 
 /** Plan section 5: "Per-user limits (30 turns/min ...)". */
 const TURN_LIMIT: RateLimit = { action: 'run.turn', limit: 30, windowSeconds: 60 };
@@ -67,10 +68,10 @@ interface SessionRow {
   effort: string | null;
 }
 
-async function loadSessionForWrite(work: TenantWork, sessionId: string): Promise<SessionRow> {
+async function loadSessionForWrite(work: TenantWork, sessionId: string, lock = false): Promise<SessionRow> {
   const { rows } = await work.tx.query<SessionRow>(
     `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort FROM sessions s
-      WHERE s.workspace_id = $1 AND s.id = $3 AND ${VISIBLE}`,
+      WHERE s.workspace_id = $1 AND s.id = $3 AND ${VISIBLE} ${lock ? 'FOR UPDATE OF s' : ''}`,
     [work.workspaceId, work.userId, sessionId],
   );
   const session = rows[0];
@@ -112,7 +113,11 @@ async function loadTurnAdmission(
   clientTurnId: string,
 ): Promise<{ session: SessionRow; existing: RunRow | null }> {
   const { rows } = await work.tx.query<TurnAdmissionRow>(
-    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort,
+    `WITH agent_lock AS MATERIALIZED (
+       SELECT a.id FROM agents a JOIN sessions s ON s.workspace_id=a.workspace_id AND s.agent_id=a.id
+        WHERE s.workspace_id=$1 AND s.id=$3 AND ${VISIBLE} FOR KEY SHARE OF a
+     )
+     SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort,
             existing.id AS existing_id, existing.agent_id AS existing_agent_id,
             existing.status AS existing_status, existing.attempt AS existing_attempt,
             existing.engine_version AS existing_engine_version,
@@ -120,6 +125,7 @@ async function loadTurnAdmission(
             existing.session_id AS existing_session_id, existing.model_id AS existing_model_id,
             existing.waiting_for AS existing_waiting_for, existing.trace_id AS existing_trace_id
        FROM sessions s
+       JOIN agent_lock locked_agent ON locked_agent.id=s.agent_id
        LEFT JOIN LATERAL (
          SELECT r.id, r.agent_id, r.status, r.attempt, r.engine_version,
                 r.workflow_instance_id, r.session_id, r.model_id, r.waiting_for, r.trace_id
@@ -127,7 +133,7 @@ async function loadTurnAdmission(
           WHERE r.workspace_id=s.workspace_id AND r.session_id=s.id AND r.client_turn_id=$4
           LIMIT 1
        ) existing ON true
-      WHERE s.workspace_id=$1 AND s.id=$3 AND ${VISIBLE}`,
+      WHERE s.workspace_id=$1 AND s.id=$3 AND ${VISIBLE} FOR UPDATE OF s`,
     [work.workspaceId, work.userId, sessionId, clientTurnId],
   );
   const row = rows[0];
@@ -143,21 +149,30 @@ async function loadTurnAdmission(
     model_id: row.model_id,
     effort: row.effort,
   };
-  return {
-    session,
-    existing: row.existing_id ? {
-      id: row.existing_id,
-      agent_id: row.existing_agent_id!,
-      status: row.existing_status!,
-      attempt: row.existing_attempt!,
-      engine_version: row.existing_engine_version!,
-      workflow_instance_id: row.existing_workflow_instance_id,
-      session_id: row.existing_session_id!,
-      model_id: row.existing_model_id!,
-      waiting_for: row.existing_waiting_for,
-      trace_id: row.existing_trace_id,
-    } : null,
-  };
+  let existing: RunRow | null = row.existing_id ? {
+    id: row.existing_id,
+    agent_id: row.existing_agent_id!,
+    status: row.existing_status!,
+    attempt: row.existing_attempt!,
+    engine_version: row.existing_engine_version!,
+    workflow_instance_id: row.existing_workflow_instance_id,
+    session_id: row.existing_session_id!,
+    model_id: row.existing_model_id!,
+    waiting_for: row.existing_waiting_for,
+    trace_id: row.existing_trace_id,
+  } : null;
+  if (!existing) {
+    // The statement snapshot can precede a concurrent identical admission's
+    // commit even though its session-row lock made us wait. A fresh read after
+    // that wait must recognize the duplicate before checking mutable caps.
+    const committed = await work.tx.query<RunRow>(
+      `SELECT id,agent_id,status,attempt,engine_version,workflow_instance_id,session_id,model_id,waiting_for,trace_id
+         FROM runs WHERE workspace_id=$1 AND session_id=$2 AND client_turn_id=$3`,
+      [work.workspaceId, sessionId, clientTurnId],
+    );
+    existing = committed.rows[0] ?? null;
+  }
+  return { session, existing };
 }
 
 /**
@@ -277,7 +292,8 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   requireOrigin(c, { required: false });
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
-  const input = await jsonBody<{ client_turn_id?: string; text?: string; attachments?: unknown }>(c);
+  const input = await jsonBody<{ client_turn_id?: string; text?: string; attachments?: unknown; expected_settings?: unknown }>(c);
+  const expectedSettings = parseExpectedSettings(input.expected_settings);
   if (input.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length > 0)) {
     throw new RouteError(
       'Attachments are not supported for agent turns yet. Remove them and try again.',
@@ -301,12 +317,13 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   const text = (input.text ?? '').slice(0, 20_000);
 
   const outcome = await withRefusalMetered(c, async () => inWorkspace(c, async (work) => {
-    // Session authorization and the idempotency lookup share one round trip.
-    // The duplicate result still comes before every mutable cap or refusal.
+    // Serialized session authorization and fresh idempotency come before
+    // every mutable cap, settings conflict or provider refusal.
     const admission = await loadTurnAdmission(work, sessionId, clientTurnId);
     const session = admission.session;
     const already = admission.existing;
     if (already) return { status: 200 as const, run: already, duplicate: true };
+    requireExpectedSettings(session, expectedSettings);
 
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
       const binding = await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, session.agent_id);
@@ -884,7 +901,8 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
   requireCsrf(c);
   const sessionId = pathUuid(c, 'id');
   const runId = pathUuid(c, 'runId');
-  const input = await jsonBody<{ expected_attempt?: number }>(c);
+  const input = await jsonBody<{ expected_attempt?: number; expected_settings?: unknown }>(c);
+  const expectedSettings = parseExpectedSettings(input.expected_settings);
   if (!Number.isInteger(input.expected_attempt) || input.expected_attempt! < 1) {
     throw new RouteError('Refresh this task before retrying.', 'expected_attempt_required', 422);
   }
@@ -892,6 +910,13 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
 
   const result = await inWorkspace(c, async (work) => {
     const session = await loadSessionForWrite(work, sessionId);
+    // Match the recovery service's agent → run → session lock order, including
+    // automatic retries. An already admitted attempt wins before settings CAS.
+    await requireRecoveryAgent(work, session.agent_id, true);
+    const previous = await loadRun(work, sessionId, runId);
+    if (previous.attempt === input.expected_attempt! + 1) return previous;
+    const currentSession = await loadSessionForWrite(work, sessionId, true);
+    requireExpectedSettings(currentSession, expectedSettings);
     const run = await retryTask(work, c.env, session.agent_id, runId, input.expected_attempt);
     if (run.session_id !== sessionId) throw new RouteError('No such task.', 'unknown_run', 404);
     return { id: run.id, status: run.status, attempt: run.attempt };
