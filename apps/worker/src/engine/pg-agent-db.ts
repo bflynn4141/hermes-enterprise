@@ -878,7 +878,13 @@ export class PgAgentDb implements AgentDb {
   }
 
   async getApprovalStatus(requestId: string): Promise<ApprovalView> {
-    return this.tx((query) => loadApprovalView({ query } as unknown as Tx, requestId, null));
+    return this.tx(async (query) => {
+      const visible = await query<{ visible: boolean }>(
+        `SELECT agent_request_is_unscoped($1) AS visible`, [requestId],
+      );
+      if (visible.rows[0]?.visible !== true) throw new Error('approval request not found');
+      return loadApprovalView({ query } as unknown as Tx, requestId, null);
+    });
   }
 
   async getDocumentText(
