@@ -23,7 +23,13 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   bootstrap: ProviderMessage[] = [];
   acceptBinding = true;
   resumeInput: string | null = null;
+  runtimeTransactions = 0;
   recoveryInput() { return Promise.resolve(this.resumeInput); }
+
+  async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    this.runtimeTransactions += 1;
+    return work();
+  }
 
   constructor(overrides: Partial<EngineRunRow> = {}) {
     super({ modelId: MODEL, ...overrides });
@@ -181,6 +187,12 @@ describe('official Hermes enterprise projection', () => {
     await execute(new FakeRuntimeDb(), client);
     expect(client.capabilityReads).toBe(1);
     expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('groups startup, submission, and execution setup into four serial runtime transactions', async () => {
+    const db = new FakeRuntimeDb();
+    await execute(db);
+    expect(db.runtimeTransactions).toBe(4);
   });
 
   it('rechecks readiness when a fresh submission takes longer than the reuse window', async () => {

@@ -373,6 +373,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         runtimeLatency(invocationStartedAt, params.receivedAt, onLatency).mark('workflow_setup');
         await runHermesAttempt({
           db,
+          run,
           startedAt: invocationStartedAt,
           receivedAt: params.receivedAt,
           onLatency,

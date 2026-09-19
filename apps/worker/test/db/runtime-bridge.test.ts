@@ -131,6 +131,22 @@ describe('official runtime on the restricted agent role', () => {
       expect(await store.mappingPending(fx.agentId)).toBe(false);
     } finally { await store.close(); }
   });
+  it('keeps nested runtime startup operations in one rollback boundary', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const id = await seedRun(fx); const run = (await store.loadRun(id))!;
+      await expect(store.withRuntimeTransaction(async () => {
+        await store.snapshotRequest(id, run.attempt, { input: 'Rollback this startup.' });
+        expect(await store.bindRun(id, run.attempt, 'rolled-back-native-run', fx.sessionId, `agent-${fx.agentId}`)).toBe(true);
+        throw new Error('interrupt grouped startup');
+      })).rejects.toThrow('interrupt grouped startup');
+      expect(await store.binding(id)).toMatchObject({ runtimeRunId: null, runtimeAttempt: null });
+      const request = await store.runtimeQuery<{ runtime_request: Record<string, unknown> | null }>(
+        'SELECT runtime_request FROM runs WHERE id=$1', [id],
+      );
+      expect(request.rows[0]?.runtime_request).toBeNull();
+    } finally { await store.close(); }
+  });
   it('retains a question across callback requests and records the answer once', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx);
     try {

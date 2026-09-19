@@ -109,6 +109,11 @@ export class PgAgentDb implements AgentDb {
    * Instances are request-local; callers must not run concurrent operations on one.
    */
   async runtimeTx<T>(fn: (q: <R>(text: string, values?: readonly unknown[]) => Promise<{ rows: R[] }>) => Promise<T>): Promise<T> {
+    // A higher-level runtime operation may deliberately group several existing
+    // AgentDb methods into one tenant-scoped transaction. Reuse that query
+    // directly so a nested runtimeTx neither opens a second transaction nor
+    // clears the outer transaction's query before the remaining reads finish.
+    if (this.runtimeTransactionQuery) return fn(this.runtimeTransactionQuery);
     return this.tx(async (query) => {
       this.runtimeTransactionQuery = query;
       try { return await fn(query); }

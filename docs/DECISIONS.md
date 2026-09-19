@@ -5400,3 +5400,30 @@ envelope, the caller's execution signal, `text/event-stream`, identity encoding
 and no-cache. The connector test requires that the POST events envelope enters
 the same native stream relay used by GET. The incremental ASGI timing test
 continues to prove the first delayed native frame leaves before terminal EOF.
+
+---
+
+## C78. Runtime startup phases share serial tenant-scoped transactions
+
+**Decided September 18, 2026.** Hermes startup groups each related database
+phase into one tenant-scoped transaction: initial run state, the started event,
+submission preparation, and streaming-message setup. Queries remain serial on
+the request-local `pg` client. The grouping reuses the existing agent-role
+transaction rather than parallelizing queries or widening database grants.
+Runtime binding resolution passes its already-loaded run into the adapter, and
+content-free latency telemetry now separates startup reads, persistence,
+delivery, execution persistence, and execution delivery.
+
+**Why.** A live paid StepFun acceptance run streamed correctly but spent about
+four seconds preparing the native request and another two seconds between the
+native binding and stream subscription. Most methods opened their own `BEGIN`,
+tenant `set_config`, and `COMMIT` sequence, multiplying Hyperdrive round trips.
+The same client cannot safely execute these reads concurrently, so one serial
+transaction per phase removes protocol overhead without changing authorization,
+replay, idempotency, or event ordering.
+
+**Evidence.** The adapter regression test requires the four grouped startup
+boundaries. A real PostgreSQL test nests request snapshotting and native binding
+inside one runtime transaction, interrupts it, and proves that both writes roll
+back. Existing runtime, streaming, database, and Worker suites continue to
+exercise retries, stop fences, event order, and terminal persistence.
