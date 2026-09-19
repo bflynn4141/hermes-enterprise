@@ -94,7 +94,7 @@ class SessionServer {
           await this.settingsGate?.promise;
           if (this.rejectSettings) return reply({ reason: 'unknown_model', message: 'The selected model could not be saved.' }, 422);
         }
-        for (const key of ['model_id', 'effort', 'title'] as const) if (input[key] !== undefined) Object.assign(row, { [key]: input[key] });
+        for (const key of ['model_id', 'effort', 'title', 'archived'] as const) if (input[key] !== undefined) Object.assign(row, { [key]: input[key] });
         row.version = (row.version ?? 0) + 1;
         return reply(row);
       }
@@ -296,4 +296,18 @@ test('a rejected model save cannot silently send through the previous model', as
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toHaveValue('Keep this draft if model selection fails');
   await expect(page.getByText(/model choice could not be saved/)).toBeVisible();
   expect(server.turns).toHaveLength(0);
+});
+
+test('archiving the selected session hydrates and connects its fallback conversation', async ({ page }) => {
+  const server = new SessionServer(page); await server.mount();
+  await page.getByRole('button', { name: 'Session options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Archive session', exact: true }).click();
+  await expect(page.getByText('Saved history B', { exact: true })).toBeVisible();
+  await send(page, 'Continue in the fallback session');
+  await expect.poll(() => server.turns.length).toBe(1);
+  expect(server.turns[0]?.sessionId).toBe(B);
+  await server.beginText(B, 'Fallback is connected.');
+  await expect(page.locator('.stream-text')).toContainText('Fallback is connected.');
+  const connections = await page.evaluate(() => window.sessionReliabilityFixture.connections());
+  expect(connections.filter((url) => url.includes('/hub/session/'))).toEqual([expect.stringContaining(`/hub/session/${B}`)]);
 });
