@@ -174,6 +174,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   let disposed = false;
   const inFlight = new Set<string>();
   const turnIds = new Map<string, string>();
+  const acceptedTurns = new Set<string>();
   const retryRequests = new Map<string, Promise<void>>();
   const sessionSnapshots = new Map<string, Promise<void>>();
   const reconciledRuns = new Set<string>();
@@ -189,6 +190,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       void resync();
       return;
     }
+    const acceptedTurn = event.kind === 'run.started' ? event.payload.client_turn_id
+      : event.kind === 'message.appended' && event.payload.role === 'user' ? event.payload.client_turn_id : null;
+    if (acceptedTurn && [...turnIds.values()].includes(acceptedTurn)) acceptedTurns.add(acceptedTurn);
     for (const action of actionsFor(event, state())) {
       dispatch(action);
       // A `loading` upsert is the reducer saying "I do not have this row"; the
@@ -274,11 +278,16 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
   function reconcileSessionSnapshot(sessionId: string, force = false): Promise<void> {
     const active = sessionSnapshots.get(sessionId);
-    if (active) return active;
+    if (active) {
+      if (!force) return active;
+      const fresh = () => state().activeSessionId === sessionId && !disposed ? reconcileSessionSnapshot(sessionId) : Promise.resolve();
+      // A terminal event can arrive while an earlier snapshot is reading.
+      // Its forced repair needs a fresh read after that older request settles.
+      return active.then(fresh, fresh);
+    }
     // A sequence id is allocated before commit. A lower-id transaction can
     // become visible after replay reached a higher id, so even an unchanged
     // idle watermark needs the periodic authoritative state check.
-    void force;
     const task = reconcileSessionSnapshotOnce(sessionId);
     sessionSnapshots.set(sessionId, task);
     const clear = (): void => {
@@ -297,7 +306,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const latest = state().sessions[sessionId]?.run;
     if (latest && latest !== before && latest.id !== snapshot.run?.id && !state().sessions[sessionId]?.pendingTurn) return;
     dispatch({ type: 'session/snapshot', snapshot });
-    if (snapshot.run) reconciledRuns.add(snapshot.run.id);
+    if (snapshot.run && ['completed', 'stopped', 'error'].includes(snapshot.run.status)
+      && (state().cursors.session[sessionId] ?? 0n) <= BigInt(snapshot.watermark)) reconciledRuns.add(snapshot.run.id);
   }
 
   function attachWorkspaceHub(): void {
@@ -329,6 +339,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
     if (!state().sessions[sessionId] || disposed) return Promise.resolve();
     if (activation?.id === sessionId && state().activeSessionId === sessionId) return activation.promise;
     dispatch({ type: 'session/select', id: sessionId });
+    // A reducer-driven selection change is routed here by the subscription
+    // too. Reuse its in-flight activation instead of opening a second socket.
+    if (activation?.id === sessionId) return activation.promise;
     if (sessionHubId === sessionId && sessionHub && !state().sessions[sessionId]?.hydrationError) return Promise.resolve();
     const generation = ++activationGeneration;
     sessionHub?.close();
@@ -472,6 +485,23 @@ export function createAdapter(options: AdapterOptions): Adapter {
   // Drafts
   // -------------------------------------------------------------------------
 
+  let selectedSessionId = state().activeSessionId;
+  const unsubscribeSelection = store.subscribe((next, action) => {
+    if (next.activeSessionId === selectedSessionId) return;
+    selectedSessionId = next.activeSessionId;
+    // Bootstrap finishes catalog/auth/draft hydration before explicit activation.
+    if (disposed || !next.ready || action.type === 'bootstrap/apply') return;
+    if (selectedSessionId) openSession(selectedSessionId);
+    else {
+      activationGeneration += 1;
+      activation = null;
+      sessionHub?.close();
+      sessionHub = null;
+      sessionHubId = null;
+      dispatch({ type: 'link/state', kind: 'session', patch: { status: 'idle' } });
+    }
+  });
+
   let persistHandle: unknown = null;
   function persistDrafts(): void {
     const s = state();
@@ -487,7 +517,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     }
   }
 
-  store.subscribe((_s, action) => {
+  const unsubscribeDrafts = store.subscribe((_s, action) => {
     if (action.type !== 'session/draft' && action.type !== 'session/attach' && action.type !== 'session/detach' && action.type !== 'session/draft-clear') return;
     if (persistHandle) clearTimer(persistHandle);
     persistHandle = setTimer(persistDrafts, 200);
@@ -585,13 +615,22 @@ export function createAdapter(options: AdapterOptions): Adapter {
     // A re-bootstrap (a resync) must not take the draft with it: what the
     // person typed is theirs, and the server has never seen it.
     const existing = state().sessions;
-    const sessions = Object.fromEntries(
+    const sessions: AppState['sessions'] = Object.fromEntries(
       boot.sessions.map((row) => {
         const previous = existing[row.id];
         const seed = sessionSeed(row);
-        return [row.id, previous ? { ...seed, draft: previous.draft, scrollTop: previous.scrollTop, unread: previous.unread } : seed];
+        return [row.id, previous ? { ...seed, draft: previous.draft, scrollTop: previous.scrollTop, unread: previous.unread,
+          pendingTurn: previous.pendingTurn,
+          ...(previous.pendingTurn ? { run: previous.run, stream: previous.stream, status: previous.status } : {}),
+          ...(previous.settingsPending || previous.settingsError ? { model: previous.model, effort: previous.effort,
+            settingsPending: previous.settingsPending, settingsError: previous.settingsError } : {}),
+        } : seed];
       }),
     );
+    // Locally creating sessions have no bootstrap row yet. Resync must not
+    // discard the draft or settings which their eventual POST reconciles.
+    const localIds = Object.keys(existing).filter((id) => id.startsWith('local-'));
+    for (const id of localIds) sessions[id] = existing[id]!;
 
     dispatch({
       type: 'bootstrap/apply',
@@ -617,7 +656,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
           automatedTriggers: boot.capabilities.automated_triggers,
         },
         sessions,
-        sessionOrder: boot.sessions.map((row) => row.id),
+        sessionOrder: [...localIds, ...boot.sessions.map((row) => row.id)],
         activeSessionId: state().activeSessionId && sessions[state().activeSessionId!] ? state().activeSessionId : boot.sessions[0]?.id ?? null,
         counts: {
           inbox: boot.counts.inbox,
@@ -658,6 +697,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     sessionHub = null;
     const active = state().activeSessionId;
     if (active) await activateSession(active);
+    if (refreshHandle) clearIntervalImpl(refreshHandle);
     refreshHandle = setIntervalImpl(() => void refreshAuth(), AUTH_REFRESH_MS);
     const doc = options.visibility ?? (typeof document === 'undefined' ? null : document);
     doc?.addEventListener('visibilitychange', onVisibility);
@@ -825,6 +865,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // in place for the whole response.
       if (sessionHubId === id) void sessionHub?.reconcile();
       turnIds.delete(sessionId);
+      acceptedTurns.delete(turnId);
     } catch (error) {
       // The draft comes back so the text is never lost — under whichever id the
       // store is keyed on now, which is the server's if the await reconciled.
@@ -834,9 +875,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // `message.appended`. If either already reconciled this turn, the server
       // accepted it and putting the text back in the composer would invite a
       // duplicate retry.
-      const committed = projected && (!pending || pending.clientTurnId !== turnId || pending.runId !== null);
+      const committed = acceptedTurns.has(turnId) || Boolean(pending?.clientTurnId === turnId && pending.runId !== null);
       if (committed) {
         turnIds.delete(sessionId);
+        acceptedTurns.delete(turnId);
         return;
       }
       if (projected) dispatch({ type: 'turn/rejected', sessionId: id, clientTurnId: turnId });
@@ -1246,6 +1288,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
     resync,
     dispose() {
       disposed = true;
+      unsubscribeSelection();
+      unsubscribeDrafts();
+      if (persistHandle) clearTimer(persistHandle);
       workspaceHub?.close();
       sessionHub?.close();
       if (refreshHandle) clearIntervalImpl(refreshHandle);

@@ -477,6 +477,108 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it('performs a fresh terminal repair after an older in-flight snapshot settles', async () => {
+    let release!: (response: Response) => void;
+    let held = false;
+    let reads = 0;
+    const final = { ...streamingPlaceholder, status: 'complete', text: 'Complete terminal answer.' };
+    const { adapter, state } = makeAdapter({
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => {
+        reads += 1;
+        if (!held) return Response.json(snapshotBody([], 'working', '10'));
+        if (reads === 3) return new Promise((resolve) => { release = resolve; });
+        return Response.json(snapshotBody([final], 'completed', '20'));
+      },
+    });
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.at(-1)!;
+      socket.open();
+      await vi.advanceTimersByTimeAsync(0);
+      held = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(reads).toBe(3);
+      socket.deliver(streamEvent('run.status', { run_id: RUN, attempt: 1, status: 'completed' }, 11n));
+      release(Response.json(snapshotBody([], 'working', '20')));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toBe(4);
+      expect(state().sessions[SESSION]!.messages.at(-1)?.text).toBe(final.text);
+      expect(state().sessions[SESSION]!.run?.status).toBe('completed');
+    } finally { adapter.dispose(); }
+  });
+
+  it.each([409, 503])('preserves a pending Send through resync and restores its exact prompt after HTTP %i', async (status) => {
+    let release!: (response: Response) => void;
+    const { adapter, state } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => new Promise((resolve) => { release = resolve; }),
+    });
+    try {
+      await adapter.start();
+      const text = 'Keep this prompt\nwith its second line';
+      const sending = adapter.send(SESSION, text);
+      const rejected = expect(sending).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      await adapter.resync();
+      expect(state().sessions[SESSION]!.pendingTurn?.message.text).toBe(text);
+      release(Response.json({ reason: 'unavailable', message: 'Turn refused' }, { status }));
+      await rejected;
+      expect(state().sessions[SESSION]!.draft.text).toBe(text);
+      expect(state().sessions[SESSION]!.pendingTurn).toBeNull();
+      expect(state().sessions[SESSION]!.run).toBeNull();
+    } finally { adapter.dispose(); }
+  });
+
+  it('activates the fallback after archiving the selected session without duplicate connections', async () => {
+    const otherId = mockUuid(20);
+    const other = { ...bootstrapBody.sessions[0], id: otherId, runtime: 'cloud' };
+    const { adapter, store, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json({ ...bootstrapBody, sessions: [...bootstrapBody.sessions, other] }),
+      [`GET /w/${WS}/sessions/${otherId}/snapshot`]: () => Response.json({ ...snapshotBody(), session: other }),
+    });
+    try {
+      await adapter.start();
+      const original = FakeSocket.instances.at(-1)!;
+      store.dispatch({ type: 'session/archive', id: SESSION, archived: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBe(otherId);
+      expect(original.closed).not.toBeNull();
+      expect(FakeSocket.instances.at(-1)!.url).toContain(`/hub/session/${otherId}`);
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${otherId}`))).toHaveLength(1);
+      await adapter.activateSession(otherId);
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${otherId}`))).toHaveLength(1);
+    } finally { adapter.dispose(); }
+  });
+
+  it('restores the previous session connection after a failed blank creation rolls back', async () => {
+    const { adapter, state } = makeAdapter({
+      [`POST /w/${WS}/sessions`]: () => Response.json({ reason: 'unavailable', message: 'Create failed' }, { status: 409 }),
+    });
+    try {
+      await adapter.start();
+      const original = FakeSocket.instances.at(-1)!;
+      await expect(adapter.createSession({ title: 'New blank task' })).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBe(SESSION);
+      expect(original.closed).not.toBeNull();
+      expect(FakeSocket.instances.at(-1)!.url).toContain(`/hub/session/${SESSION}`);
+      expect(FakeSocket.instances.at(-1)!.closed).toBeNull();
+      expect(FakeSocket.instances.filter((socket) => socket.url.includes(`/hub/session/${SESSION}`))).toHaveLength(2);
+    } finally { adapter.dispose(); }
+  });
+
+  it('closes the old connection when the selected session is removed with no fallback', async () => {
+    const { adapter, store, state } = makeAdapter();
+    try {
+      await adapter.start();
+      const socket = FakeSocket.instances.at(-1)!;
+      store.dispatch({ type: 'session/rollback', id: SESSION });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state().activeSessionId).toBeNull();
+      expect(socket.closed).not.toBeNull();
+      expect(state().connection.session.status).toBe('idle');
+    } finally { adapter.dispose(); }
+  });
+
   it.each(['idle', 'active'] as const)('repairs a late lower-id commit at an unchanged watermark while %s', async (phase) => {
     let committed = false;
     const { adapter, state } = makeAdapter({
