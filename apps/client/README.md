@@ -39,9 +39,81 @@ pnpm --filter client test       # vitest: the reducer and the adapter
 pnpm --filter client typecheck
 pnpm --filter client e2e        # Playwright, against the mock bundle
 pnpm e2e:live                   # the whole stack, then the live scenarios
+pnpm --filter client acceptance:native-staging -- --manifest /absolute/rehearsal.json --report /absolute/evidence.json
 pnpm db:reset                   # (root) demo database back to the seed — destructive
 pnpm --filter client dev:step-up  # re-stamp the fake-auth step-up window
 ```
+
+### Native staging acceptance (read-only)
+
+`acceptance:native-staging` verifies a prepared Partnerships-to-Finance
+rehearsal without starting a run or changing hosted state. It accepts only GET
+responses from an HTTPS deployment whose health identifies `staging`, WorkOS
+authentication and Hermes runs as healthy. It requires two distinct, mode-0600
+Playwright storage-state files and confirms that they resolve to the expected
+Partnerships and Finance people in the same workspace.
+
+The manifest is operator-owned and stays outside the repository. Its shape is:
+
+```json
+{
+  "schema_version": 1,
+  "base_url": "https://staging-host",
+  "workspace_id": "uuid",
+  "intake_event_id": "uuid",
+  "payload_hash": "sha256:64-lowercase-hex-characters",
+  "handoff_id": "uuid",
+  "request_id": "uuid",
+  "decision_id": "uuid",
+  "document_id": "uuid",
+  "input_provenance": "sample",
+  "roles": {
+    "partnerships": {
+      "auth_state": "/absolute/private/partnerships.json",
+      "user_id": "uuid",
+      "email": "the-expected-partnerships-login",
+      "agent_id": "uuid",
+      "runtime_profile": "the-bound-native-profile",
+      "run_id": "uuid"
+    },
+    "finance": {
+      "auth_state": "/absolute/private/finance.json",
+      "user_id": "uuid",
+      "email": "the-expected-finance-login",
+      "agent_id": "uuid",
+      "runtime_profile": "the-bound-native-profile",
+      "run_id": "uuid"
+    }
+  }
+}
+```
+
+Capture each storage state from that person's already authenticated browser
+context, keep the files outside the checkout, and restrict them to the current
+user (`chmod 600`). Then invoke the verifier explicitly:
+
+```sh
+HERMES_NATIVE_STAGING_ACCEPT=read-only pnpm --filter client acceptance:native-staging -- \
+  --manifest /absolute/rehearsal.json \
+  --report /absolute/native-staging-evidence.json
+```
+
+The command refuses CI, local endpoints, reused auth sessions, legacy skill
+versions, incomplete tool inventories, scripted/fixture markers, simulated
+execution and customer labeling for this sample rehearsal. It requires the
+exact versioned Partnerships and Finance assignments, the current four-tool
+Finance readiness inventory (`get_partner_handoff_result`, `list_requests`,
+`get_request`, `skill_view`; the trace excludes the viewer-only `skill_view`),
+one stored invocation of each role's required native bridge tool, a passed
+authoritative Finance result, an approved human decision, the saved invoice
+draft and its delivered allowlisted acknowledgment. The mode-0600 report keeps
+only stable identifiers and reviewed contracts; it never contains cookies or
+private tool payloads.
+
+This evidence establishes that the prepared workflow used the native runtime
+and real stored application state. It does not grade provider response quality.
+The existing `e2e:live` command remains the local fake-auth, scripted-model
+suite and cannot satisfy this acceptance check.
 
 ## Running it live
 
