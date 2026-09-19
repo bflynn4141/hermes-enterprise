@@ -25,9 +25,14 @@ const ids = {
   financeRun: '40000000-0000-4000-8000-000000000002',
   partnershipsAssignment: '50000000-0000-4000-8000-000000000001',
   financeAssignment: '50000000-0000-4000-8000-000000000002',
+  reviewJob: '60000000-0000-4000-8000-000000000001',
 };
 
 const payloadHash = `sha256:${'a'.repeat(64)}`;
+const passedChecks = [
+  'duplicate', 'currency', 'amount', 'engagement_authorization',
+  'engagement_validity', 'invoice_source', 'engagement_source',
+].map((code) => ({ code, status: 'passed', message: `${code} passed.` }));
 
 const manifest = () => ({
   schema_version: 1,
@@ -101,6 +106,7 @@ function handoff(role) {
     result_kind: 'checks_passed',
     input_provenance: 'sample',
     simulated: false,
+    checks: passedChecks,
     decided_at: '2026-09-19T12:00:00.000Z',
     outcome: {
       validation: 'passed',
@@ -153,6 +159,19 @@ function trace(role) {
   const argumentsValue = role === 'partnerships'
     ? { intake_event_id: ids.intake, expected_payload_hash: payloadHash }
     : { handoff_id: ids.handoff };
+  const data = role === 'partnerships'
+    ? { handoff_id: ids.handoff, job_id: ids.reviewJob, created: true }
+    : {
+      kind: 'checks_passed',
+      handoff_id: ids.handoff,
+      request_id: ids.request,
+      input_provenance: 'sample',
+      checks: passedChecks,
+      outcome: {
+        delivery: 'delivered', validation: 'passed', agent_explanation: 'running',
+        human_decision: 'pending', acknowledgment: 'pending',
+      },
+    };
   return {
     run_id: entry.run_id,
     agent_id: entry.agent_id,
@@ -166,7 +185,13 @@ function trace(role) {
     tool_calls: [{
       name: contract.requiredTool,
       arguments: JSON.stringify(argumentsValue),
-      result: JSON.stringify({ tool: contract.requiredTool, data: { handoff_id: ids.handoff, request_id: ids.request } }),
+      result: JSON.stringify({
+        tool: contract.requiredTool,
+        source: contract.resultSource,
+        retrieved_at: '2026-09-19T12:00:00.000Z',
+        untrusted: true,
+        data,
+      }),
       truncated: false,
     }],
   };
@@ -202,7 +227,7 @@ function evidence() {
       handoff_id: ids.handoff,
       request_id: ids.request,
       input_provenance: 'sample',
-      checks: [{ code: 'duplicate', status: 'passed' }],
+      checks: passedChecks,
       outcome: { validation: 'passed', human_decision: 'approved', acknowledgment: 'delivered' },
     },
     request: {
@@ -261,11 +286,11 @@ describe('native staging acceptance manifest', () => {
 describe('native staging acceptance evidence', () => {
   it('retains exact native role contracts and completed sample lineage', () => {
     const report = verifyAcceptanceEvidence(evidence(), manifest());
-    expect(report.result).toBe('verified_read_only');
-    expect(report.roles.finance.readiness_tools).toEqual([
+    expect(report.result).toBe('stored_evidence_consistent');
+    expect(report.roles.finance.expected_readiness_tools).toEqual([
       'get_partner_handoff_result', 'list_requests', 'get_request', 'skill_view',
     ]);
-    expect(report.roles.finance.run_tools).toEqual([
+    expect(report.roles.finance.stored_run_tools).toEqual([
       'get_partner_handoff_result', 'list_requests', 'get_request',
     ]);
     expect(report.input_provenance).toBe('sample');
@@ -289,6 +314,18 @@ describe('native staging acceptance evidence', () => {
 
     const simulated = evidence();
     simulated.roles.finance.workflow.handoffs[0].simulated = true;
-    expect(() => verifyAcceptanceEvidence(simulated, manifest())).toThrow(/native execution marker/);
+    expect(() => verifyAcceptanceEvidence(simulated, manifest())).toThrow(/simulated flag/);
+  });
+
+  it('refuses an engine error envelope even when its text repeats every expected id', () => {
+    const failed = evidence();
+    failed.roles.finance.trace.tool_calls[0].result = JSON.stringify({
+      tool: 'get_partner_handoff_result',
+      source: 'engine',
+      retrieved_at: '2026-09-19T12:00:00.000Z',
+      untrusted: true,
+      data: { error: `failed ${ids.handoff} ${ids.request}` },
+    });
+    expect(() => verifyAcceptanceEvidence(failed, manifest())).toThrow(/result source/);
   });
 });

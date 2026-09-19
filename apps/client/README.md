@@ -46,10 +46,11 @@ pnpm --filter client dev:step-up  # re-stamp the fake-auth step-up window
 
 ### Native staging acceptance (read-only)
 
-`acceptance:native-staging` verifies a prepared Partnerships-to-Finance
-rehearsal without starting a run or changing hosted state. It accepts only GET
-responses from an HTTPS deployment whose health identifies `staging`, WorkOS
-authentication and Hermes runs as healthy. It requires two distinct, mode-0600
+`acceptance:native-staging` checks stored evidence from a prepared
+Partnerships-to-Finance rehearsal without starting a run or changing hosted
+state. It accepts only GET
+responses from an HTTPS deployment whose health identifies `staging` and whose
+WorkOS and Hermes configuration checks report `ok`. It requires two distinct, mode-0600
 Playwright storage-state files and confirms that they resolve to the expected
 Partnerships and Finance people in the same workspace.
 
@@ -99,19 +100,24 @@ HERMES_NATIVE_STAGING_ACCEPT=read-only pnpm --filter client acceptance:native-st
 ```
 
 The command refuses CI, local endpoints, reused auth sessions, legacy skill
-versions, incomplete tool inventories, scripted/fixture markers, simulated
-execution and customer labeling for this sample rehearsal. It requires the
-exact versioned Partnerships and Finance assignments, the current four-tool
-Finance readiness inventory (`get_partner_handoff_result`, `list_requests`,
-`get_request`, `skill_view`; the trace excludes the viewer-only `skill_view`),
-one stored invocation of each role's required native bridge tool, a passed
-authoritative Finance result, an approved human decision, the saved invoice
-draft and its delivered allowlisted acknowledgment. The mode-0600 report keeps
-only stable identifiers and reviewed contracts; it never contains cookies or
-private tool payloads.
+versions, incomplete tool inventories, observable scripted/fixture markers,
+the handoff's simulated flag and customer labeling for this sample rehearsal.
+It requires the exact versioned Partnerships and Finance assignments, the
+stored enable-time four-tool Finance readiness attestation
+(`get_partner_handoff_result`, `list_requests`, `get_request`, `skill_view`;
+the trace excludes the viewer-only `skill_view`), one stored successful typed
+workspace result from each role's required bridge tool, a passed authoritative
+Finance result, an approved human decision, the saved invoice draft and its
+delivered allowlisted acknowledgment. The mode-0600 report keeps only stable
+identifiers and reviewed contracts; it never contains cookies or private tool
+payloads.
 
-This evidence establishes that the prepared workflow used the native runtime
-and real stored application state. It does not grade provider response quality.
+The report establishes that the application records, enable-time readiness
+snapshot, native-shaped trace and typed tool results are mutually consistent.
+Those database-visible shapes cannot distinguish a real provider/native run
+from pre-shaped or directly inserted records. The verifier does not freshly
+probe current runtime readiness and does not grade provider response quality;
+the manual two-account rehearsal remains the hosted provider/tool acceptance.
 The existing `e2e:live` command remains the local fake-auth, scripted-model
 suite and cannot satisfy this acceptance check.
 

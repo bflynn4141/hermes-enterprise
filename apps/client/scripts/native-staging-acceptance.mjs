@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * Read-only verifier for a prepared native Partnerships -> Finance rehearsal.
+ * Read-only verifier for stored evidence from a prepared Partnerships -> Finance rehearsal.
  *
  * This script never starts a run or changes hosted state. It performs GETs with
  * two independently captured WorkOS browser states and verifies the stored
- * identities, native assignments, traces, handoff, human decision and saved
- * invoice. It is deliberately separate from e2e-live.mjs, whose fake auth and
- * scripted provider are invalid acceptance evidence.
+ * identities, assignments, native-shaped traces, handoff, human decision and
+ * saved invoice. These application records cannot independently prove that a
+ * live provider or native process produced them. It is deliberately separate
+ * from e2e-live.mjs, whose fake auth and scripted provider are invalid even as
+ * candidate acceptance evidence.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -25,6 +27,10 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const PLACEHOLDER = /(^|[._-])(example|replace|todo|placeholder)([._-]|$)/i;
 const NON_NATIVE_EVIDENCE = /\b(scripted|fixture|mock)\b/i;
 const CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const FINANCE_CHECK_CODES = Object.freeze([
+  'duplicate', 'currency', 'amount', 'engagement_authorization',
+  'engagement_validity', 'invoice_source', 'engagement_source',
+]);
 
 export const ROLE_CONTRACTS = Object.freeze({
   partnerships: {
@@ -57,6 +63,7 @@ export const ROLE_CONTRACTS = Object.freeze({
       'publish_partner_invoice_review',
     ]),
     requiredTool: 'publish_partner_invoice_review',
+    resultSource: 'workspace.partner_invoice_intakes',
   },
   finance: {
     skillKey: 'partner-invoice-review',
@@ -71,6 +78,7 @@ export const ROLE_CONTRACTS = Object.freeze({
     ]),
     tools: Object.freeze(['get_partner_handoff_result', 'list_requests', 'get_request']),
     requiredTool: 'get_partner_handoff_result',
+    resultSource: 'workspace.partner_handoff_results',
   },
 });
 
@@ -275,6 +283,26 @@ function callArguments(call, label) {
   catch { throw new AcceptanceError(`${label} arguments are not valid JSON`); }
 }
 
+function toolResultEnvelope(call, contract, label) {
+  const raw = string(call.result, `${label} result`);
+  refuse(!NON_NATIVE_EVIDENCE.test(raw), `${label} result contains a scripted/fixture marker`);
+  let envelope;
+  try { envelope = object(JSON.parse(raw), `${label} result envelope`); }
+  catch { throw new AcceptanceError(`${label} result is not a valid JSON envelope`); }
+  same(envelope.tool, contract.requiredTool, `${label} result tool`);
+  same(envelope.source, contract.resultSource, `${label} result source`);
+  same(envelope.untrusted, true, `${label} result trust marker`);
+  refuse(typeof envelope.retrieved_at === 'string' && !Number.isNaN(Date.parse(envelope.retrieved_at)), `${label} result retrieval time is missing`);
+  refuse(envelope.truncated !== true && !('data_text' in envelope), `${label} result envelope is truncated`);
+  return object(envelope.data, `${label} result data`);
+}
+
+function verifyPassedFinanceChecks(checks, label) {
+  refuse(Array.isArray(checks), `${label} are missing`);
+  exactNames(checks.map((check) => check?.code), FINANCE_CHECK_CODES, `${label} codes`);
+  refuse(checks.every((check) => check?.status === 'passed' && typeof check?.message === 'string' && check.message.length > 0), `${label} are not typed passed checks`);
+}
+
 function verifyTrace(trace, manifest, role) {
   object(trace, `${role} trace`);
   const contract = ROLE_CONTRACTS[role];
@@ -302,10 +330,23 @@ function verifyTrace(trace, manifest, role) {
     exactNames(Object.keys(args), ['handoff_id'], 'finance result arguments');
     same(args.handoff_id, manifest.handoff_id, 'finance handoff argument');
   }
-  const result = string(call.result, `${role} required tool result`);
-  refuse(!NON_NATIVE_EVIDENCE.test(result), `${role} required tool result contains a scripted/fixture marker`);
-  refuse(result.includes(manifest.handoff_id), `${role} required tool result does not retain the handoff id`);
-  if (role === 'finance') refuse(result.includes(manifest.request_id), 'finance tool result does not retain the request id');
+  const data = toolResultEnvelope(call, contract, `${role} required tool`);
+  same(data.handoff_id, manifest.handoff_id, `${role} tool result handoff id`);
+  if (role === 'partnerships') {
+    exactNames(Object.keys(data), ['handoff_id', 'job_id', 'created'], 'partnerships tool result fields');
+    uuid(data.job_id, 'partnerships tool result job id');
+    refuse(typeof data.created === 'boolean', 'partnerships tool result created flag is missing');
+  } else {
+    same(data.kind, 'checks_passed', 'finance tool result kind');
+    same(data.request_id, manifest.request_id, 'finance tool result request id');
+    same(data.input_provenance, 'sample', 'finance tool result provenance');
+    verifyPassedFinanceChecks(data.checks, 'finance tool result checks');
+    same(data.outcome?.delivery, 'delivered', 'finance tool result delivery');
+    same(data.outcome?.validation, 'passed', 'finance tool result validation');
+    same(data.outcome?.agent_explanation, 'running', 'finance tool result explanation state');
+    same(data.outcome?.human_decision, 'pending', 'finance tool result decision state');
+    same(data.outcome?.acknowledgment, 'pending', 'finance tool result acknowledgment state');
+  }
 }
 
 function verifyOutcome(evidence, manifest) {
@@ -316,9 +357,10 @@ function verifyOutcome(evidence, manifest) {
   const handoff = handoffs[0];
   same(handoff.current, true, 'handoff current state');
   same(handoff.input_provenance, 'sample', 'handoff input provenance');
-  same(handoff.simulated, false, 'handoff native execution marker');
+  same(handoff.simulated, false, 'handoff simulated flag');
   same(handoff.request_id, manifest.request_id, 'handoff request id');
   same(handoff.result_kind, 'checks_passed', 'handoff result kind');
+  verifyPassedFinanceChecks(handoff.checks, 'handoff checks');
   same(handoff.outcome?.validation, 'passed', 'handoff validation outcome');
   same(handoff.outcome?.agent_explanation, 'completed', 'Finance explanation outcome');
   same(handoff.outcome?.human_decision, 'approved', 'Finance human decision');
@@ -338,7 +380,7 @@ function verifyOutcome(evidence, manifest) {
   same(result.outcome?.validation, 'passed', 'authoritative result validation');
   same(result.outcome?.human_decision, 'approved', 'authoritative result decision');
   same(result.outcome?.acknowledgment, 'delivered', 'authoritative result acknowledgment');
-  refuse(Array.isArray(result.checks) && result.checks.length > 0 && result.checks.every((check) => check?.status === 'passed'), 'authoritative checks are not all passed');
+  verifyPassedFinanceChecks(result.checks, 'authoritative checks');
 
   const request = object(evidence.request, 'request');
   same(request.id, manifest.request_id, 'request id');
@@ -397,11 +439,12 @@ export function verifyAcceptanceEvidence(evidence, rawManifest) {
         version: ROLE_CONTRACTS[role].version,
         artifact_digest: ROLE_CONTRACTS[role].artifactDigest,
       },
-      readiness_tools: [...ROLE_CONTRACTS[role].readinessTools],
-      run_tools: [...ROLE_CONTRACTS[role].tools],
+      expected_readiness_tools: [...ROLE_CONTRACTS[role].readinessTools],
+      stored_run_tools: [...ROLE_CONTRACTS[role].tools],
     }])),
-    result: 'verified_read_only',
-    limitation: 'Stored native execution and workflow evidence verified; this does not grade provider response quality.',
+    result: 'stored_evidence_consistent',
+    evidence_scope: 'Application records, stored enable-time readiness status, native-shaped traces and typed tool results.',
+    limitation: 'This cannot distinguish a real provider/native run from pre-shaped or directly inserted records, does not freshly probe current runtime readiness, and does not grade provider response quality.',
   });
 }
 
