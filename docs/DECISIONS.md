@@ -5621,3 +5621,25 @@ agent receives only the Finance manifest/tools even when the deployment-wide
 legacy policy is set, and reviewed template reapplication removes stray grants.
 The complete unit, database, browser, typecheck, build and 48-migration replay
 gates pass.
+
+## C84. Native conversation ids start from the first Enterprise run
+
+**Decided September 19, 2026.** The first Hermes run in an Enterprise session
+uses its globally fresh Enterprise run id as the native `session_id`. Later
+turns in that same Enterprise session reuse the latest persisted
+`runtime_session_id`. The exact selected id is snapshotted with the native
+request and bound to the run before execution.
+
+**Why.** A staging reset can recreate deterministic Enterprise session ids
+while the separately hosted Hermes SessionDB still retains its earlier
+transcript. Passing the reused Enterprise id let an otherwise fresh prompt load
+old native history and return an unrelated answer. A fresh run id breaks that
+collision, while the persisted mapping preserves real multi-turn continuity.
+Retries continue to use the snapshotted id so native idempotency fingerprints
+remain stable across releases.
+
+**Evidence.** Runtime unit coverage proves first-turn isolation, prior native
+mapping reuse and exact binding. Restricted-role database coverage proves a new
+run resolves to itself and a following run resolves to the earlier native
+conversation root. The live staging acceptance requires a unique-marker prompt
+in a new Enterprise session after deployment.
