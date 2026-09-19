@@ -26,3 +26,4 @@ export * from './plain-text.js';
 export * from './wire.js';
 export * from './recovery.js';
 export * from './request-review.js';
+export * from './agent-context.js';

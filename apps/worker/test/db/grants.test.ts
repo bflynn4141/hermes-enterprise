@@ -37,6 +37,7 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   agents: ['SELECT'],
   agent_capabilities: ['SELECT'],
   agent_files: ['SELECT'],
+  agent_context_notes: ['SELECT'],
   agent_owners: ['SELECT'],
   agent_provisioning: ['SELECT'],
   agent_runtime_bindings: ['SELECT'],

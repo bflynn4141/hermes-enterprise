@@ -311,6 +311,11 @@ export const agentFiles = pgTable('agent_files', {
   updatedAt: now('updated_at'),
 });
 
+export const agentContextNotes = pgTable('agent_context_notes', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  title: text('title').notNull(), text: text('text').notNull(), revision: integer('revision').notNull().default(1),
+  authorId: uuid('author_id'), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
 export const agentContextFields = pgTable(
   'agent_context_fields',
   {
@@ -577,6 +582,7 @@ export const runs = pgTable(
     runtimeSessionId: text('runtime_session_id'),
     runtimeAttempt: integer('runtime_attempt'),
     runtimeRequest: jsonb('runtime_request'),
+    contextSnapshot: jsonb('context_snapshot'),
     runtimeRequestAttempt: integer('runtime_request_attempt'),
     runtimeStartedAt: ts('runtime_started_at'),
     runtimeWaitStartedAt: ts('runtime_wait_started_at'),
@@ -1927,6 +1933,7 @@ export const ALL_TABLES = {
   hermes_cloud_capacity: hermesCloudCapacity,
   agent_capabilities: agentCapabilities,
   agent_files: agentFiles,
+  agent_context_notes: agentContextNotes,
   agent_context_fields: agentContextFields,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,

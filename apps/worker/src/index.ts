@@ -35,6 +35,7 @@ import {
   patchContextField,
 } from './routes/agent-config.js';
 import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
+import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
 import { KeyCryptoError } from './keys/envelope.js';
@@ -469,6 +470,10 @@ app.post('/w/:ws/instructions/:id/save', acceptInstruction);
 app.post('/w/:ws/instructions/:id/discard', discardInstruction);
 app.delete('/w/:ws/instructions/:id', discardInstruction);
 app.get('/w/:ws/context-fields', listContextFields);
+app.get('/w/:ws/agents/:agentId/context-notes', listContextNotes);
+app.post('/w/:ws/agents/:agentId/context-notes', writeContextNote);
+app.patch('/w/:ws/agents/:agentId/context-notes/:noteId', writeContextNote);
+app.delete('/w/:ws/agents/:agentId/context-notes/:noteId', deleteContextNote);
 app.patch('/w/:ws/context-fields/:field', patchContextField);
 
 // The two socket upgrades. Authorisation happens here; the hub only holds the

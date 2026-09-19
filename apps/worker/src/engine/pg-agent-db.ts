@@ -356,6 +356,10 @@ export class PgAgentDb implements AgentDb {
     });
   }
 
+  async loadContextSnapshot(runId: string): Promise<unknown> {
+    return this.tx(async q => (await q<{ context_snapshot: unknown }>('SELECT context_snapshot FROM runs WHERE id=$1', [runId])).rows[0]?.context_snapshot ?? null);
+  }
+
   async resolveCredential(provider: string): Promise<Credential> {
     const resolved = await this.tx((q) => resolveKey({ query: q as never }, this.env, this.workspaceId, provider));
     if (resolved.status === 'invalid' || resolved.apiKey === '') {

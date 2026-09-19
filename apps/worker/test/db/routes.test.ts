@@ -61,7 +61,7 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.viewer.role).toBe('admin');
     expect(body.viewer.reviewer_roles).toEqual(['access', 'finance']);
     expect(body.agent).toMatchObject({ id: fx.agentId, name: 'Iris', email: null });
-    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
+    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: true, automated_triggers: false });
     expect(body.sessions).toContainEqual(expect.objectContaining({ id: fx.sessionId, agent_id: fx.agentId }));
     expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0, pending_for_me: 0, pending_for_others: 0 });
     expect(body.heads).toEqual({ session: '0', workspace: '0' });

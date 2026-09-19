@@ -254,6 +254,7 @@ export interface AgentDb extends AgentWrites {
   /** The per-run tool allowlist: `agent_capabilities.tool_names`, filtered by mode. */
   loadToolNames(agentId: string | null): Promise<string[]>;
   loadSystemPrompt(runId: string): Promise<string>;
+  loadContextSnapshot?(runId: string): Promise<unknown>;
   /**
    * The agent's context fields, each carrying who wrote it.
    *

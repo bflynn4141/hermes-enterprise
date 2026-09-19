@@ -674,6 +674,9 @@ export async function admitApprovalContinuation(
   }
   let continuationMessage: { id: string; seq: number; text: string } | null = null;
   if (insertedRunId) {
+    if (intent.source_run_id) {
+      await tx.query(`UPDATE runs SET context_snapshot=(SELECT context_snapshot FROM runs WHERE id=$2) WHERE id=$1`, [insertedRunId,intent.source_run_id]);
+    }
     const sequence = await tx.query<{ seq: number }>(
       `UPDATE sessions SET next_seq = next_seq + 1, last_activity_at = now()
         WHERE id = $1 RETURNING next_seq - 1 AS seq`,

@@ -152,6 +152,10 @@ export async function declareUpload(
   }
 
   const id = crypto.randomUUID();
+  if (kind === 'agent_file' && declaration.agent_id) {
+    const found=await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2',[work.workspaceId,declaration.agent_id]);
+    if(!found.rows[0])throw new RouteError('No such agent','not_found',404);
+  }
   const storageKey = uploadKey(work.workspaceId, id);
 
   const { rows } =
