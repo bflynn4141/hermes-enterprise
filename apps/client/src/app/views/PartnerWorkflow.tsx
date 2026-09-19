@@ -7,6 +7,7 @@ import {
   type PartnerEngagementAuthorizationInput,
   type PartnerEngagementSummary,
   type PartnerHandoffResult,
+  type PartnerInputProvenance,
   type PartnerInvoiceCorrectionInput,
   type PartnerInvoiceIntakeInput,
   type PartnerRoleReadiness,
@@ -18,6 +19,7 @@ import { RestError } from '../../model/rest.js';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Glass } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
+import { InputProvenanceBadge } from '../input-provenance.js';
 
 const DOCUMENT_ACCEPT = '.pdf,.md,.txt,application/pdf,text/markdown,text/plain';
 
@@ -76,6 +78,7 @@ function workflowError(error: unknown): string {
     case 'workflow_readiness_incomplete': return 'Both native profiles need the required version, tools, and provider attestation before this workflow can be enabled.';
     case 'workflow_admission_disabled': return 'An Admin must enable this workflow after both native profiles are ready.';
     case 'skill_artifact_mismatch': return 'The installed native skill does not match the reviewed workflow artifact.';
+    case 'legacy_handoff_input_forbidden': return 'This historical handoff does not record its input source, so it cannot be corrected as customer data.';
     case 'forbidden_partner_workflow_action': return 'Your role cannot perform this action.';
     default: return error.message || 'The server did not complete that action. Your fields are still here; try again.';
   }
@@ -230,13 +233,14 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 }
 
-function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkflowViewV2; onClose: () => void; onSaved: (requestId: string) => void }) {
+function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkflowViewV2; onClose: () => void; onSaved: (requestId: string, inputProvenance: PartnerInputProvenance) => void }) {
   const adapter = useAdapter();
   const state = useAppState();
   const reduce = useReducedMotion();
   const [draft, setDraft] = useState(emptyEngagementDraft);
   const [source, setSource] = useState<Attachment | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [inputProvenance, setInputProvenance] = useState<PartnerInputProvenance>('sample');
   const [key, setKey] = useState(workflowKey);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -248,6 +252,7 @@ function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkf
     event.preventDefault();
     if (!valid || !source?.sha256) return;
     const body: PartnerEngagementAuthorizationInput = {
+      input_provenance: inputProvenance,
       partner: { id: draft.partnerId, name: draft.partnerName.trim() },
       reference: draft.reference.trim(), purpose: draft.purpose.trim(), currency: draft.currency.toUpperCase(),
       authorized_total_minor: amountMinor, valid_from: draft.validFrom, valid_until: draft.validUntil,
@@ -259,7 +264,7 @@ function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkf
     void adapter.rest.proposePartnerEngagement(state.workspace.id, body)
       .then((result) => {
         setKey(workflowKey());
-        onSaved(result.approval_request_id);
+        onSaved(result.approval_request_id, result.input_provenance);
       })
       .catch((caught: unknown) => setError(workflowError(caught)))
       .finally(() => setBusy(false));
@@ -267,7 +272,12 @@ function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkf
 
   return (
     <motion.form className="partner-workflow-form" aria-label="Record agreed engagement terms" onSubmit={submit} initial={{ opacity: 0, y: reduce ? 0 : -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .16, ease: [0.22, 1, 0.36, 1] }}>
-      <header><div><h3>Record agreed engagement terms</h3><p>Finance will verify these terms before they can authorize one invoice. This does not sign an agreement or authorize payment.</p></div><Button small onClick={onClose}>Close</Button></header>
+      <header><div><h3>{inputProvenance === 'sample' ? 'Record sample engagement terms' : 'Record agreed engagement terms'}</h3><p>{inputProvenance === 'sample' ? 'For demonstration only. This does not confirm an external agreement.' : 'Finance will verify these externally agreed terms before they can authorize one invoice.'} This does not sign an agreement or authorize payment.</p></div><Button small onClick={onClose}>Close</Button></header>
+      <fieldset className="partner-provenance-choice">
+        <legend>What kind of input is this?</legend>
+        <label><input type="radio" name="engagement-provenance" value="sample" checked={inputProvenance === 'sample'} onChange={() => setInputProvenance('sample')} /><span><strong>Sample data</strong><small>For testing or demonstration. It does not confirm an external agreement.</small></span></label>
+        <label><input type="radio" name="engagement-provenance" value="customer" checked={inputProvenance === 'customer'} onChange={() => setInputProvenance('customer')} /><span><strong>Customer data</strong><small>From externally agreed terms with a verifiable source.</small></span></label>
+      </fieldset>
       <div className="partner-form-grid">
         <label className="partner-form-wide"><span>Partner</span><select required value={draft.partnerId} onChange={(event) => { const option = workflow.partner_options.find((item) => item.id === event.target.value); setDraft((current) => ({ ...current, partnerId: event.target.value, partnerName: option?.name ?? '' })); }}><option value="">Choose a partner from stored work</option>{workflow.partner_options.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.source}</option>)}</select></label>
         <label><span>Reference</span><input required value={draft.reference} onChange={(event) => field('reference', event.target.value)} placeholder="ENG-2026-042" /></label>
@@ -278,10 +288,10 @@ function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkf
         <label><span>Valid until</span><input required type="date" value={draft.validUntil} onChange={(event) => field('validUntil', event.target.value)} /></label>
         <label className="partner-form-wide"><span>Permitted evidence excerpt</span><textarea required rows={3} value={draft.excerpt} onChange={(event) => field('excerpt', event.target.value)} placeholder="The exact source excerpt Finance may review" /></label>
       </div>
-      <UploadedSource label="Source of the externally agreed terms" source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} />
-      <label className="partner-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I checked these terms and the permitted excerpt against the stored source.</span></label>
+      <UploadedSource label={inputProvenance === 'sample' ? 'Source of the sample terms' : 'Source of the externally agreed terms'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} />
+      <label className="partner-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I checked these {inputProvenance === 'sample' ? 'sample terms' : 'externally agreed terms'} and the permitted excerpt against the stored source.</span></label>
       {error && <p className="partner-error" role="alert">{error}</p>}
-      <footer><span className="meta">Creates a record-change proposal for the named Finance reviewer.</span><Button primary disabled={!valid || busy} type="submit">{busy ? 'Creating proposal…' : 'Send to Finance for authorization'}</Button></footer>
+      <footer><span className="meta">Creates a record-change proposal for the named Finance reviewer.</span><Button primary disabled={!valid || busy} type="submit">{busy ? 'Creating proposal…' : inputProvenance === 'sample' ? 'Send sample terms to Finance' : 'Send to Finance for authorization'}</Button></footer>
     </motion.form>
   );
 }
@@ -330,6 +340,8 @@ function InvoiceForm({
   const [draft, setDraft] = useState(() => invoiceDraft(engagement, correction));
   const [source, setSource] = useState<Attachment | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const initialProvenance: PartnerInputProvenance = correction?.input_provenance === 'sample' || correction?.input_provenance === 'unknown' || engagement?.input_provenance === 'sample' ? 'sample' : 'customer';
+  const [inputProvenance, setInputProvenance] = useState<PartnerInputProvenance>(initialProvenance);
   const [key, setKey] = useState(workflowKey);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -340,6 +352,7 @@ function InvoiceForm({
   const chooseEngagement = (id: string): void => {
     const next = workflow.engagements.find((item) => item.id === id) ?? null;
     setEngagementId(id);
+    setInputProvenance(next?.input_provenance === 'sample' ? 'sample' : 'customer');
     setDraft((current) => ({ ...current, payee: next?.partner.name ?? current.payee, description: next?.purpose ?? current.description, currency: next?.currency ?? current.currency }));
   };
 
@@ -354,6 +367,7 @@ function InvoiceForm({
       total_minor: amountMinor, ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
     };
     const common = {
+      input_provenance: inputProvenance,
       engagement_record_id: engagement.id,
       expected_engagement_revision: engagement.revision,
       expected_authorization_hash: engagement.authorization_hash,
@@ -375,6 +389,11 @@ function InvoiceForm({
   return (
     <motion.form className="partner-workflow-form" aria-label={correction ? 'Correct invoice' : 'Submit invoice to Finance'} onSubmit={submit} initial={{ opacity: 0, y: reduce ? 0 : -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .16, ease: [0.22, 1, 0.36, 1] }}>
       <header><div><h3>{correction ? `Correct ${correction.invoice_number}` : 'Submit invoice to Finance'}</h3><p>{correction ? 'The original mismatch stays in history. This creates one successor review.' : 'Upload the received source and confirm the fields Finance should check.'}</p></div><Button small onClick={onClose}>Close</Button></header>
+      <fieldset className="partner-provenance-choice">
+        <legend>What kind of invoice input is this?</legend>
+        <label><input type="radio" name="invoice-provenance" value="sample" checked={inputProvenance === 'sample'} onChange={() => setInputProvenance('sample')} /><span><strong>Sample data</strong><small>For testing or demonstration.</small></span></label>
+        <label><input type="radio" name="invoice-provenance" value="customer" checked={inputProvenance === 'customer'} disabled={engagement?.input_provenance === 'sample' || correction?.input_provenance === 'sample' || correction?.input_provenance === 'unknown'} onChange={() => setInputProvenance('customer')} /><span><strong>Customer data</strong><small>{engagement?.input_provenance === 'sample' || correction?.input_provenance === 'sample' ? 'Sample engagement lineage must stay sample.' : correction?.input_provenance === 'unknown' ? 'Historical input cannot be relabeled as customer data.' : 'From a received customer invoice.'}</small></span></label>
+      </fieldset>
       <div className="partner-form-grid">
         <label className="partner-form-wide"><span>Authorized engagement</span><select disabled={Boolean(correction)} value={engagementId} onChange={(event) => chooseEngagement(event.target.value)}><option value="">Choose authorized terms</option>{workflow.engagements.map((item) => <option key={item.id} value={item.id} disabled={item.authorization_status !== 'authorized'}>{item.partner.name} · {item.reference} · {item.authorization_status}</option>)}</select></label>
         <label><span>Invoice number</span><input required value={draft.number} onChange={(event) => field('number', event.target.value)} /></label>
@@ -388,7 +407,7 @@ function InvoiceForm({
         <label className="partner-form-wide"><span>Internal note (optional)</span><textarea rows={2} value={draft.notes} onChange={(event) => field('notes', event.target.value)} /></label>
       </div>
       <UploadedSource label={correction ? 'Corrected invoice source' : 'Received invoice source'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} />
-      {engagement && <div className="partner-authority-summary"><strong>{money(engagement.authorized_total_minor, engagement.currency)} authorized</strong><span>{engagement.purpose}</span><small>{engagement.reference} · valid {engagement.valid_from} through {engagement.valid_until} · one invoice</small></div>}
+      {engagement && <div className="partner-authority-summary"><strong>{money(engagement.authorized_total_minor, engagement.currency)} authorized</strong><span>{engagement.purpose}</span><small>{engagement.reference} · valid {engagement.valid_from} through {engagement.valid_until} · one invoice · <InputProvenanceBadge value={engagement.input_provenance} /></small></div>}
       <label className="partner-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I checked the invoice number, parties, dates, purpose, currency, and amount against {source?.name ?? 'the stored source'}.</span></label>
       {error && <p className="partner-error" role="alert">{error}</p>}
       <footer><span className="meta">Finance sees the confirmed fields and authorized evidence. No payment or email is sent.</span><Button primary disabled={!valid || busy} type="submit">{busy ? 'Submitting…' : correction ? 'Submit correction' : 'Submit invoice to Finance'}</Button></footer>
@@ -428,9 +447,10 @@ function HandoffCard({ handoff, workflow, onCorrect }: { handoff: PartnerWorkflo
   const adapter = useAdapter();
   const [result, setResult] = useState<PartnerHandoffResult | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const canCorrect = workflow.actions.correct_invoice && handoff.current && ['needs_information', 'stale_source'].includes(handoff.result_kind) && handoff.outcome.human_decision !== 'pending';
+  const legacyCorrectionBlocked = handoff.input_provenance === 'unknown' && handoff.current && ['needs_information', 'stale_source'].includes(handoff.result_kind);
+  const canCorrect = workflow.actions.correct_invoice && !legacyCorrectionBlocked && handoff.current && ['needs_information', 'stale_source'].includes(handoff.result_kind) && handoff.outcome.human_decision !== 'pending';
   const modelCopy = handoff.simulated
-    ? 'Sample fixture · no model call'
+    ? 'Simulated execution · no model call'
     : handoff.outcome.agent_explanation === 'completed' ? 'Finance agent explanation ready'
       : handoff.outcome.agent_explanation === 'failed' || handoff.outcome.agent_explanation === 'stopped' ? 'Agent explanation unavailable'
         : handoff.outcome.agent_explanation === 'running' ? 'Finance agent is reviewing'
@@ -445,13 +465,14 @@ function HandoffCard({ handoff, workflow, onCorrect }: { handoff: PartnerWorkflo
     <article className="partner-handoff-card" data-current={handoff.current}>
       <header>
         <div><span className="partner-card-kicker">{handoff.partner_name} · {handoff.engagement_reference}</span><h3>{handoff.invoice_number}</h3><p>{money(handoff.invoice_total_minor, handoff.invoice_currency)}</p></div>
-        <span className={`pill ${handoff.outcome.human_decision === 'approved' ? 'pill-ok' : ['needs_information', 'stale_source', 'failed_processing'].includes(handoff.result_kind) ? 'pill-warn' : ''}`}>{outcomeLabel(handoff)}</span>
+        <span className="row"><InputProvenanceBadge value={handoff.input_provenance} /><span className={`pill ${handoff.outcome.human_decision === 'approved' ? 'pill-ok' : ['needs_information', 'stale_source', 'failed_processing'].includes(handoff.result_kind) ? 'pill-warn' : ''}`}>{outcomeLabel(handoff)}</span></span>
       </header>
       <ol className="partner-progress" aria-label={`Progress for ${handoff.invoice_number}`}>
         {progressFor(handoff).map((step) => <li key={step.label} data-state={step.state} aria-current={step.state === 'current' ? 'step' : undefined}><i aria-hidden="true" /><span>{step.label}</span></li>)}
       </ol>
       <div className="partner-agent-state"><span>{modelCopy}</span>{handoff.outcome.delivery === 'failed' && <span className="partner-inline-error">Delivery failed</span>}</div>
       {handoff.result_reason && <p className="partner-result-reason">{handoff.result_reason}</p>}
+      {legacyCorrectionBlocked && <p className="partner-result-reason">This historical handoff cannot be corrected because its input source was not recorded.</p>}
       {handoff.acknowledgment && (
         <div className="partner-acknowledgment" role="status">
           <strong>{handoff.acknowledgment.outcome === 'invoice_draft_saved' ? 'Finance saved the invoice draft' : 'Finance declined the invoice'}</strong>
@@ -470,7 +491,7 @@ function HandoffCard({ handoff, workflow, onCorrect }: { handoff: PartnerWorkflo
         <div className="partner-handoff-evidence">
           {handoff.checks.length > 0 && <ul>{handoff.checks.map((check) => <li key={check.code} data-state={check.status}><strong>{check.code.replaceAll('_', ' ')}</strong><span>{check.message}</span></li>)}</ul>}
           {!result && <p className="meta">Loading authorized source excerpts…</p>}
-          {result && <div className="partner-evidence-grid"><EvidenceSource title="Authorized engagement source" source={result.source_versions.engagement} /><EvidenceSource title="Confirmed invoice source" source={result.source_versions.invoice} /></div>}
+          {result && <><p className="meta"><InputProvenanceBadge value={result.input_provenance} /> applies to this result and both authorized source snapshots.</p><div className="partner-evidence-grid"><EvidenceSource title="Authorized engagement source" source={result.source_versions.engagement} /><EvidenceSource title="Confirmed invoice source" source={result.source_versions.invoice} /></div></>}
         </div>
       )}
     </article>
@@ -520,9 +541,9 @@ export function PartnerWorkflow() {
   if (loading) return <Skeleton rows={4} label="Loading Partnerships and Finance" />;
   if (error || !workflow) return <div className="error-block"><span className="t">Could not load Partnerships + Finance</span><span className="s">{error}</span><Button small onClick={load}>Try again</Button></div>;
 
-  const proposalSaved = (requestId: string): void => {
+  const proposalSaved = (requestId: string, inputProvenance: PartnerInputProvenance): void => {
     setForm(null);
-    setNotice('Engagement proposal created. Finance must authorize the recorded terms before an invoice can be submitted.');
+    setNotice(inputProvenance === 'sample' ? 'Sample engagement proposal created for demonstration. It does not confirm an external agreement.' : 'Engagement proposal created. Finance must authorize the recorded terms before an invoice can be submitted.');
     adapter.ensure('request', requestId, true);
     nav(REQ(requestId));
     load();
@@ -578,7 +599,7 @@ export function PartnerWorkflow() {
           {workflow.engagements.length > 0 && (
             <details className="partner-engagements">
               <summary>Authorized engagement terms ({workflow.engagements.length})</summary>
-              <div>{workflow.engagements.map((engagement) => <article key={engagement.id}><div><strong>{engagement.partner.name}</strong><span>{engagement.reference} · {engagement.purpose}</span></div><div><strong>{money(engagement.authorized_total_minor, engagement.currency)}</strong><span>{engagement.authorization_status} · through {engagement.valid_until}</span></div></article>)}</div>
+              <div>{workflow.engagements.map((engagement) => <article key={engagement.id}><div><strong>{engagement.partner.name}</strong><span>{engagement.reference} · {engagement.purpose}</span></div><div><strong>{money(engagement.authorized_total_minor, engagement.currency)}</strong><span>{engagement.authorization_status} · through {engagement.valid_until} · <InputProvenanceBadge value={engagement.input_provenance} /></span></div></article>)}</div>
             </details>
           )}
           <div className="partner-work-list">

@@ -66,6 +66,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
       email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
+      partnerWorkflowNative: params.get('workflowExecution') === 'native',
       workflowRole: params.get('workflowRole') === 'partnerships' ? 'partnerships'
         : params.get('workflowRole') === 'finance' ? 'finance'
           : params.get('workflowRole') === 'unrelated' ? 'unrelated'

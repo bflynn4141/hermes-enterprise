@@ -24,6 +24,7 @@ import './legacy-documents.css';
 import { requestActionLabel } from '../approval-copy.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
+import { InputProvenanceBadge } from '../input-provenance.js';
 import {
   ApprovalRequest,
   approvalActionLabel,
@@ -703,26 +704,29 @@ function PartnerResultEvidence({ handoffId, fallback }: { handoffId: string; fal
       ? 'Agent explanation unavailable'
       : result.outcome.agent_explanation === 'running' ? 'Finance agent is reviewing' : 'Finance agent review queued';
   return (
-    <details className="legacy-disclosure">
-      <summary>Authorized workflow evidence ({result.checks.length} checks)</summary>
-      <p className="meta">{explanation} · Human decision {result.outcome.human_decision.replaceAll('_', ' ')}</p>
-      <ul className="partner-result-checks">
-        {result.checks.map((check) => <li key={check.code} data-state={check.status}><strong>{check.code.replaceAll('_', ' ')}</strong><span>{check.message}</span></li>)}
-      </ul>
-      <div className="partner-evidence-grid">
-        {([
-          ['Authorized engagement source', result.source_versions.engagement],
-          ['Confirmed invoice source', result.source_versions.invoice],
-        ] as const).map(([label, source]) => (
-          <section key={label}>
-            <span className="partner-card-kicker">{label}</span>
-            <h4>{source.name}</h4>
-            <p className="meta">{source.author_name ? `${source.author_name} · ` : ''}<time dateTime={source.created_at}>{new Date(source.created_at).toLocaleString()}</time></p>
-            <blockquote>{source.excerpt}</blockquote>
-          </section>
-        ))}
-      </div>
-    </details>
+    <div className="partner-result-evidence">
+      <p className="partner-provenance-summary"><InputProvenanceBadge value={result.input_provenance} /><span>{result.input_provenance === 'sample' ? 'Use this decision for demonstration only.' : result.input_provenance === 'customer' ? 'This review uses customer-provided input.' : 'Historical provenance is unavailable; this is not labeled as customer data.'}</span></p>
+      <details className="legacy-disclosure">
+        <summary>Authorized workflow evidence ({result.checks.length} checks)</summary>
+        <p className="meta">{explanation} · Human decision {result.outcome.human_decision.replaceAll('_', ' ')}</p>
+        <ul className="partner-result-checks">
+          {result.checks.map((check) => <li key={check.code} data-state={check.status}><strong>{check.code.replaceAll('_', ' ')}</strong><span>{check.message}</span></li>)}
+        </ul>
+        <div className="partner-evidence-grid">
+          {([
+            ['Authorized engagement source', result.source_versions.engagement],
+            ['Confirmed invoice source', result.source_versions.invoice],
+          ] as const).map(([label, source]) => (
+            <section key={label}>
+              <span className="partner-card-kicker">{label}</span>
+              <h4>{source.name}</h4>
+              <p className="meta">{source.author_name ? `${source.author_name} · ` : ''}<time dateTime={source.created_at}>{new Date(source.created_at).toLocaleString()}</time></p>
+              <blockquote>{source.excerpt}</blockquote>
+            </section>
+          ))}
+        </div>
+      </details>
+    </div>
   );
 }
 

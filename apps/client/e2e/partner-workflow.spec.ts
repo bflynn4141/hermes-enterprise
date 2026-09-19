@@ -20,7 +20,8 @@ test('Finance reviews authorized evidence, records the decision, and returns a s
 
   const handoff = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
   await expect(handoff.getByText('Ready for Finance decision', { exact: true })).toBeVisible();
-  await expect(handoff.getByText('Sample fixture · no model call', { exact: true })).toBeVisible();
+  await expect(handoff.getByText('Sample data', { exact: true })).toBeVisible();
+  await expect(handoff.getByText('Simulated execution · no model call', { exact: true })).toBeVisible();
   await handoff.getByRole('button', { name: 'View checks and evidence' }).click();
   await expect(handoff.getByText('Sample engagement terms.txt', { exact: true })).toBeVisible();
   await expect(handoff.getByText('INV-SAMPLE-014.pdf', { exact: true })).toBeVisible();
@@ -29,6 +30,8 @@ test('Finance reviews authorized evidence, records the decision, and returns a s
   await handoff.getByRole('button', { name: 'Open Finance decision' }).click();
   await expect(pane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
   await expect(pane.getByText('0 of 1 Finance review', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Sample data', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Use this decision for demonstration only.', { exact: true })).toBeVisible();
   await expect(pane.getByText('Authorized workflow evidence (4 checks)', { exact: true })).toBeVisible();
   await page.screenshot({ path: 'qa/multi-party-finance-decision.png', fullPage: true });
   await pane.getByText('Authorized workflow evidence (4 checks)', { exact: true }).click();
@@ -58,6 +61,8 @@ test('Partnerships corrects a mismatch from stored source and keeps the original
   await expect(mismatch.getByText('Needs invoice correction', { exact: true })).toBeVisible();
   await mismatch.getByRole('button', { name: 'Correct invoice' }).click();
   const form = pane.getByRole('form', { name: 'Correct invoice' });
+  await expect(form.getByRole('radio', { name: /Sample data/ })).toBeChecked();
+  await expect(form.getByRole('radio', { name: /Customer data/ })).toBeDisabled();
   await form.getByRole('spinbutton', { name: 'Amount', exact: true }).fill('800.00');
   await form.locator('input[type="file"]').setInputFiles({ name: 'corrected-invoice.txt', mimeType: 'text/plain', buffer: Buffer.from('Sample corrected invoice INV-SAMPLE-013 for USD 800.00') });
   await expect(form.getByText('corrected-invoice.txt', { exact: true })).toHaveText('corrected-invoice.txt');
@@ -66,7 +71,8 @@ test('Partnerships corrects a mismatch from stored source and keeps the original
   await expect(pane.getByText('Correction submitted. The original review remains in history.')).toBeVisible();
   const corrected = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-013' }).first();
   await expect(corrected.getByText('Ready for Finance decision', { exact: true })).toBeVisible();
-  await expect(corrected.getByText('Sample fixture · no model call', { exact: true })).toBeVisible();
+  await expect(corrected.getByText('Sample data', { exact: true })).toBeVisible();
+  await expect(corrected.getByText('Simulated execution · no model call', { exact: true })).toBeVisible();
   await expect(pane.getByRole('link', { name: 'Open source session' }).first()).toHaveAttribute('href', /\/s\//);
   await expect(form).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -81,6 +87,8 @@ test('Partnerships confirms invoice fields and submits the first intake without 
   const pane = app(page);
   await pane.getByRole('button', { name: 'Submit invoice to Finance' }).click();
   const form = pane.getByRole('form', { name: 'Submit invoice to Finance' });
+  await expect(form.getByRole('radio', { name: /Sample data/ })).toBeChecked();
+  await expect(form.getByRole('radio', { name: /Customer data/ })).toBeDisabled();
   await form.getByRole('textbox', { name: 'Invoice number', exact: true }).fill('INV-SAMPLE-015');
   await form.getByRole('spinbutton', { name: 'Amount', exact: true }).fill('1200.00');
   await form.locator('input[type="file"]').setInputFiles({ name: 'sample-invoice-015.txt', mimeType: 'text/plain', buffer: Buffer.from('Sample invoice INV-SAMPLE-015 for USD 1,200.00') });
@@ -101,6 +109,11 @@ test('Partnerships proposes verified terms and the named Finance principal can a
   const pane = app(page);
   await pane.getByRole('button', { name: 'Record agreed terms' }).click();
   const form = pane.getByRole('form', { name: 'Record agreed engagement terms' });
+  await expect(form.getByText('For demonstration only. This does not confirm an external agreement. This does not sign an agreement or authorize payment.', { exact: true })).toBeVisible();
+  await expect(form.getByRole('radio', { name: /Sample data/ })).toBeChecked();
+  await form.getByRole('radio', { name: /Customer data/ }).check();
+  await expect(form.getByRole('button', { name: 'Send to Finance for authorization' })).toBeVisible();
+  await form.getByRole('radio', { name: /Sample data/ }).check();
   await form.getByLabel('Partner').selectOption({ label: 'Robin Studio · engagement' });
   await form.getByLabel('Reference').fill('ENG-SAMPLE-42');
   await form.getByLabel('Purpose').fill('Partner enablement workshop');
@@ -108,17 +121,31 @@ test('Partnerships proposes verified terms and the named Finance principal can a
   await form.getByLabel('Permitted evidence excerpt').fill('Sample terms: one partner enablement workshop for USD 1,200.');
   await form.locator('input[type="file"]').setInputFiles({ name: 'sample-engagement-terms.txt', mimeType: 'text/plain', buffer: Buffer.from('Sample externally agreed terms for one workshop at USD 1,200.') });
   await form.getByRole('checkbox').check();
-  await form.getByRole('button', { name: 'Send to Finance for authorization' }).click();
+  await form.getByRole('button', { name: 'Send sample terms to Finance' }).click();
   await expect(pane.getByText('Waiting for Alex Rivera.')).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Approve change' })).toHaveCount(0);
 
   await page.goto(`/?partnerWorkflow=1&workflowRole=finance&seat=member&scenario=approvals#inbox/request/${RECORD_CHANGE_REQUEST}`);
   await expect(pane.getByText('Enterprise partner records', { exact: true })).toBeVisible();
-  await expect(pane.getByText('3 proposed changes', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Sample data', { exact: true })).toBeVisible();
+  await expect(pane.getByText('For demonstration only. Approval does not confirm an external agreement.', { exact: true })).toBeVisible();
+  await expect(pane.getByText('4 proposed changes', { exact: true })).toBeVisible();
   await pane.locator('details.approval-disclosure').first().locator('summary').click();
-  await expect(pane.locator('p').getByText('Sample fixture: record the externally agreed Robin Studio terms for invoice checking.', { exact: true })).toBeVisible();
+  await expect(pane.locator('p').getByText('Authorize sample Robin Studio terms for an invoice-checking demonstration.', { exact: true })).toBeVisible();
   await pane.getByRole('button', { name: 'Approve change' }).click();
   await expect(pane.getByText('approved · authorization v1', { exact: true })).toBeVisible();
+});
+
+test('native Finance execution keeps sample input provenance distinct from execution state', async ({ page }) => {
+  await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member&workflowExecution=native');
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  const pane = app(page);
+  const handoff = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
+  await expect(handoff.getByText('Sample data', { exact: true })).toBeVisible();
+  await expect(handoff.getByText('Finance agent explanation ready', { exact: true })).toBeVisible();
+  await expect(handoff.getByText('Simulated execution · no model call', { exact: true })).toHaveCount(0);
+  await handoff.getByRole('button', { name: 'View checks and evidence' }).click();
+  await expect(handoff.getByText('Sample data', { exact: true })).toHaveCount(2);
 });
 
 test('an unrelated member receives no private workflow ids or content', async ({ page }) => {

@@ -1392,6 +1392,16 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .partner-workflow-form header p { margin-top: 5px; color: var(--muted); }
 .partner-workflow-form > footer { align-items: center; padding-top: 2px; }
 .partner-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.partner-provenance-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
+.partner-provenance-choice legend { margin-bottom: 7px; color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.partner-provenance-choice label { display: flex; gap: 9px; align-items: flex-start; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(5, 3, 42, .42); cursor: pointer; }
+.partner-provenance-choice label:has(input:checked) { border-color: #9B9AE0; background: rgba(83, 82, 151, .14); }
+.partner-provenance-choice label:has(input:focus-visible) { outline: 2px solid #9B9AE0; outline-offset: 2px; }
+.partner-provenance-choice input { margin-top: 2px; }
+.partner-provenance-choice label > span { display: grid; gap: 2px; }
+.partner-provenance-choice small { color: var(--muted); line-height: 16px; }
+.partner-provenance-summary { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--muted); }
+.partner-provenance-badge { flex: none; }
 .partner-form-grid label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .partner-form-grid label > span, .partner-field-label { color: var(--muted); font-size: 11.2px; line-height: 16px; }
 .partner-form-grid :is(input, textarea, select) { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; background: rgba(5, 3, 42, .7); color: var(--body); }
@@ -1472,7 +1482,7 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 @media (max-width: 760px) {
   .partner-workflow-heading, .partner-actions, .partner-workflow-form > header, .partner-workflow-form > footer { flex-direction: column; align-items: stretch; }
   .partner-heading-status { justify-content: flex-start; }
-  .partner-role-grid, .partner-form-grid, .partner-evidence-grid { grid-template-columns: 1fr; }
+  .partner-role-grid, .partner-form-grid, .partner-evidence-grid, .partner-provenance-choice { grid-template-columns: 1fr; }
   .partner-form-wide { grid-column: auto; }
   .partner-connector { grid-template-columns: 1fr; }
   .partner-connector small { grid-column: auto; }

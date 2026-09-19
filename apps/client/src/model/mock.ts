@@ -123,6 +123,8 @@ interface MockOptions {
   email?: 'disconnected' | 'connected';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
+  /** Contract fixture for native execution over explicitly labeled sample inputs. */
+  partnerWorkflowNative?: boolean;
   /** Explicit authorization view for the local multi-party fixture. */
   workflowRole?: PartnerWorkflowViewerRole;
 }
@@ -235,6 +237,7 @@ export function createMockBackend(options: MockOptions = {}) {
           ...(options.partnerWorkflow ? {
             workflow_provenance: {
               handoff_id: mockUuid(610),
+              input_provenance: 'sample',
               shared_partner: { id: mockUuid(611), name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42' },
               source_sessions: [
                 { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
@@ -268,8 +271,8 @@ export function createMockBackend(options: MockOptions = {}) {
     if (view && row && view.payload.approval_type === 'record_change') {
       view.payload = {
         ...view.payload,
-        summary: 'Sample fixture: record the externally agreed Robin Studio terms for invoice checking.',
-        consequence: 'Approval records only these terms for one invoice check. It does not sign an agreement, approve payment, or confirm delivery.',
+        summary: 'Authorize sample Robin Studio terms for an invoice-checking demonstration.',
+        consequence: 'Approval records sample terms for one demonstration. It does not confirm an external agreement, sign an agreement, approve payment, or confirm delivery.',
         evidence: [{ id: 'sample-engagement-source', kind: 'source', label: 'Sample engagement terms.txt', ref: `attachment:${mockUuid(616)}` }],
         details: {
           system_id: 'enterprise-partner-records',
@@ -278,6 +281,7 @@ export function createMockBackend(options: MockOptions = {}) {
             { record_id: 'partner:robin-studio', field: 'purpose', before: null, after: 'Partner enablement workshop' },
             { record_id: 'partner:robin-studio', field: 'authorized_total', before: null, after: 'USD 1,200.00' },
             { record_id: 'partner:robin-studio', field: 'invoice_scope', before: null, after: 'One invoice' },
+            { record_id: 'partner:robin-studio', field: 'input_provenance', before: null, after: 'sample' },
           ],
           validation: ['Stored source is readable and unchanged', 'Alex Rivera is the named Finance reviewer'],
           rollback: 'Revoke this exact authorization revision before an invoice is accepted.',
@@ -711,6 +715,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const partnerEngagements: PartnerEngagementSummary[] = options.partnerWorkflow ? [
     {
       id: mockUuid(613), revision: 1, authorization_hash: engagementHash, authorization_status: 'authorized',
+      input_provenance: 'sample',
       partner: { id: mockUuid(611), name: 'Robin Studio' }, reference: 'ENG-SAMPLE-42',
       purpose: 'Partner enablement workshop', currency: 'USD', authorized_total_minor: 120000,
       valid_from: '2026-09-01', valid_until: '2026-10-31', one_invoice: true,
@@ -718,6 +723,7 @@ export function createMockBackend(options: MockOptions = {}) {
     },
     {
       id: mockUuid(614), revision: 1, authorization_hash: hashForMock(43), authorization_status: 'authorized',
+      input_provenance: 'sample',
       partner: { id: mockUuid(617), name: 'Northstar Labs' }, reference: 'ENG-SAMPLE-43',
       purpose: 'Partner technical review', currency: 'USD', authorized_total_minor: 80000,
       valid_from: '2026-09-01', valid_until: '2026-10-31', one_invoice: true,
@@ -730,6 +736,7 @@ export function createMockBackend(options: MockOptions = {}) {
       partner_id: mockUuid(611), partner_name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42',
       invoice_number: 'INV-SAMPLE-014', invoice_currency: 'USD', invoice_total_minor: 120000,
       source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: REQ_INVOICE,
+      input_provenance: 'sample',
       outcome: { delivery: 'delivered', validation: 'passed', agent_explanation: 'completed', human_decision: 'pending', acknowledgment: 'pending' },
       result_kind: 'checks_passed', result_reason: 'All server checks passed. Finance must record the human decision.',
       checks: [
@@ -738,13 +745,14 @@ export function createMockBackend(options: MockOptions = {}) {
         { code: 'amount', status: 'passed', message: 'USD 1,200.00 matches the authorized total.' },
         { code: 'invoice_source', status: 'passed', message: 'The confirmed invoice source is readable and unchanged.' },
       ],
-      acknowledgment: null, simulated: true, created_at: iso(-10), decided_at: null,
+      acknowledgment: null, simulated: !options.partnerWorkflowNative, created_at: iso(-10), decided_at: null,
     },
     {
       id: mockUuid(615), revision: 1, supersedes_handoff_id: null, superseded_by_handoff_id: null, current: true,
       partner_id: mockUuid(617), partner_name: 'Northstar Labs', engagement_reference: 'ENG-SAMPLE-43',
       invoice_number: 'INV-SAMPLE-013', invoice_currency: 'USD', invoice_total_minor: 95000,
       source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: null,
+      input_provenance: 'sample',
       outcome: { delivery: 'delivered', validation: 'needs_information', agent_explanation: 'completed', human_decision: 'not_ready', acknowledgment: 'pending' },
       result_kind: 'needs_information', result_reason: 'The invoice is USD 150.00 above the authorized amount. Submit a corrected source and confirmed fields.',
       checks: [
@@ -766,6 +774,7 @@ export function createMockBackend(options: MockOptions = {}) {
       engagement_revision: engagement.revision,
       authorization_hash: engagement.authorization_hash,
       request_id: handoff.request_id,
+      input_provenance: handoff.input_provenance,
       source_versions: {
         engagement: engagement.source,
         invoice: { attachment_id: mockUuid(619), name: `${handoff.invoice_number}.pdf`, sha256: sourceDigest, created_at: handoff.created_at, author_name: handoff.partner_name, excerpt: `Sample invoice ${handoff.invoice_number}: ${moneyForMock(handoff.invoice_total_minor, handoff.invoice_currency)} for ${engagement.purpose}.` },
@@ -1370,24 +1379,27 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/partner-workflow/engagement-authorizations') && method === 'POST') {
       if (workflowRole !== 'partnerships') return fail(403, 'forbidden_partner_workflow_action');
-      return json({ approval_request_id: APPROVAL_DEMO_REQUEST_IDS.record_change, authorization_revision: 1, authorization_hash: hashForMock(80), engagement_record_id: null, status: 'pending', created: true }, 201);
+      const inputProvenance = body.input_provenance === 'customer' ? 'customer' : 'sample';
+      return json({ approval_request_id: APPROVAL_DEMO_REQUEST_IDS.record_change, authorization_revision: 1, authorization_hash: hashForMock(80), engagement_record_id: null, status: 'pending', input_provenance: inputProvenance, created: true }, 201);
     }
     if (p('/partner-workflow/invoice-intakes') && method === 'POST') {
       if (workflowRole !== 'partnerships') return fail(403, 'partnerships_principal_required');
       const id = mockUuid(630 + partnerHandoffs.length);
       const engagement = partnerEngagements.find((item) => item.id === body.engagement_record_id);
       const invoice = body.invoice as Record<string, unknown>;
+      const inputProvenance = engagement?.input_provenance === 'sample' ? 'sample' : body.input_provenance === 'customer' ? 'customer' : 'sample';
       partnerHandoffs.unshift({
         id, revision: 1, supersedes_handoff_id: null, superseded_by_handoff_id: null, current: true,
         partner_id: engagement?.partner.id ?? mockUuid(611), partner_name: engagement?.partner.name ?? 'Sample partner',
         engagement_reference: engagement?.reference ?? 'ENG-SAMPLE', invoice_number: String(invoice.number ?? 'INV-SAMPLE'),
         invoice_currency: String(invoice.currency ?? 'USD'), invoice_total_minor: Number(invoice.total_minor ?? 0),
         source_session_id: SESSION_A, finance_session_id: SESSION_B, request_id: null,
+        input_provenance: inputProvenance,
         outcome: { delivery: 'queued', validation: 'queued', agent_explanation: 'queued', human_decision: 'not_ready', acknowledgment: 'pending' },
         result_kind: 'pending_checks', result_reason: 'Sample invoice received. No model call was made in this fixture.', checks: [], acknowledgment: null,
-        simulated: true, created_at: iso(0), decided_at: null,
+        simulated: !options.partnerWorkflowNative, created_at: iso(0), decided_at: null,
       });
-      return json({ intake_event_id: mockUuid(640), payload_hash: hashForMock(81), handoff_id: id, handoff_revision: 1, source_run_id: RUN, finance_run_id: null, created: true }, 201);
+      return json({ intake_event_id: mockUuid(640), payload_hash: hashForMock(81), handoff_id: id, handoff_revision: 1, source_run_id: RUN, finance_run_id: null, input_provenance: inputProvenance, created: true }, 201);
     }
     const partnerHandoffMatch = match(new RegExp(`^/w/${WS}/partner-workflow/handoffs/([^/]+)/(result|corrections)$`));
     if (partnerHandoffMatch) {
@@ -1396,6 +1408,9 @@ export function createMockBackend(options: MockOptions = {}) {
       if (partnerHandoffMatch[2] === 'result' && method === 'GET') return json(workflowResult(handoff));
       if (partnerHandoffMatch[2] === 'corrections' && method === 'POST') {
         if (workflowRole !== 'partnerships') return fail(403, 'partnerships_principal_required');
+        if (handoff.input_provenance === 'unknown') return fail(409, 'legacy_handoff_input_forbidden', 'Historical handoffs without provenance cannot be corrected.');
+        if (handoff.input_provenance === 'sample' && body.input_provenance === 'customer') return fail(400, 'bad_invoice_correction', 'Sample lineage must remain sample.');
+        const inputProvenance = handoff.input_provenance === 'sample' ? 'sample' : body.input_provenance === 'customer' ? 'customer' : 'sample';
         handoff.current = false;
         const successorId = mockUuid(650 + partnerHandoffs.length);
         handoff.superseded_by_handoff_id = successorId;
@@ -1405,12 +1420,13 @@ export function createMockBackend(options: MockOptions = {}) {
           ...handoff, id: successorId, revision: 1, supersedes_handoff_id: handoff.id, superseded_by_handoff_id: null, current: true,
           invoice_number: String(invoice.number ?? handoff.invoice_number), invoice_currency: String(invoice.currency ?? handoff.invoice_currency),
           invoice_total_minor: Number(invoice.total_minor ?? handoff.invoice_total_minor), request_id: REQ_INVOICE,
+          input_provenance: inputProvenance,
           outcome: { delivery: 'delivered', validation: 'passed', agent_explanation: 'completed', human_decision: 'pending', acknowledgment: 'pending' },
           result_kind: 'checks_passed', result_reason: 'Sample corrected invoice passed deterministic checks. No model call was made in this fixture.',
-          checks: [{ code: 'amount', status: 'passed', message: 'The corrected amount matches the authorized total.' }], simulated: true, created_at: iso(1), decided_at: null,
+          checks: [{ code: 'amount', status: 'passed', message: 'The corrected amount matches the authorized total.' }], simulated: !options.partnerWorkflowNative, created_at: iso(1), decided_at: null,
         };
         partnerHandoffs.unshift(successor);
-        return json({ superseded_handoff_id: handoff.id, handoff_id: successor.id, handoff_revision: 1, intake_event_id: mockUuid(651), payload_hash: hashForMock(82), source_run_id: RUN, finance_run_id: mockUuid(652), created: true }, 201);
+        return json({ superseded_handoff_id: handoff.id, handoff_id: successor.id, handoff_revision: 1, intake_event_id: mockUuid(651), payload_hash: hashForMock(82), source_run_id: RUN, finance_run_id: mockUuid(652), input_provenance: inputProvenance, created: true }, 201);
       }
     }
     const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/skill-assignments(?:/([^/]+))?$`));
