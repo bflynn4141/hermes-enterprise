@@ -47,6 +47,7 @@ class SessionServer {
   creationGate: ReturnType<typeof deferred> | null = null;
   rejectSettings = false;
   settingsRequests = 0;
+  guidanceRequests = 0;
   active = A;
 
   constructor(readonly page: Page) {}
@@ -115,6 +116,19 @@ class SessionServer {
           seq: message.seq, role: message.role, kind: message.kind, text: message.text, blocks: [],
           status: message.status, run_id: run.id, client_turn_id: input.client_turn_id });
         return reply({ run_id: run.id, status: run.status, attempt: run.attempt }, 201);
+      }
+      if (sessionId && url.pathname.endsWith('/guide')) {
+        const input = route.request().postDataJSON();
+        const run = this.runs.get(sessionId)!;
+        const message: Message = { ...this.message(sessionId, 'user', input.text), kind: 'guidance',
+          status: 'streaming', run_id: run.id, seq: (this.messages.get(sessionId)?.length ?? 0) + 1 };
+        this.messages.set(sessionId, [...this.messages.get(sessionId)!, message]);
+        run.guidance = { id: message.id, text: message.text, status: 'pending' };
+        this.guidanceRequests += 1;
+        await this.emit(sessionId, 'message.appended', { message_id: message.id, session_id: sessionId,
+          seq: message.seq, role: message.role, kind: message.kind, text: message.text, blocks: [],
+          status: message.status, run_id: run.id });
+        return reply({ guidance_id: message.id, status: 'queued' }, 201);
       }
       if (sessionId && /\/runs\//.test(url.pathname)) {
         const run = this.runs.get(sessionId)!;
@@ -310,4 +324,32 @@ test('archiving the selected session hydrates and connects its fallback conversa
   await expect(page.locator('.stream-text')).toContainText('Fallback is connected.');
   const connections = await page.evaluate(() => window.sessionReliabilityFixture.connections());
   expect(connections.filter((url) => url.includes('/hub/session/'))).toEqual([expect.stringContaining(`/hub/session/${B}`)]);
+});
+
+test('queued guidance and its applied state survive reload without replaying the request', async ({ page }) => {
+  const server = new SessionServer(page); await server.mount();
+  await send(page, 'Compare the partners');
+  await expect.poll(() => server.turns.length).toBe(1);
+  await server.beginText(A, 'Starting the comparison.');
+  const guidanceText = 'Use only verified partner information.';
+  await page.getByRole('textbox', { name: 'Message Iris' }).fill(guidanceText);
+  await page.getByRole('button', { name: 'Send guidance', exact: true }).click();
+  await expect.poll(() => server.guidanceRequests).toBe(1);
+  const guidance = server.messages.get(A)!.find((message) => message.kind === 'guidance')!;
+  const row = () => page.locator(`[data-message-id="${guidance.id}"]`);
+  await expect(row()).toContainText(guidanceText);
+  await page.reload();
+  await expect(row()).toContainText(guidanceText);
+  await expect(row()).toContainText(/queued/i);
+  guidance.status = 'complete';
+  const run = server.runs.get(A)!;
+  run.guidance = { id: guidance.id, text: guidance.text, status: 'applied' };
+  await server.emit(A, 'run.guidance.applied', { run_id: run.id, guidance_id: guidance.id, turn: 0 });
+  await expect(row()).toContainText(/applied/i);
+  await page.reload();
+  await expect(row()).toContainText(guidanceText);
+  await expect(row()).toContainText(/applied/i);
+  await expect(row()).toHaveCount(1);
+  expect(server.guidanceRequests).toBe(1);
+  expect(server.turns).toHaveLength(1);
 });
