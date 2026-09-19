@@ -49,7 +49,7 @@ function routeError(error: unknown): never {
       'handoff_superseded', 'handoff_already_decided', 'workflow_admission_disabled',
       'workflow_readiness_incomplete', 'authorization_revoked', 'authorization_expired',
       'authorization_superseded', 'authorization_consumed',
-      'input_provenance_mismatch',
+      'input_provenance_mismatch', 'finance_instruction_conflict',
     ].includes(error.reason);
     throw new RouteError(error.message, error.reason,
       forbidden.includes(error.reason) ? 403 : notFound.includes(error.reason) ? 404 : conflict ? 409 : 422);

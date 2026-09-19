@@ -4,15 +4,9 @@ import { publishEvents } from '../jobs.js';
 import { consumeReservedCapacity, reservedCapacityAgentId } from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service.js';
+import { PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS } from '../enterprise-skills/role-instructions.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
-
-const PARTNER_PROGRAM_INSTRUCTIONS = [
-  'Support this member as Iris for the Partner Program: discover and screen potential ecosystem partners from approved professional evidence.',
-  'AgentCash People Search may be used only through an authorized screening run: the first filtered request requires the member’s explicit approval and is capped at $0.15; recurring runs require the server spend gate.',
-  'Name missing evidence instead of inventing it. A discovered prospect has not applied.',
-  'Prepare cited prospect briefs and draft-only outreach for human review, then stop before sending, decisions, access changes, signatures, commitments, or money movement.',
-].join(' ');
 
 interface JoinCoordinationInput {
   readonly env: Env;
@@ -179,7 +173,7 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
   await input.tx.query(
     `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
      VALUES ($1,$2,'Iris','Partner Program',$3,'draft','identity')`,
-    [agentId, input.workspaceId, PARTNER_PROGRAM_INSTRUCTIONS],
+    [agentId, input.workspaceId, PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS],
   );
   await input.tx.query(
     `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1,$2,$3)`,
@@ -192,8 +186,10 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
   );
   await input.tx.query(
     `INSERT INTO instruction_versions (workspace_id, agent_id, body, status, proposed_by, sources, saved_at)
-     VALUES ($1,$2,$3,'saved',$4,'[]'::jsonb,now())`,
-    [input.workspaceId, agentId, PARTNER_PROGRAM_INSTRUCTIONS, input.joiningUserId],
+     VALUES ($1,$2,$3,'saved',$4,$5::jsonb,now())`,
+    [input.workspaceId, agentId, PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS, input.joiningUserId,
+      JSON.stringify([{ kind: 'invitation_bootstrap', invitation_id: input.invitationId,
+        role_template_key: 'partner-program-compatibility', role_template_version: '1.0.0' }])],
   );
   await materializeLegacyPartnerAssignment(
     input.env,
