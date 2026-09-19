@@ -195,6 +195,9 @@ export type PartnerInvoiceHandoffProjection = z.infer<typeof partnerInvoiceHando
 // recipient and provenance are always filled from authenticated server state.
 export const sha256DigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 export const isoDateSchema = z.iso.date();
+export const partnerInputProvenanceSchema = z.enum(['sample', 'customer']);
+export type PartnerInputProvenance = z.infer<typeof partnerInputProvenanceSchema>;
+export const partnerProjectedInputProvenanceSchema = z.enum(['sample', 'customer', 'unknown']);
 
 export const partnerSourceBindingInputSchema = z.object({
   attachment_id: uuidSchema,
@@ -203,6 +206,7 @@ export const partnerSourceBindingInputSchema = z.object({
 export type PartnerSourceBindingInput = z.infer<typeof partnerSourceBindingInputSchema>;
 
 export const partnerEngagementAuthorizationInputSchema = z.object({
+  input_provenance: partnerInputProvenanceSchema,
   partner: z.object({ id: uuidSchema, name: z.string().trim().min(1).max(200) }).strict(),
   reference: z.string().trim().min(1).max(200),
   purpose: shortText,
@@ -225,6 +229,7 @@ export const partnerEngagementAuthorizationResultSchema = z.object({
   authorization_hash: authorizationHashSchema,
   engagement_record_id: uuidSchema.nullable(),
   status: z.enum(['pending', 'authorized', 'declined', 'expired', 'superseded', 'withdrawn']),
+  input_provenance: partnerInputProvenanceSchema,
   created: z.boolean(),
 }).strict();
 export type PartnerEngagementAuthorizationResult = z.infer<typeof partnerEngagementAuthorizationResultSchema>;
@@ -236,6 +241,7 @@ export const partnerInvoiceInputSchema = invoicePayloadSchema.superRefine((value
 });
 
 export const partnerInvoiceIntakeInputSchema = z.object({
+  input_provenance: partnerInputProvenanceSchema,
   engagement_record_id: uuidSchema,
   expected_engagement_revision: z.number().int().positive(),
   expected_authorization_hash: authorizationHashSchema,
@@ -252,6 +258,7 @@ export const partnerInvoiceIntakeResultSchema = z.object({
   handoff_revision: z.number().int().positive(),
   source_run_id: uuidSchema,
   finance_run_id: uuidSchema.nullable(),
+  input_provenance: partnerInputProvenanceSchema,
   created: z.boolean(),
 }).strict();
 export type PartnerInvoiceIntakeResult = z.infer<typeof partnerInvoiceIntakeResultSchema>;
@@ -263,6 +270,7 @@ export const publishPartnerInvoiceReviewInputSchema = z.object({
 export type PublishPartnerInvoiceReviewInput = z.infer<typeof publishPartnerInvoiceReviewInputSchema>;
 
 export const partnerInvoiceCorrectionInputSchema = z.object({
+  input_provenance: partnerInputProvenanceSchema,
   expected_handoff_revision: z.number().int().positive(),
   engagement_record_id: uuidSchema,
   expected_engagement_revision: z.number().int().positive(),
@@ -281,6 +289,7 @@ export const partnerInvoiceCorrectionResultSchema = z.object({
   payload_hash: authorizationHashSchema,
   source_run_id: uuidSchema,
   finance_run_id: uuidSchema.nullable(),
+  input_provenance: partnerInputProvenanceSchema,
   created: z.boolean(),
 }).strict();
 export type PartnerInvoiceCorrectionResult = z.infer<typeof partnerInvoiceCorrectionResultSchema>;
@@ -321,6 +330,7 @@ const partnerHandoffResultBaseSchema = z.object({
   engagement_revision: z.number().int().positive(),
   authorization_hash: authorizationHashSchema,
   request_id: uuidSchema.nullable(),
+  input_provenance: partnerProjectedInputProvenanceSchema,
   source_versions: z.object({
     engagement: partnerFrozenSourceSchema,
     invoice: partnerFrozenSourceSchema,
@@ -377,6 +387,7 @@ export const partnerEngagementSummarySchema = z.object({
   revision: z.number().int().positive(),
   authorization_hash: authorizationHashSchema,
   authorization_status: z.enum(['authorized', 'revoked', 'expired', 'superseded', 'consumed']),
+  input_provenance: partnerInputProvenanceSchema,
   partner: z.object({ id: uuidSchema, name: z.string().min(1).max(200) }).strict(),
   reference: z.string().min(1).max(200),
   purpose: z.string().min(1).max(1000),
@@ -409,6 +420,7 @@ export const partnerWorkflowHandoffV2Schema = z.object({
   result_reason: z.string().max(1000).nullable(),
   checks: z.array(partnerHandoffCheckSchema).max(16),
   acknowledgment: partnerDecisionAcknowledgmentSchema.nullable(),
+  input_provenance: partnerProjectedInputProvenanceSchema,
   simulated: z.boolean(),
   created_at: z.iso.datetime({ offset: true }),
   decided_at: z.iso.datetime({ offset: true }).nullable(),
