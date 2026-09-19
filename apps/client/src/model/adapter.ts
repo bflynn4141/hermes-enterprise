@@ -612,9 +612,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const extra = await loadExtra();
     ticket = extra.hubTicket;
 
-    // A re-bootstrap (a resync) must not take the draft with it: what the
-    // person typed is theirs, and the server has never seen it.
-    const existing = state().sessions;
+    // The shell reuses its store across workspaces and sign-ins. Only a
+    // same-viewer, same-workspace resync may carry local work into bootstrap.
+    const sameIdentity = state().workspace.id === workspaceId && state().user.id === boot.viewer.user_id;
+    const existing = sameIdentity ? state().sessions : {};
     const sessions: AppState['sessions'] = Object.fromEntries(
       boot.sessions.map((row) => {
         const previous = existing[row.id];
@@ -657,7 +658,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         },
         sessions,
         sessionOrder: [...localIds, ...boot.sessions.map((row) => row.id)],
-        activeSessionId: state().activeSessionId && sessions[state().activeSessionId!] ? state().activeSessionId : boot.sessions[0]?.id ?? null,
+        activeSessionId: sameIdentity && state().activeSessionId && sessions[state().activeSessionId!] ? state().activeSessionId : boot.sessions[0]?.id ?? null,
         counts: {
           inbox: boot.counts.inbox,
           pendingForMe: boot.counts.pending_for_me ?? boot.counts.inbox,

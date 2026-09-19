@@ -477,6 +477,45 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it.each(['workspace', 'viewer', 'same identity'] as const)('scopes draft, pending-turn, and settings preservation across a %s change', async (boundary) => {
+    const first = makeAdapter();
+    await first.adapter.start();
+    const localId = 'local-private-draft';
+    const patch = {
+      draft: { text: 'Private workspace A draft', attachments: [] },
+      settingsPending: true, model: 'private-choice', effort: null,
+      pendingTurn: { clientTurnId: 'pending-a', runId: null, previousStatus: 'Ready',
+        message: { id: mockUuid(601), session_id: SESSION, seq: 0, role: 'user' as const, kind: null, text: 'Private pending A prompt', blocks: [], status: 'complete' as const, run_id: null } },
+    };
+    first.store.dispatch({ type: 'session/set', id: SESSION, patch });
+    first.store.dispatch({ type: 'session/create', id: localId });
+    first.store.dispatch({ type: 'session/set', id: localId, patch: { ...patch, pendingTurn: { ...patch.pendingTurn, message: { ...patch.pendingTurn.message, session_id: localId } } } });
+    first.adapter.dispose();
+    const workspaceId = boundary === 'workspace' ? mockUuid(602) : WS;
+    const viewerId = boundary === 'viewer' ? mockUuid(603) : USER;
+    const { impl } = makeFetch({
+      [`GET /w/${workspaceId}/bootstrap`]: () => Response.json({ ...bootstrapBody, workspace: { ...bootstrapBody.workspace, id: workspaceId }, viewer: { ...bootstrapBody.viewer, user_id: viewerId } }),
+      [`GET /w/${workspaceId}/sessions/${SESSION}/snapshot`]: () => Response.json({ ...snapshotBody(), workspace_id: workspaceId }),
+    });
+    const next = createAdapter({ store: first.store, workspaceId, auth: createAuth('fake'), fetchImpl: impl,
+      socketFactory: (url) => new FakeSocket(url), visibility: { hidden: false, addEventListener: () => undefined, removeEventListener: () => undefined } });
+    try {
+      await next.start();
+      const current = first.state();
+      if (boundary === 'same identity') {
+        expect(current.sessions[localId]).toMatchObject({ ...patch, pendingTurn: { ...patch.pendingTurn, message: { ...patch.pendingTurn.message, session_id: localId } } });
+        expect(current.sessions[SESSION]).toMatchObject(patch);
+        expect(current.activeSessionId).toBe(localId);
+      } else {
+        expect(current.sessions[localId]).toBeUndefined();
+        expect(current.sessionOrder).toEqual([SESSION]);
+        expect(current.activeSessionId).toBe(SESSION);
+        expect(current.sessions[SESSION]).toMatchObject({ draft: { text: '', attachments: [] }, pendingTurn: null, run: null, model: 'deepseek-flash', effort: 'high' });
+        expect(current.sessions[SESSION]!.settingsPending).toBeUndefined();
+      }
+    } finally { next.dispose(); }
+  });
+
   it('performs a fresh terminal repair after an older in-flight snapshot settles', async () => {
     let release!: (response: Response) => void;
     let held = false;
