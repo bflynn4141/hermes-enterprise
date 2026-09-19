@@ -378,7 +378,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           this.env,
           { query: <T extends import('pg').QueryResultRow>(text: string, values: readonly unknown[] = []) => db.runtimeQuery<T>(text, values) },
           params.workspaceId,
-          run.agentId,
+          binding.agentId,
         );
         await runHermesAttempt({
           db,
