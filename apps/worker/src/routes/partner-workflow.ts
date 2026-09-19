@@ -35,6 +35,10 @@ const ADMISSION_SKILL_KEYS = {
   partnerships: 'partner-program-screening',
   finance: 'partner-invoice-review',
 } as const;
+const ADMISSION_ROLE_TEMPLATE_KEYS = {
+  partnerships: 'partnerships-agent',
+  finance: 'finance-agent',
+} as const;
 
 function routeError(error: unknown): never {
   if (error instanceof PartnerWorkflowError) {
@@ -140,13 +144,19 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
   const setup = await inWorkspace(c, async (work) => {
     work.requireAdmin('enabling new partner workflow admission');
     const roles = await work.tx.query<{
-      role: AdmissionRole; agent_id: string; assignment_id: string; skill_key: string;
+      role: AdmissionRole; team_id: string; agent_id: string; principal_user_id: string;
+      role_template_key: string; role_template_version: string;
+      assignment_id: string; skill_key: string;
     }>(
-      `SELECT et.slug AS role,eta.agent_id,esa.id AS assignment_id,esa.skill_key
+      `SELECT et.slug AS role,eta.team_id,eta.agent_id,eta.principal_user_id,
+              eta.role_template_key,eta.role_template_version,
+              esa.id AS assignment_id,esa.skill_key
          FROM enterprise_team_agents eta
          JOIN enterprise_teams et ON et.workspace_id=eta.workspace_id AND et.id=eta.team_id
          JOIN enterprise_skill_assignments esa
            ON esa.workspace_id=eta.workspace_id AND esa.agent_id=eta.agent_id AND esa.team_id=eta.team_id
+          AND esa.skill_key=CASE et.slug
+            WHEN 'partnerships' THEN 'partner-program-screening' ELSE 'partner-invoice-review' END
         WHERE eta.workspace_id=$1 AND et.slug IN ('partnerships','finance')`,
       [work.workspaceId],
     );
@@ -157,6 +167,10 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
         if (role.skill_key !== ADMISSION_SKILL_KEYS[role.role]) {
           throw new RouteError(`${role.role} does not have the reviewed multi-party assignment.`, 'workflow_readiness_incomplete', 409);
         }
+        if (role.role_template_key !== ADMISSION_ROLE_TEMPLATE_KEYS[role.role]
+            || role.role_template_version !== '1.0.0') {
+          throw new RouteError(`${role.role} does not have the reviewed employee role binding.`, 'workflow_readiness_incomplete', 409);
+        }
         const resolved = await resolveEnterpriseSkillAssignment(
           work.tx, work.workspaceId, role.agent_id, role.skill_key,
         );
@@ -166,7 +180,11 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
         }
         return {
           role: role.role,
+          team_id: role.team_id,
           agent_id: role.agent_id,
+          principal_user_id: role.principal_user_id,
+          role_template_key: role.role_template_key,
+          role_template_version: role.role_template_version,
           assignment: resolved.assignment,
           binding: await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, role.agent_id),
         };
@@ -195,11 +213,22 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
   const view = await inWorkspace(c, async (work) => {
     work.requireAdmin('enabling new partner workflow admission');
     for (const role of setup.roles) {
-      const current = await work.tx.query<{ revision: number; skill_version: string; state: string; digest: string }>(
+      const current = await work.tx.query<{
+        revision: number; skill_version: string; state: string; digest: string;
+      }>(
         `SELECT esa.revision,esa.skill_version,esa.state,art.digest
-           FROM enterprise_skill_assignments esa JOIN enterprise_skill_artifacts art ON art.id=esa.artifact_id
-          WHERE esa.workspace_id=$1 AND esa.id=$2 FOR UPDATE OF esa`,
-        [work.workspaceId, role.assignment.id],
+           FROM enterprise_skill_assignments esa
+           JOIN enterprise_skill_artifacts art ON art.id=esa.artifact_id
+           JOIN enterprise_team_agents eta
+             ON eta.workspace_id=esa.workspace_id AND eta.team_id=esa.team_id AND eta.agent_id=esa.agent_id
+          JOIN enterprise_teams et
+             ON et.workspace_id=eta.workspace_id AND et.id=eta.team_id
+          WHERE esa.workspace_id=$1 AND esa.id=$2 AND eta.team_id=$3 AND eta.agent_id=$4
+            AND eta.principal_user_id=$5 AND et.slug=$6
+            AND eta.role_template_key=$7 AND eta.role_template_version=$8
+          FOR UPDATE OF esa,eta`,
+        [work.workspaceId, role.assignment.id, role.team_id, role.agent_id,
+          role.principal_user_id, role.role, role.role_template_key, role.role_template_version],
       );
       const row = current.rows[0];
       if (!row || row.revision !== role.assignment.revision || row.skill_version !== role.assignment.version
