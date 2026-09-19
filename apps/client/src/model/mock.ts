@@ -128,6 +128,8 @@ interface MockOptions {
   partnerWorkflowNative?: boolean;
   /** Explicit authorization view for the local multi-party fixture. */
   workflowRole?: PartnerWorkflowViewerRole;
+  /** First-activation fixture: roles exist, but no native readiness has been saved yet. */
+  workflowActivation?: 'success' | 'native-mismatch' | 'binding-drift';
 }
 
 type MockRequest = RequestEntity;
@@ -724,8 +726,9 @@ export function createMockBackend(options: MockOptions = {}) {
   const viewerUserId = seat === 'member' ? MEMBER_USER : USER;
   const viewerMemberId = seat === 'member' ? ALEX_MEMBER : MAYA_MEMBER;
   const viewerName = seat === 'member' ? 'Alex Rivera' : 'Maya Chen';
-  let partnerConfigured = options.partnerWorkflow === true;
+  let partnerConfigured = options.partnerWorkflow === true || options.workflowActivation !== undefined;
   let partnerAdmissionEnabled = options.partnerWorkflow === true;
+  let partnerProfilesVerified = options.partnerWorkflow === true;
   const sourceDigest = (23).toString(16).padStart(64, '0');
   const declaredUploads = new Map<string, { name: string; size: number; mime: string }>();
   const engagementHash = hashForMock(42);
@@ -1357,7 +1360,14 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/partner-workflow/admission') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
-      if (body.enabled === true && !partnerConfigured) return fail(409, 'workflow_readiness_incomplete', 'Complete both native profile attestations before enabling this workflow.');
+      if (body.enabled === true && !partnerConfigured) return fail(409, 'workflow_not_configured', 'Configure both roles before enabling admission.');
+      if (body.enabled === true && options.workflowActivation === 'native-mismatch') {
+        return fail(409, 'workflow_readiness_incomplete', 'A native profile did not attest the reviewed skill and tool inventory.');
+      }
+      if (body.enabled === true && options.workflowActivation === 'binding-drift') {
+        return fail(409, 'workflow_readiness_incomplete', 'A role assignment changed after native readiness was checked.');
+      }
+      if (body.enabled === true) partnerProfilesVerified = true;
       partnerAdmissionEnabled = body.enabled === true;
       return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
     }
@@ -1399,8 +1409,8 @@ export function createMockBackend(options: MockOptions = {}) {
           },
         ] : [],
         readiness: workflowRole === 'unrelated' ? [] : configured ? [
-          { role: 'partnerships', configured: true, assignment_state: 'active', native_status: 'ready', skill_key: 'partner-program-screening', skill_version: '1.8.0', artifact_digest: hashForMock(71), missing: [] },
-          { role: 'finance', configured: true, assignment_state: 'active', native_status: 'ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: [] },
+          { role: 'partnerships', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-program-screening', skill_version: '1.8.0', artifact_digest: hashForMock(71), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
+          { role: 'finance', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
         ] : [
           { role: 'partnerships', configured: false, assignment_state: 'missing', native_status: 'unknown', skill_key: 'partner-program-screening', skill_version: null, artifact_digest: null, missing: ['principal', 'agent', 'assignment', 'skill', 'tools', 'provider'] },
           { role: 'finance', configured: false, assignment_state: 'missing', native_status: 'unknown', skill_key: 'partner-invoice-review', skill_version: null, artifact_digest: null, missing: ['principal', 'agent', 'assignment', 'skill', 'tools', 'provider'] },

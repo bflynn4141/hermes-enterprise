@@ -75,7 +75,7 @@ function workflowError(error: unknown): string {
     case 'partnerships_principal_required': return 'Only the configured Partnerships employee can submit this invoice.';
     case 'finance_recipient_unavailable': return 'Finance is not ready to receive this invoice yet.';
     case 'workflow_not_configured': return 'Assign both employee profiles before enabling this workflow.';
-    case 'workflow_readiness_incomplete': return 'Both native profiles need the required version, tools, and provider attestation before this workflow can be enabled.';
+    case 'workflow_readiness_incomplete': return 'The native profiles did not match the reviewed role bindings, versions, tools, and provider attestations. The workflow remains disabled.';
     case 'workflow_admission_disabled': return 'An Admin must enable this workflow after both native profiles are ready.';
     case 'skill_artifact_mismatch': return 'The installed native skill does not match the reviewed workflow artifact.';
     case 'legacy_handoff_input_forbidden': return 'This historical handoff does not record its input source, so it cannot be corrected as customer data.';
@@ -520,6 +520,7 @@ export function PartnerWorkflow() {
   const [correction, setCorrection] = useState<PartnerWorkflowHandoffV2 | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [admissionBusy, setAdmissionBusy] = useState(false);
+  const [admissionError, setAdmissionError] = useState<string | null>(null);
   const lastStreamMessage = state.connection.workspace.lastMessageAt;
 
   const load = (): void => {
@@ -556,17 +557,16 @@ export function PartnerWorkflow() {
     const target = document.getElementById(`handoff-${handoffId}`);
     target?.scrollIntoView({ block: 'nearest' });
   };
-  const profilesReady = workflow.readiness.length === 2 && workflow.readiness.every((item) => item.configured && item.assignment_state === 'active' && item.native_status === 'ready' && item.missing.length === 0);
   const updateAdmission = (): void => {
     const enabled = workflow.admission_state !== 'enabled';
     setAdmissionBusy(true);
-    setError(null);
+    setAdmissionError(null);
     void adapter.rest.setPartnerWorkflowAdmission(state.workspace.id, { enabled })
       .then((view) => {
         setWorkflow(view);
         setNotice(enabled ? 'Partnerships + Finance is enabled for new governed work.' : 'New governed work is disabled. Existing records and receipts remain available.');
       })
-      .catch((caught: unknown) => setError(workflowError(caught)))
+      .catch((caught: unknown) => setAdmissionError(workflowError(caught)))
       .finally(() => setAdmissionBusy(false));
   };
 
@@ -586,10 +586,12 @@ export function PartnerWorkflow() {
           <div className="partner-actions">
             <div><h3>Work in this role</h3><p>{workflow.viewer_role === 'admin' ? 'You can inspect setup readiness. Admin setup authority does not reveal private workflow content.' : workflow.viewer_role === 'finance' ? 'Review authorized evidence and record the human decision in Inbox.' : 'Record agreed terms, then submit the received invoice with fields you verified.'}</p></div>
             {workflow.actions.configure && <Button onClick={() => { setCorrection(null); setForm(form === 'setup' ? null : 'setup'); }}>{form === 'setup' ? 'Close setup' : workflow.configured ? 'Edit role bindings' : 'Configure roles'}</Button>}
-            {workflow.actions.set_admission && <Button primary={workflow.admission_state !== 'enabled'} disabled={admissionBusy || (workflow.admission_state !== 'enabled' && !profilesReady)} onClick={updateAdmission}>{admissionBusy ? 'Saving…' : workflow.admission_state === 'enabled' ? 'Disable workflow' : 'Enable workflow'}</Button>}
+            {workflow.actions.set_admission && <Button primary={workflow.admission_state !== 'enabled'} disabled={admissionBusy || (workflow.admission_state !== 'enabled' && !workflow.configured)} onClick={updateAdmission}>{admissionBusy ? workflow.admission_state === 'enabled' ? 'Disabling…' : 'Verifying profiles…' : workflow.admission_state === 'enabled' ? 'Disable workflow' : 'Verify and enable workflow'}</Button>}
             {workflow.actions.propose_engagement && <Button onClick={() => { setCorrection(null); setForm(form === 'engagement' ? null : 'engagement'); }}>{form === 'engagement' ? 'Close terms form' : 'Record agreed terms'}</Button>}
             {workflow.actions.submit_invoice && <Button primary onClick={() => { setCorrection(null); setForm(form === 'invoice' ? null : 'invoice'); }}>{form === 'invoice' && !correction ? 'Close invoice form' : 'Submit invoice to Finance'}</Button>}
           </div>
+          {workflow.actions.set_admission && workflow.configured && workflow.admission_state !== 'enabled' && !admissionError && <p className="meta">Verification checks both native profiles against the exact reviewed role bindings, skills, tools, and provider attestations before any new work is admitted.</p>}
+          {admissionError && <p className="partner-error" role="alert">{admissionError}</p>}
           <AnimatePresence initial={false}>
             {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={(view) => { setWorkflow(view); setForm(null); setNotice('Role assignments saved. Native readiness is shown above.'); }} />}
             {form === 'engagement' && <EngagementForm key="engagement" workflow={workflow} onClose={() => setForm(null)} onSaved={proposalSaved} />}
