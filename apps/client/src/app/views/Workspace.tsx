@@ -1757,7 +1757,7 @@ function AgentsTab() {
       .patchSettings(state.workspace.id, patch)
       .then((next) => {
         setView(next);
-        setAck(true);
+        setAck('default_model_id' in patch || 'default_effort' in patch);
         setTimeout(() => setAck(false), 1600);
         return true;
       })
