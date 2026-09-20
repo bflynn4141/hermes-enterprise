@@ -10,6 +10,7 @@ import { createHub, PING_MS, SILENCE_MS, type SocketLike } from './hub.js';
 import { createStore, initialState, type AppState } from './store.js';
 import { createAuth } from './auth.js';
 import { draftsKey } from './constants.js';
+import { hasVerifiedKey } from '../app/selectors.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
@@ -477,6 +478,87 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it('does not fetch Admin inventories for a Member and keeps chat availability unknown rather than blocked', async () => {
+    const memberBootstrap = { ...bootstrapBody, viewer: { ...bootstrapBody.viewer, role: 'member' as const } };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(memberBootstrap),
+    });
+    await adapter.start();
+    expect(calls.some((call) => call.path.endsWith('/provider-keys'))).toBe(false);
+    expect(calls.some((call) => call.path.endsWith('/invitations'))).toBe(false);
+    expect(state().ui.providerKeysLocked).toBe(true);
+    expect(hasVerifiedKey(state()).any).toBe(true);
+    adapter.dispose();
+  });
+
+  it('boots an agentless reviewer into Inbox without activating an old session or inventing a chat target', async () => {
+    const queueItem = { id: mockUuid(7), text: 'Cancel this stale follow-up', status: 'queued' as const, position: 0 };
+    const baseActiveSnapshot = snapshotBody([], 'working');
+    const activeSnapshot = { ...baseActiveSnapshot, run: { ...baseActiveSnapshot.run!, queue: [queueItem] } };
+    const agentlessBootstrap = {
+      ...bootstrapBody,
+      viewer: { ...bootstrapBody.viewer, role: 'member' as const },
+      agent: null,
+    };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(agentlessBootstrap),
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => Response.json(activeSnapshot),
+      [`POST /w/${WS}/sessions/${SESSION}/runs/${RUN}/stop`]: () => Response.json({ run_id: RUN, status: 'stopped', attempt: 1 }),
+      [`DELETE /w/${WS}/sessions/${SESSION}/runs/${RUN}/queue/${queueItem.id}`]: () => Response.json({ items: [] }),
+    });
+
+    await adapter.start();
+
+    expect(state().agent).toEqual({ id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null });
+    expect(state().activeSessionId).toBeNull();
+    expect(state().sessions[SESSION]).toBeDefined();
+    expect(state().ui).toMatchObject({ app: { section: 'inbox', view: 'list' }, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(calls.some((call) => call.path.includes(`/sessions/${SESSION}/snapshot`))).toBe(false);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes('/hub/session/'))).toBe(false);
+    await adapter.activateSession(SESSION);
+    expect(state().activeSessionId).toBe(SESSION);
+    expect(calls.some((call) => call.path.includes(`/sessions/${SESSION}/snapshot`))).toBe(true);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes('/hub/session/'))).toBe(false);
+    await expect(adapter.createSession()).rejects.toThrow('No agent is available');
+    await expect(adapter.send(SESSION, 'Do not route this to a stale agent.')).rejects.toThrow('No agent is available');
+    await expect(adapter.guide(SESSION, 'Do not guide stale work.')).rejects.toThrow('No agent is available');
+    await expect(adapter.queue(SESSION, 'Do not queue stale work.')).rejects.toThrow('No agent is available');
+    await expect(adapter.editQueued(SESSION, queueItem.id, 'Do not edit stale work.')).rejects.toThrow('No agent is available');
+    await adapter.stop(SESSION);
+    expect(state().sessions[SESSION]?.run?.status).toBe('stopped');
+    await adapter.removeQueued(SESSION, queueItem.id);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith(`/runs/${RUN}/stop`))).toBe(true);
+    expect(calls.some((call) => call.method === 'DELETE' && call.path.endsWith(`/runs/${RUN}/queue/${queueItem.id}`))).toBe(true);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith('/sessions'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith('/turns'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && (call.path.endsWith('/guide') || call.path.endsWith('/queue') || call.path.endsWith('/retry')))).toBe(false);
+    adapter.dispose();
+  });
+
+  it('does not treat the bootstrap-selected agent as an exhaustive session ACL', async () => {
+    const secondAgent = mockUuid(5);
+    const secondSession = mockUuid(6);
+    const primaryAgentSession = { ...bootstrapBody.sessions[0], id: SESSION, agent_id: AGENT };
+    const secondAgentSession = { ...bootstrapBody.sessions[0], id: secondSession, agent_id: secondAgent };
+    const multiAgentBootstrap = { ...bootstrapBody, sessions: [secondAgentSession, primaryAgentSession] };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(multiAgentBootstrap),
+      [`GET /w/${WS}/sessions/${secondSession}/snapshot`]: () => Response.json({
+        ...snapshotBody(),
+        session: { ...snapshotBody().session, id: secondSession, agent_id: secondAgent },
+      }),
+    });
+
+    await adapter.start();
+
+    expect(state().activeSessionId).toBe(SESSION);
+    await adapter.activateSession(secondSession);
+    expect(state().activeSessionId).toBe(secondSession);
+    expect(calls.some((call) => call.path.includes(`/sessions/${secondSession}/snapshot`))).toBe(true);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes(`/hub/session/${secondSession}`))).toBe(true);
+    adapter.dispose();
+  });
+
   it.each(['workspace', 'viewer', 'same identity'] as const)('scopes draft, pending-turn, and settings preservation across a %s change', async (boundary) => {
     const first = makeAdapter();
     await first.adapter.start();
@@ -1171,6 +1253,38 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('a 4403 closes Admin state immediately and reboots with the authoritative Member projection', async () => {
+    let bootCount = 0;
+    const memberBootstrap = {
+      ...bootstrapBody,
+      viewer: { ...bootstrapBody.viewer, role: 'member' as const },
+      workspace: { ...bootstrapBody.workspace, settings: { default_model_id: 'deepseek-flash', default_effort: 'high', default_runtime: 'cloud' } },
+    };
+    const { adapter, store, state, calls } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(bootCount++ === 0 ? bootstrapBody : memberBootstrap),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'nav/app', object: { section: 'admin', view: 'Provider keys' }, manual: true });
+    store.dispatch({ type: 'entity/upsert', kind: 'provider_key', id: 'key-1', version: 1, data: { label: 'Private key' } });
+    store.dispatch({ type: 'list/set', key: 'invitations', ids: ['invite-1'], total: 1 });
+
+    const socket = FakeSocket.instances.find((item) => item.url.includes('/hub/workspace'))!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.serverClose(4403);
+
+    expect(state().user.role).toBe('member');
+    expect(state().ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    expect(state().entities.provider_key).toEqual({});
+    expect(state().entities.lists.invitations).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(bootCount).toBe(2);
+    expect(calls.filter((call) => call.path.endsWith('/provider-keys'))).toHaveLength(1);
+    expect(calls.filter((call) => call.path.endsWith('/invitations'))).toHaveLength(1);
+    adapter.dispose();
+  });
+
   it('a 503 with Retry-After is not a sign-out', async () => {
     let attempts = 0;
     const { adapter, state } = makeAdapter({
@@ -1334,6 +1448,31 @@ describe('the adapter', () => {
     await adapter.send(SESSION, 'Use the shared guide');
     expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({
       attachments: [{ id: mockUuid(61), sha256: 'b'.repeat(64), kind: 'library_source' }],
+    });
+    adapter.dispose();
+  });
+
+  it('omits unbound file chips from turn admission so Iris never appears to have read them', async () => {
+    const { adapter, calls, store } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: {
+      emailIngress: false,
+      turnAttachments: true,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    } } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(62), label: 'dropped.pdf', icon: 'context',
+    } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(63), label: 'Rubric.md', kind: 'source', sha256: 'c'.repeat(64), icon: 'context',
+    } });
+    await adapter.send(SESSION, 'Review the sources');
+    expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({
+      attachments: [{ id: mockUuid(63), sha256: 'c'.repeat(64), kind: 'agent_file' }],
     });
     adapter.dispose();
   });

@@ -46,11 +46,19 @@ export function invitationFailureMessage(error: unknown): string {
 export function invitationSuccessMessage(invitation: InvitationEntity): string {
   if (invitation.status === 'accepted') return 'Already a member';
   if (invitation.provisioning) return 'Agent setup started';
-  return 'Invitation queued';
+  if (invitation.delivery_status === 'queued') return 'Invitation queued';
+  if (invitation.delivery_status === 'sending') return 'Invitation sending';
+  if (invitation.delivery_status === 'delivered') return 'Invitation sent';
+  if (invitation.delivery_status === 'failed') return 'Invitation recorded · email not delivered';
+  // Local / setup-only / missing delivery fields: recorded, not emailed.
+  return 'Invitation recorded';
 }
 
 export function invitationDeliveryMessage(invitation: InvitationEntity): string | null {
-  if (!invitation.delivery_status || invitation.delivery_status === 'not_required') return null;
+  if (invitation.delivery_status === 'not_required') {
+    return 'No invitation email was sent.';
+  }
+  if (!invitation.delivery_status) return null;
   if (invitation.delivery_status === 'queued') return 'Email delivery queued';
   if (invitation.delivery_status === 'sending') return 'Sending through WorkOS';
   if (invitation.delivery_status === 'delivered') return 'Sent by WorkOS';

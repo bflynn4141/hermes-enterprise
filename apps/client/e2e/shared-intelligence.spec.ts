@@ -34,6 +34,8 @@ test.describe('Shared Intelligence', () => {
     await expect(app.getByText(/Shared with Admin using only the exact approved excerpts/)).toBeVisible();
 
     await page.getByRole('button', { name: 'Admin', exact: true }).click();
+    await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
+    await app.getByRole('tab', { name: 'Intelligence', exact: true }).click();
     await expect(app.getByRole('heading', { name: 'Shared Intelligence', exact: true })).toBeVisible();
     await expect(app.getByRole('heading', { name: 'Record evidence provenance before escalation' })).toBeVisible();
     await expect(app.getByText('Strong goal fit')).toBeVisible();

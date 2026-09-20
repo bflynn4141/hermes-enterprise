@@ -81,7 +81,7 @@ function progressLabel(messages: readonly Message[]): string | null {
   return text.length > 140 ? `${text.slice(0, 137).trimEnd()}…` : text;
 }
 
-export function RunActivity({ session, progress = [], now = systemNow }: { session: SessionState; progress?: readonly Message[]; now?: () => number }) {
+export function RunActivity({ session, progress = [], now = systemNow, readOnly = false }: { session: SessionState; progress?: readonly Message[]; now?: () => number; readOnly?: boolean }) {
   const adapter = useAdapter();
   const run = session.run;
   if (!run) return null;
@@ -203,7 +203,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
             failed: run.error?.message ?? 'Failed',
             blocked: run.waiting_label ?? 'Waiting',
           }}
-          onRetry={(key) => {
+          onRetry={readOnly ? undefined : (key) => {
             void key;
             void adapter.retry(session.id, run.id).catch(() => undefined);
           }}

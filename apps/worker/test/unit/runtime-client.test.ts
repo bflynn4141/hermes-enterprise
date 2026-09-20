@@ -54,7 +54,7 @@ describe('official Hermes Runs transport', () => {
   it('reads the checked native identity, skill and tool inventory through the fixed connector', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
       workspace_id: '11111111-1111-4111-8111-111111111111',
       agent_id: '22222222-2222-4222-8222-222222222222',
@@ -68,7 +68,7 @@ describe('official Hermes Runs transport', () => {
       tools: ['publish_partner_invoice_review', 'skill_view'],
     }));
     await expect(client.enterpriseReadiness()).resolves.toMatchObject({
-      version: '1.7.0', runtimeRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      version: '1.7.0', runtimeRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifactDigest: PLUGIN_DIGEST },
       skills: [{
         name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
@@ -87,7 +87,7 @@ describe('official Hermes Runs transport', () => {
   ])('rejects a %s readiness attestation', async (_label, changed) => {
     const body = {
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'a'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }],
@@ -116,7 +116,7 @@ describe('official Hermes Runs transport', () => {
   it('keeps the two-field plugin identity accepted for an original legacy profile', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
       plugin: { name: 'enterprise_bridge', version: '1.7.0' },
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1',
@@ -132,7 +132,7 @@ describe('official Hermes Runs transport', () => {
   it('rejects a partial attestation instead of downgrading it to legacy readiness', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       agentcash_enabled: false, agentcash_wallet_present: false, native_cron_disabled: true,
     }));

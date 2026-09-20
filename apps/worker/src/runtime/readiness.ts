@@ -17,7 +17,7 @@ import {
   toolsForSkillVersion,
 } from '../enterprise-skills/registry.js';
 
-export const HERMES_NATIVE_REVISION = '5d59366010640c1d6b8f170d8a4ee109db2bbdef';
+export const HERMES_NATIVE_REVISION = '345cd2b057a452236de401d3534b8502a7465e8d';
 export const ENTERPRISE_BRIDGE_VERSION = '1.7.0';
 /** Exact native MCP name emitted by managed Partnerships profiles. */
 export const AGENTCASH_MCP_TOOL = 'mcp__agentcash__fetch';

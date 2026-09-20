@@ -565,6 +565,77 @@ describe('the controls', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ reason: 'run_active' });
   });
+
+  it('keeps history and Stop available after agent revocation but blocks future execution and context writes', async () => {
+    const workspace = await seedWorkspace();
+    const { env, created, events } = envWithWorkflow();
+    const runId = await startRun(workspace, env);
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(
+        `INSERT INTO agent_owners(workspace_id,agent_id,member_id)
+         SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`,
+        [workspace.workspaceId, workspace.agentId, workspace.adminId],
+      );
+      await c.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2', [workspace.workspaceId, workspace.agentId]);
+    });
+
+    const denied = [
+      await asUser(env, workspace.adminId, turnPath(workspace), {
+        method: 'POST', body: { client_turn_id: `revoked:${randomUUID()}`, text: 'new run' },
+      }),
+      await asUser(env, workspace.adminId, `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/guide`, {
+        method: 'POST', body: { text: 'future guidance' },
+      }),
+      await asUser(env, workspace.adminId, `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/queue`, {
+        method: 'POST', body: { text: 'future queue item' },
+      }),
+    ];
+    for (const response of denied) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ reason: 'not_found' });
+    }
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(`UPDATE runs SET status='error' WHERE id=$1`, [runId]);
+    });
+    const retry = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
+      { method: 'POST', body: { expected_attempt: 1 } },
+    );
+    expect(retry.status).toBe(404);
+    expect(await retry.json()).toMatchObject({ reason: 'not_found' });
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(`UPDATE runs SET status='waiting',waiting_for='private_answer' WHERE id=$1`, [runId]);
+    });
+    const answer = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/context`,
+      { method: 'POST', body: { key: 'private_answer', value: 'must not persist' } },
+    );
+    expect(answer.status).toBe(404);
+    expect(await answer.json()).toMatchObject({ reason: 'not_found' });
+    expect(created).toHaveLength(1);
+    expect(events).toHaveLength(0);
+
+    const stop = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/stop`,
+      { method: 'POST' },
+    );
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ run_id: runId, status: 'stopping' });
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      expect((await c.query('SELECT 1 FROM agent_context_fields WHERE agent_id=$1 AND key=$2', [workspace.agentId, 'private_answer'])).rowCount).toBe(0);
+      expect((await c.query('SELECT 1 FROM run_queue WHERE run_id=$1', [runId])).rowCount).toBe(0);
+      expect((await c.query("SELECT 1 FROM messages WHERE session_id=$1 AND kind='guidance'", [workspace.sessionId])).rowCount).toBe(0);
+    });
+  });
 });
 
 describe('the context answer', () => {

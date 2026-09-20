@@ -27,17 +27,18 @@ export async function getSlackConnection(c: Context<{ Bindings: Env }>): Promise
         : installation?.status === 'error'
           ? 'error'
           : 'disconnected';
+    const admin = work.role === 'admin';
     return slackConnectionSchema.parse({
       configured,
       status,
-      installation_kind: installation ? (installation.is_enterprise_install ? 'organization' : 'workspace') : null,
-      team_name: installation?.slack_team_name ?? null,
-      enterprise_name: installation?.slack_enterprise_name ?? null,
-      connected_at: installation?.connected_at.toISOString() ?? null,
-      granted_scopes: installation?.granted_scopes ?? [],
+      installation_kind: admin && installation ? (installation.is_enterprise_install ? 'organization' : 'workspace') : null,
+      team_name: admin ? installation?.slack_team_name ?? null : null,
+      enterprise_name: admin ? installation?.slack_enterprise_name ?? null : null,
+      connected_at: admin ? installation?.connected_at.toISOString() ?? null : null,
+      granted_scopes: admin ? installation?.granted_scopes ?? [] : [],
       agent: agent ? { id: agent.agent_id, name: agent.agent_name } : null,
-      can_manage: work.role === 'admin',
-      reconnect_required: installation?.status === 'error',
+      can_manage: admin,
+      reconnect_required: admin && installation?.status === 'error',
       behavior: {
         direct_messages: 'same_session',
         channel_messages: 'mention_required',
@@ -115,7 +116,7 @@ export async function createSlackLinkCode(c: Context<{ Bindings: Env }>): Promis
 }
 
 function callbackLocation(workspaceId: string, result: 'connected' | 'failed'): string {
-  return `/workspace/${encodeURIComponent(workspaceId)}?slack=${result}#settings/Slack`;
+  return `/workspace/${encodeURIComponent(workspaceId)}?slack=${result}#admin/Slack`;
 }
 
 export async function slackOAuthCallback(c: Context<{ Bindings: Env }>): Promise<Response> {

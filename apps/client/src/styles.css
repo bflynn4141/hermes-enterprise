@@ -169,6 +169,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
    the library's 224→52 collapse animation can never paint over the pane beside
    it (decision C36). */
 .sidebar { display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 0 8px; border-right: 1px solid var(--line); background: var(--app); min-width: 0; overflow: hidden; }
+.sidebar.is-agentless .workspace-sidebar-nav button[aria-label="New session"] { display: none; }
 .sidebar .brand { display: flex; align-items: center; gap: 12px; height: 64px; flex-shrink: 0; }
 .sidebar .brand img { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; }
 .sidebar .brand-name { font-size: 16px; line-height: 19.2px; }
@@ -563,8 +564,74 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .settings-row { display: flex; align-items: center; gap: 12px; height: 78px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 12.8px; }
 .kv { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--line); font-size: 12.8px; }
 .kv .k { color: var(--muted); font-size: 11.2px; }
-.settings-page > .tabs { overflow-x: auto; overflow-y: hidden; }
-.settings-page > .tabs .tab { flex: 0 0 auto; white-space: nowrap; }
+.settings-view-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; }
+.settings-view-switch { min-height: 44px; max-width: 100%; padding: 10px 32px 10px 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--context); color: var(--body); font: inherit; font-size: 14px; cursor: pointer; }
+.settings-view-switch:focus-visible { outline: 2px solid #9B9AE0; outline-offset: 2px; }
+.settings-view-label { color: var(--muted); font-size: 14px; }
+.settings-page > .tabs, .settings-section-tabs > .tabs { flex-wrap: wrap; gap: 0 24px; }
+.settings-page > .tabs .tab, .settings-section-tabs .tab { flex: 0 0 auto; white-space: nowrap; font-size: 14px; }
+/* Wrapped tabs keep the active marker attached to the selected tab, without
+   sliding an absolute underline beneath an unrelated row. */
+.settings-page > .tabs .tab-indicator, .settings-section-tabs .tab-indicator { display: none; }
+.settings-page > .tabs .tab[aria-selected="true"], .settings-section-tabs .tab[aria-selected="true"] { border-bottom-color: var(--glass); }
+.admin-settings-page { min-height: 100%; }
+.admin-group-tabs > .tabs { flex-wrap: nowrap; gap: 24px; overflow-x: auto; }
+.admin-detail-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 32px; align-items: start; padding-top: 8px; }
+.admin-detail-layout-single { grid-template-columns: minmax(0, 1fr); }
+.admin-detail-index { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 16px; }
+.admin-detail-index button { padding: 10px 12px; min-height: 42px; color: var(--muted); text-align: left; border: 1px solid transparent; border-radius: 7px; font-size: 14px; line-height: 20px; cursor: pointer; }
+.admin-detail-index button:hover { color: var(--body); background: rgba(255,255,255,.025); }
+.admin-detail-index button[aria-current="page"] { color: var(--body); background: var(--context); border-color: var(--line); }
+.admin-detail-index button:focus-visible { outline: 2px solid #9B9AE0; outline-offset: 2px; }
+.admin-detail-page { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.admin-detail-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 4px; }
+.admin-detail-heading h2 { margin: 0; font-size: 25px; font-weight: 500; line-height: 1.25; }
+.admin-detail-heading p { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 62ch; }
+.admin-detail-heading > div { flex: 1 1 260px; }
+.admin-settings-card { border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.015); min-width: 0; overflow: hidden; }
+.admin-settings-card-header { padding: 22px 24px 16px; }
+.admin-settings-card-header h3 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 500; }
+.admin-settings-card-header p { margin: 7px 0 0; max-width: 65ch; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.admin-settings-card-body { padding: 0 24px 22px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.admin-settings-card-body > p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.admin-settings-card-body .kv { min-height: 54px; font-size: 14px; gap: 16px; flex-wrap: wrap; }
+.admin-settings-card-body .kv .meta { font-size: 13px; line-height: 1.6; text-align: right; max-width: 65%; overflow-wrap: anywhere; }
+.admin-settings-card-body .kv:last-child { border-bottom: 0; }
+.admin-settings-card-footer { padding: 16px 24px; background: rgba(255,255,255,.025); border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.admin-settings-card-footer p { flex: 1 1 230px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.admin-settings-card-footer > .btn { margin-left: auto; }
+.admin-settings-card-danger { border-color: rgba(242,139,156,.3); }
+.admin-settings-card-danger .admin-settings-card-header h3 { color: #F2A8B5; }
+.admin-settings-card code { overflow-wrap: anywhere; white-space: normal; }
+.admin-settings-card .field { flex-direction: column; align-items: stretch; gap: 8px; }
+.admin-settings-card .field input { flex: none; width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; }
+.admin-detail-page .meta { line-height: 1.6; }
+@container (max-width: 900px) {
+  .admin-detail-layout { grid-template-columns: minmax(0, 1fr); gap: 26px; }
+  .admin-detail-index { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .admin-detail-index button { min-height: 40px; }
+}
+@container (max-width: 500px) {
+  .admin-settings-card-header { padding: 18px 18px 14px; }
+  .admin-settings-card-body { padding: 0 18px 18px; }
+  .admin-settings-card-footer { padding: 14px 18px; }
+  .admin-settings-card-body .kv { align-items: flex-start; }
+  .admin-settings-card-body .kv .meta { max-width: 100%; text-align: left; }
+}
+.admin-settings-content { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.admin-settings-view { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.admin-settings-view > .kv { min-height: 52px; }
+.admin-settings-view > .kv + .kv { margin-top: -18px; }
+.admin-settings-view > .admin-intelligence-scroll { overflow: visible; }
+.admin-settings-content .admin-intelligence { padding: 0; }
+.provider-key-row { padding: 22px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(255,255,255,.015); display: grid; grid-template-columns: 32px minmax(180px, 220px) minmax(0, 1fr); align-items: start; column-gap: 16px; row-gap: 10px; }
+.provider-key-row .row-id { width: auto !important; }
+.provider-key-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; min-width: 0; }
+
+@container (max-width: 760px) {
+  .provider-key-row { grid-template-columns: 32px minmax(0, 1fr); column-gap: 12px; }
+  .provider-key-row .row-main, .provider-key-actions { grid-column: 2; width: 100%; }
+}
 
 /* Runtime capacity is a two-step Admin flow. Secrets stay in the form only;
    success states use the existing reduced-motion-aware Ack primitive. */
@@ -1035,6 +1102,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .composer .text-btn .composer-selector-chevron { width: 14px; height: 14px; }
 .composer .text-btn:disabled { opacity: 1; cursor: default; }
 .composer .text-btn:disabled:hover { color: var(--muted); background: transparent; }
+.composer .composer-runtime-chip { cursor: default; pointer-events: none; }
+.composer .composer-runtime-chip:hover { color: var(--muted); background: transparent; }
 .composer-model-control { min-width: 0; max-width: min(340px, 42vw); }
 .composer-model-control .text-btn { min-width: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

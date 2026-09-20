@@ -138,6 +138,33 @@ test('only extracted sources can be selected, and selection does not send a turn
   await expect(page.getByRole('button', { name: 'Remove Partner criteria.md' })).toBeVisible();
 });
 
+test('composer source picker works while drag-drop turn uploads stay disabled', async ({ page }) => {
+  await page.goto('/?agentSettings=1');
+  const composer = page.locator('.composer');
+  await expect(composer.getByRole('button', { name: 'Add context' })).toBeVisible();
+
+  const uploads: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/attachments$/.test(new URL(request.url()).pathname)) uploads.push(request.url());
+  });
+  const transfer = await page.evaluateHandle(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['Composer drop must not become a turn attachment.'], 'drag-check.txt', { type: 'text/plain' }));
+    return data;
+  });
+  await composer.dispatchEvent('dragenter', { dataTransfer: transfer });
+  await composer.dispatchEvent('drop', { dataTransfer: transfer });
+  await page.waitForTimeout(100);
+  await expect(page.getByText('Drop documents', { exact: true })).toHaveCount(0);
+  expect(uploads).toEqual([]);
+
+  await composer.getByRole('button', { name: 'Add context' }).click();
+  const picker = page.getByRole('dialog', { name: 'Select sources' });
+  await expect(picker).toBeVisible();
+  await picker.getByRole('button', { name: /Partner criteria\.md/ }).click();
+  await expect(page.getByRole('button', { name: 'Remove Partner criteria.md' })).toBeVisible();
+});
+
 test('mobile sections and reduced-motion approval switch stay usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: 'reduce' });

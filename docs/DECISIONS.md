@@ -5791,3 +5791,34 @@ wallet funding or paid provider call occurs in prepare, registration or
 acceptance. Revoking available capacity quarantines it; reserved capacity must
 first be released by withdrawing its invitation. Existing opaque
 `HERMES_RUNTIME_AGENTS` credentials are left unchanged.
+
+## C87. Admin controls and personal settings have separate navigation
+
+September 20, 2026. Settings previously rendered the same workspace-control tabs to every member, relying on individual controls and server checks to explain authority. This obscured which settings affected the organization and sent members into pages they could not manage.
+
+Use the existing Admin section for organization policy, inbox rules, agent defaults, shared provider credentials and runtime capacity, organization usage, workspace connections, and Shared Intelligence administration. Show it only to current workspace admins. Guard destinations before mounting data-fetching components, including direct links and legacy Settings URLs; role changes must remove the privileged view.
+
+Personal Settings remains available to everyone for their own notifications, personal Slack identity linking, and read-only privacy information. Own-agent configuration stays with Agents. Reading retention facts or linking a personal identity does not grant authority to change shared connections, attest provider policies, or inspect organization credentials.
+
+Navigation explains authority; server routes independently enforce it. Protect administrative reads and writes while preserving the member-readable settings information required by ordinary application behavior. Do not return privileged metadata solely because the UI hides it. Keep member notification writes scoped to the authenticated user. Regression checks cover direct navigation and direct API access as well as visible controls.
+
+An active approval reviewer may not yet have an agent assigned. Bootstrap must still return their authorized workspace and Inbox state with a null agent, never substitute another member’s private agent. Agent-dependent controls stay unavailable until an accessible agent exists.
+
+Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
+
+
+### C87 navigation refinement — Admin View and User View
+
+September 20: Brian prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.
+
+
+### C87 navigation refinement — four consolidated tabs
+
+Brian’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
+
+
+### C87 detail-page design — September20
+
+Brian requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
+
+References: https://vercel.com/docs/project-configuration/general-settings and https://vercel.com/docs/integrations/install-an-integration/manage-integrations-reference. Adapt section hierarchy and integration management concepts to Hermes tokens, rather than copying Vercel’s brand.

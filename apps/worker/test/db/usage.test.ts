@@ -147,9 +147,13 @@ describe('GET /w/:ws/usage', () => {
     expect(JSON.stringify(report)).not.toContain('wrapped_dek');
   });
 
-  it('is readable by a Member, because they can already see the runs behind it', async () => {
+  it('is Admin-only because it aggregates sessions and provider keys across owners', async () => {
     const { env } = makeEnv();
-    const response = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/usage?range=7d`);
+    const refused = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/usage?range=7d`);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ reason: 'admin_required' });
+
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/usage?range=7d`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { range: string; disclaimer: string };
     expect(body.range).toBe('7d');

@@ -17,7 +17,7 @@ import urllib.request
 from .packages import PLUGIN_NAME, PLUGIN_VERSION, packaged_skills, sha256_file
 
 
-RUNTIME_REVISION = "5d59366010640c1d6b8f170d8a4ee109db2bbdef"
+RUNTIME_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
 RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
 MANAGED_PROFILE_MARKER_FILENAME = "enterprise-cloud-managed.json"
 EXPECTED_PLUGIN_SOURCES = frozenset({
@@ -25,6 +25,17 @@ EXPECTED_PLUGIN_SOURCES = frozenset({
     "https://github.com/bflynn4141/hermes-enterprise.git#runtime/hermes/enterprise_bridge",
 })
 NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/v1/capabilities"})
+# Plugin system-prompt sections at RUNTIME_REVISION (hermes_cli/plugins_dispatch.py).
+# The pinned runtime strips each section, refuses one above 4,000 characters,
+# skips everything past an 8,000-character framed total, and renders sections
+# in id order. Assigned skill text is delivered as numbered continuation
+# sections inside that budget; the live render is compared before readiness.
+SKILL_SECTION_ID_PREFIX = "enterprise-skill"
+NATIVE_PROMPT_SECTION_POSITION = "after_memory"
+NATIVE_PROMPT_SECTION_MAX_CHARS = 4000
+NATIVE_PROMPT_SECTIONS_TOTAL_CHARS = 8000
+NATIVE_PROMPT_SECTIONS_START = "<!-- hermes-plugin-sections:start -->"
+NATIVE_PROMPT_SECTIONS_END = "<!-- hermes-plugin-sections:end -->"
 CLOUD_SAFE_ROUTES = frozenset({
     ("GET", "/health"),
     ("GET", "/health/detailed"),
@@ -403,6 +414,85 @@ def actual_skill_attestation(manager, manifests, plugin_root=None):
             raise RuntimeError("Governed skill preflight found a stale or misbound package: " + name)
         actual.append({**manifest, "content_digest": package["content_digest"]})
     return actual
+
+
+def _continuation_chunks(text, limit):
+    """Split verified skill text at line boundaries into stripped chunks within *limit*."""
+    chunks, current = [], ""
+    for line in text.split("\n"):
+        if len(line.strip()) > limit:
+            raise RuntimeError("Enterprise skill line exceeds the native prompt section limit.")
+        candidate = line if not current else current + "\n" + line
+        if len(candidate.strip()) > limit:
+            if current.strip():
+                chunks.append(current.strip())
+            current = line
+        else:
+            current = candidate
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
+def rendered_prompt_sections_length(sections):
+    """Mirror the pinned runtime's framed length for its aggregate section budget."""
+    blocks = [
+        f"## Plugin Context: {section_id}\n<!-- hermes-plugin-section-chars:{len(text)} -->\n\n{text}"
+        for section_id, text in sections
+    ]
+    return len(NATIVE_PROMPT_SECTIONS_START + "\n" + "\n\n".join(blocks) + "\n" + NATIVE_PROMPT_SECTIONS_END)
+
+
+def build_skill_prompt_sections(manifests, plugin_root=None, packages=None):
+    """Return ordered (section_id, text) pairs pinning only the assigned, verified skills.
+
+    Each manifest must name a packaged skill whose version and reviewed
+    ``artifact_digest`` match. The exact SKILL.md bytes are read again, bound to
+    the package ``content_digest``, and only then split into continuation
+    sections that fit the pinned runtime's per-section and aggregate limits.
+    Any mismatch fails closed; nothing unverified is ever returned.
+    """
+    available = packages or packaged_skills(plugin_root)
+    texts = []
+    for manifest in manifests:
+        name = manifest.get("name")
+        package = available.get(name)
+        if (package is None or package["version"] != manifest.get("version")
+                or package["artifact_digest"] != manifest.get("artifact_digest")):
+            raise RuntimeError(f"Assigned enterprise skill is not the reviewed package: {name}")
+        path = pathlib.Path(package["path"])
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"Enterprise skill package is unavailable: {name}")
+        raw = path.read_bytes()
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != package["content_digest"]:
+            raise RuntimeError(f"Enterprise skill bytes changed after package verification: {name}")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"Enterprise skill package is not UTF-8 text: {name}") from error
+        if NATIVE_PROMPT_SECTIONS_START in text or NATIVE_PROMPT_SECTIONS_END in text:
+            raise RuntimeError(f"Enterprise skill contains a reserved native prompt marker: {name}")
+        chunks = _continuation_chunks(text, NATIVE_PROMPT_SECTION_MAX_CHARS)
+        if not chunks:
+            raise RuntimeError(f"Enterprise skill package is empty: {name}")
+        texts.extend(chunks)
+    if len(texts) > 99:
+        raise RuntimeError("Assigned enterprise skills need too many native prompt sections.")
+    sections = [(f"{SKILL_SECTION_ID_PREFIX}.{index:02d}", text) for index, text in enumerate(texts, 1)]
+    if rendered_prompt_sections_length(sections) > NATIVE_PROMPT_SECTIONS_TOTAL_CHARS:
+        raise RuntimeError("Assigned enterprise skills exceed the native prompt section budget.")
+    return sections
+
+
+def actual_skill_prompt_attestation(manager, expected_sections):
+    """Prove the live plugin manager renders exactly the verified sections for a new session."""
+    rendered = manager.render_system_prompt_sections({})
+    actual = [(item.id, item.content, item.plugin, item.position) for item in rendered]
+    expected = [(section_id, text, PLUGIN_NAME, NATIVE_PROMPT_SECTION_POSITION)
+                for section_id, text in expected_sections]
+    if actual != expected:
+        raise RuntimeError("Governed skill prompt sections differ from the verified assignment.")
+    return [section_id for section_id, _ in expected_sections]
 
 
 def actual_plugin_attestation(manager):

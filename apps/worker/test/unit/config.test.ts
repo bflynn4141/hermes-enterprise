@@ -147,10 +147,10 @@ describe('wrangler.jsonc', () => {
     const staging = envs.staging!.vars as Record<string, string>;
     const production = envs.production!.vars as Record<string, string>;
     expect(staging.HERMES_ENTERPRISE_PLUGIN_REVISION).toBe(
-      '6d692fdcd6b8479700c01336e7d068c358511b7c',
+      '4c33fa31110c3a5272d3e192166576998b4f5d9c',
     );
     expect(staging.HERMES_ENTERPRISE_PLUGIN_SHA256).toBe(
-      'sha256:e6600d2ea716b893b56e672d03a1cde750e6dd504089bbd7ea9791df06c48261',
+      'sha256:1273cd07b42d69c3b0314f8afe36ee8ae1cc0232396d9e36db50e286df12cc75',
     );
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_REVISION');
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_SHA256');

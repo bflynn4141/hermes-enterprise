@@ -90,7 +90,8 @@ export const bootstrapSchema = z
         setup_step: z.string().max(32).nullable(),
         provisioning_status: agentProvisioningStatusSchema.nullable().optional(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
     capabilities: z
       .object({
         email_ingress: z.boolean(),

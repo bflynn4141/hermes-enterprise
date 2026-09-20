@@ -2,11 +2,18 @@ import { expect, test } from '@playwright/test';
 
 const FRESH_WORKSPACE = '/?data=empty&key=none';
 
+async function selectModelProviders(page: import('@playwright/test').Page) {
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
+  await app.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await app.getByRole('button', { name: 'Model providers', exact: true }).click();
+  return app;
+}
+
 async function openProviderConnect(page: import('@playwright/test').Page) {
   await page.goto(FRESH_WORKSPACE);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const app = page.getByRole('region', { name: 'Application' });
-  await app.getByRole('tab', { name: 'Provider keys' }).click();
+  await page.getByRole('button', { name: 'Admin', exact: true }).click();
+  const app = await selectModelProviders(page);
   await app.getByRole('button', { name: 'Connect Nous Portal' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Nous Portal' });
   await expect(dialog.getByRole('button', { name: 'Continue with Nous' })).toBeVisible();
@@ -62,20 +69,18 @@ test.describe('Nous Portal connection', () => {
   });
 
   test('does not expose the connection controls to a Member', async ({ page }) => {
-    await page.goto('/?seat=member&data=empty&key=none');
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.goto('/?seat=member&data=empty&key=none#admin/Provider%20keys');
     const app = page.getByRole('region', { name: 'Application' });
-    await app.getByRole('tab', { name: 'Provider keys' }).click();
 
-    await expect(app.getByText('Admin decision required')).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
     await expect(app.getByRole('button', { name: 'Connect Nous Portal' })).toHaveCount(0);
   });
 
   test('never presents protected connection status as a missing connection', async ({ page }) => {
     await page.goto('/?data=empty&key=none&providerKeys=locked');
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const app = page.getByRole('region', { name: 'Application' });
-    await app.getByRole('tab', { name: 'Provider keys' }).click();
+    await page.getByRole('button', { name: 'Admin', exact: true }).click();
+    const app = await selectModelProviders(page);
 
     await expect(app.getByText('Provider connection details are protected')).toBeVisible();
     await expect(app.getByText(/Iris can keep using a saved Nous Portal connection/)).toBeVisible();

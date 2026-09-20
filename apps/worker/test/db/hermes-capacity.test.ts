@@ -489,11 +489,8 @@ describe('Hermes Cloud invitation capacity', () => {
       delivery_trace_id: lifecycle[0]?.correlation_id,
     });
     const memberList = await asUser(hermesEnv(), fixture.memberId, `/w/${fixture.workspaceId}/invitations`);
-    const memberItems = (await memberList.json() as { items: Array<Record<string, unknown>> }).items;
-    const memberRow = memberItems.find((row) => row.id === invitation.id)!;
-    expect(memberRow).not.toHaveProperty('delivery_status');
-    expect(memberRow).not.toHaveProperty('delivery_reason');
-    expect(memberRow).not.toHaveProperty('delivery_trace_id');
+    expect(memberList.status).toBe(403);
+    expect(await memberList.json()).toMatchObject({ reason: 'admin_required' });
   });
 
   it('records a terminal provider rejection once without retrying it', async () => {

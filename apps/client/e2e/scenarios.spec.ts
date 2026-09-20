@@ -192,7 +192,7 @@ test.describe('members write feedback', () => {
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     await expect(invite.getByText('Job role')).toHaveCount(0);
-    await expect(invite.getByText('Capacity is reserved automatically, then the invitation email is queued for delivery.')).toBeVisible();
+    await expect(invite.getByText('Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
 
@@ -372,6 +372,8 @@ test.describe('P3 · review and admit', () => {
     // The receipt replaces the review, and it is honest about what is pending.
     await expect(appPane.getByText('Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.')).toBeVisible();
     await expect(appPane.getByText('What this implies')).toBeVisible();
+    // Legacy Execute must never appear as a successful external action control.
+    await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);
 
     // The badge came down by one, from the event rather than from a counter.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('3');

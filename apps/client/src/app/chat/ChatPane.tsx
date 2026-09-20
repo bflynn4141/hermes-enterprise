@@ -19,12 +19,12 @@ import { TOGGLE_SHORTCUT } from '../panel.js';
 import type { SessionState } from '../../model/store.js';
 import { EMPTY } from '../../model/constants.js';
 
-export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean; active: boolean; firstRun?: ReactNode }) {
+export function ChatPane({ narrow, active, firstRun = null, readOnly = false }: { narrow: boolean; active: boolean; firstRun?: ReactNode; readOnly?: boolean }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const adapter = useAdapter();
   const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
-  const agent = agentName(state);
+  const agent = readOnly ? 'Session history' : agentName(state);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [focusSearch, setFocusSearch] = useState(false);
   const [overflow, setOverflow] = useState(false);
@@ -60,13 +60,11 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
 
   if (!session) {
     return (
-      <section className="pane pane-iris" data-active={active} aria-label={`${agent} conversation`}>
+      <section className="pane pane-iris" data-active={active} aria-label={readOnly ? 'Session history' : `${agent} conversation`}>
         <div className="chat-welcome chat-welcome-standalone">
-          <IrisMark size={48} className="mark" />
-          <p>{EMPTY.chatReady(agent)}</p>
-          <Button primary onClick={() => void adapter.createSession()}>
-            Start
-          </Button>
+          {readOnly ? <Glass name="loop" size={48} className="mark" /> : <IrisMark size={48} className="mark" />}
+          <p>{readOnly ? 'Choose a previous session to read its history.' : EMPTY.chatReady(agent)}</p>
+          {!readOnly && <Button primary onClick={() => void adapter.createSession()}>Start</Button>}
         </div>
       </section>
     );
@@ -89,7 +87,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
     <section
       className="pane pane-iris"
       data-active={active}
-      aria-label={`${agent} conversation`}
+      aria-label={readOnly ? 'Session history' : `${agent} conversation`}
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !event.shiftKey) {
           event.preventDefault();
@@ -98,7 +96,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
       }}
     >
       <header className="pane-header iris-header">
-        <IrisMark size={28} state={markState} className="mark" />
+        {readOnly ? <Glass name="loop" size={28} className="mark" /> : <IrisMark size={28} state={markState} className="mark" />}
         <span className="name">{agent}</span>
         <span className="grow" />
         <span style={{ position: 'relative', display: 'inline-flex' }}>
@@ -116,7 +114,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
           >
             <Icon name="history" /> <span className="header-action-label">Sessions</span>
           </button>
-          <SessionsPopover open={sessionsOpen} onClose={() => setSessionsOpen(false)} anchorRef={sessionsBtn} focusSearch={focusSearch} />
+          <SessionsPopover open={sessionsOpen} onClose={() => setSessionsOpen(false)} anchorRef={sessionsBtn} focusSearch={focusSearch} readOnly={readOnly} />
         </span>
         <IconButton
           anchorRef={searchBtn}
@@ -127,12 +125,12 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
             setSessionsOpen(true);
           }}
         />
-        <button type="button" className="text-btn" aria-label="New session" onClick={() => void adapter.createSession()}>
+        {!readOnly && <button type="button" className="text-btn" aria-label="New session" onClick={() => void adapter.createSession()}>
           <Icon name="plus" /> <span className="header-action-label">New session</span>
-        </button>
+        </button>}
         {narrow && (
           <span className="pane-switch" role="group" aria-label="Pane">
-            <button type="button" aria-pressed onClick={() => undefined}>
+            <button type="button" aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'chat' } })}>
               Chat
             </button>
             <button type="button" aria-pressed={false} onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'app' } })}>
@@ -159,7 +157,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
         <span style={{ position: 'relative', display: 'inline-flex' }}>
           <IconButton anchorRef={moreBtn} name="more" label="Session options" onClick={() => setOverflow((open) => !open)} />
           <Popover open={overflow} onClose={() => setOverflow(false)} anchorRef={moreBtn} className="menu" width={240} label="Session options">
-            <MenuItem
+            {!readOnly && <MenuItem
               small
               icon="rename"
               onClick={() => {
@@ -168,7 +166,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
               }}
             >
               Rename session
-            </MenuItem>
+            </MenuItem>}
             <MenuItem small icon="search" onClick={openFind}>
               Find in session
             </MenuItem>
@@ -176,7 +174,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
                 the affordance away too, so it lives where the rarely-wanted
                 things live rather than beside Hide. Cursor put the same choice
                 in a "More Actions" ellipsis (cursor.com/changelog/2-3). */}
-            <MenuItem
+            {!readOnly && <MenuItem
               small
               icon="expand"
               sub="No rail. Reopen from the app header."
@@ -186,8 +184,8 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
               }}
             >
               Hide completely
-            </MenuItem>
-            <MenuItem
+            </MenuItem>}
+            {!readOnly && <MenuItem
               small
               icon="external"
               onClick={() => {
@@ -196,8 +194,8 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
               }}
             >
               {session.share ? 'Sharing…' : 'Share session'}
-            </MenuItem>
-            <MenuItem
+            </MenuItem>}
+            {!readOnly && <MenuItem
               small
               icon="archive"
               onClick={() => {
@@ -208,7 +206,7 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
               }}
             >
               {session.archived ? 'Restore session' : 'Archive session'}
-            </MenuItem>
+            </MenuItem>}
           </Popover>
         </span>
       </div>
@@ -253,8 +251,8 @@ export function ChatPane({ narrow, active, firstRun = null }: { narrow: boolean;
 
       {firstRun ?? (
         <>
-          <Transcript key={session.id} session={session} find={find ? { query: find, index: findIndex, onCount } : null} />
-          <Composer session={session} />
+          <Transcript key={session.id} session={session} find={find ? { query: find, index: findIndex, onCount } : null} readOnly={readOnly} />
+          {readOnly ? <p className="meta" style={{ padding: '10px 24px 18px' }}>Read-only history. No agent is currently available for new work.</p> : <Composer session={session} />}
         </>
       )}
 
