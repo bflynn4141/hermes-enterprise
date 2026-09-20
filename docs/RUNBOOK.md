@@ -508,7 +508,8 @@ Roll out a runtime change in this order:
 
 1. Start one dedicated profile with `HERMES_ENTERPRISE_RELEASE_RING=canary`.
    A stock Hermes Cloud profile must also set
-   `HERMES_ENTERPRISE_SOURCE_REVISION=5d59366010640c1d6b8f170d8a4ee109db2bbdef`;
+   `HERMES_ENTERPRISE_SOURCE_REVISION=345cd2b057a452236de401d3534b8502a7465e8d`
+   (the current pin in `runtime/hermes/contract.json`);
    the verified native launcher supplies this attestation itself.
 2. Add `"release_ring":"canary"` only to that profile's
    `HERMES_RUNTIME_AGENTS` binding. Health and turn admission must reject a
