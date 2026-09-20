@@ -94,7 +94,7 @@ export interface StreamAccumulator {
 
 export interface DraftState {
   text: string;
-  attachments: { id: string; label: string; icon?: string; kind?: 'source'; sha256?: string }[];
+  attachments: { id: string; label: string; icon?: string; kind?: 'source'; sha256?: string; source_kind?: 'agent_file' | 'library_source' }[];
 }
 
 /**

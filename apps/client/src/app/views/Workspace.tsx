@@ -13,12 +13,12 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
 import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
-import { LIST_KEYS, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
+import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
@@ -26,6 +26,7 @@ import { ProviderConnect, type ProviderConnectStatus } from '../providers/Provid
 import { PartnerWorkflow } from './PartnerWorkflow.js';
 import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
 import { RuntimeCapacityTab } from './RuntimeCapacity.js';
+import { Markdown } from '../chat/Markdown.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -662,11 +663,47 @@ export function SkillAssignmentEditor({
 
 function LibraryDocuments() {
   const nav = useNav();
+  const state = useAppState();
+  const adapter = useAdapter();
+  const dispatch = useDispatch();
   const lists = useWorkspaceLists();
   const [query, setQuery] = useState('');
+  const [sources, setSources] = useState<LibrarySource[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(true);
+  const [sourcesError, setSourcesError] = useState('');
+  const [openSource, setOpenSource] = useState<LibrarySource | null>(null);
+  const [sourceStatus, setSourceStatus] = useState('');
+  const agentId = state.agent.id;
+  useEffect(() => {
+    if (!agentId) { setSources([]); setSourcesLoading(false); return; }
+    let live = true;
+    setSourcesLoading(true); setSourcesError('');
+    void adapter.rest.listLibrarySources(state.workspace.id, agentId)
+      .then((page) => { if (live) setSources(page.items); })
+      .catch(() => { if (live) setSourcesError('Could not load shared sources. Try again.'); })
+      .finally(() => { if (live) setSourcesLoading(false); });
+    return () => { live = false; };
+  }, [adapter.rest, state.workspace.id, agentId]);
   const match = (text: string): boolean => text.toLowerCase().includes(query.toLowerCase());
   const documents = lists.documents.filter((doc) => match(doc.title));
+  const sharedSources = sources.filter((source) => match(`${source.title} ${source.summary}`));
   const drafts = lists.requests.filter((request) => (request.kind === 'invoice' || request.kind === 'agreement') && request.status === 'pending');
+  const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+  const canSelectSource = !!session && session.agentId === agentId && !session.pendingTurn
+    && !['working', 'waiting'].includes(session.run?.status ?? '') && session.draft.attachments.length < 5;
+  const selectSource = (source: LibrarySource): void => {
+    if (!session || !canSelectSource) return;
+    dispatch({ type: 'session/attach', id: session.id, attachment: {
+      id: source.id,
+      label: source.title,
+      icon: 'context',
+      kind: 'source',
+      sha256: source.sha256,
+      source_kind: 'library_source',
+    } });
+    dispatch({ type: 'iris/panel', panel: 'open' });
+    setSourceStatus(`${source.title} selected for your next message. Nothing has been sent.`);
+  };
 
   return (
     <>
@@ -674,6 +711,25 @@ function LibraryDocuments() {
         <Icon name="search" />
         <input placeholder="Search documents" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search documents" />
       </label>
+      <h2 className="section-title">Shared sources</h2>
+      {sourceStatus && <p className="meta" role="status">{sourceStatus}</p>}
+      {sourcesError && <p className="meta action-error" role="alert">{sourcesError}</p>}
+      <div className="col">
+        {sourcesLoading && <Skeleton rows={1} label="Loading shared sources" />}
+        {!sourcesLoading && !sourcesError && sharedSources.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No shared sources are available to this agent.</div>}
+        {sharedSources.map((source) => {
+          const selected = session?.draft.attachments.some((item) => item.id === source.id) ?? false;
+          return <div className="list-row" key={source.id}>
+            <Glass name="context" size={28} className="row-icon" />
+            <div className="row-main">
+              <span className="t">{source.title}</span>
+              <span className="s">{source.version_label} · {source.audiences.join(' + ')} · {source.summary}</span>
+            </div>
+            <Button link onClick={() => setOpenSource(source)}>Open →</Button>
+            {state.capabilities.turnAttachments && <Button disabled={!canSelectSource || selected} onClick={() => selectSource(source)}>{selected ? 'Selected' : `Use with ${agentName(state)}`}</Button>}
+          </div>;
+        })}
+      </div>
       <h2 className="section-title">Drafts awaiting review</h2>
       <div className="col">
         {drafts.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No drafts are waiting for review.</div>}
@@ -713,6 +769,17 @@ function LibraryDocuments() {
           </div>
         ))}
       </div>
+      <Dialog
+        open={openSource !== null}
+        title={openSource?.title ?? 'Shared source'}
+        onClose={() => setOpenSource(null)}
+        actions={openSource && state.capabilities.turnAttachments ? <Button primary disabled={!canSelectSource || (session?.draft.attachments.some((item) => item.id === openSource.id) ?? false)} onClick={() => { selectSource(openSource); setOpenSource(null); }}>Use with {agentName(state)}</Button> : undefined}
+      >
+        {openSource && <>
+          <p className="meta">{openSource.version_label} · Shared with {openSource.audiences.join(' and ')}</p>
+          <Markdown text={openSource.content_markdown} />
+        </>}
+      </Dialog>
     </>
   );
 }

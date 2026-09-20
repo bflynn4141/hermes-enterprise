@@ -440,6 +440,10 @@ export async function configurePartnerWorkflow(
 ): Promise<PartnerWorkflowView> {
   const partnershipsTeam = await team(tx, workspaceId, 'partnerships');
   const financeTeam = await team(tx, workspaceId, 'finance');
+  // The guide is shared through explicit grants to these two teams. Keeping
+  // provisioning in the same transaction means a newly configured workflow
+  // never has roles without its common operating reference.
+  await tx.query('SELECT ensure_partner_program_guide($1,$2)', [workspaceId, configuredBy]);
   // `pg` clients serialize one transaction. Await each lookup so this remains
   // compatible with pg 9, which rejects overlapping `client.query` calls.
   const partnershipsArtifact = await artifact(tx, PARTNER_PROGRAM_MULTI_PARTY_DEFINITION);

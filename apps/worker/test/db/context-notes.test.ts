@@ -147,8 +147,8 @@ it('admits a selected source atomically and idempotent retry retains the origina
   });
   expect(retried.status).toBe(200);
   const messages = await asUser(runtime, fx.adminId, `/w/${fx.workspaceId}/sessions/${fx.sessionId}/messages`);
-  expect(await messages.json()).toMatchObject({ items: [expect.objectContaining({ attachments: [{ id: source, label: 'rubric', kind: 'source', status: 'ready', sha256: hash }] })] });
+  expect(await messages.json()).toMatchObject({ items: [expect.objectContaining({ attachments: [{ id: source, label: 'rubric', kind: 'source', source_kind: 'agent_file', status: 'ready', sha256: hash }] })] });
   const snapshot = await asUser(runtime, fx.adminId, `/w/${fx.workspaceId}/sessions/${fx.sessionId}/snapshot`);
   expect(snapshot.status).toBe(200);
-  expect(await snapshot.json()).toMatchObject({ messages: { items: [expect.objectContaining({ attachments: [{ id: source, label: 'rubric', kind: 'source', status: 'ready', sha256: hash }] })] } });
+  expect(await snapshot.json()).toMatchObject({ messages: { items: [expect.objectContaining({ attachments: [{ id: source, label: 'rubric', kind: 'source', source_kind: 'agent_file', status: 'ready', sha256: hash }] })] } });
 });

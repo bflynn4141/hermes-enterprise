@@ -74,7 +74,7 @@ export const sessionSchema = z
 export type Session = z.infer<typeof sessionSchema>;
 
 export const attachmentRefSchema = z
-  .object({ id: z.string().max(128), label: z.string().max(200), kind: z.enum(['file', 'skill', 'source', 'line']).default('file'), status: z.enum(['pending', 'extracting', 'ready', 'failed']).default('ready'), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() })
+  .object({ id: z.string().max(128), label: z.string().max(200), kind: z.enum(['file', 'skill', 'source', 'line']).default('file'), status: z.enum(['pending', 'extracting', 'ready', 'failed']).default('ready'), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), source_kind: z.enum(['agent_file', 'library_source']).optional() })
   .strict();
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
