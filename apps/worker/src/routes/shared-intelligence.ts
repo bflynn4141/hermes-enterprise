@@ -1,10 +1,20 @@
-import { createSharedIntelligenceProposalSchema } from '@hermes/shared';
+import {
+  createSharedIntelligenceGoalSchema,
+  createSharedIntelligenceProposalSchema,
+  queueSharedIntelligenceProposalSchema,
+  sharedIntelligenceTriageDecisionSchema,
+} from '@hermes/shared';
 import type { Context } from 'hono';
 import type { Env } from '../env.js';
 import {
   evaluateSharedIntelligence,
+  createSharedIntelligenceGoal,
+  decideSharedIntelligenceTriage,
+  listSharedIntelligenceAdmin,
   listSharedIntelligence,
   prepareSharedIntelligenceProposal,
+  queueSharedIntelligenceProposal,
+  reassessSharedIntelligenceTriage,
   revokeSharedIntelligenceProposal,
   saveSharedIntelligenceProposal,
   submitSharedIntelligenceProposal,
@@ -34,4 +44,48 @@ export async function submitSharedIntelligence(c: Context<{ Bindings: Env }>): P
 export async function revokeSharedIntelligence(c: Context<{ Bindings: Env }>): Promise<Response> {
   const proposalId = pathUuid(c, 'proposalId');
   return c.json(await inWorkspace(c, (work) => revokeSharedIntelligenceProposal(work, proposalId)));
+}
+
+export async function queueSharedIntelligence(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const proposalId = pathUuid(c, 'proposalId');
+  const parsed = queueSharedIntelligenceProposalSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) return c.json({ error: parsed.error.message, reason: 'bad_body' }, 400);
+  return c.json(await inWorkspace(c, (work) => queueSharedIntelligenceProposal(c.env, work, proposalId, parsed.data.goal_id)));
+}
+
+export async function getSharedIntelligenceAdmin(c: Context<{ Bindings: Env }>): Promise<Response> {
+  return c.json(await inWorkspace(c, (work) => {
+    work.requireAdmin('viewing Shared Intelligence triage');
+    return listSharedIntelligenceAdmin(work);
+  }));
+}
+
+export async function createSharedIntelligenceAdminGoal(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const parsed = createSharedIntelligenceGoalSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) return c.json({ error: parsed.error.message, reason: 'bad_body' }, 400);
+  const goal = await inWorkspace(c, (work) => {
+    work.requireAdmin('creating a Shared Intelligence goal');
+    return createSharedIntelligenceGoal(work, parsed.data);
+  });
+  return c.json(goal, 201);
+}
+
+export async function decideSharedIntelligenceAdminTriage(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const proposalId = pathUuid(c, 'proposalId');
+  const parsed = sharedIntelligenceTriageDecisionSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) return c.json({ error: parsed.error.message, reason: 'bad_body' }, 400);
+  return c.json(await inWorkspace(c, (work) => {
+    work.requireAdmin('deciding Shared Intelligence triage');
+    return decideSharedIntelligenceTriage(work, proposalId, parsed.data);
+  }));
+}
+
+export async function reassessSharedIntelligenceAdminTriage(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const proposalId = pathUuid(c, 'proposalId');
+  const parsed = queueSharedIntelligenceProposalSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) return c.json({ error: parsed.error.message, reason: 'bad_body' }, 400);
+  return c.json(await inWorkspace(c, (work) => {
+    work.requireAdmin('reassessing Shared Intelligence triage');
+    return reassessSharedIntelligenceTriage(c.env, work, proposalId, parsed.data.goal_id);
+  }));
 }
