@@ -126,6 +126,8 @@ interface MockOptions {
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** Browser regression fixture for rejected Library skill adopts. */
+  libraryAdopt?: 'ok' | 'fail';
   /** Server-advertised invitation contract; default mirrors flag-off deployments. */
   memberInvitations?: 'legacy_delivery' | 'setup_only';
   /** Existing unfinished setup shown while the deployment is flag-off. */
@@ -1637,6 +1639,15 @@ export function createMockBackend(options: MockOptions = {}) {
         instructions.unshift(saved); return json(saved, 201);
       }
       return page(instructions);
+    }
+    const skillAdoptMatch = match(new RegExp(`^/w/${WS}/skills/([^/]+)/adopt$`));
+    if (skillAdoptMatch && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'not_admin');
+      if (options.libraryAdopt === 'fail') return fail(503, 'fixture_write_failed');
+      const skill = skills.find((row) => row.id === skillAdoptMatch[1]);
+      if (!skill) return fail(404, 'not_found');
+      skill.adopted = true;
+      return json(skill);
     }
     if (p('/skills')) return page(skills);
     if (p('/partner-workflow/configure') && method === 'POST') {

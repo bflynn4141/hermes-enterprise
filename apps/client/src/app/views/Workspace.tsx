@@ -659,7 +659,8 @@ function LibrarySkills() {
   const adapter = useAdapter();
   const admin = useIsAdmin();
   const lists = useWorkspaceLists();
-  const [ack, setAck] = useState(false);
+  const [ack, setAck] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [assignments, setAssignments] = useState<EnterpriseSkillAssignment[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const agentId = state.agent.id;
@@ -674,6 +675,7 @@ function LibrarySkills() {
   return (
     <div className="col">
       <PartnerWorkflow />
+      {error && <p className="meta action-error" role="alert">{error}</p>}
       {lists.skills.length === 0 && <EmptyState icon="skill" title="No shared skills yet" />}
       {lists.skills.map((skill) => {
         const assignment = assignments.find((item) => `managed:${item.skill_key}` === skill.id);
@@ -700,15 +702,21 @@ function LibrarySkills() {
                   <Button
                     disabled={skill.adopted || !admin}
                     onClick={() => {
-                      void adapter.rest.adoptSkill(state.workspace.id, skill.id).catch(() => undefined);
-                      setAck(true);
-                      setTimeout(() => setAck(false), 1600);
+                      setError(null);
+                      void adapter.rest
+                        .adoptSkill(state.workspace.id, skill.id)
+                        .then(() => {
+                          adapter.invalidateList(LIST_KEYS.skills);
+                          setAck(skill.id);
+                          setTimeout(() => setAck(null), 1600);
+                        })
+                        .catch(() => setError('Could not add that skill. Try again.'));
                     }}
                   >
                     {skill.adopted ? 'In use' : admin ? 'Add' : EMPTY.adminOnly}
                   </Button>
                 )}
-                <Ack show={ack} style={{ right: 0, top: -40 }}>Added</Ack>
+                <Ack show={ack === skill.id} style={{ right: 0, top: -40 }}>Added</Ack>
               </span>
             </div>
             {assignment && editing === assignment.id && agentId && (
