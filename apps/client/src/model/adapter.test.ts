@@ -1452,6 +1452,31 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('omits unbound file chips from turn admission so Iris never appears to have read them', async () => {
+    const { adapter, calls, store } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: {
+      emailIngress: false,
+      turnAttachments: true,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    } } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(62), label: 'dropped.pdf', icon: 'context',
+    } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(63), label: 'Rubric.md', kind: 'source', sha256: 'c'.repeat(64), icon: 'context',
+    } });
+    await adapter.send(SESSION, 'Review the sources');
+    expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({
+      attachments: [{ id: mockUuid(63), sha256: 'c'.repeat(64), kind: 'agent_file' }],
+    });
+    adapter.dispose();
+  });
+
   const reauthOverride = {
     [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () =>
       new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),

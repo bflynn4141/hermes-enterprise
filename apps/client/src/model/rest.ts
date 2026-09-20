@@ -162,6 +162,19 @@ export class RestError extends Error {
 
 export type FetchLike = typeof fetch;
 
+/**
+ * captureContext only accepts hash-bound agent_file / library_source rows.
+ * Drop file/skill/line chips and bare attachment ids so a turn never claims
+ * Iris read bytes the Worker cannot load.
+ */
+export function selectedSourcesForTurn(attachments: AttachmentRef[]): { id: string; sha256: string; kind: 'agent_file' | 'library_source' }[] {
+  return attachments.flatMap((source) => {
+    if (source.kind !== 'source' || !source.sha256) return [];
+    return [{ id: source.id, sha256: source.sha256, kind: source.source_kind ?? 'agent_file' }];
+  });
+}
+
+
 export interface RestOptions {
   baseUrl?: string;
   fetchImpl?: FetchLike;
@@ -323,7 +336,7 @@ export function createRest(options: RestOptions) {
     sessionSnapshot: (workspaceId: string, sessionId: string) =>
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
     sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: body.attachments.map((source) => ({ id: source.id, sha256: source.sha256, kind: source.kind === 'source' ? source.source_kind ?? 'agent_file' : source.kind })) }) as Promise<RunView>,
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: selectedSourcesForTurn(body.attachments) }) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
