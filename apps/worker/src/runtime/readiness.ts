@@ -15,6 +15,8 @@ import {
 
 export const HERMES_NATIVE_REVISION = '5d59366010640c1d6b8f170d8a4ee109db2bbdef';
 export const ENTERPRISE_BRIDGE_VERSION = '1.7.0';
+/** Exact native MCP name emitted by managed Partnerships profiles. */
+export const AGENTCASH_MCP_TOOL = 'mcp__agentcash__fetch';
 export const LEGACY_PARTNER_CONTENT_DIGEST =
   'sha256:cd26e70aa49de223f28216ea579d33c610305d3184a6c592c7841fa12aca6ddf';
 
@@ -96,7 +98,12 @@ function matchesManagedRuntimeIdentity(
 }
 
 export function enterpriseReadinessToolNames(assignment: EnterpriseSkillAssignment): string[] {
-  return [...assignmentToolNames(assignment), 'skill_view'];
+  const definition = enterpriseSkillDefinition(assignment.skill_key, assignment.version);
+  return [
+    ...assignmentToolNames(assignment),
+    'skill_view',
+    ...(definition?.roleTemplateKey === 'partnerships-agent' ? [AGENTCASH_MCP_TOOL] : []),
+  ];
 }
 
 /**
@@ -167,6 +174,7 @@ export function matchesManagedRuntimeAttestation(
   const expectedTools = [
     ...toolsForSkillVersion(manifest.skill_key, manifest.version, manifest.capability_grants),
     'skill_view',
+    ...(definition.roleTemplateKey === 'partnerships-agent' ? [AGENTCASH_MCP_TOOL] : []),
   ];
   return readiness.agentCashEnabled === expectsAgentCash &&
     readiness.agentCashWalletPresent === expectsAgentCash &&
@@ -183,7 +191,7 @@ export function matchesLegacyCapacityAttestation(
   readiness: HermesEnterpriseReadiness,
   expected?: ManagedRuntimeIdentity,
 ): boolean {
-  const expectedTools = [...PARTNER_PROGRAM_TOOLS, 'skill_view'];
+  const expectedTools = [...PARTNER_PROGRAM_TOOLS, 'skill_view', AGENTCASH_MCP_TOOL];
   return (!expected || matchesManagedRuntimeIdentity(readiness, expected)) &&
     readiness.runtimeRevision === HERMES_NATIVE_REVISION &&
     readiness.plugin?.name === 'enterprise_bridge' &&
