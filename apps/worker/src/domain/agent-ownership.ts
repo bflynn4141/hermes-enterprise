@@ -2,7 +2,9 @@ import type { Tx } from '../db/client.js';
 
 /**
  * Verify the current member owns an agent, repairing only the legacy shape
- * where one active member already owns the agent's sole writable session.
+ * where one active member already owns an explicitly shared agent's sole
+ * writable session. Private agents require an explicit binding: session
+ * ownership must never recreate a revoked content grant.
  */
 export async function ensureAgentOwner(
   tx: Tx,
@@ -15,6 +17,10 @@ export async function ensureAgentOwner(
      SELECT $1, $2, m.id
        FROM members m
       WHERE m.workspace_id = $1 AND m.user_id = $3 AND m.status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM agents a WHERE a.workspace_id=$1 AND a.id=$2
+            AND a.context_scope='workspace'
+        )
         AND EXISTS (
           SELECT 1 FROM sessions s
            WHERE s.workspace_id = $1 AND s.agent_id = $2 AND s.owner_id = $3

@@ -3,6 +3,8 @@ import { beforeEach, expect, it } from 'vitest';
 import { asUser, makeEnv } from './harness.js';
 import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 import { captureContext } from '../../src/context-snapshot.js';
+import { recordVerdict } from '../../src/attachments/service.js';
+import { FakeR2 } from '../stubs/fake-r2.js';
 import type { TenantWork } from '../../src/routes/tenant.js';
 
 let fx: Fixture;
@@ -50,10 +52,53 @@ it('removing an ownership binding cannot downgrade private content to shared',as
   await withClient('owner',async tx=>{
     await tx.query('BEGIN'); await setTenant(tx,fx.workspaceId,fx.adminId);
     await tx.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2',[fx.workspaceId,fx.agentId]);
+    await tx.query('UPDATE sessions SET owner_id=$2 WHERE id=$1',[fx.sessionId,fx.memberId]);
     await tx.query('COMMIT');
   });
+  // A provisioning GET must not recreate a revoked grant from session ownership.
+  await asUser(env,fx.memberId,`/w/${fx.workspaceId}/agents/${fx.agentId}/provisioning`);
   expect((await asUser(env,fx.memberId,notes())).status).toBe(404);
   expect((await asUser(env,fx.adminId,files())).status).toBe(404);
+});
+
+it('rechecks source authorization when recording an upload verification result',async()=>{
+  await withClient('owner',async tx=>{
+    await tx.query('BEGIN'); await setTenant(tx,fx.workspaceId,fx.memberId);
+    await tx.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2',[fx.workspaceId,fx.agentId]);
+    const work={tx,workspaceId:fx.workspaceId,userId:fx.memberId} as unknown as TenantWork;
+    await expect(recordVerdict(work,'agent_file',file,{ok:true,digest:'b'.repeat(64)})).rejects.toMatchObject({status:404});
+    await expect(recordVerdict(work,'agent_file',file,{ok:false,reason:'magic_mismatch',detail:'bad bytes',status:422})).rejects.toMatchObject({status:404});
+    await tx.query('ROLLBACK');
+  });
+});
+
+for (const invalid of [false,true]) it(`revocation during upload verification prevents ${invalid ? 'refusal/deletion' : 'completion'} through HTTP`,async()=>{
+  const bucket=new FakeR2(), key=`test/${file}`;
+  const bytes=invalid ? new Uint8Array([0xcf,0xfa,0xed,0xfe,7,0,0,1,0,0]) : new TextEncoder().encode('safe text!');
+  await bucket.put(key,bytes);
+  await withClient('owner',async tx=>{
+    await tx.query('BEGIN'); await setTenant(tx,fx.workspaceId,fx.adminId);
+    await tx.query('UPDATE agent_owners SET member_id=(SELECT id FROM members WHERE workspace_id=$1 AND user_id=$3) WHERE workspace_id=$1 AND agent_id=$2',[fx.workspaceId,fx.agentId,fx.adminId]);
+    await tx.query('UPDATE agent_files SET sha256=NULL WHERE id=$1',[file]);
+    await tx.query('COMMIT');
+  });
+  const get=bucket.get.bind(bucket);
+  bucket.get=async key=>{
+    await withClient('owner',async tx=>{
+      await tx.query('BEGIN'); await setTenant(tx,fx.workspaceId,fx.adminId);
+      await tx.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2',[fx.workspaceId,fx.agentId]);
+      await tx.query('COMMIT');
+    });
+    return get(key);
+  };
+  const testEnv=makeEnv({UPLOADS:bucket as unknown as R2Bucket}).env;
+  expect((await asUser(testEnv,fx.adminId,`/w/${fx.workspaceId}/files/${file}/complete`,{method:'POST'})).status).toBe(404);
+  expect(bucket.objects.has(key)).toBe(true);
+  await withClient('owner',async tx=>{
+    await tx.query('BEGIN'); await setTenant(tx,fx.workspaceId,fx.adminId);
+    expect((await tx.query('SELECT sha256,extraction_status FROM agent_files WHERE id=$1',[file])).rows[0]).toMatchObject({sha256:null,extraction_status:'pending'});
+    await tx.query('ROLLBACK');
+  });
 });
 
 it('allows the active team principal and fails closed after its binding is revoked',async()=>{
