@@ -1,0 +1,173 @@
+import { memberProvisioningOperationSchema, type MemberProvisioningOperation, type MemberRoleTemplate } from '@hermes/shared';
+import type { Env } from '../env.js';
+import type { Tx } from '../db/client.js';
+import { enqueueJob, type Job, withWorkspaceTransaction } from '../jobs.js';
+import { releaseInvitationCapacity, reserveCapacityForInvitation, withCapacityGrantQuarantine } from '../hermes-cloud/capacity.js';
+import { RouteError } from '../routes/tenant.js';
+
+interface OperationRow {
+  id: string; workspace_id: string; invitation_id: string; revision: number;
+  role_template_key: MemberRoleTemplate; preparation: MemberProvisioningOperation['preparation'];
+  cancellation: MemberProvisioningOperation['cancellation']; issue: MemberProvisioningOperation['issue'];
+  invitation_status?: string; delivery_status?: string; delivery_error?: string | null; cloud_status?: string | null;
+}
+
+export function memberProvisioningEnabled(env: Env): boolean {
+  return env.HERMES_MEMBER_PROVISIONING_ENABLED === '1';
+}
+
+export function projectMemberProvisioning(row: OperationRow): MemberProvisioningOperation {
+  const delivery = row.invitation_status === 'accepted' ? 'sent' : row.delivery_status === 'queued' ? 'queued'
+    : row.delivery_status === 'sending' ? 'sending'
+      : row.delivery_status === 'delivered' ? 'sent'
+        : row.delivery_status === 'failed' && ['workos_invitation_delivery_outcome_unknown', 'workos_invitation_local_commit_failed'].includes(row.delivery_error ?? '')
+          ? 'reconciliation_required'
+          : row.delivery_status === 'failed' ? 'failed' : 'not_queued';
+  return memberProvisioningOperationSchema.parse({
+    id: row.id, workspace_id: row.workspace_id, revision: row.revision,
+    preparation: row.preparation, delivery,
+    membership: row.invitation_status === 'accepted' ? 'joined' : 'not_joined',
+    cancellation: row.cancellation, issue: row.issue,
+  });
+}
+
+async function enqueueRevision(tx: Tx, workspaceId: string, id: string, revision: number): Promise<string | null> {
+  return enqueueJob(tx, workspaceId, 'member_provision', `member-provision:${id}:${revision}`, { operation_id: id, revision });
+}
+
+/** Persist one idempotent operation in the same transaction as its invitation. */
+export async function createMemberProvisioningOperation(tx: Tx, input: {
+  workspaceId: string; invitationId: string; requestedBy: string; roleTemplateKey: MemberRoleTemplate;
+}): Promise<{ operation: MemberProvisioningOperation; jobId: string | null }> {
+  // The Cloud callback takes the same workspace lock before it marks a
+  // connection usable and wakes waiting operations. Sharing that lock closes
+  // the only race where setup could observe "disconnected" immediately before
+  // the callback wakes an older snapshot that did not include this row.
+  await tx.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [input.workspaceId]);
+  const connection = await tx.query<{ status: string }>(
+    'SELECT status FROM cloud_connections WHERE workspace_id=$1', [input.workspaceId]);
+  const cloudStatus = connection.rows[0]?.status ?? null;
+  const preparation = cloudStatus === 'connected' ? 'queued' : 'awaiting_connection';
+  const issue = cloudStatus === 'reconnect_required' ? 'cloud_reconnect_required' : cloudStatus === 'connected' ? null : 'cloud_not_connected';
+  const { rows } = await tx.query<OperationRow>(
+    `INSERT INTO member_provisioning_operations
+       (workspace_id,invitation_id,requested_by,role_template_key,preparation,issue)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (workspace_id,invitation_id) DO UPDATE
+       SET role_template_key=member_provisioning_operations.role_template_key
+     RETURNING *`,
+    [input.workspaceId, input.invitationId, input.requestedBy, input.roleTemplateKey, preparation, issue],
+  );
+  const row = rows[0];
+  if (!row) throw new RouteError('Member setup could not be recorded.', 'member_setup_failed', 409);
+  return { operation: projectMemberProvisioning(row), jobId: await enqueueRevision(tx, input.workspaceId, row.id, row.revision) };
+}
+
+/** Called after a verified Cloud organization connection commits. */
+export async function wakeMemberProvisioningForCloudConnection(tx: Tx, workspaceId: string): Promise<string[]> {
+  const { rows } = await tx.query<OperationRow>(
+    `UPDATE member_provisioning_operations
+        SET preparation='queued', issue=NULL, revision=revision+1
+      WHERE workspace_id=$1 AND preparation='awaiting_connection' AND cancellation='none'
+      RETURNING *`, [workspaceId]);
+  const jobs: string[] = [];
+  for (const row of rows) {
+    const id = await enqueueRevision(tx, workspaceId, row.id, row.revision);
+    if (id) jobs.push(id);
+  }
+  return jobs;
+}
+
+export async function requestMemberProvisioningCancellation(tx: Tx, workspaceId: string, invitationId: string): Promise<string | null> {
+  const { rows } = await tx.query<OperationRow>(
+    `UPDATE member_provisioning_operations
+        SET cancellation='requested', revision=revision+1
+      WHERE workspace_id=$1 AND invitation_id=$2 AND cancellation='none'
+        AND EXISTS (SELECT 1 FROM invitations i WHERE i.workspace_id=$1 AND i.id=$2 AND i.status<>'accepted')
+      RETURNING *`, [workspaceId, invitationId]);
+  const row = rows[0];
+  return row ? enqueueRevision(tx, workspaceId, row.id, row.revision) : null;
+}
+
+export async function rebindMemberProvisioningOperation(tx: Tx, workspaceId: string,
+  previousInvitationId: string, nextInvitationId: string): Promise<{ operation: MemberProvisioningOperation; jobId: string | null } | null> {
+  const { rows } = await tx.query<OperationRow>(
+    `UPDATE member_provisioning_operations
+        SET invitation_id=$3, revision=revision+1
+      WHERE workspace_id=$1 AND invitation_id=$2 AND cancellation='none'
+      RETURNING *`, [workspaceId, previousInvitationId, nextInvitationId]);
+  const row = rows[0];
+  if (!row) return null;
+  row.invitation_status = 'pending'; row.delivery_status = 'not_required'; row.delivery_error = null;
+  return { operation: projectMemberProvisioning(row), jobId: await enqueueRevision(tx, workspaceId, row.id, row.revision) };
+}
+
+/**
+ * This runner performs only local, already-proven work. It may reserve a
+ * pre-existing verified Partnerships profile. It never calls Cloud lifecycle
+ * tools, creates paid capacity, configures a profile, or sends an invitation.
+ */
+export async function runMemberProvisioningJob(env: Env, job: Job): Promise<void> {
+  const payload = (job.payload ?? {}) as { operation_id?: string; revision?: number };
+  if (!payload.operation_id || !Number.isInteger(payload.revision) || (payload.revision ?? -1) < 0) return;
+  await withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const { rows } = await tx.query<OperationRow>(
+      `SELECT op.*, i.status AS invitation_status, i.delivery_status, i.delivery_error, cc.status AS cloud_status
+         FROM member_provisioning_operations op
+         JOIN invitations i ON i.workspace_id=op.workspace_id AND i.id=op.invitation_id
+         LEFT JOIN cloud_connections cc ON cc.workspace_id=op.workspace_id
+        WHERE op.workspace_id=$1 AND op.id=$2 FOR UPDATE OF op`,
+      [job.workspace_id, payload.operation_id],
+    );
+    const row = rows[0];
+    if (!row || row.revision !== payload.revision) return;
+
+    if (row.cancellation === 'requested' || ['withdrawn', 'expired', 'resent'].includes(row.invitation_status ?? '')) {
+      await releaseInvitationCapacity(tx, job.workspace_id, row.invitation_id);
+      await tx.query(
+        `UPDATE member_provisioning_operations
+            SET cancellation='complete', completed_at=now(), revision=revision+1
+          WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
+        [job.workspace_id, row.id, row.revision],
+      );
+      return;
+    }
+    if (row.invitation_status === 'accepted' || row.preparation === 'ready') return;
+
+    // Existing capacity is safe to use because reserveCapacityForInvitation
+    // revalidates the exact reviewed discovery grant under the row lock.
+    const reservation = row.role_template_key === 'partnerships-agent'
+      ? await reserveCapacityForInvitation(env, tx, job.workspace_id, row.invitation_id)
+      : null;
+    if (reservation) {
+      await tx.query(
+        `UPDATE member_provisioning_operations
+            SET preparation='ready', issue=NULL, revision=revision+1
+          WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
+        [job.workspace_id, row.id, row.revision],
+      );
+      return;
+    }
+
+    if (!row.cloud_status || row.cloud_status === 'reconnect_required') {
+      await tx.query(
+        `UPDATE member_provisioning_operations
+            SET preparation='awaiting_connection', issue=$4, revision=revision+1
+          WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
+        [job.workspace_id, row.id, row.revision,
+          row.cloud_status === 'reconnect_required' ? 'cloud_reconnect_required' : 'cloud_not_connected'],
+      );
+      return;
+    }
+
+    // A connected grant proves identity and read-only schema access, not a
+    // lifecycle adapter or governed role bootstrap. Stay explicit and terminal
+    // until those external contracts are verified and integrated.
+    await tx.query(
+      `UPDATE member_provisioning_operations
+          SET preparation='failed', issue='cloud_contract_unverified', revision=revision+1
+        WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
+      [job.workspace_id, row.id, row.revision],
+    );
+  }));
+}

@@ -83,6 +83,9 @@ export const JOB_KINDS = [
   // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
   'hermes_capacity_alert',
+  // Local member setup orchestration. It reserves only pre-verified capacity;
+  // lifecycle creation and invitation delivery are separate, gated operations.
+  'member_provision',
   // Advisory Jev assessment for Inbox ordering. Approval policy remains the authority.
   'request_triage',
   // Exact revision-bound outreach after a human approves and a dedicated
@@ -733,6 +736,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'workos_sync':
       await runWorkosSync(env, job);
+      return;
+    case 'member_provision':
+      await (await import('./member-provisioning/service.js')).runMemberProvisioningJob(env, job);
       return;
     case 'backup_uploads':
       // The nightly copy of one workspace's uploads prefix into the backup

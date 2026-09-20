@@ -11,6 +11,7 @@
 // its tests are the only producers, and they parse through the same schemas, so
 // a drift between mock and server is a test failure rather than a surprise.
 import { z } from 'zod';
+import { memberProvisioningOperationSchema, memberRoleTemplateSchema } from './member-provisioning.js';
 import { runErrorSchema, streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
 import { refSchema } from './refs.js';
@@ -325,6 +326,9 @@ export const invitationEntitySchema = z
       'invitation_delivery_failed',
     ]).nullable().optional(),
     delivery_trace_id: uuidSchema.nullable().optional(),
+    /** Preparation is separate from email delivery and contains no provider detail. */
+    provisioning: memberProvisioningOperationSchema.nullable().optional(),
+    role_template_key: memberRoleTemplateSchema.optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();

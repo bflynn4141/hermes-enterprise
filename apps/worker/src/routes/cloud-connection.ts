@@ -7,6 +7,7 @@ import { openSecret, sealSecret } from '../keys/envelope.js';
 import { inWorkspace, RouteError } from './tenant.js';
 import { discoverCloudOAuth, exchangeCloudCode, inspectCloudTools, inspectCloudOrganization, makeCloudAuthorizationUrl, registerCloudClient } from '../hermes-cloud/management.js';
 import { cloudCredentialIdentity } from '../hermes-cloud/credential-envelope.js';
+import { wakeMemberProvisioningForCloudConnection } from '../member-provisioning/service.js';
 
 type C = Context<{ Bindings: Env }>;
 interface EnvelopeRow {
@@ -146,6 +147,7 @@ export async function completeCloudConnection(c: C): Promise<Response> {
         await work.tx.query(`UPDATE cloud_connections SET status='connected', organization_id=$3, organization_name=$4,updated_at=now()
           WHERE workspace_id=$1 AND id=$2 AND (organization_id IS NULL OR organization_id=$3)`,
         [work.workspaceId, prepared.id, account.id, account.name]);
+        work.jobs.push(...await wakeMemberProvisioningForCloudConnection(work.tx, work.workspaceId));
       }
       await work.tx.query(`UPDATE cloud_connection_attempts SET status='complete' WHERE id=$1`, [prepared.id]);
     });

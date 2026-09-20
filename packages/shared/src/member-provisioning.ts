@@ -17,6 +17,8 @@ export const memberProvisioningIssueSchema = z.enum([
   'readiness_failed', 'creation_outcome_unknown', 'delivery_outcome_unknown',
   'delivery_rejected', 'temporary_failure',
 ]);
+export const memberRoleTemplateSchema = z.enum(['partnerships-agent', 'finance-agent']);
+export type MemberRoleTemplate = z.infer<typeof memberRoleTemplateSchema>;
 
 export const memberProvisioningOperationSchema = z.object({
   id: uuidSchema,

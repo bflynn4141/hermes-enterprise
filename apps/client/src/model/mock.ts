@@ -345,7 +345,15 @@ export function createMockBackend(options: MockOptions = {}) {
   // the client two contradictory sources of truth.
   const invitations: InvitationEntity[] = empty
     ? []
-    : [{ id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000), version: 1 }];
+    : [{
+        id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000),
+        role_template_key: 'finance-agent',
+        provisioning: {
+          id: mockUuid(211), workspace_id: WS, revision: 1, preparation: 'ready', delivery: 'sent',
+          membership: 'not_joined', cancellation: 'none', issue: null,
+        },
+        version: 1,
+      }];
   const runtimeDiscoveryGrants: RuntimeDiscoveryGrant[] = [];
 
   const providerKeys: MaskedProviderKey[] =
@@ -1413,7 +1421,16 @@ export function createMockBackend(options: MockOptions = {}) {
           trace_id: mockUuid(399),
         }, 409);
       }
-      const row: InvitationEntity = { id: mockUuid(220 + invitations.length), email: String(body.email ?? ''), role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0), version: 1 };
+      const row: InvitationEntity = {
+        id: mockUuid(220 + invitations.length), email: String(body.email ?? ''),
+        role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0),
+        role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent',
+        provisioning: {
+          id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
+          preparation: 'queued', delivery: 'not_queued', membership: 'not_joined', cancellation: 'none', issue: null,
+        },
+        version: 1,
+      };
       invitations.push(row);
       return json(row, 201);
     }
@@ -1436,7 +1453,13 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       row.status = 'resent';
       row.version += 1;
-      const successor: InvitationEntity = { ...row, id: mockUuid(220 + invitations.length), status: 'pending', invited_at: iso(0), version: 1 };
+      const successor: InvitationEntity = {
+        ...row, id: mockUuid(220 + invitations.length), status: 'pending', invited_at: iso(0), version: 1,
+        provisioning: row.provisioning ? {
+          ...row.provisioning, revision: row.provisioning.revision + 1,
+          preparation: 'queued', delivery: 'not_queued', cancellation: 'none', issue: null,
+        } : undefined,
+      };
       invitations.push(successor);
       return json(successor);
     }
