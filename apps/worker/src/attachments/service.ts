@@ -342,6 +342,9 @@ export async function recordVerdict(
   id: string,
   verdict: Verdict,
 ): Promise<FileRow | null> {
+  // Object verification runs outside the initial transaction. Recheck the
+  // current binding before committing either success or destructive refusal.
+  if (kind === 'agent_file') await loadRow(work, kind, id);
   if (verdict.ok) return markReady(work, kind, id, verdict.digest);
   await markFailed(work, kind, id, verdict.reason, verdict.detail);
   return null;
