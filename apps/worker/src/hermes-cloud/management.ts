@@ -1,6 +1,6 @@
 // Official Cloud management protocol boundary. Management grants are distinct
-// from inference keys. This module never invokes a lifecycle tool: discovery
-// must establish the actual provider contract before paid operations are wired.
+// from inference keys. Discovery and bounded calls share one fail-closed MCP
+// transport; durable orchestration decides whether a paid action may run.
 export const CLOUD_ORIGIN = 'https://portal.nousresearch.com';
 export const CLOUD_RESOURCE = `${CLOUD_ORIGIN}/mcp`;
 export const CLOUD_SCOPE = 'mcp:manage_agents';
@@ -8,7 +8,8 @@ const MAX_BYTES = 256 * 1024;
 const PROTOCOL = '2025-03-26';
 
 export class CloudManagementError extends Error {
-  readonly reason: 'cloud_reconnect_required' | 'cloud_scope_invalid' | 'cloud_contract_invalid' | 'cloud_unavailable';
+  readonly reason: 'cloud_reconnect_required' | 'cloud_scope_invalid' | 'cloud_contract_invalid' |
+    'cloud_unavailable' | 'cloud_action_rejected' | 'cloud_call_outcome_unknown';
   constructor(reason: CloudManagementError['reason']) {
     super(reason); this.name = 'CloudManagementError';
     this.reason = reason;
@@ -231,6 +232,61 @@ async function rpcResponse(response: Response, id: string): Promise<ObjectValue>
 }
 
 export interface CloudToolContract { name: string; inputSchema: ObjectValue; outputSchema?: ObjectValue }
+export type CloudManagementToolName = 'agents' | 'agent' | 'service_credentials' | 'usage';
+
+async function openCloudManagementSession(
+  credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
+  fetcher: typeof fetch,
+): Promise<Record<string, string>> {
+  exactManagementScope(credential.scope);
+  const headers: Record<string, string> = { Authorization: `Bearer ${string(credential.accessToken, 16384)}`,
+    Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' };
+  const initId = crypto.randomUUID();
+  const initialized = await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: initId, method: 'initialize', params: {
+      protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'hermes-enterprise-preflight', version: '1.0.0' },
+    } }) });
+  const init = await rpcResponse(initialized, initId);
+  if (init.protocolVersion !== PROTOCOL || !object(init.capabilities).tools) return invalid();
+  const sessionId = initialized.headers.get('mcp-session-id');
+  if (sessionId) headers['Mcp-Session-Id'] = string(sessionId, 1024);
+  headers['MCP-Protocol-Version'] = PROTOCOL;
+  const notification = await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
+  checkStatus(notification);
+  await notification.body?.cancel();
+  return headers;
+}
+
+/**
+ * Invoke one allowlisted Cloud management tool and return its bounded JSON
+ * payload. Once tools/call is dispatched, any missing or malformed response is
+ * outcome-unknown: callers must reconcile instead of replaying a paid action.
+ */
+export async function callCloudManagementTool(
+  credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
+  tool: CloudManagementToolName,
+  args: ObjectValue,
+  fetcher: typeof fetch = fetch,
+): Promise<ObjectValue> {
+  const headers = await openCloudManagementSession(credential, fetcher);
+  const id = crypto.randomUUID();
+  let result: ObjectValue;
+  try {
+    result = await rpcResponse(await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: tool, arguments: args } }),
+    }), id);
+  } catch (error) {
+    if (error instanceof CloudManagementError && error.reason === 'cloud_reconnect_required') throw error;
+    throw new CloudManagementError('cloud_call_outcome_unknown');
+  }
+  if (result.isError === true) throw new CloudManagementError('cloud_action_rejected');
+  if (result.isError !== undefined && result.isError !== false) return invalid();
+  if (!Array.isArray(result.content) || result.content.length !== 1) return invalid();
+  const block = object(result.content[0]);
+  if (block.type !== 'text' || typeof block.text !== 'string' || block.text.length > MAX_BYTES) return invalid();
+  return parseJson(block.text);
+}
 
 /** Authenticated account attribution only; never decode unsigned token claims. */
 export async function inspectCloudOrganization(accessToken: string, fetcher: typeof fetch = fetch): Promise<{ id: string; name: string } | null> {
@@ -250,23 +306,7 @@ export async function inspectCloudTools(
   credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
   fetcher: typeof fetch = fetch,
 ): Promise<CloudToolContract[]> {
-  exactManagementScope(credential.scope);
-  const headers: Record<string, string> = { Authorization: `Bearer ${string(credential.accessToken, 16384)}`,
-    Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' };
-  const initId = crypto.randomUUID();
-  const initialized = await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
-    body: JSON.stringify({ jsonrpc: '2.0', id: initId, method: 'initialize', params: {
-      protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'hermes-enterprise-preflight', version: '1.0.0' },
-    } }) });
-  const init = await rpcResponse(initialized, initId);
-  if (init.protocolVersion !== PROTOCOL || !object(init.capabilities).tools) return invalid();
-  const sessionId = initialized.headers.get('mcp-session-id');
-  if (sessionId) headers['Mcp-Session-Id'] = string(sessionId, 1024);
-  headers['MCP-Protocol-Version'] = PROTOCOL;
-  const notification = await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
-  checkStatus(notification);
-  await notification.body?.cancel();
+  const headers = await openCloudManagementSession(credential, fetcher);
   const contracts: CloudToolContract[] = [];
   const cursors = new Set<string>();
   let cursor: string | undefined;
@@ -280,7 +320,7 @@ export async function inspectCloudTools(
     for (const item of result.tools) {
       const tool = object(item);
       const name = string(tool.name, 255);
-      if (name !== 'agents' && name !== 'agent') continue;
+      if (!['agents', 'agent', 'service_credentials', 'usage'].includes(name)) continue;
       if (contracts.some(existing => existing.name === name)) return invalid();
       contracts.push({ name, inputSchema: object(tool.inputSchema),
         ...(tool.outputSchema === undefined ? {} : { outputSchema: object(tool.outputSchema) }) });
