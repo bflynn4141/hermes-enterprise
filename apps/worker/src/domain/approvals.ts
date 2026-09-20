@@ -348,7 +348,7 @@ async function resolveResourceBindings(
   workspaceId: string,
   proposal: ApprovalProposal,
   resources: Map<string, { owner_member_id: string; version: string | null; sha256: string | null; executor_available: boolean }>,
-  requester: { userId: string | null; runId: string | null },
+  requester: { userId: string | null; runId: string | null; agentId: string },
 ): Promise<ApprovalResourceBinding[]> {
   const bindings: ApprovalResourceBinding[] = [];
   for (const resourceId of sortedUnique(proposalResourceIds(proposal))) {
@@ -414,6 +414,31 @@ async function resolveResourceBindings(
         executor_available: false,
         reason: source?.sha256 ? null : 'The source attachment is not ready with an immutable digest.',
       });
+    } else if (evidence.kind === 'artifact') {
+      // Artifact ids are shared by several evidence systems. Add a binding
+      // only when this id is a mailbox snapshot granted to the requester's
+      // explicit Enterprise team; partner artifacts keep their existing
+      // validation path and are not reclassified as missing mailbox data.
+      const found = await tx.query<{ version_id: string; sha256: string }>(
+        `SELECT snapshot.library_version_id AS version_id,snapshot.normalized_sha256 AS sha256
+           FROM mailbox_thread_snapshots snapshot
+           JOIN enterprise_team_agents team_agent
+             ON team_agent.workspace_id=snapshot.workspace_id AND team_agent.team_id=snapshot.team_id
+           JOIN library_source_team_grants source_grant
+             ON source_grant.workspace_id=snapshot.workspace_id
+            AND source_grant.source_id=snapshot.library_source_id
+            AND source_grant.team_id=snapshot.team_id
+          WHERE snapshot.workspace_id=$1 AND snapshot.id=$2 AND team_agent.agent_id=$3
+            AND ($4::uuid IS NULL OR team_agent.principal_user_id=$4)`,
+        [workspaceId, evidence.id, requester.agentId, requester.userId],
+      );
+      const snapshot = found.rows[0];
+      if (snapshot) {
+        bindings.push({
+          kind: 'artifact', id: evidence.id, version: snapshot.version_id,
+          sha256: snapshot.sha256, immutable: true, executor_available: false, reason: null,
+        });
+      }
     } else if (evidence.kind === 'document') {
       const found = await tx.query<{ version: number; payload: unknown }>(
         `SELECT document.version,document.payload
@@ -1015,7 +1040,7 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   const expiresAt = new Date(requestedExpiry).toISOString();
   const bindings = await resolveResourceBindings(
     context.tx, context.workspaceId, input.proposal, targets.resources,
-    { userId: requester.userId, runId: requester.runId },
+    { userId: requester.userId, runId: requester.runId, agentId: context.agentId },
   );
   const serverContext = {
     requester: { agent_id: context.agentId, member_id: requester.memberId, user_id: requester.userId },
@@ -1351,7 +1376,11 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   const expiresAt = new Date(expiry).toISOString();
   const bindings = await resolveResourceBindings(
     context.tx, context.workspaceId, input.proposal, targets.resources,
-    { userId: oldPayload.context.requester.user_id, runId: oldPayload.context.source.run_id },
+    {
+      userId: oldPayload.context.requester.user_id,
+      runId: oldPayload.context.source.run_id,
+      agentId: oldPayload.context.requester.agent_id,
+    },
   );
   const serverContext = { ...oldPayload.context, target_agent_ids: targets.targetAgentIds, target_member_ids: targets.targetMemberIds, target_resource_ids: targets.targetResourceIds, source: { ...oldPayload.context.source, dependent_request_ids: targets.dependentRequestIds } };
   const nextRevision = row.authorization_revision + 1;

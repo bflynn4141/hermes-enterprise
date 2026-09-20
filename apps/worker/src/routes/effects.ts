@@ -21,7 +21,11 @@
 // and step-up — because it writes an audit row against a person's name, and
 // "somebody walked past an unlocked laptop" should not be able to.
 import type { Context } from 'hono';
-import { effectEntitySchema, paginatedSchema, EFFECT_STATUSES } from '@hermes/shared';
+import {
+  effectEntitySchema,
+  paginatedSchema,
+  EFFECT_STATUSES,
+} from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, pathUuid, RouteError } from './tenant.js';
@@ -47,7 +51,7 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
 }
 
 /** Does this member hold the role the effect needs? */
-async function holdsRole(
+export async function holdsRole(
   tx: { query: (text: string, values?: readonly unknown[]) => Promise<{ rowCount: number | null }> },
   workspaceId: string,
   userId: string,

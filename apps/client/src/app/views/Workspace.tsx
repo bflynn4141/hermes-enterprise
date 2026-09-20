@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -467,10 +467,154 @@ export function Library({ view, id }: { view: string; id: string | null }) {
         <Tabs tabs={LIBRARY_TABS} value={view} onChange={(next) => nav(LIB(next))} label="Library sections" />
         {view === 'skills' && <LibrarySkills />}
         {view === 'documents' && <LibraryDocuments />}
-        {/* Connections remains independently owned; Shared Intelligence is a reviewed Library workflow. */}
-        {view === 'connections' && <EmptyState icon="context" title={EMPTY.libraryUnavailable} detail="Connections are managed outside the pilot." />}
+        {/* Connections and Shared Intelligence are independent, reviewed Library workflows. */}
+        {view === 'connections' && <LibraryConnections />}
         {view === 'intelligence' && <SharedIntelligence />}
       </div>
+    </div>
+  );
+}
+
+function LibraryConnections() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const nav = useNav();
+  const admin = useIsAdmin();
+  const [inbound, setInbound] = useState<InboundEmailConnection | null>(null);
+  const [outbound, setOutbound] = useState<OutboundEmailConnection | null>(null);
+  const [threadId, setThreadId] = useState('');
+  const [busy, setBusy] = useState<'connect' | 'import' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [result, setResult] = useState<InboundEmailThreadImport | null>(null);
+
+  const load = (): void => {
+    if (!state.workspace.id) return;
+    void Promise.all([
+      adapter.rest.inboundEmailConnection(state.workspace.id),
+      adapter.rest.outboundEmailConnection(state.workspace.id),
+    ]).then(([readConnection, sendConnection]) => {
+      setInbound(readConnection);
+      setOutbound(sendConnection);
+    }).catch(() => setNotice('Connection status could not be loaded. Try again.'));
+  };
+  useEffect(load, [adapter, state.workspace.id]);
+
+  const stepUp = (): boolean => {
+    const url = adapter.auth.stepUpUrl(window.location.href, 'gmail');
+    if (url) {
+      window.location.assign(url);
+      return true;
+    }
+    setNotice('This needs a recent sign-in. Sign in again to continue.');
+    return false;
+  };
+  const errorNotice = (caught: unknown): void => {
+    const error = caught as { status?: number; reason?: string };
+    if (error.status === 401 && error.reason === 'reauth_required') {
+      stepUp();
+      return;
+    }
+    setNotice(error.reason === 'admin_required' ? EMPTY.adminOnly
+      : error.reason === 'gmail_evidence_unavailable' ? 'Read-only Gmail evidence is not configured for this deployment.'
+        : error.reason === 'gmail_evidence_not_connected' ? 'Connect the read-only Gmail account before importing a thread.'
+          : 'The evidence action could not be completed. Nothing was sent or changed outside Hermes.');
+  };
+  const connect = async (): Promise<void> => {
+    setBusy('connect');
+    setNotice(null);
+    try {
+      const started = await adapter.rest.startGmailEvidenceOAuth(state.workspace.id);
+      window.location.assign(started.authorize_url);
+    } catch (caught) {
+      errorNotice(caught);
+      setBusy(null);
+    }
+  };
+  const importThread = async (): Promise<void> => {
+    if (!state.agent.id || threadId.trim().length < 4) return;
+    setBusy('import');
+    setNotice(null);
+    setResult(null);
+    try {
+      const imported = await adapter.rest.importGmailEvidenceThread(state.workspace.id, {
+        agent_id: state.agent.id,
+        thread_id: threadId.trim(),
+      });
+      setResult(imported);
+      setThreadId('');
+      setInbound((current) => current ? {
+        ...current,
+        imported_threads: current.imported_threads + (imported.created ? 1 : 0),
+        latest_import_at: imported.imported_at,
+      } : current);
+    } catch (caught) {
+      errorNotice(caught);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!inbound || !outbound) return <Skeleton rows={6} label="Loading connections" />;
+  const connected = inbound.status === 'connected';
+  return (
+    <div className="col">
+      {notice && <Ack show>{notice}</Ack>}
+      {result && (
+        <Ack show>
+          {result.created ? 'Thread imported as immutable Library evidence.' : 'That exact thread snapshot was already imported.'}
+          {' '}Detected {result.events.replies} repl{result.events.replies === 1 ? 'y' : 'ies'}, recorded {result.events.bounces} unverified bounce-like notice{result.events.bounces === 1 ? '' : 's'}, and detected {result.events.unsubscribes} unsubscribe request{result.events.unsubscribes === 1 ? '' : 's'}. Sent 0 messages.
+        </Ack>
+      )}
+      <Panel
+        icon="context"
+        title={connected ? `Read-only Gmail · ${inbound.address}` : inbound.configured ? 'Connect read-only Gmail evidence' : 'Read-only Gmail is not configured'}
+        subtitle={connected
+          ? 'Hermes reads only the exact thread ID an Admin enters. It cannot use this credential to send.'
+          : 'This uses separate Google consent from the outreach sender and never lists or searches the mailbox.'}
+        right={admin && inbound.configured ? (
+          <Button primary={!connected} disabled={busy !== null} onClick={() => void connect()}>
+            {busy === 'connect' ? 'Opening Google…' : connected ? 'Reconnect' : 'Connect'}
+          </Button>
+        ) : undefined}
+      >
+        <div className="kv"><span className="grow">Authorization</span><span className="meta">Separate gmail.readonly consent</span></div>
+        <div className="kv"><span className="grow">Selection</span><span className="meta">One exact thread per import</span></div>
+        <div className="kv"><span className="grow">Imported snapshots</span><span className="meta">{inbound.imported_threads}</span></div>
+        {!admin && <p className="meta">A workspace Admin manages this connection and imports evidence.</p>}
+      </Panel>
+      {connected && admin && (
+        <Panel
+          icon="document"
+          title="Technical Gmail evidence import"
+          subtitle="Enter a Gmail API thread ID supplied by an approved operator tool. Google does not document converting a Gmail browser link into this API ID."
+        >
+          <div className="row" style={{ alignItems: 'end' }}>
+            <label className="field grow">
+              <span>Gmail thread ID</span>
+              <input
+                value={threadId}
+                onChange={(event) => setThreadId(event.target.value)}
+                placeholder="18f2a4b7c9d…"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <Button primary disabled={busy !== null || threadId.trim().length < 4 || !state.agent.id} onClick={() => void importThread()}>
+              {busy === 'import' ? 'Importing…' : 'Import evidence'}
+            </Button>
+          </div>
+          <p className="meta">This is an operator proof, not a finished end-user thread picker. Exact-thread replies and explicit unsubscribe requests can stop future outreach. DSN-looking bounce text is recorded only as unverified evidence and never suppresses a contact automatically. Import cannot send email.</p>
+        </Panel>
+      )}
+      <Panel
+        icon="send"
+        title={outbound.status === 'connected' ? `Outbound sender · ${outbound.address}` : 'Outbound sender is not connected'}
+        subtitle="Sending is a separate Settings connection. Read permission is never reused as send permission."
+        right={<Button link onClick={() => nav(SETTINGS('Email'))}>Open Email settings</Button>}
+      >
+        <div className="kv"><span className="grow">Mode</span><span className="meta">{outbound.mode === 'send_after_approval' ? 'Exact approved revision only' : 'Draft only'}</span></div>
+        <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{outbound.pending_messages}</span></div>
+      </Panel>
     </div>
   );
 }

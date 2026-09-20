@@ -71,6 +71,7 @@
     "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
     "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
     "GMAIL_OUTREACH_ENABLED": "0",
+    "GMAIL_EVIDENCE_ENABLED": "0",
     "INBOX_TRIAGE_MODE": "off",
     "INBOX_TRIAGE_RUBRIC_VERSION": "1",
     "RAINDROP_OBSERVABILITY_MODE": "off",
@@ -217,6 +218,7 @@
         // Email execution stays off until a dedicated mailbox is connected and accepted.
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
+        "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "active",
         "INBOX_TRIAGE_RUBRIC_VERSION": "1",
         // Sends metadata-only terminal run events when RAINDROP_WRITE_KEY exists.
@@ -322,6 +324,7 @@
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
+        "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "off",
         "INBOX_TRIAGE_RUBRIC_VERSION": "1",
         "RAINDROP_OBSERVABILITY_MODE": "off",
