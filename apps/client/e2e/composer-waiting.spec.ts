@@ -112,6 +112,9 @@ test('the send button stays at the composer bottom-right at narrow widths', asyn
 
 test('the existing Local runtime selection remains intact', async ({ page }) => {
   await mount(page, { status: 'none' });
-  await page.getByRole('button', { name: 'Runs on Local' }).click();
-  await expect(page.getByText('Hermes Agent on this computer')).toBeVisible();
+  const runtime = page.getByLabel('Runs on Local');
+  await expect(runtime).toBeVisible();
+  await expect(runtime).toHaveAttribute('title', 'Hermes Agent on this computer');
+  // Runtime is fixed for the session: no Cloud/Local switcher menu.
+  await expect(page.getByRole('menuitemradio', { name: /Cloud|Local/ })).toHaveCount(0);
 });

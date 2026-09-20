@@ -1102,6 +1102,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .composer .text-btn .composer-selector-chevron { width: 14px; height: 14px; }
 .composer .text-btn:disabled { opacity: 1; cursor: default; }
 .composer .text-btn:disabled:hover { color: var(--muted); background: transparent; }
+.composer .composer-runtime-chip { cursor: default; pointer-events: none; }
+.composer .composer-runtime-chip:hover { color: var(--muted); background: transparent; }
 .composer-model-control { min-width: 0; max-width: min(340px, 42vw); }
 .composer-model-control .text-btn { min-width: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -54,7 +54,6 @@ export function Composer({ session }: { session: SessionState }) {
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const modeBtn = useRef<HTMLButtonElement>(null);
   const modelBtn = useRef<HTMLButtonElement>(null);
-  const runtimeBtn = useRef<HTMLButtonElement>(null);
   const attachBtn = useRef<HTMLButtonElement>(null);
 
   const run = session.run;
@@ -378,22 +377,13 @@ export function Composer({ session }: { session: SessionState }) {
             </button>
             <ModelMenu session={session} open={menu === 'model'} onClose={() => setMenu(null)} anchorRef={modelBtn} />
           </span>
-          <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <button ref={runtimeBtn} type="button" className="text-btn" aria-haspopup="dialog" aria-expanded={menu === 'runtime'} disabled={active} title={active ? 'Runtime for this run' : undefined} onClick={() => setMenu(menu === 'runtime' ? null : 'runtime')}>
-              <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
-              <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'} <Icon name="chevron" size={14} className="composer-selector-chevron" />
-            </button>
-            <Popover open={menu === 'runtime'} onClose={() => setMenu(null)} anchorRef={runtimeBtn} width={420} label="Runs on" above>
-              <MenuItem icon="cloud" sub={session.runtime === 'cloud' ? state.workspace.name : 'Not configured for Iris'} checked={session.runtime === 'cloud'} disabled={session.runtime !== 'cloud'} onClick={() => setMenu(null)}>
-                Cloud
-              </MenuItem>
-              <MenuItem icon="device" sub={session.runtime === 'local' ? 'Hermes Agent on this computer' : 'Not configured for this workspace'} checked={session.runtime === 'local'} disabled={session.runtime !== 'local'} onClick={() => setMenu(null)}>
-                Local
-              </MenuItem>
-              <div className="p-meta" style={{ padding: '0 12px' }}>
-                Model requests use the workspace's own provider key either way; execution location does not change where the model runs.
-              </div>
-            </Popover>
+          <span
+            className="text-btn composer-runtime-chip"
+            aria-label={`Runs on ${session.runtime === 'local' ? 'Local' : 'Cloud'}`}
+            title={session.runtime === 'local' ? 'Hermes Agent on this computer' : state.workspace.name}
+          >
+            <Icon name={session.runtime === 'local' ? 'device' : 'cloud'} size={16} />
+            <span className="chip-label"> Runs on</span> {session.runtime === 'local' ? 'Local' : 'Cloud'}
           </span>
           <button type="button" className="send" aria-label={contextKey ? 'Send context answer' : active ? (sendMode === 'queue' ? 'Queue follow-up' : 'Send guidance') : 'Send message'} disabled={!text.trim() || blocked || admitting} onClick={send}>
             <Icon name="up" />
