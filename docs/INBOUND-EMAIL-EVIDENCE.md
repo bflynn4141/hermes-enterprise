@@ -2,6 +2,20 @@
 
 Hermes can import one Gmail thread that a workspace Admin explicitly selects. The import is an immutable evidence snapshot for an agent’s governed Library team. It is not a mailbox browser and it is not an email-sending integration.
 
+## UX status: operator proof, not a finished picker
+
+The current Connections form accepts a Gmail API `threadId`. That is a technical operator path, not a finished user-friendly selection flow. Google documents `threadId` as an opaque API resource identifier, but does not document a supported conversion from a Gmail browser URL or URL fragment to that identifier. Hermes therefore does not parse pasted Gmail links or claim that a browser link can be converted safely.
+
+Google does provide a supported user-recognizable selection surface through a Google Workspace add-on in Gmail. When a user opens a message and invokes a contextual add-on action, the Gmail event object contains the currently open `gmail.messageId` and `gmail.threadId`. A future “Import to Hermes” Gmail add-on could pass that authenticated contextual thread ID to this existing exact-thread intake while the independent `gmail.readonly` connection remains the server-side content authority. That add-on, its event authentication, installation policy, and consent review are not implemented here.
+
+Hermes must not substitute `users.threads.list` or mailbox search for that picker: doing so would broaden the product from explicit selected-thread intake into mailbox browsing. Until a supported contextual selector is built, describe this screen as an operator proof rather than a complete end-user flow.
+
+Primary selection references:
+
+- [Google Workspace add-on event objects](https://developers.google.com/workspace/add-ons/concepts/event-objects)
+- [Extending the Gmail message UI](https://developers.google.com/workspace/add-ons/gmail/extending-message-ui)
+- [Gmail thread management](https://developers.google.com/workspace/gmail/api/guides/threads)
+
 ## Authority boundary
 
 - The evidence flow uses a separate Google OAuth client and token table from the outbound sender.

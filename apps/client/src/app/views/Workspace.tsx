@@ -581,8 +581,8 @@ function LibraryConnections() {
       {connected && admin && (
         <Panel
           icon="document"
-          title="Import one Gmail thread"
-          subtitle="Paste the thread ID from the Gmail URL. The snapshot is immutable and visible only to the selected agent’s Enterprise team."
+          title="Technical Gmail evidence import"
+          subtitle="Enter a Gmail API thread ID supplied by an approved operator tool. Google does not document converting a Gmail browser link into this API ID."
         >
           <div className="row" style={{ alignItems: 'end' }}>
             <label className="field grow">
@@ -599,7 +599,7 @@ function LibraryConnections() {
               {busy === 'import' ? 'Importing…' : 'Import evidence'}
             </Button>
           </div>
-          <p className="meta">Import can record replies, hard bounces, and explicit unsubscribe requests from this snapshot. It can only stop future outreach; it cannot send email.</p>
+          <p className="meta">This is an operator proof, not a finished end-user thread picker. Import can record replies, hard bounces, and explicit unsubscribe requests from this snapshot. It can only stop future outreach; it cannot send email.</p>
         </Panel>
       )}
       <Panel

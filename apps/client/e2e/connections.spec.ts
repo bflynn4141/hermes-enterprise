@@ -13,6 +13,7 @@ test('Connections keeps Gmail read evidence separate from the outbound sender', 
   await expect(pane.getByText('Separate gmail.readonly consent')).toBeVisible();
   await expect(pane.getByText(/Outbound sender · iris-partners@example.com/)).toBeVisible();
   await expect(pane.getByText('Read permission is never reused as send permission.')).toBeVisible();
+  await expect(pane.getByText('This is an operator proof, not a finished end-user thread picker.', { exact: false })).toBeVisible();
 
   await pane.getByLabel('Gmail thread ID').fill('thread_1234');
   await pane.getByRole('button', { name: 'Import evidence' }).click();
