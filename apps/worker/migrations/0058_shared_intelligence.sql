@@ -122,5 +122,6 @@ CREATE TRIGGER runs_revoke_shared_intelligence BEFORE DELETE ON runs
   FOR EACH ROW EXECUTE FUNCTION revoke_shared_intelligence_for_deleted_run();
 
 GRANT SELECT, INSERT, UPDATE ON shared_intelligence_proposals, shared_intelligence_evidence TO app;
+GRANT INSERT ON library_sources, library_source_versions, library_source_team_grants TO app;
 GRANT DELETE ON library_source_team_grants TO app;
 REVOKE ALL ON shared_intelligence_proposals, shared_intelligence_evidence FROM agent;

@@ -525,7 +525,7 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
     return { kind, status: 'waiting', reason: 'Approval queues this exact revision for the configured sender; it waits safely if that mailbox is not connected.' };
   }
   if (proposal.approval_type === 'shared_learning') {
-    const publication = bindings.find((binding) => binding.kind === 'skill' && binding.id === proposal.details.skill_id);
+    const publication = bindings.find((binding) => binding.kind === 'resource' && binding.id === proposal.details.skill_id);
     const changed = bindings.find((binding) => !binding.immutable);
     if (publication?.executor_available && !changed) {
       return { kind, status: 'waiting', reason: 'Approval publishes this exact reviewed version to the selected Library audiences.' };
