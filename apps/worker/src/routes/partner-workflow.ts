@@ -19,7 +19,7 @@ import { HermesClient } from '../runtime/client.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import {
   enterpriseReadinessToolNames,
-  matchesExactEnterpriseAttestation,
+  matchesExactManagedEnterpriseAttestation,
 } from '../runtime/readiness.js';
 import {
   correctPartnerInvoiceIntake,
@@ -196,8 +196,14 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
   const readiness = Object.fromEntries(await Promise.all(setup.roles.map(async (role) => {
     const client = new HermesClient(role.binding.baseUrl, role.binding.apiKey, undefined, role.binding.transport);
     const [capabilities, raw] = await Promise.all([client.capabilities(), client.enterpriseReadiness()]);
-    if (!capabilities.durableIdempotency || raw.workspaceId !== setup.workspaceId || raw.agentId !== role.agent_id
-        || !matchesExactEnterpriseAttestation(raw, role.assignment)) {
+    if (!capabilities.durableIdempotency ||
+        !matchesExactManagedEnterpriseAttestation(raw, role.assignment, {
+          workspaceId: setup.workspaceId,
+          agentId: role.agent_id,
+          enterpriseUrl: c.env.HERMES_ENTERPRISE_PUBLIC_URL,
+          pluginRevision: c.env.HERMES_ENTERPRISE_PLUGIN_REVISION,
+          pluginArtifactDigest: c.env.HERMES_ENTERPRISE_PLUGIN_SHA256,
+        })) {
       throw new RouteError(`${role.role} native profile has not attested the reviewed skill and tool inventory.`, 'workflow_readiness_incomplete', 409);
     }
     const skill = raw.skills![0]!;
@@ -206,6 +212,8 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
       agent_id: role.agent_id, assignment_id: role.assignment.id, assignment_revision: role.assignment.revision,
       skill_name: skill.name, skill_version: skill.version, artifact_digest: skill.artifactDigest,
       runtime_revision: raw.runtimeRevision!, plugin_version: raw.plugin!.version,
+      enterprise_url: new URL(raw.enterpriseUrl).origin,
+      plugin_revision: raw.plugin!.revision!, plugin_artifact_digest: raw.plugin!.artifactDigest!,
       tool_names: tools, checked_at: checkedAt,
     }];
   })));
