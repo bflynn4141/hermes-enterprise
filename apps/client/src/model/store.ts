@@ -431,10 +431,7 @@ export function sessionFrom(row: Session): SessionState {
     pending: false,
     lastActivity: row.last_activity_at ? Date.parse(row.last_activity_at) : Date.now(),
     carried: null,
-    // A row from the server carries no provenance, so anything that is not
-    // still the placeholder is treated as somebody's: refining a title a person
-    // may have set two weeks ago is the failure mode worth avoiding.
-    titleSource: row.title === DEFAULT_SESSION_TITLE ? 'auto' : 'manual',
+    titleSource: titleSourceOf(row),
   };
 }
 
@@ -443,7 +440,18 @@ export function sessionFrom(row: Session): SessionState {
 // ---------------------------------------------------------------------------
 
 /** What `POST /w/:ws/sessions` names a session with nothing to go on. */
-export const DEFAULT_SESSION_TITLE = 'New session';
+import { DEFAULT_SESSION_TITLE, autoTitleFrom } from '@hermes/shared';
+export { DEFAULT_SESSION_TITLE, autoTitleFrom };
+
+/**
+ * Who named the session, as far as the client is concerned. The server records
+ * the provenance; a row without it (mock data, an older Worker) falls back to
+ * the old heuristic, where anything that is not the placeholder is somebody's.
+ */
+export function titleSourceOf(row: { title: string; title_source?: string }): 'auto' | 'manual' {
+  if (row.title_source) return row.title_source === 'manual' ? 'manual' : 'auto';
+  return row.title === DEFAULT_SESSION_TITLE ? 'auto' : 'manual';
+}
 
 /**
  * A session nobody has used: no messages, no run, and still the placeholder
@@ -498,15 +506,6 @@ export function sessionStatusLabel(session: SessionState): string {
 }
 
 /** The first six words of the first turn, which is what the session was about. */
-export function autoTitleFrom(text: string): string | null {
-  const words = text.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
-  if (words.length === 0) return null;
-  let title = words.slice(0, 6).join(' ');
-  // A six-word title can still be 200 characters if somebody pastes a URL.
-  if (title.length > 60) title = `${title.slice(0, 57).trimEnd()}\u2026`;
-  // Trailing punctuation reads as a truncation that is not there.
-  return title.replace(/[\s.,;:!?\u2014-]+$/u, '') || null;
-}
 
 // ---------------------------------------------------------------------------
 // Actions

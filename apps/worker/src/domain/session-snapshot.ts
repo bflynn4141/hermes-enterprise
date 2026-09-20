@@ -173,7 +173,7 @@ export async function loadSessionSnapshot(
   const session = row.session;
   return sessionSnapshotSchema.parse({
     workspace_id: workspaceId,
-    session: { id: session.id, agent_id: session.agent_id, title: session.title, mode: session.mode,
+    session: { id: session.id, agent_id: session.agent_id, title: session.title, title_source: session.title_source ?? 'default', mode: session.mode,
       model_id: session.model_id, effort: session.effort ?? null,
       runtime: runtimeLocation(env, workspaceId, String(session.agent_id), session.runtime === 'local' ? 'local' : 'cloud'),
       pinned: session.pinned, archived: session.archived, focus_ref: session.focus_ref ?? null,
