@@ -377,7 +377,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(workflows).toHaveLength(1);
     const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const screening = await client.query(`SELECT id FROM partner_screening_runs WHERE agent_id=$1 AND status='completed'`, [fx.agentId]);
-      const candidates = await client.query(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
+      const candidates = await client.query<{ id: string }>(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
       const sessions = await client.query(`SELECT id FROM sessions WHERE agent_id=$1 AND title='Iris · Automated partner screening'`, [fx.agentId]);
       const runs = await client.query(`SELECT id, client_turn_id FROM runs WHERE session_id=$1`, [sessions.rows[0]?.id]);
       const prompt = await client.query<{ text: string }>(
@@ -390,7 +390,8 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
         [fx.workspaceId, `partner-outreach-draft-${fx.agentId}`],
       );
       return {
-        screening: screening.rowCount, candidates: candidates.rowCount, sessions: sessions.rowCount,
+        screening: screening.rowCount, candidates: candidates.rowCount,
+        candidateId: candidates.rows[0]?.id ?? null, sessions: sessions.rowCount,
         runs: runs.rows, prompt: prompt.rows[0]?.text ?? '', policy: policy.rows,
       };
     });
@@ -399,8 +400,30 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(stored.runs[0]?.client_turn_id).toMatch(/^partner-screening:/);
     expect(stored.prompt).toContain('details.draft_only to true');
     expect(stored.prompt).toContain('otherwise set it to null');
+    expect(stored.prompt).toContain('inspect professional_contact rather than inferring lookup failure');
+    expect(stored.prompt).toContain('copy its stored phone_numbers and social_profiles when present');
+    expect(stored.prompt).not.toContain('When next_contact_call is absent, do not invent contact data: draft-only mode may continue');
     expect(stored.prompt).toContain('Do not use propose_request');
     expect(stored.policy).toEqual([{ approval_type: 'communication', requester_agent_id: fx.agentId }]);
+
+    const db = new PgAgentDb(env as Env, fx.workspaceId, randomUUID());
+    try {
+      const detail = await db.getPartnerCandidate(fx.agentId, stored.candidateId!) as {
+        draft_approval_context: {
+          policy_key: string; approval_type: string; draft_only: boolean;
+          target_member_ids: string[];
+          sender: { member_id: string; address: string };
+        } | null;
+      };
+      expect(detail.draft_approval_context).toMatchObject({
+        policy_key: `partner-outreach-draft-${fx.agentId}`,
+        approval_type: 'communication', draft_only: true,
+        target_member_ids: [expect.any(String)],
+        sender: { member_id: expect.any(String), address: expect.stringMatching(/@example\.test$/) },
+      });
+    } finally {
+      await db.close();
+    }
   });
 
   it('requires a separate spend gate before Cron queues AgentCash discovery', async () => {
@@ -1031,6 +1054,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
         professional_contact: {
           preferred_verified_email: string | null;
           phone_numbers: { number: string; type: string | null }[];
+          social_profiles: { network: string; url: string }[];
           verification: { draft_eligible: boolean };
         };
         next_contact_call: unknown;
@@ -1038,6 +1062,10 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       expect(detail.professional_contact).toMatchObject({
         preferred_verified_email: 'work@example.com',
         phone_numbers: [{ number: '+1 415 555 0100', type: 'mobile' }],
+        social_profiles: [
+          { network: 'linkedin', url: profileUrl },
+          { network: 'twitter', url: 'https://x.com/contact_candidate' },
+        ],
         verification: { draft_eligible: true },
       });
       expect(detail.next_contact_call).toBeNull();

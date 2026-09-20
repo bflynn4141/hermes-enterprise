@@ -278,13 +278,13 @@ function outreachDraftInstructions(context: DraftPolicyContext): string {
       ];
   return [
     'Choose exactly one strongest previously unengaged prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
-    'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. Never alter an argument, repeat a completed paid call, or use another contact source.',
+    'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. When next_contact_call is absent, inspect professional_contact rather than inferring lookup failure: copy its stored phone_numbers and social_profiles when present; only when professional_contact is null use a null address and empty phone/social lists. Never alter an argument, repeat a completed paid call, use another contact source, or discard completed stored contact fields.',
     `Call propose_approval with policy_key ${JSON.stringify(context.policyKey)}, approval_type communication, illustrative false, target_member_ids [${JSON.stringify(context.memberId)}], and no target agents, resources, dependent requests, continuation, or scheduled_for.`,
     ...disposition,
     `Set details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
     'Set one recipient with candidate_id and the candidate name. Copy only stored phone_numbers and social_profiles into the recipient for human review.',
     'Write a concise subject and body grounded in the cited professional evidence. Invite the person to explore or apply to the configured Partner Program without claiming prior interest, approval, benefits, or terms.',
-    'Cite the stored candidate artifacts and the contact enrichment id in proposal.evidence.',
+    'Cite the stored candidate artifacts and, when professional_contact is present, its contact enrichment id in proposal.evidence.',
     'Do not use propose_request for a discovered prospect. A prospect has not submitted an application.',
   ].join(' ');
 }

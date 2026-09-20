@@ -227,6 +227,10 @@
         // remains unreachable without the separate durable dispatch claim.
         "HERMES_CLOUD_MANAGEMENT_ENABLED": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
+        // Exact reviewed managed connector installed for the governed staging rehearsal.
+        // Production remains unset and therefore cannot enable this workflow.
+        "HERMES_ENTERPRISE_PLUGIN_REVISION": "d0806ecb2b8ac55b9ea52b02bbaed896fe0a2549",
+        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:e665ecfd3d5ae6e68c38a71f83a8821fd1a8093bef9489194901beaa9dd87adf",
         "R2_BUCKET": "hermes-uploads-staging"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
