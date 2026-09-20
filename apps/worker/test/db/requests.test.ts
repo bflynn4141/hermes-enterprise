@@ -313,6 +313,47 @@ describe('GET /w/:ws/requests', () => {
     expect(jobs.every((job) => job.attempts === 0)).toBe(true);
   });
 
+  it('sorts the bounded priority pool before applying a smaller caller limit', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    e.INBOX_TRIAGE_MODE = 'active';
+    const urgentId = await seedRequest(fx, 'application', { label: 'Older urgent review' });
+    const lowId = await seedRequest(fx, 'application', { label: 'Newer low-priority review' });
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `UPDATE requests
+            SET created_at=CASE WHEN id=$2 THEN now()-interval '1 day' ELSE now() END
+          WHERE workspace_id=$1 AND id=ANY($3::uuid[])`,
+        [fx.workspaceId, urgentId, [urgentId, lowId]],
+      );
+      await client.query(
+        `INSERT INTO request_triage_assessments
+           (workspace_id, request_id, request_version, state_hash, rubric_version,
+            summary_version, model_id, status, priority_score, priority_band,
+            confidence, signals, reason_codes, completed_at)
+         SELECT r.workspace_id, r.id, EXTRACT(EPOCH FROM r.updated_at)::int,
+                repeat(CASE WHEN r.id=$2 THEN 'a' ELSE 'b' END,64),
+                '1','1','jev-latest','complete',
+                CASE WHEN r.id=$2 THEN 99 ELSE 10 END,
+                CASE WHEN r.id=$2 THEN 'urgent' ELSE 'low' END,
+                0.99,'{}'::jsonb,'[]'::jsonb,now()
+           FROM requests r
+          WHERE r.workspace_id=$1 AND r.id=ANY($3::uuid[])`,
+        [fx.workspaceId, urgentId, [urgentId, lowId]],
+      );
+      await client.query('COMMIT');
+    });
+
+    const page = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?sort=priority&limit=1`)
+    ).json());
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({ id: urgentId, triage: { band: 'urgent', score: 99 } });
+  });
+
   it('queues fresh triage work when the rubric changes without duplicating the same configuration', async () => {
     const fx = await seedWorkspace();
     const { env: e } = env();

@@ -78,6 +78,7 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const visibilityRaw = c.req.query('visibility');
   const visibility = visibilityRaw === 'hidden' || visibilityRaw === 'all' ? visibilityRaw : 'active';
   const triageActive = c.env.INBOX_TRIAGE_MODE === 'active';
+  const candidateLimit = sort === 'priority' && triageActive ? LIST_LIMIT : limit;
 
   let items = await inWorkspace(c, async (work) => {
     const baseValues: unknown[] = [work.workspaceId, work.userId];
@@ -109,9 +110,10 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
 
     // Presentation is effective state: routing or a role change can override
     // an older stored hide. Scan in bounded keyset pages until the requested
-    // visible page is full or the matching request set is exhausted, so a run
-    // of newer hidden rows cannot starve an older visible/required request.
-    while (visible.length < limit) {
+    // recent page (or the existing 100-row priority candidate pool) is full,
+    // or the request set is exhausted. Hidden rows cannot starve older work,
+    // and priority sorting still happens before the caller's limit is applied.
+    while (visible.length < candidateLimit) {
       const values = [...baseValues];
       const where = [...baseWhere];
       if (before) {
@@ -157,7 +159,7 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         ));
         if (visibility === 'all' || item.presentation.hidden === (visibility === 'hidden')) {
           visible.push(item);
-          if (visible.length === limit) break;
+          if (visible.length === candidateLimit) break;
         }
       }
 
@@ -177,6 +179,7 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         || left.id.localeCompare(right.id);
     });
   }
+  items = items.slice(0, limit);
   return c.json(
     requestPage.parse({
       items,
