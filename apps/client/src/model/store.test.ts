@@ -24,8 +24,7 @@ import {
   workAreaFor,
   type Action,
   type AppState,
-  type SessionState,
-} from './store.js';
+  type SessionState, titleSourceOf } from './store.js';
 
 const WS = mockUuid(1);
 const SESSION_A = mockUuid(2);
@@ -939,5 +938,19 @@ describe('session titles and blank sessions', () => {
       session: { id: SESSION_A, agent_id: AGENT, title: DEFAULT_SESSION_TITLE, mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: '2026-10-12T09:49:00.000Z', share: null, context: null, version: 2 },
     });
     expect(state.sessions[SESSION_A]!.title).toBe('Screen the applicant');
+  });
+});
+
+describe('titleSourceOf', () => {
+  it('trusts the row\'s provenance when the server sends it', () => {
+    expect(titleSourceOf({ title: 'Ada Ling · application', title_source: 'run' })).toBe('auto');
+    expect(titleSourceOf({ title: 'Screen the applicant', title_source: 'turn' })).toBe('auto');
+    expect(titleSourceOf({ title: 'New session', title_source: 'default' })).toBe('auto');
+    expect(titleSourceOf({ title: 'Mine', title_source: 'manual' })).toBe('manual');
+  });
+
+  it('falls back to "anything but the placeholder is somebody\'s" for rows without it', () => {
+    expect(titleSourceOf({ title: 'New session' })).toBe('auto');
+    expect(titleSourceOf({ title: 'Ada Ling · application' })).toBe('manual');
   });
 });

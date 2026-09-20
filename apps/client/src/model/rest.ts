@@ -358,6 +358,7 @@ export function createRest(options: RestOptions) {
 
     // --- sessions ---
     sessions: (workspaceId: string, query = '') => request('GET', `${ws(workspaceId)}/sessions${query}`, paginatedSchema(sessionSchema)) as Promise<Paginated<z.infer<typeof sessionSchema>>>,
+    getSession: (workspaceId: string, sessionId: string) => request('GET', `${ws(workspaceId)}/sessions/${sessionId}`, sessionSchema),
     createSession: (workspaceId: string, body: { title?: string; mode?: string; runtime?: string; agent_id?: string }) => request('POST', `${ws(workspaceId)}/sessions`, sessionSchema, body),
     patchSession: (workspaceId: string, sessionId: string, patch: Record<string, unknown>) => request('PATCH', `${ws(workspaceId)}/sessions/${sessionId}`, sessionSchema, patch),
     deleteSession: (workspaceId: string, sessionId: string) => send('DELETE', `${ws(workspaceId)}/sessions/${sessionId}`),
