@@ -29,5 +29,7 @@ export * from './request-review.js';
 export * from './agent-context.js';
 export * from './agent-instructions.js';
 export * from './agent-permissions.js';
+export * from './member-provisioning.js';
+export * from './cloud-connection.js';
 export * from './library-sources.js';
 export * from './shared-intelligence.js';

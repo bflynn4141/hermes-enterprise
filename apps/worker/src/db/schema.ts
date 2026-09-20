@@ -2057,7 +2057,28 @@ export const jobReady = pgTable('job_ready', {
  * Every table in the schema, for the drift test. A table added to the SQL and
  * forgotten here (or the other way round) fails that test.
  */
+export const cloudConnections = pgTable('cloud_connections', {
+  id: uuid('id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull().unique(),
+  initiatedBy: uuid('initiated_by').notNull(),
+  status: text('status').notNull(),
+  organizationId: text('organization_id'),
+  organizationName: text('organization_name'),
+  ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+export const cloudConnectionAttempts = pgTable('cloud_connection_attempts', {
+  id: uuid('id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  initiatedBy: uuid('initiated_by').notNull(), stateHash: text('state_hash').notNull().unique(),
+  status: text('status').notNull(), ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), expiresAt: ts('expires_at').notNull(), createdAt: now('created_at'),
+});
+
 export const ALL_TABLES = {
+  cloud_connections: cloudConnections,
+  cloud_connection_attempts: cloudConnectionAttempts,
   schema_migrations: schemaMigrations,
   users,
   auth_sessions: authSessions,
