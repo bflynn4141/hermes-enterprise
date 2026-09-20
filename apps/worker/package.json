@@ -7,7 +7,7 @@
     "dev": "wrangler dev --local",
     "build": "wrangler deploy --dry-run --outdir dist",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --project unit && node scripts/db-test.mjs && vitest run --project worker",
+    "test": "vitest run --project unit && node scripts/db-test.mjs --with-worker",
     "test:unit": "vitest run --project unit",
     "db:roles": "node scripts/roles.mjs",
     "db:migrate": "node scripts/roles.mjs && node scripts/migrate.mjs",

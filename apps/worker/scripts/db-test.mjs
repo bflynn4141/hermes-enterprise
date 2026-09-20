@@ -1,32 +1,53 @@
-// `pnpm --filter @hermes/worker db:test` — the db project, on `hermes_test`.
+// Run DB-backed Vitest projects against one explicitly owned target.
 //
-// It used to be `node scripts/roles.mjs && vitest run --project db` with
-// `PGDATABASE` unset, which meant `hermes`: the same database the developer's
-// own Worker is looking at, written to by tests that create workspaces, runs
-// and decisions. The tests are correct either way; the developer's Inbox was
-// not. `hermes_test` is now the only database any suite writes to (decision
-// C43), and this script is what makes sure it exists before vitest starts.
+// Local invocations create and remove a per-process container. GitHub Actions
+// uses only the workflow's declared disposable service. CI=true by itself is
+// deliberately not an escape hatch: local workers have historically set it
+// and then mutated the shared `hermes_test` database.
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEST_DATABASE, ensureTestDatabase, hyperdriveStrings } from '../../../scripts/test-db.mjs';
+import {
+  cleanupTestDatabase,
+  ensureTestDatabase,
+  isolatedTestEnvironment,
+  resolveVitestTarget,
+} from '../../../scripts/test-db.mjs';
 
 const workerDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const ci = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const database = ci ? (process.env.PGDATABASE ?? 'hermes') : TEST_DATABASE;
+const github = process.env.GITHUB_ACTIONS === 'true';
+const withWorker = process.argv.includes('--with-worker');
+const passthrough = process.argv.slice(2).filter(
+  (argument) => argument !== '--with-worker' && argument !== '--',
+);
 
-// Seeded too: `test/db/harness.ts` builds its own rows, but the catalog the
-// health check counts comes from the migrations and the seed.
-// GitHub Actions already owns its disposable Postgres service and has migrated
-// it in the preceding workflow step. Starting Docker Compose there would fight
-// that service for port 5433. A developer machine is different: its `hermes`
-// database is durable product state, so local tests always create and use the
-// separate `hermes_test` database.
-if (!ci) ensureTestDatabase();
+function run(project, extra = []) {
+  const result = spawnSync('npx', ['vitest', 'run', '--project', project, ...extra], {
+    cwd: workerDir,
+    stdio: 'inherit',
+    env: isolatedTestEnvironment(process.env),
+  });
+  return result.status ?? 1;
+}
 
-const result = spawnSync('npx', ['vitest', 'run', '--project', 'db', ...process.argv.slice(2)], {
-  cwd: workerDir,
-  stdio: 'inherit',
-  env: { ...process.env, PGDATABASE: database, ...hyperdriveStrings(database) },
-});
-process.exit(result.status ?? 1);
+let status = 1;
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.once(signal, () => {
+    if (!github) cleanupTestDatabase();
+    process.exit(code);
+  });
+}
+try {
+  if (github) {
+    resolveVitestTarget(process.env, { needsDatabase: true });
+  } else {
+    ensureTestDatabase();
+  }
+
+  status = run('db', passthrough);
+  if (status === 0 && withWorker) status = run('worker');
+} finally {
+  if (!github) cleanupTestDatabase();
+}
+
+process.exit(status);

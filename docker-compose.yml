@@ -1,4 +1,5 @@
-# Local Postgres for development and tests.
+# Durable local Postgres for development only. Automated DB-backed tests use a
+# separately labelled, per-invocation disposable container from test-db.mjs.
 # Port 5433 on the loopback interface only: 5432 is often already taken by a
 # system Postgres, and binding 127.0.0.1 keeps the database off the network.
 services:
