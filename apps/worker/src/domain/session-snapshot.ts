@@ -20,7 +20,7 @@ export function projectSessionMessage(row: Record<string, unknown>): Message {
     id: row.id, session_id: row.session_id, seq: row.seq, role: row.role, kind: row.kind ?? null,
     text: row.text, blocks: row.blocks, status: row.status, run_id: row.run_id ?? null,
     worked_ms: row.worked_ms ?? null, incomplete: row.status === 'incomplete',
-    ...(sources.length ? { attachments: sources.map((source: { id: string; name: string; sha256: string }) => ({ id: source.id, label: source.name.slice(0, 200), kind: 'source', status: 'ready', sha256: source.sha256 })) } : {}),
+    ...(sources.length ? { attachments: sources.map((source: { id: string; name: string; sha256: string; kind?: 'agent_file' | 'library_source' }) => ({ id: source.id, label: source.name.slice(0, 200), kind: 'source', status: 'ready', sha256: source.sha256, source_kind: source.kind ?? 'agent_file' })) } : {}),
     ...(created ? { at: new Date(created instanceof Date ? created : String(created)).toISOString() } : {}),
   });
 }
@@ -109,7 +109,7 @@ export async function loadSessionSnapshot(
          ON e.payload->>'run_id'=r.id::text AND e.payload->>'attempt'=r.attempt::text
         WHERE e.kind IN ('run.started','run.status','message.reset','message.delta','message.final')
      ), message_page AS MATERIALIZED (
-       SELECT m.*, (SELECT jsonb_agg(jsonb_build_object('id',source->>'id','name',source->>'name','sha256',source->>'sha256'))
+       SELECT m.*, (SELECT jsonb_agg(jsonb_build_object('id',source->>'id','name',source->>'name','sha256',source->>'sha256','kind',source->>'kind'))
          FROM runs bound, jsonb_array_elements(bound.context_snapshot->'sources') source
          WHERE bound.id=m.run_id AND bound.workspace_id=m.workspace_id) AS context_sources
        FROM messages m JOIN visible_session s ON m.workspace_id=s.workspace_id AND m.session_id=s.id
