@@ -21,6 +21,8 @@ export interface Env {
   HERMES_POOL_LOW_CAPACITY_THRESHOLD?: string;
   /** Public origin the Cloud profile uses for its reverse enterprise bridge. */
   HERMES_ENTERPRISE_PUBLIC_URL?: string;
+  /** Enables the admin-only Cloud OAuth connection, not paid provisioning. */
+  HERMES_CLOUD_MANAGEMENT_ENABLED?: string;
   /** Reviewed native plugin commit accepted for managed warm-pool profiles. */
   HERMES_ENTERPRISE_PLUGIN_REVISION?: string;
   /** Reviewed deterministic digest of the installed enterprise_bridge tree. */

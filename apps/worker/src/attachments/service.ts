@@ -26,7 +26,7 @@ import {
   type AttachmentDeclaration,
   type AttachmentKind,
 } from '@hermes/shared';
-import type { Env } from '../env.js';
+import { isDevelopment, type Env } from '../env.js';
 import { RouteError, type TenantWork } from '../routes/tenant.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { uploadKey } from '../storage/keys.js';
@@ -125,6 +125,7 @@ export async function declareUpload(
   kind: AttachmentKind,
   input: unknown,
 ): Promise<{ row: FileRow; storageKey: string; declaration: AttachmentDeclaration }> {
+  requireUploadConfiguration(env);
   const parsed = attachmentDeclarationSchema.safeParse(input);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -229,6 +230,7 @@ export async function uploadTarget(
   storageKey: string,
   mime: string,
 ): Promise<UploadTarget> {
+  requireUploadConfiguration(env);
   if (presigningAvailable(env)) {
     const signed = await presignPut(env, storageKey, ATTACHMENT_PRESIGN_SECONDS);
     return {
@@ -249,6 +251,12 @@ export async function uploadTarget(
     headers: { 'content-type': mime },
     direct: true,
   };
+}
+
+function requireUploadConfiguration(env: Env): void {
+  if (!isDevelopment(env) && !presigningAvailable(env)) {
+    throw new RouteError('File uploads are unavailable until storage is configured. Contact your workspace administrator.', 'uploads_unavailable', 503);
+  }
 }
 
 /** What verification concluded about the bytes. */

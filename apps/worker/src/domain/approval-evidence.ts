@@ -28,10 +28,14 @@ export function approvalEvidenceSourceUrl(value: unknown, source: string): strin
     const videoId = url.searchParams.get('v');
     const isWatch = youtube && path === '/watch' && videoId !== null && /^[A-Za-z0-9_-]{11}$/u.test(videoId);
     const isYoutube = youtube && (isWatch || /^\/(?:@[A-Za-z0-9_.-]+|(?:channel|c)\/[A-Za-z0-9_-]+|shorts\/[A-Za-z0-9_-]{11})\/?$/u.test(path));
-    if (!isGithub && !isLinkedIn && !isYoutube) return null;
+    const isX = source === 'agentcash_creators'
+      && ['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(host)
+      && /^\/[A-Za-z0-9_]{1,30}(?:\/status\/\d{1,30})?\/?$/u.test(path);
+    if (!isGithub && !isLinkedIn && !isYoutube && !isX) return null;
     const originalParams = new URLSearchParams(url.search);
     url.search = '';
     url.hash = '';
+    if (isX) url.hostname = 'x.com';
     if (isWatch) url.searchParams.set('v', videoId!);
     if (isGithub && host === 'api.github.com') {
       for (const key of ['q', 'type', 'sort', 'direction', 'per_page']) {

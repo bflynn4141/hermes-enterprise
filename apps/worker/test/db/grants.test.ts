@@ -28,6 +28,21 @@ async function grantsFor(role: string): Promise<Map<string, Set<Privilege>>> {
   });
 }
 
+async function columnGrantsFor(role: string, table: string): Promise<Array<{
+  column_name: string;
+  privilege_type: Privilege;
+}>> {
+  return withClient('owner', async (c) => (
+    await c.query<{ column_name: string; privilege_type: Privilege }>(
+      `SELECT column_name, privilege_type
+         FROM information_schema.column_privileges
+        WHERE table_schema = 'public' AND grantee = $1 AND table_name = $2
+        ORDER BY column_name, privilege_type`,
+      [role, table],
+    )
+  ).rows);
+}
+
 /** What the `agent` role is allowed, table by table. Nothing else is granted. */
 const AGENT_EXPECTED: Record<string, Privilege[]> = {
   workspaces: ['SELECT'],
@@ -99,6 +114,10 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
 
 /** The revocations the approval invariant rests on, named one by one. */
 const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
+  { table: 'shared_intelligence_proposals', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'shared_intelligence_evidence', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'cloud_connections', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'cloud_connection_attempts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
@@ -146,6 +165,7 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'partner_decision_acknowledgments', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_provisioning', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_runtime_bindings', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'hermes_cloud_capacity', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_resources', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_policies', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_requests', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
@@ -197,6 +217,15 @@ describe('database grants', () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it('grants runtime admission only the non-secret capacity columns it evaluates', async () => {
+    expect(await columnGrantsFor('agent', 'hermes_cloud_capacity')).toEqual([
+      { column_name: 'assigned_agent_id', privilege_type: 'SELECT' },
+      { column_name: 'state', privilege_type: 'SELECT' },
+      { column_name: 'workspace_id', privilege_type: 'SELECT' },
+    ]);
+    expect((await grantsFor('agent')).has('hermes_cloud_capacity')).toBe(false);
   });
 
   it('keeps the audit table and the outbox append-only for both roles', async () => {

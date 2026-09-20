@@ -340,6 +340,8 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       session_id: context.sessionId, run_id: context.runId, created_at: context.at(index - 20), version: 1,
       payload: payload as unknown as Record<string, unknown>, sources: [], missing: [], note: null,
       decision_id: null, decided_at: null, decided_by_name: null, approval: projection,
+      provenance: { kind: 'sample', source: 'approval_demo_fixture', recorded_at: context.at(index - 20) },
+      presentation: { hidden: false, hidden_at: null, hidden_reason: null },
       decision_summary: {
         action: 'Review approval', primary: proposal.summary, facts: [], consequence: proposal.consequence,
         approval_requirement: {

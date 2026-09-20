@@ -147,6 +147,19 @@ export function matchesExactEnterpriseAttestation(
     matchesEnterpriseReadiness(readiness, assignment);
 }
 
+/** Admission for a governed multi-party role must bind both halves of the
+ * proof: the exact assignment inventory and the reviewed managed runtime
+ * origin/plugin identity. A self-consistent skill/tool payload from an
+ * unpinned or differently installed connector is not sufficient. */
+export function matchesExactManagedEnterpriseAttestation(
+  readiness: HermesEnterpriseReadiness,
+  assignment: EnterpriseSkillAssignment | null,
+  expected: ManagedRuntimeIdentity,
+): boolean {
+  return matchesManagedRuntimeIdentity(readiness, expected) &&
+    matchesExactEnterpriseAttestation(readiness, assignment);
+}
+
 /** A promoted digest binding follows its current explicit assignment. The
  * common managed boot/source identity remains fixed while the reviewed role
  * can move from bootstrap P1.7 to P1.8 or Finance. */

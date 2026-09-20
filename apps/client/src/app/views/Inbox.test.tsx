@@ -36,6 +36,8 @@ function request(id: number, subject: string, kind: RequestEntity['kind'], statu
     id: mockUuid(id), kind, status, subject, label: subject, title: subject,
     session_id: null, run_id: null, created_at: '2026-09-15T12:00:00.000Z',
     version: 1, payload, sources, missing: [],
+    provenance: { kind: 'unknown', source: 'not_recorded', recorded_at: '2026-09-15T12:00:00.000Z' },
+    presentation: { hidden: false, hidden_at: null, hidden_reason: null },
     decision_summary: {
       action: kind === 'application' ? 'Review applicant' : kind === 'invoice' ? 'Approve invoice draft' : 'Approve agreement draft',
       primary: subject,

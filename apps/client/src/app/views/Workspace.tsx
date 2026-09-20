@@ -26,6 +26,9 @@ import { ProviderConnect, type ProviderConnectStatus } from '../providers/Provid
 import { PartnerWorkflow } from './PartnerWorkflow.js';
 import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
 import { RuntimeCapacityTab } from './RuntimeCapacity.js';
+import { SharedIntelligence } from './SharedIntelligence.js';
+import { CloudConnection } from './CloudConnection.js';
+import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
 
 /**
@@ -464,8 +467,9 @@ export function Library({ view, id }: { view: string; id: string | null }) {
         <Tabs tabs={LIBRARY_TABS} value={view} onChange={(next) => nav(LIB(next))} label="Library sections" />
         {view === 'skills' && <LibrarySkills />}
         {view === 'documents' && <LibraryDocuments />}
+        {/* Connections and Shared Intelligence are independent, reviewed Library workflows. */}
         {view === 'connections' && <LibraryConnections />}
-        {view === 'intelligence' && <EmptyState icon="skill" title={EMPTY.libraryUnavailable} detail="Shared Intelligence proposals are reviewed by a human; the pilot does not publish them." />}
+        {view === 'intelligence' && <SharedIntelligence />}
       </div>
     </div>
   );
@@ -1210,6 +1214,45 @@ function SlackTab() {
  *
  * Admin, a typed confirmation, and step-up.
  */
+function OrganizationCloudConnection() {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const [connection, setConnection] = useState<(CloudConnectionStatus & { available: boolean }) | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = () => { void adapter.rest.cloudConnection(state.workspace.id).then(value => {
+      if (active) { setConnection(value); }
+    }).catch(() => { if (active) setError('Cloud connection status could not be loaded.'); }); };
+    setConnection(null);
+    setError(new URL(window.location.href).searchParams.get('cloud') === 'failed' ? 'Cloud was not connected. Your previous connection, if any, is unchanged. Please try again.' : null);
+    load();
+    window.addEventListener('focus', load);
+    const interval = window.setInterval(load, 30_000);
+    return () => { active = false; window.removeEventListener('focus', load); window.clearInterval(interval); };
+  }, [adapter, state.workspace.id]);
+  const connect = async () => {
+    setBusy(true); setError(null);
+    try {
+      const result = await adapter.rest.startCloudConnection(state.workspace.id);
+      const url = new URL(result.authorization_url);
+      if (url.origin !== 'https://portal.nousresearch.com' || url.pathname !== '/oauth/authorize' || url.username || url.password) throw new Error('untrusted redirect');
+      window.location.assign(url.href);
+    } catch (caught) {
+      const reason = (caught as { reason?: string }).reason ?? '';
+      if (reason === 'reauth_required') {
+        const url = adapter.auth.stepUpUrl(window.location.href, 'provider_key');
+        if (url) { window.location.assign(url); return; }
+        setError('Sign in again, then connect Cloud.');
+      } else { setError(cloudConnectionErrorMessage(reason)); }
+      setBusy(false);
+    }
+  };
+  if (!connection) return <p role="status">{error ?? 'Loading Cloud connection…'}</p>;
+  return <CloudConnection status={connection} available={connection.available} busy={busy} error={error} onConnect={() => { void connect(); }} />;
+}
+
 function OrganizationTab() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -1291,6 +1334,7 @@ function OrganizationTab() {
 
       {admin && (
         <>
+          <OrganizationCloudConnection />
           <h2 className="section-title">Deleting this workspace</h2>
           {pending ? (
             <>
@@ -2258,7 +2302,7 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
 }
 
 /**
- * Email notifications.
+ * Notification preferences.
  *
  * The shape is the server's: `{ notifications: { approvals, blocked, digest } }`
  * on the way in and `settingsView.notifications` on the way back. It used to
@@ -2299,7 +2343,8 @@ function NotificationsTab() {
   };
   return (
     <>
-      <h2 className="section-title">Email notifications</h2>
+      <div className="row"><h2 className="section-title">Notification preferences</h2><span className="grow" /><span className="pill">Delivery not configured</span></div>
+      <p className="meta">These preferences are saved for a future delivery service. This deployment does not send approval, blocked-work or digest emails.</p>
       {([
         ['approvals', 'Approval requests'],
         ['blocked', 'Blocked work'],
@@ -2311,10 +2356,10 @@ function NotificationsTab() {
         </div>
       ))}
       <div className="app-footer inline">
-        <span className="meta">Email only · The Inbox stays on</span>
+        <span className="meta">Preferences only · The Inbox stays on · No notification email is sent</span>
         <span className="grow" />
         <Ack show={ack} style={{ right: 0, top: -12, position: 'relative' }}>
-          Saved
+          Preference saved
         </Ack>
       </div>
     </>

@@ -1048,6 +1048,29 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, agentId, candidate.id, this.traceId],
       );
       const contact = contactResult.rows[0];
+      const draftPolicyResult = await q<{
+        policy_key: string; member_id: string; sender_address: string;
+      }>(
+        `SELECT p.key AS policy_key, m.id AS member_id, u.email AS sender_address
+           FROM approval_policies p
+           JOIN members m
+             ON m.workspace_id=p.workspace_id AND m.status='active'
+            AND m.id=CASE
+              WHEN p.steps#>>'{0,reviewers,0,member_id}' ~
+                   '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN (p.steps#>>'{0,reviewers,0,member_id}')::uuid
+              ELSE NULL
+            END
+           JOIN users u ON u.id=m.user_id
+          WHERE p.workspace_id=$1 AND p.requester_agent_id=$2
+            AND p.key=$3 AND p.approval_type='communication' AND p.active
+            AND jsonb_array_length(p.steps)=1
+            AND jsonb_array_length(p.steps->0->'reviewers')=1
+            AND p.steps#>>'{0,reviewers,0,kind}'='member'
+          ORDER BY p.version DESC LIMIT 1`,
+        [this.workspaceId, agentId, `partner-outreach-draft-${agentId}`],
+      );
+      const draftPolicy = draftPolicyResult.rows[0];
       const contactEligible = ['agentcash_people', 'agentcash_creators'].includes(String(candidate.source))
         && trustedLinkedInProfileUrl(String(candidate.profile_url)) !== null;
       const nextContactCall = !contactEligible
@@ -1089,6 +1112,13 @@ export class PgAgentDb implements AgentDb {
           verified_at: contact.verified_at,
           source: 'agentcash_minerva_hunter',
         } : null,
+        draft_approval_context: draftPolicy ? {
+          policy_key: draftPolicy.policy_key,
+          approval_type: 'communication',
+          draft_only: true,
+          target_member_ids: [draftPolicy.member_id],
+          sender: { member_id: draftPolicy.member_id, address: draftPolicy.sender_address },
+        } : null,
         next_contact_call: nextContactCall,
         constraints: [
           'Do not claim this organization applied or consented.',
@@ -1097,6 +1127,7 @@ export class PgAgentDb implements AgentDb {
           'A proposal remains pending until a human reviews it; do not contact the organization.',
           'Phone numbers and social profiles are review-only data. Never call, text, or message them.',
           'Use an email address in a draft only when preferred_verified_email is non-null.',
+          'Propose outreach only when draft_approval_context is present, and copy that server-owned policy, audience, and sender exactly.',
         ],
       };
     });

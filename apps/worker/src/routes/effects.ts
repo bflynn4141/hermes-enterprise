@@ -6,13 +6,11 @@
 // The execute route is the most important honest surface in the product, so it
 // is worth being explicit about what it is:
 //
-// There is no executor. This repository contains no SMTP client, no payment
-// provider, no signature provider, no identity provider integration and no
-// webhook that would reach one — not behind a flag, not "just for testing"
-// (CONVENTIONS, invariant 5). So pressing Execute records an attempt, writes
-// `status = 'unavailable'` with the reason, appends an `effect.executed` audit
-// row, and tells the person in plain words that nothing was sent, paid, granted
-// or signed and that they will have to do it themselves for now.
+// There is no executor for these legacy ledger rows. Approved communications
+// can use the separate governed Gmail outbox when configured, but executing a
+// legacy effect does not enqueue that outbox or prove delivery. Pressing
+// Execute records an attempt, writes `status = 'unavailable'` with the reason,
+// appends an `effect.executed` audit row, and states which work remains undone.
 //
 // That is a worse product than one that executes. It is a far better product
 // than one that *says* it executed, which is what a stub with a green tick

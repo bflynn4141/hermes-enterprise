@@ -39,6 +39,8 @@ import {
   type InboundEmailThreadImportInput,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
+  cloudConnectionResponseSchema,
+  cloudConnectionStartSchema,
   runViewSchema,
   sessionSnapshotSchema,
   type SessionSettings,
@@ -48,6 +50,9 @@ import {
   attachmentDetailSchema,
   attachmentUploadSchema,
   librarySourceSchema,
+  sharedIntelligenceProposalSchema,
+  sharedIntelligenceSubmitResultSchema,
+  sharedIntelligenceWorkspaceSchema,
   approvalViewSchema,
   directUploadResultSchema,
   enterpriseSkillAssignmentPageSchema,
@@ -80,6 +85,7 @@ import {
   type PartnerInvoiceCorrectionInput,
   type PartnerInvoiceCorrectionResult,
   type PartnerHandoffResult,
+  type CreateSharedIntelligenceProposal,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -362,6 +368,8 @@ export function createRest(options: RestOptions) {
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
     addRequestNote: (workspaceId: string, id: string, body: { body: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${id}/notes`, requestEntitySchema, body),
+    patchRequestPresentation: (workspaceId: string, id: string, body: { hidden: boolean; reason?: string }) =>
+      request('PATCH', `${ws(workspaceId)}/requests/${id}/presentation`, requestEntitySchema, body),
     listRequests: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
     listEffects: (workspaceId: string, requestId: string) =>
@@ -484,6 +492,14 @@ export function createRest(options: RestOptions) {
     /** Team-granted, versioned references in Library. */
     listLibrarySources: (workspaceId: string, agentId?: string | null) =>
       request('GET', `${ws(workspaceId)}/library-sources${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(librarySourceSchema)),
+    sharedIntelligence: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/shared-intelligence`, sharedIntelligenceWorkspaceSchema),
+    createSharedIntelligenceProposal: (workspaceId: string, body: CreateSharedIntelligenceProposal) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals`, sharedIntelligenceProposalSchema, body),
+    submitSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/submit`, sharedIntelligenceSubmitResultSchema, {}),
+    revokeSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/revoke`, sharedIntelligenceProposalSchema, {}),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`
@@ -522,6 +538,8 @@ export function createRest(options: RestOptions) {
     importGmailEvidenceThread: (workspaceId: string, body: InboundEmailThreadImportInput) =>
       request('POST', `${ws(workspaceId)}/integrations/email/evidence/threads`, inboundEmailThreadImportSchema, body),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
+    cloudConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/cloud/connection`, cloudConnectionResponseSchema),
+    startCloudConnection: (workspaceId: string) => request('POST', `${ws(workspaceId)}/cloud/connection/start`, cloudConnectionStartSchema, {}),
     pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**

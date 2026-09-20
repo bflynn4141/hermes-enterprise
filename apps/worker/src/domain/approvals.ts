@@ -549,6 +549,14 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
   if (proposal.approval_type === 'communication' && proposal.details.channel === 'email') {
     return { kind, status: 'waiting', reason: 'Approval queues this exact revision for the configured sender; it waits safely if that mailbox is not connected.' };
   }
+  if (proposal.approval_type === 'shared_learning') {
+    const publication = bindings.find((binding) => binding.kind === 'resource' && binding.id === proposal.details.skill_id);
+    const changed = bindings.find((binding) => !binding.immutable);
+    if (publication?.executor_available && !changed) {
+      return { kind, status: 'waiting', reason: 'Approval publishes this exact reviewed version to the selected Library audiences.' };
+    }
+    return { kind, status: 'unavailable', reason: changed?.reason ?? NO_EXECUTOR };
+  }
   const unbound = bindings.find((binding) => !binding.immutable);
   return { kind, status: 'unavailable', reason: unbound?.reason ?? NO_EXECUTOR };
 }
@@ -914,15 +922,15 @@ async function validatePartnerOutreachContact(
     throw new RouteError('partner outreach must name the stored candidate', 'invalid_partner_outreach_contact', 422);
   }
   const result = await tx.query<{
-    enrichment_id: string; display_name: string; contact_data: {
+    enrichment_id: string | null; display_name: string; contact_data: {
       phones?: { number: string; type?: string | null }[];
       social_profiles?: { network: string; url: string }[];
-    }; preferred_email: string | null; draft_eligible: boolean;
+    } | null; preferred_email: string | null; draft_eligible: boolean | null;
   }>(
     `SELECT e.id AS enrichment_id, c.display_name, e.contact_data,
             e.preferred_email, e.draft_eligible
        FROM partner_candidates c
-       JOIN LATERAL (
+       LEFT JOIN LATERAL (
          SELECT id, contact_data, preferred_email, draft_eligible
            FROM partner_contact_enrichments
           WHERE workspace_id=c.workspace_id AND agent_id=c.agent_id AND candidate_id=c.id
@@ -933,15 +941,36 @@ async function validatePartnerOutreachContact(
   );
   const stored = result.rows[0];
   const expectedAddress = stored?.draft_eligible ? stored.preferred_email : null;
-  const expectedPhones = stored?.contact_data.phones ?? [];
-  const expectedProfiles = stored?.contact_data.social_profiles ?? [];
+  const expectedPhones = stored?.contact_data?.phones ?? [];
+  const expectedProfiles = stored?.contact_data?.social_profiles ?? [];
+  const citedSourceIds = proposal.evidence.flatMap((item) =>
+    ['source', 'artifact'].includes(item.kind)
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(item.id)
+      ? [item.id]
+      : [],
+  );
+  const linkedSource = stored && citedSourceIds.length > 0
+    ? await tx.query(
+        `SELECT 1
+           FROM partner_screening_run_candidates rc
+           JOIN partner_source_artifacts a
+             ON a.workspace_id=rc.workspace_id AND a.run_id=rc.run_id
+            AND a.id=ANY(rc.artifact_ids)
+          WHERE rc.workspace_id=$1 AND rc.candidate_id=$2
+            AND a.id=ANY($3::uuid[])
+          LIMIT 1`,
+        [workspaceId, recipient.candidate_id, citedSourceIds],
+      )
+    : null;
+  const contactEvidenceMatches = !stored?.enrichment_id
+    || proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact');
   if (!stored || recipient.name !== stored.display_name || recipient.address !== expectedAddress
       || canonicalJson(recipient.phone_numbers ?? []) !== canonicalJson(expectedPhones)
       || canonicalJson(recipient.social_profiles ?? []) !== canonicalJson(expectedProfiles)
-      || !proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact')) {
+      || linkedSource?.rowCount !== 1 || !contactEvidenceMatches) {
     throw new RouteError('partner outreach contact fields must match stored verified evidence', 'invalid_partner_outreach_contact', 422);
   }
-  if (sendPolicy && !recipient.address) {
+  if (sendPolicy && (!stored.enrichment_id || !stored.draft_eligible || !recipient.address)) {
     throw new RouteError('approved partner email requires a verified professional address', 'invalid_partner_outreach_contact', 422);
   }
   await idempotencyLock(tx, workspaceId, `partner-engagement:${agentId}:${recipient.candidate_id}`);
@@ -1139,6 +1168,19 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     );
     if (materialized) return;
   }
+  if (payload.approval_type === 'shared_learning'
+      && payload.details.skill_id.startsWith('shared-intelligence:')) {
+    const materialized = await (await import('../shared-intelligence/service.js')).materializeSharedIntelligencePublication(
+      work,
+      {
+        requestId: row.request_id,
+        authorizationRevision: row.authorization_revision,
+        authorizationHash: row.authorization_hash,
+        payload,
+      },
+    );
+    if (materialized) return;
+  }
   const queuedEmail = await queueApprovedEmail(work.tx, {
     workspaceId: row.workspace_id,
     requestId: row.request_id,
@@ -1230,8 +1272,10 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
   const payload = approvalPayloadSchema.parse(row.payload);
   const partnerEngagementChange = payload.approval_type === 'record_change'
     && payload.details.system_id === 'enterprise-partner-records';
-  if (partnerEngagementChange && input.decision === 'request_changes') {
-    throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  const sharedIntelligenceChange = payload.approval_type === 'shared_learning'
+    && payload.details.skill_id.startsWith('shared-intelligence:');
+  if ((partnerEngagementChange || sharedIntelligenceChange) && input.decision === 'request_changes') {
+    throw new RouteError('Submit changed content as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
   }
   const members = await activeMembers(context.tx, context.workspaceId);
   const reviewer = members.find((member) => member.user_id === context.userId);
@@ -1275,6 +1319,13 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
         [context.workspaceId, requestId, row.authorization_revision, row.authorization_hash],
       );
     }
+    if (sharedIntelligenceChange) {
+      await context.tx.query(
+        `UPDATE shared_intelligence_proposals SET status='declined'
+          WHERE workspace_id=$1 AND approval_request_id=$2 AND approval_revision=$3 AND approval_hash=$4`,
+        [context.workspaceId, requestId, row.authorization_revision, row.authorization_hash],
+      );
+    }
   } else {
     const refreshedVotes = await votesFor(context.tx, row);
     const refreshed = progress(row, payload, members, refreshedVotes, assignments);
@@ -1297,6 +1348,10 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   if (oldPayload.approval_type === 'record_change'
       && oldPayload.details.system_id === 'enterprise-partner-records') {
     throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  }
+  if (oldPayload.approval_type === 'shared_learning'
+      && oldPayload.details.skill_id.startsWith('shared-intelligence:')) {
+    throw new RouteError('Submit changed content as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
   }
   if (oldPayload.approval_type !== input.proposal.approval_type) throw new RouteError('a revision cannot change approval type', 'approval_type_changed', 422);
   const members = await activeMembers(context.tx, context.workspaceId);

@@ -422,6 +422,63 @@ export const librarySourceTeamGrants = pgTable(
   (t) => [primaryKey({ columns: [t.workspaceId, t.sourceId, t.teamId] })],
 );
 
+export const sharedIntelligenceProposals = pgTable(
+  'shared_intelligence_proposals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    createdByUserId: uuid('created_by_user_id').notNull(),
+    requesterAgentId: uuid('requester_agent_id').notNull(),
+    title: text('title').notNull(),
+    goal: text('goal').notNull(),
+    lesson: text('lesson').notNull(),
+    rationale: text('rationale').notNull(),
+    targetTeamIds: uuid('target_team_ids').array().notNull(),
+    targetTeamLabels: text('target_team_labels').array().notNull(),
+    dedupeSha256: text('dedupe_sha256').notNull(),
+    assessment: jsonb('assessment').notNull(),
+    status: text('status').notNull(),
+    approvalRequestId: uuid('approval_request_id'),
+    approvalRevision: integer('approval_revision'),
+    approvalHash: text('approval_hash'),
+    librarySourceId: uuid('library_source_id'),
+    libraryVersionId: uuid('library_version_id'),
+    createdAt: now('created_at'),
+    publishedAt: ts('published_at'),
+    revokedAt: ts('revoked_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [index('shared_intelligence_creator_idx').on(t.workspaceId, t.createdByUserId, t.createdAt)],
+);
+
+export const sharedIntelligenceEvidence = pgTable(
+  'shared_intelligence_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    proposalId: uuid('proposal_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    sourceSessionId: uuid('source_session_id'),
+    sourceMessageId: uuid('source_message_id').notNull(),
+    sourceMessageRole: text('source_message_role').notNull(),
+    sessionTitle: text('session_title').notNull(),
+    runEndedAt: ts('run_ended_at').notNull(),
+    sourceSha256: text('source_sha256').notNull(),
+    approvedExcerpt: text('approved_excerpt').notNull(),
+    excerptSha256: text('excerpt_sha256').notNull(),
+    provenance: text('provenance').notNull(),
+    toolNames: text('tool_names').array().notNull().default([]),
+    stepLabels: text('step_labels').array().notNull().default([]),
+    outcome: text('outcome').notNull(),
+    revokedAt: ts('revoked_at'),
+    createdAt: now('created_at'),
+  },
+  (t) => [
+    unique('shared_intelligence_evidence_source_key').on(t.proposalId, t.sourceSha256),
+    unique('shared_intelligence_evidence_run_key').on(t.proposalId, t.sourceRunId),
+  ],
+);
+
 export const instructionVersions = pgTable('instruction_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -882,6 +939,29 @@ export const requests = pgTable('requests', {
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
+
+export const requestProvenance = pgTable('request_provenance', {
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').primaryKey(),
+  kind: text('kind').notNull().default('unknown'),
+  source: text('source').notNull().default('not_recorded'),
+  recordedAt: now('recorded_at'),
+});
+
+export const requestPresentations = pgTable(
+  'request_presentations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    hiddenAt: ts('hidden_at'),
+    hiddenReason: text('hidden_reason'),
+    restoredAt: ts('restored_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
 
 export const requestTriageAssessments = pgTable(
   'request_triage_assessments',
@@ -2086,7 +2166,28 @@ export const jobReady = pgTable('job_ready', {
  * Every table in the schema, for the drift test. A table added to the SQL and
  * forgotten here (or the other way round) fails that test.
  */
+export const cloudConnections = pgTable('cloud_connections', {
+  id: uuid('id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull().unique(),
+  initiatedBy: uuid('initiated_by').notNull(),
+  status: text('status').notNull(),
+  organizationId: text('organization_id'),
+  organizationName: text('organization_name'),
+  ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+export const cloudConnectionAttempts = pgTable('cloud_connection_attempts', {
+  id: uuid('id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  initiatedBy: uuid('initiated_by').notNull(), stateHash: text('state_hash').notNull().unique(),
+  status: text('status').notNull(), ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), expiresAt: ts('expires_at').notNull(), createdAt: now('created_at'),
+});
+
 export const ALL_TABLES = {
+  cloud_connections: cloudConnections,
+  cloud_connection_attempts: cloudConnectionAttempts,
   schema_migrations: schemaMigrations,
   users,
   auth_sessions: authSessions,
@@ -2114,6 +2215,8 @@ export const ALL_TABLES = {
   library_sources: librarySources,
   library_source_versions: librarySourceVersions,
   library_source_team_grants: librarySourceTeamGrants,
+  shared_intelligence_proposals: sharedIntelligenceProposals,
+  shared_intelligence_evidence: sharedIntelligenceEvidence,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,
   agent_skills: agentSkills,
@@ -2138,6 +2241,8 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  request_provenance: requestProvenance,
+  request_presentations: requestPresentations,
   request_triage_assessments: requestTriageAssessments,
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,

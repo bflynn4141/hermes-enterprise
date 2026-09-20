@@ -20,6 +20,7 @@ import { authorizeAgentCashContact, authorizeAgentCashCreatorSearch, authorizeAg
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
+import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
 import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
 import {
   getInboundEmailConnection,
@@ -89,6 +90,12 @@ import {
 import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
 import { listLibrarySources } from './routes/library-sources.js';
 import {
+  createSharedIntelligenceProposal,
+  getSharedIntelligence,
+  revokeSharedIntelligence,
+  submitSharedIntelligence,
+} from './routes/shared-intelligence.js';
+import {
   answerContext,
   createTurn,
   editQueueItem,
@@ -113,6 +120,7 @@ import {
   listRequestDocuments,
   listRequestEffects,
   listRequests,
+  patchRequestPresentation,
 } from './routes/requests.js';
 import { executeEffect, listEffects } from './routes/effects.js';
 import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
@@ -351,6 +359,9 @@ app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
+app.get('/w/:ws/cloud/connection', getCloudConnection);
+app.post('/w/:ws/cloud/connection/start', startCloudConnection);
+app.get('/w/:ws/cloud/connection/callback', completeCloudConnection);
 app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
 // Sessions, and everything hanging off one.
@@ -396,6 +407,10 @@ app.delete('/w/:ws/attachments/:id', deleteAttachment);
 
 app.get('/w/:ws/files', listFiles);
 app.get('/w/:ws/library-sources', listLibrarySources);
+app.get('/w/:ws/shared-intelligence', getSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals', createSharedIntelligenceProposal);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/submit', submitSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/revoke', revokeSharedIntelligence);
 app.post('/w/:ws/files', createFile);
 app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);
@@ -417,6 +432,7 @@ app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
+app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
 

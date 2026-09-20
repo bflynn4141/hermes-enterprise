@@ -148,6 +148,51 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
   });
 
+  test('origin filters and personal hiding stay visible, reversible, and reviewer-safe', async ({ page }) => {
+    const app = await openInbox(page);
+    await expect(app.getByLabel('Request origin')).toHaveValue('all');
+    await expect(app.getByText('Sample', { exact: true }).first()).toBeVisible();
+    await app.getByLabel('Request origin').selectOption('sample');
+    await expect(app.getByText('Launch partner research sprint')).toBeVisible();
+
+    await app.getByLabel('Reviewer').selectOption('waiting');
+    await openRequest(app, /Change Rowan’s schedule and tools/);
+    await expect(app.getByRole('button', { name: 'Hide', exact: true })).toBeEnabled();
+    await app.getByRole('button', { name: 'Hide', exact: true }).click();
+    await expect(app.getByRole('dialog')).toContainText('Only your Inbox view changes');
+    await app.getByLabel('Reason').fill('Waiting for the assigned agent administrator.');
+    await app.getByRole('button', { name: 'Hide from my Inbox' }).click();
+    await expect(app.getByRole('button', { name: 'Restore', exact: true })).toBeVisible();
+    // The sidebar badge is "For me" work. Organizing a row assigned to Alex
+    // must not change Maya's thirteen required reviews.
+    await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
+
+    await app.getByRole('button', { name: 'Back to Inbox' }).click();
+    await expect(app.getByText('Change Rowan’s schedule and tools')).toHaveCount(0);
+    await app.getByLabel('Inbox visibility').selectOption('hidden');
+    await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
+    await openRequest(app, /Change Rowan’s schedule and tools/);
+    await app.getByRole('button', { name: 'Restore', exact: true }).click();
+    await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
+  });
+
+  test('origin and visibility controls remain usable at phone width', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(APPROVALS);
+    await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('inbox');
+    const app = page.getByRole('region', { name: 'Application' });
+    await expect(app.getByLabel('Request origin')).toBeVisible();
+    await expect(app.getByLabel('Inbox visibility')).toBeVisible();
+    await app.getByLabel('Request origin').selectOption('sample');
+    await expect(app.getByText('Launch partner research sprint')).toBeVisible();
+    const bounds = await app.locator('.inbox-topbar').evaluate((node) => ({
+      clientWidth: node.clientWidth,
+      scrollWidth: node.scrollWidth,
+    }));
+    expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth);
+  });
+
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
     await app.getByLabel('Reviewer').selectOption('all');
