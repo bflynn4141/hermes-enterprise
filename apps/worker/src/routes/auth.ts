@@ -101,18 +101,65 @@ function expiredSignInResponse(c: Context<{ Bindings: Env }>): Response {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Sign-in expired · Hermes</title>
     <style>
-      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --app: #000030;
+        --ink: #080416;
+        --indigo: #1a135d;
+        --body: #f2f2f2;
+        --muted: #c6c3da;
+        --action: #0000f2;
+        --action-hover: #1a1aff;
+        --context: #151047;
+        --line: rgba(223, 223, 255, 0.18);
+      }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f3ee; color: #1d1d1b; }
-      main { width: min(100% - 2rem, 30rem); padding: 2.5rem; border: 1px solid #dedbd2; border-radius: 1rem; background: #fff; box-shadow: 0 1rem 3rem rgb(29 29 27 / 8%); }
-      h1 { margin: 0 0 0.75rem; font-size: clamp(1.75rem, 5vw, 2.25rem); line-height: 1.1; letter-spacing: -0.03em; }
-      p { margin: 0; color: #595852; font-size: 1rem; line-height: 1.6; }
-      a { display: inline-flex; margin-top: 1.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.7rem 1rem; border-radius: 0.7rem; background: #1d1d1b; color: #fff; font-weight: 650; text-decoration: none; }
-      a:focus-visible { outline: 3px solid #7c6df2; outline-offset: 3px; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background:
+          radial-gradient(circle at 82% 8%, rgba(84, 88, 172, 0.56), transparent 42%),
+          linear-gradient(160deg, var(--indigo) 0%, #110734 55%, var(--ink) 100%);
+        color: var(--body);
+      }
+      main {
+        width: min(100%, 30rem);
+        padding: clamp(1.75rem, 6vw, 2.5rem);
+        border: 1px solid var(--line);
+        border-radius: 0.875rem;
+        background:
+          linear-gradient(115deg, rgba(92, 103, 191, 0.24), rgba(45, 34, 116, 0.38) 48%, rgba(17, 10, 52, 0.72)),
+          var(--context);
+        box-shadow: 0 1.5rem 4rem rgba(0, 0, 25, 0.35);
+      }
+      .brand { display: flex; align-items: center; gap: 0.75rem; color: var(--body); font-size: 1.05rem; font-weight: 500; }
+      .brand svg { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; filter: drop-shadow(0 0.5rem 1rem rgba(0, 0, 25, 0.35)); }
+      h1 { margin: 1.75rem 0 0.75rem; font-size: clamp(2rem, 7vw, 2.5rem); font-weight: 500; line-height: 1.08; letter-spacing: -0.025em; }
+      p { margin: 0; color: var(--muted); font-size: 1rem; line-height: 1.6; }
+      a { display: inline-flex; margin-top: 1.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.7rem 1.125rem; border-radius: 0.5rem; background: var(--action); color: var(--body); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: background-color 120ms ease-out; }
+      a:hover { background: var(--action-hover); }
+      a:focus-visible { outline: 2px solid #c6c6ff; outline-offset: 3px; }
+      @media (max-width: 30rem) {
+        main { padding: 1.5rem; }
+        a { width: 100%; }
+      }
     </style>
   </head>
   <body>
     <main>
+      <div class="brand">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <defs><linearGradient id="iris" x1="10" y1="7" x2="49" y2="60" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset=".45" stop-color="#e9e6f6"/><stop offset=".72" stop-color="#bdb7d8"/><stop offset="1" stop-color="#716b96"/></linearGradient></defs>
+          <path d="M32 9c6 0 10 8 6 15 7-4 15 0 15 7s-8 11-15 7c4 7 0 15-7 15s-11-8-7-15c-7 4-15 0-15-7s8-11 15-7c-4-7 0-15 8-15Z" fill="url(#iris)"/>
+          <path d="M32 10c4 0 8 5 7 11l-7 9-7-7c-3-6 0-13 7-13Z" fill="#fff" opacity=".72"/><circle cx="31" cy="31" r="6" fill="#26214c"/><circle cx="31" cy="30" r="5" fill="#181333"/>
+        </svg>
+        <span>Hermes</span>
+      </div>
       <h1>Your sign-in expired</h1>
       <p>This sign-in attempt took too long or is no longer valid. Start a fresh sign-in to continue.</p>
       <a href="/auth/login">Start a new sign-in</a>
