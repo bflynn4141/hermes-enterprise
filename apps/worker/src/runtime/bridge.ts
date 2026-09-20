@@ -51,6 +51,7 @@ import {
 import { partnerAgentConfigSchema } from '../partner-screening/config.js';
 import { completePartnerScreening } from '../partner-screening/service.js';
 import { scopeWorkspaceHubEvents } from '../domain/audience.js';
+import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 
 export interface BridgeDb extends AgentDb {
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
@@ -168,13 +169,23 @@ async function dispatchRuntimeApprovalCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
-    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     const callId = await durableCallId(call);
     const existing = await db.runtimeCall(run.id, callId);
     if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
       throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
     }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)
+        && existing?.result !== null && existing?.result !== undefined) {
+      const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
+      return {
+        complete: { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } } as CallResult,
+      };
+    }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)) {
+      throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+    }
+    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
+    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     if (existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
       return {
@@ -274,13 +285,21 @@ export async function dispatchRuntimeCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
-    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     const callId = await durableCallId(call);
     const existing = await db.runtimeCall(run.id, callId);
     if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
       throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
     }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)
+        && existing?.result !== null && existing?.result !== undefined) {
+      const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
+      return { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } };
+    }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)) {
+      throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+    }
+    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
+    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     if (existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
       return { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } };
@@ -440,11 +459,14 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
 
 /** A retry and a paid-call lease serialize on the same task row. */
 async function requireCurrentPaidRun(tx: Tx, workspaceId: string, agentId: string, runId: string, runtimeRunId: string): Promise<void> {
-  const { rows } = await tx.query(
-    `SELECT id FROM runs WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
+  const { rows } = await tx.query<{ recovery_input: string | null }>(
+    `SELECT recovery_input FROM runs WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
        AND runtime_run_id=$4 AND runtime_attempt=attempt AND status='working'
        AND NOT stop_requested FOR UPDATE`, [workspaceId,agentId,runId,runtimeRunId]);
   if (!rows.length) throw new RouteError('The task attempt is no longer active.', 'runtime_run_inactive', 409);
+  if (isResponseOnlyRecoveryInput(rows[0]?.recovery_input)) {
+    throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+  }
 }
 
 /** Atomically reserve the one paid call before the AgentCash MCP executes it. */
@@ -1175,7 +1197,10 @@ export async function proxyRuntimeModel(
     // Whitelist request fields: fallback models, provider credentials,
     // routing URLs, and other caller-controlled routing cannot bypass the catalog.
     const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
-    for (const key of ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty']) {
+    const responseOnly = isResponseOnlyRecoveryInput(run.recoveryInput);
+    const fields = ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty'];
+    if (!responseOnly) fields.push('tools', 'tool_choice', 'parallel_tool_calls');
+    for (const key of fields) {
       if (key in value) forwarded[key] = value[key];
     }
     if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };

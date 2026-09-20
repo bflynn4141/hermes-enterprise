@@ -7,6 +7,7 @@ import { bridgeToken } from '../../src/runtime/config.js';
 import { RuntimeDb } from '../../src/runtime/store.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
 import { call, makeEnv, readTenant } from './harness.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -15,6 +16,56 @@ function deferred<T>() {
 }
 
 describe('paid lease admission versus retry', () => {
+  it('refuses a paid lease before reservation during response-only recovery', async () => {
+    const fx = await seedWorkspace();
+    const screeningId = randomUUID();
+    const runId = randomUUID();
+    const nativeId = `run_${'c'.repeat(32)}`;
+    const config = partnerAgentConfigSchema.parse({
+      source: 'agentcash_people', source_purpose: 'person_partner_research', organization_only: false,
+      no_outreach: true, role_label: 'Partner', keywords: ['artificial intelligence'],
+      people_search: { current_position_seniority_level: ['Founder'] },
+      max_api_requests: 1, max_spend_usd: 0.15,
+    });
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: 'response-only-paid-test-secret-123456789',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({ [fx.agentId]: {
+        workspace_id: fx.workspaceId, base_url: 'https://runtime.example/v1', api_key: 'test-runtime-key',
+      } }),
+    });
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `INSERT INTO partner_screening_runs
+           (id,workspace_id,agent_id,created_by,idempotency_key,source,authentication,config_snapshot,api_requests_max)
+         VALUES($1,$2,$3,$4,$5,'agentcash_people','wallet',$6::jsonb,1)`,
+        [screeningId,fx.workspaceId,fx.agentId,fx.adminId,`response-only:${screeningId}`,JSON.stringify(config)],
+      );
+      await client.query(
+        `INSERT INTO runs
+           (id,workspace_id,session_id,agent_id,status,model_id,client_turn_id,mode,attempt,
+            runtime_kind,runtime_run_id,runtime_attempt,recovery_input)
+         VALUES($1,$2,$3,$4,'working','deepseek-flash',$5,'work',2,'hermes',$6,2,$7)`,
+        [runId,fx.workspaceId,fx.sessionId,fx.agentId,`partner-screening:${screeningId}`,nativeId,RESPONSE_ONLY_RECOVERY_INPUT],
+      );
+      await client.query('COMMIT');
+    });
+    const rejected = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/people-search/authorize`, {
+      method: 'POST', origin: null,
+      headers: { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` },
+      body: { runtime_run_id: nativeId, tool_call_id: 'forbidden-paid-call', arguments: agentCashPeopleSearchArguments(config) },
+    });
+    expect(rejected.status).toBe(403);
+    expect(await rejected.json()).toMatchObject({ reason: 'runtime_tool_forbidden' });
+    await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      expect((await client.query(
+        'SELECT api_requests_used,agentcash_tool_call_id FROM partner_screening_runs WHERE id=$1',
+        [screeningId],
+      )).rows[0]).toEqual({ api_requests_used: 0, agentcash_tool_call_id: null });
+    });
+  });
+
   it('rejects a stale active-run lookup when retry advances the attempt before payment reservation', async () => {
     const fx = await seedWorkspace();
     const screeningId = randomUUID();

@@ -15,10 +15,16 @@ import type { MessagePreviewFrame } from '@hermes/shared';
 import { runtimeLatency, type RuntimeLatency } from './latency.js';
 import { governedCreatorSearchInput } from '../partner-screening/agentcash-creators.js';
 import { matchesManagedRuntimeAttestation, type ManagedRuntimeIdentity } from './readiness.js';
+import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 
 export interface RuntimePersistence extends AgentDb {
   /** Collapse a serial runtime phase into one tenant-scoped database transaction. */
   withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
+  /**
+   * Lock and revalidate the exact automatic attempt before a side effect that
+   * must serialize with Retry and Stop. Call only inside a runtime transaction.
+   */
+  lockAutomaticRecoveryExecution(runId: string, attempt: number): Promise<boolean>;
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string): Promise<boolean>;
   snapshotRequest(runId: string, attempt: number, body: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -29,6 +35,10 @@ export interface RuntimePersistence extends AgentDb {
   resolveRuntimeSessionId(run: EngineRunRow): Promise<string>;
   loadBootstrapHistory(run: EngineRunRow): Promise<ProviderMessage[]>;
   recoveryInput?(runId: string, attempt: number): Promise<string | null>;
+  /** Exact request from the immediately preceding attempt. */
+  recoveryAuthority?(runId: string, attempt: number): Promise<Record<string, unknown> | null>;
+  /** Exact request already snapshotted for this attempt. */
+  runtimeRequest?(runId: string, attempt: number): Promise<Record<string, unknown> | null>;
   nextRuntimeSequence(runId: string): Promise<number>;
   activeRuntimeMs?(runId: string, attempt: number, start: number, end: number): Promise<number>;
   finalizeRuntime<T>(runId: string, attempt: number, work: () => Promise<T>): Promise<T | null>;
@@ -89,6 +99,44 @@ const CHECKPOINT: StepConfig = { retries: { limit: 3, delay: 1000, backoff: 'exp
 const EXECUTION: StepConfig = { retries: { limit: 1, delay: 1000, backoff: 'constant' }, timeout: '60 minutes' };
 const FRESH_CAPABILITIES_MS = 5_000;
 
+const canonicalAuthority = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalAuthority).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const row = value as Record<string, unknown>;
+    return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${canonicalAuthority(row[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+};
+const requestToolNames = (request: Record<string, unknown> | null | undefined): string[] =>
+  Array.isArray(request?._enterprise_tool_names)
+    ? request._enterprise_tool_names.filter((name): name is string => typeof name === 'string')
+    : [];
+const requestSkills = (request: Record<string, unknown> | null | undefined): RuntimeSkillManifest[] =>
+  Array.isArray(request?._enterprise_skills)
+    ? request._enterprise_skills.filter((skill): skill is RuntimeSkillManifest => Boolean(skill) && typeof skill === 'object' && !Array.isArray(skill))
+    : [];
+
+export function recoveryAuthorityAuditIntersection(
+  run: Pick<EngineRunRow, 'attempt' | 'recoveryInput'>,
+  currentTools: readonly string[],
+  currentSkills: readonly RuntimeSkillManifest[],
+  previous: Record<string, unknown> | null,
+): { toolNames: string[]; skills: RuntimeSkillManifest[] } {
+  if (isResponseOnlyRecoveryInput(run.recoveryInput)) return { toolNames: [], skills: [] };
+  if (run.attempt <= 1) return { toolNames: [...currentTools], skills: [...currentSkills] };
+  if (!previous) throw new Error('recovery_authority_snapshot_missing');
+  const priorTools = new Set(requestToolNames(previous));
+  const priorSkills = new Set(requestSkills(previous).map(canonicalAuthority));
+  return {
+    toolNames: currentTools.filter((name) => priorTools.has(name)),
+    // Exact manifests include assignment/config/grant revisions and capability
+    // grants, making the persisted comparison useful for audit. The native
+    // transport strips these private fields, so automatic safety is enforced
+    // separately by the response-only server boundaries.
+    skills: currentSkills.filter((skill) => priorSkills.has(canonicalAuthority(skill))),
+  };
+}
+
 export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, input: RunAttemptInput): Promise<void> {
   const latency = runtimeLatency(deps.startedAt ?? Date.now(), deps.receivedAt, deps.onLatency);
   const { db, client } = deps;
@@ -97,6 +145,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   const startup = await latency.measure('startup_read', () => withRuntimeTransaction(async () => {
     const run = deps.run ?? await db.loadRun(input.runId);
     if (!run || run.attempt !== input.attempt || !run.agentId) throw new Error('Hermes run has no current agent binding');
+    if (run.automaticRecovery && !['working', 'stopping'].includes(run.status)) {
+      throw new Error('Hermes automatic recovery attempt is no longer active');
+    }
     return {
       run,
       existingBinding: await db.binding(run.id),
@@ -141,20 +192,26 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'stopped' } }]);
       return;
     }
-    await step.do('hermes-started', CHECKPOINT, async () => {
+    const started = await step.do('hermes-started', CHECKPOINT, async () => {
       const saved = await latency.measure('startup_event_persistence', () => withRuntimeTransaction(async () => {
-        if (!stopAtStart) await db.setRunStatus(run.id, 'working');
+        if (run.automaticRecovery) {
+          if (!await db.lockAutomaticRecoveryExecution(run.id, run.attempt)) return null;
+        } else if (!stopAtStart) {
+          await db.setRunStatus(run.id, 'working');
+        }
         return db.emit([{ kind: 'run.started', sessionId: run.sessionId, payload: {
           run_id: run.id, session_id: run.sessionId, attempt: run.attempt,
           engine_version: run.engineVersion, client_turn_id: run.clientTurnId,
           mode: run.mode, model_id: run.modelId, effort: run.effort, title: null, steps: [],
         } }]);
       }));
+      if (!saved) return { ok: false };
       await latency.measure('startup_delivery', async () => {
         await deps.forward(run.sessionId, run.id, saved);
       });
       return { ok: true };
     });
+    if (!started.ok) return;
     const submitted = await step.do('hermes-submit', CHECKPOINT, async () => {
       // A Workflow callback may be replaying after either process restarted.
       // Re-read the live contract before trusting a persisted binding or
@@ -163,16 +220,32 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         latency.measure('submit_capabilities', attestRuntime),
         db.binding(run.id),
       ]);
-      if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) return { id: existing.runtimeRunId };
+      if (existing?.runtimeAttempt === run.attempt && existing.runtimeRunId) {
+        const request = await db.runtimeRequest?.(run.id, run.attempt);
+        return { id: existing.runtimeRunId, enterpriseToolNames: requestToolNames(request) };
+      }
       const preparationStartedAt = Date.now();
       // RuntimeDb owns one pg client. Keep the reads serial, but avoid paying a
       // complete transaction and tenant-context setup for every one of them.
       const body = await withRuntimeTransaction(async () => {
+        // A crash after snapshot persistence but before native binding must
+        // reuse the exact request. Recomputing here could lose the previous
+        // attempt snapshot or observe a later grant change.
+        const snapshotted = await db.runtimeRequest?.(run.id, run.attempt);
+        if (snapshotted) return snapshotted;
         const history = await db.loadHistory(run.id, 100);
         const userInput = history.recent.filter((row) => row.role === 'user').map((row) => row.providerMessage.content ?? '').join('\n\n');
         const turnAuthor = [...history.recent].reverse()
           .find((row) => row.role === 'user')?.providerMessage.enterprise_turn_author;
         const recoveryInput = await db.recoveryInput?.(run.id, run.attempt);
+        const currentToolNames = allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name);
+        const priorAuthority = run.attempt > 1 ? await db.recoveryAuthority?.(run.id, run.attempt) ?? null : null;
+        const authority = recoveryAuthorityAuditIntersection(
+          { attempt: run.attempt, recoveryInput },
+          currentToolNames,
+          deps.skillSnapshot ?? [],
+          priorAuthority,
+        );
         const previous = await db.loadBootstrapHistory(run);
         const runtimeSessionId = await db.resolveRuntimeSessionId(run);
         const model = await db.loadModel(run.modelId);
@@ -186,8 +259,8 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
           model: wireModel,
           provider: 'custom',
           instructions: await buildSystemPrompt(db, run, []),
-          _enterprise_tool_names: allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name),
-          _enterprise_skills: deps.skillSnapshot ?? [],
+          _enterprise_tool_names: authority.toolNames,
+          _enterprise_skills: authority.skills,
         };
         if (turnAuthor) proposed._enterprise_turn_author = turnAuthor;
         if (previous.length) proposed.conversation_history = previous;
@@ -199,20 +272,34 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       if (readinessAge < 0 || readinessAge > FRESH_CAPABILITIES_MS) {
         checkedAt = await latency.measure('submit_capabilities', attestRuntime);
       }
-      const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
       // Bind the exact snapshotted value. A Workflow replay may carry a request
       // created by an older release, and changing its session id would violate
       // the native idempotency fingerprint.
       const runtimeSessionId = typeof body.session_id === 'string' && body.session_id.trim()
         ? body.session_id
         : run.id;
-      if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, runtimeSessionId, deps.profile))) {
-        await client.stop(id);
-        throw new Error('Hermes run attempt was superseded');
-      }
+      const submitAndBind = async (): Promise<string> => {
+        const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
+        if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, runtimeSessionId, deps.profile))) {
+          await client.stop(id);
+          throw new Error('Hermes run attempt was superseded');
+        }
+        return id;
+      };
+      const id = run.automaticRecovery
+        ? await withRuntimeTransaction(async () => {
+            if (!await db.lockAutomaticRecoveryExecution(run.id, run.attempt)) return null;
+            // Hermes acknowledges the durable idempotent run before executing
+            // it. Hold this row lock only through that bounded acknowledgement
+            // and binding so Retry/Stop cannot move authority between them.
+            return submitAndBind();
+          })
+        : await submitAndBind();
+      if (!id) return { id: null, enterpriseToolNames: [] };
       freshSubmissionCheckedAt = checkedAt;
-      return { id };
+      return { id, enterpriseToolNames: requestToolNames(body) };
     });
+    if (!submitted.id) return;
     remoteId = submitted.id;
     const id = submitted.id;
     await step.do('hermes-execute', EXECUTION, async () => {
@@ -228,12 +315,11 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       const prepared = await latency.measure('execute_persistence', () => withRuntimeTransaction(async () => {
         const { stepAttempt } = await db.enterStep(progress);
         const { messageId } = await db.upsertAssistantMessage({ runId: run.id, sessionId: run.sessionId, turn: 0, text: '', blocks: [], status: 'streaming', workedMs: null });
-        const enterpriseToolNames = allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name);
         const saved = await db.emit([
           { kind: 'run.step', sessionId: run.sessionId, payload: { run_id: run.id, attempt: run.attempt, turn: 0, step_id: 'hermes', label: 'Thinking', state: 'active', tool_call_id: null } },
           { kind: 'message.reset', sessionId: run.sessionId, payload: { run_id: run.id, turn: 0, attempt: run.attempt, step_attempt: stepAttempt, message_id: messageId } },
         ]);
-        return { stepAttempt, messageId, enterpriseToolNames, saved };
+        return { stepAttempt, messageId, enterpriseToolNames: submitted.enterpriseToolNames, saved };
       }));
       const { stepAttempt, messageId } = prepared;
       currentMessageId = messageId;

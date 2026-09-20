@@ -7,7 +7,7 @@
 // reducer needs no translation layer when it is ported in M2.
 import { z } from 'zod';
 
-export const REF_SECTIONS = ['agents', 'inbox', 'members', 'history', 'library', 'settings'] as const;
+export const REF_SECTIONS = ['agents', 'inbox', 'members', 'admin', 'history', 'library', 'settings'] as const;
 export type RefSection = (typeof REF_SECTIONS)[number];
 
 /** A view selection, not a database mutation or an arbitrary route. */
@@ -44,6 +44,7 @@ export const TRACES: Ref = { section: 'agents', view: 'traces' };
 export const COMPARE: Ref = { section: 'agents', view: 'traces', sub: 'compare' };
 export const INBOX: Ref = { section: 'inbox', view: 'list' };
 export const MEMBERS: Ref = { section: 'members' };
+export const ADMIN = (view = 'intelligence'): Ref => ({ section: 'admin', view });
 
 export const TRACE = (id: string): Ref => ({ section: 'agents', view: 'trace', id });
 export const REQ = (id: string, extra: Partial<Ref> = {}): Ref => ({ section: 'inbox', view: 'request', id, ...extra });

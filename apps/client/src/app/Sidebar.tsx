@@ -13,7 +13,7 @@
 // the string `x-dev-user` survives into a production bundle (spec §12.8).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SidebarNav } from '@hermes/motion-components';
-import { HISTORY, INBOX, LIB, MEMBERS, OV, SETTINGS, type Ref } from '@hermes/shared';
+import { ADMIN, HISTORY, INBOX, LIB, MEMBERS, OV, SETTINGS, type Ref } from '@hermes/shared';
 import { useAppState, useAdapter, useDispatch, useNav } from './store-context.js';
 import { Glass, Icon } from './ui/icons.js';
 import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
@@ -25,6 +25,7 @@ const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'agents', label: 'Agents', icon: 'iris', ref: OV },
   { key: 'inbox', label: 'Inbox', icon: 'inbox', ref: INBOX },
   { key: 'members', label: 'Members', icon: 'people', ref: MEMBERS },
+  { key: 'admin', label: 'Admin', icon: 'shield', ref: ADMIN() },
   { key: 'history', label: 'History', icon: 'trace', ref: HISTORY() },
   { key: 'library', label: 'Library', icon: 'context', ref: LIB('skills') },
   { key: 'settings', label: 'Settings', icon: 'settings', ref: SETTINGS() },
@@ -35,6 +36,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
   const adapter = useAdapter();
   const nav = useNav();
   const dispatch = useDispatch();
+  const sections = SECTIONS.filter((section) => section.key !== 'admin' || state.user.role === 'admin');
   const [menu, setMenu] = useState(false);
   const accountBtn = useRef<HTMLElement>(null);
   const phoneAccountBtn = useRef<HTMLButtonElement>(null);
@@ -45,7 +47,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     nav(ref);
   };
 
-  const navItems = SECTIONS.map((section) => ({
+  const navItems = sections.map((section) => ({
     key: section.key,
     label: section.label,
     icon: <Glass name={section.icon} size={18} />,
@@ -115,13 +117,13 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
       {phone ? <div className="phone-navigation">
         <select aria-label="Workspace section" value={state.ui.app.section}
           onChange={(event) => {
-            const section = SECTIONS.find((item) => item.key === event.target.value);
+            const section = sections.find((item) => item.key === event.target.value);
             if (section) {
               go(section.ref);
               dispatch({ type: 'ui/set', patch: { pane: 'app' } });
             }
           }}>
-          {SECTIONS.map((section) => <option key={section.key} value={section.key}>{section.label}</option>)}
+          {sections.map((section) => <option key={section.key} value={section.key}>{section.label}</option>)}
         </select>
         <button ref={phoneAccountBtn} type="button" className="icon-btn" aria-label="Your account"
           aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu((open) => !open)}>
@@ -145,7 +147,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
           </span>
         }
         onNavigate={(key) => {
-          const section = SECTIONS.find((item) => item.key === key);
+          const section = sections.find((item) => item.key === key);
           if (!section) return;
           nav(section.ref);
           if (key === 'inbox') dispatch({ type: 'nav/tab', key: 'inboxTab', value: 'needs-review' });

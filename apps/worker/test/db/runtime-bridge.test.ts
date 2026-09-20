@@ -131,6 +131,24 @@ describe('official runtime on the restricted agent role', () => {
       expect(await store.mappingPending(fx.agentId)).toBe(false);
     } finally { await store.close(); }
   });
+  it('exposes only the immediately previous authority snapshot to a recovery attempt', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const id = await seedRun(fx);
+      const previous = { input: 'Original prompt', _enterprise_tool_names: ['list_requests'], _enterprise_skills: [] };
+      await store.snapshotRequest(id, 1, previous);
+      await owner(fx, (q) => q(
+        `UPDATE runs SET attempt=2,recovery_input='Resume stored evidence.' WHERE id=$1`,
+        [id],
+      ));
+      expect(await store.recoveryAuthority(id, 2)).toEqual(previous);
+      expect(await store.runtimeRequest(id, 2)).toBeNull();
+      const next = { input: 'Resume stored evidence.', _enterprise_tool_names: ['list_requests'], _enterprise_skills: [] };
+      await store.snapshotRequest(id, 2, next);
+      expect(await store.runtimeRequest(id, 2)).toEqual(next);
+      expect(await store.recoveryAuthority(id, 2)).toBeNull();
+    } finally { await store.close(); }
+  });
   it('keeps nested runtime startup operations in one rollback boundary', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx);
     try {

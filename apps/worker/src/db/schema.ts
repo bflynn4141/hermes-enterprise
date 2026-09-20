@@ -447,9 +447,52 @@ export const sharedIntelligenceProposals = pgTable(
     createdAt: now('created_at'),
     publishedAt: ts('published_at'),
     revokedAt: ts('revoked_at'),
+    triageStatus: text('triage_status').notNull().default('private'),
+    triageGoalId: uuid('triage_goal_id'),
+    triageAssessment: jsonb('triage_assessment'),
+    triageSubmittedAt: ts('triage_submitted_at'),
+    triageDecidedAt: ts('triage_decided_at'),
+    triageDecidedByUserId: uuid('triage_decided_by_user_id'),
+    triageDecisionNote: text('triage_decision_note'),
     updatedAt: now('updated_at'),
   },
   (t) => [index('shared_intelligence_creator_idx').on(t.workspaceId, t.createdByUserId, t.createdAt)],
+);
+
+export const sharedIntelligenceGoals = pgTable(
+  'shared_intelligence_goals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    scope: text('scope').notNull(),
+    teamId: uuid('team_id'),
+    title: text('title').notNull(),
+    detail: text('detail').notNull(),
+    revision: integer('revision').notNull().default(1),
+    contentSha256: text('content_sha256').notNull(),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').notNull(),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [index('shared_intelligence_goals_active_idx').on(t.workspaceId, t.active, t.createdAt)],
+);
+
+export const sharedIntelligenceTriageDecisions = pgTable(
+  'shared_intelligence_triage_decisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    proposalId: uuid('proposal_id').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    decision: text('decision').notNull(),
+    previousStatus: text('previous_status').notNull(),
+    resultingStatus: text('resulting_status').notNull(),
+    note: text('note').notNull().default(''),
+    assessmentStateSha256: text('assessment_state_sha256').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [index('shared_intelligence_triage_decisions_idx').on(t.workspaceId, t.proposalId, t.createdAt)],
 );
 
 export const sharedIntelligenceEvidence = pgTable(
@@ -721,6 +764,7 @@ export const runs = pgTable(
     recoveryCancelled: boolean('recovery_cancelled').notNull().default(false),
     recoveryBlockedReason: text('recovery_blocked_reason'),
     recoveryInput: text('recovery_input'),
+    automaticRecovery: boolean('automatic_recovery').notNull().default(false),
     recoveryHistory: jsonb('recovery_history').notNull().default([]),
     runtimeKind: text('runtime_kind').notNull().default('legacy'),
     runtimeProfile: text('runtime_profile'),
@@ -2229,6 +2273,8 @@ export const ALL_TABLES = {
   library_source_team_grants: librarySourceTeamGrants,
   shared_intelligence_proposals: sharedIntelligenceProposals,
   shared_intelligence_evidence: sharedIntelligenceEvidence,
+  shared_intelligence_goals: sharedIntelligenceGoals,
+  shared_intelligence_triage_decisions: sharedIntelligenceTriageDecisions,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,
   agent_skills: agentSkills,

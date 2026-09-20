@@ -90,8 +90,13 @@ import {
 import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
 import { listLibrarySources } from './routes/library-sources.js';
 import {
+  createSharedIntelligenceAdminGoal,
   createSharedIntelligenceProposal,
+  decideSharedIntelligenceAdminTriage,
+  getSharedIntelligenceAdmin,
   getSharedIntelligence,
+  queueSharedIntelligence,
+  reassessSharedIntelligenceAdminTriage,
   revokeSharedIntelligence,
   submitSharedIntelligence,
 } from './routes/shared-intelligence.js';
@@ -409,8 +414,13 @@ app.get('/w/:ws/files', listFiles);
 app.get('/w/:ws/library-sources', listLibrarySources);
 app.get('/w/:ws/shared-intelligence', getSharedIntelligence);
 app.post('/w/:ws/shared-intelligence/proposals', createSharedIntelligenceProposal);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/triage', queueSharedIntelligence);
 app.post('/w/:ws/shared-intelligence/proposals/:proposalId/submit', submitSharedIntelligence);
 app.post('/w/:ws/shared-intelligence/proposals/:proposalId/revoke', revokeSharedIntelligence);
+app.get('/w/:ws/admin/shared-intelligence', getSharedIntelligenceAdmin);
+app.post('/w/:ws/admin/shared-intelligence/goals', createSharedIntelligenceAdminGoal);
+app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/decision', decideSharedIntelligenceAdminTriage);
+app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/reassess', reassessSharedIntelligenceAdminTriage);
 app.post('/w/:ws/files', createFile);
 app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);
