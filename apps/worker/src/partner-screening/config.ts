@@ -42,6 +42,12 @@ export const partnerAgentConfigSchema = z
         person_skills: z.array(z.string().min(1).max(120)).max(10).default([]),
         current_position_titles: z.array(z.string().min(1).max(120)).max(10).default([]),
         person_locations: z.array(z.string().min(1).max(120)).max(10).default([]),
+        // Automation injects the durable page position into the per-run
+        // snapshot. Deployment policy may omit both values and starts at the
+        // first page. search_after takes precedence when the provider returns
+        // one; offset remains the bounded fallback.
+        offset: z.number().int().min(0).max(10_000).default(0),
+        search_after: z.string().min(1).max(2048).nullable().default(null),
       })
       .strict()
       .optional(),
@@ -63,7 +69,12 @@ export const partnerAgentConfigSchema = z
     if (config.source_purpose !== 'person_partner_research' || config.organization_only) {
       context.addIssue({ code: 'custom', message: 'AgentCash People Search must use the approved person-research purpose.' });
     }
-    if (!config.people_search || Object.values(config.people_search).every((values) => values.length === 0)) {
+    if (!config.people_search || [
+      config.people_search.current_position_seniority_level,
+      config.people_search.person_skills,
+      config.people_search.current_position_titles,
+      config.people_search.person_locations,
+    ].every((values) => values.length === 0)) {
       context.addIssue({ code: 'custom', message: 'AgentCash People Search requires at least one bounded filter.' });
     }
     if (config.search_queries.length > 0 || config.intake_urls.length > 0 || config.max_api_requests !== 1 || config.max_spend_usd !== 0.15) {
@@ -129,8 +140,8 @@ export function partnerAgentConfig(env: Env, agentId: string): ConfigResult {
   }
 }
 
-export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMatrix {
-  const config = partnerAgentConfig(env, agentId);
+export function partnerSourceMatrix(env: Env, agentId: string, resolved?: ConfigResult): PartnerSourceMatrix {
+  const config = resolved ?? partnerAgentConfig(env, agentId);
   const githubAuth = env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' : 'unauthenticated';
   const source = config.config?.source ?? 'github';
   return partnerSourceMatrixSchema.parse({
@@ -163,9 +174,11 @@ export function partnerSourceMatrix(env: Env, agentId: string): PartnerSourceMat
       },
       {
         id: 'x',
-        state: 'unconfigured',
-        authentication: env.PARTNER_X_BEARER_TOKEN?.trim() ? 'authenticated' : 'not_applicable',
-        note: 'Requires an approved X developer app, bearer token, and pay-per-use budget. No X calls are made by this build.',
+        state: config.config ? 'live' : 'unconfigured',
+        authentication: config.config ? 'wallet' : 'not_applicable',
+        note: config.config
+          ? 'Explicit-request creator discovery can search public X posts through one fixed $0.005 AgentCash call; public metrics are point-in-time evidence, not proof of influence or availability.'
+          : config.problem,
       },
       {
         id: 'linkedin',

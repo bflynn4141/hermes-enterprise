@@ -28,6 +28,7 @@ import { readableTool } from '../tool-copy.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
 import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
+import { runClockKey, waitingElapsed } from '../../model/run-clock.js';
 
 const systemNow = (): number => Date.now();
 
@@ -40,19 +41,20 @@ export function formatRunElapsed(startedAt: string, now: number): string {
   return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(1)}s`;
 }
 
-function RunElapsed({ startedAt, active, now }: { startedAt: string; active: boolean; now: () => number }) {
-  const [current, setCurrent] = useState(() => now());
+function RunElapsed({ clockId, startedAt, active, now }: { clockId: string; startedAt: string; active: boolean; now: () => number }) {
+  const read = () => waitingElapsed(clockId, startedAt, now());
+  const [current, setCurrent] = useState(read);
 
   useEffect(() => {
-    setCurrent(now());
+    setCurrent(read());
     if (!active) return;
-    const timer = window.setInterval(() => setCurrent(now()), 100);
+    const timer = window.setInterval(() => setCurrent(read()), 100);
     return () => window.clearInterval(timer);
-  }, [active, now, startedAt]);
+  }, [active, now, startedAt, clockId]);
 
   return (
     <span className="live-run-elapsed" aria-hidden="true">
-      {formatRunElapsed(startedAt, current)}
+      {formatRunElapsed('1970-01-01T00:00:00.000Z', current)}
     </span>
   );
 }
@@ -79,7 +81,7 @@ function progressLabel(messages: readonly Message[]): string | null {
   return text.length > 140 ? `${text.slice(0, 137).trimEnd()}…` : text;
 }
 
-export function RunActivity({ session, progress = [], now = systemNow }: { session: SessionState; progress?: readonly Message[]; now?: () => number }) {
+export function RunActivity({ session, progress = [], now = systemNow, readOnly = false }: { session: SessionState; progress?: readonly Message[]; now?: () => number; readOnly?: boolean }) {
   const adapter = useAdapter();
   const run = session.run;
   if (!run) return null;
@@ -117,7 +119,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
     .map((item) => ({
       key: item.id,
       label: item.text,
-      amount: item.status === 'paused' ? 'Paused' : item.status === 'sent' ? 'Sent' : 'Queued',
+      amount: item.status === 'paused' ? 'Paused' : item.status === 'sent' ? 'Handed to Iris' : 'Queued',
       status: (item.status === 'sent' ? 'done' : item.status === 'paused' ? 'blocked' : 'sequence') as 'done' | 'blocked' | 'sequence',
       details: [{ label: 'Position', meta: String(item.position + 1) }],
     }));
@@ -156,7 +158,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
               label={`${phaseLabel}…`}
               variant={!activeTool || activeTool.id.startsWith('get_document_text') ? 'Dots' : 'Drive'}
             />
-            {run.started_at && <RunElapsed startedAt={run.started_at} active={working} now={now} />}
+            {run.started_at && <RunElapsed key={runClockKey(session.id, run.id, run.attempt)} clockId={runClockKey(session.id, run.id, run.attempt)} startedAt={run.started_at} active={working} now={now} />}
           </div>
           {liveTools.length > 0 && (
             <div className="live-tool-list" role="list" aria-label="Tool activity">
@@ -201,7 +203,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
             failed: run.error?.message ?? 'Failed',
             blocked: run.waiting_label ?? 'Waiting',
           }}
-          onRetry={(key) => {
+          onRetry={readOnly ? undefined : (key) => {
             void key;
             void adapter.retry(session.id, run.id).catch(() => undefined);
           }}
@@ -233,7 +235,9 @@ function FluidRunStream({ session, stream, canRelease }: { session: SessionState
   const systemReducedMotion = useReducedMotion() ?? false;
   const reducedMotion = systemReducedMotion || appReducedMotion;
   const graphemes = useMemo(() => splitGraphemes(stream.text), [stream.text]);
-  const [visibleText, setVisibleText] = useState(() => (reducedMotion ? stream.text : ''));
+  // A mount can restore an already received checkpoint after navigation. Show
+  // that prefix immediately; only subsequent deltas need incremental reveal.
+  const [visibleText, setVisibleText] = useState(() => stream.text);
   const final = stream.status !== 'streaming';
   const completionSent = useRef(false);
 

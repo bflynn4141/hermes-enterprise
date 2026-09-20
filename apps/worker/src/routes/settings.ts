@@ -96,6 +96,38 @@ export const RETENTION_FACTS = [
   { store: 'Identity provider (WorkOS)', retention: 'authentication data only', erasure: 'account deletion' },
 ] as const;
 
+/**
+ * Data-use and sharing policy the product enforces. These used to be hardcoded
+ * in the client PrivacyTab; a client that invented them would be making a
+ * data-protection claim nobody reviewed. The jurisdiction row is filled from
+ * the workspace row at request time.
+ */
+export const POLICY_FACTS = [
+  {
+    id: 'workspace_privacy',
+    label: 'Private to this workspace',
+    value: 'Context, agent history and shared skills stay in your organization',
+  },
+  {
+    id: 'model_training',
+    label: 'Model training',
+    value: 'Off',
+  },
+  {
+    id: 'shared_intelligence',
+    label: 'Shared Intelligence',
+    value: 'Human review required',
+  },
+] as const;
+
+const hasAttestation = (attestation: Record<string, unknown> | null): boolean =>
+  typeof attestation?.kind === 'string' && attestation.kind.length > 0;
+
+/** Only a recorded ZDR or DPA permits real personal data. `synthetic_only`
+ * and `none` are explicit restrictions, not weaker approvals. */
+const allowsRealData = (attestation: Record<string, unknown> | null): boolean =>
+  attestation?.kind === 'zdr' || attestation?.kind === 'dpa';
+
 // ---------------------------------------------------------------------------
 // GET /w/:ws/settings
 // ---------------------------------------------------------------------------
@@ -163,6 +195,7 @@ function settingsView(
   deletion: { requested_at: string | null; scheduled_at: string | null },
   role: string,
 ): Record<string, unknown> {
+  const admin = role === 'admin';
   return {
     workspace_id: workspaceId,
     role,
@@ -179,10 +212,13 @@ function settingsView(
       warn: caps.warn,
     },
     timezone: settings.timezone,
-    flags: settings.flags,
-    fetch_url_allowlist: readAllowlist(settings.flags),
+    // Defaults and caps are part of ordinary run behavior, and notifications
+    // belong to the current user. Feature flags, the network allowlist and a
+    // pending workspace deletion are administrative configuration state.
+    flags: admin ? settings.flags : {},
+    fetch_url_allowlist: admin ? readAllowlist(settings.flags) : [],
     notifications,
-    deletion,
+    deletion: admin ? deletion : { requested_at: null, scheduled_at: null },
   };
 }
 
@@ -497,39 +533,74 @@ export async function patchSettings(c: Context<{ Bindings: Env }>): Promise<Resp
  */
 export async function getDataPrivacy(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await inWorkspace(c, async (work) => {
-    const { rows } = await work.tx.query<{
-      id: string;
-      provider: string;
-      label: string;
-      last4: string;
-      status: string;
-      attestation: Record<string, unknown> | null;
-      verified_at: Date | null;
-    }>(
-      `SELECT id, provider, label, last4, status, attestation, verified_at
-         FROM workspace_provider_keys
-        WHERE workspace_id = $1 AND revoked_at IS NULL
-        ORDER BY created_at`,
-      [work.workspaceId],
-    );
+    const [keysResult, workspace] = await Promise.all([
+      work.tx.query<{
+        id: string;
+        provider: string;
+        label: string;
+        last4: string;
+        status: string;
+        attestation: Record<string, unknown> | null;
+        verified_at: Date | null;
+      }>(
+        `SELECT id, provider, label, last4, status, attestation, verified_at
+           FROM workspace_provider_keys
+          WHERE workspace_id = $1 AND revoked_at IS NULL
+          ORDER BY created_at`,
+        [work.workspaceId],
+      ),
+      work.tx.query<{ jurisdiction: string }>(
+        `SELECT jurisdiction FROM workspaces WHERE id = $1`,
+        [work.workspaceId],
+      ),
+    ]);
+    const { rows } = keysResult;
 
-    const keys = rows.map((row) => ({
-      key_id: row.id,
-      provider: row.provider,
-      label: row.label,
-      last4: row.last4,
-      status: row.status,
-      verified_at: row.verified_at ? row.verified_at.toISOString() : null,
-      attestation: row.attestation ?? null,
-      /** True when an Admin has recorded ZDR or a DPA against this key. */
-      attested: Boolean(row.attestation && (row.attestation as { kind?: unknown }).kind),
-      warnings: row.provider === 'deepseek' ? [DEEPSEEK_WARNING] : [],
-      /** Plan section 7: real applicant data needs an attestation or synthetic data. */
-      real_data_allowed:
-        row.provider !== 'deepseek' && Boolean(row.attestation && (row.attestation as { kind?: unknown }).kind),
-    }));
+    const keys = work.role === 'admin'
+      ? rows.map((row) => ({
+          key_id: row.id,
+          provider: row.provider,
+          label: row.label,
+          last4: row.last4,
+          status: row.status,
+          verified_at: row.verified_at ? row.verified_at.toISOString() : null,
+          attestation: row.attestation ?? null,
+          /** True when an Admin has recorded ZDR or a DPA against this key. */
+          attested: hasAttestation(row.attestation),
+          warnings: row.provider === 'deepseek' ? [DEEPSEEK_WARNING] : [],
+          /** Plan section 7: real applicant data needs an attestation or synthetic data. */
+          real_data_allowed:
+            row.provider !== 'deepseek' && allowsRealData(row.attestation),
+        }))
+      // A member sees processor policy rather than credential inventory: one
+      // row per provider, an ephemeral presentation id, and no key label,
+      // fingerprint, health, verification time, count or attestation text.
+      : [...new Map(rows.map((row) => [row.provider, row.provider])).values()].map((provider) => {
+          const providerRows = rows.filter((row) => row.provider === provider);
+          const attested = providerRows.some((row) => hasAttestation(row.attestation));
+          const allKeysAllowRealData = providerRows.length > 0
+            && providerRows.every((row) => allowsRealData(row.attestation));
+          return {
+            key_id: crypto.randomUUID(),
+            provider,
+            label: provider,
+            last4: '',
+            status: 'configured',
+            verified_at: null,
+            attestation: null,
+            attested,
+            warnings: provider === 'deepseek' ? [DEEPSEEK_WARNING] : [],
+            real_data_allowed: provider !== 'deepseek' && allKeysAllowRealData,
+          };
+        });
+
+    const jurisdiction = workspace.rows[0]?.jurisdiction ?? 'default';
 
     return {
+      policy: [
+        ...POLICY_FACTS,
+        { id: 'jurisdiction', label: 'Jurisdiction', value: jurisdiction },
+      ],
       keys,
       retention: RETENTION_FACTS,
       erasure: ERASURE_TIMING,

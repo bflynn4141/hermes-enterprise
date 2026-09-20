@@ -4140,6 +4140,12 @@ rather than per-turn.
 
 ## C41. `StreamingText` is the third component not adopted
 
+**September 19, 2026 clarification:** The current incremental reveal starts from
+the text already present when its component mounts. Restored checkpoints are
+visible immediately, never replayed from blank after navigation. Only subsequent
+deltas use the existing reveal loop; reduced motion remains immediate. Mount,
+remount, appended-delta and durable-final handoff regressions cover this boundary.
+
 **Context.** A turn whose reply was the word "testing" rendered "3 sources" and
 offered "Show the application evidence" and "Draft a follow-up for missing
 details". Nothing had gone wrong: `StreamingText`'s `sources` and `followUps`
@@ -5268,3 +5274,600 @@ that provider diagnostics never cross the boundary, and verify rejected calls
 remain attributed to the exact credential and model. The Nous adapter test
 pins the independent verification route. A live Hermes Cloud trace completed
 the StepFun control request in one model call with no tool calls.
+
+---
+
+## C73. Iris recovery preserves tasks, effects and model provenance
+
+**Decided September 18, 2026.** Overview and trace expose Retry task without a
+chat message. Idle Run now checks only the current authorized screening cadence;
+its durable cycle key prevents a second allowance. Existing requests and paid
+receipts are inspected before advancing an attempt. Completed discovery resumes
+from stored candidate evidence; pending imports retain their native mapping, and
+uncertain mutations or existing drafts block replay. Reviewing an already-created
+draft permits future cadence work even when the original final response failed.
+
+Manual and automatic retries share admission, ownership, provider, capacity and
+approval-budget checks. Expected attempts make delayed duplicate requests no-ops.
+An app transaction records the new attempt and a durable launch job before the
+Workflow starts. Prior model/effort, trace, failure and trigger remain in the
+recovery history. Paid authorization rechecks the active native attempt under the
+same task-row lock so a late callback cannot reserve work after recovery advances.
+
+Only an ordinary-chat failure that has completed read-only tools and can be
+reduced to the server-enforced response-only contract retries automatically, up
+to three total attempts with one- and five-minute delays. Pre-tool failures and
+partner-screening recovery remain explicit manual Retry because the native Runs
+contract does not accept an exact per-attempt tool/skill inventory. Sanitized
+provider Retry-After deadlines can extend eligible waits; excessive waits pause
+recovery. Cancellation, human review, stopped tasks, unavailable credentials,
+quota and unresolved effects never become an unbounded retry loop. The UI uses
+server-confirmed state and existing button feedback; its countdown is motionless
+and does not repeatedly announce itself to screen readers.
+
+**Hardened September 20, 2026.** Recovery rechecks for any newer session run
+under the same agent admission lock immediately before it advances the failed
+attempt; even a newer completed turn makes the queued recovery stale. The failed
+attempt's model and effort are pinned rather than reread from mutable session
+settings. The Worker persists the intersection of prior tool/skill snapshots and
+current grants for audit, but does not treat those private fields as enforcement:
+the public native Runs API deliberately strips them. Post-tool ordinary-chat
+continuation is therefore a server-owned response-only mode: its native request
+contains no tools or skills, the model proxy strips runtime-supplied tool
+definitions, Enterprise tool dispatch rejects fresh calls, and direct paid-call
+leases are refused before reservation. Automatic recovery
+requires both that response-only contract and a managed token-digest runtime;
+legacy HMAC profiles remain manual-only.
+That automatic admission is persisted on the run rather than inferred later.
+Before a retry Workflow selects the Hermes or legacy engine, it re-resolves the
+managed binding and requires token-digest auth again. A deployment switch,
+missing Hermes configuration or binding downgrade marks the attempt as a
+non-retryable runtime-drift failure without provider or tool dispatch; the user
+can still choose explicit manual Retry. First attempts incur no extra recovery
+lookup. The drift write itself requires the exact expected attempt, automatic
+marker, active status and no Stop request in one SQL predicate. The Workflow
+rechecks after asynchronous binding resolution, and the adapter reloads an
+automatic attempt before native work, so a delayed invocation can neither
+fail nor submit work for its successor.
+Automatic startup revalidates and locks that same predicate before emitting
+`run.started`; it never resets a successor or a concurrent Stop to working.
+Hermes acknowledges an idempotent native run with a bounded HTTP 202 before
+streaming. The adapter therefore holds the exact-attempt row lock only across
+that acknowledgement and durable native binding. Retry and Stop serialize at
+that boundary, while model execution and streaming never hold the transaction.
+An exact drift failure projects approval-continuation budgets and partner
+handoffs in the same transaction; a stale no-op projects nothing.
+The current fixed/free-route Iris binding is legacy HMAC, so this change does
+not claim automatic continuation there: users retain explicit manual Retry until
+that profile is migrated to a managed token-digest identity. Dynamically managed
+token-digest profiles receive the bounded automatic path described above.
+
+Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
+`low`, `high`, `max`, with provider default `high`. Automation follows the
+workspace policy, and retries preserve the failed attempt's exact model and
+effort. The separate Jev typed classifier and production automation policy are
+unchanged.
+
+**Default rollout held.** The requested all-workspace V4.1 Flash/low migration
+is prepared separately. A September 18 staging preflight of exact
+`nous:deepseek/deepseek-v4.1-flash` at explicit low effort returned Nous HTTP 404
+on all three native attempts (run `fb738cb4-c64c-4bf4-ae2a-132326ce6675`). The
+public catalog still lists it; official routing and OAuth handling match the
+application. Do not promote it globally until exact-model inference and tool
+acceptance pass. Recovery can ship independently while configured defaults and
+historical records remain intact.
+
+**Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
+reviewed-cycle recovery, pinned-model snapshots, paid receipts, cadence keys,
+cancellation, newer completed-turn races, prior-authority snapshots and
+response-only paid-lease refusal. Runtime adapter and bridge tests assert saved
+instructions cross the real native transport without relying on stripped private
+fields, the provider sees no tool definitions, and fresh Enterprise calls are
+rejected before writes. Admission tests reject legacy and unset deployments
+before upstream I/O; execution-fence tests cover token-digest-to-legacy binding
+drift and Hermes-to-legacy or unset deployment drift before engine selection.
+Race tests move the attempt and request Stop at both startup and native dispatch;
+PostgreSQL acceptance proves both writes wait through binding, while exact-only
+failure tests prove approval budgets and partner handoffs cannot be projected by
+a stale attempt.
+Browser tests cover Overview/trace actions, no-output failure,
+countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
+and live-provider acceptance are recorded in the Tech Lead delivery note.
+
+---
+
+## C74. Raindrop observes terminal Hermes runs through a content-free boundary
+
+**Decided September 18, 2026.** Staging exports one AI event after an official
+Hermes run has committed and delivered its terminal message and status. The
+event contains model and lifecycle metadata, tool names and states, final-answer
+presence and length, and fixed error taxonomies. Tenant and run identifiers are
+one-way hashed. Prompts, answers, applicant data, tool arguments and results,
+provider bodies and error messages remain inside Hermes.
+
+The exporter uses Raindrop's documented batch ingestion contract directly. The
+official JavaScript package was rejected for the Worker path because one event
+export added 290 transitive packages and a blocked protobuf build script. A
+small HTTP client keeps the Worker bundle and supply-chain surface bounded.
+
+Raindrop runs after the canonical result and has a 2.5-second request deadline.
+Its absence or failure is logged as metadata and cannot alter the run. Stable
+pseudonymous event ids make Workflow replay idempotent. Development and
+production default off; staging is active only when its server-side write key
+exists. The first explicit agent signals are terminal error and tool use without
+a final response.
+
+**Evidence.** Unit tests assert the export query cannot select transcript or
+tool contents, raw identifiers and error messages never reach request bodies,
+negative signals attach to the same event, disabled mode does no work, and
+vendor failures resolve without throwing. The Worker typecheck and dry-run
+bundle verify Cloudflare compatibility without the vendor SDK.
+
+---
+
+## C75. Cloud response text uses a primed GET SSE hop and names its paid/free route
+
+**Decided September 18, 2026.** The Hermes Cloud connector keeps one exact
+machine-authenticated `/api/plugins/enterprise_bridge/control` path. Short
+control operations continue to use POST envelopes. A run's event subscription
+uses GET with only a validated `run_id`, sends a valid SSE comment immediately,
+and writes each complete native SSE frame separately. The Worker requests
+identity encoding and consumes the same native event contract as before. The
+older POST events envelope remains for a one-release drain window.
+
+The model selector now labels Nous Portal entries as `Paid route` or `Free
+route` and exposes the exact model id on the control. Two StepFun routes with
+the same human label can no longer be mistaken for one another. The route id is
+preserved exactly when Enterprise removes the `nous:` catalog namespace for the
+official Hermes runtime; there is no implicit fallback and no default-model
+change in this repair.
+
+**Why.** Staging proved that native output, durable final state and reload
+persistence were correct, but a long answer remained absent in the browser
+until the run ended. The existing component and Worker streaming tests could
+not distinguish a provider that delivered late from an HTTP intermediary that
+buffered the dashboard's POST response. A conventional primed GET SSE response
+removes that avoidable ambiguity. It cannot manufacture tokens before an
+upstream provider emits them, so first-delta telemetry remains the authority
+for separating provider latency from transport latency.
+
+**Evidence.** A delayed-native-chunk ASGI test proves the first delta leaves the
+connector before terminal EOF. Worker tests prove GET, authentication,
+no-compression request headers, keepalive tolerance, and exact paid/free runtime
+model ids. Browser tests prove visible text grows before completion, the final
+handoff has no blank frame, and committed output survives session navigation
+and reload. Model-menu unit and browser tests cover the two same-label StepFun
+routes and the selected exact id.
+
+---
+
+## C76. Creator-channel runs receive exact governed calls and X uses a $0.005 public-post connector
+
+**Decided September 18, 2026.** An explicit Hermes creator, influencer,
+consultant, or implementation search now causes the Worker to append the exact
+approved AgentCash call to the native runtime input. The original user message
+remains authoritative: the payment endpoint independently checks that it names
+Hermes, an action such as search or test, and the requested channel before it
+leases a call. Recovery input never receives a fresh paid-search instruction.
+
+LinkedIn and YouTube keep the fixed $0.01 public-index search. X uses one fixed
+read-only `fetcher.sh/api/twitter/search` request for the exact `"Hermes Agent"`
+phrase, capped at $0.005. Its importer stores at most five canonical X
+profile/post pairs, bounded public bio and post text, point-in-time follower and
+engagement metrics, and explicit evidence gaps. It drops contact-like text,
+provider metadata, payment receipts, locations, images, and unrelated response
+fields. Direct messaging, outreach, and direct platform credentials remain
+outside this connector.
+
+The screening cost column uses millidollar precision so the audit row records
+$0.005 instead of rounding it to $0.01. LinkedIn/YouTube and X use separate
+run-bound idempotency keys, so an explicit multi-channel test can lease each
+fixed call once without sharing or replaying an allowance.
+
+**Why.** A staging acceptance prompt asked Iris to call the existing creator
+search exactly once. The free model rate-limited; a paid-model retry then spent
+ten tool steps reading unrelated Inbox records because the skill referred to
+exact arguments that the app never supplied. The connector was implemented,
+but model tool selection made it practically unreachable. Exact prompt
+augmentation removes that hidden dependency while the Worker lease preserves
+the spend and intent boundary.
+
+**Evidence.** Three live AgentCash X calls verified the origin-hosted schema: a
+narrow combined account query returned no users, `Nous Research` returned the
+verified Nous profile, and the public-post search returned current Hermes
+authors and posts. Unit tests cover explicit-intent detection, exact runtime
+input, X sanitization, public metrics, skill metadata and source state. Python
+plugin tests cover host allowlisting plus pre/post hooks. The PostgreSQL route
+test covers the $0.005 lease, import, candidate/artifact persistence and exact
+audited cost.
+
+---
+
+## C77. Dashboard-connector events use its authenticated POST dispatcher
+
+**Decided September 18, 2026.** A Hermes Cloud run subscribes through the
+fixed, service-authenticated `POST /api/plugins/enterprise_bridge/control`
+operation envelope. The plugin's GET handler remains as a compatibility route
+for hosts that expose plugin GET routes, but it is not the Enterprise Worker's
+primary transport. The POST response is still a primed `StreamingResponse`;
+its native relay uses nonblocking `read1`, emits complete SSE frames as soon as
+they arrive, requests identity encoding, and disables intermediary transforms.
+
+**Why.** Staging disproved C75's routing assumption. A real run reached native
+submit and status repeatedly but never produced a native `/events` request:
+the dashboard edge did not dispatch the plugin's GET handler. That left the
+Worker to reconcile only the terminal status and made the completed answer
+appear at once. The POST dispatcher is the route the dashboard actually
+exposes. The buffering bug that originally motivated GET was in the connector's
+blocking native read, which remains fixed independently of the HTTP method.
+
+**Evidence.** The Worker regression test requires an authenticated POST events
+envelope, the caller's execution signal, `text/event-stream`, identity encoding
+and no-cache. The connector test requires that the POST events envelope enters
+the same native stream relay used by GET. The incremental ASGI timing test
+continues to prove the first delayed native frame leaves before terminal EOF.
+
+---
+
+## C78. Runtime startup phases share serial tenant-scoped transactions
+
+**Decided September 18, 2026.** Hermes startup groups each related database
+phase into one tenant-scoped transaction: initial run state, the started event,
+submission preparation, and streaming-message setup. Queries remain serial on
+the request-local `pg` client. The grouping reuses the existing agent-role
+transaction rather than parallelizing queries or widening database grants.
+Runtime binding resolution passes its already-loaded run into the adapter, and
+content-free latency telemetry now separates startup reads, persistence,
+delivery, execution persistence, and execution delivery.
+
+**Why.** A live paid StepFun acceptance run streamed correctly but spent about
+four seconds preparing the native request and another two seconds between the
+native binding and stream subscription. Most methods opened their own `BEGIN`,
+tenant `set_config`, and `COMMIT` sequence, multiplying Hyperdrive round trips.
+The same client cannot safely execute these reads concurrently, so one serial
+transaction per phase removes protocol overhead without changing authorization,
+replay, idempotency, or event ordering.
+
+**Evidence.** The adapter regression test requires the four grouped startup
+boundaries. A real PostgreSQL test nests request snapshotting and native binding
+inside one runtime transaction, interrupts it, and proves that both writes roll
+back. Existing runtime, streaming, database, and Worker suites continue to
+exercise retries, stop fences, event order, and terminal persistence.
+
+---
+
+## C79. Interactive admission publishes in order before its durable launch
+
+**Decided September 18, 2026.** A new interactive turn commits its user message,
+stream event, publish retry job and Workflow launch retry job together. After
+commit, the request hands the exact returned event envelope directly to the
+Session Hub, then creates the Workflow only after the hub acknowledges it. The
+launch job names the publish job as a prerequisite, so background or Cron replay
+cannot create a higher-id run event before the lower-id user message is visible.
+Direct acknowledgements retire both idempotent jobs in one background tenant
+transaction; a crash or RPC failure leaves the jobs for recovery.
+
+Admission reuses the tenant transaction's membership result, reads session plus
+duplicate state together, reads model plus credential state together, and writes
+the initial message, engine turn and draft cleanup in one statement. Workflow
+startup loads the run and dynamic runtime binding in one serial agent-role
+transaction. Phase telemetry separates authentication, admission transaction,
+post-commit jobs, ordered publish and Workflow creation.
+
+The Enterprise model-list bridge now returns each catalog model's positive
+`context_length` and validates provider credentials serially inside one runtime
+transaction. Unknown context remains omitted rather than invented. This lets the
+pinned official Hermes metadata resolver use the authoritative OpenAI-compatible
+model record instead of making a failing `/api/show` probe on every warm turn.
+
+**Evidence.** PostgreSQL route regressions force both the direct publish and
+Workflow-create failure boundaries and prove publication precedes launch while
+the durable jobs finish. Outbox tests compare the directly delivered envelope
+with its committed id and trace. Unit/database tests cover known, null and invalid
+context windows. The native probe runs the exact pinned Hermes gateway and
+asserts a complete model/tool turn without any `/api/show` request.
+---
+
+## C80. Approval review starts with the decision and the content
+
+**Decided September 18, 2026.** Brian accepted the compact decision/header/email
+arrangement and evidence expanding below. Each governed review starts with the
+decision, exact per-step approval counts, policy ordering, expiry and the server's
+eligibility reason. Specialized previews remain intact. Proposer, long summary,
+request identity and policy metadata live in Request details. Review history shows
+all votes from the current revision; it does not claim to be a cross-revision audit.
+
+Communication drafts use **Approve draft** throughout Inbox, chat, Overview and
+detail. This records review of copy and sends nothing. Authorized reviewers can
+revise an email draft's actual subject/body through the existing revision contract;
+sender, recipients, evidence, policy and external effects stay unchanged. Pending
+revision entry is under More actions, and decision controls hide while editing.
+Saving produces a fresh server-bound revision requiring a fresh decision. Stale
+responses refetch for review; authentication never automatically replays an action. An unsaved email rewrite can
+survive a sign-in redirect for at most 15 minutes, bounded by authorization expiry.
+It restores only after a matching viewer/workspace/request/revision/hash refetch
+with revision permission, and opens the editor for an explicit save. Cancel, success,
+expiry or any binding/account mismatch clears the saved rewrite.
+
+Invoice and agreement review uses **Approve invoice draft** and **Approve agreement
+draft**. One workspace Admin approves the current legacy draft. The document preview
+preserves supplied parties, currency, dates and terms; absent data is explicit.
+Approval saves a Library draft. Bank setup, payment authorization and signature
+consent ceremony are removed because those effects are unavailable. Historical
+authorization text remains an internal note, not evidence of execution. Client
+decisions bind the exact request snapshot rendered by the pane, even if the entity
+cache advances before the click, using the backend's version/hash binding and refresh conflicts without
+resubmitting.
+
+Evidence expands below the content. Stored partner facts, dates and safe original
+URLs load from the request-scoped evidence projection, with Iris's note labeled
+separately. Opaque proposal references never become links. Unsupported sources and
+unlinked legacy messages are stated as unavailable; email ingestion is outside this
+release. Native disclosures open instantly. Preview transitions honor both system
+and app reduced-motion preferences.
+
+**Evidence.** Client regressions cover draft labels, per-step quorums, all votes,
+real email-body revision, old-binding rejection, safe evidence links, and legacy
+draft receipts. Browser checks cover all ten governed previews at desktop and narrow
+widths, plus phone review with the existing sidebar collapsed. This change does not
+redesign the phone navigation shell. The client requires the matching backend
+review-binding helper and typed evidence endpoint; integrate and release together.
+
+---
+
+## C81. Proactive outreach advances through new candidates and sends only an exact approved email
+
+**Decided September 18, 2026.** Recurring AgentCash People Search keeps the
+existing six-hour cadence, one request per run and `$0.15` discovery ceiling.
+The Worker, not the model, owns the provider page cursor. It advances only after
+an exact paid response is imported and cycles after the final page. A durable
+engagement ledger removes any candidate already drafted, declined, queued,
+sent, or suppressed from later Iris candidate lists.
+
+Iris may use only contact fields copied from stored professional enrichment and
+verification evidence. Draft-only remains the default in every environment.
+When an operator enables approved sending, the human decision creates a durable
+outbox row bound to the request id, authorization revision and hash, and
+recipient index. The sender must be a matching dedicated Gmail OAuth account;
+credentials are envelope-encrypted and the connector requests `gmail.send`
+plus OpenID identity without mailbox-read scope.
+
+Delivery rechecks the approval, sender identity and suppression list. A
+confirmed Gmail response records its message and thread ids and marks the
+engagement sent. A network error or server response that cannot prove delivery
+becomes `ambiguous` and stops automatic retries, because avoiding duplicate
+unsolicited outreach is more important than hiding a manual review. Settings →
+Email exposes connection, cadence, rollout mode, and waiting work.
+
+**Evidence.** Unit coverage fixes OAuth scope/state, verified account identity,
+header-safe MIME generation, provider requests, pagination and end-of-results
+cycling. PostgreSQL coverage proves cursor persistence, repeat-candidate
+exclusion, exact authorization binding, pending-mailbox behavior, encrypted
+credential resolution, one confirmed send, receipt persistence and engagement
+transition. Migration replay, the typed schema/grant matrix, client render and
+the full database suite include the new boundary.
+
+---
+
+## C82. Modular workflows are Hermes skills with Enterprise assignments
+
+**Decided September 18, 2026.** Hermes Enterprise uses Hermes's existing
+extension model instead of introducing a parallel “Program” package type. A
+skill is the versioned procedure. A plugin supplies trusted tools and hooks. An
+Enterprise skill assignment binds one reviewed skill version to one agent's
+validated non-secret config, semantic capability grants, proactive schedule,
+approval policy and active/paused state.
+
+The Partner Program is the first implementation. Existing environment policy
+is imported once as assignment revision 1 so deployed agents keep working.
+After materialization the database assignment is authoritative. The native
+runtime derives both `skills.auto_load` and assignment tools from the active
+row; pause removes both. Cron discovers persisted assignments and uses each
+assignment's enabled flag and interval. Library → Skills renders the registry's
+field metadata and lets an Admin save a new revision.
+
+The assignment and its append-only revisions are tenant-isolated. The app role
+may create and update an assignment; the agent role has read-only access. The
+database enforces monotonic revisions and records every snapshot. Secrets,
+provider credentials, evidence, Inbox approvals, external effects and receipts
+remain in their existing control-plane stores. A skill still cannot grant
+itself decision or send authority.
+
+Runtime discovery and recovery status reads never materialize an assignment or
+enable a schedule. The deployment-wide legacy Partner Program fallback is a
+rollout compatibility projection only for an agent with no Enterprise team or
+skill governance. Any explicit Enterprise role/assignment suppresses that
+fallback, so a Finance agent cannot inherit Partnerships manifests or tools.
+Applying a reviewed role template also replaces capability grants with the
+template's exact allowlist instead of preserving arbitrary historic grants.
+
+**Evidence.** Migration replay applies 46 migrations twice from a blank shadow
+database. Unit tests prove active and paused runtime boundaries. PostgreSQL
+coverage proves legacy import, revision history and agent-role visibility. The
+full shared, client, Worker unit and database suites pass, and the production
+client and Worker dry-run builds succeed. A mock browser check opens the
+schema-driven editor, saves a changed priority and observes revision 2 without
+console errors.
+
+---
+
+## C83. Cross-team agent coordination uses a governed Bot Mode bridge
+
+**Decided September 19, 2026.** Partnerships-to-Finance coordination is hybrid.
+The authenticated, revision-pinned database handoff remains the authority. The
+recipient Finance session also receives one durable user-role turn using Hermes
+0.21.3's canonical Bot Mode envelope,
+`Message from 🤖 <display> (@<profile>): <body>`, with native `turn_author` bot
+attribution. The transcript
+renders that exact envelope as an agent timeline notice instead of a human
+message bubble.
+
+The Enterprise Worker generates the message from an immutable, human-confirmed
+intake and the Finance-private invoice record; neither model can alter the
+envelope, choose a recipient or author authority. The Partnerships tool receives
+only the intake id and expected hash. The Worker rechecks the exact human
+authorization, validity window, non-deleted source digests, frozen revisions,
+assignment snapshots and run grants before its deterministic duplicate,
+evidence, currency and amount checks create the only request. An unsigned
+agreement draft is evidence to review, not proof that terms were authorized.
+
+The Finance model gets read-only request/result tools and may explain the stored
+result. It cannot call native `message_agent`, create or mutate a request,
+approve, pay or send. The Finance human decision rechecks the same binding and
+saves only an invoice draft. One bounded server acknowledgment records the
+decision result without invoice content or an automatic agent reply, preventing
+acknowledgement loops.
+
+**Why.** Native Bot Mode's message shape and attribution make agent coordination
+legible and compatible with the Hermes client, but unrestricted peer tools would
+bypass Enterprise team scopes. Keeping transport visible and authority on the
+server preserves both behaviors.
+
+`input_provenance` is separate from execution simulation. Sample terms stay
+sample throughout authorization, intake, correction and results, while a real
+native execution over those terms remains non-simulated. Historical unknown
+provenance is not relabeled customer data.
+
+**Evidence.** Shared tests pin the current and legacy Bot Mode parsers. Runtime
+tests require validated native bot attribution and reject malformed authors
+before network I/O. The V2 PostgreSQL acceptance covers exact authorization,
+same-key replay/conflict, revised terms, evidence deletion and validity drift,
+assignment drift, one-successor correction, sample lineage, guarded human
+decision and one acknowledgment. On September 19 it passed 8/8 alone and 12/12
+with the legacy partner workflow suite. These fixtures use real Postgres/app
+roles and guarded HTTP with fixture storage/auth and scripted run admission;
+they do not constitute hosted two-account or live provider proof.
+
+## C84. Native conversation ids start from the first Enterprise run
+
+**Decided September 19, 2026.** The first Hermes run in an Enterprise session
+uses its globally fresh Enterprise run id as the native `session_id`. Later
+turns in that same Enterprise session reuse the latest persisted
+`runtime_session_id`. The exact selected id is snapshotted with the native
+request and bound to the run before execution.
+
+**Why.** A staging reset can recreate deterministic Enterprise session ids
+while the separately hosted Hermes SessionDB still retains its earlier
+transcript. Passing the reused Enterprise id let an otherwise fresh prompt load
+old native history and return an unrelated answer. A fresh run id breaks that
+collision, while the persisted mapping preserves real multi-turn continuity.
+Retries continue to use the snapshotted id so native idempotency fingerprints
+remain stable across releases.
+
+**Evidence.** Runtime unit coverage proves first-turn isolation, prior native
+mapping reuse and exact binding. Restricted-role database coverage proves a new
+run resolves to itself and a following run resolves to the earlier native
+conversation root. The live staging acceptance requires a unique-marker prompt
+in a new Enterprise session after deployment.
+
+---
+
+## C85. Multi-party admission is an opt-in, exact-attestation transition
+
+**Decided September 19, 2026.** Existing Partnerships 1.7 profiles and work keep
+their original runtime name, procedure and version-aware tool inventory. The
+new role uses `enterprise_bridge:partner-program-screening-v1-8` version `1.8.0`
+with artifact digest
+`sha256:281bbfff95d40e202c3ced5d1cb30ebf432868bee100d0c2a647faa40757a9e5`.
+Finance keeps its runtime name but new work uses version `1.0.1` with digest
+`sha256:bdb13d70f7a603f92eb47fc2d1c057c82f26658e61df8cf357790f23875753e4`;
+historical 1.0.0 remains resolvable.
+
+The additive migration leaves admission disabled. Enabling it requires exact
+attestation for both current role assignments, including agent/assignment id,
+revision, version, artifact/content digest, complete tool inventory, pinned
+runtime/plugin, native cron off and role-specific AgentCash state. The server
+re-locks the role bindings after the remote probe and rechecks the saved
+snapshot on every new intake. Relevant pause, revision, artifact or principal
+drift closes admission; unrelated assignments do not. Compatibility readiness
+can keep a legacy profile operational but can never admit the new workflow.
+
+**Why.** A global package bump would silently change existing Iris tools and
+could invalidate active assignments or require unrelated restarts. A stored
+"ready" flag without revision binding would allow new work after the native
+profile and Enterprise authority diverged. Per-profile opt-in preserves the
+existing product while making new cross-team authority fail closed.
+
+**Operational consequence.** Deploy the Worker and migration with admission
+off, update only the selected profiles, verify both attestations, then enable
+that workspace. A newly invited Finance employee must start with compatibility
+discovery disabled, receive the Finance role immediately, and never have the
+starter Partnerships search approved. Hosted acceptance still requires the
+second real member and exact native probes; local fixtures cannot replace it.
+
+---
+
+## C86. Warm capacity begins with a narrow, revocable discovery credential
+
+**Decided September 19, 2026.** A new Hermes Cloud pool profile receives its
+permanent Enterprise agent UUID before it can become invitation capacity. A
+stepped-up workspace Admin prepares one random 32-byte discovery bearer for
+that unused identity. Enterprise returns the bearer once and stores only a
+workspace-and-agent-scoped digest. Before verified registration, it expires in
+24 hours and can call only the read-only skills and tools discovery routes.
+Registration links the exact credential to live-attested capacity and keeps it
+valid across restarts until assignment or revocation.
+
+The bootstrap contract is the historical Partnerships 1.7 profile: exact
+runtime, plugin source identity, role, configuration digest, skill artifact and
+content digests, tool inventory, AgentCash wallet state and disabled native
+cron. Its connector must also attest the exact permanent workspace and agent
+IDs and the configured Enterprise public origin. Registration and invitation
+acceptance probe the real connector. Acceptance performs network I/O outside
+the database transaction, then locks and rechecks the invitation, capacity,
+grant and first assignment materialization before atomically copying the digest
+to a `token_digest` runtime binding. The stored readiness time is the probe's
+actual completion time.
+
+After assignment, every token-digest run re-attests the fixed managed process
+and the agent's current explicit assignment before provider submission. This
+allows reviewed P1.8 or Finance transitions without weakening source, origin,
+artifact or tool checks. A managed flag, origin, plugin source, assignment or
+inventory mismatch blocks execution. Existing fixed Iris bindings keep their
+legacy HMAC and compatibility readiness behavior.
+
+**Why.** A connector control secret proves access to the dashboard route but
+does not prove which Enterprise identity or governed profile the native process
+will load. A discovery credential lets the native initializer read only the
+configuration it must validate, without creating an agent, granting execution
+or exposing a reusable plaintext secret in the database. Linking readiness to
+the same grant prevents synthetic or unclaimable capacity rows from satisfying
+an invitation.
+
+**Operational consequence.** The generated discovery bearer and the existing
+Cloud connector control secret are separate Admin inputs. No Cloud lifecycle,
+wallet funding or paid provider call occurs in prepare, registration or
+acceptance. Revoking available capacity quarantines it; reserved capacity must
+first be released by withdrawing its invitation. Existing opaque
+`HERMES_RUNTIME_AGENTS` credentials are left unchanged.
+
+## C87. Admin controls and personal settings have separate navigation
+
+September 20, 2026. Settings previously rendered the same workspace-control tabs to every member, relying on individual controls and server checks to explain authority. This obscured which settings affected the organization and sent members into pages they could not manage.
+
+Use the existing Admin section for organization policy, inbox rules, agent defaults, shared provider credentials and runtime capacity, organization usage, workspace connections, and Shared Intelligence administration. Show it only to current workspace admins. Guard destinations before mounting data-fetching components, including direct links and legacy Settings URLs; role changes must remove the privileged view.
+
+Personal Settings remains available to everyone for their own notifications, personal Slack identity linking, and read-only privacy information. Own-agent configuration stays with Agents. Reading retention facts or linking a personal identity does not grant authority to change shared connections, attest provider policies, or inspect organization credentials.
+
+Navigation explains authority; server routes independently enforce it. Protect administrative reads and writes while preserving the member-readable settings information required by ordinary application behavior. Do not return privileged metadata solely because the UI hides it. Keep member notification writes scoped to the authenticated user. Regression checks cover direct navigation and direct API access as well as visible controls.
+
+An active approval reviewer may not yet have an agent assigned. Bootstrap must still return their authorized workspace and Inbox state with a null agent, never substitute another member’s private agent. Agent-dependent controls stay unavailable until an accessible agent exists.
+
+Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
+
+
+### C87 navigation refinement — Admin View and User View
+
+September 20: Brian prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.
+
+
+### C87 navigation refinement — four consolidated tabs
+
+Brian’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
+
+
+### C87 detail-page design — September20
+
+Brian requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
+
+References: https://vercel.com/docs/project-configuration/general-settings and https://vercel.com/docs/integrations/install-an-integration/manage-integrations-reference. Adapt section hierarchy and integration management concepts to Hermes tokens, rather than copying Vercel’s brand.

@@ -45,6 +45,7 @@ export interface FakeRequestRow {
 }
 
 export class FakeAgentDb implements AgentDb {
+  async operationConsent(): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null> { return null; }
   readonly events: EmittedEvent[] = [];
   readonly requests: FakeRequestRow[] = [];
   readonly partnerCandidates: Record<string, unknown>[] = [];
@@ -101,6 +102,12 @@ export class FakeAgentDb implements AgentDb {
       providerMessage: { role: 'user', content: 'Here is the programme and the application.' },
       toolCallId: null,
     });
+  }
+
+  /** Test-only state transition for races that happen after the startup read. */
+  setRunForTest(overrides: Partial<EngineRunRow>): void {
+    this.run = { ...this.run, ...overrides };
+    if (overrides.stopRequested !== undefined) this.stopFlag = overrides.stopRequested;
   }
 
   /** Every id the event contract validates is a uuid, so they all are. */

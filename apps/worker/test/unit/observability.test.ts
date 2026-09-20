@@ -13,8 +13,6 @@ import {
   METRICS,
   analyticsAvailable,
   recordHermesLatency,
-  recordHermesStream,
-  recordHermesTerminalFailure,
   recordProviderLatency,
   recordStopLatency,
   writePoint,
@@ -160,32 +158,6 @@ describe('Analytics Engine', () => {
     expect(recordStopLatency(e, 'ws', { runId: 'r', ms: 12, honouredAt: 'delta' })).toBe(false);
   });
 
-  it('records Hermes stream SLOs and structured terminal failures without response text', () => {
-    const written: Record<string, unknown>[] = [];
-    const e = env({
-      ANALYTICS: { writeDataPoint: (point: Record<string, unknown>) => written.push(point) },
-    } as unknown as Partial<Env>);
-
-    recordHermesStream(e, 'ws-1', {
-      runId: 'run-1', releaseRing: 'canary', streamEnd: 'terminal',
-      firstDeltaMs: 120, firstPreviewMs: 124, firstCheckpointMs: 260,
-      deltaCount: 4, deltaCharacters: 57,
-    });
-    recordHermesTerminalFailure(e, 'ws-1', {
-      runId: 'run-2', releaseRing: 'canary', code: 'provider_rate_limited',
-      source: 'runtime', structured: true, retryable: true,
-      workedMs: 900, partialCharacters: 12,
-    });
-
-    expect(written[0]?.blobs).toEqual(['hermes.stream', 'ws-1', 'run-1', 'canary', 'terminal']);
-    expect(written[0]?.doubles).toEqual([120, 124, 260, 4, 57]);
-    expect(written[1]?.blobs).toEqual([
-      'hermes.terminal_failure', 'ws-1', 'run-2', 'canary',
-      'provider_rate_limited', 'runtime', 'structured',
-    ]);
-    expect(JSON.stringify(written)).not.toContain('response');
-  });
-
   it('covers every metric plan section 5 names', () => {
     for (const metric of [
       'run.duration',
@@ -202,7 +174,9 @@ describe('Analytics Engine', () => {
       expect(METRICS).toContain(metric);
     }
   });
+});
 
+describe('Hermes startup latency', () => {
   it('keeps startup latency separate from stream timing and represents unavailable turn time explicitly', () => {
     const written: Record<string, unknown>[] = [];
     const e = env({
@@ -212,7 +186,7 @@ describe('Analytics Engine', () => {
       runId: 'run-1', modelId: 'nous:example/model', releaseRing: 'stable',
       phase: 'first_delta', duration_ms: 750, elapsed_ms: 750, turn_elapsed_ms: null,
     });
-    expect(written[0]?.blobs).toEqual(['hermes.latency', 'ws-1', 'run-1', 'nous:example/model', 'stable', 'first_delta']);
+    expect(written[0]?.blobs).toEqual(['hermes.latency', 'ws-1', 'run-1', 'nous:example/model', 'first_delta']);
     expect(written[0]?.doubles).toEqual([750, 750, -1]);
   });
 });

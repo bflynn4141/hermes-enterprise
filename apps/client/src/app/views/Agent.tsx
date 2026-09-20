@@ -14,10 +14,12 @@ import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from
 import { AGENT_TABS, EMPTY } from '../../model/constants.js';
 import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
-import { approvalActionLabel, approvalIcon, approvalTypeLabel, matchesReviewerFilter } from './Approval.js';
+import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from '../approval-copy.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
+import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
+import { persistSetupStep } from './setup-progress.js';
 
-function AgentHead({ full }: { full?: boolean }) {
+export function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
   return (
     <div className="agent-head">
@@ -31,26 +33,64 @@ function AgentHead({ full }: { full?: boolean }) {
   );
 }
 
-function AgentTabsRow({ value }: { value: string }) {
+export function AgentTabsRow({ value }: { value: string }) {
   const nav = useNav();
-  const refs: Record<string, Ref> = { overview: OV, context: CTX, skills: SKILLS_VIEW, traces: TRACES };
-  return <Tabs strong tabs={AGENT_TABS} value={value} onChange={(id) => nav(refs[id] ?? OV)} label="Agent views" />;
+  const refs: Record<string, Ref> = { overview: OV, context: CTX, skills: SKILLS_VIEW, permissions: { section: 'agents', view: 'permissions' }, traces: TRACES };
+  return <div className="agent-tabs-navigation">
+    <div className="agent-tabs-desktop"><Tabs strong tabs={AGENT_TABS} value={value} onChange={(id) => nav(refs[id] ?? OV)} label="Agent views" /></div>
+    <label className="agent-tabs-mobile"><span className="sr-only">Agent view</span><select value={value} onChange={(event) => nav(refs[event.target.value] ?? OV)}>{AGENT_TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}</select></label>
+  </div>;
+}
+
+interface RequestRowCopy {
+  title: string;
+  summary: string;
+  compact: boolean;
+}
+
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+export function requestRowCopy(request: RequestEntity): RequestRowCopy {
+  const fallback = {
+    title: request.subject ?? request.label,
+    summary: request.title ?? '',
+    compact: false,
+  };
+  if (request.kind !== 'approval' || approvalType(request) !== 'communication') return fallback;
+
+  const details = record(record(request.payload).details);
+  const recipients = Array.isArray(details.recipients) ? details.recipients : [];
+  const firstRecipient = record(recipients[0]);
+  const firstName = typeof firstRecipient.name === 'string' ? firstRecipient.name.trim() : '';
+  if (!firstName) return fallback;
+
+  const more = Math.max(0, recipients.length - 1);
+  const recipient = more > 0 ? `${firstName} +${more}` : firstName;
+  const channel = details.channel === 'email' ? 'email' : 'message';
+  const draftOnly = details.draft_only === true;
+  return {
+    title: draftOnly ? `Draft outreach — ${recipient}` : `Send ${channel} — ${recipient}`,
+    summary: draftOnly ? 'Review copy only · Nothing is sent' : 'Review before approving send',
+    compact: true,
+  };
 }
 
 export function RequestRow({ request, action, onAction }: { request: RequestEntity; action: string; onAction: () => void }) {
   const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
+  const copy = requestRowCopy(request);
   return (
     <div className="list-row">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
-      <div className="row-id">
-        <span className="t">{request.subject ?? request.label}</span>
-        <span className="s">{request.title ?? ''}</span>
+      <div className={`row-id${copy.compact ? ' approval-compact-copy' : ''}`}>
+        <span className="t" title={copy.title}>{copy.title}</span>
+        <span className="s" title={copy.summary}>{copy.summary}</span>
       </div>
       <div className="row-main">
         <span className="t">{type}</span>
         <span className="s">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{request.kind === 'approval' ? approvalActionLabel(request) : action} →</Button>
+      <Button onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
     </div>
   );
 }
@@ -63,14 +103,26 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
   const nav = useNav();
   const prefersReducedMotion = useReducedMotion();
   const activity = agentActivity(state, traces);
+  const recovery = useAgentRecovery();
+  const liveAttempt = Object.values(state.sessions).find((session) => session.run?.id === activity.traceId)?.run?.attempt ?? 0;
+  // A newly started turn can arrive over the socket before its recovery read.
+  // Do not let the previous task's polled state hide that confirmed activity.
+  const recoveryBehindLive = activity.state === 'working' && recovery.view &&
+    (activity.traceId !== recovery.view.run_id || liveAttempt > (recovery.view.attempt ?? 0));
+  const recoveryState = recoveryBehindLive ? undefined : recovery.view?.state;
+  const activityState: AgentActivityState = !recoveryState ? activity.state
+    : recoveryState === 'working' ? 'working'
+      : ['waiting', 'queued', 'retry_scheduled'].includes(recoveryState) ? 'waiting'
+        : ['retryable', 'blocked', 'stopped'].includes(recoveryState) ? 'stopped' : 'idle';
   const reduced = state.ui.reduceMotion || Boolean(prefersReducedMotion);
-  const target = activity.traceId ? TRACE(activity.traceId) : TRACES;
+  const traceId = recoveryBehindLive ? activity.traceId : recovery.view?.run_id ?? activity.traceId;
+  const target = traceId ? TRACE(traceId) : TRACES;
 
   return (
-    <section className="agent-activity-card" data-activity-state={activity.state} aria-label="Agent activity">
+    <section className="agent-activity-card" data-activity-state={activityState} aria-label="Agent activity">
       <div className="agent-activity-head">
         <span className="agent-activity-mark">
-          <IrisMark size={32} state={activityMarkState(activity.state)} />
+          <IrisMark size={32} state={activityMarkState(activityState)} />
         </span>
         <div className="agent-activity-identity">
           <span className="agent-activity-title">{state.workspace.name}</span>
@@ -79,9 +131,9 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
         <div className="agent-activity-actions">
           <span className="agent-activity-status" role="status" aria-live="polite">
             <i aria-hidden="true" />
-            {activity.status}
+            {recoveryState ? RECOVERY_STATUS[recoveryState] : activity.status}
           </span>
-          <Button link onClick={() => nav(target)}>{activity.traceId ? 'View trace →' : 'View traces →'}</Button>
+          <Button link onClick={() => nav(target)}>{traceId ? 'View trace →' : 'View traces →'}</Button>
         </div>
       </div>
 
@@ -106,9 +158,10 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
               </span>
             </>
           )}
-          {activity.action && <span className="agent-activity-action">{activity.action}</span>}
+          {activity.action && (!recoveryState || recoveryState === 'idle') && <span className="agent-activity-action">{activity.action}</span>}
         </motion.div>
       </div>
+      {!recoveryBehindLive && <RecoveryControlView recovery={recovery} />}
     </section>
   );
 }
@@ -637,7 +690,7 @@ export function TraceFailure({ error }: { error: NonNullable<TraceEntity['error'
  * Two rules the server sets and the client keeps:
  *   * a truncated tool result is shown truncated, marker and all. Re-expanding
  *     it would be a trace of a run that did not happen;
- *   * opening a trace advances nothing. There is no control on this screen.
+ *   * opening a trace advances nothing; recovery requires its explicit control.
  */
 export function TraceDetail({ id }: { id: string | null }) {
   const adapter = useAdapter();
@@ -703,6 +756,7 @@ export function TraceDetail({ id }: { id: string | null }) {
         </div>
         <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${trace.model_id ?? 'unknown model'}`} />
         {trace.error && <TraceFailure error={trace.error} />}
+        {id && <AgentRecovery runId={id} />}
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">
@@ -819,15 +873,29 @@ export function Setup({ step }: { step: string }) {
   const adapter = useAdapter();
   const nav = useNav();
   const lists = useWorkspaceLists();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const tabs = [
     { id: 'identity', label: 'Identity' },
     { id: 'context', label: 'Context' },
     { id: 'permissions', label: 'Permissions' },
     { id: 'ready', label: 'Ready' },
   ];
+  const saveAndGo = (next: string | null, onSuccess: () => void): void => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const patch = state.agent.id
+      ? (body: { setup_step: string | null }) => adapter.rest.patchAgent(state.workspace.id, state.agent.id!, body)
+      : null;
+    void persistSetupStep(patch, next).then((result) => {
+      setBusy(false);
+      if (result.ok) onSuccess();
+      else setError(result.message);
+    });
+  };
   const goto = (next: string): void => {
-    nav({ section: 'agents', view: 'setup', step: next });
-    if (state.agent.id) void adapter.rest.patchAgent(state.workspace.id, state.agent.id, { setup_step: next }).catch(() => undefined);
+    saveAndGo(next, () => nav({ section: 'agents', view: 'setup', step: next }));
   };
   return (
     <div className="scroll">
@@ -836,11 +904,12 @@ export function Setup({ step }: { step: string }) {
           <h1 className="display-32">Start {agentName(state)}</h1>
         </div>
         <Tabs tabs={tabs} value={step} onChange={goto} label="Setup steps" />
+        {error && <p className="meta" role="alert">{error}</p>}
         {step === 'identity' && (
           <>
             <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email ?? 'Email not connected'} right={<span className="meta">Loop not started</span>} />
             <div className="row">
-              <Button primary onClick={() => goto('context')}>
+              <Button primary disabled={busy} onClick={() => goto('context')}>
                 Continue
               </Button>
             </div>
@@ -862,7 +931,7 @@ export function Setup({ step }: { step: string }) {
               {lists.agentFiles.length === 0 && <EmptyState icon="context" title={EMPTY.context} />}
             </div>
             <div className="row">
-              <Button primary onClick={() => goto('permissions')}>
+              <Button primary disabled={busy} onClick={() => goto('permissions')}>
                 Continue
               </Button>
             </div>
@@ -889,7 +958,7 @@ export function Setup({ step }: { step: string }) {
               </div>
             </div>
             <div className="row">
-              <Button primary onClick={() => goto('ready')}>
+              <Button primary disabled={busy} onClick={() => goto('ready')}>
                 Continue
               </Button>
             </div>
@@ -904,10 +973,8 @@ export function Setup({ step }: { step: string }) {
               <span className="grow" />
               <Button
                 primary
-                onClick={() => {
-                  if (state.agent.id) void adapter.rest.patchAgent(state.workspace.id, state.agent.id, { setup_step: null }).catch(() => undefined);
-                  nav(OV);
-                }}
+                disabled={busy}
+                onClick={() => saveAndGo(null, () => nav(OV))}
               >
                 Start {agentName(state)}
               </Button>

@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { runAttemptInstanceId } from '../../src/runs/workflow.js';
-import { asUser, makeEnv, type HubCall } from './harness.js';
+import { asUser, asUserWithWaitUntil, makeEnv, type HubCall } from './harness.js';
 import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 
 /**
@@ -47,10 +47,12 @@ function envWithWorkflow(overrides: Partial<Env> = {}): {
   hubCalls: HubCall[];
   events: { type: string; payload: unknown }[];
   hubStops: { session: string; runId: string }[];
+  sequence: string[];
 } {
   const created: CreatedInstance[] = [];
   const events: { type: string; payload: unknown }[] = [];
   const hubStops: { session: string; runId: string }[] = [];
+  const sequence: string[] = [];
   const base = makeEnv({
     // Development-shaped: no provider key exists in a seeded workspace, and the
     // point of these tests is the route, not the model.
@@ -60,7 +62,10 @@ function envWithWorkflow(overrides: Partial<Env> = {}): {
     SESSION_HUB: {
       idFromName: (name: string) => ({ name }),
       get: (id: { name: string }) => ({
-        publish: () => ({ delivered: 0, lastId: null }),
+        publish: () => {
+          sequence.push('message-published');
+          return { delivered: 0, lastId: null };
+        },
         forward: () => ({ delivered: 0, lastId: null, stop_requested: false }),
         requestStop: (runId: string) => {
           hubStops.push({ session: id.name, runId });
@@ -74,6 +79,7 @@ function envWithWorkflow(overrides: Partial<Env> = {}): {
           // What Cloudflare does: `create()` throws if the id is in use.
           throw new Error(`instance.id ${options.id} already exists`);
         }
+        sequence.push('workflow-created');
         created.push({ id: options.id, params: options.params });
         return Promise.resolve({ id: options.id });
       },
@@ -88,7 +94,7 @@ function envWithWorkflow(overrides: Partial<Env> = {}): {
     } as unknown as Env['RUN_ATTEMPT'],
     ...overrides,
   });
-  return { env: base.env, created, hubCalls: base.hubCalls, events, hubStops };
+  return { env: base.env, created, hubCalls: base.hubCalls, events, hubStops, sequence };
 }
 
 let fx: Fixture;
@@ -111,7 +117,7 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(await response.json()).toMatchObject({ reason: 'client_turn_id_required' });
   });
 
-  it('rejects nonempty attachments before persisting a message or admitting a run', async () => {
+  it('rejects unbound attachments before persisting a message or admitting a run', async () => {
     const workspace = await seedWorkspace();
     const { env, created } = envWithWorkflow();
     const clientTurnId = `turn-attachment-${randomUUID()}`;
@@ -125,7 +131,7 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     });
 
     expect(response.status).toBe(422);
-    expect(await response.json()).toMatchObject({ reason: 'attachments_unsupported' });
+    expect(await response.json()).toMatchObject({ reason: 'invalid_context_sources' });
     expect(created).toEqual([]);
     const count = await asTenant(workspace.workspaceId, workspace.adminId, async (c) =>
       c.query<{ count: string }>('SELECT count(*)::text AS count FROM runs WHERE client_turn_id = $1', [clientTurnId]));
@@ -148,10 +154,6 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
         run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
         run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
-      },
-      enterprise_contract: {
-        schema_version: 1, source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
-        release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
       },
     }));
     const { env, created } = envWithWorkflow({
@@ -196,10 +198,6 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
         run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
       },
-      enterprise_contract: {
-        schema_version: 1, source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
-        release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
-      },
     }));
     const { env } = envWithWorkflow({
       MODEL_SCRIPTED: '0',
@@ -232,7 +230,7 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
 
   it('creates one run, one instance, and names the instance ${run_id}-a1', async () => {
     const workspace = await seedWorkspace();
-    const { env, created } = envWithWorkflow();
+    const { env, created, sequence } = envWithWorkflow();
     const response = await asUser(env, workspace.adminId, turnPath(workspace), {
       method: 'POST',
       body: { client_turn_id: 'turn-a', text: 'Score this application.' },
@@ -247,6 +245,35 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(created[0]?.params).toMatchObject({ runId: body.run_id, attempt: 1, engineVersion: 1 });
     expect(created[0]?.params.receivedAt).toEqual(expect.any(Number));
     expect(created[0]!.params.receivedAt as number).toBeLessThanOrEqual(Date.now());
+    expect(sequence.slice(0, 2)).toEqual(['message-published', 'workflow-created']);
+  });
+
+  it('reports authentication, transaction, ordered publish and Workflow handoff phases', async () => {
+    const workspace = await seedWorkspace();
+    const { env } = envWithWorkflow();
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const response = await asUser(env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `turn-timings-${randomUUID()}`, text: 'Measure this admission.' },
+    });
+    expect(response.status).toBe(201);
+    const entry = logs.mock.calls
+      .map(([value]) => {
+        try { return JSON.parse(String(value)) as Record<string, unknown>; }
+        catch { return null; }
+      })
+      .find((value) => value?.at === 'hermes.turn_admitted');
+    expect(entry).toMatchObject({
+      capability_ms: null,
+      authentication_ms: expect.any(Number),
+      transaction_ms: expect.any(Number),
+      after_commit_jobs_ms: expect.any(Number),
+      admission_ms: expect.any(Number),
+      ordered_publish_ms: expect.any(Number),
+      workflow_create_ms: expect.any(Number),
+      handoff_deferred: false,
+      handoff_ms: expect.any(Number),
+    });
   });
 
   it('returns the existing run on a duplicate POST and creates no second instance', async () => {
@@ -264,6 +291,71 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(first.status).toBe(201);
     expect(second.status).toBe(200);
     expect((await first.json() as { run_id: string }).run_id).toBe((await second.json() as { run_id: string }).run_id);
+    expect(created).toHaveLength(1);
+  });
+
+  it('retries a failed direct publish before the durable launch job creates the Workflow', async () => {
+    const workspace = await seedWorkspace();
+    let publishAttempts = 0;
+    let createdRef: CreatedInstance[] = [];
+    const configured = envWithWorkflow({
+      SESSION_HUB: {
+        idFromName: (name: string) => ({ name }),
+        get: () => ({
+          publish: () => {
+            publishAttempts += 1;
+            expect(createdRef).toHaveLength(0);
+            if (publishAttempts === 1) throw new Error('transient hub failure');
+            return { delivered: 0, lastId: null };
+          },
+        }),
+      } as unknown as Env['SESSION_HUB'],
+    });
+    createdRef = configured.created;
+
+    const response = await asUserWithWaitUntil(configured.env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `turn-publish-retry-${randomUUID()}`, text: 'Keep this visible.' },
+    });
+    expect(response.status).toBe(201);
+    const { run_id } = await response.json() as { run_id: string };
+    expect(publishAttempts).toBe(2);
+    expect(configured.created).toHaveLength(1);
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      const { rows } = await c.query<{ remaining: string }>(
+        `SELECT count(*)::text AS remaining FROM jobs
+          WHERE workspace_id=$1 AND kind IN ('publish','run_launch')
+            AND (payload->>'runId'=$2::text OR payload->>'first_id' IN (
+              SELECT id::text FROM stream_events WHERE workspace_id=$1 AND trace_id=(SELECT trace_id FROM runs WHERE id=$2::uuid)
+            )) AND done_at IS NULL`,
+        [workspace.workspaceId, run_id],
+      );
+      expect(rows[0]?.remaining).toBe('0');
+    });
+  });
+
+  it('retries Workflow creation durably after the message has been published', async () => {
+    const workspace = await seedWorkspace();
+    let attempts = 0;
+    const created: CreatedInstance[] = [];
+    const configured = envWithWorkflow({
+      RUN_ATTEMPT: {
+        create: (options: { id: string; params: Record<string, unknown> }) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('transient Workflow API failure');
+          created.push(options);
+          return Promise.resolve({ id: options.id });
+        },
+      } as unknown as Env['RUN_ATTEMPT'],
+    });
+
+    const response = await asUserWithWaitUntil(configured.env, workspace.adminId, turnPath(workspace), {
+      method: 'POST',
+      body: { client_turn_id: `turn-launch-retry-${randomUUID()}`, text: 'Launch reliably.' },
+    });
+    expect(response.status).toBe(201);
+    expect(attempts).toBe(2);
     expect(created).toHaveLength(1);
   });
 
@@ -453,7 +545,7 @@ describe('the controls', () => {
       env,
       workspace.adminId,
       `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
-      { method: 'POST' },
+      { method: 'POST', body: { expected_attempt: 1 } },
     );
     expect(response.status).toBe(201);
     expect(await response.json()).toMatchObject({ run_id: runId, attempt: 2, status: 'working' });
@@ -468,10 +560,81 @@ describe('the controls', () => {
       env,
       workspace.adminId,
       `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
-      { method: 'POST' },
+      { method: 'POST', body: { expected_attempt: 1 } },
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ reason: 'run_active' });
+  });
+
+  it('keeps history and Stop available after agent revocation but blocks future execution and context writes', async () => {
+    const workspace = await seedWorkspace();
+    const { env, created, events } = envWithWorkflow();
+    const runId = await startRun(workspace, env);
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(
+        `INSERT INTO agent_owners(workspace_id,agent_id,member_id)
+         SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`,
+        [workspace.workspaceId, workspace.agentId, workspace.adminId],
+      );
+      await c.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2', [workspace.workspaceId, workspace.agentId]);
+    });
+
+    const denied = [
+      await asUser(env, workspace.adminId, turnPath(workspace), {
+        method: 'POST', body: { client_turn_id: `revoked:${randomUUID()}`, text: 'new run' },
+      }),
+      await asUser(env, workspace.adminId, `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/guide`, {
+        method: 'POST', body: { text: 'future guidance' },
+      }),
+      await asUser(env, workspace.adminId, `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/queue`, {
+        method: 'POST', body: { text: 'future queue item' },
+      }),
+    ];
+    for (const response of denied) {
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ reason: 'not_found' });
+    }
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(`UPDATE runs SET status='error' WHERE id=$1`, [runId]);
+    });
+    const retry = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/retry`,
+      { method: 'POST', body: { expected_attempt: 1 } },
+    );
+    expect(retry.status).toBe(404);
+    expect(await retry.json()).toMatchObject({ reason: 'not_found' });
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      await c.query(`UPDATE runs SET status='waiting',waiting_for='private_answer' WHERE id=$1`, [runId]);
+    });
+    const answer = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/context`,
+      { method: 'POST', body: { key: 'private_answer', value: 'must not persist' } },
+    );
+    expect(answer.status).toBe(404);
+    expect(await answer.json()).toMatchObject({ reason: 'not_found' });
+    expect(created).toHaveLength(1);
+    expect(events).toHaveLength(0);
+
+    const stop = await asUser(
+      env,
+      workspace.adminId,
+      `/w/${workspace.workspaceId}/sessions/${workspace.sessionId}/runs/${runId}/stop`,
+      { method: 'POST' },
+    );
+    expect(stop.status).toBe(200);
+    expect(await stop.json()).toMatchObject({ run_id: runId, status: 'stopping' });
+
+    await asTenant(workspace.workspaceId, workspace.adminId, async (c) => {
+      expect((await c.query('SELECT 1 FROM agent_context_fields WHERE agent_id=$1 AND key=$2', [workspace.agentId, 'private_answer'])).rowCount).toBe(0);
+      expect((await c.query('SELECT 1 FROM run_queue WHERE run_id=$1', [runId])).rowCount).toBe(0);
+      expect((await c.query("SELECT 1 FROM messages WHERE session_id=$1 AND kind='guidance'", [workspace.sessionId])).rowCount).toBe(0);
+    });
   });
 });
 

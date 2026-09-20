@@ -18,7 +18,13 @@
 // no INSERT on `jobs` at all (0004: `REVOKE ALL ON jobs FROM agent`), which is
 // why the engine publishes by handing committed rows to the hub itself rather
 // than by enqueuing a `publish` job; see decision 40 in docs/DECISIONS.md.
-import type { ApprovalView, ProposeApprovalInput, RequestKind } from '@hermes/shared';
+import type {
+  ApprovalView,
+  PartnerHandoffResult,
+  ProposeApprovalInput,
+  PublishPartnerInvoiceReviewInput,
+  RequestKind,
+} from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 
 /** An outbox row, written in the same transaction as the change it describes. */
@@ -106,6 +112,8 @@ export interface AppendTurnInput {
  * whose header says why it will not be added, with a type test that fails.
  */
 export interface AgentWrites {
+  /** Server-owned tool consent. This cannot approve or decide anything. */
+  operationConsent(input: { runId: string; agentId: string; toolCallId: string; toolName: string; arguments: Record<string, unknown> }): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null>;
   /**
    * Writes a `requests` row in `pending`. Nothing else may move it out.
    *
@@ -142,6 +150,11 @@ export interface AgentWrites {
    */
   ensureContextField(input: { runId: string; toolCallId: string; agentId: string; key: string }): Promise<void>;
   proposeInstruction(input: ProposeInstructionInput): Promise<{ versionId: string; created: boolean }>;
+  publishPartnerInvoiceReview?(input: {
+    runId: string;
+    agentId: string;
+    arguments: PublishPartnerInvoiceReviewInput;
+  }): Promise<{ handoff_id: string; job_id: string | null; created: boolean }>;
   appendTurn(input: AppendTurnInput): Promise<{ turnId: string; created: boolean }>;
   emit(events: readonly EmitInput[]): Promise<EmittedEvent[]>;
 }
@@ -167,6 +180,10 @@ export interface EngineRunRow {
   readonly mode: string;
   readonly agentId: string | null;
   readonly clientTurnId: string;
+  /** Exact server-owned retry instruction, never accepted from the runtime. */
+  readonly recoveryInput?: string | null;
+  /** Server-owned admission marker; a Workflow must revalidate its managed runtime before execution. */
+  readonly automaticRecovery?: boolean;
 }
 
 export interface HistoryTurn {
@@ -222,6 +239,7 @@ export interface RunErrorInput {
  * Everything the engine may do. A tool receives only the `AgentWrites` half.
  */
 export interface AgentDb extends AgentWrites {
+  loadOperationApproval?(id: string, runId: string): Promise<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string } | null>;
   loadRun(runId: string): Promise<EngineRunRow | null>;
   /**
    * The turn a new attempt starts at: the first turn whose assistant message is
@@ -243,6 +261,7 @@ export interface AgentDb extends AgentWrites {
   /** The per-run tool allowlist: `agent_capabilities.tool_names`, filtered by mode. */
   loadToolNames(agentId: string | null): Promise<string[]>;
   loadSystemPrompt(runId: string): Promise<string>;
+  loadContextSnapshot?(runId: string): Promise<unknown>;
   /**
    * The agent's context fields, each carrying who wrote it.
    *
@@ -274,6 +293,11 @@ export interface AgentDb extends AgentWrites {
     transport: string;
     effort_map: Record<string, string> | null;
   } | null>;
+  getPartnerHandoffResult?(input: {
+    runId: string;
+    agentId: string;
+    handoffId: string;
+  }): Promise<PartnerHandoffResult>;
 
   /** Run bookkeeping. Not on `AgentWrites`: a tool cannot move its own run. */
   enterStep(input: StepProgress): Promise<{ stepAttempt: number }>;

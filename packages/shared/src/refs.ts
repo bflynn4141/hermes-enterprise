@@ -7,7 +7,7 @@
 // reducer needs no translation layer when it is ported in M2.
 import { z } from 'zod';
 
-export const REF_SECTIONS = ['agents', 'inbox', 'members', 'history', 'library', 'settings'] as const;
+export const REF_SECTIONS = ['agents', 'inbox', 'members', 'admin', 'history', 'library', 'settings'] as const;
 export type RefSection = (typeof REF_SECTIONS)[number];
 
 /** A view selection, not a database mutation or an arbitrary route. */
@@ -15,6 +15,8 @@ export const inboxFiltersSchema = z.object({
   status: z.enum(['pending', 'resolved']).optional(),
   kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement', 'task', 'approval']).optional(),
   reviewer: z.enum(['for_me', 'waiting', 'all']).optional(),
+  provenance: z.enum(['all', 'operational', 'sample', 'test', 'unknown']).optional(),
+  visibility: z.enum(['active', 'hidden', 'all']).optional(),
   sort: z.enum(['priority', 'recent']).optional(),
   query: z.string().max(200).optional(),
 }).strict();
@@ -42,6 +44,7 @@ export const TRACES: Ref = { section: 'agents', view: 'traces' };
 export const COMPARE: Ref = { section: 'agents', view: 'traces', sub: 'compare' };
 export const INBOX: Ref = { section: 'inbox', view: 'list' };
 export const MEMBERS: Ref = { section: 'members' };
+export const ADMIN = (view = 'intelligence'): Ref => ({ section: 'admin', view });
 
 export const TRACE = (id: string): Ref => ({ section: 'agents', view: 'trace', id });
 export const REQ = (id: string, extra: Partial<Ref> = {}): Ref => ({ section: 'inbox', view: 'request', id, ...extra });
@@ -66,7 +69,7 @@ export function viewFocusRef(target: z.infer<typeof viewFocusSchema>): Ref {
     case 'context': return CTX;
     case 'skills': return SKILLS_VIEW;
     case 'traces': return TRACES;
-    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', query: '', sort: 'priority', ...target.filters } };
+    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active', query: '', sort: 'priority', ...target.filters } };
     case 'inbox_rules': return { section: 'inbox', view: 'rules' };
     case 'members': return MEMBERS;
     case 'history': return HISTORY();
@@ -93,6 +96,8 @@ export const sameRef = (a: Ref | null | undefined, b: Ref | null | undefined): b
     && (a.filters?.status ?? 'pending') === (b.filters?.status ?? 'pending')
     && (a.filters?.kind ?? 'all') === (b.filters?.kind ?? 'all')
     && (a.filters?.reviewer ?? 'for_me') === (b.filters?.reviewer ?? 'for_me')
+    && (a.filters?.provenance ?? 'all') === (b.filters?.provenance ?? 'all')
+    && (a.filters?.visibility ?? 'active') === (b.filters?.visibility ?? 'active')
     && (a.filters?.sort ?? 'priority') === (b.filters?.sort ?? 'priority')
     && (a.filters?.query ?? '') === (b.filters?.query ?? '');
 };

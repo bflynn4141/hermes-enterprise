@@ -81,7 +81,7 @@ export async function seedWorkspace(): Promise<Fixture> {
          ($1, $3, 'member', ARRAY[]::text[])`,
       [workspaceId, adminId, memberId],
     );
-    await c.query(`INSERT INTO agents (id, workspace_id, name, status) VALUES ($1, $2, 'Iris', 'started')`, [
+    await c.query(`INSERT INTO agents (id, workspace_id, name, status, context_scope) VALUES ($1, $2, 'Iris', 'started', 'workspace')`, [
       agentId,
       workspaceId,
     ]);

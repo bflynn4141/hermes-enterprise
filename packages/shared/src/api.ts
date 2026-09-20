@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { streamEventSchema, streamIdSchema, uuidSchema } from './events.js';
 import { memberRoleSchema, requestKindSchema, requestStatusSchema, sessionModeSchema } from './enums.js';
+import { memberRoleTemplateSchema } from './member-provisioning.js';
 import { refSchema } from './refs.js';
 
 export const agentProvisioningStatusSchema = z.enum([
@@ -89,12 +90,28 @@ export const bootstrapSchema = z
         setup_step: z.string().max(32).nullable(),
         provisioning_status: agentProvisioningStatusSchema.nullable().optional(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
     capabilities: z
       .object({
         email_ingress: z.boolean(),
         turn_attachments: z.boolean(),
         automated_triggers: z.boolean(),
+        /**
+         * Optional only for rolling compatibility with Workers deployed before
+         * this contract existed. Absence means the old legacy-delivery route;
+         * current Workers always advertise one of these two explicit modes.
+         */
+        member_invitations: z.discriminatedUnion('mode', [
+          z.object({
+            mode: z.literal('legacy_delivery'),
+            role_templates: z.array(memberRoleTemplateSchema).max(0),
+          }).strict(),
+          z.object({
+            mode: z.literal('setup_only'),
+            role_templates: z.array(memberRoleTemplateSchema).min(1),
+          }).strict(),
+        ]).optional(),
       })
       .strict(),
     /** Replay cursors: the client asks for events after these. */

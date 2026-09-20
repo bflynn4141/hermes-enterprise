@@ -34,7 +34,8 @@ export function Shell() {
   const gridRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<HTMLElement>(null);
   const agent = agentName(state);
-  const firstRunActive = state.ui.app.section === 'agents' && state.ui.app.view === 'setup';
+  const hasAgent = state.agent.id !== null;
+  const firstRunActive = hasAgent && state.ui.app.section === 'agents' && state.ui.app.view === 'setup';
   const firstRun = useFirstRunExperience(firstRunActive);
 
   useEffect(() => {
@@ -42,7 +43,9 @@ export function Shell() {
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
-  const panel = state.ui.irisPanel;
+  const configuredPanel = state.ui.irisPanel;
+  const historicalSessionOpen = !hasAgent && state.activeSessionId !== null;
+  const panel = hasAgent || historicalSessionOpen ? configuredPanel : 'hidden';
   const narrow = width < PANE_SWITCH_BREAKPOINT && panel === 'open';
   const pane = state.ui.pane;
   const navWidth = navWidthFor(width, state.ui.navCollapsed);
@@ -56,7 +59,7 @@ export function Shell() {
   // Below the pane-switch breakpoint there is no room for a 56 px strip beside
   // a usable app pane, so the rail is not shown and the app header's button is
   // the way back — which is what `hidden` already does.
-  const railShown = panel === 'rail' && width >= PANE_SWITCH_BREAKPOINT;
+  const railShown = hasAgent && panel === 'rail' && width >= PANE_SWITCH_BREAKPOINT;
   const resizable = panel === 'open' && !narrow;
 
   // --- the preference, per workspace and user -------------------------------
@@ -91,6 +94,7 @@ export function Shell() {
         IS_MAC,
       );
       if (verdict === 'ignore') return;
+      if (!hasAgent) return;
       event.preventDefault();
       if (verdict === 'collapse-from-composer') {
         dispatch({ type: 'iris/panel', panel: 'rail' });
@@ -102,7 +106,7 @@ export function Shell() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dispatch, focusApp, state.ui.irisPanel]);
+  }, [dispatch, focusApp, hasAgent, state.ui.irisPanel]);
 
   // Reopening from any control returns focus to the composer — the shortcut, the
   // rail's mark, the app header's button, New session. One effect rather than
@@ -113,7 +117,8 @@ export function Shell() {
     previous.current = panel;
   }, [panel]);
 
-  const columns = narrow
+  const phone = width <= 600;
+  const columns = phone ? 'minmax(0, 1fr)' : narrow
     ? `${navWidth}px minmax(0, 1fr)`
     : panel === 'open'
       ? `${navWidth}px ${irisWidth}px minmax(0, 1fr)`
@@ -126,7 +131,7 @@ export function Shell() {
       <ConnectionBanner />
       <div
         ref={gridRef}
-        className={`shell ${narrow ? 'is-narrow' : ''} ${compact ? 'is-compact' : ''}`}
+        className={`shell ${phone ? 'is-phone' : ''} ${narrow ? 'is-narrow' : ''} ${compact ? 'is-compact' : ''}`}
         data-iris={panel}
         style={{
           gridTemplateColumns: columns,
@@ -135,8 +140,8 @@ export function Shell() {
           transition: dragging ? 'none' : 'grid-template-columns var(--dur-layout) var(--ease-out)',
         }}
       >
-        <Sidebar />
-        {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} firstRun={firstRun?.conversation} />}
+        <Sidebar phone={phone} />
+        {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} firstRun={firstRun?.conversation} readOnly={!hasAgent} />}
         {railShown && <IrisRail shortcut={TOGGLE_SHORTCUT} />}
         <AppPane narrow={narrow} active={!narrow || pane === 'app'} paneRef={appRef} firstRun={firstRun?.agreement} />
         {resizable && (

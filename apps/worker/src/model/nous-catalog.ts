@@ -16,9 +16,9 @@
 //   Tools.    `supported_parameters` must contain `tools`. The run engine has
 //             no path that does not call a tool, so a model without them is
 //             synced but greyed, and the menu says why.
-//   Effort.   `reasoning` in `supported_parameters` is what makes the effort
-//             control mean anything. Without it the row carries a null
-//             effort_map, which is the existing "effort is fixed" convention.
+//   Effort.   Each model's reasoning metadata supplies its supported efforts
+//             and provider default. Never offer a generic `medium` to a model
+//             such as DeepSeek V4.1 that only accepts low, high and max.
 import {
   NOUS_DEFAULT_EFFORT,
   NOUS_EFFORT_MAP,
@@ -36,6 +36,7 @@ export interface NousPortalModel {
   top_provider?: { context_length?: unknown } | null;
   pricing?: Record<string, unknown> | null;
   supported_parameters?: unknown;
+  reasoning?: { supported_efforts?: unknown; default_effort?: unknown } | null;
 }
 
 export interface SyncRow {
@@ -60,6 +61,32 @@ export function perMillion(value: unknown): number | null {
 
 const asList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+function reasoningEfforts(raw: NousPortalModel, supportsReasoning: boolean): Pick<SyncRow, 'effort_map' | 'default_effort'> {
+  if (!supportsReasoning) return { effort_map: null, default_effort: null };
+  // Older catalogs omit this metadata altogether. An explicit empty or
+  // malformed list means there is no safe selectable effort, not permission
+  // to invent one from the legacy fallback.
+  if (raw.reasoning?.supported_efforts === undefined) {
+    return { effort_map: { ...NOUS_EFFORT_MAP }, default_effort: NOUS_DEFAULT_EFFORT };
+  }
+  const order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  const efforts = [...new Set(asList(raw.reasoning.supported_efforts))]
+    .filter((value) => /^[a-z][a-z0-9_-]{0,31}$/.test(value))
+    .sort((a, b) => {
+      const aRank = order.indexOf(a);
+      const bRank = order.indexOf(b);
+      return (aRank < 0 ? order.length : aRank) - (bRank < 0 ? order.length : bRank) || a.localeCompare(b);
+    });
+  if (efforts.length === 0) return { effort_map: null, default_effort: null };
+  const declared = raw.reasoning.default_effort;
+  return {
+    effort_map: Object.fromEntries(efforts.map((effort) => [effort, effort])),
+    default_effort: typeof declared === 'string' && efforts.includes(declared)
+      ? declared
+      : efforts.includes(NOUS_DEFAULT_EFFORT) ? NOUS_DEFAULT_EFFORT : efforts[0]!,
+  };
+}
 
 /**
  * Every model we can offer, as catalog rows.
@@ -91,7 +118,7 @@ export function normaliseNousModels(body: unknown): SyncRow[] {
     if (outputModalities.length > 0 && !outputModalities.includes('text')) continue;
 
     const parameters = asList(raw.supported_parameters);
-    const supportsReasoning = parameters.includes('reasoning') || parameters.includes('include_reasoning');
+    const supportsReasoning = parameters.includes('reasoning') || parameters.includes('include_reasoning') || parameters.includes('reasoning_effort');
     const contextRaw = raw.context_length ?? raw.top_provider?.context_length;
     const context = typeof contextRaw === 'number' && Number.isFinite(contextRaw) && contextRaw > 0
       ? Math.floor(contextRaw)
@@ -101,8 +128,7 @@ export function normaliseNousModels(body: unknown): SyncRow[] {
     out.push({
       model_id: modelId,
       label: typeof raw.name === 'string' && raw.name !== '' ? raw.name.slice(0, 80) : raw.id.slice(0, 80),
-      effort_map: supportsReasoning ? { ...NOUS_EFFORT_MAP } : null,
-      default_effort: supportsReasoning ? NOUS_DEFAULT_EFFORT : null,
+      ...reasoningEfforts(raw, supportsReasoning),
       pricing_per_million: {
         input,
         output,

@@ -21,6 +21,8 @@ const config: PartnerAgentConfig = {
     person_skills: ['Artificial Intelligence (AI)', 'Developer Relations'],
     current_position_titles: [],
     person_locations: [],
+    offset: 0,
+    search_after: null,
   },
   ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
   minimum_priority: 40,
@@ -43,6 +45,7 @@ describe('AgentCash People Search connector', () => {
         excludeFields: ['educations', 'languages'],
         include_employment_history: false,
         verbose: false,
+        limit: 5,
         offset: 0,
       },
     });
@@ -85,7 +88,7 @@ describe('AgentCash People Search connector', () => {
       metadata: { total: 1, credits: 1, offset: 0 },
     }), config, new Date('2026-09-16T20:00:00Z'));
 
-    expect(result).toMatchObject({ apiRequestsUsed: 1, monetaryCostUsd: 0.15 });
+    expect(result).toMatchObject({ apiRequestsUsed: 1, monetaryCostUsd: 0.15, nextOffset: 0, nextSearchAfter: null });
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]).toMatchObject({
       sourceKey: 'person-1',
@@ -95,6 +98,46 @@ describe('AgentCash People Search connector', () => {
     expect(result.candidates[0]?.priority.total).toBeGreaterThanOrEqual(40);
     expect(JSON.stringify(result.artifacts)).not.toContain('must-not-persist');
     expect(JSON.stringify(result.artifacts)).not.toContain('+15551234567');
+  });
+
+  it('uses the stored provider cursor and advances to the next page', () => {
+    const pagedConfig: PartnerAgentConfig = {
+      ...config,
+      people_search: { ...config.people_search!, offset: 25, search_after: 'cursor-25' },
+    };
+    expect(agentCashPeopleSearchArguments(pagedConfig).body).toMatchObject({
+      limit: 5,
+      search_after: 'cursor-25',
+    });
+    expect(agentCashPeopleSearchArguments(pagedConfig).body).not.toHaveProperty('offset');
+
+    const result = parseAgentCashPeopleSearch({
+      people: [{
+        id: 'person-26', full_name: 'Next Candidate',
+        social_profiles: { professional_network: { url: 'https://www.linkedin.com/in/next-candidate' } },
+      }],
+      companies: {},
+      metadata: { total: 100, offset: 25, search_after: 'cursor-26' },
+    }, pagedConfig, new Date('2026-09-18T17:00:00Z'));
+
+    expect(result).toMatchObject({ nextOffset: 26, nextSearchAfter: 'cursor-26' });
+  });
+
+  it('cycles back to the first page after the final result page', () => {
+    const pagedConfig: PartnerAgentConfig = {
+      ...config,
+      people_search: { ...config.people_search!, offset: 10, search_after: null },
+    };
+    const result = parseAgentCashPeopleSearch({
+      people: [{
+        id: 'person-11', full_name: 'Final Candidate',
+        social_profiles: { professional_network: { url: 'https://www.linkedin.com/in/final-candidate' } },
+      }],
+      companies: {},
+      metadata: { total: 11, offset: 10, search_after: 'unused-final-cursor' },
+    }, pagedConfig, new Date('2026-09-18T17:00:00Z'));
+
+    expect(result).toMatchObject({ nextOffset: 0, nextSearchAfter: null });
   });
 
   it('accepts the response and payment metadata blocks persisted by Hermes', () => {

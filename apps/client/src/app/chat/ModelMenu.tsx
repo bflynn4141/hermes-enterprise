@@ -30,7 +30,7 @@
 // Keyboard: ArrowUp/ArrowDown move through the options (roving `tabindex`),
 // Home/End jump, Enter picks, typing goes to the search box wherever focus is.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SETTINGS, vendorPrefix, type CatalogEntry } from '@hermes/shared';
+import { ADMIN, vendorPrefix, type CatalogEntry } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
 import { MenuItem, Popover } from '../ui/primitives.js';
@@ -54,6 +54,16 @@ export function contextLabel(length: number | null): string | null {
   if (length >= 1_000_000) return `${Math.round(length / 100_000) / 10}M ctx`;
   if (length >= 1_000) return `${Math.round(length / 1_000)}K ctx`;
   return `${length} ctx`;
+}
+
+/**
+ * Nous Portal exposes the free StepFun route as a distinct model id. Keep that
+ * distinction visible anywhere two otherwise-identical labels can be picked.
+ * Non-free Portal ids consume the workspace's paid Portal capacity.
+ */
+export function modelRouteLabel(row: { readonly model_id: string; readonly provider: string }): 'Free route' | 'Paid route' | null {
+  if (row.provider !== 'nous_portal') return null;
+  return row.model_id.endsWith(':free') ? 'Free route' : 'Paid route';
 }
 
 export interface ModelGroup {
@@ -186,8 +196,7 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
         disabled_reason: row.disabled_reason,
       },
     });
-    dispatch({ type: 'session/set', id: session.id, patch: { model: row.model_id, effort } });
-    void adapter.rest.patchSession(state.workspace.id, session.id, { model_id: row.model_id }).catch(() => undefined);
+    void adapter.updateSessionSettings(session.id, { model_id: row.model_id, effort }).catch(() => undefined);
   };
 
   /**
@@ -245,14 +254,17 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
                 key={row.model_id}
                 checked={selected === row.model_id}
                 disabled={!row.enabled}
-                title={row.enabled ? undefined : row.disabled_reason ?? undefined}
+                title={row.enabled ? row.model_id : row.disabled_reason ?? undefined}
                 sub={subtitle(row)}
                 right={
-                  row.model_id === companyDefault ? (
-                    <span className="model-pin" title="The workspace default, set in Settings">
-                      Company default
-                    </span>
-                  ) : undefined
+                  <span className="model-tags">
+                    {modelRouteLabel(row) && <span className="model-route">{modelRouteLabel(row)}</span>}
+                    {row.model_id === companyDefault && (
+                      <span className="model-pin" title="The workspace default, set in Settings">
+                        Company default
+                      </span>
+                    )}
+                  </span>
                 }
                 onClick={() => pick(row)}
               >
@@ -301,16 +313,16 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
       )}
 
       <div className="divider" />
-      <MenuItem
+      {state.user.role === 'admin' ? <MenuItem
         small
         onClick={() => {
           onClose();
-          nav(SETTINGS('Provider keys'));
+          nav(ADMIN('Provider keys'));
         }}
         right={<Icon name="arrow" size={16} />}
       >
-        Add or sync a provider key
-      </MenuItem>
+        Add or sync a model provider
+      </MenuItem> : <p className="p-meta" style={{ padding: '0 12px' }}>A workspace Admin manages model providers.</p>}
     </Popover>
   );
 }

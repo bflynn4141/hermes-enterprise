@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, type Fixture } from './helpers.js';
 import { FakeQueue, FakeR2, fakeBatch } from '../stubs/fake-r2.js';
-import { INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
+import { fetchReviewBinding, INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
 import { rendersBatch } from '../../src/queues/renders.js';
 import { PDF_UNAVAILABLE_REASON } from '../../src/documents/render.js';
 
@@ -14,11 +14,11 @@ function env() {
   return { ...made, bucket, queue };
 }
 
-const approve = (e: ReturnType<typeof env>, fx: Fixture, requestId: string) =>
+const approve = async (e: ReturnType<typeof env>, fx: Fixture, requestId: string) =>
   asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
     method: 'POST',
     headers: INBOX_HEADERS,
-    body: { decision: 'approve' },
+    body: { decision: 'approve', ...await fetchReviewBinding(e.env, fx, requestId) },
   });
 
 describe('GET /w/:ws/documents', () => {

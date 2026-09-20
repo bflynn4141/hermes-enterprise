@@ -5,20 +5,33 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
-import { HermesClient, HermesContractError, terminalHermesStatus, type HermesCapabilities, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import { HermesClient, HermesCapabilitiesError, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
+import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
+import { ENTERPRISE_BRIDGE_VERSION, HERMES_NATIVE_REVISION } from '../../src/runtime/readiness.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
 const NATIVE_ID = 'run_native-123';
 const MODEL = 'openrouter:anthropic/claude-sonnet-4';
 const PROFILE = 'enterprise-agent-1';
-const CAPABILITIES: HermesCapabilities = {
-  durableIdempotency: true,
-  retentionSeconds: 86_400,
-  contractVersion: 1,
-  terminalErrorSchemaVersion: 1,
-  sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
-  releaseRing: 'stable',
+const nativeCapabilities = {
+  object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+  auth: { type: 'bearer', required: true },
+  runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+  features: {
+    run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+    runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+  },
+  endpoints: {
+    runs: { method: 'POST', path: '/v1/runs' },
+    run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+    run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+    run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+    run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+  },
 };
 
 class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
@@ -29,7 +42,24 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   finalizations = 0;
   finalizing = false;
   bootstrap: ProviderMessage[] = [];
+  submissionSessionId: string | null = null;
   acceptBinding = true;
+  resumeInput: string | null = null;
+  priorAuthority: Record<string, unknown> | null = null;
+  runtimeTransactions = 0;
+  runtimeTransactionDepth = 0;
+  automaticExecutionLocks = 0;
+  onAutomaticExecutionLock: ((count: number) => void) | null = null;
+  recoveryInput() { return Promise.resolve(this.resumeInput); }
+  recoveryAuthority() { return Promise.resolve(this.priorAuthority); }
+  runtimeRequest(_runId: string, attempt: number) { return Promise.resolve(this.snapshots.get(attempt) ?? null); }
+
+  async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    this.runtimeTransactions += 1;
+    this.runtimeTransactionDepth += 1;
+    try { return await work(); }
+    finally { this.runtimeTransactionDepth -= 1; }
+  }
 
   constructor(overrides: Partial<EngineRunRow> = {}) {
     super({ modelId: MODEL, ...overrides });
@@ -40,6 +70,14 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   }
 
   binding() { return Promise.resolve(this.nativeBinding); }
+
+  async lockAutomaticRecoveryExecution(_runId: string, attempt: number) {
+    this.automaticExecutionLocks += 1;
+    this.onAutomaticExecutionLock?.(this.automaticExecutionLocks);
+    const run = (await this.loadRun())!;
+    return run.attempt === attempt && run.automaticRecovery === true
+      && run.status === 'working' && !run.stopRequested;
+  }
 
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string) {
     if (this.acceptBinding) {
@@ -55,6 +93,10 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   }
 
   loadBootstrapHistory() { return Promise.resolve(this.bootstrap); }
+
+  resolveRuntimeSessionId(run: EngineRunRow) {
+    return Promise.resolve(this.submissionSessionId ?? run.id);
+  }
 
   nextRuntimeSequence() {
     return Promise.resolve(Math.max(-1, ...this.turns.filter((turn) => turn.turn === 0).map((turn) => turn.seq)) + 1);
@@ -100,7 +142,14 @@ class FakeHermesClient extends HermesClient {
     this.capabilityReads += 1;
     return this.capabilityFailure
       ? Promise.reject(this.capabilityFailure)
-      : Promise.resolve(CAPABILITIES);
+      : Promise.resolve({
+          durableIdempotency: true as const,
+          retentionSeconds: 86_400,
+          contractVersion: 1 as const,
+          terminalErrorSchemaVersion: 1 as const,
+          sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+          releaseRing: 'stable' as const,
+        });
   }
 
   override submit(body: Record<string, unknown>, key: string) {
@@ -138,12 +187,20 @@ class FakeHermesClient extends HermesClient {
   }
 }
 
-async function execute(
+async function execute<TClient extends HermesClient = FakeHermesClient>(
   db = new FakeRuntimeDb(),
-  client = new FakeHermesClient(),
+  client: TClient = new FakeHermesClient() as unknown as TClient,
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
-  timing: { pollMs?: number; batchMs?: number; preview?: RuntimeDeps['preview']; onTerminalFailure?: RuntimeDeps['onTerminalFailure']; onLatency?: RuntimeDeps['onLatency'] } = {},
+  timing: {
+    pollMs?: number;
+    batchMs?: number;
+    preview?: RuntimeDeps['preview'];
+    onTerminalFailure?: RuntimeDeps['onTerminalFailure'];
+    onLatency?: RuntimeDeps['onLatency'];
+    managedRuntimeIdentity?: RuntimeDeps['managedRuntimeIdentity'];
+    skillSnapshot?: readonly RuntimeSkillManifest[];
+  } = {},
 ) {
   const run = (await db.loadRun())!;
   await runHermesAttempt({
@@ -152,16 +209,306 @@ async function execute(
     ...(timing.preview ? { preview: timing.preview } : {}),
     ...(timing.onTerminalFailure ? { onTerminalFailure: timing.onTerminalFailure } : {}),
     ...(timing.onLatency ? { onLatency: timing.onLatency } : {}),
+    ...(timing.managedRuntimeIdentity ? { managedRuntimeIdentity: timing.managedRuntimeIdentity } : {}),
+    ...(timing.skillSnapshot ? { skillSnapshot: timing.skillSnapshot } : {}),
   }, step, { runId: run.id, attempt: run.attempt, traceId: run.traceId ?? 'runtime-test' });
   return { db, client, step };
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('does not contact the runtime when an automatic Workflow belongs to an older attempt', async () => {
+    const db = new FakeRuntimeDb({ attempt: 3, automaticRecovery: true });
+    const run = (await db.loadRun())!;
+    const client = new FakeHermesClient();
+    await expect(runHermesAttempt({
+      db, client, profile: PROFILE,
+      forward: async () => ({ stop_requested: false }),
+    }, new FakeStep(), { runId: run.id, attempt: 2, traceId: 'stale-automatic-workflow' }))
+      .rejects.toThrow('no current agent binding');
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.eventSubscriptions).toBe(0);
+  });
+
+  it('does not emit started or change state when an automatic attempt advances at the startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ attempt: 3 });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it('does not emit started or overwrite Stop when it arrives at the automatic startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ status: 'stopping', stopRequested: true });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect((await db.loadRun())?.status).toBe('stopping');
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it.each([
+    ['a successor attempt', { attempt: 3 }],
+    ['Stop', { status: 'stopping', stopRequested: true }],
+  ] as const)(
+    'does not submit when %s wins immediately before the automatic dispatch fence',
+    async (_label, transition) => {
+      const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+      db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+      db.onAutomaticExecutionLock = (count) => {
+        if (count === 2) db.setRunForTest(transition);
+      };
+      const { client } = await execute(db);
+      expect(db.snapshots.has(2)).toBe(true);
+      expect(db.automaticExecutionLocks).toBe(2);
+      expect(client.submissions).toHaveLength(0);
+      expect(client.eventSubscriptions).toBe(0);
+      expect(db.statusChanges).toHaveLength(0);
+    },
+  );
+
+  it('holds the automatic execution fence through native acknowledgement and binding only', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const client = new FakeHermesClient();
+    client.onSubmit = () => { expect(db.runtimeTransactionDepth).toBe(1); };
+    const bind = db.bindRun.bind(db);
+    vi.spyOn(db, 'bindRun').mockImplementation(async (...args) => {
+      expect(db.runtimeTransactionDepth).toBe(1);
+      return bind(...args);
+    });
+    await execute(db, client);
+    expect(db.runtimeTransactionDepth).toBe(0);
+    expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('carries trusted Bot Mode attribution from the durable user turn', async () => {
+    const db = new FakeRuntimeDb();
+    db.turns.splice(0, 1, {
+      ...db.turns[0]!,
+      providerMessage: {
+        role: 'user',
+        content: 'Message from 🤖 Iris (@agent-partnerships): Review this handoff.',
+        enterprise_turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
+      },
+    });
+    const { client } = await execute(db);
+    expect(client.submissions[0]?.body._enterprise_turn_author).toEqual({
+      id: 'bot:agent-partnerships', name: 'Iris', is_bot: true,
+    });
+  });
+
+  it('submits exact governed creator calls for an explicit channel test', async () => {
+    const db = new FakeRuntimeDb();
+    db.turns.splice(0, 1, {
+      ...db.turns[0]!,
+      providerMessage: { role: 'user', content: 'Run a Hermes creator test for LinkedIn, YouTube, and X.' },
+    });
+    const { client } = await execute(db);
+    const input = String(client.submissions[0]?.body.input ?? '');
+    expect(input).toContain(db.turns[0]!.providerMessage.content);
+    expect(input).toContain('https://stableenrich.dev/api/exa/search');
+    expect(input).toContain('https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top');
+    expect(input.match(/mcp__agentcash__fetch exactly once/g)).toHaveLength(2);
+    expect(db.snapshots.get(1)?.input).toBe(input);
+  });
+
+  it('submits saved recovery instructions instead of replaying original discovery input', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2 });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const { client } = await execute(db);
+    expect(client.submissions).toHaveLength(1);
+    expect(client.submissions[0]?.body.input).toBe(db.resumeInput);
+    expect(client.submissions[0]?.key).toContain('-a2');
+    expect(db.snapshots.get(2)?.input).toBe(db.resumeInput);
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual([]);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
+  });
+
+  it('keeps response-only authority empty through the real Hermes transport contract', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2 });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const nativeBodies: Record<string, unknown>[] = [];
+    const send = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/v1/capabilities')) return Response.json(nativeCapabilities);
+      if (url.endsWith('/v1/runs') && init?.method === 'POST') {
+        nativeBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Response.json({ run_id: NATIVE_ID, status: 'started' }, { status: 202 });
+      }
+      if (url.endsWith(`/v1/runs/${NATIVE_ID}/events`)) {
+        return new Response(`data: ${JSON.stringify({ event: 'run.completed', run_id: NATIVE_ID, output: 'Finished from stored results.' })}\n\n`, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`Unexpected native request: ${url}`);
+    });
+    await execute(db,new HermesClient('https://runtime.invalid','runtime-secret',send));
+    expect(db.snapshots.get(2)).toMatchObject({
+      input: RESPONSE_ONLY_RECOVERY_INPUT,_enterprise_tool_names: [],_enterprise_skills: [],
+    });
+    expect(nativeBodies).toHaveLength(1);
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_tool_names');
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_skills');
+    expect(nativeBodies[0]?.input).toBe(RESPONSE_ONLY_RECOVERY_INPUT);
+  });
+
+  it('records the prior/current authority intersection for audit without treating it as native enforcement', async () => {
+    class RestrictedRuntimeDb extends FakeRuntimeDb {
+      override loadToolNames() { return Promise.resolve(['list_requests', 'propose_instruction']); }
+    }
+    const db = new RestrictedRuntimeDb({ attempt: 2 });
+    db.resumeInput = 'Resume the bounded stored-evidence assessment.';
+    db.priorAuthority = { _enterprise_tool_names: ['list_requests', 'get_request'], _enterprise_skills: [] };
+    const newlyGrantedSkill = {
+      name: 'new-skill', skill_key: 'new-skill', runtime_name: 'new-skill', version: '1',
+      artifact_digest: `sha256:${'a'.repeat(64)}`, state: 'active', assignment_revision: 2,
+      grant_revision: null, binding_source: 'enterprise_assignment', binding_state: null,
+      grant_expires_at: null, capability_grants: ['read'], auto_load: true, config: {},
+    } as RuntimeSkillManifest;
+    const { client } = await execute(db, new FakeHermesClient(), new FakeStep(), undefined, {
+      skillSnapshot: [newlyGrantedSkill],
+    });
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual(['list_requests']);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
+  });
+
   it('starts fresh streaming without a second remote readiness round trip', async () => {
     const client = new FakeHermesClient();
     await execute(new FakeRuntimeDb(), client);
     expect(client.capabilityReads).toBe(1);
     expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('blocks token-digest execution before native submit when managed readiness is absent after restart', async () => {
+    class UnmanagedClient extends FakeHermesClient {
+      override enterpriseReadiness() {
+        return Promise.reject(new HermesCapabilitiesError());
+      }
+    }
+    const client = new UnmanagedClient();
+    const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      managedRuntimeIdentity: {
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        agentId: '22222222-2222-4222-8222-222222222222',
+        enterpriseUrl: 'https://enterprise.example.test',
+        pluginRevision: 'a'.repeat(40),
+        pluginArtifactDigest: `sha256:${'d'.repeat(64)}`,
+      },
+    });
+    expect(client.capabilityReads).toBeGreaterThan(0);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.eventSubscriptions).toBe(0);
+    expect(db.statusChanges.at(-1)?.status).toBe('error');
+  });
+
+  it('runs a promoted digest binding after its explicit assignment changes to Finance', async () => {
+    const skill: RuntimeSkillManifest = {
+      name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+      skill_key: PARTNER_INVOICE_REVIEW_DEFINITION.key,
+      runtime_name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+      version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+      artifact_digest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+      state: 'active', assignment_revision: 2, grant_revision: null,
+      binding_source: 'enterprise_assignment', binding_state: null, grant_expires_at: null,
+      capability_grants: [...PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants],
+      auto_load: true,
+      config: { invoice_review: { duplicate_window_days: 365, require_engagement_evidence: true } },
+    };
+    class FinanceClient extends FakeHermesClient {
+      override enterpriseReadiness(): Promise<HermesEnterpriseReadiness> {
+        return Promise.resolve({
+          object: 'hermes.enterprise_bridge.readiness', version: ENTERPRISE_BRIDGE_VERSION,
+          runtimeRevision: HERMES_NATIVE_REVISION,
+          plugin: { name: 'enterprise_bridge', version: ENTERPRISE_BRIDGE_VERSION,
+            revision: 'a'.repeat(40), artifactDigest: `sha256:${'d'.repeat(64)}` },
+          workspaceId: '11111111-1111-4111-8111-111111111111',
+          agentId: '22222222-2222-4222-8222-222222222222',
+          enterpriseUrl: 'https://enterprise.example.test',
+          skills: [{ name: skill.runtime_name, version: skill.version,
+            artifactDigest: skill.artifact_digest, contentDigest: skill.artifact_digest }],
+          toolNames: ['get_partner_handoff_result', 'list_requests', 'get_request', 'skill_view'],
+          agentCashEnabled: false, agentCashWalletPresent: false, nativeCronDisabled: true,
+        });
+      }
+    }
+    const client = new FinanceClient();
+    await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
+      managedRuntimeIdentity: {
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        agentId: '22222222-2222-4222-8222-222222222222',
+        enterpriseUrl: 'https://enterprise.example.test',
+        pluginRevision: 'a'.repeat(40),
+        pluginArtifactDigest: `sha256:${'d'.repeat(64)}`,
+      },
+      skillSnapshot: [skill],
+    });
+    expect(client.submissions).toHaveLength(1);
+    expect(client.eventSubscriptions).toBe(1);
+  });
+
+  it('groups startup, submission, and execution setup into four serial runtime transactions', async () => {
+    const db = new FakeRuntimeDb();
+    let startupTransactions: number | undefined;
+    class Client extends FakeHermesClient {
+      override async *events(id: string, signal: AbortSignal) {
+        startupTransactions = db.runtimeTransactions;
+        yield* super.events(id, signal);
+      }
+    }
+    await execute(db, new Client());
+    expect(startupTransactions).toBe(4);
+  });
+
+  it('reads Stop and guidance in one serial transaction and releases it before native control calls', async () => {
+    const db = new FakeRuntimeDb();
+    db.guidance.push({ id: crypto.randomUUID(), text: 'Check the references.', status: 'queued' });
+    let activeTransaction: number | null = null;
+    let transaction = 0;
+    const reads: Array<{ name: string; transaction: number | null }> = [];
+    vi.spyOn(db, 'withRuntimeTransaction').mockImplementation(async (work) => {
+      expect(activeTransaction).toBeNull();
+      activeTransaction = ++transaction;
+      try { return await work(); }
+      finally { activeTransaction = null; }
+    });
+    const originalStop = db.stopRequested.bind(db);
+    vi.spyOn(db, 'stopRequested').mockImplementation(async () => {
+      reads.push({ name: 'stop', transaction: activeTransaction });
+      return originalStop();
+    });
+    const originalGuidance = db.loadGuidance.bind(db);
+    vi.spyOn(db, 'loadGuidance').mockImplementation(async () => {
+      if (!db.finalizing) reads.push({ name: 'guidance', transaction: activeTransaction });
+      return originalGuidance();
+    });
+    const client = new FakeHermesClient();
+    client.onStatus = () => { expect(activeTransaction).toBeNull(); };
+    const originalSteer = client.steer.bind(client);
+    vi.spyOn(client, 'steer').mockImplementation(async (id, text) => {
+      expect(activeTransaction).toBeNull();
+      return originalSteer(id, text);
+    });
+    await execute(db, client);
+    expect(reads).toEqual([
+      { name: 'stop', transaction: 1 },
+      { name: 'stop', transaction: 5 },
+      { name: 'guidance', transaction: 5 },
+    ]);
+    expect(client.eventSubscriptions).toBe(1);
+    expect(client.steers).toHaveLength(1);
+    expect(db.finalizations).toBe(1);
   });
 
   it('rechecks readiness when a fresh submission takes longer than the reuse window', async () => {
@@ -180,7 +527,7 @@ describe('official Hermes enterprise projection', () => {
     const db = new FakeRuntimeDb();
     db.nativeBinding = { runtimeRunId: NATIVE_ID, runtimeAttempt: 1 };
     const client = new FakeHermesClient();
-    client.capabilityFailure = new HermesContractError();
+    client.capabilityFailure = new HermesCapabilitiesError();
     const step = new FakeStep();
     step.results.set('hermes-submit', { id: NATIVE_ID });
     await execute(db, client, step);
@@ -194,7 +541,7 @@ describe('official Hermes enterprise projection', () => {
     const db = new FakeRuntimeDb();
     const client = new FakeHermesClient();
     vi.spyOn(db, 'enterStep').mockImplementationOnce(async () => {
-      client.capabilityFailure = new HermesContractError();
+      client.capabilityFailure = new HermesCapabilitiesError();
       throw new Error('transient persistence failure before subscribing');
     });
     class RetryingStep extends FakeStep {
@@ -216,7 +563,7 @@ describe('official Hermes enterprise projection', () => {
       const client = new FakeHermesClient();
       client.onSubmit = () => {
         now += difference;
-        client.capabilityFailure = new HermesContractError();
+        client.capabilityFailure = new HermesCapabilitiesError();
       };
       const { db } = await execute(new FakeRuntimeDb(), client);
       expect(client.capabilityReads).toBe(2);
@@ -270,16 +617,41 @@ describe('official Hermes enterprise projection', () => {
     assertRunLog(db.streamEvents(), { requireFinalPerTurn: true });
   });
 
-  it('preserves exact native tool identifiers in live activity and persisted steps', async () => {
+  it('does not duplicate governed bridge tools from name-only native lifecycle frames', async () => {
     class ToolActivityClient extends FakeHermesClient {
       override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
         this.eventSubscriptions += 1;
         this.streamSignal = signal;
         yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'list_partner_candidates' };
         yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'list_partner_candidates' };
-        yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'get_partner_candidate' };
         yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'I found one candidate.' };
-        yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'get_partner_candidate', error: false };
+        this.current = this.final;
+        yield { event: `run.${this.final.status}`, ...this.final };
+      }
+    }
+
+    const db = new FakeRuntimeDb();
+    const enteredSteps = vi.spyOn(db, 'enterStep');
+    await execute(db, new ToolActivityClient());
+    const activity = db.events
+      .filter((event) => event.kind === 'run.step' && Boolean((event.payload as { tool_call_id?: string | null }).tool_call_id))
+      .map((event) => event.payload as { step_id: string; label: string; state: string; tool_call_id: string });
+
+    expect(activity).toEqual([]);
+    expect(enteredSteps).not.toHaveBeenCalledWith(expect.objectContaining({ label: 'list_partner_candidates' }));
+    expect(db.steps.has('0:hermes-tool-1')).toBe(false);
+  });
+
+  it('preserves native lifecycle activity for local and MCP tools without a bridge record', async () => {
+    class ToolActivityClient extends FakeHermesClient {
+      override async *events(_id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        this.streamSignal = signal;
+        yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'skill_view' };
+        yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'skill_view' };
+        yield { event: 'tool.started', run_id: NATIVE_ID, tool: 'mcp__fixture__read' };
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'I found one candidate.' };
+        yield { event: 'tool.completed', run_id: NATIVE_ID, tool: 'mcp__fixture__read', error: false };
         this.current = this.final;
         yield { event: `run.${this.final.status}`, ...this.final };
       }
@@ -293,13 +665,13 @@ describe('official Hermes enterprise projection', () => {
       .map((event) => event.payload as { step_id: string; label: string; state: string; tool_call_id: string });
 
     expect(activity).toEqual([
-      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'list_partner_candidates', state: 'active', tool_call_id: 'hermes-tool-1' }),
-      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'list_partner_candidates', state: 'done', tool_call_id: 'hermes-tool-1' }),
-      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'get_partner_candidate', state: 'active', tool_call_id: 'hermes-tool-2' }),
-      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'get_partner_candidate', state: 'done', tool_call_id: 'hermes-tool-2' }),
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'skill_view', state: 'active', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-1', label: 'skill_view', state: 'done', tool_call_id: 'hermes-tool-1' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'mcp__fixture__read', state: 'active', tool_call_id: 'hermes-tool-2' }),
+      expect.objectContaining({ step_id: 'hermes-tool-2', label: 'mcp__fixture__read', state: 'done', tool_call_id: 'hermes-tool-2' }),
     ]);
-    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'list_partner_candidates', toolCallId: 'hermes-tool-1' }));
-    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'get_partner_candidate', toolCallId: 'hermes-tool-2' }));
+    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'skill_view', toolCallId: 'hermes-tool-1' }));
+    expect(enteredSteps).toHaveBeenCalledWith(expect.objectContaining({ label: 'mcp__fixture__read', toolCallId: 'hermes-tool-2' }));
     expect(db.steps.get('0:hermes-tool-1')?.state).toBe('done');
     expect(db.steps.get('0:hermes-tool-2')?.state).toBe('done');
   });
@@ -446,6 +818,81 @@ describe('official Hermes enterprise projection', () => {
     expect(secondDeltaAt).toBeLessThan(150);
   });
 
+  it('does not lose stream completion while a stale status read is in flight', async () => {
+    vi.useFakeTimers();
+    let statusStarted!: () => void;
+    const statusPending = new Promise<void>((resolve) => { statusStarted = resolve; });
+    let streamEnded!: () => void;
+    const streamFinished = new Promise<void>((resolve) => { streamEnded = resolve; });
+    let releaseStatus!: (value: HermesStatus) => void;
+    class RacedTerminalClient extends FakeHermesClient {
+      override status() {
+        this.statusReads += 1;
+        if (this.statusReads !== 1) return Promise.resolve({ ...this.current });
+        statusStarted();
+        return new Promise<HermesStatus>((resolve) => { releaseStatus = resolve; });
+      }
+      override async *events(): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        await statusPending;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Complete answer.' };
+        this.current = this.final;
+        streamEnded();
+        yield { event: 'run.completed', ...this.final };
+      }
+    }
+    const db = new FakeRuntimeDb();
+    const client = new RacedTerminalClient();
+    const task = execute(db, client, new FakeStep(), undefined, { pollMs: 1000 });
+    try {
+      await streamFinished;
+      await vi.advanceTimersByTimeAsync(1);
+      releaseStatus({ run_id: NATIVE_ID, status: 'running' });
+      await vi.advanceTimersByTimeAsync(25);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+      expect(client.statusReads).toBe(2);
+      expect(client.submissions).toHaveLength(1);
+    } finally {
+      await vi.runAllTimersAsync();
+      await task;
+      vi.useRealTimers();
+    }
+  });
+
+  it('consumes an EOF wake only once and retains bounded polling after disconnect', async () => {
+    vi.useFakeTimers();
+    class DisconnectedRunningClient extends FakeHermesClient {
+      override status() {
+        this.statusReads += 1;
+        return Promise.resolve(this.statusReads >= 3 ? this.final : this.current);
+      }
+      override async *events(): AsyncGenerator<HermesEvent> {
+        this.eventSubscriptions += 1;
+        yield { event: 'message.delta', run_id: NATIVE_ID, delta: 'Partial answer.' };
+        // EOF is not terminal status. One prompt status check is useful, but
+        // repeatedly observing an ended stream must not produce a hot loop.
+      }
+    }
+    const db = new FakeRuntimeDb();
+    const client = new DisconnectedRunningClient();
+    const task = execute(db, client, new FakeStep(), undefined, { pollMs: 1000 });
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      expect(client.statusReads).toBe(2);
+      expect(db.statusChanges.at(-1)?.status).toBe('working');
+      await vi.advanceTimersByTimeAsync(1000);
+      await task;
+      expect(client.statusReads).toBe(3);
+      expect(client.eventSubscriptions).toBe(1);
+      expect(client.submissions).toHaveLength(1);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+    } finally {
+      await vi.runAllTimersAsync();
+      await task;
+      vi.useRealTimers();
+    }
+  });
+
   it('forwards the last delta before a slow terminal status reconciliation', async () => {
     class SlowTerminalClient extends FakeHermesClient {
       terminalStatusResolved = false;
@@ -501,14 +948,38 @@ describe('official Hermes enterprise projection', () => {
     expect(client.submissions[0]).toMatchObject({
       key: `enterprise-${run.id}-a1`,
       body: {
-        input: 'Here is the programme and the application.', session_id: run.sessionId,
+        input: 'Here is the programme and the application.', session_id: run.id,
         provider: 'custom', model: 'anthropic/claude-sonnet-4',
         model_options: { reasoning_effort: 'high' }, conversation_history: db.bootstrap,
       },
     });
     expect(client.submissions[0]?.body.instructions).toContain('Admit applicants who meet the published bar.');
-    expect(db.bindings).toEqual([{ runId: run.id, attempt: 1, remoteId: NATIVE_ID, sessionId: run.sessionId, profile: PROFILE }]);
+    expect(db.bindings).toEqual([{ runId: run.id, attempt: 1, remoteId: NATIVE_ID, sessionId: run.id, profile: PROFILE }]);
     expect(JSON.stringify(client.submissions)).not.toContain('sk-test');
+  });
+
+  it('reuses the prior native conversation id for a later Enterprise turn', async () => {
+    const db = new FakeRuntimeDb();
+    db.submissionSessionId = 'native-session-root';
+    const { client } = await execute(db);
+    expect(client.submissions[0]?.body.session_id).toBe('native-session-root');
+    expect(db.bindings[0]?.sessionId).toBe('native-session-root');
+  });
+
+  it.each([
+    ['nous:stepfun/step-3.7-flash', 'stepfun/step-3.7-flash'],
+    ['nous:stepfun/step-3.7-flash:free', 'stepfun/step-3.7-flash:free'],
+  ])('submits the exact effective Portal route for %s', async (catalogId, wireId) => {
+    class NousRuntimeDb extends FakeRuntimeDb {
+      constructor() { super({ modelId: catalogId }); }
+      override loadModel() {
+        return Promise.resolve({ model_id: catalogId, provider: 'nous_portal', transport: 'nous_chat', effort_map: null });
+      }
+    }
+    const client = new FakeHermesClient();
+    await execute(new NousRuntimeDb(), client);
+    expect(client.submissions[0]?.body.model).toBe(wireId);
+    expect(client.submissions[0]?.body.provider).toBe('custom');
   });
 
   it('reuses a persisted native run when submission checkpoints are lost', async () => {
@@ -530,10 +1001,10 @@ describe('official Hermes enterprise projection', () => {
       override capabilities() {
         this.capabilityReads += 1;
         if (this.capabilityReads !== 1) {
-          return Promise.resolve(CAPABILITIES);
+          return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
         }
-        return new Promise<HermesCapabilities>((resolve) => {
-          releaseReadiness = () => resolve(CAPABILITIES);
+        return new Promise<{ durableIdempotency: true; retentionSeconds: number }>((resolve) => {
+          releaseReadiness = () => resolve({ durableIdempotency: true, retentionSeconds: 86_400 });
         });
       }
     }
@@ -681,12 +1152,7 @@ describe('official Hermes enterprise projection', () => {
 
   it('classifies failed native execution, logs only safe fields and does not duplicate proxy accounting', async () => {
     const client = new FakeHermesClient();
-    client.final = {
-      run_id: NATIVE_ID,
-      status: 'failed',
-      error: 'fixed safe copy',
-      terminal_error: { schema_version: 1, code: 'provider_rate_limited', category: 'rate_limit', retryable: true, source: 'provider' },
-    };
+    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 429: provider-key-and-private-request-must-not-leak' };
     const terminalFailures: RuntimeTerminalFailure[] = [];
     const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
       onTerminalFailure: (failure) => terminalFailures.push(failure),
@@ -707,12 +1173,7 @@ describe('official Hermes enterprise projection', () => {
   it('reports stopped after native authority revocation beats the stop poll to a terminal failure', async () => {
     const db = new FakeRuntimeDb();
     const client = new FakeHermesClient();
-    client.final = {
-      run_id: NATIVE_ID,
-      status: 'failed',
-      error: 'Hermes restarted before this run settled.',
-      terminal_error: { schema_version: 1, code: 'runtime_interrupted', category: 'interrupted', retryable: true, source: 'runtime' },
-    };
+    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 409: runtime_run_inactive' };
     client.onStatus = () => { if (client.current.status === 'failed') db.stopFlag = true; };
     await execute(db, client);
     expect(db.statusChanges.at(-1)?.status).toBe('stopped');
@@ -730,24 +1191,6 @@ describe('official Hermes enterprise projection', () => {
     expect(db.events.filter((event) => event.kind === 'message.final')).toHaveLength(1);
     expect(client.stops).toEqual([NATIVE_ID]);
     expect(JSON.stringify(db.events)).not.toContain('private upstream failure');
-  });
-
-  it('fails closed and emits a content-free alert signal on a runtime contract violation', async () => {
-    const client = new FakeHermesClient();
-    client.capabilityFailure = new HermesContractError();
-    const terminalFailures: RuntimeTerminalFailure[] = [];
-    const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
-      onTerminalFailure: (failure) => terminalFailures.push(failure),
-    });
-    expect(db.statusChanges.at(-1)).toMatchObject({
-      status: 'error',
-      error: { class: 'permanent', retryable: false, reason: 'hermes_contract_violation' },
-    });
-    expect(terminalFailures).toEqual([expect.objectContaining({
-      native_status: 'contract_violation', failure_code: 'contract_violation',
-      structured_error: false, terminal_error_source: 'contract', retryable: false,
-    })]);
-    expect(JSON.stringify({ status: db.statusChanges, terminalFailures })).not.toContain('runtime.invalid');
   });
 
   it('keeps an explicitly empty final output instead of promoting intermediate prose to the answer', async () => {
@@ -807,6 +1250,39 @@ describe('official Hermes enterprise projection', () => {
     });
     expect(finalPublished).toBe(true);
     expect(db.finalizations).toBe(1);
+  });
+
+  it('measures final persistence through commit before terminal delivery without recording content', async () => {
+    let now = 10_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const measurements: Array<Parameters<NonNullable<RuntimeDeps['onLatency']>>[0]> = [];
+    class TimedDb extends FakeRuntimeDb {
+      override async finalizeRuntime<T>(id: string, attempt: number, work: () => Promise<T>) {
+        const events = await super.finalizeRuntime(id, attempt, work);
+        now += 450; // Includes transaction commit, not just its callback.
+        return events;
+      }
+    }
+    try {
+      const db = new TimedDb();
+      const client = new FakeHermesClient();
+      await execute(db, client, new FakeStep(), async (_sessionId, _runId, events) => {
+        if (events.some((event) => event.kind === 'message.final')) {
+          expect(measurements).toContainEqual(expect.objectContaining({ phase: 'final_persistence', duration_ms: 450 }));
+          expect(db.finalizing).toBe(false);
+          now += 40;
+        }
+        return { stop_requested: false };
+      }, { onLatency: (measurement) => { measurements.push(measurement); } });
+      const phases = measurements.map((measurement) => measurement.phase);
+      expect(phases).toContain('native_stream_terminal');
+      expect(phases).toContain('native_status_terminal');
+      expect(phases).toContain('final_stream_drain');
+      expect(phases).toContain('final_checkpoint_drain');
+      expect(measurements).toContainEqual(expect.objectContaining({ phase: 'final_delivery', duration_ms: 40 }));
+      expect(JSON.stringify(measurements)).not.toContain(client.final.output);
+      expect(db.statusChanges.at(-1)?.status).toBe('completed');
+    } finally { clock.mockRestore(); }
   });
 
   it('preserves the completed run and durable final events when their live delivery fails', async () => {

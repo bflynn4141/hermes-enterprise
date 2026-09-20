@@ -22,6 +22,7 @@
 import { EFFECT_LABELS, EFFECT_UNAVAILABLE_REASON } from './effects.js';
 import type { Tx } from '../db/client.js';
 import type { EffectKind } from '@hermes/shared';
+import { requestAudiencePredicate } from './audience.js';
 
 export const HISTORY_TABS = ['all', 'decisions', 'blocked'] as const;
 export type HistoryTab = (typeof HISTORY_TABS)[number];
@@ -60,7 +61,7 @@ export interface HistoryRow {
 const SELECT = `
   SELECT e.id, e.kind, e.created_at, e.actor_type,
          actor.name        AS actor_name,
-         e.request_id,
+         r.id               AS request_id,
          r.kind            AS request_kind,
          r.status          AS request_status,
          r.label           AS request_label,
@@ -81,10 +82,10 @@ const SELECT = `
          ar.work_status    AS approval_work_status
     FROM events e
     LEFT JOIN users actor   ON actor.id = e.actor_user_id
-    LEFT JOIN requests r    ON r.id = e.request_id
     LEFT JOIN decisions d   ON d.id = e.decision_id
     LEFT JOIN effects f     ON f.id = e.effect_id
     LEFT JOIN documents doc ON doc.id = e.document_id
+    LEFT JOIN requests r    ON r.id = COALESCE(e.request_id, f.request_id, doc.request_id)
     LEFT JOIN members m     ON m.id = e.member_id
     LEFT JOIN users mu      ON mu.id = m.user_id
     LEFT JOIN approval_requests ar ON ar.request_id = e.request_id`;
@@ -100,9 +101,10 @@ export async function loadHistory(
   tab: HistoryTab,
   before: string | null,
   limit: number,
+  userId: string,
 ): Promise<HistoryRow[]> {
-  const where: string[] = [];
-  const values: unknown[] = [];
+  const where: string[] = [requestAudiencePredicate('r.id', '$1')];
+  const values: unknown[] = [userId];
 
   if (tab === 'decisions') where.push(`e.kind IN ('decision.recorded', 'approval.vote_recorded', 'approval.finalized')`);
   if (tab === 'blocked') {
@@ -209,6 +211,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
             : `${actor} prepared agreement ${documentNumber(row) ?? subject}`;
       detail = 'Proposed for review · No decision taken';
       status = row.request_status === 'pending' ? 'Needs review' : 'Reviewed';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'request.hidden':
+      text = `${actor} hid ${subjectOrNumber(row)} from their Inbox`;
+      detail = 'Personal organization only · Request and other reviewers unchanged';
+      status = 'Hidden';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'request.restored':
+      text = `${actor} restored ${subjectOrNumber(row)} to their Inbox`;
+      detail = 'Personal Inbox visibility restored · Workflow unchanged';
+      status = 'Restored';
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 
@@ -332,6 +348,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = { section: 'members' };
       break;
     }
+
+    case 'gmail.connected':
+      text = `${actor} connected a Gmail outreach sender`;
+      detail = 'Dedicated sender · Exact approved email revisions only';
+      status = 'Connected';
+      ref = { section: 'settings', view: 'Email' };
+      break;
+
+    case 'outbound_email.sent':
+      text = `${actor} sent ${subject}`;
+      detail = 'Exact approved email revision · Gmail delivery confirmed';
+      status = 'Sent';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
 
     default:
       text = `${actor} · ${row.kind}`;

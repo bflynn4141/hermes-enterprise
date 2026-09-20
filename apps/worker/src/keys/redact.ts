@@ -51,6 +51,7 @@ const SECRET_NAMES = new Set(SECRET_FIELD_NAMES.map((n) => n.toLowerCase()));
  * still be caught, and over-redacting a log line costs nothing.
  */
 const KEY_SHAPES: readonly RegExp[] = [
+  /apikey_[A-Za-z0-9_-]{12,}/g,
   /sk-ant-[A-Za-z0-9_-]{6,}/g,
   /sk-proj-[A-Za-z0-9_-]{6,}/g,
   /sk-or-[A-Za-z0-9_-]{6,}/g,

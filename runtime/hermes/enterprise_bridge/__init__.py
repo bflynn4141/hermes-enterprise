@@ -10,6 +10,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .packages import packaged_skills
+from .runtime_policy import build_skill_prompt_sections, load_enterprise_skills
+
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 CONTROL_ROUTE = "/api/plugins/enterprise_bridge/control"
@@ -19,6 +22,7 @@ MCP_COMPONENT = re.compile(r"[^A-Za-z0-9_]")
 TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 AGENTCASH_PEOPLE_SEARCH_URL = "https://stableenrich.dev/api/fullenrich/people-search"
 AGENTCASH_CREATOR_SEARCH_URL = "https://stableenrich.dev/api/exa/search"
+AGENTCASH_X_CREATOR_SEARCH_URL = "https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top"
 AGENTCASH_CONTACT_ENRICH_URL = "https://stableenrich.dev/api/minerva/enrich"
 AGENTCASH_EMAIL_VERIFY_URL = "https://stableenrich.dev/api/hunter/email-verifier"
 CONTACT_RETURN_FIELDS = ["full_name", "linkedin_url", "professional_emails", "phones", "twitter_url", "facebook_url"]
@@ -43,6 +47,16 @@ AGENTCASH_CREATOR_SEARCH_ARGUMENTS = {
         },
     },
 }
+AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS = {
+    "url": AGENTCASH_X_CREATOR_SEARCH_URL,
+    "method": "GET",
+    "maxAmount": 0.005,
+}
+
+
+def is_creator_search_arguments(arguments):
+    return arguments in (AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+                         AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS)
 
 
 def approved_agentcash_arguments(program):
@@ -261,19 +275,6 @@ class Bridge:
                            "parameters": tool["parameters"]})
         return result
 
-    def skills(self):
-        status, body = self.request("GET", self.base_url + "/skills", self.token)
-        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("skills"), list):
-            raise BridgeError("Enterprise skill discovery failed.")
-        result = []
-        for item in body["skills"]:
-            if (not isinstance(item, dict)
-                    or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", str(item.get("name", "")))
-                    or not isinstance(item.get("config", {}), dict)):
-                raise BridgeError("Enterprise skill discovery returned an invalid manifest.")
-            result.append(item)
-        return result
-
     def ensure_running(self, run_id):
         status, body = self.request("GET", self.native_url + "/v1/runs/" + run_id, self.native_token)
         if status != 200 or body.get("status") not in {"running", "waiting_for_approval"}:
@@ -393,7 +394,10 @@ class Bridge:
             {"runtime_run_id": run_id, "tool_call_id": tool_call_id, "arguments": arguments},
         )
         if status not in {200, 201} or not isinstance(body, dict) or body.get("ok") is not True:
-            raise BridgeError("AgentCash creator-search authorization was rejected.")
+            reason = body.get("reason") if isinstance(body, dict) else None
+            safe_reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z0-9_:-]{1,80}", reason) else None
+            detail = f"{status} {safe_reason}" if safe_reason else str(status)
+            raise BridgeError(f"AgentCash creator-search authorization was rejected ({detail}).")
         return body
 
     def import_creator_search(self, run_id, tool_call_id, arguments, result):
@@ -421,7 +425,7 @@ class Bridge:
                                             pending.get("tool_call_id"), pending.get("arguments"))
         if (not isinstance(run_id, str) or not re.fullmatch(r"run_[0-9a-f]{32}", run_id)
                 or not isinstance(tool_call_id, str) or not TOOL_CALL_ID.fullmatch(tool_call_id)
-                or arguments != AGENTCASH_CREATOR_SEARCH_ARGUMENTS):
+                or not is_creator_search_arguments(arguments)):
             raise BridgeError("AgentCash pending creator import identity was rejected.")
         home = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")).resolve()
         spill_path = (home / "cache" / "spillover" / (tool_call_id + ".txt")).resolve()
@@ -494,37 +498,63 @@ class Bridge:
 
 
 def register(ctx):
+    # Managed Cloud startup installs the non-disposable native admission gate
+    # before control auth, network discovery, or any context-owned hook that
+    # Hermes would dispose after a caught register() failure.
+    managed_state = None
+    if os.environ.get("HERMES_ENTERPRISE_CLOUD_MANAGED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from .cloud_managed import begin_managed_startup, is_gateway_process
+        if is_gateway_process():
+            managed_state = begin_managed_startup()
+    if managed_state is not None:
+        from .cloud_managed import install_enterprise_reader_toolset
+        install_enterprise_reader_toolset()
+
     # Register the Cloud control surface before tool discovery. If the Worker is
     # temporarily unavailable, dashboard startup still leaves the route either
     # strongly authenticated or absent; it never falls open.
-    register_control_auth(ctx)
+    control_auth = register_control_auth(ctx)
+    if managed_state is not None and control_auth is None:
+        raise BridgeError("Cloud-managed Enterprise control authentication is unavailable.")
     bridge = Bridge(
         ctx.get_config("base_url", ""), os.environ.get("ENTERPRISE_RUNTIME_TOKEN", ""),
         ctx.get_config("native_url", "http://127.0.0.1:8642"), os.environ.get("API_SERVER_KEY", ""),
         request_timeout=ctx.get_config("request_timeout_seconds", 5),
         pending_timeout=ctx.get_config("pending_timeout_seconds", 86400),
     )
-    # Install the veto before network discovery; a discovery failure exposes zero tools.
-    assigned_skills = {
-        name for name in ctx.get_config("allowed_skills", [])
-        if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
-    }
+    # The authenticated assignment is the only authority for which skills this
+    # profile may view and which skill text is pinned into every new session.
+    # Configured settings may restate it but never widen or replace it.
+    plugin_root = pathlib.Path(__file__).parent
+    try:
+        assignment = load_enterprise_skills(bridge.base_url, bridge.token, plugin_root=plugin_root)
+    except RuntimeError as error:
+        raise BridgeError(str(error)) from error
+    configured_skills = ctx.get_config("allowed_skills", [])
+    if configured_skills and list(configured_skills) != assignment["auto_load"]:
+        raise BridgeError("Configured allowed skills differ from the authenticated Enterprise assignment.")
+    assigned_skills = set(assignment["auto_load"])
+    assigned_program = assignment["config"].get("partner_program")
+    assigned_program = assigned_program if isinstance(assigned_program, dict) else {}
     partner_program = ctx.get_config("partner_program", {})
-    if not isinstance(partner_program, dict):
-        partner_program = {}
-    if not assigned_skills or (os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1" and not partner_program):
-        for manifest in bridge.skills():
-            assigned_skills.add(manifest["name"])
-            config = manifest.get("config", {})
-            if not partner_program and isinstance(config.get("partner_program"), dict):
-                partner_program = config["partner_program"]
+    if not isinstance(partner_program, dict) or not partner_program:
+        partner_program = assigned_program
+    elif partner_program != assigned_program:
+        raise BridgeError("Partner Program policy differs from the authenticated Enterprise assignment.")
+    # Hermes 0.21.3 has no skills.auto_load. The pinned plugin API freezes
+    # registered sections into each new session's system prompt before the
+    # first model call, so the verified SKILL.md text is pinned here. Only this
+    # plugin is enabled in a governed profile; the launcher and managed Cloud
+    # validator compare the live render with the same verified sections.
+    for section_id, text in build_skill_prompt_sections(assignment["manifests"], plugin_root):
+        ctx.register_system_prompt_section(section_id, text)
     agentcash_arguments = approved_agentcash_arguments(partner_program)
     allowed = {"skill_view"}
     configured_mcp_policy = ctx.get_config("mcp_policy", [])
     if not configured_mcp_policy and os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1":
         configured_mcp_policy = [{
             "server": "agentcash", "tools": ["fetch"],
-            "allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15,
+            "allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15,
         }]
     mcp_policy = {}
     for item in configured_mcp_policy:
@@ -549,7 +579,7 @@ def register(ctx):
             return {"action": "block", "message": "This MCP tool is not in the enterprise allowlist."}
         args = args if isinstance(args, dict) else {}
         if (tool_name == "mcp__agentcash__fetch" and args != agentcash_arguments
-                and args != AGENTCASH_CREATOR_SEARCH_ARGUMENTS
+                and not is_creator_search_arguments(args)
                 and agentcash_contact_call_kind(args) is None):
             return {"action": "block", "message": "Only the exact approved Partner Program AgentCash requests are allowed."}
         if "url" in args:
@@ -572,6 +602,8 @@ def register(ctx):
         return None
 
     def guard(tool_name, args=None, tool_call_id="", **kwargs):
+        if managed_state is not None and not managed_state.ensure_current():
+            return {"action": "block", "message": "Enterprise native readiness is unavailable."}
         if tool_name == "skill_view":
             args = args if isinstance(args, dict) else {}
             if (args.get("name") in assigned_skills
@@ -588,11 +620,15 @@ def register(ctx):
                     run_id, call_id = trusted_hook_identity(tool_call_id)
                     if args == agentcash_arguments:
                         bridge.authorize_people_search(run_id, call_id, args)
-                    elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+                    elif is_creator_search_arguments(args):
                         bridge.authorize_creator_search(run_id, call_id, args)
                     else:
                         bridge.authorize_contact(run_id, call_id, args)
+                except BridgeError as error:
+                    logging.warning("AgentCash payment authorization failed: %s", error)
+                    return {"action": "block", "message": "AgentCash payment authorization failed closed."}
                 except Exception:
+                    logging.warning("AgentCash payment authorization failed: unexpected error.")
                     return {"action": "block", "message": "AgentCash payment authorization failed closed."}
             return None
         if tool_name not in allowed:
@@ -607,7 +643,7 @@ def register(ctx):
             run_id, trusted_call_id = trusted_hook_identity(tool_call_id)
             if args == agentcash_arguments:
                 bridge.import_people_search(run_id, trusted_call_id, args, result)
-            elif args == AGENTCASH_CREATOR_SEARCH_ARGUMENTS:
+            elif is_creator_search_arguments(args):
                 bridge.import_creator_search(run_id, trusted_call_id, args, result)
             elif agentcash_contact_call_kind(args) is not None:
                 bridge.import_contact(run_id, trusted_call_id, args, result)
@@ -620,13 +656,19 @@ def register(ctx):
 
     ctx.register_hook("post_tool_call", import_agentcash_result)
     ctx.register_hook("pre_tool_call", guard)
-    skill_path = pathlib.Path(__file__).parent / "skills" / "partner-program-screening" / "SKILL.md"
-    ctx.register_skill(
-        name="partner-program-screening",
-        path=skill_path,
-        description="Screen partner prospects and prepare cited human reviews.",
-        frontmatter={"version": "1.6.0", "metadata": {"hermes": {"category": "enterprise"}}},
-    )
+    for package in packaged_skills(pathlib.Path(__file__).parent).values():
+        ctx.register_skill(
+            name=package["bare_name"],
+            path=package["path"],
+            description=package["description"],
+            frontmatter={
+                "version": package["version"],
+                "artifact_digest": package["artifact_digest"],
+                "content_digest": package["content_digest"],
+                "metadata": {"hermes": {"category": "enterprise"}},
+            },
+        )
+    enterprise_tool_names = set()
     for schema in bridge.tools():
         name = schema["name"]
         handle = ctx.register_tool(name=name, toolset=TOOLSET, schema=schema,
@@ -634,8 +676,9 @@ def register(ctx):
         if handle is None:
             raise BridgeError("An enterprise tool conflicts with another runtime tool.")
         allowed.add(name)
+        enterprise_tool_names.add(name)
     spill_root = pathlib.Path(os.environ.get("HERMES_HOME", "/opt/data")) / "cache" / "spillover"
-    if agentcash_arguments is not None and spill_root.is_dir():
+    if managed_state is None and agentcash_arguments is not None and spill_root.is_dir():
         try:
             bridge.recover_pending_people_search(agentcash_arguments)
         except BridgeError as error:
@@ -657,3 +700,12 @@ def register(ctx):
             logging.warning("AgentCash pending creator recovery did not complete: %s", error)
         except Exception:
             logging.warning("AgentCash pending creator recovery did not complete: unexpected error.")
+    if managed_state is not None:
+        from .cloud_managed import start_initializer
+        start_initializer({
+            "base_url": ctx.get_config("base_url", ""),
+            "native_url": ctx.get_config("native_url", "http://127.0.0.1:8642"),
+            "allowed_skills": ctx.get_config("allowed_skills", []),
+            "mcp_policy": ctx.get_config("mcp_policy", []),
+            "partner_program": ctx.get_config("partner_program", {}),
+        }, managed_state, enterprise_tool_names)

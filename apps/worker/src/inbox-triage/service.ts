@@ -2,8 +2,9 @@ import { approvalPayloadSchema } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { publishEvents, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
+import { callSystemOne } from '../jev/client.js';
 
-export const JEV_MODEL_ID = 'typesafe/jev';
+export const JEV_MODEL_ID = 'jev-latest';
 export const SUMMARY_VERSION = '1';
 
 type Band = 'urgent' | 'high' | 'normal' | 'low';
@@ -16,6 +17,16 @@ type Signals = {
   primary_reason: string;
   needs_human_triage: boolean;
 };
+
+const TRIAGE_QUESTIONS = {
+  goal_relevance: { type: 'score', instructions: 'How directly does this request advance the workspace goal?', criteria: ['Unrelated', 'Weakly related', 'Clearly related', 'Critical to the goal'] },
+  material_impact: { type: 'score', instructions: 'How material is the consequence of delay or a wrong decision?', criteria: ['Minimal', 'Limited', 'Meaningful', 'Severe'] },
+  time_sensitivity: { type: 'score', instructions: 'How time-sensitive is this request beyond the explicit expiry?', criteria: ['No urgency', 'Some timing value', 'Time sensitive', 'Immediate blocker'] },
+  decision_complexity: { type: 'score', instructions: 'How much human judgment is required?', criteria: ['Routine', 'Some judgment', 'Substantial judgment', 'Exceptional complexity'] },
+  evidence_sufficiency: { type: 'score', instructions: 'How sufficient is the available evidence for a decision?', criteria: ['Insufficient', 'Material gaps', 'Mostly sufficient', 'Sufficient'] },
+  primary_reason: { type: 'choice', instructions: 'Choose the main reason this item should be reviewed.', criteria: { deadline: 'Deadline or expiry', impact: 'Material impact', blocker: 'Blocks work', risk: 'Risk or sensitive authorization', goal: 'Goal relevance', routine: 'Routine queue item' } },
+  needs_human_triage: { type: 'noul', instructions: 'Does ambiguity or missing context require manual triage before deciding?' },
+} as const;
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -40,6 +51,14 @@ const stable = (value: unknown): string => {
 async function sha256(value: unknown): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stable(value)));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function callJev(
+  apiKey: string,
+  state: Record<string, unknown>,
+  fetcher: typeof fetch = fetch,
+): Promise<unknown> {
+  return callSystemOne(apiKey, { state, model: JEV_MODEL_ID, questions: TRIAGE_QUESTIONS }, fetcher);
 }
 
 export function normalizedTriageState(input: {
@@ -118,8 +137,18 @@ export function scoreTriage(state: Record<string, unknown>, signals: Signals): {
   return { score, band, reasons: [...new Set(reasons.filter(Boolean))].slice(0, 8), confidence: Math.min(1, Math.max(0, signals.evidence_sufficiency / 3)) };
 }
 
-export async function enqueueRequestTriage(tx: Tx, workspaceId: string, requestId: string, requestVersion: number): Promise<string | null> {
-  const key = `request-triage:${requestId}:${requestVersion}`;
+export async function enqueueRequestTriage(
+  tx: Tx,
+  workspaceId: string,
+  requestId: string,
+  requestVersion: number,
+  rubricVersion = '1',
+): Promise<string | null> {
+  // A request revision may need a fresh assessment when either the rubric or
+  // model changes. Keeping both in the durable idempotency key lets that new
+  // work coexist with an older job that is still backing off, while repeated
+  // reads under the same configuration still collapse to one job.
+  const key = `request-triage:${requestId}:${requestVersion}:${rubricVersion}:${JEV_MODEL_ID}`;
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO jobs (workspace_id,kind,key,payload)
      VALUES ($1,'request_triage',$2,$3::jsonb)
@@ -156,36 +185,25 @@ export async function runRequestTriageJob(env: Env, job: Job): Promise<void> {
   const assessmentId = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO request_triage_assessments
-        (workspace_id,request_id,request_version,state_hash,rubric_version,summary_version,status,attempt_count)
-       VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)
+        (workspace_id,request_id,request_version,state_hash,rubric_version,summary_version,provider,model_id,status,attempt_count)
+       VALUES ($1,$2,$3,$4,$5,$6,'typesafe_api',$7,'pending',$8)
        ON CONFLICT (request_id,state_hash,rubric_version,model_id)
        DO UPDATE SET attempt_count=GREATEST(request_triage_assessments.attempt_count, EXCLUDED.attempt_count)
        RETURNING id`,
-      [job.workspace_id, requestId, row.version, stateHash, rubricVersion, SUMMARY_VERSION, job.attempts],
+      [job.workspace_id, requestId, row.version, stateHash, rubricVersion, SUMMARY_VERSION, JEV_MODEL_ID, job.attempts],
     );
     return inserted.rows[0]?.id ?? null;
   });
   if (!assessmentId) return;
-  if (!env.AI) {
+  if (!env.TYPESAFE_API_KEY) {
     await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
-      `UPDATE request_triage_assessments SET status='abstained',failure_class='ai_binding_unavailable',completed_at=now() WHERE id=$1`, [assessmentId],
+      `UPDATE request_triage_assessments SET status='abstained',failure_class='typesafe_key_unavailable',completed_at=now() WHERE id=$1`, [assessmentId],
     ));
     return;
   }
 
   try {
-    const result = await env.AI.run(JEV_MODEL_ID as keyof AiModels, {
-      state,
-      questions: {
-        goal_relevance: { type: 'score', instructions: 'How directly does this request advance the workspace goal?', criteria: ['Unrelated', 'Weakly related', 'Clearly related', 'Critical to the goal'] },
-        material_impact: { type: 'score', instructions: 'How material is the consequence of delay or a wrong decision?', criteria: ['Minimal', 'Limited', 'Meaningful', 'Severe'] },
-        time_sensitivity: { type: 'score', instructions: 'How time-sensitive is this request beyond the explicit expiry?', criteria: ['No urgency', 'Some timing value', 'Time sensitive', 'Immediate blocker'] },
-        decision_complexity: { type: 'score', instructions: 'How much human judgment is required?', criteria: ['Routine', 'Some judgment', 'Substantial judgment', 'Exceptional complexity'] },
-        evidence_sufficiency: { type: 'score', instructions: 'How sufficient is the available evidence for a decision?', criteria: ['Insufficient', 'Material gaps', 'Mostly sufficient', 'Sufficient'] },
-        primary_reason: { type: 'choice', instructions: 'Choose the main reason this item should be reviewed.', criteria: { deadline: 'Deadline or expiry', impact: 'Material impact', blocker: 'Blocks work', risk: 'Risk or sensitive authorization', goal: 'Goal relevance', routine: 'Routine queue item' } },
-        needs_human_triage: { type: 'noul', instructions: 'Does ambiguity or missing context require manual triage before deciding?', criteria: { true: 'Manual triage is needed', false: 'The request is clear enough' } },
-      },
-    } as never) as unknown;
+    const result = await callJev(env.TYPESAFE_API_KEY, state);
     const response = record(result);
     const answers = record(response.answers);
     const choice = record(answers.primary_reason).choice;

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, withClient } from './helpers.js';
-import { INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
+import { fetchReviewBinding, INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
 import { claimJob, drainJobs, withWorkspaceTransaction } from '../../src/jobs.js';
 import { runReceiptJob } from '../../src/runs/receipt.js';
 import { randomUUID } from 'node:crypto';
@@ -107,7 +107,7 @@ describe('the receipt job', () => {
     await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
       method: 'POST',
       headers: INBOX_HEADERS,
-      body: { decision: 'approve' },
+      body: { decision: 'approve', ...await fetchReviewBinding(e.env, fx, requestId) },
     });
     const rows = await messages(fx.workspaceId, fx.adminId, fx.sessionId);
     expect(rows[1]?.text).toBe(

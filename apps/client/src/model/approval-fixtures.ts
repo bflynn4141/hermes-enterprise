@@ -22,6 +22,7 @@ export const APPROVAL_DEMO_REQUEST_IDS: Record<ApprovalType, string> = {
 };
 
 export interface ApprovalDemoContext {
+  communicationDraft?: boolean;
   workspaceId: string;
   sessionId: string;
   runId: string;
@@ -160,19 +161,19 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
     },
     {
       type: 'communication',
-      subject: 'Send pilot invitation',
+      subject: context.communicationDraft ? 'Review the partner pilot outreach draft, prepared after comparing the proposed onboarding approaches and recipient research' : 'Send pilot invitation',
       label: 'External communication',
       proposal: {
         kind: 'approval', approval_type: 'communication', illustrative: true,
         summary: 'Review the exact fictional invitation, recipients and attachment before any send effect.',
         consequence: 'Approval authorizes this exact message; provider sending remains a separate effect.',
-        evidence: [{ id: 'invite-source', kind: 'document', label: 'Pilot invite copy', ref: 'invite-copy:v2' }],
+        evidence: [{ id: context.communicationDraft ? mockUuid(1900) : 'invite-source', kind: context.communicationDraft ? 'source' : 'document', label: context.communicationDraft ? 'Illustrative partner source' : 'Pilot invite copy', ref: 'invite-copy:v2', note: 'Illustrative note from Iris about the pilot.' }],
         details: {
-          channel: 'email', draft_only: false, sender: { member_id: context.mayaMemberId, address: 'maya@nous.example' },
-          recipients: [{ name: 'Taylor Brooks', address: 'taylor@example.invalid' }],
+          channel: 'email', draft_only: context.communicationDraft ?? false, sender: { member_id: context.mayaMemberId, address: 'maya@nous.example' },
+          recipients: [{ name: 'Taylor Brooks', address: context.communicationDraft ? null : 'taylor@example.invalid' }],
           subject: 'Invitation to the illustrative partner pilot',
           body: 'Hi Taylor,\n\nWe would like to invite your team to a fictional two-week partner onboarding pilot. Please review the attached outline. No message will be sent from this demo.\n\nMaya',
-          attachments: [{ id: 'pilot-outline', label: 'Illustrative pilot outline.pdf' }], scheduled_for: context.at(90),
+          attachments: [{ id: 'pilot-outline', label: 'Illustrative pilot outline.pdf' }], scheduled_for: context.communicationDraft ? undefined : context.at(90),
         },
       },
     },
@@ -304,7 +305,7 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
     const derivedTargetAgentIds = targetAgentIds(proposal);
     const derivedTargetResourceIds = targetResourceIds(proposal);
     const derivedTargetMemberIds = targetMemberIds(proposal, derivedTargetResourceIds, context.mayaMemberId);
-    const effectKind = effectFor(type);
+    const effectKind = proposal.approval_type === 'communication' && proposal.details.draft_only ? 'none' : effectFor(type);
     const effectUnavailableReason = 'Illustrative demo only; no external provider is connected and no effect occurred.';
     const payload: ApprovalPayload = {
       ...proposal,
@@ -339,6 +340,8 @@ export function createApprovalDemoFixtures(context: ApprovalDemoContext): Approv
       session_id: context.sessionId, run_id: context.runId, created_at: context.at(index - 20), version: 1,
       payload: payload as unknown as Record<string, unknown>, sources: [], missing: [], note: null,
       decision_id: null, decided_at: null, decided_by_name: null, approval: projection,
+      provenance: { kind: 'sample', source: 'approval_demo_fixture', recorded_at: context.at(index - 20) },
+      presentation: { hidden: false, hidden_at: null, hidden_reason: null },
       decision_summary: {
         action: 'Review approval', primary: proposal.summary, facts: [], consequence: proposal.consequence,
         approval_requirement: {

@@ -45,6 +45,11 @@ import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 import { runJobsAfterCommit } from '../jobs.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import {
+  persistCapacityGrantDrift,
+  verifyPendingInvitationCapacityForEmail,
+} from '../hermes-cloud/capacity.js';
+import { streamEventAudiencePredicate } from '../domain/audience.js';
 
 /**
  * Only same-origin paths may be used as a post-login destination. Anything
@@ -68,6 +73,100 @@ export function safeReturnPath(raw: string | undefined | null): string {
 
 const redirectUri = (c: Context<{ Bindings: Env }>): string =>
   c.env.WORKOS_REDIRECT_URI ?? `${new URL(c.req.url).origin}/auth/callback`;
+
+/**
+ * A callback can outlive its ten-minute browser transaction while the person
+ * completes MFA. The authorization code must still be refused, but a browser
+ * should get a useful recovery path rather than the API error envelope.
+ *
+ * The page is deliberately static: the failed transaction is not trusted for
+ * a return path, and an automatic redirect could loop between AuthKit and an
+ * expired callback. `no-referrer` also keeps the callback's code and state out
+ * of the fresh sign-in request.
+ */
+function expiredSignInResponse(c: Context<{ Bindings: Env }>): Response {
+  const headers = new Headers({
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'Content-Type': 'text/html; charset=UTF-8',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Hermes-Error-Reason': 'invalid_state',
+  });
+  headers.append('Set-Cookie', clearedAuthTransactionCookie(c.env));
+  return new Response(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign-in expired · Hermes</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --app: #000030;
+        --ink: #080416;
+        --indigo: #1a135d;
+        --body: #f2f2f2;
+        --muted: #c6c3da;
+        --action: #0000f2;
+        --action-hover: #1a1aff;
+        --context: #151047;
+        --line: rgba(223, 223, 255, 0.18);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background:
+          radial-gradient(circle at 82% 8%, rgba(84, 88, 172, 0.56), transparent 42%),
+          linear-gradient(160deg, var(--indigo) 0%, #110734 55%, var(--ink) 100%);
+        color: var(--body);
+      }
+      main {
+        width: min(100%, 30rem);
+        padding: clamp(1.75rem, 6vw, 2.5rem);
+        border: 1px solid var(--line);
+        border-radius: 0.875rem;
+        background:
+          linear-gradient(115deg, rgba(92, 103, 191, 0.24), rgba(45, 34, 116, 0.38) 48%, rgba(17, 10, 52, 0.72)),
+          var(--context);
+        box-shadow: 0 1.5rem 4rem rgba(0, 0, 25, 0.35);
+      }
+      .brand { display: flex; align-items: center; gap: 0.75rem; color: var(--body); font-size: 1.05rem; font-weight: 500; }
+      .brand svg { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; filter: drop-shadow(0 0.5rem 1rem rgba(0, 0, 25, 0.35)); }
+      h1 { margin: 1.75rem 0 0.75rem; font-size: clamp(2rem, 7vw, 2.5rem); font-weight: 500; line-height: 1.08; letter-spacing: -0.025em; }
+      p { margin: 0; color: var(--muted); font-size: 1rem; line-height: 1.6; }
+      a { display: inline-flex; margin-top: 1.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.7rem 1.125rem; border-radius: 0.5rem; background: var(--action); color: var(--body); font-size: 0.875rem; font-weight: 500; text-decoration: none; transition: background-color 120ms ease-out; }
+      a:hover { background: var(--action-hover); }
+      a:focus-visible { outline: 2px solid #c6c6ff; outline-offset: 3px; }
+      @media (max-width: 30rem) {
+        main { padding: 1.5rem; }
+        a { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <defs><linearGradient id="iris" x1="10" y1="7" x2="49" y2="60" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset=".45" stop-color="#e9e6f6"/><stop offset=".72" stop-color="#bdb7d8"/><stop offset="1" stop-color="#716b96"/></linearGradient></defs>
+          <path d="M32 9c6 0 10 8 6 15 7-4 15 0 15 7s-8 11-15 7c4 7 0 15-7 15s-11-8-7-15c-7 4-15 0-15-7s8-11 15-7c-4-7 0-15 8-15Z" fill="url(#iris)"/>
+          <path d="M32 10c4 0 8 5 7 11l-7 9-7-7c-3-6 0-13 7-13Z" fill="#fff" opacity=".72"/><circle cx="31" cy="31" r="6" fill="#26214c"/><circle cx="31" cy="30" r="5" fill="#181333"/>
+        </svg>
+        <span>Hermes</span>
+      </div>
+      <h1>Your sign-in expired</h1>
+      <p>This sign-in attempt took too long or is no longer valid. Start a fresh sign-in to continue.</p>
+      <a href="/auth/login">Start a new sign-in</a>
+    </main>
+  </body>
+</html>`, { status: 400, headers });
+}
 
 /**
  * The development step-up.
@@ -137,9 +236,7 @@ export async function login(c: Context<{ Bindings: Env }>): Promise<Response> {
 /** GET /auth/callback */
 export async function callback(c: Context<{ Bindings: Env }>): Promise<Response> {
   const transaction = await readAuthTransaction(c, c.req.query('state'));
-  if (!transaction) {
-    throw new RouteError('the authentication transaction is missing or expired', 'invalid_state', 400);
-  }
+  if (!transaction) return expiredSignInResponse(c);
   const code = c.req.query('code');
   if (!code) throw new RouteError('the callback needs a code', 'no_code', 400);
   const port = workosPort(c.env);
@@ -183,9 +280,6 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
   let workspaceId: string | null = null;
   const jobs: string[] = [];
   try {
-    await client.query('BEGIN');
-    userId = await upsertUser(client, authentication.user);
-
     if (organizationId) {
       const { rows } = await client.query<{ workspace_id: string }>(
         `SELECT workspace_id FROM workspace_directory WHERE workos_organization_id = $1`,
@@ -193,6 +287,14 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
       );
       workspaceId = rows[0]?.workspace_id ?? null;
     }
+    const capacityProof = workspaceId
+      ? await verifyPendingInvitationCapacityForEmail(
+        c.env, workspaceId, authentication.user.email,
+      )
+      : null;
+
+    await client.query('BEGIN');
+    userId = await upsertUser(client, authentication.user);
 
     // WorkOS keeps `sid` stable across reauthentication and advances
     // `auth_time`. Persist that claim rather than token `iat`, which also moves
@@ -231,6 +333,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
           joiningUserId: userId,
           joiningMemberId: mirrored.memberId,
           invitationId: mirrored.acceptedInvitation.id,
+          capacityProof,
           jobs,
         });
       }
@@ -238,6 +341,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
+    await persistCapacityGrantDrift(c.env, error);
     throw error;
   } finally {
     await client.end();
@@ -426,10 +530,16 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
         workspaceId,
       ]);
       const head = await tx.query<{ session_head: string; workspace_head: string }>(
-        `SELECT COALESCE(max(id) FILTER (WHERE session_id IS NOT NULL), 0)::text AS session_head,
-                COALESCE(max(id) FILTER (WHERE session_id IS NULL), 0)::text     AS workspace_head
-           FROM stream_events WHERE workspace_id = $1`,
-        [workspaceId],
+        `SELECT COALESCE(max(stream_row.id) FILTER (
+                  WHERE stream_row.session_id IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM sessions owned_session
+                                 WHERE owned_session.id = stream_row.session_id
+                                   AND owned_session.owner_id = $2)), 0)::text AS session_head,
+                COALESCE(max(stream_row.id) FILTER (
+                  WHERE stream_row.session_id IS NULL
+                    AND ${streamEventAudiencePredicate('stream_row', '$2')}), 0)::text AS workspace_head
+           FROM stream_events stream_row WHERE stream_row.workspace_id = $1`,
+        [workspaceId, session.userId],
       );
       return {
         role: member.rows[0]?.role ?? 'member',

@@ -57,9 +57,18 @@ export interface HermesCapabilities {
 export interface HermesEnterpriseReadiness {
   object: 'hermes.enterprise_bridge.readiness';
   version: string;
+  runtimeRevision: string | null;
+  plugin: {
+    name: string;
+    version: string;
+    revision: string | null;
+    artifactDigest: string | null;
+  } | null;
   workspaceId: string;
   agentId: string;
   enterpriseUrl: string;
+  skills: readonly { name: string; version: string; artifactDigest: string; contentDigest: string }[] | null;
+  toolNames: readonly string[] | null;
   agentCashEnabled: boolean;
   agentCashWalletPresent: boolean;
   nativeCronDisabled: boolean;
@@ -113,6 +122,17 @@ export function parseHermesTerminalError(value: unknown): HermesTerminalError | 
   return { schema_version: 1, code, category, retryable, source };
 }
 
+function nativeTurnAuthor(value: unknown): { id: string; name: string; is_bot: true } | null {
+  if (value === undefined) return null;
+  const author = record(value);
+  if (!author || author.is_bot !== true || typeof author.id !== 'string' || typeof author.name !== 'string'
+      || !/^bot:[a-z0-9][a-z0-9_-]{0,63}$/.test(author.id)
+      || author.name.length < 1 || author.name.length > 64 || /[:\n(]/.test(author.name)) {
+    throw new Error('invalid enterprise turn author');
+  }
+  return { id: author.id, name: author.name, is_bot: true };
+}
+
 export class HermesClient {
   constructor(
     private readonly baseUrl: string,
@@ -133,12 +153,19 @@ export class HermesClient {
     return response;
   }
   private async connector(operation: string, payload: Record<string, unknown> = {}, signal?: AbortSignal): Promise<Response> {
+    const streaming = operation === 'events';
     const response = await this.send(this.baseUrl.replace(/\/$/, ''), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
-        Accept: operation === 'events' ? 'text/event-stream' : 'application/json',
+        Accept: streaming ? 'text/event-stream' : 'application/json',
+        ...(streaming ? {
+          // The response is already compact SSE. Compression thresholds can
+          // otherwise turn incremental native frames into one terminal burst.
+          'Accept-Encoding': 'identity',
+          'Cache-Control': 'no-cache',
+        } : {}),
       },
       body: JSON.stringify({ operation, ...payload }),
       redirect: 'manual',
@@ -149,6 +176,12 @@ export class HermesClient {
       throw new HermesApiError(response.status, operation === 'steer' ? 'steer' : operation === 'stop' ? 'stop' : 'request');
     }
     return response;
+  }
+  private async connectorEvents(id: string, signal: AbortSignal): Promise<Response> {
+    // Hermes Dashboard's machine-authenticated plugin edge dispatches POST
+    // operations. A GET route can exist inside the plugin yet never be reached
+    // through that edge, leaving the Worker to poll until terminal output.
+    return this.connector('events', { run_id: id }, signal);
   }
   async capabilities(): Promise<HermesCapabilities> {
     const response = this.transport === 'dashboard_connector'
@@ -195,15 +228,57 @@ export class HermesClient {
     if (this.transport !== 'dashboard_connector') throw new HermesCapabilitiesError();
     const response = await this.connector('readiness');
     const body = record(await response.json());
+    const hasAnyAttestation = body !== null && [
+      body.runtime_revision, body.plugin, body.skills, body.tools,
+    ].some((value) => value !== undefined);
+    const plugin = hasAnyAttestation ? record(body?.plugin) : null;
+    const hasManagedPluginFields = plugin?.revision !== undefined || plugin?.artifact_digest !== undefined;
+    const skillRows = hasAnyAttestation && Array.isArray(body?.skills) ? body.skills : null;
+    const toolRows = hasAnyAttestation && Array.isArray(body?.tools) ? body.tools : null;
+    const skills = skillRows?.map((value) => {
+      const skill = record(value);
+      return skill && typeof skill.name === 'string' && /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/.test(skill.name) &&
+        typeof skill.version === 'string' && /^\d+\.\d+\.\d+$/.test(skill.version) &&
+        typeof skill.artifact_digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(skill.artifact_digest) &&
+        typeof skill.content_digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(skill.content_digest)
+        ? { name: skill.name, version: skill.version, artifactDigest: skill.artifact_digest,
+            contentDigest: skill.content_digest }
+        : null;
+    }) ?? null;
+    const toolNames = toolRows?.every((value) => typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value))
+      ? toolRows as string[] : null;
     if (body?.object !== 'hermes.enterprise_bridge.readiness' || typeof body.version !== 'string' ||
-        typeof body.workspace_id !== 'string' || typeof body.agent_id !== 'string' ||
-        typeof body.enterprise_url !== 'string' || typeof body.agentcash_enabled !== 'boolean' ||
-        typeof body.agentcash_wallet_present !== 'boolean' || typeof body.native_cron_disabled !== 'boolean') {
+        !/^\d+\.\d+\.\d+$/.test(body.version) ||
+        typeof body.workspace_id !== 'string' || body.workspace_id.length === 0 ||
+        typeof body.agent_id !== 'string' || body.agent_id.length === 0 ||
+        typeof body.enterprise_url !== 'string' || body.enterprise_url.length === 0 ||
+        typeof body.agentcash_enabled !== 'boolean' ||
+        typeof body.agentcash_wallet_present !== 'boolean' || typeof body.native_cron_disabled !== 'boolean' ||
+        (hasAnyAttestation && (
+          typeof body.runtime_revision !== 'string' || !/^[0-9a-f]{40}$/.test(body.runtime_revision) ||
+          plugin?.name !== 'enterprise_bridge' || plugin.version !== body.version ||
+          (hasManagedPluginFields && (
+            typeof plugin.revision !== 'string' || !/^[0-9a-f]{40}$/.test(plugin.revision) ||
+            typeof plugin.artifact_digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(plugin.artifact_digest)
+          )) ||
+          !skillRows || skillRows.length > 16 || !toolRows || toolRows.length > 128 ||
+          !skills || skills.some((skill) => skill === null) || new Set(skills.map((skill) => skill!.name)).size !== skills.length ||
+          !toolNames || !toolNames.includes('skill_view') || new Set(toolNames).size !== toolNames.length
+        ))) {
       throw new HermesCapabilitiesError();
     }
     return {
       object: 'hermes.enterprise_bridge.readiness', version: body.version,
+      runtimeRevision: hasAnyAttestation ? body.runtime_revision as string : null,
+      plugin: hasAnyAttestation ? {
+        name: plugin!.name as string,
+        version: plugin!.version as string,
+        revision: hasManagedPluginFields ? plugin!.revision as string : null,
+        artifactDigest: hasManagedPluginFields ? plugin!.artifact_digest as string : null,
+      } : null,
       workspaceId: body.workspace_id, agentId: body.agent_id, enterpriseUrl: body.enterprise_url,
+      skills: hasAnyAttestation ? skills as NonNullable<HermesEnterpriseReadiness['skills']> : null,
+      toolNames: hasAnyAttestation ? toolNames : null,
       agentCashEnabled: body.agentcash_enabled, agentCashWalletPresent: body.agentcash_wallet_present,
       nativeCronDisabled: body.native_cron_disabled,
     };
@@ -211,7 +286,9 @@ export class HermesClient {
   async submit(body: Record<string, unknown>, key: string): Promise<string> {
     // Audit-only fields stay in the Worker's immutable runtime request. The
     // native API sees the procedure through its governed profile instead.
-    const { _enterprise_tool_names, _enterprise_skills, ...nativeBody } = body;
+    const { _enterprise_tool_names, _enterprise_skills, _enterprise_turn_author, ...rest } = body;
+    const author = nativeTurnAuthor(_enterprise_turn_author);
+    const nativeBody = { ...rest, ...(author ? { turn_author: author } : {}) };
     const response = this.transport === 'dashboard_connector'
       ? await this.connector('submit', { idempotency_key: key, body: nativeBody })
       : await this.request('/v1/runs', { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(nativeBody) });
@@ -253,7 +330,7 @@ export class HermesClient {
   }
   async *events(id: string, signal: AbortSignal): AsyncGenerator<HermesEvent> {
     const response = this.transport === 'dashboard_connector'
-      ? await this.connector('events', { run_id: id }, signal)
+      ? await this.connectorEvents(id, signal)
       : await this.request(`/v1/runs/${encodeURIComponent(id)}/events`, { signal });
     for await (const frame of readSse(response, 'hermes')) {
       if (!frame.data || frame.data === '[DONE]') continue;

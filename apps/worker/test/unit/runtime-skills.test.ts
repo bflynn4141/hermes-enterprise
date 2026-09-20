@@ -35,7 +35,7 @@ describe('enterprise Hermes skills', () => {
     const [skill] = runtimeSkillManifests(env, agentId);
     expect(skill).toMatchObject({
       name: PARTNER_PROGRAM_SKILL.name,
-      version: '1.6.0',
+      version: '1.7.0',
       auto_load: true,
       config: {
         partner_program: {

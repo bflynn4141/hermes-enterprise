@@ -2,9 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Message, Run } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
-import type { SessionState, Store } from '../../model/store.js';
+import { createStore, initialState, type SessionState } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { RunActivity } from './RunSurface.js';
+import { RunActivity, RunStream } from './RunSurface.js';
 
 const sessionId = '22222222-2222-4222-8222-222222222222';
 const runId = '33333333-3333-4333-8333-333333333333';
@@ -72,13 +72,21 @@ function progress(text: string): Message {
 
 function render(activity: React.ReactNode): string {
   return renderToStaticMarkup(
-    <StoreProvider store={{} as Store} adapter={{} as Adapter}>
+    <StoreProvider store={createStore(initialState())} adapter={{} as Adapter}>
       {activity}
     </StoreProvider>,
   );
 }
 
 describe('live run activity', () => {
+  it('renders an already received streaming prefix on the first render and remount', () => {
+    const restored = session(run(), 'The restored answer is already available.');
+    for (let mount = 0; mount < 2; mount += 1) {
+      expect(render(<RunStream session={restored} canRelease={false} />))
+        .toContain('The restored answer is already available.');
+    }
+  });
+
   it('shows one thinking state before response text arrives', () => {
     const html = render(<RunActivity session={session(run())} />);
     expect(html.match(/Reasoning through the request/g)).toHaveLength(1);
@@ -86,8 +94,9 @@ describe('live run activity', () => {
   });
 
   it('derives elapsed time from the run start after the activity remounts', () => {
-    const firstMount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:03.700Z')} />);
-    const remount = render(<RunActivity session={session(run())} now={() => Date.parse('2026-09-17T19:00:24.100Z')} />);
+    const timedRun = { ...run(), id: '77777777-7777-4777-8777-777777777777' };
+    const firstMount = render(<RunActivity session={session(timedRun)} now={() => Date.parse('2026-09-17T19:00:03.700Z')} />);
+    const remount = render(<RunActivity session={session(timedRun)} now={() => Date.parse('2026-09-17T19:00:24.100Z')} />);
 
     expect(firstMount).toContain('3.7s');
     expect(remount).toContain('24.1s');

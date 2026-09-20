@@ -159,12 +159,22 @@ describe('F2 · the two routes with no tenant in their path', () => {
     const body = (await response.json()) as {
       workspace: { id: string; name: string };
       agent: { id: string; name: string; email: string | null };
-      capabilities: { email_ingress: boolean; turn_attachments: boolean; automated_triggers: boolean };
+      capabilities: {
+        email_ingress: boolean;
+        turn_attachments: boolean;
+        automated_triggers: boolean;
+        member_invitations: { mode: string; role_templates: string[] };
+      };
       sessions: { id: string; title: string }[];
     };
     expect(body.workspace.name).toBe('A brand new workspace');
     expect(body.agent).toMatchObject({ name: 'Beacon', email: null });
-    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
+    expect(body.capabilities).toEqual({
+      email_ingress: false,
+      turn_attachments: true,
+      automated_triggers: false,
+      member_invitations: { mode: 'legacy_delivery', role_templates: [] },
+    });
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]?.title).toBe('Set up Beacon');
 
@@ -597,6 +607,49 @@ describe('F8 · traces', () => {
     expect(body.fetched_urls).toContain('https://example.test/policy');
     expect(body.focus.map((f) => f.entity_id)).toContain(requestId);
     expect(body.allowed_tools).toEqual(['list_requests', 'propose_request']);
+  });
+
+  it('keeps a run’s frozen tool allowlist after the agent capabilities change', async () => {
+    const fx = await seedWorkspace();
+    const { runId } = await seedRun(fx);
+    const frozenTools = ['get_partner_handoff_result', 'get_request'];
+    const currentTools = ['list_requests', 'propose_request', 'save_review_note'];
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `UPDATE runs
+            SET runtime_request = jsonb_build_object('_enterprise_tool_names', $3::jsonb)
+          WHERE workspace_id = $1 AND id = $2`,
+        [fx.workspaceId, runId, JSON.stringify(frozenTools)],
+      );
+      await c.query(
+        `UPDATE agent_capabilities
+            SET tool_names = $3::text[]
+          WHERE workspace_id = $1 AND agent_id = $2`,
+        [fx.workspaceId, fx.agentId, currentTools],
+      );
+      await c.query('COMMIT');
+    });
+
+    const frozen = await call(`/w/${fx.workspaceId}/traces/${runId}`, { headers: asUser(fx.adminId) });
+    expect(frozen.status).toBe(200);
+    expect((await frozen.json()) as { allowed_tools: string[] }).toMatchObject({ allowed_tools: frozenTools });
+
+    // A run with no snapshot predates native request freezing, so the route
+    // retains the legacy projection from the agent's current capabilities.
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `UPDATE runs SET runtime_request = NULL WHERE workspace_id = $1 AND id = $2`,
+        [fx.workspaceId, runId],
+      );
+      await c.query('COMMIT');
+    });
+    const legacy = await call(`/w/${fx.workspaceId}/traces/${runId}`, { headers: asUser(fx.adminId) });
+    expect(legacy.status).toBe(200);
+    expect((await legacy.json()) as { allowed_tools: string[] }).toMatchObject({ allowed_tools: currentTools });
   });
 
   it('shows the safe terminal failure classification without native provider text', async () => {

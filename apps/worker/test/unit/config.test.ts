@@ -107,6 +107,10 @@ describe('wrangler.jsonc', () => {
     expect((config.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('0');
     expect((envs.staging!.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('1');
     expect((envs.production!.vars as Record<string, string>).PARTNER_SCREENING_PAID_AUTOMATION_ENABLED).toBe('0');
+    for (const scope of [config, ...Object.values(envs)]) {
+      expect((scope.vars as Record<string, string>).PARTNER_OUTREACH_EMAIL_MODE).toBe('draft_only');
+      expect((scope.vars as Record<string, string>).GMAIL_OUTREACH_ENABLED).toBe('0');
+    }
   });
 
   it('keeps the first member-approved search bounded in every environment', () => {
@@ -126,6 +130,30 @@ describe('wrangler.jsonc', () => {
       expect(vars.HERMES_POOL_LOW_CAPACITY_THRESHOLD).toBe('1');
       expect(vars).not.toHaveProperty('HERMES_CLOUD_AUTOPROVISION_ENABLED');
     }
+  });
+
+  it('enables the Cloud connection only in staging, never paid provisioning', () => {
+    expect((config.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('0');
+    expect((envs.staging!.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('1');
+    expect((envs.production!.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('0');
+    for (const scope of Object.values(envs)) {
+      const vars = scope.vars as Record<string, string> & { ALLOWED_ORIGINS: string; HERMES_ENTERPRISE_PUBLIC_URL: string };
+      expect(vars.ALLOWED_ORIGINS.split(',')).toContain(new URL(vars.HERMES_ENTERPRISE_PUBLIC_URL).origin);
+      expect(vars).not.toHaveProperty('HERMES_CLOUD_AUTOPROVISION_ENABLED');
+    }
+  });
+
+  it('pins the reviewed managed connector only for the staging rehearsal', () => {
+    const staging = envs.staging!.vars as Record<string, string>;
+    const production = envs.production!.vars as Record<string, string>;
+    expect(staging.HERMES_ENTERPRISE_PLUGIN_REVISION).toBe(
+      '4c33fa31110c3a5272d3e192166576998b4f5d9c',
+    );
+    expect(staging.HERMES_ENTERPRISE_PLUGIN_SHA256).toBe(
+      'sha256:1273cd07b42d69c3b0314f8afe36ee8ae1cc0232396d9e36db50e286df12cc75',
+    );
+    expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_REVISION');
+    expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_SHA256');
   });
 
   it('binds both Hyperdrive configs everywhere, one per database role', () => {
@@ -151,6 +179,8 @@ describe('wrangler.jsonc', () => {
       'WORKOS_COOKIE_PASSWORD',
       'KEK_V1',
       'HERMES_BRIDGE_SECRET',
+      'GMAIL_CLIENT_SECRET',
+      'GMAIL_STATE_SECRET',
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',

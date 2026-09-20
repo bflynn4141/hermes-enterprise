@@ -1,13 +1,12 @@
-// What a decision implies, and what the pilot does about it: nothing.
+// What a legacy decision implies, and what this effect route can execute.
 //
 // Invariant 3 (docs/CONVENTIONS.md): a decision records what a human decided.
 // Anything that crosses a system boundary as a result — an access grant, an
 // email, a payment, a signature — is an `effects` row in `pending` that a human
 // with the required role executes. The decision never executes one, and in this
-// build no execution exists at all: there is no SMTP client, no payment
-// provider, no signature provider, and no webhook that would reach one. The
-// execute route says so in words a reviewer can read, which is the honest
-// version of a feature that is not built.
+// route does not execute one. Approved email delivery now has a separate,
+// exact-revision outbox; that does not turn a legacy `email_send` effect into a
+// delivery receipt. Payment, signature and access executors remain absent.
 //
 // The plan for each kind comes from the demo's receipts, which are the product
 // specification for this: an admission leaves "Access pending · No message
@@ -73,14 +72,13 @@ export const EFFECT_LABELS: Readonly<Record<EffectKind, string>> = {
  * build does and does not do, and three copies of a promise drift.
  */
 export const EFFECT_UNAVAILABLE_REASON =
-  'Not executed. This build sends nothing, pays nothing, grants nothing and signs nothing.';
+  'Not executed. This legacy effect has no configured executor; no email, payment, access or signature action was completed.';
 
 export const EFFECT_UNAVAILABLE_DETAIL =
-  'The decision is recorded and this effect is waiting. Execution is deliberately absent from the pilot: ' +
-  'no outreach, payment, access or signature code exists in this repository, behind a flag or otherwise. ' +
-  'A person holding the required role performs it outside the product and marks it here in a later milestone.';
+  'The decision is recorded and this legacy effect remains unavailable. Approved communications use a separate governed outbox when configured; this row does not queue or prove delivery. ' +
+  'Payment, access and signature executors are not configured, so a person holding the required role must complete that work outside the product.';
 
-/** The enforcement record written when someone presses Execute. */
+/** The enforcement record written when someone records a legacy-effect attempt. */
 export const unavailableEnforcement = (
   userId: string,
 ): { result: 'unavailable'; reason: string; detail: string; attempted_by: string; attempted_at: string } => ({

@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ApprovalProposal, ApprovalView } from '@hermes/shared';
+import { paginatedSchema, requestEntitySchema, type ApprovalProposal, type ApprovalView } from '@hermes/shared';
 import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
+import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
 import { installApprovalDemoFixture } from '../../src/domain/approval-fixtures.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
+import { storeGmailAccount } from '../../src/outbound-email/gmail-store.js';
+import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
 
 interface ApprovalFixture extends Fixture {
   readonly adminMemberId: string;
@@ -127,6 +130,24 @@ function outreachDraft(fx: ApprovalFixture): Extract<ApprovalProposal, { approva
   };
 }
 
+async function installOutreachDraftPolicy(fx: ApprovalFixture): Promise<void> {
+  await withClient('owner', async (client) => {
+    await client.query('BEGIN');
+    await setTenant(client, fx.workspaceId, fx.adminId);
+    await client.query(
+      `INSERT INTO approval_policies
+        (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
+         prevent_self_review, steps)
+       VALUES ($1,'partner-outreach-draft',1,'communication',$2,100,'sequential',false,$3::jsonb)`,
+      [fx.workspaceId, fx.agentId, JSON.stringify([{
+        id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+        reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+      }])],
+    );
+    await client.query('COMMIT');
+  });
+}
+
 async function propose(fx: ApprovalFixture, proposal: ApprovalProposal, key: string, policyKey = 'run-plan-low'): Promise<ApprovalView> {
   const e = env();
   return withTenantTransaction(e.env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, (tx) =>
@@ -149,22 +170,67 @@ describe('enterprise approval policy and voting', () => {
   let fx: ApprovalFixture;
   beforeEach(async () => { fx = await seedApprovalFixture(); });
 
-  it('stores outreach as a draft-only review with no delivery effect', async () => {
-    await withClient('owner', async (client) => {
-      await client.query('BEGIN');
-      await setTenant(client, fx.workspaceId, fx.adminId);
-      await client.query(
-        `INSERT INTO approval_policies
-          (workspace_id, key, version, approval_type, requester_agent_id, priority, mode,
-           prevent_self_review, steps)
-         VALUES ($1,'partner-outreach-draft',1,'communication',$2,100,'sequential',false,$3::jsonb)`,
-        [fx.workspaceId, fx.agentId, JSON.stringify([{
-          id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
-          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
-        }])],
-      );
-      await client.query('COMMIT');
+  it('resurfaces a hidden sequential approval when the next step becomes the viewer\'s turn', async () => {
+    const e = env();
+    const proposed = await propose(
+      fx,
+      teamCommitment(fx),
+      `proposal:${randomUUID()}`,
+      'team-sequential',
+    );
+    const presentationPath = `/w/${fx.workspaceId}/requests/${proposed.request_id}/presentation`;
+
+    const hidden = await asUser(e.env, fx.secondReviewerUserId, presentationPath, {
+      method: 'PATCH', headers: INBOX_HEADERS,
+      body: { hidden: true, reason: 'Waiting for the receiving owner first.' },
     });
+    expect(hidden.status).toBe(200);
+    expect(requestEntitySchema.parse(await hidden.json()).presentation.hidden).toBe(true);
+
+    const firstVote = await asUser(
+      e.env,
+      fx.memberId,
+      `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`,
+      { method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`) },
+    );
+    expect(firstVote.status).toBe(201);
+    expect((await firstVote.json() as ApprovalView).status).toBe('pending');
+
+    const active = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    expect(active.items.find((item) => item.id === proposed.request_id)).toMatchObject({
+      presentation: { hidden: false, hidden_at: null },
+      approval: { pending_for_viewer: true },
+    });
+    const hiddenList = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/requests?visibility=hidden`)
+    ).json());
+    expect(hiddenList.items.map((item) => item.id)).not.toContain(proposed.request_id);
+
+    const bootstrapResponse = await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/bootstrap`);
+    expect(bootstrapResponse.status).toBe(200);
+    const bootstrap = await bootstrapResponse.json() as {
+      agent: null;
+      counts: { inbox: number; pending_for_me: number };
+    };
+    expect(bootstrap.agent).toBeNull();
+    expect(bootstrap.counts).toMatchObject({ inbox: 1, pending_for_me: 1 });
+    const historyCounts = await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/history/counts`)
+    ).json() as { inbox: number };
+    expect(historyCounts.inbox).toBe(1);
+    const storedHiddenAt = await readTenant(fx.workspaceId, fx.secondReviewerUserId, async (client) => (
+      await client.query<{ hidden_at: Date | null }>(
+        `SELECT hidden_at FROM request_presentations WHERE request_id=$1 AND user_id=$2`,
+        [proposed.request_id, fx.secondReviewerUserId],
+      )
+    ).rows[0]?.hidden_at);
+    expect(storedHiddenAt).toBeInstanceOf(Date);
+  });
+
+  it('stores outreach as a draft-only review with no delivery effect', async () => {
+    await installOutreachDraftPolicy(fx);
     const proposed = await propose(fx, outreachDraft(fx), `proposal:${randomUUID()}`, 'partner-outreach-draft');
     expect(proposed.payload.approval_type).toBe('communication');
     if (proposed.payload.approval_type !== 'communication') throw new Error('fixture drift');
@@ -174,6 +240,55 @@ describe('enterprise approval policy and voting', () => {
     expect(proposed.effect).toMatchObject({
       kind: 'communication', status: 'not_required', reason: expect.stringContaining('does not send'),
     });
+  });
+
+  it('saves revised email copy and requires a fresh review of that exact draft', async () => {
+    await installOutreachDraftPolicy(fx);
+    const e = env();
+    const original = outreachDraft(fx);
+    const proposed = await propose(fx, original, `proposal:${randomUUID()}`, 'partner-outreach-draft');
+    const requestChanges = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS,
+      body: { ...decision(proposed, `vote:${randomUUID()}`, 'request_changes'), note: 'Make the invitation shorter.' },
+    });
+    expect(requestChanges.status).toBe(201);
+
+    const revised = {
+      ...original,
+      details: { ...original.details, subject: 'Build with Hermes', body: 'Hi Taylor,\n\nWould you like to explore the Hermes Partner Program?' },
+    };
+    const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/revisions`, {
+      method: 'POST', headers: INBOX_HEADERS,
+      body: {
+        expected_authorization_revision: proposed.payload.authorization.revision,
+        expected_authorization_hash: proposed.payload.authorization.hash,
+        idempotency_key: `revision:${randomUUID()}`, proposal: revised,
+        change_summary: 'Shortened the subject and invitation body.',
+      },
+    });
+    expect(response.status).toBe(201);
+    const current = await response.json() as ApprovalView;
+    expect(current.payload.authorization.revision).toBe(2);
+    expect(current.payload.authorization.hash).not.toBe(proposed.payload.authorization.hash);
+    expect(current.payload.details).toEqual(revised.details);
+    expect(current.payload.evidence).toEqual(original.evidence);
+    expect(current.votes).toHaveLength(0);
+    expect(current.status).toBe('pending');
+
+    const staleVote = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`),
+    });
+    expect(staleVote.status).toBe(409);
+    expect(await staleVote.json()).toMatchObject({ reason: 'stale_authorization' });
+
+    const freshVote = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(current, `vote:${randomUUID()}`),
+    });
+    expect(freshVote.status).toBe(201);
+    const approved = await freshVote.json() as ApprovalView;
+    expect(approved.status).toBe('approved');
+    expect(approved.payload.details).toEqual(revised.details);
+    expect(approved.effect).toMatchObject({ kind: 'communication', status: 'not_required' });
   });
 
   it('accepts only contact fields copied from stored verified partner evidence', async () => {
@@ -197,6 +312,23 @@ describe('enterprise approval policy and voting', () => {
          VALUES ($1,$2,'agentcash_people',$3,'Taylor Brooks','https://www.linkedin.com/in/taylor-brooks',
                  90,'[]','high','{}',$4,now(),now()) RETURNING id`,
         [fx.workspaceId, fx.agentId, `approval-contact:${randomUUID()}`, screening.rows[0]!.id],
+      );
+      const source = await client.query<{ id: string }>(
+        `INSERT INTO partner_source_artifacts
+           (workspace_id,run_id,source,artifact_key,kind,source_url,fetched_at,sha256,content)
+         VALUES ($1,$2,'agentcash_people',$3,'person_profile',
+                 'https://www.linkedin.com/in/taylor-brooks',now(),$4,$5::jsonb)
+         RETURNING id`,
+        [fx.workspaceId, screening.rows[0]!.id, `approval-contact-source:${randomUUID()}`, 'c'.repeat(64), JSON.stringify({
+          full_name: 'Taylor Brooks', headline: 'Hermes implementation consultant',
+        })],
+      );
+      await client.query(
+        `INSERT INTO partner_screening_run_candidates
+           (workspace_id,run_id,candidate_id,deterministic_priority,priority_breakdown,
+            confidence,evidence_gaps,artifact_ids)
+         VALUES ($1,$2,$3,90,'[]','high','{}',$4::uuid[])`,
+        [fx.workspaceId, screening.rows[0]!.id, candidate.rows[0]!.id, [source.rows[0]!.id]],
       );
       const run = await client.query<{ id: string }>(
         `INSERT INTO runs (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode)
@@ -225,10 +357,17 @@ describe('enterprise approval policy and voting', () => {
         }])],
       );
       await client.query('COMMIT');
-      return { candidateId: candidate.rows[0]!.id, enrichmentId: enrichment.rows[0]!.id };
+      return {
+        candidateId: candidate.rows[0]!.id,
+        enrichmentId: enrichment.rows[0]!.id,
+        sourceId: source.rows[0]!.id,
+      };
     });
     const proposal = outreachDraft(fx);
-    proposal.evidence.push({ id: seeded.enrichmentId, kind: 'artifact', label: 'Verified professional contact' });
+    proposal.evidence = [
+      { id: seeded.sourceId, kind: 'source', label: 'Stored professional evidence' },
+      { id: seeded.enrichmentId, kind: 'artifact', label: 'Verified professional contact' },
+    ];
     proposal.details.recipients = [{
       name: 'Taylor Brooks', address: 'taylor@example.com', candidate_id: seeded.candidateId,
       phone_numbers: [{ number: '+1 415 555 0100', type: 'mobile' }],
@@ -238,11 +377,373 @@ describe('enterprise approval policy and voting', () => {
     const accepted = await propose(fx, proposal, `proposal:${randomUUID()}`, policyKey);
     expect(accepted.payload.approval_type).toBe('communication');
 
+    const engagement = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ stage: string; request_id: string }>(
+        `SELECT stage, request_id FROM partner_engagements WHERE candidate_id=$1`,
+        [seeded.candidateId],
+      )).rows[0],
+    );
+    expect(engagement).toEqual({ stage: 'draft_pending', request_id: accepted.request_id });
+
+    const db = new PgAgentDb(env().env, fx.workspaceId, `engagement-${randomUUID()}`);
+    try {
+      expect(await db.listPartnerCandidates(fx.agentId, 0, 10)).toEqual([]);
+    } finally {
+      await db.close();
+    }
+
+    await expect(propose(fx, proposal, `proposal:${randomUUID()}`, policyKey)).rejects.toMatchObject({
+      reason: 'partner_candidate_already_engaged',
+    });
+
     const forged = structuredClone(proposal);
     forged.details.recipients[0]!.address = 'invented@example.net';
     await expect(propose(fx, forged, `proposal:${randomUUID()}`, policyKey)).rejects.toMatchObject({
       reason: 'invalid_partner_outreach_contact',
     });
+
+    const e = env();
+    const approved = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${accepted.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(accepted, `vote:${randomUUID()}`),
+    });
+    expect(approved.status).toBe(201);
+    const approvedStage = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ stage: string }>(
+        `SELECT stage FROM partner_engagements WHERE candidate_id=$1`,
+        [seeded.candidateId],
+      )).rows[0]?.stage,
+    );
+    expect(approvedStage).toBe('draft_approved');
+  });
+
+  it.each([
+    {
+      channel: 'People Search', source: 'agentcash_people', artifactKind: 'person_profile',
+      sourceUrl: 'https://www.linkedin.com/in/hermes-builder',
+      profileUrl: 'https://www.linkedin.com/in/hermes-builder', monetaryCostUsd: 0.15,
+      content: { full_name: 'Hermes Builder', headline: 'Hermes implementation consultant' },
+      fact: { label: 'Name', value: 'Hermes Builder' },
+    },
+    {
+      channel: 'LinkedIn/YouTube creator search', source: 'agentcash_creators', artifactKind: 'creator_content',
+      sourceUrl: 'https://www.youtube.com/watch?v=AbCdEfGhI12',
+      profileUrl: 'https://www.youtube.com/@hermesbuilder', monetaryCostUsd: 0.01,
+      content: { platform: 'youtube', creator_name: 'Hermes Builder', creator_profile_url: 'https://www.youtube.com/@hermesbuilder', excerpt: 'A public Hermes Agent implementation walkthrough.' },
+      fact: { label: 'Platform', value: 'youtube' },
+    },
+    {
+      channel: 'X creator search', source: 'agentcash_creators', artifactKind: 'creator_content',
+      sourceUrl: 'https://x.com/hermes_builder/status/1234567890',
+      profileUrl: 'https://x.com/hermes_builder', monetaryCostUsd: 0.005,
+      content: { platform: 'x', creator_name: 'Hermes Builder', creator_profile_url: 'https://x.com/hermes_builder', excerpt: 'A public Hermes Agent implementation walkthrough.' },
+      fact: { label: 'Platform', value: 'x' },
+    },
+  ])('accepts a cited $channel draft with an honest missing-contact state', async ({
+    channel, source: discoverySource, artifactKind, sourceUrl, profileUrl,
+    monetaryCostUsd, content, fact,
+  }) => {
+    const seeded = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const screening = await client.query<{ id: string }>(
+        `INSERT INTO partner_screening_runs
+           (workspace_id,agent_id,created_by,idempotency_key,status,source,authentication,
+            config_snapshot,api_requests_max,api_requests_used,agentcash_tool_call_id,
+            candidates_discovered,monetary_cost_usd,completed_at)
+         VALUES ($1,$2,$3,$4,'completed',$5,'wallet','{}',1,1,'channel-seed',1,$6,now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, fx.adminId, `approval-channel:${randomUUID()}`, discoverySource, monetaryCostUsd],
+      );
+      const source = await client.query<{ id: string }>(
+        `INSERT INTO partner_source_artifacts
+           (workspace_id,run_id,source,artifact_key,kind,source_url,fetched_at,sha256,content)
+         VALUES ($1,$2,$3,$4,$5,$6,now(),$7,$8::jsonb)
+         RETURNING id`,
+        [
+          fx.workspaceId, screening.rows[0]!.id, discoverySource,
+          `channel-source:${randomUUID()}`, artifactKind, sourceUrl,
+          'b'.repeat(64), JSON.stringify(content),
+        ],
+      );
+      const candidate = await client.query<{ id: string }>(
+        `INSERT INTO partner_candidates
+           (workspace_id,agent_id,source,source_key,display_name,profile_url,
+            deterministic_priority,priority_breakdown,confidence,evidence_gaps,
+            latest_run_id,first_seen_at,last_seen_at)
+         VALUES ($1,$2,$3,$4,'Hermes Builder',$5,
+                 80,'[]','medium',ARRAY['Professional email is not verified.'],$6,now(),now()) RETURNING id`,
+        [
+          fx.workspaceId, fx.agentId, discoverySource,
+          `channel-candidate:${randomUUID()}`, profileUrl, screening.rows[0]!.id,
+        ],
+      );
+      await client.query(
+        `INSERT INTO partner_screening_run_candidates
+           (workspace_id,run_id,candidate_id,deterministic_priority,priority_breakdown,
+            confidence,evidence_gaps,artifact_ids)
+         VALUES ($1,$2,$3,80,'[]','medium',ARRAY['Professional email is not verified.'],$4::uuid[])`,
+        [fx.workspaceId, screening.rows[0]!.id, candidate.rows[0]!.id, [source.rows[0]!.id]],
+      );
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode)
+         VALUES ($1,$2,$3,'working','deepseek-flash',$4,$5,'work') RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID()],
+      );
+      await client.query(
+        `INSERT INTO approval_policies
+          (workspace_id,key,version,approval_type,requester_agent_id,priority,mode,
+           prevent_self_review,steps)
+         VALUES ($1,$2,1,'communication',$3,1000000,'sequential',false,$4::jsonb)`,
+        [fx.workspaceId, `partner-outreach-draft-${fx.agentId}`, fx.agentId, JSON.stringify([{
+          id: 'owner-review', label: 'Review partner draft', order: 0,
+          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+        }])],
+      );
+      await client.query('COMMIT');
+      return {
+        candidateId: candidate.rows[0]!.id,
+        sourceId: source.rows[0]!.id,
+        runId: run.rows[0]!.id,
+      };
+    });
+
+    const proposal = outreachDraft(fx);
+    proposal.evidence = [{ id: seeded.sourceId, kind: 'source', label: `Stored ${channel} evidence` }];
+    proposal.details.recipients = [{
+      name: 'Hermes Builder', address: null, candidate_id: seeded.candidateId,
+      phone_numbers: [], social_profiles: [],
+    }];
+    const uncited = structuredClone(proposal);
+    uncited.evidence = [];
+    await expect(propose(
+      fx, uncited, `proposal:${randomUUID()}`, `partner-outreach-draft-${fx.agentId}`,
+    )).rejects.toMatchObject({ reason: 'invalid_partner_outreach_contact' });
+
+    const accepted = await withTenantTransaction(env().env, 'app', {
+      workspaceId: fx.workspaceId, userId: fx.adminId,
+    }, (tx) => proposeApproval(
+      {
+        tx, workspaceId: fx.workspaceId, jobs: [], agentId: fx.agentId,
+        userId: fx.adminId, sessionId: fx.sessionId, runId: seeded.runId,
+      },
+      {
+        label: proposal.summary, policy_key: `partner-outreach-draft-${fx.agentId}`,
+        proposal, target_agent_ids: [], target_member_ids: [], target_resource_ids: [],
+        dependent_request_ids: [], idempotency_key: `proposal:${randomUUID()}`,
+      },
+    ));
+    expect(accepted.payload.context.source).toMatchObject({
+      session_id: fx.sessionId, run_id: seeded.runId,
+    });
+    expect(accepted.payload.approval_type).toBe('communication');
+    if (accepted.payload.approval_type !== 'communication') throw new Error('fixture drift');
+    expect(accepted.payload.details.recipients).toEqual([{
+      name: 'Hermes Builder', address: null, candidate_id: seeded.candidateId,
+      phone_numbers: [], social_profiles: [],
+    }]);
+    expect(accepted.effect).toMatchObject({ kind: 'communication', status: 'not_required' });
+
+    const cited = await asUser(
+      env().env,
+      fx.adminId,
+      `/w/${fx.workspaceId}/requests/${accepted.request_id}/approval/evidence/${seeded.sourceId}`,
+    );
+    expect(cited.status).toBe(200);
+    expect(await cited.json()).toMatchObject({
+      kind: 'partner_source',
+      source_url: sourceUrl,
+      facts: expect.arrayContaining([fact]),
+    });
+
+    const forged = structuredClone(proposal);
+    forged.details.recipients[0]!.address = 'invented@example.net';
+    await expect(propose(
+      fx, forged, `proposal:${randomUUID()}`, `partner-outreach-draft-${fx.agentId}`,
+    )).rejects.toMatchObject({ reason: 'invalid_partner_outreach_contact' });
+  });
+
+  it('binds an approved partner email to one outbox row and sends only that approved revision', async () => {
+    const seeded = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const screening = await client.query<{ id: string }>(
+        `INSERT INTO partner_screening_runs
+           (workspace_id,agent_id,created_by,idempotency_key,status,source,authentication,
+            config_snapshot,api_requests_max,api_requests_used,agentcash_tool_call_id,
+            candidates_discovered,monetary_cost_usd,completed_at)
+         VALUES ($1,$2,$3,$4,'completed','agentcash_people','wallet','{}',1,1,'seed',1,0.15,now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, fx.adminId, `approval-send:${randomUUID()}`],
+      );
+      const candidate = await client.query<{ id: string }>(
+        `INSERT INTO partner_candidates
+           (workspace_id,agent_id,source,source_key,display_name,profile_url,
+            deterministic_priority,priority_breakdown,confidence,evidence_gaps,
+            latest_run_id,first_seen_at,last_seen_at)
+         VALUES ($1,$2,'agentcash_people',$3,'Jordan Lee','https://www.linkedin.com/in/jordan-lee',
+                 94,'[]','high','{}',$4,now(),now()) RETURNING id`,
+        [fx.workspaceId, fx.agentId, `approval-send:${randomUUID()}`, screening.rows[0]!.id],
+      );
+      const source = await client.query<{ id: string }>(
+        `INSERT INTO partner_source_artifacts
+           (workspace_id,run_id,source,artifact_key,kind,source_url,fetched_at,sha256,content)
+         VALUES ($1,$2,'agentcash_people',$3,'person_profile',
+                 'https://www.linkedin.com/in/jordan-lee',now(),$4,$5::jsonb)
+         RETURNING id`,
+        [fx.workspaceId, screening.rows[0]!.id, `approval-send-source:${randomUUID()}`, 'd'.repeat(64), JSON.stringify({
+          full_name: 'Jordan Lee', headline: 'Hermes partner lead',
+        })],
+      );
+      await client.query(
+        `INSERT INTO partner_screening_run_candidates
+           (workspace_id,run_id,candidate_id,deterministic_priority,priority_breakdown,
+            confidence,evidence_gaps,artifact_ids)
+         VALUES ($1,$2,$3,94,'[]','high','{}',$4::uuid[])`,
+        [fx.workspaceId, screening.rows[0]!.id, candidate.rows[0]!.id, [source.rows[0]!.id]],
+      );
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode)
+         VALUES ($1,$2,$3,'completed','deepseek-flash',$4,$5,'work') RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID()],
+      );
+      const enrichment = await client.query<{ id: string }>(
+        `INSERT INTO partner_contact_enrichments
+           (workspace_id,agent_id,candidate_id,run_id,runtime_run_id,status,contact_data,
+            preferred_email,verification_status,verification_checks,draft_eligible,
+            monetary_cost_usd,fetched_at,verified_at)
+         VALUES ($1,$2,$3,$4,$5,'completed',$6::jsonb,'jordan@example.com','valid',$7::jsonb,true,0.08,now(),now())
+         RETURNING id`,
+        [fx.workspaceId, fx.agentId, candidate.rows[0]!.id, run.rows[0]!.id, `run_${'e'.repeat(32)}`,
+          JSON.stringify({ professional_emails: ['jordan@example.com'], phones: [], social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/jordan-lee' }] }),
+          JSON.stringify({ regexp: true, mx_records: true, smtp_server: true, smtp_check: true, disposable: false, block: false })],
+      );
+      await client.query(
+        `INSERT INTO approval_policies
+          (workspace_id,key,version,approval_type,requester_agent_id,priority,mode,
+           prevent_self_review,steps)
+         VALUES ($1,$2,1,'communication',$3,1000000,'sequential',false,$4::jsonb)`,
+        [fx.workspaceId, `partner-outreach-send-${fx.agentId}`, fx.agentId, JSON.stringify([{
+          id: 'owner-review', label: 'Approve partner email', order: 0,
+          reviewers: [{ kind: 'member', member_id: fx.adminMemberId }], quorum: 1,
+        }])],
+      );
+      await client.query('COMMIT');
+      return {
+        candidateId: candidate.rows[0]!.id,
+        enrichmentId: enrichment.rows[0]!.id,
+        sourceId: source.rows[0]!.id,
+      };
+    });
+
+    const proposal = outreachDraft(fx);
+    proposal.summary = 'Approve a personalized partner invitation.';
+    proposal.consequence = 'Approval places this exact message in the outbound email queue.';
+    proposal.evidence = [
+      { id: seeded.sourceId, kind: 'source', label: 'Stored professional evidence' },
+      { id: seeded.enrichmentId, kind: 'artifact', label: 'Verified professional contact' },
+    ];
+    proposal.details.draft_only = false;
+    proposal.details.recipients = [{
+      name: 'Jordan Lee', address: 'jordan@example.com', candidate_id: seeded.candidateId,
+      phone_numbers: [], social_profiles: [{ network: 'linkedin', url: 'https://www.linkedin.com/in/jordan-lee' }],
+    }];
+    const proposed = await propose(
+      fx, proposal, `proposal:${randomUUID()}`, `partner-outreach-send-${fx.agentId}`,
+    );
+    expect(proposed.effect).toMatchObject({ kind: 'communication', status: 'waiting' });
+
+    const e = env();
+    const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`),
+    });
+    expect(response.status).toBe(201);
+
+    const persisted = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const outbox = await client.query<{
+        id: string; state: string; authorization_revision: number; authorization_hash: string;
+        sender_address: string; recipient_address: string; subject: string; body: string;
+      }>(`SELECT id,state,authorization_revision,authorization_hash,sender_address,
+                  recipient_address,subject,body
+             FROM outbound_email_outbox WHERE request_id=$1`, [proposed.request_id]);
+      const engagement = await client.query<{ stage: string }>(
+        `SELECT stage FROM partner_engagements WHERE request_id=$1`, [proposed.request_id],
+      );
+      return { outbox: outbox.rows, stage: engagement.rows[0]?.stage };
+    });
+    expect(persisted.outbox).toEqual([expect.objectContaining({
+      state: 'pending_connection',
+      authorization_revision: proposed.payload.authorization.revision,
+      authorization_hash: proposed.payload.authorization.hash,
+      sender_address: 'maya@example.test', recipient_address: 'jordan@example.com',
+      subject: 'Explore the Hermes Partner Program',
+      body: expect.stringContaining('Hermes Partner Program'),
+    })]);
+    expect(persisted.stage).toBe('pending_connection');
+
+    const sentRequests: Request[] = [];
+    const emailEnv = makeEnv({
+      KEK_V1: Buffer.alloc(32, 31).toString('base64'),
+      GMAIL_FETCHER: {
+        fetch: async (request: Request) => {
+          sentRequests.push(request.clone());
+          return new Response(JSON.stringify({ id: 'gmail-message-1', threadId: 'gmail-thread-1' }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        },
+      } as Fetcher,
+    }).env;
+    const outboxId = persisted.outbox[0]!.id;
+    await withTenantTransaction(
+      emailEnv,
+      'app',
+      { workspaceId: fx.workspaceId, userId: fx.adminId },
+      async (tx) => {
+        const account = await storeGmailAccount(tx, emailEnv, {
+          workspaceId: fx.workspaceId,
+          connectedBy: fx.adminId,
+          address: 'maya@example.test',
+          token: {
+            access_token: 'test-access-token',
+            refresh_token: 'test-refresh-token',
+            expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+            scope: 'https://www.googleapis.com/auth/gmail.send openid email',
+            token_type: 'Bearer',
+          },
+        });
+        await tx.query(
+          `UPDATE outbound_email_outbox SET account_id=$2,state='queued' WHERE id=$1`,
+          [outboxId, account.id],
+        );
+      },
+    );
+    await runOutboundEmailSendJob(emailEnv, {
+      id: randomUUID(), workspace_id: fx.workspaceId, kind: 'outbound_email_send',
+      key: `outbound-email:${outboxId}`, payload: { outbox_id: outboxId }, attempts: 1,
+    });
+
+    expect(sentRequests).toHaveLength(1);
+    const gmailRequest = sentRequests[0]!;
+    expect(gmailRequest.url).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages/send');
+    const gmailBody = await gmailRequest.json() as { raw: string };
+    const mime = Buffer.from(gmailBody.raw, 'base64url').toString('utf8');
+    expect(mime).toContain('From: maya@example.test');
+    expect(mime).toContain('jordan@example.com');
+    expect(mime).toContain('Subject: =?UTF-8?B?');
+
+    const sent = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const outbox = await client.query(
+        `SELECT state,provider_message_id,provider_thread_id,attempt_count FROM outbound_email_outbox WHERE id=$1`,
+        [outboxId],
+      );
+      const engagement = await client.query(`SELECT stage,last_outreach_at FROM partner_engagements WHERE request_id=$1`, [proposed.request_id]);
+      const approval = await client.query(`SELECT effect_status,work_status FROM approval_requests WHERE request_id=$1`, [proposed.request_id]);
+      return { outbox: outbox.rows[0], engagement: engagement.rows[0], approval: approval.rows[0] };
+    });
+    expect(sent.outbox).toMatchObject({
+      state: 'sent', provider_message_id: 'gmail-message-1', provider_thread_id: 'gmail-thread-1', attempt_count: 1,
+    });
+    expect(sent.engagement).toMatchObject({ stage: 'sent', last_outreach_at: expect.any(Date) });
+    expect(sent.approval).toEqual({ effect_status: 'executed', work_status: 'completed' });
   });
 
   it('requires two distinct current reviewers and prevents requester self-review', async () => {
@@ -364,7 +865,13 @@ describe('enterprise approval policy and voting', () => {
     expect(mineCounts).toMatchObject({ pending_for_me: 1, pending_for_others: 0 });
 
     const notMine = await asUser(e.env, fx.outsiderUserId, `/w/${fx.workspaceId}/bootstrap`);
-    const otherCounts = (await notMine.json() as { counts: { pending_for_me: number; pending_for_others: number } }).counts;
+    expect(notMine.status).toBe(200);
+    const otherBootstrap = await notMine.json() as {
+      agent: null;
+      counts: { pending_for_me: number; pending_for_others: number };
+    };
+    expect(otherBootstrap.agent).toBeNull();
+    const otherCounts = otherBootstrap.counts;
     expect(otherCounts).toMatchObject({ pending_for_me: 0, pending_for_others: 1 });
 
     await asUser(e.env, fx.memberId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
@@ -408,6 +915,49 @@ describe('enterprise approval policy and voting', () => {
         { label: 'Stopped run proposal', policy_key: 'run-plan-low', proposal: runPlan(fx), target_agent_ids: [], target_member_ids: [], target_resource_ids: [], dependent_request_ids: [], idempotency_key: `proposal:${randomUUID()}` },
       ),
     )).rejects.toMatchObject({ reason: 'invalid_source_run' });
+  });
+
+  it('preserves the derived session owner as creator for an agent proposal without userId', async () => {
+    const runId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `INSERT INTO runs
+          (id, workspace_id, session_id, agent_id, status, model_id, client_turn_id, trace_id, stop_requested)
+         VALUES ($1, $2, $3, $4, 'working', 'deepseek-flash', 'derived-owner-run', 'derived-owner-run', false)`,
+        [runId, fx.workspaceId, fx.sessionId, fx.agentId],
+      );
+      await c.query('COMMIT');
+    });
+    const proposed = await withTenantTransaction(env().env, 'app', {
+      workspaceId: fx.workspaceId, userId: fx.adminId,
+    }, (tx) => proposeApproval(
+      { tx, workspaceId: fx.workspaceId, jobs: [], agentId: fx.agentId, sessionId: fx.sessionId, runId },
+      {
+        label: 'Agent proposal with derived owner', policy_key: 'run-plan-low', proposal: runPlan(fx),
+        target_agent_ids: [], target_member_ids: [], target_resource_ids: [], dependent_request_ids: [],
+        idempotency_key: `proposal:${randomUUID()}`,
+      },
+    ));
+    expect(proposed.payload.context.requester.user_id).toBe(fx.adminId);
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const revision = (await c.query<{ created_by_type: string; created_by_user_id: string }>(
+        `SELECT created_by_type,created_by_user_id FROM approval_revisions
+          WHERE workspace_id=$1 AND request_id=$2 AND revision=1`,
+        [fx.workspaceId, proposed.request_id],
+      )).rows[0];
+      const audit = (await c.query<{ actor_type: string; actor_user_id: string }>(
+        `SELECT actor_type,actor_user_id FROM events
+          WHERE workspace_id=$1 AND request_id=$2 AND kind='approval.proposed'`,
+        [fx.workspaceId, proposed.request_id],
+      )).rows[0];
+      expect(revision).toEqual({ created_by_type: 'agent', created_by_user_id: fx.adminId });
+      expect(audit).toEqual({ actor_type: 'agent', actor_user_id: fx.adminId });
+      await c.query('ROLLBACK');
+    });
   });
 
   it('supersedes old votes and rejects stale revision-bound commands', async () => {
@@ -506,6 +1056,10 @@ describe('enterprise approval policy and voting', () => {
       'deliverable', 'data_disclosure', 'record_change', 'exception', 'agent_governance',
     ]);
     expect(views.every((view) => view.payload.illustrative)).toBe(true);
-    expect(views.filter((view) => view.effect.kind !== 'none').every((view) => view.effect.status === 'unavailable')).toBe(true);
+    expect(views.filter((view) => view.effect.kind !== 'none').every((view) =>
+      view.effect.kind === 'communication'
+        ? view.effect.status === 'waiting'
+        : view.effect.status === 'unavailable',
+    )).toBe(true);
   });
 });

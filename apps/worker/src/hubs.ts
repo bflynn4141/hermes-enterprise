@@ -38,7 +38,14 @@ export interface HubEvent {
   readonly id: string;
   readonly session_id: string | null;
   readonly kind: string;
+  /** Delivery-only request audience. Removed before the browser sees it. */
+  readonly audience_user_ids?: readonly string[];
   readonly [extra: string]: unknown;
+}
+
+function clientEvent(event: HubEvent): Omit<HubEvent, 'audience_user_ids'> {
+  const { audience_user_ids: _audience, ...visible } = event;
+  return visible;
 }
 
 abstract class Hub<T extends Env = Env> extends DurableObject<T> {
@@ -94,7 +101,7 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
       }
       const visible = events.filter((e) => this.maySee(attachment, e));
       if (visible.length === 0) continue;
-      socket.send(JSON.stringify({ type: 'events', events: visible }));
+      socket.send(JSON.stringify({ type: 'events', events: visible.map(clientEvent) }));
       delivered += visible.length;
     }
     return { delivered, lastId: events.at(-1)?.id ?? null };
@@ -111,7 +118,7 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
         socket.close(4401, 'authorization expired');
         continue;
       }
-      if (!this.maySee(attachment, { session_id: sessionId })) continue;
+      if (!this.maySee(attachment, { id: 'transient', kind: 'message.preview', session_id: sessionId })) continue;
       socket.send(JSON.stringify(frame));
       delivered += 1;
     }
@@ -186,7 +193,7 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
     ws.send(JSON.stringify({ type: 'ticket.accepted', authorized_until: authorizedUntil }));
   }
 
-  protected abstract maySee(attachment: SocketAttachment, event: { session_id: string | null }): boolean;
+  protected abstract maySee(attachment: SocketAttachment, event: HubEvent): boolean;
 
   override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): void {
     void code;
@@ -201,7 +208,7 @@ abstract class Hub<T extends Env = Env> extends DurableObject<T> {
  * owner and to holders of a share on it.
  */
 export class SessionHub extends Hub {
-  protected override maySee(attachment: SocketAttachment, event: { session_id: string | null }): boolean {
+  protected override maySee(attachment: SocketAttachment, event: HubEvent): boolean {
     return attachment.sessionId !== null && attachment.sessionId === event.session_id;
   }
 
@@ -250,7 +257,7 @@ export class SessionHub extends Hub {
  * `entity.updated` to every member.
  */
 export class WorkspaceHub extends Hub {
-  protected override maySee(): boolean {
-    return true;
+  protected override maySee(attachment: SocketAttachment, event: HubEvent): boolean {
+    return event.audience_user_ids === undefined || event.audience_user_ids.includes(attachment.userId);
   }
 }

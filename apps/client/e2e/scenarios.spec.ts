@@ -11,6 +11,7 @@
 // need the worker: they assert what the *server* does. They are listed in the
 // spec and land with the M2 routes; `E2E_BASE_URL` points this config at them.
 import { expect, test } from '@playwright/test';
+import { mockUuid } from '@hermes/shared';
 
 const EMPTY_WORKSPACE = '/?data=empty&key=none';
 const SEEDED = '/';
@@ -151,19 +152,24 @@ test.describe('members write feedback', () => {
     const app = page.getByRole('region', { name: 'Application' });
 
     await app.getByRole('tab', { name: 'Invitations' }).click();
-    await app.getByRole('button', { name: 'Resend' }).click();
-    await expect(app.getByRole('alert')).toHaveText('Could not resend that invitation. Try again.');
+    const lena = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
+    await lena.getByRole('button', { name: 'Resend' }).click();
+    await expect(app.getByRole('alert')).toHaveText(
+      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+    );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
-    await app.getByRole('button', { name: 'Withdraw' }).click();
+    await lena.getByRole('button', { name: 'Cancel' }).click();
     await expect(app.getByRole('alert')).toHaveText('Could not withdraw that invitation. Try again.');
 
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     const email = invite.getByRole('textbox', { name: 'Work email' });
     await email.fill('new.member@example.com');
-    await invite.getByRole('button', { name: 'Invite' }).click();
-    await expect(invite.getByRole('alert')).toHaveText('Could not send that invitation. Check the address and try again.');
+    await invite.getByRole('button', { name: 'Send invitation' }).click();
+    await expect(invite.getByRole('alert')).toHaveText(
+      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+    );
     await expect(email).toHaveValue('new.member@example.com');
     await invite.getByRole('button', { name: 'Cancel' }).click();
 
@@ -179,18 +185,96 @@ test.describe('members write feedback', () => {
     await expect(manage).toBeVisible();
   });
 
-  test('a successful invite appears in the Invitations tab', async ({ page }) => {
+  test('flag-off legacy delivery has truthful copy and queues the invitation', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Members', exact: true }).click();
     const app = page.getByRole('region', { name: 'Application' });
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
+    await expect(invite.getByText('Job role')).toHaveCount(0);
+    await expect(invite.getByText('Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
-    await invite.getByRole('button', { name: 'Invite' }).click();
+    await invite.getByRole('button', { name: 'Send invitation' }).click();
 
     await expect(invite).toHaveCount(0);
     await expect(app.getByText('new.member@example.com')).toBeVisible();
-    await expect(app.getByText('Invitation sent')).toBeVisible();
+    await expect(app.getByText('Invitation queued')).toBeVisible();
+    const created = app.getByRole('listitem').filter({ hasText: 'new.member@example.com' });
+    await expect(created.getByText('Email delivery queued')).toBeVisible();
+    await expect(created.getByText('Setting up agent')).toHaveCount(0);
+  });
+
+  test('flag-on setup uses advertised roles without queuing email at creation', async ({ page }) => {
+    await page.goto('/?memberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const invite = page.getByRole('dialog', { name: 'Invite member' });
+    await expect(invite.getByText('Job role')).toBeVisible();
+    await expect(invite.getByRole('option', { name: 'Partnerships' })).toHaveCount(1);
+    await expect(invite.getByRole('option', { name: 'Finance' })).toHaveCount(0);
+    await invite.getByRole('combobox').selectOption('partnerships-agent');
+    await expect(invite.getByRole('combobox')).toHaveValue('partnerships-agent');
+    await expect(invite.getByText('Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.')).toBeVisible();
+    await invite.getByRole('textbox', { name: 'Work email' }).fill('partnerships.setup@example.com');
+    await invite.getByRole('button', { name: 'Start setup' }).click();
+
+    await expect(invite).toHaveCount(0);
+    await expect(app.getByText('Agent setup started')).toBeVisible();
+    const created = app.getByRole('listitem').filter({ hasText: 'partnerships.setup@example.com' });
+    await expect(created.getByText('Setting up agent').first()).toBeVisible();
+    await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
+    await expect(created.getByText('Partnerships', { exact: true })).toBeVisible();
+    await expect(created.getByText('Email delivery queued')).toHaveCount(0);
+  });
+
+  test('flag-off existing setup is shown as paused and remains cancellable', async ({ page }) => {
+    await page.goto('/?pausedMemberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    const card = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
+    await expect(card.getByText('Setup paused')).toBeVisible();
+    await expect(card.getByText('Setup is paused. You can cancel this invitation or wait for setup to resume.')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(card.getByText('Setting up agent')).toHaveCount(0);
+  });
+
+  test('invitation cards fit desktop and phone layouts', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/?memberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Invite member' });
+    await dialog.getByRole('textbox', { name: 'Work email' }).fill('design.check@example.com');
+    await dialog.getByRole('button', { name: 'Start setup' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(app.getByText('Agent setup started')).toHaveCount(0, { timeout: 3_000 });
+    const cards = app.locator('.member-card-list');
+    await expect(cards.getByRole('listitem')).toHaveCount(2);
+    await expect(cards.getByText('Setting up agent').first()).toBeVisible();
+    let layout = await cards.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    await page.screenshot({ path: testInfo.outputPath('members-desktop.png'), fullPage: true });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const showApp = page.locator('.pane-iris').getByRole('button', { name: 'App', exact: true });
+    if (await showApp.isVisible()) await showApp.click();
+    await expect(app).toHaveAttribute('data-active', 'true');
+    layout = await cards.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    const card = cards.getByRole('listitem').first();
+    const bounds = await card.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    for (const button of await card.getByRole('button').all()) {
+      const buttonBounds = await button.boundingBox();
+      expect(buttonBounds?.height ?? 0).toBeGreaterThanOrEqual(42);
+    }
+    await page.screenshot({ path: testInfo.outputPath('members-mobile.png'), fullPage: true });
   });
 });
 
@@ -217,13 +301,25 @@ test.describe('P2 · triage', () => {
     // card above it now — two places, deliberately, and one of them is the
     // list this assertion is about.
     const needsYou = appPane.getByRole('list', { name: 'Requests that need you' });
-    await expect(needsYou.getByRole('button', { name: /^Review/ })).toHaveCount(4);
+    await expect(needsYou.getByRole('button', { name: /^(Review|Approve .* draft)/ })).toHaveCount(4);
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
-    // Following: nothing the agent said moved the pane off Overview.
-    await expect(appPane.getByText('Iris / Overview')).toBeVisible();
-    await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
+    // Following: nothing the agent said moved the pane off Overview. The
+    // Agents surface has one header, so content begins directly below it and
+    // the follow control stays with the surviving breadcrumb.
+    const appHeader = appPane.locator('.pane-header');
+    await expect(appHeader.getByText('Agents', { exact: true })).toBeVisible();
+    await expect(appHeader.getByText('Iris', { exact: true })).toBeVisible();
+    await expect(appHeader.getByRole('button', { name: 'Following Iris', exact: true })).toBeVisible();
+    await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
+    await expect(appPane.getByText('Iris / Overview', { exact: true })).toHaveCount(0);
+    const headerLayout = await appPane.evaluate((pane) => {
+      const header = pane.querySelector<HTMLElement>('.pane-header')!;
+      const content = pane.querySelector<HTMLElement>('.object-view')!;
+      return { headerBottom: header.getBoundingClientRect().bottom, contentTop: content.getBoundingClientRect().top };
+    });
+    expect(Math.abs(headerLayout.contentTop - headerLayout.headerBottom)).toBeLessThanOrEqual(1);
 
     // The Inbox badge agrees with the list.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('4');
@@ -232,9 +328,24 @@ test.describe('P2 · triage', () => {
   test('a manual navigation pins the view, and Follow returns it', async ({ page }) => {
     await page.goto(SEEDED);
     const appPane = page.getByRole('region', { name: 'Application' });
-    await appPane.getByRole('tab', { name: 'Skills' }).click();
-    await expect(appPane.getByText('View pinned')).toBeVisible();
-    await appPane.getByRole('button', { name: /^Follow / }).click();
+    await expect(appPane.locator('.agent-tabs-navigation')).toBeVisible();
+    const sections = appPane.getByRole('combobox', { name: 'Agent view' });
+    if (await sections.isVisible()) await sections.selectOption('skills');
+    else await appPane.getByRole('tab', { name: 'Skills' }).click();
+    const appHeader = appPane.locator('.pane-header');
+    await expect(appHeader.getByText('View pinned')).toBeVisible();
+    await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const showApp = page.locator('.pane-iris').getByRole('button', { name: 'App', exact: true });
+    if (await showApp.isVisible()) await showApp.click();
+    await expect(appPane).toHaveAttribute('data-active', 'true');
+    await expect(appHeader.getByText('View pinned')).toBeHidden();
+    await expect(appHeader.getByRole('button', { name: 'Follow Iris', exact: true })).toBeVisible();
+    const headerWidth = await appHeader.evaluate((header) => ({ client: header.clientWidth, scroll: header.scrollWidth }));
+    expect(headerWidth.scroll).toBeLessThanOrEqual(headerWidth.client);
+
+    await appHeader.getByRole('button', { name: /^Follow / }).click();
     await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
   });
 });
@@ -261,6 +372,8 @@ test.describe('P3 · review and admit', () => {
     // The receipt replaces the review, and it is honest about what is pending.
     await expect(appPane.getByText('Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.')).toBeVisible();
     await expect(appPane.getByText('What this implies')).toBeVisible();
+    // Legacy Execute must never appear as a successful external action control.
+    await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);
 
     // The badge came down by one, from the event rather than from a counter.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('3');
@@ -273,5 +386,34 @@ test.describe('P3 · review and admit', () => {
     await expect(appPane.getByText('Admin decision required')).toBeVisible();
     await expect(appPane.getByRole('button', { name: 'Admit' })).toHaveCount(0);
     await expect(appPane.getByText('You can read the request and its evidence. An Admin records the decision.')).toBeVisible();
+  });
+});
+
+
+test.describe('legacy document draft decisions', () => {
+  test('invoice approval saves a draft without a payment ceremony', async ({ page }) => {
+    await page.goto('/#inbox/request/00000000-0000-4000-8000-00000000000d');
+    const appPane = page.getByRole('region', { name: 'Application' });
+    await expect(appPane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
+    await expect(appPane.getByText('0 of 1 Admin approval', { exact: true })).toBeVisible();
+    await expect(appPane.getByText('No source messages linked.', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Review payment' })).toHaveCount(0);
+    await appPane.getByRole('button', { name: 'Approve invoice draft', exact: true }).click();
+    await expect(appPane.getByRole('heading', { name: 'Saved in Library', exact: true })).toBeVisible();
+    await expect(appPane.getByText('Invoice saved. No payment or email is sent.', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);
+  });
+
+  test('agreement review stays unsigned and members see who can approve', async ({ page }) => {
+    await page.goto('/?seat=member#inbox/request/00000000-0000-4000-8000-00000000000e');
+    const appPane = page.getByRole('region', { name: 'Application' });
+    await expect(appPane.getByText('0 of 1 Admin approval', { exact: true })).toBeVisible();
+    await expect(appPane.getByText('Admin required', { exact: true })).toBeVisible();
+    await expect(appPane.getByRole('button', { name: 'Approve agreement draft', exact: true })).toHaveCount(0);
+    await expect(appPane.getByRole('textbox', { name: 'Full legal name' })).toHaveCount(0);
+    await page.goto('/#inbox/request/00000000-0000-4000-8000-00000000000e');
+    await appPane.getByRole('button', { name: 'Approve agreement draft', exact: true }).click();
+    await expect(appPane.getByRole('heading', { name: 'Saved unsigned', exact: true })).toBeVisible();
+    await expect(appPane.getByText('Agreement saved unsigned. Nothing is signed or sent.', { exact: true })).toBeVisible();
   });
 });

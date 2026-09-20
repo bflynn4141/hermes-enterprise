@@ -126,6 +126,8 @@ export class FakeWorkOS implements WorkOSPort {
   readonly calls: { method: string; argument: unknown }[] = [];
   /** Set to make the next refresh fail the way WorkOS would. */
   refreshFailure: FakeWorkOSError | null = null;
+  /** Set to make invitation delivery fail after the local row commits. */
+  invitationFailure: FakeWorkOSError | null = null;
   /** The code `/auth/callback` will be given, and who it resolves to. */
   pendingCode: { code: string; userId: string; organizationId: string | null; sid: string } | null = null;
 
@@ -261,6 +263,7 @@ export class FakeWorkOS implements WorkOSPort {
     expiresInDays?: number;
   }): Promise<WorkOSInvitation> {
     this.calls.push({ method: 'sendInvitation', argument: options });
+    if (this.invitationFailure) throw this.invitationFailure;
     const invitation: WorkOSInvitation = {
       id: `invitation_${crypto.randomUUID().slice(0, 8)}`,
       email: options.email,
@@ -274,6 +277,7 @@ export class FakeWorkOS implements WorkOSPort {
 
   resendInvitation(invitationId: string): Promise<WorkOSInvitation> {
     this.calls.push({ method: 'resendInvitation', argument: invitationId });
+    if (this.invitationFailure) throw this.invitationFailure;
     const existing = this.invitations.find((invitation) => invitation.id === invitationId);
     const invitation: WorkOSInvitation = {
       id: `invitation_${crypto.randomUUID().slice(0, 8)}`,

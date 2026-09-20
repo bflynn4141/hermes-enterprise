@@ -1,7 +1,7 @@
 # Official Hermes Agent runtime
 
 Hermes Enterprise now has an execution adapter for the official Nous runtime,
-pinned to `5d59366010640c1d6b8f170d8a4ee109db2bbdef` (package 0.21.3).
+pinned to `345cd2b057a452236de401d3534b8502a7465e8d` (package 0.21.3).
 The Worker remains the enterprise control plane and system of record.
 
 ## Identity and state
@@ -49,6 +49,15 @@ frame limit. Each lane has at most one delivery in flight. Received response
 text is capped at 4 Mi code units; queued tool/activity operations are capped at
 256. Exceeding a bound fails explicitly and preserves received partial output.
 
+For Hermes Cloud bindings, the long-lived connector hop is a conventional GET
+SSE response on the same exact service-authenticated `/control` path used by
+POST control operations. It commits headers with an immediate SSE comment,
+asks intermediaries for identity encoding, and relays one complete native frame
+per ASGI body write. This removes POST-response and compression thresholds from
+the first-delta path without widening the connector's host, path or operation
+allowlist. The legacy POST `events` envelope remains temporarily drainable by
+an older Worker.
+
 Tool activity and control reads serialize whole operations on the main database
 client; production delta checkpoints use their existing dedicated connection.
 Native completion wakes status reconciliation. If status wins the race, the
@@ -72,8 +81,10 @@ not create a native replay journal or hide model latency with artificial typing.
 
 The official runtime loads a narrow enterprise plugin. The plugin also registers
 reviewed, read-only enterprise skills. The Worker returns an agent-scoped
-non-secret skill manifest before startup; selected packages are loaded through
-Hermes's native `skills.auto_load` and configured through `skills.config`. It
+non-secret skill manifest before startup; the plugin verifies the assigned
+package bytes against it and pins that text into every new session's system
+prompt through Hermes's plugin prompt-section API (the pinned 0.21.3 release has
+no `skills.auto_load`). Non-secret values travel in `skills.config`. It
 gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
@@ -97,8 +108,8 @@ native API.
 See [the runtime launcher](../runtime/hermes/README.md) for install, start,
 configuration and source-contract checks. Enable `AGENT_RUNTIME=hermes` and
 provide `HERMES_BRIDGE_SECRET`; `HERMES_RUNTIME_AGENTS` contains fixed profiles
-and the permanent identities of unclaimed warm-pool profiles. After acceptance,
-invitee profiles resolve from encrypted dynamic bindings. Missing bindings fail
+only. Unclaimed warm-pool identities use discovery grants and verified capacity;
+after acceptance, invitee profiles resolve from encrypted dynamic bindings. Missing bindings fail
 explicitly; there is no silent fallback to a chat loop.
 Bindings default to `"release_ring":"stable"`. A dedicated rollout profile may
 declare `"release_ring":"canary"` only when its launcher also sets
@@ -177,9 +188,9 @@ are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before
 opening this execution path to hosted customer data. Dedicated profiles remove
-the general bundled-skill catalog and can auto-load only reviewed plugin packages;
-the only native skill tool retained is `skill_view`, restricted by the plugin to
-the assigned package because official auto-load is gated on a skills tool. Skill
+the general bundled-skill catalog; the plugin pins only the reviewed, assigned
+package into each new session's prompt. The only native skill tool retained is
+`skill_view`, restricted by the plugin to the assigned package. Skill
 listing, creation and self-editing remain disabled. See
 [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md). Hermesmail remains
 a concept address, not a provisioned mailbox.
@@ -237,21 +248,31 @@ approvals, audit data, model credentials, and the reverse tool/model bridge. It
 must not proxy a developer laptop or impersonate the agent runtime. A Cloud
 instance binds to the Worker through the reviewed `enterprise_bridge` plugin.
 The plugin contributes one fixed service-authenticated dashboard endpoint. It
-accepts only capabilities, submit, status, events, stop and steer operations,
-then forwards them to the loopback API Server with the native key. It is not an
-arbitrary path proxy. `HERMES_RUNTIME_AGENTS` records the endpoint with
+accepts only capabilities, submit, status, events, stop and steer operations.
+Control operations use POST; the event stream uses GET with a validated
+`run_id` query on that same exact path, then forwards to the loopback API Server
+with the native key. It is not an arbitrary path proxy.
+`HERMES_RUNTIME_AGENTS` records an existing fixed profile endpoint with
 `transport: "dashboard_connector"` and the separate per-agent control secret.
 The native `API_SERVER_KEY` never leaves Hermes Cloud.
 
-Fixed and unclaimed invitee profiles are declared in `HERMES_RUNTIME_AGENTS`.
-Invitee profiles use `hermes_cloud_capacity` for reservation and one-time
-assignment, then `agent_runtime_bindings` for execution. Pool and runtime
-control secrets are envelope-encrypted. Registration is the only readiness
-gate: it verifies the permanent identity, durable connector, plugin, dedicated
-AgentCash wallet, and cron policy before the row can become `available`.
-Acceptance marks the new binding ready in the same transaction. Database
-uniqueness prevents one Cloud agent, permanent agent ID, or connector from
-appearing in two pool entries. Assigned capacity is never returned to the pool;
+Existing fixed profiles remain in the opaque `HERMES_RUNTIME_AGENTS` map.
+Unclaimed invitee profiles are not added to that deployment variable. They use
+a one-time discovery credential, `hermes_cloud_capacity` for reservation and
+`agent_runtime_bindings` for execution. Connector control secrets are
+envelope-encrypted; discovery and assigned runtime bearers are stored only as
+workspace-and-agent-scoped SHA-256 digests.
+
+Registration verifies the permanent identity, clean Enterprise origin,
+durable connector, exact native and plugin source identity, P1.7 artifact and
+content, complete tool inventory, dedicated AgentCash wallet, and disabled cron
+before capacity becomes `available`. Invitation acceptance performs a new live
+connector probe outside the database transaction, then locks and rechecks the
+same invitation, capacity, grant, identity and assignment snapshot before it
+promotes the digest binding. The database records the actual probe completion
+time; it never manufactures readiness from a stored row. A revoked or drifted
+grant quarantines capacity, and an Admin must withdraw an invitation before
+revoking its reserved grant. Assigned capacity is never returned to the pool;
 retirement requires destroying or securely wiping its persistent state outside
 this application.
 
@@ -260,20 +281,38 @@ this application.
 An operator first configures a paid Cloud instance and dedicated AgentCash
 wallet, installs the reviewed Enterprise bridge, disables native cron, and
 starts the instance with its permanent Enterprise workspace and agent identities.
-A recently authenticated workspace Admin then calls
+A recently authenticated workspace Admin opens Runtime pools and prepares a
+credential for that unused permanent agent UUID. Enterprise generates the
+64-hex discovery bearer and displays it once. Its prepared form expires after
+24 hours and authorizes only `GET /skills` and `GET /tools`; linking verified
+capacity removes the expiry until assignment or revocation.
+
+The operator copies that discovery bearer into the managed native initializer.
+It is distinct from the connector control secret already provisioned in Cloud.
+The Admin then registers the existing instance through
 `POST /w/:workspace/admin/hermes-capacity` with the Cloud agent ID, instance
-name, clean HTTPS connector URL, connector control secret, and preflight agent
-ID. The route checks connector capabilities, exact
-workspace and preflight identities, plugin version, AgentCash enablement,
-wallet presence, and cron policy before inserting `available` capacity. It
-stores the control secret only as a workspace-KEK envelope and rejects duplicate
-Cloud agents or connector URLs. This operation registers existing capacity; it
-does not create an instance or fund a wallet.
+name, clean HTTPS connector URL, existing connector control secret, preflight
+agent ID and discovery grant ID. The response and every grant response are
+`no-store`. Enterprise never displays, imports or changes the native
+`API_SERVER_KEY`.
+
+The route checks connector capabilities and the complete live attestation
+before inserting `available` capacity. It stores the connector control secret
+only as a workspace-KEK envelope and rejects an identity already present in
+agents, runtime bindings or capacity, as well as duplicate Cloud agents and
+connector URLs. This operation registers existing capacity; it does not create
+an instance, install a plugin, call a paid API or fund a wallet.
 
 Set `AGENT_RUNTIME=hermes`, `HERMES_POOL_LOW_CAPACITY_THRESHOLD`,
-`HERMES_BRIDGE_SECRET`, the workspace KEK, and an exact
-`HERMES_RUNTIME_AGENTS` entry for each fixed or unclaimed pool profile in every
-deployed environment. A dated internal warning is emitted when available
+`HERMES_BRIDGE_SECRET`, `HERMES_ENTERPRISE_PUBLIC_URL`, the workspace KEK, and
+the reviewed `HERMES_ENTERPRISE_PLUGIN_REVISION` (40 lowercase hex) and
+`HERMES_ENTERPRISE_PLUGIN_SHA256` (`sha256:` plus 64 lowercase hex) in every
+deployed environment. Keep only existing fixed profiles in
+`HERMES_RUNTIME_AGENTS`; do not rewrite its opaque live credentials while
+adding pool capacity. Health fails closed when either reviewed plugin value is
+missing or malformed. The final values come from the reviewed native plugin
+commit and deterministic installed-tree build, and must match the values used
+by that Cloud profile. A dated internal warning is emitted when available
 capacity reaches the threshold.
 
 The official image can persist user-managed plugins, skills and configuration

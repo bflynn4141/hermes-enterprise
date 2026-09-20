@@ -22,11 +22,28 @@ WORKOS_ISSUER=""
 # registered as a redirect URI in the WorkOS dashboard, exactly.
 WORKOS_REDIRECT_URI=""
 
+# --- TypeSafe Jev Inbox classifier ------------------------------------------
+# Needed only when INBOX_TRIAGE_MODE is shadow or active.
+TYPESAFE_API_KEY=""
+
 # --- Slack workspace channel -------------------------------------------------
 # Create one granular-permissions Slack app from docs/slack-app-manifest.yaml.
 # The redirect URI and Events API Request URL must exactly match the public
 # Worker origin. Leave disabled to render the truthful unconfigured state.
 SLACK_ENABLED="0"
+GMAIL_OUTREACH_ENABLED="0"
+# GMAIL_CLIENT_ID=""
+# GMAIL_CLIENT_SECRET=""
+# GMAIL_STATE_SECRET=""
+# GMAIL_REDIRECT_URI="http://localhost:8787/integrations/gmail/oauth/callback"
+
+# Optional selected-thread evidence intake. Use a separate Google OAuth client;
+# never reuse the outreach sender client or its secret.
+GMAIL_EVIDENCE_ENABLED="0"
+# GMAIL_EVIDENCE_CLIENT_ID="...apps.googleusercontent.com"
+# GMAIL_EVIDENCE_CLIENT_SECRET="..."
+# GMAIL_EVIDENCE_STATE_SECRET="replace-with-at-least-32-random-characters"
+# GMAIL_EVIDENCE_REDIRECT_URI="http://localhost:8787/integrations/gmail-evidence/oauth/callback"
 SLACK_CLIENT_ID=""
 SLACK_CLIENT_SECRET=""
 SLACK_SIGNING_SECRET=""
@@ -101,6 +118,11 @@ R2_SECRET_ACCESS_KEY=""
 
 # --- Observability ------------------------------------------------------------
 SENTRY_DSN=""
+# Server-only Raindrop write key. Keep RAINDROP_OBSERVABILITY_MODE=off locally
+# unless testing the exporter against a dedicated development project.
+RAINDROP_WRITE_KEY=""
+# Optional when the write key is already scoped to the intended project.
+RAINDROP_PROJECT_ID=""
 
 # --- Switches (also set as plain vars per environment in wrangler.jsonc) -------
 # fake: `x-dev-user` names a seeded user. workos: sealed cookie (M2).
@@ -109,6 +131,9 @@ AUTH_MODE="fake"
 MODEL_GATEWAY_MODE="off"
 # 1 refuses to create new Workflow instances; part of the engine-version runbook.
 ENGINE_PAUSED="0"
+# off | active. Staging is active in wrangler.jsonc but remains a no-op until
+# RAINDROP_WRITE_KEY is configured as a Worker secret.
+RAINDROP_OBSERVABILITY_MODE="off"
 
 # Official Hermes runtime. Fixed profiles and permanently pre-bound invitation
 # slots live in the deployment map. The application never creates, mutates or
@@ -118,3 +143,6 @@ ENGINE_PAUSED="0"
 HERMES_BRIDGE_SECRET=""
 HERMES_POOL_LOW_CAPACITY_THRESHOLD="1"
 HERMES_ENTERPRISE_PUBLIC_URL="https://staging.example.com"
+# Exact values produced and reviewed with the installed enterprise_bridge build.
+HERMES_ENTERPRISE_PLUGIN_REVISION=""
+HERMES_ENTERPRISE_PLUGIN_SHA256=""

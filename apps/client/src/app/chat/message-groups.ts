@@ -5,7 +5,7 @@ const isProviderTurn = (message: Message): boolean =>
   message.role === 'iris' && Boolean(message.run_id) && (message.kind == null || message.kind === 'progress');
 
 export const hasVisibleMessageContent = (message: Message): boolean =>
-  Boolean(message.heading?.trim() || message.text.trim() || message.blocks.length > 0 || message.incomplete);
+  Boolean(message.heading?.trim() || message.text.trim() || message.blocks.length > 0 || message.incomplete || message.status === 'incomplete');
 
 /** Keep visible finals until the transcript can render their replacement. */
 export function canReleaseRunStream(

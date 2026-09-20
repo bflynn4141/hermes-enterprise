@@ -21,7 +21,7 @@ function ago(ts: number): string {
   return `${Math.round(d / 86_400_000)}d`;
 }
 
-export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { open: boolean; onClose: () => void; anchorRef: RefObject<HTMLElement | null>; focusSearch: boolean }) {
+export function SessionsPopover({ open, onClose, anchorRef, focusSearch, readOnly = false }: { open: boolean; onClose: () => void; anchorRef: RefObject<HTMLElement | null>; focusSearch: boolean; readOnly?: boolean }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const adapter = useAdapter();
@@ -49,7 +49,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
       <div className="row">
         <span className="p-title">Sessions</span>
         <span className="grow" />
-        <button
+        {!readOnly && <button
           type="button"
           className="text-btn light"
           onClick={() => {
@@ -58,7 +58,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
           }}
         >
           + New session
-        </button>
+        </button>}
       </div>
       <div className="search">
         <Icon name="search" />
@@ -80,7 +80,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
           return (
             <div key={session.id} className={`session-row ${selected ? 'selected' : ''}`} role="listitem" aria-current={selected ? 'true' : undefined}>
               <Glass name="loop" size={22} className="s-icon" />
-              {renaming === session.id ? (
+              {!readOnly && renaming === session.id ? (
                 <input
                   className="grow"
                   value={title}
@@ -107,8 +107,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                   type="button"
                   className="sr-body"
                   onClick={() => {
-                    dispatch({ type: 'session/select', id: session.id });
-                    adapter.openSession(session.id);
+                    void adapter.activateSession(session.id).catch(() => undefined);
                     onClose();
                   }}
                 >
@@ -123,7 +122,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
               <span className="sr-when">
                 <span>{ago(session.lastActivity)}</span>
                 <span style={{ position: 'relative', display: 'inline-flex' }}>
-                  <button
+                  {!readOnly && <button
                     type="button"
                     className="icon-btn"
                     ref={(el) => {
@@ -134,7 +133,7 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
                     onClick={() => setMenuFor(menuFor === session.id ? null : session.id)}
                   >
                     <Icon name="more" size={16} />
-                  </button>
+                  </button>}
                   <Popover open={menuFor === session.id} onClose={() => setMenuFor(null)} anchorRef={anchorFor(session.id) as RefObject<HTMLElement | null>} className="menu" width={180} label="Session actions">
                     <MenuItem
                       small
@@ -182,19 +181,18 @@ export function SessionsPopover({ open, onClose, anchorRef, focusSearch }: { ope
         <div className="hermes-ui">
           <SearchList
             items={list.map((session) => session.title)}
-            labels={{ placeholder: 'Search sessions…', ariaLabel: 'Search sessions', emptyTitle: EMPTY.sessions, emptyHint: 'Start one from the composer.' }}
+            labels={{ placeholder: 'Search sessions…', ariaLabel: 'Search sessions', emptyTitle: EMPTY.sessions, emptyHint: readOnly ? 'No historical session matches.' : 'Start one from the composer.' }}
             onSelect={(item) => {
               const match = list.find((session) => session.title === item);
               if (match) {
-                dispatch({ type: 'session/select', id: match.id });
-                adapter.openSession(match.id);
+                void adapter.activateSession(match.id).catch(() => undefined);
                 onClose();
               }
             }}
           />
         </div>
       )}
-      <div className="p-meta">Archiving changes organization only; runs and approvals are unaffected.</div>
+      <div className="p-meta">{readOnly ? 'Historical sessions are available to read.' : 'Archiving changes organization only; runs and approvals are unaffected.'}</div>
     </Popover>
   );
 }

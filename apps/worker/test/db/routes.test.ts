@@ -7,6 +7,7 @@
 // so the SQL, the transaction and the authorization are the real ones; what the
 // workerd project covers instead is that the Worker boots in the real runtime
 // with the real bindings.
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import worker from '../../src/index.js';
 import type { Env } from '../../src/env.js';
@@ -49,7 +50,12 @@ describe('GET /w/:ws/bootstrap', () => {
       workspace: { id: string; settings: { default_model_id: string } };
       viewer: { role: string; reviewer_roles: string[] };
       agent: { id: string; name: string; email: string | null };
-      capabilities: { email_ingress: boolean; turn_attachments: boolean; automated_triggers: boolean };
+      capabilities: {
+        email_ingress: boolean;
+        turn_attachments: boolean;
+        automated_triggers: boolean;
+        member_invitations: { mode: string; role_templates: string[] };
+      };
       sessions: { id: string; agent_id: string }[];
       counts: Record<string, number>;
       heads: { session: string; workspace: string };
@@ -61,7 +67,12 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.viewer.role).toBe('admin');
     expect(body.viewer.reviewer_roles).toEqual(['access', 'finance']);
     expect(body.agent).toMatchObject({ id: fx.agentId, name: 'Iris', email: null });
-    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
+    expect(body.capabilities).toEqual({
+      email_ingress: false,
+      turn_attachments: true,
+      automated_triggers: false,
+      member_invitations: { mode: 'legacy_delivery', role_templates: [] },
+    });
     expect(body.sessions).toContainEqual(expect.objectContaining({ id: fx.sessionId, agent_id: fx.agentId }));
     expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0, pending_for_me: 0, pending_for_others: 0 });
     expect(body.heads).toEqual({ session: '0', workspace: '0' });
@@ -75,6 +86,81 @@ describe('GET /w/:ws/bootstrap', () => {
     expect(body.catalog.every((row) => row.enabled === false)).toBe(true);
     expect(body.catalog.map((row) => row.model_id)).toContain('nous:anthropic/claude-sonnet-5');
     for (const row of body.catalog) expect(row.model_id.startsWith('nous:')).toBe(true);
+  });
+
+  it('withholds Admin flags from a Member bootstrap while preserving ordinary settings', async () => {
+    const fx = await seedWorkspace();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `UPDATE workspace_settings
+            SET flags=$2::jsonb,daily_token_cap=1200,max_concurrent_runs=2,timezone='America/Los_Angeles'
+          WHERE workspace_id=$1`,
+        [fx.workspaceId, JSON.stringify({ feature_preview: true, fetch_url_allowlist: ['private.example'] })],
+      );
+      await c.query('COMMIT');
+    });
+
+    const member = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.memberId });
+    expect(member.status).toBe(200);
+    const memberBody = await member.json() as { workspace: { settings: Record<string, unknown> } };
+    expect(memberBody.workspace.settings).toMatchObject({
+      flags: {}, daily_token_cap: 1200, max_concurrent_runs: 2, timezone: 'America/Los_Angeles',
+    });
+    expect(JSON.stringify(memberBody)).not.toContain('private.example');
+
+    const admin = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.adminId });
+    expect(admin.status).toBe(200);
+    expect(await admin.json()).toMatchObject({ workspace: { settings: {
+      flags: { feature_preview: true },
+    } } });
+  });
+
+  it('selects only an accessible private agent and returns no agent when the viewer has none', async () => {
+    const fx = await seedWorkspace();
+    const memberAgentId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const { rows } = await c.query<{ id: string; user_id: string }>(
+        'SELECT id,user_id FROM members WHERE workspace_id=$1', [fx.workspaceId],
+      );
+      const adminMemberId = rows.find((row) => row.user_id === fx.adminId)!.id;
+      const memberMemberId = rows.find((row) => row.user_id === fx.memberId)!.id;
+      await c.query("UPDATE agents SET context_scope='private' WHERE id=$1", [fx.agentId]);
+      await c.query(
+        'INSERT INTO agent_owners(workspace_id,agent_id,member_id) VALUES($1,$2,$3)',
+        [fx.workspaceId, fx.agentId, adminMemberId],
+      );
+      await c.query(
+        `INSERT INTO agents(id,workspace_id,name,status,context_scope,responsibility)
+         VALUES($1,$2,'Member private agent','started','private','Private responsibility')`,
+        [memberAgentId, fx.workspaceId],
+      );
+      await c.query(
+        'INSERT INTO agent_owners(workspace_id,agent_id,member_id) VALUES($1,$2,$3)',
+        [fx.workspaceId, memberAgentId, memberMemberId],
+      );
+      await c.query('COMMIT');
+    });
+
+    const member = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.memberId });
+    expect(member.status).toBe(200);
+    expect(await member.json()).toMatchObject({ agent: { id: memberAgentId, name: 'Member private agent' } });
+    const admin = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.adminId });
+    expect(admin.status).toBe(200);
+    expect(await admin.json()).toMatchObject({ agent: { id: fx.agentId, name: 'Iris' } });
+
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query('DELETE FROM agent_owners WHERE workspace_id=$1 AND agent_id=$2', [fx.workspaceId, fx.agentId]);
+      await c.query('COMMIT');
+    });
+    const refused = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.adminId });
+    expect(refused.status).toBe(200);
+    expect(await refused.json()).toMatchObject({ agent: null });
   });
 
   it('refuses a caller who is not a member, without confirming the workspace exists', async () => {

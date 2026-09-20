@@ -1,3 +1,4 @@
+import { approvalReviewerLabel } from './approval-copy.js';
 // Selectors over the entity cache. They replace the demo's fixture selectors
 // (`pendingRequests`, `workspaceMembers`, `historyEvents`, …) one for one, so
 // the views that consume them did not change shape when the data source did.
@@ -95,25 +96,20 @@ export function hasVerifiedKey(state: AppState): { any: boolean; rejected: strin
 
 /** The status line under a request row, derived from the row, never stored. */
 export function requestStatusLabel(request: RequestEntity): string {
-  const payload = request.payload as { score?: number; total_minor?: number } | undefined;
-  const money = payload?.total_minor ? `$${(payload.total_minor / 100).toLocaleString('en-US')}` : '$1,200';
-  if (request.kind === 'approval' && request.approval) {
-    const projection = request.approval;
-    if (projection.pending_for_viewer) return 'Needs your decision';
-    if (projection.waiting_on_others) return projection.current_reviewer_names.length > 0 ? `Waiting for ${projection.current_reviewer_names.join(', ')}` : 'Waiting on others';
-    if (projection.authorization_status === 'approved' && projection.effect_status === 'unavailable') return 'Approved · Effect unavailable';
-    if (projection.authorization_status === 'approved') return `Approved · Work ${projection.work_status.replaceAll('_', ' ')}`;
-    return projection.authorization_status.replaceAll('_', ' ');
-  }
+  const payload = request.payload as { score?: number; total_minor?: number; currency?: string } | undefined;
+  const money = typeof payload?.total_minor === 'number' && payload.currency
+    ? `${payload.currency} ${(payload.total_minor / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : null;
+  if (request.kind === 'approval' && request.approval) return approvalReviewerLabel(request);
   switch (request.status) {
     case 'pending':
-      return request.kind === 'task' ? 'Ready to continue' : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? `${money} · Draft` : `${money} · Unsigned v1`;
+      return request.kind === 'task' ? 'Ready to continue' : request.kind === 'application' ? `${payload?.score ?? 0} / 100 · Awaiting your review` : request.kind === 'invoice' ? [money, 'Invoice draft'].filter(Boolean).join(' · ') : 'Agreement draft · Unsigned';
     case 'declined':
       return 'Declined · No message sent';
     case 'admitted':
       return 'Admitted · Access pending';
     case 'created':
-      return 'Created · Not sent · No money moved';
+      return 'Invoice draft created · Not sent · No money moved';
     case 'drafted':
       return 'Draft saved · Unsigned · Not sent';
     case 'approved':

@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
+import { DATABASE_URL_KEYS, isolatedTestEnvironment, resolveVitestTarget } from '../../scripts/test-db.mjs';
 
 // The Node projects import the Worker's own modules, which import the runtime's
 // built-in `cloudflare:*` modules. Node has no such modules, so they resolve to
@@ -9,6 +10,7 @@ import { defineConfig } from 'vitest/config';
 // project, where the real modules exist.
 const here = dirname(fileURLToPath(import.meta.url));
 const nodeAlias = {
+  '@hermes/shared': join(here, '../../packages/shared/src/index.ts'),
   'cloudflare:workers': join(here, 'test/stubs/cloudflare-workers.ts'),
   'cloudflare:workflows': join(here, 'test/stubs/cloudflare-workflows.ts'),
 };
@@ -23,34 +25,40 @@ const nodeAlias = {
 //           reading the same wrangler.jsonc a deploy uses. It reaches the same
 //           Docker Postgres through the local Hyperdrive connection strings.
 //
-// `hermes_test`, never `hermes` (decision C43). The db and worker projects both
-// write rows — workspaces, runs, decisions — and `hermes` is the database the
-// developer's own `wrangler dev` on :8787 is showing them. `pnpm db:test` and
-// `pnpm e2e:live` create and migrate `hermes_test`; a bare `vitest run` here
-// picks it up from these defaults rather than falling back to the dev database.
-const ci = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
-const database = ci ? (process.env.PGDATABASE ?? 'hermes') : 'hermes_test';
-const host = process.env.PGHOST ?? '127.0.0.1';
-const port = process.env.PGPORT ?? '5433';
+// DB-backed projects require either the narrow GitHub Actions service contract
+// or the local launcher's verified ownership manifest. Unit-only commands stay
+// Docker-free even though Vitest eagerly evaluates this whole config.
+const requestedProjects = process.argv.flatMap((argument, index, argv) => {
+  if (argument === '--project') return argv[index + 1] ? [argv[index + 1]!] : [];
+  if (argument.startsWith('--project=')) return [argument.slice('--project='.length)];
+  return [];
+});
+const needsDatabase = requestedProjects.length === 0
+  || requestedProjects.some((project) => project === 'db' || project === 'worker');
+const target = resolveVitestTarget(process.env, { needsDatabase });
+const database = target.database;
+const host = target.host;
+const port = target.port;
 const password = process.env.PGLOCALPASSWORD ?? 'localdev';
 const connection = (role: 'app' | 'agent'): string =>
   `postgres://${role}:${encodeURIComponent(password)}@${host}:${port}/${database}`;
 
-// `db-config.mjs` is imported later by the database test modules. Set this
-// before those imports so a bare local `vitest run` cannot fall back to its
-// developer-database default. CI's database is disposable and explicitly
-// named by the workflow, so it keeps that name.
-process.env.PGDATABASE = database;
+// `db-config.mjs` is imported later by database test modules. Set the already
+// verified explicit target before those imports; never replace it with a
+// global `hermes_test` default.
+for (const key of DATABASE_URL_KEYS) delete process.env[key];
+Object.assign(process.env, isolatedTestEnvironment({
+  ...process.env,
+  PGHOST: host,
+  PGPORT: port,
+  PGDATABASE: database,
+}));
 
-// Ignore inherited local-Hyperdrive URLs outside CI. A terminal used to start
-// the developer Worker may carry URLs for `hermes`; tests must not inherit
-// those into their workerd pool.
-const localApp = ci
-  ? (process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_APP ?? connection('app'))
-  : connection('app');
-const localAgent = ci
-  ? (process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_AGENT ?? connection('agent'))
-  : connection('agent');
+// Never inherit Hyperdrive URLs from a developer shell. Both local and GitHub
+// targets are explicit above, so the URLs are deterministically rebuilt from
+// that same verified host, port and database.
+const localApp = connection('app');
+const localAgent = connection('agent');
 
 // Wrangler resolves Hyperdrive's local connection strings from the environment
 // while it parses wrangler.jsonc, which happens before the pool applies its own

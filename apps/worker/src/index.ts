@@ -10,6 +10,7 @@
 // uploads routes and the `extract` consumer; M4 filled in the decision route,
 // the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
+import { getAgentPermissions, patchAgentPermissions, decideAgentOperation } from './routes/agent-permissions.js';
 import { withSentry } from '@sentry/cloudflare';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
@@ -19,6 +20,14 @@ import { authorizeAgentCashContact, authorizeAgentCashCreatorSearch, authorizeAg
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
+import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
+import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
+import {
+  getInboundEmailConnection,
+  gmailEvidenceOAuthCallback,
+  importGmailEvidenceThread,
+  startGmailEvidenceOAuth,
+} from './routes/inbound-email.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -32,7 +41,10 @@ import {
   listInstructions,
   listSkills,
   patchContextField,
+  saveInstruction,
 } from './routes/agent-config.js';
+import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
+import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
 import { KeyCryptoError } from './keys/envelope.js';
@@ -47,7 +59,12 @@ import {
   resendInvitation,
   withdrawInvitation,
 } from './routes/members.js';
-import { registerHermesCapacity } from './routes/hermes-capacity.js';
+import {
+  createRuntimeDiscoveryGrant,
+  listRuntimeDiscoveryGrants,
+  registerHermesCapacity,
+  revokeRuntimeDiscoveryGrant,
+} from './routes/hermes-capacity.js';
 import {
   archiveSession,
   clearMessageFeedback,
@@ -55,6 +72,7 @@ import {
   createShare,
   getDraft,
   getSessionRoute,
+  getSessionSnapshot,
   listMessages,
   listSessions,
   patchSession,
@@ -70,6 +88,18 @@ import {
   uploadAttachment,
 } from './routes/attachments.js';
 import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
+import { listLibrarySources } from './routes/library-sources.js';
+import {
+  createSharedIntelligenceAdminGoal,
+  createSharedIntelligenceProposal,
+  decideSharedIntelligenceAdminTriage,
+  getSharedIntelligenceAdmin,
+  getSharedIntelligence,
+  queueSharedIntelligence,
+  reassessSharedIntelligenceAdminTriage,
+  revokeSharedIntelligence,
+  submitSharedIntelligence,
+} from './routes/shared-intelligence.js';
 import {
   answerContext,
   createTurn,
@@ -87,6 +117,7 @@ import {
   createApprovalRevision,
   createApprovalRoute,
   getApprovalRoute,
+  getApprovalEvidenceRoute,
 } from './routes/approvals.js';
 import {
   createRequestNote,
@@ -94,6 +125,7 @@ import {
   listRequestDocuments,
   listRequestEffects,
   listRequests,
+  patchRequestPresentation,
 } from './routes/requests.js';
 import { executeEffect, listEffects } from './routes/effects.js';
 import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
@@ -117,6 +149,8 @@ import { sentryOptions } from './ops/sentry.js';
 import { sweepPlatformCounters } from './ops/instance-cap.js';
 import { runNightly } from './ops/nightly.js';
 import { sweepRuns } from './runs/sweep.js';
+import { getAgentRecovery, wakeAgent } from './routes/recovery.js';
+import { scheduleRunRecovery } from './runs/recovery.js';
 import { sessionSocket, workspaceSocket } from './routes/hubs.js';
 import { takeRefreshedCookie } from './auth/adapters.js';
 import { drainJobs, withWorkspaceTransaction } from './jobs.js';
@@ -140,6 +174,16 @@ import {
   startPartnerScreening,
 } from './routes/partner-screening.js';
 import { getAgentProvisioning, patchAgent, verifyAgentProvisioning } from './routes/agents.js';
+import {
+  configurePartnerWorkflowRoute,
+  correctPartnerInvoice,
+  createPartnerInvoiceIntake,
+  createPartnerInvoiceReviewHandoff,
+  getPartnerHandoffResultRoute,
+  getPartnerWorkflow,
+  proposePartnerEngagement,
+  setPartnerWorkflowAdmission,
+} from './routes/partner-workflow.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -208,7 +252,7 @@ app.onError((error, c) => {
   // most likely to have those two fields are objects that came *from* an
   // upstream: a parsed provider error body, a decoded JSON payload. A thrown
   // plain object is a bug, and a bug is a 500.
-  const carried = error as { status?: unknown; reason?: unknown; message?: string };
+  const carried = error as { status?: unknown; reason?: unknown; message?: string; traceId?: unknown };
   if (
     error instanceof Error &&
     typeof carried.status === 'number' &&
@@ -216,8 +260,12 @@ app.onError((error, c) => {
     carried.status <= 599 &&
     typeof carried.reason === 'string'
   ) {
+    const traceId = typeof carried.traceId === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(carried.traceId)
+      ? carried.traceId
+      : null;
     return c.json(
-      { error: carried.message ?? 'request failed', reason: carried.reason },
+      { error: carried.message ?? 'request failed', reason: carried.reason, ...(traceId ? { trace_id: traceId } : {}) },
       carried.status as 400,
     );
   }
@@ -276,6 +324,8 @@ app.post('/invitations/:token/accept', acceptInvitation);
 // is bound to a short-lived, single-use signed state row; Events API requests
 // are verified against the raw request bytes before JSON parsing.
 app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
+app.get('/integrations/gmail/oauth/callback', gmailOAuthCallback);
+app.get('/integrations/gmail-evidence/oauth/callback', gmailEvidenceOAuthCallback);
 app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
 // authorisation — and the only route in the system that answers without a
@@ -308,13 +358,22 @@ app.get('/w/:ws/integrations/slack', getSlackConnection);
 app.post('/w/:ws/integrations/slack/oauth/start', startSlackOAuth);
 app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
+app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
+app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
+app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
+app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
+app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
+app.get('/w/:ws/cloud/connection', getCloudConnection);
+app.post('/w/:ws/cloud/connection/start', startCloudConnection);
+app.get('/w/:ws/cloud/connection/callback', completeCloudConnection);
 app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
 // Sessions, and everything hanging off one.
 app.get('/w/:ws/sessions', listSessions);
 app.post('/w/:ws/sessions', createSession);
 app.get('/w/:ws/sessions/:id', getSessionRoute);
+app.get('/w/:ws/sessions/:id/snapshot', getSessionSnapshot);
 app.patch('/w/:ws/sessions/:id', patchSession);
 app.get('/w/:ws/sessions/:id/draft', getDraft);
 app.put('/w/:ws/sessions/:id/draft', putDraft);
@@ -334,6 +393,8 @@ app.get('/w/:ws/sessions/:id/runs/:runId', getRunRoute);
 app.post('/w/:ws/sessions/:id/runs/:runId/stop', stopRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/guide', guideRun);
 app.post('/w/:ws/sessions/:id/runs/:runId/retry', retryRun);
+app.get('/w/:ws/agents/:agentId/recovery', getAgentRecovery);
+app.post('/w/:ws/agents/:agentId/wake', wakeAgent);
 app.post('/w/:ws/sessions/:id/runs/:runId/queue', queueMessage);
 app.patch('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', editQueueItem);
 app.delete('/w/:ws/sessions/:id/runs/:runId/queue/:itemId', removeQueueItem);
@@ -350,6 +411,16 @@ app.get('/w/:ws/attachments/:id', getAttachment);
 app.delete('/w/:ws/attachments/:id', deleteAttachment);
 
 app.get('/w/:ws/files', listFiles);
+app.get('/w/:ws/library-sources', listLibrarySources);
+app.get('/w/:ws/shared-intelligence', getSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals', createSharedIntelligenceProposal);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/triage', queueSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/submit', submitSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/revoke', revokeSharedIntelligence);
+app.get('/w/:ws/admin/shared-intelligence', getSharedIntelligenceAdmin);
+app.post('/w/:ws/admin/shared-intelligence/goals', createSharedIntelligenceAdminGoal);
+app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/decision', decideSharedIntelligenceAdminTriage);
+app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/reassess', reassessSharedIntelligenceAdminTriage);
 app.post('/w/:ws/files', createFile);
 app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);
@@ -366,10 +437,12 @@ app.get('/w/:ws/requests', listRequests);
 app.get('/w/:ws/requests/:id', getRequest);
 app.post('/w/:ws/requests/:id/decisions', createDecision);
 app.get('/w/:ws/requests/:id/approval', getApprovalRoute);
+app.get('/w/:ws/requests/:id/approval/evidence/:evidenceId', getApprovalEvidenceRoute);
 app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
+app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
 
@@ -394,9 +467,9 @@ app.get('/w/:ws/documents/:id/versions', listDocumentVersions);
 app.post('/w/:ws/documents/:id/versions', createDocumentVersion);
 app.get('/w/:ws/documents/:id/render', getDocumentRender);
 
-// Usage and settings. Usage is readable by any member — they can already see
-// every run that produced the numbers — and the caps that govern it are
-// Admin-only to change. `DELETE /w/:ws` revokes access now and schedules the
+// Organization usage is Admin-only. Settings preserve member run defaults
+// and personal notifications while restricting workspace changes to Admins.
+// `DELETE /w/:ws` revokes access now and schedules the
 // destruction for seven days from now (src/workflows-long/workspace-deletion.ts).
 app.get('/w/:ws/usage', getUsage);
 app.get('/w/:ws/settings', getSettings);
@@ -415,6 +488,9 @@ app.post('/w/:ws/invitations', createInvitation);
 app.post('/w/:ws/invitations/:id/resend', resendInvitation);
 app.post('/w/:ws/invitations/:id/withdraw', withdrawInvitation);
 app.post('/w/:ws/admin/hermes-capacity', registerHermesCapacity);
+app.get('/w/:ws/admin/runtime-discovery-grants', listRuntimeDiscoveryGrants);
+app.post('/w/:ws/admin/runtime-discovery-grants', createRuntimeDiscoveryGrant);
+app.delete('/w/:ws/admin/runtime-discovery-grants/:grantId', revokeRuntimeDiscoveryGrant);
 
 // The Agent tab's own surfaces: the runs a person can read back, the skills the
 // agent has adopted, its instruction versions, and the context fields a human
@@ -423,14 +499,33 @@ app.post('/w/:ws/admin/hermes-capacity', registerHermesCapacity);
 app.get('/w/:ws/traces', listTraces);
 app.get('/w/:ws/traces/:runId', getTrace);
 app.get('/w/:ws/skills', listSkills);
+app.get('/w/:ws/agents/:agent/permissions', getAgentPermissions);
+app.patch('/w/:ws/agents/:agent/permissions', patchAgentPermissions);
+app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOperation);
 app.post('/w/:ws/skills', adoptSkill);
 app.post('/w/:ws/skills/:id/adopt', adoptSkill);
+app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);
+app.get('/w/:ws/agents/:agentId/skill-assignments/:id', getSkillAssignment);
+app.patch('/w/:ws/agents/:agentId/skill-assignments/:id', patchSkillAssignment);
+app.get('/w/:ws/partner-workflow', getPartnerWorkflow);
+app.post('/w/:ws/partner-workflow/configure', configurePartnerWorkflowRoute);
+app.post('/w/:ws/partner-workflow/invoice-review-handoffs', createPartnerInvoiceReviewHandoff);
+app.post('/w/:ws/partner-workflow/engagement-authorizations', proposePartnerEngagement);
+app.post('/w/:ws/partner-workflow/invoice-intakes', createPartnerInvoiceIntake);
+app.get('/w/:ws/partner-workflow/handoffs/:handoffId/result', getPartnerHandoffResultRoute);
+app.post('/w/:ws/partner-workflow/handoffs/:handoffId/corrections', correctPartnerInvoice);
+app.post('/w/:ws/partner-workflow/admission', setPartnerWorkflowAdmission);
 app.get('/w/:ws/instructions', listInstructions);
+app.post('/w/:ws/instructions', saveInstruction);
 app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
 app.post('/w/:ws/instructions/:id/save', acceptInstruction);
 app.post('/w/:ws/instructions/:id/discard', discardInstruction);
 app.delete('/w/:ws/instructions/:id', discardInstruction);
 app.get('/w/:ws/context-fields', listContextFields);
+app.get('/w/:ws/agents/:agentId/context-notes', listContextNotes);
+app.post('/w/:ws/agents/:agentId/context-notes', writeContextNote);
+app.patch('/w/:ws/agents/:agentId/context-notes/:noteId', writeContextNote);
+app.delete('/w/:ws/agents/:agentId/context-notes/:noteId', deleteContextNote);
 app.patch('/w/:ws/context-fields/:field', patchContextField);
 
 // The two socket upgrades. Authorisation happens here; the hub only holds the
@@ -543,6 +638,12 @@ const handler = {
         // Admission is separate from draining: the same minute may enqueue a
         // job after this pass, and the next minute will claim it. The durable
         // idempotency key makes overlapping Cron invocations harmless.
+        try {
+          const recovered = await scheduleRunRecovery(env);
+          console.log(JSON.stringify({ at: 'cron.run_recovery', ...recovered }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.run_recovery', ok: false, error: String(error) }));
+        }
         try {
           const automated = await enqueueAutomatedPartnerScreening(env, new Date(event.scheduledTime));
           console.log(JSON.stringify({ at: 'cron.partner_screening', ...automated }));

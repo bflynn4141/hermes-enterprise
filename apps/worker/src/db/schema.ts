@@ -197,6 +197,7 @@ export const agents = pgTable('agents', {
   name: text('name').notNull(),
   responsibility: text('responsibility'),
   instructionsActive: text('instructions_active'),
+  contextScope: text('context_scope').notNull().default('private'),
   status: text('status').notNull().default('draft'),
   setupStep: text('setup_step'),
   startedAt: ts('started_at'),
@@ -245,6 +246,8 @@ export const agentRuntimeBindings = pgTable('agent_runtime_bindings', {
   wrappedDek: bytea('wrapped_dek').notNull(),
   wrapIv: bytea('wrap_iv').notNull(),
   kekVersion: integer('kek_version').notNull(),
+  runtimeCredentialDigest: bytea('runtime_credential_digest'),
+  runtimeAuthMode: text('runtime_auth_mode').notNull().default('legacy_hmac'),
   readyAt: ts('ready_at'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
@@ -256,6 +259,7 @@ export const hermesCloudCapacity = pgTable('hermes_cloud_capacity', {
   cloudAgentId: text('cloud_agent_id').notNull(),
   instanceName: text('instance_name').notNull(),
   preflightAgentId: uuid('preflight_agent_id').notNull(),
+  discoveryGrantId: uuid('discovery_grant_id'),
   dashboardUrl: text('dashboard_url'),
   connectorUrl: text('connector_url').notNull(),
   state: text('state').notNull().default('available'),
@@ -279,6 +283,30 @@ export const hermesCloudCapacity = pgTable('hermes_cloud_capacity', {
   updatedAt: now('updated_at'),
 });
 
+export const runtimeDiscoveryGrants = pgTable('runtime_discovery_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  createdBy: uuid('created_by'),
+  credentialDigest: bytea('credential_digest').notNull(),
+  roleTemplateKey: text('role_template_key').notNull(),
+  roleTemplateVersion: text('role_template_version').notNull().default('1.0.0'),
+  skillKey: text('skill_key').notNull(),
+  skillVersion: text('skill_version').notNull(),
+  runtimeName: text('runtime_name').notNull(),
+  artifactDigest: text('artifact_digest').notNull(),
+  assignmentId: uuid('assignment_id'),
+  assignmentRevision: integer('assignment_revision'),
+  configDigest: text('config_digest').notNull(),
+  grantRevision: integer('grant_revision').notNull().default(1),
+  linkedCapacityId: uuid('linked_capacity_id'),
+  expiresAt: ts('expires_at'),
+  revokedAt: ts('revoked_at'),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
 export const agentCapabilities = pgTable('agent_capabilities', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -291,6 +319,21 @@ export const agentCapabilities = pgTable('agent_capabilities', {
   createdAt: now('created_at'),
 });
 
+export const agentOperationPolicies = pgTable('agent_operation_policies', {
+  agentId: uuid('agent_id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  revision: integer('revision').notNull().default(0), operations: jsonb('operations').notNull().default({}), updatedAt: now('updated_at'),
+});
+export const agentOperationApprovals = pgTable('agent_operation_approvals', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  runId: uuid('run_id').notNull(), toolCallId: text('tool_call_id').notNull(), operationId: text('operation_id').notNull(),
+  toolName: text('tool_name').notNull(), arguments: jsonb('arguments').notNull(), policyRevision: integer('policy_revision').notNull(),
+  status: text('status').notNull().default('pending'), decidedBy: uuid('decided_by'), decidedAt: ts('decided_at'), createdAt: now('created_at'),
+});
+export const agentOperationPolicyRevisions = pgTable('agent_operation_policy_revisions', {
+  workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(), revision: integer('revision').notNull(),
+  operationId: text('operation_id').notNull(), requireHumanApproval: boolean('require_human_approval').notNull(),
+  changedBy: uuid('changed_by').notNull(), createdAt: now('created_at'),
+}, table => [primaryKey({columns:[table.agentId,table.revision]})]);
 export const agentFiles = pgTable('agent_files', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -311,6 +354,11 @@ export const agentFiles = pgTable('agent_files', {
   updatedAt: now('updated_at'),
 });
 
+export const agentContextNotes = pgTable('agent_context_notes', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  title: text('title').notNull(), text: text('text').notNull(), revision: integer('revision').notNull().default(1),
+  authorId: uuid('author_id'), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
 export const agentContextFields = pgTable(
   'agent_context_fields',
   {
@@ -327,6 +375,152 @@ export const agentContextFields = pgTable(
     updatedAt: now('updated_at'),
   },
   (t) => [unique('agent_context_fields_key').on(t.agentId, t.key)],
+);
+
+export const librarySources = pgTable(
+  'library_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    slug: text('slug').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('library_sources_workspace_slug_key').on(t.workspaceId, t.slug)],
+);
+
+export const librarySourceVersions = pgTable(
+  'library_source_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    sourceId: uuid('source_id').notNull(),
+    version: integer('version').notNull(),
+    versionLabel: text('version_label').notNull(),
+    sha256: text('sha256').notNull(),
+    contentMarkdown: text('content_markdown').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: now('created_at'),
+  },
+  (t) => [
+    unique('library_source_versions_number_key').on(t.sourceId, t.version),
+    unique('library_source_versions_workspace_source_id_key').on(t.workspaceId, t.sourceId, t.id),
+  ],
+);
+
+export const librarySourceTeamGrants = pgTable(
+  'library_source_team_grants',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    sourceId: uuid('source_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    grantedBy: uuid('granted_by'),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.sourceId, t.teamId] })],
+);
+
+export const sharedIntelligenceProposals = pgTable(
+  'shared_intelligence_proposals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    createdByUserId: uuid('created_by_user_id').notNull(),
+    requesterAgentId: uuid('requester_agent_id').notNull(),
+    title: text('title').notNull(),
+    goal: text('goal').notNull(),
+    lesson: text('lesson').notNull(),
+    rationale: text('rationale').notNull(),
+    targetTeamIds: uuid('target_team_ids').array().notNull(),
+    targetTeamLabels: text('target_team_labels').array().notNull(),
+    dedupeSha256: text('dedupe_sha256').notNull(),
+    assessment: jsonb('assessment').notNull(),
+    status: text('status').notNull(),
+    approvalRequestId: uuid('approval_request_id'),
+    approvalRevision: integer('approval_revision'),
+    approvalHash: text('approval_hash'),
+    librarySourceId: uuid('library_source_id'),
+    libraryVersionId: uuid('library_version_id'),
+    createdAt: now('created_at'),
+    publishedAt: ts('published_at'),
+    revokedAt: ts('revoked_at'),
+    triageStatus: text('triage_status').notNull().default('private'),
+    triageGoalId: uuid('triage_goal_id'),
+    triageAssessment: jsonb('triage_assessment'),
+    triageSubmittedAt: ts('triage_submitted_at'),
+    triageDecidedAt: ts('triage_decided_at'),
+    triageDecidedByUserId: uuid('triage_decided_by_user_id'),
+    triageDecisionNote: text('triage_decision_note'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [index('shared_intelligence_creator_idx').on(t.workspaceId, t.createdByUserId, t.createdAt)],
+);
+
+export const sharedIntelligenceGoals = pgTable(
+  'shared_intelligence_goals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    scope: text('scope').notNull(),
+    teamId: uuid('team_id'),
+    title: text('title').notNull(),
+    detail: text('detail').notNull(),
+    revision: integer('revision').notNull().default(1),
+    contentSha256: text('content_sha256').notNull(),
+    active: boolean('active').notNull().default(true),
+    createdByUserId: uuid('created_by_user_id').notNull(),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [index('shared_intelligence_goals_active_idx').on(t.workspaceId, t.active, t.createdAt)],
+);
+
+export const sharedIntelligenceTriageDecisions = pgTable(
+  'shared_intelligence_triage_decisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    proposalId: uuid('proposal_id').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    decision: text('decision').notNull(),
+    previousStatus: text('previous_status').notNull(),
+    resultingStatus: text('resulting_status').notNull(),
+    note: text('note').notNull().default(''),
+    assessmentStateSha256: text('assessment_state_sha256').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [index('shared_intelligence_triage_decisions_idx').on(t.workspaceId, t.proposalId, t.createdAt)],
+);
+
+export const sharedIntelligenceEvidence = pgTable(
+  'shared_intelligence_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    proposalId: uuid('proposal_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    sourceSessionId: uuid('source_session_id'),
+    sourceMessageId: uuid('source_message_id').notNull(),
+    sourceMessageRole: text('source_message_role').notNull(),
+    sessionTitle: text('session_title').notNull(),
+    runEndedAt: ts('run_ended_at').notNull(),
+    sourceSha256: text('source_sha256').notNull(),
+    approvedExcerpt: text('approved_excerpt').notNull(),
+    excerptSha256: text('excerpt_sha256').notNull(),
+    provenance: text('provenance').notNull(),
+    toolNames: text('tool_names').array().notNull().default([]),
+    stepLabels: text('step_labels').array().notNull().default([]),
+    outcome: text('outcome').notNull(),
+    revokedAt: ts('revoked_at'),
+    createdAt: now('created_at'),
+  },
+  (t) => [
+    unique('shared_intelligence_evidence_source_key').on(t.proposalId, t.sourceSha256),
+    unique('shared_intelligence_evidence_run_key').on(t.proposalId, t.sourceRunId),
+  ],
 );
 
 export const instructionVersions = pgTable('instruction_versions', {
@@ -370,6 +564,113 @@ export const agentSkills = pgTable(
     adoptedAt: now('adopted_at'),
   },
   (t) => [primaryKey({ columns: [t.agentId, t.skillVersionId] })],
+);
+
+export const enterpriseSkillAssignments = pgTable(
+  'enterprise_skill_assignments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    teamId: uuid('team_id'),
+    artifactId: uuid('artifact_id'),
+    skillKey: text('skill_key').notNull(),
+    skillVersion: text('skill_version').notNull(),
+    state: text('state').notNull().default('active'),
+    config: jsonb('config').notNull().default({}),
+    capabilityGrants: text('capability_grants').array().notNull().default([]),
+    schedule: jsonb('schedule').notNull().default({ enabled: true, interval_minutes: 360 }),
+    approvalPolicy: jsonb('approval_policy').notNull().default({ human_review_required: true }),
+    revision: integer('revision').notNull().default(1),
+    assignedBy: uuid('assigned_by'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('enterprise_skill_assignments_agent_key').on(t.workspaceId, t.agentId, t.skillKey)],
+);
+
+export const enterpriseSkillAssignmentRevisions = pgTable(
+  'enterprise_skill_assignment_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    assignmentId: uuid('assignment_id').notNull(),
+    workspaceId: uuid('workspace_id').notNull(),
+    teamId: uuid('team_id'),
+    artifactId: uuid('artifact_id'),
+    revision: integer('revision').notNull(),
+    skillVersion: text('skill_version').notNull(),
+    state: text('state').notNull(),
+    config: jsonb('config').notNull(),
+    capabilityGrants: text('capability_grants').array().notNull().default([]),
+    schedule: jsonb('schedule').notNull(),
+    approvalPolicy: jsonb('approval_policy').notNull(),
+    changedBy: uuid('changed_by'),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('enterprise_skill_assignment_revisions_key').on(t.assignmentId, t.revision)],
+);
+
+export const enterpriseTeams = pgTable(
+  'enterprise_teams',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('enterprise_teams_workspace_slug_key').on(t.workspaceId, t.slug)],
+);
+
+export const enterpriseTeamAgents = pgTable(
+  'enterprise_team_agents',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    agentId: uuid('agent_id').notNull(),
+    principalUserId: uuid('principal_user_id').notNull(),
+    roleTemplateKey: text('role_template_key').notNull(),
+    roleTemplateVersion: text('role_template_version').notNull().default('1.0.0'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspaceId, t.teamId, t.agentId] }),
+    unique('enterprise_team_agents_one_team_key').on(t.workspaceId, t.teamId),
+    unique('enterprise_team_agents_one_agent_key').on(t.workspaceId, t.agentId),
+    unique('enterprise_team_agents_one_principal_key').on(t.workspaceId, t.principalUserId),
+  ],
+);
+
+export const enterpriseSkillArtifacts = pgTable(
+  'enterprise_skill_artifacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    skillKey: text('skill_key').notNull(),
+    skillVersion: text('skill_version').notNull(),
+    digest: text('digest').notNull(),
+    manifest: jsonb('manifest').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('enterprise_skill_artifacts_version_key').on(t.skillKey, t.skillVersion)],
+);
+
+export const enterpriseConnectionBindings = pgTable(
+  'enterprise_connection_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    state: text('state').notNull().default('active'),
+    capabilityGrants: text('capability_grants').array().notNull().default([]),
+    capabilityDenies: text('capability_denies').array().notNull().default([]),
+    resourceScope: jsonb('resource_scope').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('enterprise_connection_bindings_key').on(t.workspaceId, t.teamId, t.connectorKey)],
 );
 
 // ---------------------------------------------------------------------------
@@ -458,12 +759,20 @@ export const runs = pgTable(
     workspaceId: uuid('workspace_id').notNull(),
     sessionId: uuid('session_id').notNull(),
     agentId: uuid('agent_id'),
+    recoveryNextAt: ts('recovery_next_at'),
+    recoveryNotBefore: ts('recovery_not_before'),
+    recoveryCancelled: boolean('recovery_cancelled').notNull().default(false),
+    recoveryBlockedReason: text('recovery_blocked_reason'),
+    recoveryInput: text('recovery_input'),
+    automaticRecovery: boolean('automatic_recovery').notNull().default(false),
+    recoveryHistory: jsonb('recovery_history').notNull().default([]),
     runtimeKind: text('runtime_kind').notNull().default('legacy'),
     runtimeProfile: text('runtime_profile'),
     runtimeRunId: text('runtime_run_id'),
     runtimeSessionId: text('runtime_session_id'),
     runtimeAttempt: integer('runtime_attempt'),
     runtimeRequest: jsonb('runtime_request'),
+    contextSnapshot: jsonb('context_snapshot'),
     runtimeRequestAttempt: integer('runtime_request_attempt'),
     runtimeStartedAt: ts('runtime_started_at'),
     runtimeWaitStartedAt: ts('runtime_wait_started_at'),
@@ -474,6 +783,7 @@ export const runs = pgTable(
     activeMs: integer('active_ms').notNull().default(0),
     interrupted: boolean('interrupted').notNull().default(false),
     instructionVersionId: uuid('instruction_version_id'),
+    instructionSnapshot: text('instruction_snapshot'),
     skillVersionIds: uuid('skill_version_ids').array().notNull().default([]),
     maxTurns: integer('max_turns').notNull().default(12),
     modelId: text('model_id').notNull(),
@@ -498,6 +808,16 @@ export const runs = pgTable(
   },
   (t) => [unique('runs_client_turn_key').on(t.sessionId, t.clientTurnId)],
 );
+
+export const runSweepObservations = pgTable('run_sweep_observations', {
+  runId: uuid('run_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  attempt: integer('attempt').notNull(),
+  workflowInstanceId: text('workflow_instance_id'),
+  runStatus: text('run_status').notNull(),
+  progressAt: ts('progress_at').notNull(),
+  firstMissingAt: now('first_missing_at'),
+});
 
 export const runSteps = pgTable(
   'run_steps',
@@ -665,6 +985,29 @@ export const requests = pgTable('requests', {
   updatedAt: now('updated_at'),
 });
 
+export const requestProvenance = pgTable('request_provenance', {
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').primaryKey(),
+  kind: text('kind').notNull().default('unknown'),
+  source: text('source').notNull().default('not_recorded'),
+  recordedAt: now('recorded_at'),
+});
+
+export const requestPresentations = pgTable(
+  'request_presentations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    hiddenAt: ts('hidden_at'),
+    hiddenReason: text('hidden_reason'),
+    restoredAt: ts('restored_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
+
 export const requestTriageAssessments = pgTable(
   'request_triage_assessments',
   {
@@ -675,8 +1018,8 @@ export const requestTriageAssessments = pgTable(
     stateHash: text('state_hash').notNull(),
     rubricVersion: text('rubric_version').notNull(),
     summaryVersion: text('summary_version').notNull(),
-    provider: text('provider').notNull().default('cloudflare_workers_ai'),
-    modelId: text('model_id').notNull().default('typesafe/jev'),
+    provider: text('provider').notNull().default('typesafe_api'),
+    modelId: text('model_id').notNull().default('jev-latest'),
     modelVersion: text('model_version'),
     status: text('status').notNull().default('pending'),
     priorityScore: numeric('priority_score', { precision: 5, scale: 2 }),
@@ -809,7 +1152,7 @@ export const partnerScreeningRuns = pgTable(
     agentCashToolCallId: text('agentcash_tool_call_id'),
     rateLimits: jsonb('rate_limits').notNull().default([]),
     candidatesDiscovered: integer('candidates_discovered').notNull().default(0),
-    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 6, scale: 2 }).notNull().default('0'),
+    monetaryCostUsd: numeric('monetary_cost_usd', { precision: 7, scale: 3 }).notNull().default('0'),
     errorCode: text('error_code'),
     errorDetail: text('error_detail'),
     startedAt: now('started_at'),
@@ -910,6 +1253,427 @@ export const partnerContactEnrichments = pgTable(
   },
   (t) => [unique('partner_contact_enrichments_run_key').on(t.workspaceId, t.runId)],
 );
+
+export const partnerEngagements = pgTable('partner_engagements', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  candidateId: uuid('candidate_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  stage: text('stage').notNull(),
+  lastOutreachAt: ts('last_outreach_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const partnerRecords = pgTable(
+  'partner_records',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    ownerAgentId: uuid('owner_agent_id').notNull(),
+    kind: text('kind').notNull(),
+    partnerId: uuid('partner_id').notNull(),
+    revision: integer('revision').notNull().default(1),
+    data: jsonb('data').notNull(),
+    evidenceIds: text('evidence_ids').array().notNull().default([]),
+    sourceSessionId: uuid('source_session_id').notNull(),
+    sourceRunId: uuid('source_run_id').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_records_idempotency_key').on(t.workspaceId, t.teamId, t.ownerAgentId, t.kind, t.idempotencyKey)],
+);
+
+export const partnerHandoffs = pgTable(
+  'partner_handoffs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    fromTeamId: uuid('from_team_id').notNull(),
+    toTeamId: uuid('to_team_id').notNull(),
+    sourceRecordId: uuid('source_record_id').notNull(),
+    sourceRecordRevision: integer('source_record_revision').notNull(),
+    invoiceRecordId: uuid('invoice_record_id').notNull(),
+    invoiceRecordRevision: integer('invoice_record_revision').notNull(),
+    projection: jsonb('projection').notNull(),
+    sourceSessionId: uuid('source_session_id').notNull(),
+    requestedBy: uuid('requested_by').notNull(),
+    status: text('status').notNull().default('queued'),
+    resultReason: text('result_reason'),
+    simulated: boolean('simulated').notNull().default(false),
+    idempotencyKey: text('idempotency_key').notNull(),
+    revision: integer('revision').notNull().default(1),
+    lineageRootId: uuid('lineage_root_id'),
+    supersedesHandoffId: uuid('supersedes_handoff_id'),
+    supersededByHandoffId: uuid('superseded_by_handoff_id'),
+    payloadHash: text('payload_hash'),
+    inputProvenance: text('input_provenance'),
+    deliveryStatus: text('delivery_status').notNull().default('queued'),
+    validationStatus: text('validation_status').notNull().default('queued'),
+    agentExplanationStatus: text('agent_explanation_status').notNull().default('queued'),
+    humanDecisionStatus: text('human_decision_status').notNull().default('not_ready'),
+    acknowledgmentStatus: text('acknowledgment_status').notNull().default('pending'),
+    checks: jsonb('checks').notNull().default([]),
+    completedAt: ts('completed_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_handoffs_idempotency_key').on(t.workspaceId, t.fromTeamId, t.idempotencyKey)],
+);
+
+export const enterpriseRunGrants = pgTable('enterprise_run_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  runId: uuid('run_id').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  teamId: uuid('team_id').notNull(),
+  assignmentId: uuid('assignment_id').notNull(),
+  assignmentRevision: integer('assignment_revision').notNull(),
+  artifactId: uuid('artifact_id').notNull(),
+  artifactDigest: text('artifact_digest').notNull(),
+  connectionBindingId: uuid('connection_binding_id').notNull(),
+  capability: text('capability').notNull(),
+  resourceKind: text('resource_kind').notNull(),
+  resourceId: uuid('resource_id'),
+  allowedFields: text('allowed_fields').array().notNull().default([]),
+  allowedActions: text('allowed_actions').array().notNull().default([]),
+  effect: text('effect').notNull(),
+  createdAt: now('created_at'),
+  revokedAt: ts('revoked_at'),
+});
+
+export const partnerWorkflowExecutions = pgTable('partner_workflow_executions', {
+  handoffId: uuid('handoff_id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull(),
+  financeAgentId: uuid('finance_agent_id').notNull(),
+  financeSessionId: uuid('finance_session_id'),
+  financeRunId: uuid('finance_run_id'),
+  requestId: uuid('request_id'),
+  resultRecordId: uuid('result_record_id'),
+  status: text('status').notNull().default('queued'),
+  resultReason: text('result_reason'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const partnerAgentMessages = pgTable(
+  'partner_agent_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    handoffId: uuid('handoff_id').notNull(),
+    direction: text('direction').notNull(),
+    protocol: text('protocol').notNull(),
+    senderAgentId: uuid('sender_agent_id').notNull(),
+    recipientAgentId: uuid('recipient_agent_id').notNull(),
+    senderProfile: text('sender_profile').notNull(),
+    recipientProfile: text('recipient_profile').notNull(),
+    senderDisplay: text('sender_display').notNull(),
+    recipientDisplay: text('recipient_display').notNull(),
+    body: text('body').notNull(),
+    wireText: text('wire_text').notNull(),
+    status: text('status').notNull().default('queued'),
+    recipientSessionId: uuid('recipient_session_id'),
+    recipientRunId: uuid('recipient_run_id'),
+    createdAt: now('created_at'),
+    deliveredAt: ts('delivered_at'),
+  },
+  (t) => [unique('partner_agent_messages_delivery_key').on(t.workspaceId, t.handoffId, t.direction)],
+);
+
+export const requestAudiences = pgTable(
+  'request_audiences',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    purpose: text('purpose').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
+
+export const partnerWorkflowSettings = pgTable('partner_workflow_settings', {
+  workspaceId: uuid('workspace_id').primaryKey(),
+  admissionState: text('admission_state').notNull().default('disabled'),
+  enabledBy: uuid('enabled_by'),
+  enabledAt: ts('enabled_at'),
+  readiness: jsonb('readiness').notNull().default({}),
+  readinessCheckedAt: ts('readiness_checked_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const partnerRecordRevisions = pgTable(
+  'partner_record_revisions',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    recordId: uuid('record_id').notNull(),
+    revision: integer('revision').notNull(),
+    data: jsonb('data').notNull(),
+    evidenceIds: text('evidence_ids').array().notNull().default([]),
+    sourceSessionId: uuid('source_session_id').notNull(),
+    sourceRunId: uuid('source_run_id').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.recordId, t.revision] })],
+);
+
+export const partnerEngagementAuthorizations = pgTable(
+  'partner_engagement_authorizations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    approvalRequestId: uuid('approval_request_id').notNull(),
+    authorizationRevision: integer('authorization_revision').notNull(),
+    authorizationHash: text('authorization_hash').notNull(),
+    inputProvenance: text('input_provenance').notNull(),
+    reviewerUserId: uuid('reviewer_user_id').notNull(),
+    engagementRecordId: uuid('engagement_record_id'),
+    partnerId: uuid('partner_id').notNull(),
+    partnerName: text('partner_name').notNull(),
+    engagementReference: text('engagement_reference').notNull(),
+    purpose: text('purpose').notNull(),
+    currency: text('currency').notNull(),
+    authorizedTotalMinor: integer('authorized_total_minor').notNull(),
+    validFrom: date('valid_from', { mode: 'string' }).notNull(),
+    validUntil: date('valid_until', { mode: 'string' }).notNull(),
+    oneInvoice: boolean('one_invoice').notNull(),
+    permittedEvidenceExcerpt: text('permitted_evidence_excerpt').notNull(),
+    sourceAttachmentId: uuid('source_attachment_id').notNull(),
+    sourceSha256: text('source_sha256').notNull(),
+    sourceName: text('source_name').notNull(),
+    sourceCreatedAt: ts('source_created_at').notNull(),
+    sourceAuthorName: text('source_author_name'),
+    sourceSessionId: uuid('source_session_id').notNull(),
+    sourceRunId: uuid('source_run_id').notNull(),
+    status: text('status').notNull().default('pending'),
+    consumedHandoffId: uuid('consumed_handoff_id'),
+    createdAt: now('created_at'),
+    authorizedAt: ts('authorized_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('partner_engagement_authorizations_approval_key').on(
+    t.workspaceId, t.approvalRequestId, t.authorizationRevision, t.authorizationHash,
+  )],
+);
+
+export const partnerInvoiceIntakes = pgTable(
+  'partner_invoice_intakes',
+  {
+    id: uuid('id').primaryKey(),
+    workspaceId: uuid('workspace_id').notNull(),
+    handoffId: uuid('handoff_id').notNull(),
+    payloadHash: text('payload_hash').notNull(),
+    inputProvenance: text('input_provenance').notNull(),
+    engagementRecordId: uuid('engagement_record_id').notNull(),
+    expectedEngagementRevision: integer('expected_engagement_revision').notNull(),
+    expectedAuthorizationHash: text('expected_authorization_hash').notNull(),
+    invoiceSourceAttachmentId: uuid('invoice_source_attachment_id').notNull(),
+    invoiceSourceSha256: text('invoice_source_sha256').notNull(),
+    invoiceSourceName: text('invoice_source_name').notNull(),
+    invoiceSourceCreatedAt: ts('invoice_source_created_at').notNull(),
+    invoiceSourceAuthorName: text('invoice_source_author_name'),
+    invoiceSourceExcerpt: text('invoice_source_excerpt').notNull(),
+    invoicePayload: jsonb('invoice_payload').notNull(),
+    requestedBy: uuid('requested_by').notNull(),
+    sourceSessionId: uuid('source_session_id').notNull(),
+    sourceRunId: uuid('source_run_id').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('partner_invoice_intakes_idempotency_key').on(t.workspaceId, t.requestedBy, t.idempotencyKey)],
+);
+
+export const partnerDecisionAcknowledgments = pgTable(
+  'partner_decision_acknowledgments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    handoffId: uuid('handoff_id').notNull(),
+    decisionId: uuid('decision_id').notNull(),
+    partnerId: uuid('partner_id').notNull(),
+    partnerName: text('partner_name').notNull(),
+    engagementReference: text('engagement_reference').notNull(),
+    outcome: text('outcome').notNull(),
+    resultCode: text('result_code').notNull(),
+    financeReviewerDisplay: text('finance_reviewer_display').notNull(),
+    recordedAt: ts('recorded_at').notNull(),
+    deliveryStatus: text('delivery_status').notNull().default('pending'),
+    deliveredAt: ts('delivered_at'),
+    createdAt: now('created_at'),
+  },
+  (t) => [
+    unique('partner_decision_acknowledgments_decision_key').on(t.workspaceId, t.decisionId),
+    unique('partner_decision_acknowledgments_handoff_key').on(t.workspaceId, t.handoffId),
+  ],
+);
+
+export const outboundEmailAccounts = pgTable('outbound_email_accounts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  provider: text('provider').notNull(),
+  address: text('address').notNull(),
+  status: text('status').notNull().default('disconnected'),
+  ciphertext: bytea('ciphertext'),
+  iv: bytea('iv'),
+  wrappedDek: bytea('wrapped_dek'),
+  wrapIv: bytea('wrap_iv'),
+  kekVersion: integer('kek_version'),
+  scope: text('scope'),
+  tokenExpiresAt: ts('token_expires_at'),
+  watchExpiresAt: ts('watch_expires_at'),
+  historyId: text('history_id'),
+  connectedBy: uuid('connected_by'),
+  lastError: text('last_error'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const outboundEmailOutbox = pgTable('outbound_email_outbox', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  authorizationRevision: integer('authorization_revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
+  candidateId: uuid('candidate_id'),
+  accountId: uuid('account_id'),
+  recipientIndex: integer('recipient_index').notNull(),
+  senderAddress: text('sender_address').notNull(),
+  recipientName: text('recipient_name').notNull(),
+  recipientAddress: text('recipient_address').notNull(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  state: text('state').notNull(),
+  providerDraftId: text('provider_draft_id'),
+  providerMessageId: text('provider_message_id'),
+  providerThreadId: text('provider_thread_id'),
+  providerResponse: jsonb('provider_response'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  lastError: text('last_error'),
+  sentAt: ts('sent_at'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const contactSuppressions = pgTable('contact_suppressions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  address: text('address').notNull(),
+  reason: text('reason').notNull(),
+  sourceMessageId: text('source_message_id'),
+  createdBy: uuid('created_by'),
+  createdAt: now('created_at'),
+});
+
+export const partnerDiscoveryCursors = pgTable('partner_discovery_cursors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  agentId: uuid('agent_id').notNull(),
+  source: text('source').notNull(),
+  nextOffset: integer('next_offset').notNull().default(0),
+  searchAfter: text('search_after'),
+  pageSize: integer('page_size').notNull(),
+  lastRunId: uuid('last_run_id'),
+  createdAt: now('created_at'),
+  updatedAt: now('updated_at'),
+});
+
+export const gmailOauthStates = pgTable('gmail_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const gmailEvidenceAccounts = pgTable(
+  'gmail_evidence_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    provider: text('provider').notNull().default('gmail'),
+    address: text('address').notNull(),
+    status: text('status').notNull().default('connected'),
+    ciphertext: bytea('ciphertext').notNull(),
+    iv: bytea('iv').notNull(),
+    wrappedDek: bytea('wrapped_dek').notNull(),
+    wrapIv: bytea('wrap_iv').notNull(),
+    kekVersion: integer('kek_version').notNull(),
+    scope: text('scope').notNull(),
+    tokenExpiresAt: ts('token_expires_at').notNull(),
+    connectedBy: uuid('connected_by'),
+    lastError: text('last_error'),
+    connectedAt: now('connected_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('gmail_evidence_accounts_workspace_address_key').on(t.workspaceId, t.address)],
+);
+
+export const gmailEvidenceOauthStates = pgTable('gmail_evidence_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const mailboxThreadSnapshots = pgTable(
+  'mailbox_thread_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    librarySourceId: uuid('library_source_id').notNull(),
+    libraryVersionId: uuid('library_version_id').notNull(),
+    provider: text('provider').notNull(),
+    providerThreadId: text('provider_thread_id').notNull(),
+    title: text('title').notNull(),
+    messageCount: integer('message_count').notNull(),
+    normalizedSha256: text('normalized_sha256').notNull(),
+    normalizedThread: jsonb('normalized_thread').notNull(),
+    importedBy: uuid('imported_by'),
+    importedAt: now('imported_at'),
+  },
+  (t) => [
+    unique('mailbox_thread_snapshots_library_version_key').on(t.libraryVersionId),
+    unique('mailbox_thread_snapshots_exact_key').on(
+      t.workspaceId,
+      t.accountId,
+      t.teamId,
+      t.providerThreadId,
+      t.normalizedSha256,
+    ),
+    unique('mailbox_thread_snapshots_evidence_binding_key').on(
+      t.workspaceId,
+      t.id,
+      t.librarySourceId,
+      t.libraryVersionId,
+      t.normalizedSha256,
+    ),
+  ],
+);
+
+export const inboundEmailEvents = pgTable('inbound_email_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  snapshotId: uuid('snapshot_id').notNull(),
+  providerMessageId: text('provider_message_id').notNull(),
+  kind: text('kind').notNull(),
+  contactAddress: text('contact_address').notNull(),
+  linkedOutboxId: uuid('linked_outbox_id'),
+  evidence: jsonb('evidence').notNull(),
+  recordedAt: now('recorded_at'),
+});
 
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -1441,13 +2205,45 @@ export const jobReady = pgTable('job_ready', {
   jobId: uuid('job_id').primaryKey(),
   workspaceId: uuid('workspace_id').notNull(),
   nextAt: now('next_at'),
+  pauseReason: text('pause_reason'),
 });
 
 /**
  * Every table in the schema, for the drift test. A table added to the SQL and
  * forgotten here (or the other way round) fails that test.
  */
+export const cloudConnections = pgTable('cloud_connections', {
+  id: uuid('id').primaryKey(),
+  workspaceId: uuid('workspace_id').notNull().unique(),
+  initiatedBy: uuid('initiated_by').notNull(),
+  status: text('status').notNull(),
+  organizationId: text('organization_id'),
+  organizationName: text('organization_name'),
+  ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+export const cloudConnectionAttempts = pgTable('cloud_connection_attempts', {
+  id: uuid('id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  initiatedBy: uuid('initiated_by').notNull(), stateHash: text('state_hash').notNull().unique(),
+  status: text('status').notNull(), ciphertext: bytea('ciphertext').notNull(), iv: bytea('iv').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
+  kekVersion: integer('kek_version').notNull(), expiresAt: ts('expires_at').notNull(), createdAt: now('created_at'),
+});
+export const memberProvisioningOperations = pgTable('member_provisioning_operations', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
+  invitationId: uuid('invitation_id').notNull(), requestedBy: uuid('requested_by'),
+  roleTemplateKey: text('role_template_key').notNull(), roleTemplateVersion: text('role_template_version').notNull().default('1.0.0'),
+  createIntentId: uuid('create_intent_id').notNull().defaultRandom(), revision: integer('revision').notNull().default(0),
+  preparation: text('preparation').notNull().default('queued'), cancellation: text('cancellation').notNull().default('none'),
+  issue: text('issue'), cloudAgentId: text('cloud_agent_id'),
+  requestedAt: now('requested_at'), completedAt: ts('completed_at'), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
+
 export const ALL_TABLES = {
+  cloud_connections: cloudConnections,
+  cloud_connection_attempts: cloudConnectionAttempts,
+  member_provisioning_operations: memberProvisioningOperations,
   schema_migrations: schemaMigrations,
   users,
   auth_sessions: authSessions,
@@ -1464,17 +2260,37 @@ export const ALL_TABLES = {
   agent_provisioning: agentProvisioning,
   agent_runtime_bindings: agentRuntimeBindings,
   hermes_cloud_capacity: hermesCloudCapacity,
+  runtime_discovery_grants: runtimeDiscoveryGrants,
   agent_capabilities: agentCapabilities,
+  agent_operation_policies: agentOperationPolicies,
+  agent_operation_approvals: agentOperationApprovals,
+  agent_operation_policy_revisions: agentOperationPolicyRevisions,
   agent_files: agentFiles,
+  agent_context_notes: agentContextNotes,
   agent_context_fields: agentContextFields,
+  library_sources: librarySources,
+  library_source_versions: librarySourceVersions,
+  library_source_team_grants: librarySourceTeamGrants,
+  shared_intelligence_proposals: sharedIntelligenceProposals,
+  shared_intelligence_evidence: sharedIntelligenceEvidence,
+  shared_intelligence_goals: sharedIntelligenceGoals,
+  shared_intelligence_triage_decisions: sharedIntelligenceTriageDecisions,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,
   agent_skills: agentSkills,
+  enterprise_skill_assignments: enterpriseSkillAssignments,
+  enterprise_skill_assignment_revisions: enterpriseSkillAssignmentRevisions,
+  enterprise_teams: enterpriseTeams,
+  enterprise_team_agents: enterpriseTeamAgents,
+  enterprise_skill_artifacts: enterpriseSkillArtifacts,
+  enterprise_connection_bindings: enterpriseConnectionBindings,
+  enterprise_run_grants: enterpriseRunGrants,
   sessions,
   session_shares: sessionShares,
   messages,
   message_feedback: messageFeedback,
   runs,
+  run_sweep_observations: runSweepObservations,
   run_steps: runSteps,
   run_turns: runTurns,
   run_queue: runQueue,
@@ -1483,6 +2299,8 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  request_provenance: requestProvenance,
+  request_presentations: requestPresentations,
   request_triage_assessments: requestTriageAssessments,
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,
@@ -1491,6 +2309,26 @@ export const ALL_TABLES = {
   partner_source_artifacts: partnerSourceArtifacts,
   partner_candidates: partnerCandidates,
   partner_contact_enrichments: partnerContactEnrichments,
+  partner_engagements: partnerEngagements,
+  partner_records: partnerRecords,
+  partner_handoffs: partnerHandoffs,
+  partner_workflow_executions: partnerWorkflowExecutions,
+  partner_agent_messages: partnerAgentMessages,
+  request_audiences: requestAudiences,
+  partner_workflow_settings: partnerWorkflowSettings,
+  partner_record_revisions: partnerRecordRevisions,
+  partner_engagement_authorizations: partnerEngagementAuthorizations,
+  partner_invoice_intakes: partnerInvoiceIntakes,
+  partner_decision_acknowledgments: partnerDecisionAcknowledgments,
+  partner_discovery_cursors: partnerDiscoveryCursors,
+  outbound_email_accounts: outboundEmailAccounts,
+  outbound_email_outbox: outboundEmailOutbox,
+  contact_suppressions: contactSuppressions,
+  gmail_oauth_states: gmailOauthStates,
+  gmail_evidence_accounts: gmailEvidenceAccounts,
+  gmail_evidence_oauth_states: gmailEvidenceOauthStates,
+  mailbox_thread_snapshots: mailboxThreadSnapshots,
+  inbound_email_events: inboundEmailEvents,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

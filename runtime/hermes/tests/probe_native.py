@@ -21,6 +21,98 @@ import urllib.request
 import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from enterprise_bridge.packages import packaged_skills
+from enterprise_bridge.runtime_policy import build_skill_prompt_sections
+
+PACKAGES = packaged_skills()
+LEGACY_PARTNER_PACKAGE = PACKAGES["enterprise_bridge:partner-program-screening"]
+PARTNER_PACKAGE = PACKAGES["enterprise_bridge:partner-program-screening-v1-8"]
+FINANCE_PACKAGE = PACKAGES["enterprise_bridge:partner-invoice-review"]
+INTAKE_EVENT_ID = "11111111-1111-4111-8111-111111111111"
+HANDOFF_ID = "22222222-2222-4222-8222-222222222222"
+PAYLOAD_HASH = "sha256:" + "a" * 64
+PENDING_HASH = "sha256:" + "b" * 64
+
+
+def tool_schema(name):
+    if name == "publish_partner_invoice_review":
+        return {
+            "name": name,
+            "description": "Publish one immutable confirmed invoice intake to Finance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intake_event_id": {"type": "string", "format": "uuid"},
+                    "expected_payload_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                },
+                "required": ["intake_event_id", "expected_payload_hash"],
+                "additionalProperties": False,
+            },
+        }
+    if name == "get_partner_handoff_result":
+        return {
+            "name": "get_partner_handoff_result",
+            "description": "Read the authoritative result for one granted Finance handoff.",
+            "parameters": {
+                "type": "object",
+                "properties": {"handoff_id": {"type": "string", "format": "uuid"}},
+                "required": ["handoff_id"],
+                "additionalProperties": False,
+            },
+        }
+    if name == "list_requests":
+        return {
+            "name": name,
+            "description": "List requests visible to the current governed role.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+    if name == "get_request":
+        return {
+            "name": name,
+            "description": "Read one request visible to the current governed role.",
+            "parameters": {
+                "type": "object",
+                "properties": {"request_id": {"type": "string", "format": "uuid"}},
+                "required": ["request_id"],
+                "additionalProperties": False,
+            },
+        }
+    return {
+        "name": "list_partner_candidates",
+        "description": "List candidates collected under the approved source policy.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+
+
+def assert_pinned_skill(role_calls, package, *, absent):
+    """Every model call for the role carries exactly the assigned verified skill text."""
+    assert role_calls, "no model calls were recorded for the role"
+    manifest = {key: package[key] for key in ("name", "version", "artifact_digest")}
+    expected = build_skill_prompt_sections([manifest])
+    unexpected = [
+        text for other in absent
+        for _section_id, text in build_skill_prompt_sections([
+            {key: other[key] for key in ("name", "version", "artifact_digest")},
+        ])
+    ]
+    for call in role_calls:
+        system_text = "\n".join(
+            str(message.get("content", "")) for message in call["body"].get("messages", [])
+            if message.get("role") == "system"
+        )
+        for section_id, text in expected:
+            assert f"## Plugin Context: {section_id}" in system_text, section_id
+            assert text in system_text, "assigned skill section is missing from the system prompt"
+        assert not any(text in system_text for text in unexpected), "an unassigned skill reached the system prompt"
 
 
 def free_port():
@@ -34,8 +126,77 @@ def main():
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--python", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    model_calls, tool_calls, catalog_names = [], [], set()
+    model_calls, tool_calls, catalog_names, metadata_fallback_calls = [], [], {}, []
     token = secrets.token_hex(32)
+    partner_agent_id, finance_agent_id, legacy_agent_id = (
+        str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    )
+    stale_roles = set()
+
+    def role_for_path(path):
+        if "/agents/" + partner_agent_id + "/" in path:
+            return "partnerships"
+        if "/agents/" + finance_agent_id + "/" in path:
+            return "finance"
+        if "/agents/" + legacy_agent_id + "/" in path:
+            return "legacy_partnerships"
+        return None
+
+    role_contracts = {
+        "partnerships": {
+            "agent_id": partner_agent_id,
+            "package": PARTNER_PACKAGE,
+            "tool": "publish_partner_invoice_review",
+            "tools": ["publish_partner_invoice_review"],
+            "arguments": {"intake_event_id": INTAKE_EVENT_ID, "expected_payload_hash": PAYLOAD_HASH},
+            "skill_heading": "Partner Program Screening",
+            "config": {"partner_program": {
+                "program_name": "Hermes Partner Program",
+                "role_label": "Technical ecosystem partner",
+                "source_purpose": "organization_partner_research",
+                "screening_dimensions": ["Track Record", "Capacity", "Fit"],
+                "search_queries": ["developer agents"],
+                "intake_urls": [], "keywords": ["agents"],
+                "ranking_weights": {"relevance": 40, "activity": 25, "adoption": 20, "openness": 15},
+                "minimum_priority": 50, "lookback_days": 365, "max_candidates": 5,
+                "organization_only": True, "no_outreach": True, "human_review_required": True,
+            }},
+        },
+        "finance": {
+            "agent_id": finance_agent_id,
+            "package": FINANCE_PACKAGE,
+            "tool": "get_partner_handoff_result",
+            "tools": ["get_partner_handoff_result", "list_requests", "get_request"],
+            "arguments": {"handoff_id": HANDOFF_ID},
+            "skill_heading": "Partner Invoice Review",
+            "config": {"invoice_review": {
+                "duplicate_window_days": 365,
+                "require_engagement_evidence": True,
+                "connector": "enterprise-partner-records",
+                "human_review_required": True,
+                "payment_execution_available": False,
+            }},
+        },
+        "legacy_partnerships": {
+            "agent_id": legacy_agent_id,
+            "package": LEGACY_PARTNER_PACKAGE,
+            "tool": "list_partner_candidates",
+            "tools": ["list_partner_candidates"],
+            "arguments": {},
+            "skill_heading": "Partner Program Screening",
+            "config": {"partner_program": {
+                "program_name": "Hermes Partner Program",
+                "role_label": "Technical ecosystem partner",
+                "source_purpose": "organization_partner_research",
+                "screening_dimensions": ["Track Record", "Capacity", "Fit"],
+                "search_queries": ["developer agents"],
+                "intake_urls": [], "keywords": ["agents"],
+                "ranking_weights": {"relevance": 40, "activity": 25, "adoption": 20, "openness": 15},
+                "minimum_priority": 50, "lookback_days": 365, "max_candidates": 5,
+                "organization_only": True, "no_outreach": True, "human_review_required": True,
+            }},
+        },
+    }
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -53,92 +214,84 @@ def main():
             return self.headers.get("Authorization") == "Bearer " + token
 
         def do_GET(self):
+            role = role_for_path(self.path)
             if not self.authorized():
                 self.reply(401, {})
             elif self.path.endswith("/tools"):
-                self.reply(200, {"tools": [{"name": "enterprise_echo", "description": "Echo a value through the governed enterprise bridge.",
-                                          "parameters": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}}]})
+                self.reply(200, {"tools": [tool_schema(name) for name in role_contracts[role]["tools"]]} if role else {})
             elif self.path.endswith("/skills"):
+                contract = role_contracts.get(role)
+                if contract is None:
+                    self.reply(404, {})
+                    return
+                package = contract["package"]
                 self.reply(200, {"skills": [{
-                    "name": "enterprise_bridge:partner-program-screening",
-                    "version": "1.1.0",
+                    "name": package["name"],
+                    "version": package["version"],
+                    "artifact_digest": ("sha256:" + "0" * 64) if role in stale_roles else package["artifact_digest"],
                     "auto_load": True,
-                    "config": {"partner_program": {
-                        "program_name": "Hermes Partner Program",
-                        "role_label": "Technical ecosystem partner",
-                        "source_purpose": "organization_partner_research",
-                        "screening_dimensions": ["Track Record", "Capacity", "Fit"],
-                        "search_queries": ["developer agents"],
-                        "intake_urls": [], "keywords": ["agents"],
-                        "ranking_weights": {"relevance": 40, "activity": 25, "adoption": 20, "openness": 15},
-                        "minimum_priority": 50, "lookback_days": 365, "max_candidates": 5,
-                        "organization_only": True, "no_outreach": True, "human_review_required": True,
-                    }},
+                    "config": contract["config"],
                 }]})
             elif self.path.endswith("/models"):
-                self.reply(200, {"object": "list", "data": [
-                    {"id": "test/fixture", "object": "model"},
-                    {"id": "anthropic/claude-sonnet-5", "object": "model"},
-                ]})
+                # The Enterprise bridge publishes the authoritative window in
+                # the OpenAI-compatible list. The pinned Hermes runtime must
+                # consume this without trying its Ollama `/api/show` fallback.
+                self.reply(200, {"object": "list", "data": [{
+                    "id": "test/fixture", "object": "model", "context_length": 131072,
+                }]})
             else:
                 self.reply(404, {})
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            role = role_for_path(self.path)
             if not self.authorized():
                 self.reply(401, {})
                 return
             if self.path.endswith("/calls"):
-                tool_calls.append(body)
-                if body["arguments"].get("value") == "pending":
+                tool_calls.append({"role": role, **body})
+                if body["arguments"].get("expected_payload_hash") == PENDING_HASH:
                     self.reply(202, {"status": "pending"})
                 else:
-                    self.reply(200, {"ok": True, "content": json.dumps({"value": body["arguments"].get("value")})})
+                    self.reply(200, {"ok": True, "content": json.dumps({
+                        "role": role, "tool": body["name"], "fixture": True,
+                    })})
+                return
+            if self.path.endswith("/api/show"):
+                metadata_fallback_calls.append(body)
+                self.reply(500, {"error": "metadata fallback must not be needed"})
                 return
             if not self.path.endswith("/chat/completions"):
                 self.reply(404, {})
                 return
-            model_calls.append(body)
-            prompt = str(body.get("messages", []))
-            faults = {
-                "FAULT_AUTH": (401, "Provider authentication failed: SECRET_NATIVE_AUTH"),
-                "FAULT_QUOTA": (402, "Insufficient credits: SECRET_NATIVE_QUOTA"),
-                "FAULT_RATE_LIMIT": (429, "Too many requests: SECRET_NATIVE_RATE"),
-                "FAULT_REJECTED": (400, "Maximum context length exceeded: SECRET_NATIVE_REQUEST"),
-                "FAULT_UNAVAILABLE": (503, "Provider temporarily unavailable: SECRET_NATIVE_UPSTREAM"),
-            }
-            for marker, (status, message) in faults.items():
-                if marker in prompt:
-                    self.reply(status, {"error": {"message": message, "type": "fixture_fault", "code": marker.lower()}})
-                    return
-            catalog_names.update(t["function"]["name"] for t in body.get("tools", []))
+            if role is None:
+                self.reply(404, {})
+                return
+            model_calls.append({"role": role, "body": body})
+            catalog_names.setdefault(role, set()).update(t["function"]["name"] for t in body.get("tools", []))
             messages = body["messages"]
-            cache_fixture = "CACHE_FIXTURE" in str(messages[-1].get("content"))
-            if cache_fixture:
-                delta = {"role": "assistant", "content": "Cache fixture complete."}
-                finish = "stop"
-            elif messages[-1]["role"] == "tool":
+            if messages[-1]["role"] == "tool":
                 delta = {"role": "assistant", "content": "Fixture complete."}
                 finish = "stop"
             else:
-                value = "pending" if "WAIT_FOR_CONTEXT" in str(messages[-1].get("content")) else "value"
+                arguments = dict(role_contracts[role]["arguments"])
+                if role == "partnerships" and "WAIT_FOR_CONTEXT" in str(messages[-1].get("content")):
+                    arguments["expected_payload_hash"] = PENDING_HASH
+                tool_name = role_contracts[role]["tool"]
+                if role == "finance" and "TRY_FORBIDDEN" in str(messages[-1].get("content")):
+                    tool_name = role_contracts["partnerships"]["tool"]
+                    arguments = dict(role_contracts["partnerships"]["arguments"])
                 delta = {"role": "assistant", "tool_calls": [{"index": 0, "id": "call_" + uuid.uuid4().hex,
-                         "type": "function", "function": {"name": "enterprise_echo", "arguments": json.dumps({"value": value})}}]}
+                         "type": "function", "function": {"name": tool_name, "arguments": json.dumps(arguments)}}]}
                 finish = "tool_calls"
             if body.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                changes = (
-                    (({"role": "assistant", "content": "Cache "}, None),
-                     ({"content": "fixture "}, None), ({"content": "complete."}, None), ({}, finish))
-                    if cache_fixture else ((delta, None), ({}, finish))
-                )
-                for change, reason in changes:
+                for change, reason in ((delta, None), ({}, finish)):
                     chunk = {"id": "fixture", "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": "test/fixture", "choices": [{"index": 0, "delta": change, "finish_reason": reason}]}
                     self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
-                    self.wfile.flush()
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             else:
@@ -150,7 +303,7 @@ def main():
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    agent_id, port = str(uuid.uuid4()), free_port()
+    agent_id, port = partner_agent_id, free_port()
     state_root = pathlib.Path(tempfile.mkdtemp(prefix="he-", dir="/tmp"))
     profile = state_root / agent_id
     process = None
@@ -208,12 +361,6 @@ def main():
             process, native_key, capabilities = start_native()
             assert capabilities["object"] == "hermes.api_server.capabilities", capabilities
             assert capabilities["features"]["runs_idempotency"]["durable"] is True, capabilities
-            assert capabilities["enterprise_contract"] == {
-                "schema_version": 1,
-                "source_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
-                "release_ring": "stable",
-                "terminal_errors": {"supported": True, "schema_version": 1},
-            }, capabilities
             assert request("GET", "/api/jobs")[0] == 404, "native cron routes remain reachable"
             body = {"input": "ECHO_VALUE", "session_id": "fixture-session", "provider": "custom", "model": "test/fixture"}
             code, accepted = request("POST", "/v1/runs", body, "fixture-first")
@@ -235,6 +382,7 @@ def main():
             result = settle(run_id)
             assert result["status"] == "completed", result
             assert result["output"] == "Fixture complete.", result
+            assert metadata_fallback_calls == [], metadata_fallback_calls
             event_request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/runs/{run_id}/events",
                 headers={"Authorization": "Bearer " + native_key})
             with urllib.request.urlopen(event_request, timeout=10) as response:
@@ -245,78 +393,32 @@ def main():
             assert all(e["run_id"] == run_id and isinstance(e["timestamp"], (int, float)) for e in events), events
             assert request("GET", "/v1/runs/" + run_id + "/events")[0] == 404, "SSE unexpectedly replays"
             assert tool_calls and tool_calls[0]["runtime_run_id"] == run_id, {
-                "calls": tool_calls, "tool_results": [message for call in model_calls for message in call["messages"] if message.get("role") == "tool"],
+                "calls": tool_calls, "tool_results": [message for call in model_calls for message in call["body"]["messages"] if message.get("role") == "tool"],
                 "log": log_file.read_text(),
             }
             assert tool_calls[0]["tool_call_id"].startswith("call_"), tool_calls
-            assert catalog_names == {"enterprise_echo", "skill_view"}, catalog_names
+            assert tool_calls[0]["name"] == "publish_partner_invoice_review", tool_calls
+            assert tool_calls[0]["arguments"] == role_contracts["partnerships"]["arguments"], tool_calls
+            assert catalog_names["partnerships"] == {"publish_partner_invoice_review", "skill_view"}, catalog_names
             assert any(
                 "Partner Program Screening" in str(message.get("content", ""))
-                for call in model_calls for message in call.get("messages", [])
-            ), "Managed Partner Program skill was not auto-loaded into model context"
-
-            # The profile default is non-Claude. An allowed per-run Claude
-            # override still needs the proxy-scoped cache policy from /models.
-            assert all('"cache_control"' not in json.dumps(call) for call in model_calls), "Non-Claude requests acquired cache markers"
-            cached_system_prefixes = []
-            for turn in (1, 2):
-                first_call = len(model_calls)
-                cache_body = {**body, "input": f"CACHE_FIXTURE_{turn}", "session_id": "cache-fixture",
-                              "model": "anthropic/claude-sonnet-5"}
-                cache_code, cache_run = request("POST", "/v1/runs", cache_body, f"fixture-cache-{turn}")
-                assert cache_code == 202, cache_run
-                cache_result = settle(cache_run["run_id"])
-                assert cache_result["status"] == "completed" and cache_result["output"] == "Cache fixture complete.", cache_result
-                calls = model_calls[first_call:]
-                assert calls and all(call["stream"] for call in calls), calls
-                system_parts = [part for call in calls for message in call["messages"]
-                                if message["role"] == "system" and isinstance(message.get("content"), list)
-                                for part in message["content"] if part.get("cache_control") == {"type": "ephemeral"}]
-                assert system_parts, "Allowed Claude override did not receive 5-minute prompt cache markers"
-                cached_system_prefixes.append({part["text"] for part in system_parts})
-                cache_wire = request("GET", "/v1/runs/" + cache_run["run_id"] + "/events")[1]
-                cache_events = [json.loads(line[6:]) for line in cache_wire.splitlines() if line.startswith("data: ")]
-                deltas = [event["delta"] for event in cache_events if event["event"] == "message.delta"]
-                assert len(deltas) >= 2 and "".join(deltas) == "Cache fixture complete.", cache_events
-            assert cached_system_prefixes[0] & cached_system_prefixes[1], "Follow-up turn changed every cached system prefix"
-            for uncached_model in ("test/fixture", "anthropic/claude-unlisted"):
-                first_call = len(model_calls)
-                uncached_body = {**body, "input": "CACHE_FIXTURE_UNCACHED", "model": uncached_model,
-                                 "session_id": "uncached-" + uncached_model.replace("/", "-")}
-                code, uncached = request("POST", "/v1/runs", uncached_body, "fixture-uncached-" + uncached_model)
-                assert code == 202 and settle(uncached["run_id"])["status"] == "completed", uncached
-                assert model_calls[first_call:] and all('"cache_control"' not in json.dumps(call) for call in model_calls[first_call:]), \
-                    "Unknown or non-Claude model acquired cache markers"
-            for marker, expected in (
-                    ("FAULT_AUTH", ("provider_auth", "auth", False)),
-                    ("FAULT_QUOTA", ("provider_quota", "quota", False)),
-                    ("FAULT_RATE_LIMIT", ("provider_rate_limited", "rate_limit", True)),
-                    ("FAULT_REJECTED", ("request_rejected", "rejected", False)),
-                    ("FAULT_UNAVAILABLE", ("provider_unavailable", "unavailable", True))):
-                fault_body = {**body, "input": marker, "session_id": "fault-" + marker.lower()}
-                fault_code, fault = request("POST", "/v1/runs", fault_body, "fixture-" + marker.lower())
-                assert fault_code == 202, fault
-                failed = settle(fault["run_id"])
-                assert failed["status"] == "failed", failed
-                detail = failed.get("terminal_error")
-                assert detail and (detail["code"], detail["category"], detail["retryable"]) == expected, {
-                    "status": failed,
-                    "gateway_log": log_file.read_text(),
-                }
-                assert "SECRET_NATIVE" not in json.dumps(failed), failed
-
-            # A retained nonterminal reservation whose owner disappears must
-            # become a structured interrupted failure after restart.
-            _, interrupted = request("POST", "/v1/runs", {**body, "input": "WAIT_FOR_CONTEXT", "session_id": "restart-interrupted"}, "fixture-interrupted")
-            interrupted_id = interrupted["run_id"]
-            until = time.monotonic() + 20
-            while not any(c["runtime_run_id"] == interrupted_id for c in tool_calls) and time.monotonic() < until:
-                time.sleep(0.1)
-            assert any(c["runtime_run_id"] == interrupted_id for c in tool_calls), "Interrupted fixture never became active"
-            # Simulate an ungraceful host/process loss. SIGTERM is cooperative
-            # and correctly persists `cancelled`; only a disappeared owner
-            # exercises restart hydration to `interrupted`.
-            process.kill()
+                for call in model_calls if call["role"] == "partnerships"
+                for message in call["body"].get("messages", [])
+            ), "Managed Partner Program skill was not pinned into model context"
+            assert_pinned_skill(
+                [call for call in model_calls if call["role"] == "partnerships"],
+                PARTNER_PACKAGE, absent=(FINANCE_PACKAGE, LEGACY_PARTNER_PACKAGE),
+            )
+            partner_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
+            assert partner_readiness["agent_id"] == partner_agent_id, partner_readiness
+            assert partner_readiness["runtime_revision"] == "345cd2b057a452236de401d3534b8502a7465e8d"
+            assert partner_readiness["skills"] == [{
+                "name": PARTNER_PACKAGE["name"], "version": PARTNER_PACKAGE["version"],
+                "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
+                "content_digest": PARTNER_PACKAGE["content_digest"],
+            }], partner_readiness
+            assert set(partner_readiness["tools"]) == {"publish_partner_invoice_review", "skill_view"}
+            process.terminate()
             process.wait(timeout=20)
             process = None
             # The profile state, not the listener number, owns idempotency.
@@ -327,14 +429,10 @@ def main():
             replay_code, replay = request("POST", "/v1/runs", body, "fixture-first")
             assert replay_code == 202 and replay["run_id"] == run_id and replay["replayed"], replay
             assert request("GET", "/v1/runs/" + run_id)[1]["status"] == "completed"
-            interrupted_status = request("GET", "/v1/runs/" + interrupted_id)[1]
-            assert interrupted_status["status"] == "interrupted", interrupted_status
-            assert interrupted_status["terminal_error"]["code"] == "runtime_interrupted", interrupted_status
-            assert interrupted_status["terminal_error"]["retryable"] is True, interrupted_status
             second_body = {**body, "input": "SECOND_TURN"}
             _, second = request("POST", "/v1/runs", second_body, "fixture-second")
             assert settle(second["run_id"])["status"] == "completed"
-            assert any(sum(m.get("role") == "tool" for m in call["messages"]) >= 2 for call in model_calls), "Session tool history missing"
+            assert any(sum(m.get("role") == "tool" for m in call["body"]["messages"]) >= 2 for call in model_calls), "Session tool history missing"
             _, waiting = request("POST", "/v1/runs", {**body, "input": "WAIT_FOR_CONTEXT"}, "fixture-wait")
             waiting_id = waiting["run_id"]
             until = time.monotonic() + 20
@@ -351,8 +449,162 @@ def main():
             jobs_file.parent.mkdir(parents=True, exist_ok=True)
             jobs_file.write_text(json.dumps({"jobs": [{"id": "forbidden-fixture", "enabled": False}]}))
             assert request("GET", "/health")[0] == 503, "native health ignored a nonempty cron store"
-            print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model.")
-            print("Verified the versioned failure matrix, structured restart interruption, durable replay, cron route/health policy, trusted run/call identity, exact tool allowlist, custom model proxy, scoped Claude prompt caching across turns and model overrides, incremental cached-model output, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
+            process.terminate()
+            process.wait(timeout=20)
+            process = None
+
+            # A second dedicated profile must load only Finance procedure and
+            # tools. It intentionally has no MCP config or AgentCash home.
+            agent_id, port = finance_agent_id, free_port()
+            profile = state_root / agent_id
+            native_key = None
+            process, native_key, finance_capabilities = start_native()
+            assert finance_capabilities["features"]["runs_idempotency"]["durable"] is True
+            finance_body = {
+                "input": "Explain the authoritative Finance result for the admitted handoff.",
+                "session_id": "finance-fixture-session", "provider": "custom", "model": "test/fixture",
+            }
+            code, finance_accepted = request("POST", "/v1/runs", finance_body, "fixture-finance")
+            assert code == 202, finance_accepted
+            finance_run_id = finance_accepted["run_id"]
+            finance_result = settle(finance_run_id)
+            assert finance_result["status"] == "completed", finance_result
+            finance_calls = [call for call in tool_calls if call["role"] == "finance"]
+            assert len(finance_calls) == 1, finance_calls
+            assert finance_calls[0]["runtime_run_id"] == finance_run_id, finance_calls
+            assert finance_calls[0]["name"] == "get_partner_handoff_result", finance_calls
+            assert finance_calls[0]["arguments"] == {"handoff_id": HANDOFF_ID}, finance_calls
+            assert catalog_names["finance"] == {
+                "get_partner_handoff_result", "list_requests", "get_request", "skill_view",
+            }, catalog_names
+            assert any(
+                "Partner Invoice Review" in str(message.get("content", ""))
+                for call in model_calls if call["role"] == "finance"
+                for message in call["body"].get("messages", [])
+            ), "Managed Finance skill was not pinned into model context"
+            assert_pinned_skill(
+                [call for call in model_calls if call["role"] == "finance"],
+                FINANCE_PACKAGE, absent=(PARTNER_PACKAGE, LEGACY_PARTNER_PACKAGE),
+            )
+            finance_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
+            assert finance_readiness["agent_id"] == finance_agent_id, finance_readiness
+            assert finance_readiness["skills"] == [{
+                "name": FINANCE_PACKAGE["name"], "version": FINANCE_PACKAGE["version"],
+                "artifact_digest": FINANCE_PACKAGE["artifact_digest"],
+                "content_digest": FINANCE_PACKAGE["content_digest"],
+            }], finance_readiness
+            assert set(finance_readiness["tools"]) == {
+                "get_partner_handoff_result", "list_requests", "get_request", "skill_view",
+            }
+            assert finance_readiness["agentcash_enabled"] is False, finance_readiness
+
+            before_forbidden = len(tool_calls)
+            forbidden_body = {**finance_body, "input": "TRY_FORBIDDEN"}
+            code, forbidden = request("POST", "/v1/runs", forbidden_body, "fixture-finance-forbidden")
+            assert code == 202, forbidden
+            forbidden_result = settle(forbidden["run_id"])
+            assert forbidden_result["status"] in {"completed", "failed"}, forbidden_result
+            assert len(tool_calls) == before_forbidden, "Finance reached the Partnerships publication tool"
+
+            process.terminate()
+            process.wait(timeout=20)
+            process = None
+
+            # The additive bundle must continue to resolve the original 1.7
+            # name and exact bytes for existing governed assignments. Exercise
+            # that assignment through the actual gateway, then restart the
+            # same profile and replay its durable admission.
+            agent_id, port = legacy_agent_id, free_port()
+            profile = state_root / agent_id
+            native_key = None
+            process, native_key, legacy_capabilities = start_native()
+            assert legacy_capabilities["features"]["runs_idempotency"]["durable"] is True
+            legacy_body = {
+                "input": "Continue the existing governed discovery workflow.",
+                "session_id": "legacy-partnerships-fixture-session",
+                "provider": "custom", "model": "test/fixture",
+            }
+            code, legacy_accepted = request("POST", "/v1/runs", legacy_body, "fixture-legacy")
+            assert code == 202, legacy_accepted
+            legacy_run_id = legacy_accepted["run_id"]
+            legacy_result = settle(legacy_run_id)
+            assert legacy_result["status"] == "completed", legacy_result
+            legacy_calls = [call for call in tool_calls if call["role"] == "legacy_partnerships"]
+            assert len(legacy_calls) == 1, legacy_calls
+            assert legacy_calls[0]["runtime_run_id"] == legacy_run_id, legacy_calls
+            assert legacy_calls[0]["name"] == "list_partner_candidates", legacy_calls
+            assert legacy_calls[0]["arguments"] == {}, legacy_calls
+            assert catalog_names["legacy_partnerships"] == {"list_partner_candidates", "skill_view"}, catalog_names
+            assert any(
+                "Partner Program Screening" in str(message.get("content", ""))
+                for call in model_calls if call["role"] == "legacy_partnerships"
+                for message in call["body"].get("messages", [])
+            ), "Managed legacy Partner Program skill was not auto-loaded into model context"
+            legacy_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
+            assert LEGACY_PARTNER_PACKAGE["artifact_digest"] == (
+                "sha256:9f124ce44aa318b13e9f8ccfd92072d8b3ba6a22030eaad31cfafbfda3a1e2a9"
+            )
+            assert LEGACY_PARTNER_PACKAGE["content_digest"] == (
+                "sha256:cd26e70aa49de223f28216ea579d33c610305d3184a6c592c7841fa12aca6ddf"
+            )
+            assert legacy_readiness["skills"] == [{
+                "name": LEGACY_PARTNER_PACKAGE["name"],
+                "version": LEGACY_PARTNER_PACKAGE["version"],
+                "artifact_digest": LEGACY_PARTNER_PACKAGE["artifact_digest"],
+                "content_digest": LEGACY_PARTNER_PACKAGE["content_digest"],
+            }], legacy_readiness
+            assert set(legacy_readiness["tools"]) == {"list_partner_candidates", "skill_view"}
+            process.terminate()
+            process.wait(timeout=20)
+            process = None
+            port = free_port()
+            process, native_key, _ = start_native()
+            replay_code, replay = request("POST", "/v1/runs", legacy_body, "fixture-legacy")
+            assert replay_code == 202 and replay["run_id"] == legacy_run_id and replay["replayed"], replay
+            assert request("GET", "/v1/runs/" + legacy_run_id)[1]["status"] == "completed"
+            process.terminate()
+            process.wait(timeout=20)
+            process = None
+
+            legacy_verify_command = [
+                sys.executable, str(ROOT / "start.py"), "--source", str(args.source),
+                "--python", str(args.python), "--workspace-id", "test-workspace",
+                "--agent-id", legacy_agent_id, "--enterprise-url", f"http://127.0.0.1:{server.server_port}",
+                "--model", "test/fixture", "--token-file", str(token_file), "--port", str(free_port()),
+                "--state-root", str(state_root), "--verify-only",
+            ]
+            stale_roles.add("legacy_partnerships")
+            stale_legacy = subprocess.run(legacy_verify_command, capture_output=True, text=True, timeout=60)
+            stale_roles.clear()
+            assert stale_legacy.returncode != 0 and "does not match the reviewed native package" in (
+                stale_legacy.stdout + stale_legacy.stderr
+            ), stale_legacy.stdout + stale_legacy.stderr
+
+            verify_command = [
+                sys.executable, str(ROOT / "start.py"), "--source", str(args.source),
+                "--python", str(args.python), "--workspace-id", "test-workspace",
+                "--agent-id", finance_agent_id, "--enterprise-url", f"http://127.0.0.1:{server.server_port}",
+                "--model", "test/fixture", "--token-file", str(token_file), "--port", str(free_port()),
+                "--state-root", str(state_root), "--verify-only",
+            ]
+            stale_roles.add("finance")
+            stale = subprocess.run(verify_command, capture_output=True, text=True, timeout=60)
+            stale_roles.clear()
+            assert stale.returncode != 0 and "does not match the reviewed native package" in (stale.stdout + stale.stderr), (
+                stale.stdout + stale.stderr
+            )
+            misbound = subprocess.run(
+                [*verify_command[:verify_command.index("--workspace-id") + 1], "other-workspace",
+                 *verify_command[verify_command.index("--workspace-id") + 2:]],
+                capture_output=True, text=True, timeout=60,
+            )
+            assert misbound.returncode != 0 and "already bound to a different enterprise agent or workspace" in (
+                misbound.stdout + misbound.stderr
+            ), misbound.stdout + misbound.stderr
+
+            print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model for opt-in Partnerships, Finance, and legacy Partnerships.")
+            print("Verified all three assigned skills are pinned into every session with exact version/digest and tool inventory; governed tools execute with trusted run/call identity; Finance has no AgentCash and a model-requested Partnerships tool never reaches Enterprise.")
+            print("Also verified the deployed legacy 1.7 registry identity against byte-compatible content, legacy startup/restart replay, arbitrary legacy/current digest rejection, profile-binding rejection, durable capabilities, current-profile restart replay, cron route/health policy, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

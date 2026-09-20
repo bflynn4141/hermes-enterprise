@@ -3,6 +3,7 @@
 import type { Context } from 'hono';
 import {
   approvalViewSchema,
+  approvalEvidenceViewSchema,
   decideApprovalInputSchema,
   reviseApprovalInputSchema,
   routeApprovalInputSchema,
@@ -17,6 +18,7 @@ import {
   routeApproval,
 } from '../domain/approvals.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { getApprovalEvidence } from '../domain/approval-evidence.js';
 
 const humanContext = (work: Parameters<Parameters<typeof inWorkspace>[1]>[0]) => ({
   tx: work.tx,
@@ -30,6 +32,14 @@ export async function getApprovalRoute(c: Context<{ Bindings: Env }>): Promise<R
   const requestId = pathUuid(c, 'id');
   const view = await inWorkspace(c, (work) => getApproval(work, requestId, work.userId));
   return c.json(approvalViewSchema.parse(view));
+}
+
+export async function getApprovalEvidenceRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const requestId = pathUuid(c, 'id');
+  const evidenceId = pathUuid(c, 'evidenceId');
+  const evidence = await inWorkspace(c, (work) =>
+    getApprovalEvidence(work.tx, work.workspaceId, requestId, evidenceId, work.userId));
+  return c.json(approvalEvidenceViewSchema.parse(evidence));
 }
 
 export async function createApprovalDecision(c: Context<{ Bindings: Env }>): Promise<Response> {

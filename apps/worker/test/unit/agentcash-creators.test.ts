@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
+  governedCreatorSearchInput,
   parseAgentCashCreatorSearch,
+  parseAgentCashXCreatorSearch,
+  requestedCreatorSearchKinds,
   trustedLinkedInProfileUrl,
 } from '../../src/partner-screening/agentcash-creators.js';
 
@@ -16,6 +20,24 @@ describe('AgentCash creator consultant discovery', () => {
         includeDomains: expect.arrayContaining(['linkedin.com', 'youtube.com']),
       },
     });
+  });
+
+  it('uses one fixed read-only X post search and injects only explicit channel tests', () => {
+    expect(AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS).toEqual({
+      url: 'https://fetcher.sh/api/twitter/search?query=%22Hermes%20Agent%22&sort=Top',
+      method: 'GET',
+      maxAmount: 0.005,
+    });
+    const prompt = 'Run a Hermes creator test for LinkedIn, YouTube, and X.';
+    expect(requestedCreatorSearchKinds(prompt)).toEqual(['linkedin_youtube', 'x']);
+    expect(requestedCreatorSearchKinds(
+      'Run an X search to find Hermes creators and consultants.',
+    )).toEqual(['x']);
+    const governed = governedCreatorSearchInput(prompt);
+    expect(governed).toContain(JSON.stringify(AGENTCASH_CREATOR_SEARCH_ARGUMENTS));
+    expect(governed).toContain(JSON.stringify(AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS));
+    expect(governed).toContain('exactly once');
+    expect(governedCreatorSearchInput('Explain whether X search exists.')).toBe('Explain whether X search exists.');
   });
 
   it('stores bounded public evidence while preserving influence and consent gaps', () => {
@@ -80,5 +102,50 @@ describe('AgentCash creator consultant discovery', () => {
     const parsed = parseAgentCashCreatorSearch(`${response}\n${payment}`);
     expect(parsed.candidates).toHaveLength(1);
     expect(JSON.stringify(parsed.artifacts)).not.toContain('0xreceipt');
+  });
+
+  it('imports bounded X creator evidence with public metrics and strips contact data', () => {
+    const parsed = parseAgentCashXCreatorSearch({
+      success: true,
+      data: {
+        status: 200,
+        message: 'OK',
+        data: {
+          tweets: [{
+            id: '2101069073878507707',
+            url: 'https://x.com/HermesAgentTips/status/2101069073878507707?ref=feed',
+            fullText: 'Hermes Agent tutorial for consultants. creator@example.com +1 555 222 3333',
+            createdAt: 'Fri Sep 18 22:01:17 +0000 2026',
+            likeCount: 12,
+            viewCount: 200,
+            author: {
+              userName: 'HermesAgentTips',
+              url: 'https://twitter.com/HermesAgentTips',
+              name: 'Hermes Agent Tips',
+              description: 'Covering Nous Research Hermes Agent and building practical guides.',
+              followers: 9506,
+              following: 1056,
+              isBlueVerified: true,
+              professional: { professional_type: 'Creator', category: [{ name: 'Content Creator' }] },
+            },
+          }],
+        },
+      },
+      metadata: { payment: { transactionHash: 'must-not-persist' } },
+    }, new Date('2026-09-18T22:35:00Z'));
+    expect(parsed).toMatchObject({ apiRequestsUsed: 1, monetaryCostUsd: 0.005 });
+    expect(parsed.candidates).toEqual([expect.objectContaining({
+      displayName: 'Hermes Agent Tips',
+      profileUrl: 'https://x.com/HermesAgentTips',
+    })]);
+    expect(parsed.artifacts[0]?.url).toBe('https://x.com/HermesAgentTips/status/2101069073878507707');
+    expect(parsed.artifacts[0]?.content).toMatchObject({
+      platform: 'x', followers: 9506, is_verified: true,
+      public_engagement: { likes: 12, views: 200 },
+    });
+    const stored = JSON.stringify(parsed.artifacts);
+    expect(stored).not.toContain('creator@example.com');
+    expect(stored).not.toContain('+1 555 222 3333');
+    expect(stored).not.toContain('must-not-persist');
   });
 });

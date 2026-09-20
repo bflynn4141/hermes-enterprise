@@ -181,6 +181,17 @@ export const recordInstanceCreated = (
     doubles: [1, fields.used, fields.cap ?? 0],
   });
 
+/** Startup latency is separate from stream delivery and provider timing. */
+export const recordHermesLatency = (
+  env: Env,
+  workspaceId: string,
+  fields: RuntimeLatency & { runId: string; modelId: string; releaseRing?: 'canary' | 'stable' },
+): boolean =>
+  writePoint(env, 'hermes.latency', workspaceId, {
+    blobs: [fields.runId, fields.modelId, fields.phase],
+    doubles: [fields.duration_ms, fields.elapsed_ms, fields.turn_elapsed_ms ?? -1],
+  });
+
 /**
  * Hermes delivery health. Timings and counts are deliberately separate from
  * response content so the first-token and stream-tail SLOs remain queryable
@@ -209,17 +220,6 @@ export const recordHermesStream = (
       fields.deltaCount,
       fields.deltaCharacters,
     ],
-  });
-
-/** Separate series keeps the existing stream metric column layout stable. */
-export const recordHermesLatency = (
-  env: Env,
-  workspaceId: string,
-  fields: RuntimeLatency & { runId: string; modelId: string; releaseRing: 'canary' | 'stable' },
-): boolean =>
-  writePoint(env, 'hermes.latency', workspaceId, {
-    blobs: [fields.runId, fields.modelId, fields.releaseRing, fields.phase],
-    doubles: [fields.duration_ms, fields.elapsed_ms, fields.turn_elapsed_ms ?? -1],
   });
 
 /** Safe, versioned terminal classification only; provider prose is forbidden. */

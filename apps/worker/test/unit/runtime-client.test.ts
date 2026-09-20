@@ -5,6 +5,8 @@ import { HermesApiError, HermesCapabilitiesError, HermesClient, HermesContractEr
 
 const RUN_ID = 'run_native-123';
 const SECRET = 'runtime-secret-that-must-stay-server-side';
+const PLUGIN_REVISION = 'a'.repeat(40);
+const PLUGIN_DIGEST = `sha256:${'d'.repeat(64)}`;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json' },
 });
@@ -64,17 +66,92 @@ function connectorTransport(response: () => Response) {
 }
 
 describe('official Hermes Runs transport', () => {
-  it('reads the Enterprise and AgentCash readiness attestation through the fixed connector', async () => {
+  it('reads the checked native identity, skill and tool inventory through the fixed connector', async () => {
     const { client } = connectorTransport(() => json({
-      object: 'hermes.enterprise_bridge.readiness', version: '1.4.0',
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
       workspace_id: '11111111-1111-4111-8111-111111111111',
       agent_id: '22222222-2222-4222-8222-222222222222',
       enterprise_url: 'https://staging.example', agentcash_enabled: true,
       agentcash_wallet_present: true, native_cron_disabled: true,
+      skills: [{
+        name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
+        artifact_digest: `sha256:${'a'.repeat(64)}`,
+        content_digest: `sha256:${'a'.repeat(64)}`,
+      }],
+      tools: ['publish_partner_invoice_review', 'skill_view'],
     }));
     await expect(client.enterpriseReadiness()).resolves.toMatchObject({
-      version: '1.4.0', agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
+      version: '1.7.0', runtimeRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifactDigest: PLUGIN_DIGEST },
+      skills: [{
+        name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
+        artifactDigest: `sha256:${'a'.repeat(64)}`,
+        contentDigest: `sha256:${'a'.repeat(64)}`,
+      }],
+      toolNames: ['publish_partner_invoice_review', 'skill_view'],
+      agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
     });
+  });
+
+  it.each([
+    ['stale plugin', { plugin: { name: 'enterprise_bridge', version: '1.6.3' } }],
+    ['invalid skill digest', { skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'G'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }] }],
+    ['duplicate tool inventory', { tools: ['skill_view', 'skill_view'] }],
+  ])('rejects a %s readiness attestation', async (_label, changed) => {
+    const body = {
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'a'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }],
+      tools: ['get_partner_handoff_result', 'skill_view'], agentcash_enabled: false,
+      agentcash_wallet_present: false, native_cron_disabled: true, ...changed,
+    };
+    const { client } = connectorTransport(() => json(body));
+    await expect(client.enterpriseReadiness()).rejects.toEqual(new HermesCapabilitiesError());
+  });
+
+  it('keeps the pre-attestation readiness payload available to legacy provisioning', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.6.3',
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      agentcash_enabled: true, agentcash_wallet_present: true, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).resolves.toEqual({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.6.3',
+      runtimeRevision: null, plugin: null,
+      workspaceId: 'workspace', agentId: 'agent', enterpriseUrl: 'https://staging.example',
+      skills: null, toolNames: null,
+      agentCashEnabled: true, agentCashWalletPresent: true, nativeCronDisabled: true,
+    });
+  });
+
+  it('keeps the two-field plugin identity accepted for an original legacy profile', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      plugin: { name: 'enterprise_bridge', version: '1.7.0' },
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1',
+        artifact_digest: `sha256:${'a'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }],
+      tools: ['get_partner_handoff_result', 'skill_view'], agentcash_enabled: false,
+      agentcash_wallet_present: false, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).resolves.toMatchObject({
+      plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: null, artifactDigest: null },
+    });
+  });
+
+  it('rejects a partial attestation instead of downgrading it to legacy readiness', async () => {
+    const { client } = connectorTransport(() => json({
+      object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
+      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
+      agentcash_enabled: false, agentcash_wallet_present: false, native_cron_disabled: true,
+    }));
+    await expect(client.enterpriseReadiness()).rejects.toEqual(new HermesCapabilitiesError());
   });
 
   it('uses one fixed service-authenticated route for a Hermes Cloud connector', async () => {
@@ -86,6 +163,25 @@ describe('official Hermes Runs transport', () => {
     expect(init?.redirect).toBe('manual');
     expect(JSON.parse(String(init?.body))).toEqual({ operation: 'capabilities' });
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${SECRET}`);
+  });
+
+  it('uses the authenticated POST operation that the dashboard edge streams without compression', async () => {
+    const event = { event: 'message.delta', run_id: RUN_ID, delta: 'First' };
+    const { client, send } = connectorTransport(() => new Response(`: enterprise-bridge-connected\n\ndata: ${JSON.stringify(event)}\n\n`, {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    const controller = new AbortController();
+    const received = [];
+    for await (const item of client.events(RUN_ID, controller.signal)) received.push(item);
+    expect(received).toEqual([event]);
+    const [url, init] = send.mock.calls[0]!;
+    expect(url).toBe('https://iris.example/api/plugins/enterprise_bridge/control');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ operation: 'events', run_id: RUN_ID });
+    expect(init?.signal).toBe(controller.signal);
+    expect(new Headers(init?.headers).get('Accept')).toBe('text/event-stream');
+    expect(new Headers(init?.headers).get('Accept-Encoding')).toBe('identity');
+    expect(new Headers(init?.headers).get('Cache-Control')).toBe('no-cache');
   });
 
   it('wraps Cloud submit and control operations without exposing a generic proxy', async () => {
@@ -141,6 +237,7 @@ describe('official Hermes Runs transport', () => {
       input: 'Review this application.', session_id: 'session-1', provider: 'custom',
       _enterprise_tool_names: ['propose_request'],
       _enterprise_skills: [{ name: 'enterprise_bridge:partner-program-screening', version: '1.1.0' }],
+      _enterprise_turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
     };
     expect(await client.submit(body, 'enterprise-local-a1')).toBe(RUN_ID);
     expect(send).toHaveBeenCalledOnce();
@@ -153,8 +250,18 @@ describe('official Hermes Runs transport', () => {
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
     expect(JSON.parse(String(init?.body))).toEqual({
       input: 'Review this application.', session_id: 'session-1', provider: 'custom',
+      turn_author: { id: 'bot:agent-partnerships', name: 'Iris', is_bot: true },
     });
     expect(String(init?.body)).not.toContain(SECRET);
+  });
+
+  it('rejects malformed internal bot attribution before contacting Hermes', async () => {
+    const { client, send } = transport(() => json({ run_id: RUN_ID, status: 'started' }, 202));
+    await expect(client.submit({
+      input: 'Review.',
+      _enterprise_turn_author: { id: 'human:someone', name: 'Iris', is_bot: true },
+    }, 'stable-key')).rejects.toThrow('invalid enterprise turn author');
+    expect(send).not.toHaveBeenCalled();
   });
 
   it.each([{}, { run_id: '' }, { run_id: 42 }, { run_id: '../another/run' }])(

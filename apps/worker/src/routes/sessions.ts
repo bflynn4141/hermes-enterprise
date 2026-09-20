@@ -28,6 +28,10 @@ import type { Env } from '../env.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { requireAllowedProvider } from '../model/allowed.js';
+import { loadSessionSnapshot, projectSessionMessage } from '../domain/session-snapshot.js';
+import { parseExpectedSettings, requireExpectedSettings, validateSessionEffort } from '../domain/session-settings.js';
+import { VISIBLE } from '../domain/session-visibility.js';
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 
 const MAX_PAGE = 100;
@@ -54,7 +58,7 @@ const MAX_PAGE = 100;
  * It binds `$2` to the caller's user id and expects the sessions table aliased
  * `s`.
  */
-export const VISIBLE = `(s.owner_id = $2)`;
+export { VISIBLE };
 
 const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
        s.pinned, s.archived, s.read_only, s.focus_ref, s.last_activity_at`;
@@ -62,10 +66,11 @@ const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.mode, s.model_
 async function loadSession(
   work: TenantWork,
   sessionId: string,
-): Promise<{ id: string; owner_id: string; read_only: boolean }> {
-  const { rows } = await work.tx.query<{ id: string; owner_id: string; read_only: boolean }>(
-    `SELECT s.id, s.owner_id, s.read_only FROM sessions s
-      WHERE s.workspace_id = $1 AND s.id = $3 AND ${VISIBLE}`,
+  lock = false,
+): Promise<{ id: string; owner_id: string; read_only: boolean; model_id: string; effort: string | null }> {
+  const { rows } = await work.tx.query<{ id: string; owner_id: string; read_only: boolean; model_id: string; effort: string | null }>(
+    `SELECT s.id, s.owner_id, s.read_only, s.model_id, s.effort FROM sessions s
+      WHERE s.workspace_id = $1 AND s.id = $3 AND ${VISIBLE} ${lock ? 'FOR UPDATE OF s' : ''}`,
     [work.workspaceId, work.userId, sessionId],
   );
   const session = rows[0];
@@ -161,17 +166,64 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
     };
     const mode = input.mode === 'ask' || input.mode === 'plan' ? input.mode : 'work';
 
-    // A session belongs to an agent for its whole life. The optional input is
-    // for the multi-agent shape; omitting it keeps the current one-agent
-    // workspace flow working while still persisting the resolved identity.
-    const agentRows = await work.tx.query<{ id: string }>(
-      `SELECT id FROM agents
-        WHERE workspace_id = $1 AND ($2::uuid IS NULL OR id = $2)
-        ORDER BY created_at LIMIT 1`,
-      [work.workspaceId, requestedAgent?.success ? requestedAgent.data : null],
-    );
-    const agentId = agentRows.rows[0]?.id;
-    if (!agentId) throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+    // A session belongs to an agent for its whole life. An omitted id resolves
+    // only among agents whose private context the caller can access; it must
+    // never fall back to the workspace's first unrelated private agent.
+    let agentId: string | null = requestedAgent?.success ? requestedAgent.data : null;
+    if (agentId) {
+      try {
+        await requireAgentContextAccess(work, agentId);
+      } catch (error) {
+        if (error instanceof RouteError && error.status === 404) {
+          throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+        }
+        throw error;
+      }
+    } else {
+      const candidates = await work.tx.query<{ id: string }>(
+        `SELECT a.id FROM agents a
+          WHERE a.workspace_id=$1
+            AND EXISTS (
+              SELECT 1 FROM members viewer_member
+               WHERE viewer_member.workspace_id=$1 AND viewer_member.user_id=$2
+                 AND viewer_member.status='active'
+            )
+            AND (a.context_scope='workspace'
+              OR EXISTS (SELECT 1 FROM agent_owners ao WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id)
+              OR EXISTS (SELECT 1 FROM enterprise_team_agents ta WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id))
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_owners ao JOIN members owner_member
+                ON owner_member.workspace_id=ao.workspace_id AND owner_member.id=ao.member_id
+               WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
+                 AND (owner_member.user_id<>$2 OR owner_member.status<>'active'))
+            AND NOT EXISTS (
+              SELECT 1 FROM enterprise_team_agents ta
+               WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id AND ta.principal_user_id<>$2)
+          ORDER BY
+            CASE
+              WHEN EXISTS (
+                SELECT 1 FROM agent_owners ao JOIN members m
+                  ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+                 WHERE ao.workspace_id=$1 AND ao.agent_id=a.id
+                   AND m.user_id=$2 AND m.status='active'
+              ) THEN 0
+              WHEN EXISTS (
+                SELECT 1 FROM enterprise_team_agents ta
+                 WHERE ta.workspace_id=$1 AND ta.agent_id=a.id AND ta.principal_user_id=$2
+              ) THEN 1
+              WHEN a.context_scope='workspace' THEN 2
+              ELSE 3
+            END,
+            a.created_at
+          LIMIT 1`,
+        [work.workspaceId, work.userId],
+      );
+      agentId = candidates.rows[0]?.id ?? null;
+      if (!agentId) throw new RouteError('no accessible agent in this workspace', 'unknown_agent', 422);
+      // Keep one canonical final check at the write boundary so predicate drift
+      // can fail closed rather than creating a session on private context.
+      await requireAgentContextAccess(work, agentId);
+    }
 
     const resolvedRuntime = c.env.AGENT_RUNTIME === 'hermes'
       ? await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, agentId)
@@ -218,6 +270,15 @@ export async function getSessionRoute(c: Context<{ Bindings: Env }>): Promise<Re
   return c.json(body);
 }
 
+/** GET /w/:ws/sessions/:id/snapshot — history and replay share one boundary. */
+export async function getSessionSnapshot(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const sessionId = pathUuid(c, 'id');
+  c.header('Cache-Control', 'private, no-store');
+  return c.json(await inWorkspace(c, (work) => loadSessionSnapshot(
+    work.tx, c.env, work.workspaceId, work.userId, sessionId,
+  )));
+}
+
 /** PATCH /w/:ws/sessions/:id — rename, pin, archive, mode, focus. */
 export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -230,12 +291,15 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     mode?: string;
     effort?: string | null;
     model_id?: string;
+    expected_settings?: unknown;
     focus_ref?: unknown;
   }>(c);
+  const expectedSettings = parseExpectedSettings(input.expected_settings);
 
   const body = await inWorkspace(c, async (work) => {
-    const session = await loadSession(work, sessionId);
+    const session = await loadSession(work, sessionId, true);
     requireOwner(work, session, 'changing a session');
+    requireExpectedSettings(session, expectedSettings);
 
     const sets: string[] = [];
     const values: unknown[] = [work.workspaceId, sessionId];
@@ -247,7 +311,6 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     if (typeof input.pinned === 'boolean') push('pinned', input.pinned);
     if (typeof input.archived === 'boolean') push('archived', input.archived);
     if (input.mode === 'ask' || input.mode === 'plan' || input.mode === 'work') push('mode', input.mode);
-    if (input.effort === null || typeof input.effort === 'string') push('effort', input.effort);
     // The model the *next* turn uses.
     //
     // This was missing, which nobody noticed because the client sends it with
@@ -262,16 +325,23 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
     // against the catalog's existence: a row that is disabled by policy, has no
     // tool calling, or has no verified key would be a session that cannot take
     // a turn, and the turns route would refuse it later with a worse message.
-    if (typeof input.model_id === 'string') {
-      const { rows: candidates } = await work.tx.query<{ offered: boolean; provider: string }>(
-        `SELECT c.provider,
-                (c.disabled_reason IS NULL AND c.supports_tools AND EXISTS (
+    if ('model_id' in input || 'effort' in input) {
+      if ('model_id' in input && (typeof input.model_id !== 'string' || !input.model_id || input.model_id.length > 64)) {
+        throw new RouteError('A valid model is required.', 'unknown_model', 422);
+      }
+      const modelId = input.model_id ?? session.model_id;
+      const { rows: candidates } = await work.tx.query<{
+        offered: boolean; enabled: boolean; provider: string; effort_map: Record<string, unknown> | null; default_effort: string | null;
+      }>(
+        `SELECT c.provider,c.effort_map,c.default_effort,
+                (c.disabled_reason IS NULL AND c.supports_tools) AS enabled,
+                EXISTS (
                    SELECT 1 FROM workspace_provider_keys k
                     WHERE k.workspace_id = $1 AND k.provider = c.provider
                       AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
-                 )) AS offered
+                 ) AS offered
            FROM catalog c WHERE c.model_id = $2`,
-        [work.workspaceId, input.model_id],
+        [work.workspaceId, modelId],
       );
       const candidate = candidates[0];
       // A model the catalog does not have is a 422 in every environment: the
@@ -285,10 +355,13 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
       // Scripted development has no provider key at all, and refusing there
       // would make a working local stack look broken — the same exception
       // `selectors.ts` makes on the client.
-      if (!candidate.offered && c.env.MODEL_SCRIPTED !== '1') {
+      if (!candidate.enabled || (!candidate.offered && c.env.MODEL_SCRIPTED !== '1')) {
         throw new RouteError('that model is not available to this workspace', 'unknown_model', 422);
       }
-      push('model_id', input.model_id);
+      const effort = validateSessionEffort('effort' in input ? input.effort
+        : modelId === session.model_id ? session.effort : candidate.default_effort, candidate.effort_map);
+      push('model_id', modelId);
+      push('effort', effort);
     }
     if ('focus_ref' in input) {
       values.push(input.focus_ref === null ? null : JSON.stringify(input.focus_ref));
@@ -407,7 +480,10 @@ export async function listMessages(c: Context<{ Bindings: Env }>): Promise<Respo
     await loadSession(work, sessionId);
 
     const { rows } = await work.tx.query(
-      `SELECT id, session_id, seq, role, kind, text, blocks, status, run_id, worked_ms, created_at
+      `SELECT id, session_id, seq, role, kind, text, blocks, status, run_id, worked_ms, created_at,
+              (SELECT jsonb_agg(jsonb_build_object('id',source->>'id','name',source->>'name','sha256',source->>'sha256','kind',source->>'kind'))
+                 FROM runs bound, jsonb_array_elements(bound.context_snapshot->'sources') source
+                WHERE bound.id=messages.run_id AND bound.workspace_id=messages.workspace_id) AS context_sources
          FROM messages
         WHERE workspace_id = $1 AND session_id = $2
           AND ($3::int IS NULL OR seq < $3::int)
@@ -417,19 +493,7 @@ export async function listMessages(c: Context<{ Bindings: Env }>): Promise<Respo
     );
     const page = rows.slice(0, limit).reverse();
     return paginatedSchema(messageSchema).parse({
-      items: page.map((row) => ({
-        id: row.id,
-        session_id: row.session_id,
-        seq: row.seq,
-        role: row.role,
-        kind: row.kind ?? null,
-        text: row.text,
-        blocks: row.blocks,
-        status: row.status,
-        run_id: row.run_id ?? null,
-        worked_ms: row.worked_ms ?? null,
-        at: (row.created_at as Date).toISOString(),
-      })),
+      items: page.map(projectSessionMessage),
       // The cursor is the oldest sequence on this page: ask for anything before
       // it to get the previous page, and null when there is nothing older.
       cursor: rows.length > limit && page[0] ? String(page[0].seq) : null,

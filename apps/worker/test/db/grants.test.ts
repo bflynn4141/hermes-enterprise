@@ -28,6 +28,21 @@ async function grantsFor(role: string): Promise<Map<string, Set<Privilege>>> {
   });
 }
 
+async function columnGrantsFor(role: string, table: string): Promise<Array<{
+  column_name: string;
+  privilege_type: Privilege;
+}>> {
+  return withClient('owner', async (c) => (
+    await c.query<{ column_name: string; privilege_type: Privilege }>(
+      `SELECT column_name, privilege_type
+         FROM information_schema.column_privileges
+        WHERE table_schema = 'public' AND grantee = $1 AND table_name = $2
+        ORDER BY column_name, privilege_type`,
+      [role, table],
+    )
+  ).rows);
+}
+
 /** What the `agent` role is allowed, table by table. Nothing else is granted. */
 const AGENT_EXPECTED: Record<string, Privilege[]> = {
   workspaces: ['SELECT'],
@@ -36,7 +51,10 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   workspace_settings: ['SELECT'],
   agents: ['SELECT'],
   agent_capabilities: ['SELECT'],
+  agent_operation_policies: ['SELECT'],
+  agent_operation_approvals: ['SELECT', 'INSERT'],
   agent_files: ['SELECT'],
+  agent_context_notes: ['SELECT'],
   agent_owners: ['SELECT'],
   agent_provisioning: ['SELECT'],
   agent_runtime_bindings: ['SELECT'],
@@ -58,6 +76,11 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   attachments: ['SELECT'],
   agent_skills: ['SELECT'],
   skill_versions: ['SELECT'],
+  enterprise_skill_assignments: ['SELECT'],
+  enterprise_skill_assignment_revisions: ['SELECT'],
+  enterprise_skill_artifacts: ['SELECT'],
+  enterprise_teams: ['SELECT'],
+  enterprise_team_agents: ['SELECT'],
   run_queue: ['SELECT'],
   events: ['SELECT'],
   catalog: ['SELECT'],
@@ -77,6 +100,7 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
   partner_candidates: ['SELECT'],
   partner_screening_run_candidates: ['SELECT'],
   partner_contact_enrichments: ['SELECT'],
+  partner_engagements: ['SELECT'],
   stream_events: ['INSERT'],
   instruction_versions: ['SELECT', 'INSERT'],
   run_steps: ['SELECT', 'INSERT', 'UPDATE'],
@@ -90,6 +114,12 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
 
 /** The revocations the approval invariant rests on, named one by one. */
 const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
+  { table: 'shared_intelligence_proposals', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'shared_intelligence_evidence', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'cloud_connections', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'cloud_connection_attempts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'member_provisioning_operations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'members', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
@@ -113,8 +143,30 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   // M3.5.
   { table: 'attachments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_owners', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'agent_operation_policies', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'agent_operation_approvals', privileges: ['UPDATE', 'DELETE'] },
+  { table: 'agent_operation_policy_revisions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_skill_assignments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_skill_assignment_revisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_skill_artifacts', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_teams', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_team_agents', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  // Connector metadata is app-owned and private records are never directly
+  // exposed to the agent role. The server mediates them through run grants.
+  { table: 'enterprise_connection_bindings', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_records', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_handoffs', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'enterprise_run_grants', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_workflow_executions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'request_audiences', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_workflow_settings', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_record_revisions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_engagement_authorizations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_invoice_intakes', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_decision_acknowledgments', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_provisioning', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'agent_runtime_bindings', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'hermes_cloud_capacity', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_resources', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_policies', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'approval_requests', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
@@ -130,10 +182,21 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'partner_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_screening_run_candidates', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_contact_enrichments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_engagements', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'partner_discovery_cursors', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'outbound_email_accounts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'outbound_email_outbox', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'contact_suppressions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'gmail_oauth_states', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'request_triage_assessments', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
 ];
 
 describe('database grants', () => {
+  it('keeps missing-instance observations app-owned', async () => {
+    expect((await grantsFor('app')).get('run_sweep_observations')).toEqual(new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']));
+    expect((await grantsFor('agent')).has('run_sweep_observations')).toBe(false);
+  });
+
   it('gives the agent role exactly the privileges the plan lists', async () => {
     const actual = await grantsFor('agent');
     const actualPlain: Record<string, Privilege[]> = {};
@@ -155,6 +218,15 @@ describe('database grants', () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it('grants runtime admission only the non-secret capacity columns it evaluates', async () => {
+    expect(await columnGrantsFor('agent', 'hermes_cloud_capacity')).toEqual([
+      { column_name: 'assigned_agent_id', privilege_type: 'SELECT' },
+      { column_name: 'state', privilege_type: 'SELECT' },
+      { column_name: 'workspace_id', privilege_type: 'SELECT' },
+    ]);
+    expect((await grantsFor('agent')).has('hermes_cloud_capacity')).toBe(false);
   });
 
   it('keeps the audit table and the outbox append-only for both roles', async () => {

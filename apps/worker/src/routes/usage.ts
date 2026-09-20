@@ -1,10 +1,8 @@
 // GET /w/:ws/usage?range=
 //
-// Any member may read it. That is a deliberate choice rather than an oversight:
-// the numbers here are what the workspace's own agent spent on the workspace's
-// own key, a Member can already see every run that produced them, and a spend
-// figure only one person can see is a spend figure nobody checks. What a Member
-// cannot do is *change* the caps — that is the Admin-only PATCH in settings.ts.
+// Admin-only. The report includes workspace-wide session titles and provider
+// key attribution. Agents and sessions are now per-member, so workspace
+// membership no longer implies visibility of every row behind these totals.
 //
 // Every number in the response is shipped with `disclaimer`, and the client is
 // expected to render it beside the total rather than in a footnote. See
@@ -16,6 +14,9 @@ import { inWorkspace } from './tenant.js';
 
 export async function getUsage(c: Context<{ Bindings: Env }>): Promise<Response> {
   const range = parseRange(c.req.query('range'));
-  const report = await inWorkspace(c, (work) => usageReport(work.tx, work.workspaceId, range));
+  const report = await inWorkspace(c, (work) => {
+    work.requireAdmin('viewing workspace usage');
+    return usageReport(work.tx, work.workspaceId, range);
+  });
   return c.json(report);
 }

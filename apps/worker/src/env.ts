@@ -21,6 +21,14 @@ export interface Env {
   HERMES_POOL_LOW_CAPACITY_THRESHOLD?: string;
   /** Public origin the Cloud profile uses for its reverse enterprise bridge. */
   HERMES_ENTERPRISE_PUBLIC_URL?: string;
+  /** Enables the admin-only Cloud OAuth connection, not paid provisioning. */
+  HERMES_CLOUD_MANAGEMENT_ENABLED?: string;
+  /** Persist and prepare member agents before any invitation delivery. */
+  HERMES_MEMBER_PROVISIONING_ENABLED?: string;
+  /** Reviewed native plugin commit accepted for managed warm-pool profiles. */
+  HERMES_ENTERPRISE_PLUGIN_REVISION?: string;
+  /** Reviewed deterministic digest of the installed enterprise_bridge tree. */
+  HERMES_ENTERPRISE_PLUGIN_SHA256?: string;
   /**
    * 'fake' reads a seeded user from `x-dev-user`; 'workos' verifies a sealed
    * cookie. M1 ships 'fake' only, behind the same `getSession` interface the
@@ -88,10 +96,32 @@ export interface Env {
   PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES?: string;
   /** Separate spend gate for recurring AgentCash discovery. Manual onboarding keeps its one-use allowance. */
   PARTNER_SCREENING_PAID_AUTOMATION_ENABLED?: string;
+  /** Draft-only by default. send_after_approval creates an exact, revision-bound email outbox after approval. */
+  PARTNER_OUTREACH_EMAIL_MODE?: 'draft_only' | 'send_after_approval';
+  /** Dedicated Gmail sender used only for exact, human-approved outreach. */
+  GMAIL_OUTREACH_ENABLED?: string;
+  GMAIL_CLIENT_ID?: string;
+  GMAIL_CLIENT_SECRET?: string;
+  GMAIL_STATE_SECRET?: string;
+  GMAIL_REDIRECT_URI?: string;
+  /** Test-only HTTP injection; production uses Google endpoints directly. */
+  GMAIL_FETCHER?: Fetcher;
+  /** Dedicated exact-scope OAuth client for explicitly selected Gmail evidence. */
+  GMAIL_EVIDENCE_ENABLED?: string;
+  GMAIL_EVIDENCE_CLIENT_ID?: string;
+  GMAIL_EVIDENCE_CLIENT_SECRET?: string;
+  GMAIL_EVIDENCE_STATE_SECRET?: string;
+  GMAIL_EVIDENCE_REDIRECT_URI?: string;
+  /** Test-only injection; never falls back to the outbound sender binding. */
+  GMAIL_EVIDENCE_FETCHER?: Fetcher;
   /** Jev Inbox ranking rollout: off, shadow (store only), or active (serve ranking). */
   INBOX_TRIAGE_MODE?: 'off' | 'shadow' | 'active';
   /** Versioned scoring rubric, persisted beside each append-only assessment. */
   INBOX_TRIAGE_RUBRIC_VERSION?: string;
+  /** Export content-free terminal Hermes run events to Raindrop when active. */
+  RAINDROP_OBSERVABILITY_MODE?: 'off' | 'active';
+  /** Optional Raindrop project override; the write key's default project is otherwise used. */
+  RAINDROP_PROJECT_ID?: string;
   /**
    * The uploads bucket's *name*, which a presigned URL needs and a binding does
    * not: the binding is resolved by Cloudflare, the URL has to spell the bucket
@@ -101,6 +131,8 @@ export interface Env {
 
   // --- Secrets (never in the repository; see .dev.vars.example) -------------
   WORKOS_API_KEY?: string;
+  /** TypeSafe Jev API credential for the advisory Inbox classifier. */
+  TYPESAFE_API_KEY?: string;
   WORKOS_CLIENT_ID?: string;
   WORKOS_COOKIE_PASSWORD?: string;
   /**
@@ -140,6 +172,8 @@ export interface Env {
    */
   KEK_CURRENT?: string;
   SENTRY_DSN?: string;
+  /** Server-side Raindrop ingestion credential. Never exposed to the client. */
+  RAINDROP_WRITE_KEY?: string;
   /**
    * The S3-compatible credentials that let this Worker mint a presigned URL.
    *
@@ -182,9 +216,6 @@ export interface Env {
   // --- Queues ---------------------------------------------------------------
   EXTRACT_QUEUE: Queue;
   RENDERS_QUEUE: Queue;
-  /** Cloudflare Workers AI; optional in tests and local development. */
-  AI?: Ai;
-
   // --- R2 -------------------------------------------------------------------
   /** Uploads, extracted text (`{key}.txt`) and, from M4, rendered documents. */
   UPLOADS: R2Bucket;

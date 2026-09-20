@@ -10,7 +10,7 @@
 // what makes a step that ran twice produce one row. The `ON CONFLICT` targets
 // name the partial indexes from migration 0002 explicitly, because an untargeted
 // `DO NOTHING` would also swallow a genuine primary-key collision.
-import type { ApprovalView, RequestKind } from '@hermes/shared';
+import { agentOperationForTool, type ApprovalView, type RequestKind } from '@hermes/shared';
 import type { Client } from 'pg';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
@@ -39,7 +39,8 @@ import type {
   StepProgress,
 } from './agent-db.js';
 import { persistApprovalContinuation } from '../runtime/continuation-intent.js';
-import { partnerAgentConfig } from '../partner-screening/config.js';
+import { assignmentToolNames, resolveEnterpriseSkillAssignment, resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';
 import {
   agentCashContactEnrichmentArguments,
   agentCashEmailVerificationArguments,
@@ -91,8 +92,11 @@ export class PgAgentDb implements AgentDb {
     const client = await this.connection();
     await client.query('BEGIN');
     try {
-      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', this.workspaceId]);
-      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', SYSTEM_USER_ID]);
+      // Both identities remain transaction-local and are installed before any
+      // scoped query. One statement avoids an extra database round trip for
+      // every runtime read, checkpoint and finalization transaction.
+      await client.query('SELECT set_config($1, $2, true), set_config($3, $4, true)',
+        ['app.workspace_id', this.workspaceId, 'app.user_id', SYSTEM_USER_ID]);
       const result = await fn(
         <R,>(text: string, values?: readonly unknown[]) =>
           client.query(text, values ? [...values] : undefined) as unknown as Promise<QueryResultLike<R>>,
@@ -109,6 +113,11 @@ export class PgAgentDb implements AgentDb {
    * Instances are request-local; callers must not run concurrent operations on one.
    */
   async runtimeTx<T>(fn: (q: <R>(text: string, values?: readonly unknown[]) => Promise<{ rows: R[] }>) => Promise<T>): Promise<T> {
+    // A higher-level runtime operation may deliberately group several existing
+    // AgentDb methods into one tenant-scoped transaction. Reuse that query
+    // directly so a nested runtimeTx neither opens a second transaction nor
+    // clears the outer transaction's query before the remaining reads finish.
+    if (this.runtimeTransactionQuery) return fn(this.runtimeTransactionQuery);
     return this.tx(async (query) => {
       this.runtimeTransactionQuery = query;
       try { return await fn(query); }
@@ -144,10 +153,13 @@ export class PgAgentDb implements AgentDb {
         mode: string;
         agent_id: string | null;
         client_turn_id: string;
+        recovery_input: string | null;
+        automatic_recovery: boolean;
       }>(
         `SELECT r.id, r.workspace_id, r.session_id, r.status, r.stop_requested, r.attempt,
                 r.engine_version, r.max_turns, r.model_id, r.effort, r.trace_id, r.active_ms,
-                r.waiting_for, r.client_turn_id, coalesce(r.mode, s.mode) AS mode,
+                r.waiting_for, r.client_turn_id, r.recovery_input, r.automatic_recovery,
+                coalesce(r.mode, s.mode) AS mode,
                 COALESCE(r.agent_id, s.agent_id) AS agent_id
            FROM runs r JOIN sessions s ON s.id = r.session_id
           WHERE r.id = $1`,
@@ -172,6 +184,8 @@ export class PgAgentDb implements AgentDb {
         mode: row.mode,
         agentId: row.agent_id,
         clientTurnId: row.client_turn_id,
+        recoveryInput: row.recovery_input,
+        automaticRecovery: row.automatic_recovery,
       };
     });
   }
@@ -277,18 +291,35 @@ export class PgAgentDb implements AgentDb {
   async loadToolNames(agentId: string | null): Promise<string[]> {
     if (!agentId) return [];
     return this.tx(async (q) => {
-      const { rows } = await q<{ tool_names: string[] }>(
-        `SELECT tool_names FROM agent_capabilities WHERE agent_id = $1 ORDER BY position`,
+      const { rows } = await q<{ tool_names: string[]; scope: string | null }>(
+        `SELECT tool_names, scope FROM agent_capabilities WHERE agent_id = $1 ORDER BY position`,
         [agentId],
       );
-      const configured = [...new Set(rows.flatMap((row) => row.tool_names ?? []))];
-      // A valid per-agent public-source config is also the explicit enablement
-      // for the two read tools and the existing pending-only proposal tool.
-      // It does not add any decision, contact or external-write ability.
-      const partnerTools = partnerAgentConfig(this.env, agentId).config
-        ? ['list_partner_candidates', 'get_partner_candidate', 'propose_request']
-        : [];
-      if (configured.length > 0 || partnerTools.length > 0) return [...new Set([...configured, ...partnerTools])];
+      // Enterprise skill assignments are the reviewed source of the skill's
+      // semantic grants. They map to exact runtime tools here; a paused
+      // assignment contributes no authority.
+      const skillQuery = { query: <T extends import('pg').QueryResultRow>(text: string, values: readonly unknown[] = []) => q<T>(text, values) };
+      const assigned = await resolvePartnerSkillAssignment(this.env, skillQuery, this.workspaceId, agentId);
+      const finance = await resolveEnterpriseSkillAssignment(skillQuery, this.workspaceId, agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key);
+      // Once an assignment exists, its semantic grants replace the legacy
+      // Partner Program capability row. Other capability rows still compose
+      // normally. This is what makes pause remove authority rather than only
+      // hiding the skill instructions.
+      const configuredRows = assigned.assignment || finance.assignment
+        ? rows.filter((row) => row.scope !== 'Partner Program')
+        : rows;
+      const configured = [...new Set(configuredRows.flatMap((row) => row.tool_names ?? []))];
+      const partnerTools = assignmentToolNames(assigned.config ? assigned.assignment : null);
+      const financeTools = assignmentToolNames(finance.config ? finance.assignment : null);
+      // During rolling deployment, an env-only policy retains its previous
+      // read/draft surface until an app-role request materializes revision 1.
+      if (assigned.source === 'legacy' && assigned.config) {
+        partnerTools.push('list_partner_candidates', 'get_partner_candidate', 'propose_request');
+      }
+      const granted = [...new Set([...configured, ...partnerTools, ...financeTools])];
+      // An assignment is explicit configuration. Its empty result (paused or
+      // zero grants) must stay empty even in local development.
+      if (assigned.assignment || finance.assignment || granted.length > 0) return granted;
       // No capability rows at all means nobody configured this agent. In a
       // deployed environment that is the answer — an unconfigured agent gets no
       // tools, which fails closed. In development it would mean a freshly
@@ -301,7 +332,7 @@ export class PgAgentDb implements AgentDb {
   async loadSystemPrompt(runId: string): Promise<string> {
     return this.tx(async (q) => {
       const { rows } = await q<{ body: string | null }>(
-        `SELECT COALESCE(iv.body, a.instructions_active) AS body
+        `SELECT COALESCE(r.instruction_snapshot, iv.body, a.instructions_active) AS body
            FROM runs r
            JOIN sessions s ON s.id = r.session_id
            JOIN agents a ON a.id = COALESCE(r.agent_id, s.agent_id)
@@ -328,6 +359,10 @@ export class PgAgentDb implements AgentDb {
       );
       return rows;
     });
+  }
+
+  async loadContextSnapshot(runId: string): Promise<unknown> {
+    return this.tx(async q => (await q<{ context_snapshot: unknown }>('SELECT context_snapshot FROM runs WHERE id=$1', [runId])).rows[0]?.context_snapshot ?? null);
   }
 
   async resolveCredential(provider: string): Promise<Credential> {
@@ -358,6 +393,19 @@ export class PgAgentDb implements AgentDb {
         ? { model_id: model.model_id, provider: model.provider, transport: model.transport, effort_map: model.effort_map }
         : null;
     });
+  }
+
+  async getPartnerHandoffResult(input: {
+    runId: string;
+    agentId: string;
+    handoffId: string;
+  }) {
+    const { getPartnerHandoffResult } = await import('../partner-workflow/v2.js');
+    return withWorkspaceTransaction(this.env, this.workspaceId, (tx) =>
+      getPartnerHandoffResult(tx, this.workspaceId, input.handoffId, {
+        runId: input.runId,
+        agentId: input.agentId,
+      }));
   }
 
   // -------------------------------------------------------------------------
@@ -524,6 +572,35 @@ export class PgAgentDb implements AgentDb {
   // AgentWrites
   // -------------------------------------------------------------------------
 
+  async operationConsent(input: { runId: string; agentId: string; toolCallId: string; toolName: string; arguments: Record<string, unknown> }): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null> {
+    const operation = agentOperationForTool(input.toolName);
+    if (!operation) return null;
+    return this.tx(async (q) => {
+      // An already parked call stays bound even if someone switches its policy Off.
+      const find = () => q<{ id: string; status: 'pending' | 'approved' | 'denied'; matches: boolean }>(
+        `SELECT id,status,(tool_name=$3 AND arguments=$4::jsonb AND agent_id=$5) AS matches FROM agent_operation_approvals WHERE run_id=$1 AND tool_call_id=$2`,
+        [input.runId,input.toolCallId,input.toolName,JSON.stringify(input.arguments),input.agentId]);
+      const existing = (await find()).rows[0];
+      if (existing) {
+        if (!existing.matches) throw new Error('operation_approval_call_conflict');
+        return existing;
+      }
+      const policy = (await q<{ revision: number; required: boolean }>(`SELECT revision, operations->$2='true'::jsonb AS required FROM agent_operation_policies WHERE agent_id=$1`, [input.agentId,operation.id])).rows[0];
+      if (!policy?.required) return null;
+      await q(`INSERT INTO agent_operation_approvals(workspace_id,agent_id,run_id,tool_call_id,operation_id,tool_name,arguments,policy_revision)
+        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT(run_id,tool_call_id) DO NOTHING`,
+        [this.workspaceId,input.agentId,input.runId,input.toolCallId,operation.id,input.toolName,JSON.stringify(input.arguments),policy.revision]);
+      const created = (await find()).rows[0];
+      if (!created?.matches) throw new Error('operation_approval_call_conflict');
+      return created;
+    });
+  }
+
+  async loadOperationApproval(id: string, runId: string): Promise<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string } | null> {
+    return this.tx(async (q) => (await q<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string }>(
+      `SELECT tool_name AS "toolName",tool_call_id AS "toolCallId",arguments,status FROM agent_operation_approvals WHERE id=$1 AND run_id=$2`,[id,runId])).rows[0] ?? null);
+  }
+
   async proposeApproval(
     input: ProposeApprovalFromAgentInput,
   ): Promise<{ approval: ApprovalView; continuationId: string | null }> {
@@ -559,6 +636,22 @@ export class PgAgentDb implements AgentDb {
       }
       return { approval, continuationId };
     });
+  }
+
+  async publishPartnerInvoiceReview(input: {
+    runId: string;
+    agentId: string;
+    arguments: { intake_event_id: string; expected_payload_hash: string };
+  }): Promise<{ handoff_id: string; job_id: string | null; created: boolean }> {
+    const { publishConfirmedPartnerInvoiceReview } = await import('../partner-workflow/v2.js');
+    return withWorkspaceTransaction(this.env, this.workspaceId, (tx) =>
+      publishConfirmedPartnerInvoiceReview(
+        tx,
+        this.workspaceId,
+        input.runId,
+        input.agentId,
+        input.arguments,
+      ));
   }
 
   /**
@@ -798,6 +891,7 @@ export class PgAgentDb implements AgentDb {
       const { rows } = await q<Record<string, unknown>>(
         `SELECT id, kind, status, label, created_at FROM requests
           WHERE workspace_id = $1 AND ($2::text IS NULL OR status = $2)
+            AND agent_request_is_unscoped(requests.id)
           ORDER BY created_at DESC LIMIT $3`,
         [this.workspaceId, status, Math.min(50, Math.max(1, limit))],
       );
@@ -808,8 +902,11 @@ export class PgAgentDb implements AgentDb {
   async getRequest(requestId: string): Promise<unknown | null> {
     return this.tx(async (q) => {
       const { rows } = await q<Record<string, unknown>>(
-        `SELECT id, kind, status, label, payload, created_at FROM requests WHERE id = $1`,
-        [requestId],
+        `SELECT id, kind, status, label, payload, created_at
+           FROM requests
+          WHERE workspace_id=$1 AND id=$2
+            AND agent_request_is_unscoped(requests.id)`,
+        [this.workspaceId, requestId],
       );
       const row = rows[0];
       if (!row) return null;
@@ -822,7 +919,13 @@ export class PgAgentDb implements AgentDb {
   }
 
   async getApprovalStatus(requestId: string): Promise<ApprovalView> {
-    return this.tx((query) => loadApprovalView({ query } as unknown as Tx, requestId, null));
+    return this.tx(async (query) => {
+      const visible = await query<{ visible: boolean }>(
+        `SELECT agent_request_is_unscoped($1) AS visible`, [requestId],
+      );
+      if (visible.rows[0]?.visible !== true) throw new Error('approval request not found');
+      return loadApprovalView({ query } as unknown as Tx, requestId, null);
+    });
   }
 
   async getDocumentText(
@@ -832,8 +935,11 @@ export class PgAgentDb implements AgentDb {
   ): Promise<{ text: string; next_offset: number | null; total_chars: number } | null> {
     return this.tx(async (q) => {
       const { rows } = await q<{ body: string | null }>(
-        `SELECT payload->>'text' AS body FROM documents WHERE id = $1`,
-        [documentId],
+        `SELECT document.payload->>'text' AS body
+           FROM documents document
+          WHERE document.workspace_id=$1 AND document.id=$2
+            AND agent_request_is_unscoped(document.request_id)`,
+        [this.workspaceId, documentId],
       );
       const body = rows[0]?.body;
       if (body === undefined) return null;
@@ -877,11 +983,11 @@ export class PgAgentDb implements AgentDb {
                 ce.status AS contact_status,
                 COALESCE(jsonb_array_length(ce.contact_data->'phones'), 0) AS phone_count,
                 COALESCE(ce.draft_eligible, false) AS verified_email,
-                (SELECT r.id FROM requests r
-                  WHERE r.workspace_id = c.workspace_id
-                    AND r.subject_key = 'partner-candidate:' || c.id::text
-                  ORDER BY r.created_at LIMIT 1) AS existing_request_id
+                pe.stage AS engagement_stage,
+                pe.request_id AS existing_request_id
            FROM partner_candidates c
+           LEFT JOIN partner_engagements pe
+             ON pe.workspace_id=c.workspace_id AND pe.agent_id=c.agent_id AND pe.candidate_id=c.id
            LEFT JOIN LATERAL (
              SELECT status, contact_data, draft_eligible
                FROM partner_contact_enrichments e
@@ -890,6 +996,7 @@ export class PgAgentDb implements AgentDb {
            ) ce ON true
           WHERE c.workspace_id = $1 AND c.agent_id = $2
             AND c.deterministic_priority >= $3
+            AND pe.id IS NULL
           ORDER BY c.deterministic_priority DESC, c.last_seen_at DESC
           LIMIT $4`,
         [this.workspaceId, agentId, Math.max(0, Math.min(100, minimumPriority)), Math.max(1, Math.min(10, limit))],
@@ -946,6 +1053,29 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, agentId, candidate.id, this.traceId],
       );
       const contact = contactResult.rows[0];
+      const draftPolicyResult = await q<{
+        policy_key: string; member_id: string; sender_address: string;
+      }>(
+        `SELECT p.key AS policy_key, m.id AS member_id, u.email AS sender_address
+           FROM approval_policies p
+           JOIN members m
+             ON m.workspace_id=p.workspace_id AND m.status='active'
+            AND m.id=CASE
+              WHEN p.steps#>>'{0,reviewers,0,member_id}' ~
+                   '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN (p.steps#>>'{0,reviewers,0,member_id}')::uuid
+              ELSE NULL
+            END
+           JOIN users u ON u.id=m.user_id
+          WHERE p.workspace_id=$1 AND p.requester_agent_id=$2
+            AND p.key=$3 AND p.approval_type='communication' AND p.active
+            AND jsonb_array_length(p.steps)=1
+            AND jsonb_array_length(p.steps->0->'reviewers')=1
+            AND p.steps#>>'{0,reviewers,0,kind}'='member'
+          ORDER BY p.version DESC LIMIT 1`,
+        [this.workspaceId, agentId, `partner-outreach-draft-${agentId}`],
+      );
+      const draftPolicy = draftPolicyResult.rows[0];
       const contactEligible = ['agentcash_people', 'agentcash_creators'].includes(String(candidate.source))
         && trustedLinkedInProfileUrl(String(candidate.profile_url)) !== null;
       const nextContactCall = !contactEligible
@@ -987,6 +1117,13 @@ export class PgAgentDb implements AgentDb {
           verified_at: contact.verified_at,
           source: 'agentcash_minerva_hunter',
         } : null,
+        draft_approval_context: draftPolicy ? {
+          policy_key: draftPolicy.policy_key,
+          approval_type: 'communication',
+          draft_only: true,
+          target_member_ids: [draftPolicy.member_id],
+          sender: { member_id: draftPolicy.member_id, address: draftPolicy.sender_address },
+        } : null,
         next_contact_call: nextContactCall,
         constraints: [
           'Do not claim this organization applied or consented.',
@@ -995,6 +1132,7 @@ export class PgAgentDb implements AgentDb {
           'A proposal remains pending until a human reviews it; do not contact the organization.',
           'Phone numbers and social profiles are review-only data. Never call, text, or message them.',
           'Use an email address in a draft only when preferred_verified_email is non-null.',
+          'Propose outreach only when draft_approval_context is present, and copy that server-owned policy, audience, and sender exactly.',
         ],
       };
     });

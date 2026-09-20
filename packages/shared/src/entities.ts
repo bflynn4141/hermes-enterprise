@@ -11,6 +11,7 @@
 // its tests are the only producers, and they parse through the same schemas, so
 // a drift between mock and server is a test failure rather than a surprise.
 import { z } from 'zod';
+import { memberProvisioningOperationSchema, memberRoleTemplateSchema } from './member-provisioning.js';
 import { runErrorSchema, streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
 import { refSchema } from './refs.js';
@@ -74,7 +75,7 @@ export const sessionSchema = z
 export type Session = z.infer<typeof sessionSchema>;
 
 export const attachmentRefSchema = z
-  .object({ id: z.string().max(128), label: z.string().max(200), kind: z.enum(['file', 'skill', 'source', 'line']).default('file'), status: z.enum(['pending', 'extracting', 'ready', 'failed']).default('ready') })
+  .object({ id: z.string().max(128), label: z.string().max(200), kind: z.enum(['file', 'skill', 'source', 'line']).default('file'), status: z.enum(['pending', 'extracting', 'ready', 'failed']).default('ready'), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), source_kind: z.enum(['agent_file', 'library_source']).optional() })
   .strict();
 export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
 
@@ -223,6 +224,16 @@ export const requestEntitySchema = z
     approval: approvalListProjectionSchema.nullable().optional(),
     decision_summary: requestDecisionSummarySchema.optional(),
     triage: requestTriageSchema.optional(),
+    provenance: z.object({
+      kind: z.enum(['operational', 'sample', 'test', 'unknown']),
+      source: z.string().max(80),
+      recorded_at: z.iso.datetime({ offset: true }),
+    }).strict().default({ kind: 'unknown', source: 'not_recorded', recorded_at: '1970-01-01T00:00:00.000Z' }),
+    presentation: z.object({
+      hidden: z.boolean(),
+      hidden_at: z.iso.datetime({ offset: true }).nullable(),
+      hidden_reason: z.string().max(500).nullable(),
+    }).strict().default({ hidden: false, hidden_at: null, hidden_reason: null }),
   })
   .strict();
 export type RequestEntity = z.infer<typeof requestEntitySchema>;
@@ -301,6 +312,23 @@ export const invitationEntitySchema = z
     role: memberRoleSchema,
     status: z.enum(['pending', 'accepted', 'expired', 'withdrawn', 'bounced', 'resent']),
     invited_at: z.iso.datetime({ offset: true }),
+    /** WorkOS email handoff state. Present on current servers; optional for older clients/fixtures. */
+    delivery_status: z.enum(['not_required', 'queued', 'sending', 'delivered', 'failed']).optional(),
+    /** Stable allowlisted failure category. Provider text never enters this contract. */
+    delivery_reason: z.enum([
+      'workos_invitation_delivery_not_configured',
+      'workos_invitation_payload_invalid',
+      'iris_capacity_reservation_missing',
+      'workos_invitation_delivery_rejected',
+      'workos_invitation_delivery_unavailable',
+      'workos_invitation_delivery_outcome_unknown',
+      'workos_invitation_local_commit_failed',
+      'invitation_delivery_failed',
+    ]).nullable().optional(),
+    delivery_trace_id: uuidSchema.nullable().optional(),
+    /** Preparation is separate from email delivery and contains no provider detail. */
+    provisioning: memberProvisioningOperationSchema.nullable().optional(),
+    role_template_key: memberRoleTemplateSchema.optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();

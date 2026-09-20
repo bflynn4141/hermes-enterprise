@@ -178,6 +178,29 @@ describe('the workspace hub', () => {
 
     expect(hub.publish([event('20', null)]).delivered).toBe(2);
   });
+
+  it('delivers an audience-scoped workspace event only to the named human and removes delivery metadata', () => {
+    const finance = socket(attachment('user-finance', null));
+    const admin = socket(attachment('user-admin', null));
+    const hub = new WorkspaceHub(hubContext([finance, admin]), env);
+    const scoped = { ...event('21', null), audience_user_ids: ['user-finance'] };
+
+    expect(hub.publish([scoped]).delivered).toBe(1);
+    expect(admin.sent).toHaveLength(0);
+    const delivered = JSON.parse(finance.sent[0]!) as { events: Record<string, unknown>[] };
+    expect(delivered.events[0]).not.toHaveProperty('audience_user_ids');
+  });
+
+  it('delivers an explicitly scoped event with no active audience to nobody', () => {
+    const formerFinance = socket(attachment('user-finance', null));
+    const admin = socket(attachment('user-admin', null));
+    const hub = new WorkspaceHub(hubContext([formerFinance, admin]), env);
+    const scoped = { ...event('22', null), audience_user_ids: [] };
+
+    expect(hub.publish([scoped]).delivered).toBe(0);
+    expect(formerFinance.sent).toHaveLength(0);
+    expect(admin.sent).toHaveLength(0);
+  });
 });
 
 describe('hub tickets', () => {

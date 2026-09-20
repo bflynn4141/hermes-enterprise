@@ -14,7 +14,10 @@ import {
   agentCashContactEnrichmentArguments,
   agentCashEmailVerificationArguments,
 } from '../../src/partner-screening/agentcash-contact.js';
-import { AGENTCASH_CREATOR_SEARCH_ARGUMENTS } from '../../src/partner-screening/agentcash-creators.js';
+import {
+  AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
+} from '../../src/partner-screening/agentcash-creators.js';
 
 async function bindAgent(fx: Awaited<ReturnType<typeof seedWorkspace>>): Promise<void> {
   await withClient('owner', async (client) => {
@@ -353,10 +356,12 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     const now = new Date('2026-09-16T19:00:00Z');
     const first = await enqueueAutomatedPartnerScreening(env, now);
     const replay = await enqueueAutomatedPartnerScreening(env, now);
-    expect(first).toMatchObject({
-      enabled: true, candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
-      configuredAgents: 1, queued: 1,
-    });
+    expect(first.enabled).toBe(true);
+    expect(first.candidateAgents).toBeGreaterThanOrEqual(1);
+    expect(first.startedAgents).toBeGreaterThanOrEqual(1);
+    expect(first.activeOwnedAgents).toBeGreaterThanOrEqual(1);
+    expect(first.configuredAgents).toBeGreaterThanOrEqual(1);
+    expect(first.queued).toBeGreaterThanOrEqual(1);
     expect(replay.queued).toBe(0);
 
     const queuedJob = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
@@ -372,7 +377,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(workflows).toHaveLength(1);
     const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const screening = await client.query(`SELECT id FROM partner_screening_runs WHERE agent_id=$1 AND status='completed'`, [fx.agentId]);
-      const candidates = await client.query(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
+      const candidates = await client.query<{ id: string }>(`SELECT id FROM partner_candidates WHERE agent_id=$1`, [fx.agentId]);
       const sessions = await client.query(`SELECT id FROM sessions WHERE agent_id=$1 AND title='Iris · Automated partner screening'`, [fx.agentId]);
       const runs = await client.query(`SELECT id, client_turn_id FROM runs WHERE session_id=$1`, [sessions.rows[0]?.id]);
       const prompt = await client.query<{ text: string }>(
@@ -385,7 +390,8 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
         [fx.workspaceId, `partner-outreach-draft-${fx.agentId}`],
       );
       return {
-        screening: screening.rowCount, candidates: candidates.rowCount, sessions: sessions.rowCount,
+        screening: screening.rowCount, candidates: candidates.rowCount,
+        candidateId: candidates.rows[0]?.id ?? null, sessions: sessions.rowCount,
         runs: runs.rows, prompt: prompt.rows[0]?.text ?? '', policy: policy.rows,
       };
     });
@@ -394,8 +400,30 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     expect(stored.runs[0]?.client_turn_id).toMatch(/^partner-screening:/);
     expect(stored.prompt).toContain('details.draft_only to true');
     expect(stored.prompt).toContain('otherwise set it to null');
+    expect(stored.prompt).toContain('inspect professional_contact rather than inferring lookup failure');
+    expect(stored.prompt).toContain('copy its stored phone_numbers and social_profiles when present');
+    expect(stored.prompt).not.toContain('When next_contact_call is absent, do not invent contact data: draft-only mode may continue');
     expect(stored.prompt).toContain('Do not use propose_request');
     expect(stored.policy).toEqual([{ approval_type: 'communication', requester_agent_id: fx.agentId }]);
+
+    const db = new PgAgentDb(env as Env, fx.workspaceId, randomUUID());
+    try {
+      const detail = await db.getPartnerCandidate(fx.agentId, stored.candidateId!) as {
+        draft_approval_context: {
+          policy_key: string; approval_type: string; draft_only: boolean;
+          target_member_ids: string[];
+          sender: { member_id: string; address: string };
+        } | null;
+      };
+      expect(detail.draft_approval_context).toMatchObject({
+        policy_key: `partner-outreach-draft-${fx.agentId}`,
+        approval_type: 'communication', draft_only: true,
+        target_member_ids: [expect.any(String)],
+        sender: { member_id: expect.any(String), address: expect.stringMatching(/@example\.test$/) },
+      });
+    } finally {
+      await db.close();
+    }
   });
 
   it('requires a separate spend gate before Cron queues AgentCash discovery', async () => {
@@ -427,18 +455,22 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
     };
     const now = new Date('2026-09-16T19:00:00Z');
     const gated = await enqueueAutomatedPartnerScreening(makeEnv(base).env, now);
-    expect(gated).toMatchObject({
-      enabled: true, paidEnabled: false,
-      candidateAgents: 1, startedAgents: 1, activeOwnedAgents: 1,
-      configuredAgents: 1, skippedPaid: 1, queued: 0,
-    });
+    // The scheduler now discovers persisted enterprise skill assignments in
+    // every workspace, so earlier fixtures can legitimately contribute to the
+    // global scan counters. This workspace's paid assignment is still gated.
+    expect(gated).toMatchObject({ enabled: true, paidEnabled: false, queued: 0 });
+    expect(gated.skippedPaid).toBeGreaterThanOrEqual(1);
+    expect(gated.candidateAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.startedAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.activeOwnedAgents).toBeGreaterThanOrEqual(1);
+    expect(gated.configuredAgents).toBeGreaterThanOrEqual(1);
 
     const admitted = await enqueueAutomatedPartnerScreening(makeEnv({
       ...base, PARTNER_SCREENING_PAID_AUTOMATION_ENABLED: '1',
     }).env, now);
-    expect(admitted).toMatchObject({
-      enabled: true, paidEnabled: true, configuredAgents: 1, skippedPaid: 0, queued: 1,
-    });
+    expect(admitted).toMatchObject({ enabled: true, paidEnabled: true, skippedPaid: 0 });
+    expect(admitted.queued).toBeGreaterThanOrEqual(1);
+    expect(admitted.configuredAgents).toBeGreaterThanOrEqual(1);
   });
 
   it('imports one run-bound AgentCash People Search response as sanitized Inbox evidence', async () => {
@@ -471,7 +503,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       PARTNER_SCREENING_CONFIG_JSON: JSON.stringify({ [fx.agentId]: rawConfig }),
     });
     const startedResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/partner-screening/runs`, {
-      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `agentcash-${randomUUID()}` },
+      method: 'POST', body: { agent_id: fx.agentId, idempotency_key: `auto:${randomUUID()}` },
     });
     expect(startedResponse.status).toBe(201);
     const started = await startedResponse.json() as { run: { id: string; status: string; source: string }; candidates: unknown[] };
@@ -588,7 +620,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
               employment: { current: { title: 'Founder', seniority: 'Founder', company_id: 'company-1' } },
             }],
             companies: { 'company-1': { id: 'company-1', name: 'PR for AI', domain: 'prfor.ai' } },
-            metadata: { total: 1, credits: 1, offset: 0 },
+            metadata: { total: 50, credits: 1, offset: 0, search_after: 'cursor-after-person-1' },
           }),
         },
       },
@@ -606,13 +638,25 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       const run = await client.query(`SELECT status, source, monetary_cost_usd, api_requests_used, agentcash_tool_call_id FROM partner_screening_runs WHERE id=$1`, [started.run.id]);
       const candidates = await client.query(`SELECT source, display_name, profile_url FROM partner_candidates WHERE latest_run_id=$1`, [started.run.id]);
       const artifacts = await client.query<{ body: string }>(`SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts WHERE run_id=$1`, [started.run.id]);
-      return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '' };
+      const cursor = await client.query(
+        `SELECT next_offset, search_after, page_size, last_run_id
+           FROM partner_discovery_cursors
+          WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_people'`,
+        [fx.workspaceId, fx.agentId],
+      );
+      return { run: run.rows[0], candidates: candidates.rows, artifacts: artifacts.rows[0]?.body ?? '', cursor: cursor.rows[0] };
     });
     expect(stored.run).toMatchObject({ status: 'completed', source: 'agentcash_people', api_requests_used: 1, agentcash_tool_call_id: 'call_people_1' });
     expect(Number(stored.run.monetary_cost_usd)).toBe(0.15);
     expect(stored.candidates).toEqual([expect.objectContaining({ source: 'agentcash_people', display_name: 'Rik Turner' })]);
     expect(stored.artifacts).not.toContain('must-not-persist');
     expect(stored.artifacts).not.toContain('+15551234567');
+    expect(stored.cursor).toMatchObject({
+      next_offset: 1,
+      search_after: 'cursor-after-person-1',
+      page_size: 5,
+      last_run_id: started.run.id,
+    });
   });
 
   it('leases an explicit one-time creator search and imports only bounded public evidence', async () => {
@@ -730,6 +774,109 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       await client.query(`UPDATE runs SET status='completed', ended_at=now() WHERE id=$1`, [runId]);
       await client.query('COMMIT');
     });
+  });
+
+  it('leases one explicit X search and stores sanitized public creator evidence', async () => {
+    const fx = await seedWorkspace();
+    const nativeRunId = `run_${'f'.repeat(32)}`;
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      const run = await client.query<{ id: string }>(
+        `INSERT INTO runs
+           (workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,mode,
+            runtime_kind,runtime_run_id,runtime_session_id,runtime_profile,runtime_attempt)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'working','deepseek-flash',$4,$5,'work','hermes',$6,$2::uuid::text,'agent-' || $3::uuid::text,1)
+         RETURNING id`,
+        [fx.workspaceId, fx.sessionId, fx.agentId, randomUUID(), randomUUID(), nativeRunId],
+      );
+      await client.query(
+        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+         VALUES ($1,$2,0,0,'user',$3::jsonb)`,
+        [fx.workspaceId, run.rows[0]!.id, JSON.stringify({
+          role: 'user',
+          content: 'Run an X search to find Hermes creator and consultant candidates.',
+        })],
+      );
+      await client.query('COMMIT');
+    });
+    const { env } = makeEnv({
+      AGENT_RUNTIME: 'hermes', HERMES_BRIDGE_SECRET: 'agentcash-x-creator-secret-123456789012345',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'https://iris-nous-cloud.example/api/plugins/enterprise_bridge/control',
+          api_key: 'runtime-profile-key', transport: 'dashboard_connector',
+        },
+      }),
+    });
+    const headers = { Authorization: `Bearer ${await bridgeToken(env, fx.workspaceId, fx.agentId)}` };
+    const authorized = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/authorize`, {
+      method: 'POST', origin: null, headers,
+      body: { runtime_run_id: nativeRunId, tool_call_id: 'call_x_creator_1', arguments: AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS },
+    });
+    expect(authorized.status).toBe(201);
+    expect(await authorized.json()).toMatchObject({ ok: true, reserved_requests: 1, max_spend_usd: 0.005 });
+
+    const imported = await call(env, `/internal/runtime/w/${fx.workspaceId}/agents/${fx.agentId}/agentcash/creator-search/import`, {
+      method: 'POST', origin: null, headers,
+      body: {
+        runtime_run_id: nativeRunId,
+        tool_call_id: 'call_x_creator_1',
+        arguments: AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
+        result: {
+          status: 200,
+          message: 'OK',
+          data: { tweets: [{
+            id: '2101069073878507707',
+            url: 'https://x.com/HermesAgentTips/status/2101069073878507707',
+            fullText: 'Hermes Agent implementation tutorial. private@example.com +1 555 111 2222',
+            createdAt: 'Fri Sep 18 22:01:17 +0000 2026',
+            likeCount: 12,
+            viewCount: 200,
+            author: {
+              userName: 'HermesAgentTips',
+              url: 'https://x.com/HermesAgentTips',
+              name: 'Hermes Agent Tips',
+              description: 'Covering Nous Research Hermes Agent and building practical guides.',
+              followers: 9506,
+              following: 1056,
+              isBlueVerified: true,
+            },
+          }] },
+        },
+      },
+    });
+    expect(imported.status).toBe(201);
+    expect(await imported.json()).toMatchObject({ ok: true, imported_candidates: 1 });
+
+    const stored = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const screening = await client.query(
+        `SELECT status, source, monetary_cost_usd, config_snapshot->>'query_kind' AS query_kind
+           FROM partner_screening_runs WHERE idempotency_key=$1`,
+        [`creator:x:${nativeRunId}`],
+      );
+      const candidate = await client.query(
+        `SELECT source, display_name, profile_url FROM partner_candidates
+          WHERE source='agentcash_creators' AND agent_id=$1`,
+        [fx.agentId],
+      );
+      const artifact = await client.query<{ body: string }>(
+        `SELECT string_agg(content::text, ' ') AS body FROM partner_source_artifacts
+          WHERE source='agentcash_creators'`,
+      );
+      return { screening: screening.rows[0], candidate: candidate.rows[0], artifact: artifact.rows[0]?.body ?? '' };
+    });
+    expect(stored.screening).toMatchObject({
+      status: 'completed', source: 'agentcash_creators', query_kind: 'hermes_x_creator_posts',
+    });
+    expect(Number(stored.screening.monetary_cost_usd)).toBe(0.005);
+    expect(stored.candidate).toMatchObject({
+      source: 'agentcash_creators', display_name: 'Hermes Agent Tips', profile_url: 'https://x.com/HermesAgentTips',
+    });
+    expect(stored.artifact).toContain('"followers": 9506');
+    expect(stored.artifact).not.toContain('private@example.com');
+    expect(stored.artifact).not.toContain('+1 555 111 2222');
   });
 
   it('rejects creator-search payment without matching explicit user intent', async () => {
@@ -907,6 +1054,7 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
         professional_contact: {
           preferred_verified_email: string | null;
           phone_numbers: { number: string; type: string | null }[];
+          social_profiles: { network: string; url: string }[];
           verification: { draft_eligible: boolean };
         };
         next_contact_call: unknown;
@@ -914,6 +1062,10 @@ describe('live Partner Program source ingestion and Iris handoff', () => {
       expect(detail.professional_contact).toMatchObject({
         preferred_verified_email: 'work@example.com',
         phone_numbers: [{ number: '+1 415 555 0100', type: 'mobile' }],
+        social_profiles: [
+          { network: 'linkedin', url: profileUrl },
+          { network: 'twitter', url: 'https://x.com/contact_candidate' },
+        ],
         verification: { draft_eligible: true },
       });
       expect(detail.next_contact_call).toBeNull();

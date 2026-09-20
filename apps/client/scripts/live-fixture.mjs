@@ -32,11 +32,20 @@ const repoRoot = new URL('../../..', import.meta.url).pathname;
  */
 export const DATABASE = process.env.PGDATABASE ?? 'hermes_test';
 
+/**
+ * `pnpm e2e:live` owns a labelled per-invocation container and exports its id
+ * as `HERMES_TEST_DB_CONTAINER_ID` (scripts/test-db.mjs). The owned database
+ * lives only there, so fixtures must exec into that container; the compose
+ * `postgres` service is the developer's durable `hermes-postgres` and is used
+ * only when a run is aimed at it deliberately without an owned container.
+ */
+const OWNED_CONTAINER = process.env.HERMES_TEST_DB_CONTAINER_ID ?? '';
+
 export function psql(sql) {
-  return execFileSync('docker', ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql], {
-    encoding: 'utf8',
-    cwd: repoRoot,
-  }).trim();
+  const args = OWNED_CONTAINER
+    ? ['exec', OWNED_CONTAINER, 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql]
+    : ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql];
+  return execFileSync('docker', args, { encoding: 'utf8', cwd: repoRoot }).trim();
 }
 
 const q = (value) => `'${String(value).replace(/'/g, "''")}'`;
@@ -65,6 +74,13 @@ export function freshWorkspace(name = `Live ${new Date().toISOString().slice(11,
       (${q(workspaceId)}, ${q(memberId)}, 'member', ARRAY[]::text[]);
     INSERT INTO agents (id, workspace_id, name, responsibility, status)
       VALUES (${q(agentId)}, ${q(workspaceId)}, 'Iris', 'Partnerships', 'started');
+    -- The Admin owns the agent, the way \`POST /workspaces\` and the dev seed
+    -- arrange it. Since the private-agent boundaries (0054, PR92) an agent
+    -- with no owner row is private to nobody: no session can be opened on it
+    -- and every scenario that sends a turn fails with \`unknown_agent\`.
+    INSERT INTO agent_owners (workspace_id, agent_id, member_id)
+      SELECT workspace_id, ${q(agentId)}, id FROM members
+       WHERE workspace_id = ${q(workspaceId)} AND user_id = ${q(adminId)};
     COMMIT;
   `);
 

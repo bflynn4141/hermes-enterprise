@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import { RuntimeDb } from '../../src/runtime/store.js';
 import { dispatchRuntimeCall, type RuntimeCall } from '../../src/runtime/bridge.js';
+import { loadRaindropRunSnapshot } from '../../src/ops/raindrop.js';
 import { AGENT_URL, APP_URL } from '../../scripts/db-config.mjs';
 import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 
@@ -39,6 +40,36 @@ async function mappedRun(fx: Fixture, store: RuntimeDb): Promise<{ id: string; r
 }
 
 describe('official runtime on the restricted agent role', () => {
+  it('reads a content-free Raindrop snapshot from the canonical terminal trace', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const { id, remote } = await mappedRun(fx, store);
+      await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, nativeCall(remote));
+      await store.upsertAssistantMessage({
+        runId: id,
+        sessionId: fx.sessionId,
+        turn: 0,
+        text: 'Private applicant alice@example.com should never leave Hermes.',
+        blocks: [],
+        status: 'complete',
+        workedMs: 250,
+      });
+      await store.setRunStatus(id, 'completed');
+
+      const snapshot = await loadRaindropRunSnapshot(store, id);
+      expect(snapshot).toMatchObject({
+        id,
+        runtimeKind: 'hermes',
+        status: 'completed',
+        outputPresent: true,
+        outputCharacters: 62,
+        tools: [{ name: 'propose_instruction', state: 'done' }],
+      });
+      expect(JSON.stringify(snapshot)).not.toContain('alice@example.com');
+      expect(JSON.stringify(snapshot)).not.toContain('Use published evidence.');
+    } finally { await store.close(); }
+  });
+
   it('serializes simultaneous identical callbacks into one proposal and one trace result', async () => {
     const fx = await seedWorkspace(); const first = makeDb(fx); const second = makeDb(fx);
     try {
@@ -100,6 +131,40 @@ describe('official runtime on the restricted agent role', () => {
       expect(await store.mappingPending(fx.agentId)).toBe(false);
     } finally { await store.close(); }
   });
+  it('exposes only the immediately previous authority snapshot to a recovery attempt', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const id = await seedRun(fx);
+      const previous = { input: 'Original prompt', _enterprise_tool_names: ['list_requests'], _enterprise_skills: [] };
+      await store.snapshotRequest(id, 1, previous);
+      await owner(fx, (q) => q(
+        `UPDATE runs SET attempt=2,recovery_input='Resume stored evidence.' WHERE id=$1`,
+        [id],
+      ));
+      expect(await store.recoveryAuthority(id, 2)).toEqual(previous);
+      expect(await store.runtimeRequest(id, 2)).toBeNull();
+      const next = { input: 'Resume stored evidence.', _enterprise_tool_names: ['list_requests'], _enterprise_skills: [] };
+      await store.snapshotRequest(id, 2, next);
+      expect(await store.runtimeRequest(id, 2)).toEqual(next);
+      expect(await store.recoveryAuthority(id, 2)).toBeNull();
+    } finally { await store.close(); }
+  });
+  it('keeps nested runtime startup operations in one rollback boundary', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const id = await seedRun(fx); const run = (await store.loadRun(id))!;
+      await expect(store.withRuntimeTransaction(async () => {
+        await store.snapshotRequest(id, run.attempt, { input: 'Rollback this startup.' });
+        expect(await store.bindRun(id, run.attempt, 'rolled-back-native-run', fx.sessionId, `agent-${fx.agentId}`)).toBe(true);
+        throw new Error('interrupt grouped startup');
+      })).rejects.toThrow('interrupt grouped startup');
+      expect(await store.binding(id)).toMatchObject({ runtimeRunId: null, runtimeAttempt: null });
+      const request = await store.runtimeQuery<{ runtime_request: Record<string, unknown> | null }>(
+        'SELECT runtime_request FROM runs WHERE id=$1', [id],
+      );
+      expect(request.rows[0]?.runtime_request).toBeNull();
+    } finally { await store.close(); }
+  });
   it('retains a question across callback requests and records the answer once', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx);
     try {
@@ -130,11 +195,14 @@ describe('official runtime on the restricted agent role', () => {
           ($1,$2,3,'iris','Incomplete text','incomplete',NULL,now()-interval '1 minute'),
           ($1,$2,4,'user','Guidance','complete','guidance',now()-interval '1 minute')`, [fx.workspaceId, fx.sessionId]));
       const id = await seedRun(fx); const run = (await store.loadRun(id))!;
+      expect(await store.resolveRuntimeSessionId(run)).toBe(id);
       expect(await store.loadBootstrapHistory(run)).toEqual([{ role: 'user', content: 'Earlier question' }, { role: 'assistant', content: 'Earlier answer' }]);
-      await store.bindRun(id, run.attempt, 'history-run', fx.sessionId, `agent-${fx.agentId}`);
+      await store.bindRun(id, run.attempt, 'history-run', 'native-session-root', `agent-${fx.agentId}`);
       await owner(fx, (q) => q("UPDATE runs SET status='completed',ended_at=now() WHERE id=$1", [id]));
       const next = await seedRun(fx);
-      expect(await store.loadBootstrapHistory((await store.loadRun(next))!)).toEqual([]);
+      const nextRun = (await store.loadRun(next))!;
+      expect(await store.loadBootstrapHistory(nextRun)).toEqual([]);
+      expect(await store.resolveRuntimeSessionId(nextRun)).toBe('native-session-root');
     } finally { await store.close(); }
   });
   it('allows only one active native submission per agent profile across sessions', async () => {
@@ -155,9 +223,11 @@ describe('official runtime on the restricted agent role', () => {
   it('lists only enabled OpenRouter catalog entries with the native chat transport', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx); const model = `openrouter:runtime-test/${crypto.randomUUID()}`;
     try {
-      await withClient('owner', (c) => c.query(`INSERT INTO catalog (model_id,provider,label,transport,pricing_per_million,pricing_verified_on)
-        VALUES ($1,'openrouter','Runtime test model','openrouter_chat','{}'::jsonb,now())`, [model]));
-      expect(await store.allowedRuntimeModels()).toContainEqual({ model_id: model, provider: 'openrouter' });
+      await withClient('owner', (c) => c.query(`INSERT INTO catalog (model_id,provider,label,transport,pricing_per_million,pricing_verified_on,context_length)
+        VALUES ($1,'openrouter','Runtime test model','openrouter_chat','{}'::jsonb,now(),16384)`, [model]));
+      expect(await store.allowedRuntimeModels()).toContainEqual({
+        model_id: model, provider: 'openrouter', context_length: 16_384,
+      });
       await withClient('owner', (c) => c.query('UPDATE catalog SET supports_tools=false WHERE model_id=$1', [model]));
       expect((await store.allowedRuntimeModels()).some((row) => row.model_id === model)).toBe(false);
     } finally {

@@ -58,8 +58,9 @@ export const RESULTING_STATUS: Readonly<Record<LegacyRequestKind, Readonly<Recor
  * An effect is the row that records a side effect a decision *implies*. It is
  * never executed as a consequence of the decision: the decision commits, the
  * effect sits in `pending`, and a human with the required role executes it.
- * In the pilot every execution returns `unavailable`; no outreach, payment or
- * signature code exists in this repository.
+ * Legacy effect execution returns `unavailable`. Approved communications may
+ * use the separate governed Gmail outbox when configured; this ledger route
+ * never proves delivery, payment, signature, or access changes.
  */
 export const EFFECT_KINDS = ['access_grant', 'email_send', 'payment', 'signature'] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
@@ -146,6 +147,8 @@ export type ActorType = (typeof ACTOR_TYPES)[number];
 export const EVENT_KINDS = [
   'decision.recorded',
   'request.created',
+  'request.hidden',
+  'request.restored',
   'approval.proposed',
   'approval.vote_recorded',
   'approval.revised',
@@ -175,6 +178,8 @@ export const EVENT_KINDS = [
   'workspace.deletion_scheduled',
   'subject.redacted',
   'run.errored',
+  'run.retried',
+  'run.retry_cancelled',
   // M5a. The database's CHECK constraint (migration 0012) carries the same
   // list, and a db test asserts the two agree: an audit kind a route can write
   // and the contract does not know about is a row the History screen cannot
@@ -188,6 +193,11 @@ export const EVENT_KINDS = [
   'slack.connected',
   'slack.disconnected',
   'slack.credential_rewrapped',
+  'gmail.connected',
+  'outbound_email.sent',
+  'partner.invoice_received',
+  'partner.invoice_corrected',
+  'partner.decision_acknowledged',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
-import { INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
+import { fetchReviewBinding, INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
 
 function env() {
   const sent: { workspace_id: string; document_id: string; version: number }[] = [];
@@ -16,7 +16,7 @@ async function approve(e: ReturnType<typeof env>, fx: Fixture, requestId: string
   const response = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
     method: 'POST',
     headers: INBOX_HEADERS,
-    body: { decision: 'approve' },
+    body: { decision: 'approve', ...await fetchReviewBinding(e.env, fx, requestId) },
   });
   expect(response.status).toBe(201);
   return ((await response.json()) as { effect_ids: string[] }).effect_ids;
@@ -72,7 +72,17 @@ describe('executing an effect', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; reason: string };
     expect(body.status).toBe('unavailable');
-    expect(body.reason).toMatch(/sends nothing, pays nothing, grants nothing and signs nothing/);
+    expect(body.status).not.toBe('executed');
+    expect(body.reason).toMatch(/legacy effect has no configured executor/);
+    expect(body.reason).toMatch(/no email, payment, access or signature action was completed/i);
+
+    // A second press stays unavailable and does not invent a successful execution.
+    const again = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/execute`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ status: 'unavailable' });
 
     await readTenant(fx.workspaceId, fx.adminId, async (c) => {
       const { rows } = await c.query<{ status: string; executed_by: string; enforcement_result: { result: string } }>(
@@ -86,6 +96,8 @@ describe('executing an effect', () => {
       // Nothing anywhere in the database claims something was executed.
       const executed = await c.query(`SELECT 1 FROM effects WHERE status = 'executed'`);
       expect(executed.rowCount).toBe(0);
+      const audit = await c.query(`SELECT 1 FROM events WHERE kind = 'effect.executed' AND effect_id = $1`, [effectId]);
+      expect(audit.rowCount).toBe(1);
     });
   });
 

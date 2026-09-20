@@ -39,9 +39,87 @@ pnpm --filter client test       # vitest: the reducer and the adapter
 pnpm --filter client typecheck
 pnpm --filter client e2e        # Playwright, against the mock bundle
 pnpm e2e:live                   # the whole stack, then the live scenarios
+pnpm --filter client acceptance:native-staging -- --manifest /absolute/rehearsal.json --report /absolute/evidence.json
 pnpm db:reset                   # (root) demo database back to the seed — destructive
 pnpm --filter client dev:step-up  # re-stamp the fake-auth step-up window
 ```
+
+### Native staging acceptance (read-only)
+
+`acceptance:native-staging` checks stored evidence from a prepared
+Partnerships-to-Finance rehearsal without starting a run or changing hosted
+state. It accepts only GET
+responses from an HTTPS deployment whose health identifies `staging` and whose
+WorkOS and Hermes configuration checks report `ok`. It requires two distinct, mode-0600
+Playwright storage-state files and confirms that they resolve to the expected
+Partnerships and Finance people in the same workspace.
+
+The manifest is operator-owned and stays outside the repository. Its shape is:
+
+```json
+{
+  "schema_version": 1,
+  "base_url": "https://staging-host",
+  "workspace_id": "uuid",
+  "intake_event_id": "uuid",
+  "payload_hash": "sha256:64-lowercase-hex-characters",
+  "handoff_id": "uuid",
+  "request_id": "uuid",
+  "decision_id": "uuid",
+  "document_id": "uuid",
+  "input_provenance": "sample",
+  "roles": {
+    "partnerships": {
+      "auth_state": "/absolute/private/partnerships.json",
+      "user_id": "uuid",
+      "email": "the-expected-partnerships-login",
+      "agent_id": "uuid",
+      "runtime_profile": "the-bound-native-profile",
+      "run_id": "uuid"
+    },
+    "finance": {
+      "auth_state": "/absolute/private/finance.json",
+      "user_id": "uuid",
+      "email": "the-expected-finance-login",
+      "agent_id": "uuid",
+      "runtime_profile": "the-bound-native-profile",
+      "run_id": "uuid"
+    }
+  }
+}
+```
+
+Capture each storage state from that person's already authenticated browser
+context, keep the files outside the checkout, and restrict them to the current
+user (`chmod 600`). Then invoke the verifier explicitly:
+
+```sh
+HERMES_NATIVE_STAGING_ACCEPT=read-only pnpm --filter client acceptance:native-staging -- \
+  --manifest /absolute/rehearsal.json \
+  --report /absolute/native-staging-evidence.json
+```
+
+The command refuses CI, local endpoints, reused auth sessions, legacy skill
+versions, incomplete tool inventories, observable scripted/fixture markers,
+the handoff's simulated flag and customer labeling for this sample rehearsal.
+It requires the exact versioned Partnerships and Finance assignments, the
+stored enable-time four-tool Finance readiness attestation
+(`get_partner_handoff_result`, `list_requests`, `get_request`, `skill_view`;
+the trace excludes the viewer-only `skill_view`), one stored successful typed
+workspace result from each role's required bridge tool, a passed authoritative
+Finance result, an approved human decision, the saved invoice draft and its
+delivered allowlisted acknowledgment. The mode-0600 report keeps only stable
+identifiers and reviewed contracts; it never contains cookies or private tool
+payloads.
+
+The report establishes that the application records, enable-time readiness
+snapshot, native-shaped trace and typed tool results are mutually consistent.
+Those database-visible shapes cannot distinguish a real provider/native run
+from pre-shaped or directly inserted records. The verifier does not freshly
+probe current runtime readiness and does not grade provider response quality;
+the manual two-account rehearsal remains the hosted provider/tool acceptance.
+The existing `e2e:live` command remains the local fake-auth, scripted-model
+suite and cannot satisfy this acceptance check.
 
 ## Running it live
 
@@ -61,30 +139,32 @@ them: `maya@nous.example` (Admin) and `dana@nous.example` (Member). It is behind
 
 | | dev stack | test stack |
 |---|---|---|
-| database | `hermes` | `hermes_test` |
+| database | `hermes` in the durable Compose container | unique `hermes_test_*` in an owned disposable container |
 | Worker | :8787, `pnpm --filter @hermes/worker dev` | :8788, started and stopped by `pnpm e2e:live` |
 | variables | `apps/worker/.dev.vars` | `apps/worker/.dev.vars.test`, generated per run |
 | model | whatever `.dev.vars` says, possibly a real provider | always scripted |
-| reset | `pnpm db:reset` | `pnpm db:test:up` (idempotent, not destructive) |
+| lifecycle | `pnpm db:up` / `pnpm db:down` | created per invocation and removed on exit |
 
-They share the Docker container and nothing else. Every suite — `pnpm e2e:live`,
-`pnpm db:test`, and the worker vitest projects — goes through
-`scripts/test-db.mjs`, which creates `hermes_test` if it is absent and migrates
-and seeds it.
+They share nothing. Every DB-backed suite — `pnpm e2e:live`, `pnpm db:test`,
+and the worker Vitest projects — goes through `scripts/test-db.mjs`, which starts
+a labelled container on a Docker-assigned loopback port, migrates and seeds its
+unique database, verifies that ownership before use, and removes that exact
+container on exit. `pnpm db:test:up` keeps one such target alive for inspection
+until Ctrl-C; it never starts or writes to `hermes-postgres`.
 
-The launcher refuses to start on 8787, refuses if the database it resolved is
-not `hermes_test`, refuses if any generated connection string does not end in
-`/hermes_test`, and refuses to reuse a Worker it did not start. Point it
-somewhere else with `E2E_BASE_URL`:
+The live launcher refuses to start on 8787, rejects any database target it does
+not own, verifies every generated connection string against its unique database,
+and refuses to reuse a Worker it did not start. Point it somewhere else with
+`E2E_BASE_URL`:
 
 ```sh
 E2E_BASE_URL=http://localhost:8798 pnpm e2e:live   # when 8788 is taken
 ```
 
-`pnpm db:reset` is the **dev** database only. It recreates `hermes` rather than
-tearing the Docker volume down — the volume is shared, and `hermes_test` is not
-its business — and it **keeps the seed workspace's provider keys**, which are
-the one thing in that database a script cannot regenerate.
+`pnpm db:reset` is the **dev** database only. It recreates `hermes` without
+tearing the Docker volume down and **keeps the seed workspace's provider keys**,
+which are the one thing in that database a script cannot regenerate. Automated
+test data never enters that container.
 
 ### Real local mode, and what it costs
 

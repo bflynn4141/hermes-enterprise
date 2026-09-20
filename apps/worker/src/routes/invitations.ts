@@ -26,6 +26,10 @@ import { mirrorMembership } from './members.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import {
+  verifyReservedCapacityForInvitation,
+  withCapacityGrantQuarantine,
+} from '../hermes-cloud/capacity.js';
 
 export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -82,7 +86,29 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
   }
 
   const jobs: string[] = [];
-  const result = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+  const invitationId = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    const invitation = await tx.query<{ id: string; email: string }>(
+      `SELECT id, email FROM invitations
+        WHERE workspace_id=$1 AND status='pending' AND expires_at > now()
+          AND (workos_invitation_id=$2 OR token_hash=$2
+               OR ($2 ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                   AND id=$2::uuid))
+        LIMIT 1`,
+      [workspaceId, token],
+    );
+    const invite = invitation.rows[0];
+    if (!invite) throw new RouteError('this invitation is not open', 'invitation_unavailable', 404);
+    if (invite.email !== email.toLowerCase()) throw new RouteError(
+      'this invitation was sent to a different address',
+      'invitation_email_mismatch',
+      403,
+    );
+    return invite.id;
+  });
+  const capacityProof = c.env.AGENT_RUNTIME === 'hermes'
+    ? await verifyReservedCapacityForInvitation(c.env, workspaceId, invitationId)
+    : null;
+  const result = await withCapacityGrantQuarantine(c.env, () => withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
     const invitation = await tx.query<{ id: string; email: string; role: string }>(
       `SELECT id, email, role FROM invitations
         WHERE workspace_id = $1 AND status = 'pending' AND expires_at > now()
@@ -124,6 +150,7 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
       joiningUserId: session.userId,
       joiningMemberId: mirrored.memberId,
       invitationId: mirrored.acceptedInvitation.id,
+      capacityProof,
       jobs,
     });
 
@@ -132,8 +159,9 @@ export async function acceptInvitation(c: Context<{ Bindings: Env }>): Promise<R
     // which they are a member of a workspace that reads as missing.
     return bootstrapSchema.parse(await loadBootstrap(
       tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+      c.env.HERMES_MEMBER_PROVISIONING_ENABLED === '1',
     ));
-  });
+  }));
 
   if (jobs.length > 0) await runJobsAfterCommit(c.env, workspaceId, jobs);
 

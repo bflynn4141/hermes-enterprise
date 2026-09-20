@@ -26,28 +26,63 @@
 // person answering it from the composer are answering the same question. See
 // decision F8.
 import type { Context } from 'hono';
-import { contextFieldSchema, instructionVersionSchema, paginatedSchema, skillVersionSchema } from '@hermes/shared';
+import { contextFieldSchema, instructionVersionSchema, paginatedSchema, skillVersionSchema, saveAgentInstructionSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 import { requireRequestedFrom, SKILLS_SURFACE } from '../domain/guards.js';
-import { runtimeSkillCards } from '../runtime/skills.js';
+import { runtimeSkillCard } from '../runtime/skills.js';
+import { listEnterpriseSkillAssignments } from '../enterprise-skills/service.js';
+import { requireAgentConfigAccess } from '../domain/agent-config-access.js';
 
 const skillPage = paginatedSchema(skillVersionSchema);
 const instructionPage = paginatedSchema(instructionVersionSchema);
 const contextPage = paginatedSchema(contextFieldSchema);
 const LIST_LIMIT = 100;
 
-/** The workspace's one agent. Every one of these routes hangs off it. */
+/** Resolve the caller's own/principal agent first. Workspace-scoped legacy
+ * agents remain a compatibility fallback; a private agent owned by somebody
+ * else is never selected merely because it was created first. */
 async function agentId(work: TenantWork): Promise<string> {
   const { rows } = await work.tx.query<{ id: string }>(
-    `SELECT id FROM agents WHERE workspace_id = $1 ORDER BY created_at LIMIT 1`,
-    [work.workspaceId],
+    `SELECT a.id FROM agents a
+      WHERE a.workspace_id = $1
+      ORDER BY
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM agent_owners ao JOIN members m
+              ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+             WHERE ao.workspace_id=$1 AND ao.agent_id=a.id
+               AND m.user_id=$2 AND m.status='active'
+          ) THEN 0
+          WHEN EXISTS (
+            SELECT 1 FROM enterprise_team_agents eta
+             WHERE eta.workspace_id=$1 AND eta.agent_id=a.id AND eta.principal_user_id=$2
+          ) THEN 1
+          WHEN EXISTS (
+            SELECT 1 FROM sessions s
+             WHERE s.workspace_id=$1 AND s.agent_id=a.id AND s.owner_id=$2
+          ) THEN 2
+          WHEN a.context_scope='workspace' THEN 3
+          ELSE 4
+        END,
+        a.created_at
+      LIMIT 1`,
+    [work.workspaceId, work.userId],
   );
   const id = rows[0]?.id;
   if (!id) throw new RouteError('this workspace has no agent', 'no_agent', 409);
   return id;
+}
+
+async function selectedAgentId(c: Context<{ Bindings: Env }>, work: TenantWork): Promise<string> {
+  const requested = c.req.query('agent_id')?.trim();
+  if (!requested) return agentId(work);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requested)) {
+    throw new RouteError('agent_id is not a uuid', 'bad_id', 400);
+  }
+  return requested;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,13 +122,17 @@ const SKILL_SELECT = `
 
 export async function listSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
   const items = await inWorkspace(c, async (work) => {
-    const agent = await agentId(work);
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
     const { rows } = await work.tx.query<SkillRow>(
       `${SKILL_SELECT} ORDER BY sv.name, sv.version DESC LIMIT $3`,
       [work.workspaceId, agent, LIST_LIMIT],
     );
     const stored = rows.map(toSkill);
-    const managed = runtimeSkillCards(c.env, agent);
+    const assignments = await listEnterpriseSkillAssignments(
+      c.env, work.tx, work.workspaceId, agent, work.role === 'admin' ? work.userId : null,
+    );
+    const managed = assignments.map(runtimeSkillCard);
     return [...managed, ...stored.filter((item) => {
       const named = item as { name?: unknown };
       return !managed.some((skill) => skill.name === named.name);
@@ -113,7 +152,9 @@ export async function adoptSkill(c: Context<{ Bindings: Env }>): Promise<Respons
   }
 
   const entity = await inWorkspace(c, async (work) => {
-    const agent = await agentId(work);
+    work.requireAdmin('adopting a skill');
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
     const exists = await work.tx.query<{ id: string }>(
       `SELECT id FROM skill_versions WHERE workspace_id = $1 AND id = $2`,
       [work.workspaceId, id],
@@ -178,7 +219,7 @@ const toInstruction = (row: InstructionRow, currentId: string | null): unknown =
 const INSTRUCTION_SELECT = `
   SELECT iv.id, iv.body, iv.status, iv.created_at, iv.run_id, u.name AS proposed_by_name,
          (SELECT prev.body FROM instruction_versions prev
-           WHERE prev.workspace_id = iv.workspace_id AND prev.status = 'saved'
+           WHERE prev.workspace_id = iv.workspace_id AND prev.agent_id = iv.agent_id AND prev.status = 'saved'
              AND prev.saved_at IS NOT NULL AND prev.created_at < iv.created_at
            ORDER BY prev.saved_at DESC LIMIT 1) AS previous
     FROM instruction_versions iv
@@ -186,26 +227,56 @@ const INSTRUCTION_SELECT = `
    WHERE iv.workspace_id = $1`;
 
 /** The newest saved row: what the agent is actually running under. */
-async function currentInstructionId(work: TenantWork): Promise<string | null> {
+async function currentInstructionId(work: TenantWork, agent: string): Promise<string | null> {
   const { rows } = await work.tx.query<{ id: string }>(
     `SELECT id FROM instruction_versions
-      WHERE workspace_id = $1 AND status = 'saved'
-      ORDER BY saved_at DESC NULLS LAST, created_at DESC LIMIT 1`,
-    [work.workspaceId],
+      WHERE workspace_id = $1 AND agent_id = $2 AND status = 'saved'
+      ORDER BY saved_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1`,
+    [work.workspaceId, agent],
   );
   return rows[0]?.id ?? null;
 }
 
 export async function listInstructions(c: Context<{ Bindings: Env }>): Promise<Response> {
   const items = await inWorkspace(c, async (work) => {
-    const current = await currentInstructionId(work);
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
+    const current = await currentInstructionId(work, agent);
     const { rows } = await work.tx.query<InstructionRow>(
-      `${INSTRUCTION_SELECT} ORDER BY iv.created_at DESC LIMIT $2`,
-      [work.workspaceId, LIST_LIMIT],
+      `${INSTRUCTION_SELECT} AND iv.agent_id = $2 ORDER BY iv.created_at DESC LIMIT $3`,
+      [work.workspaceId, agent, LIST_LIMIT],
     );
     return rows.map((row) => toInstruction(row, current));
   });
   return c.json(instructionPage.parse({ items, cursor: null, total: items.length }));
+}
+
+/** A direct human edit is a new saved version, never an in-place rewrite. */
+export async function saveInstruction(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireRequestedFrom(c, SKILLS_SURFACE);
+  requireCsrf(c);
+  const parsed = saveAgentInstructionSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) throw new RouteError('instructions are invalid', 'bad_body', 400);
+  const entity = await inWorkspace(c, async (work) => {
+    work.requireAdmin('saving agent instructions');
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
+    await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [work.workspaceId, agent]);
+    const current = await currentInstructionId(work, agent);
+    if (current !== parsed.data.expected_current_id) throw new RouteError('instructions changed; review the current version before saving', 'stale_revision', 409);
+    const inserted = await work.tx.query<{ id: string }>(
+      `INSERT INTO instruction_versions (workspace_id,agent_id,body,status,proposed_by,saved_at)
+       VALUES ($1,$2,$3,'saved',$4,now()) RETURNING id`,
+      [work.workspaceId, agent, parsed.data.text, work.userId],
+    );
+    const id = inserted.rows[0]!.id;
+    await work.tx.query(`UPDATE agents SET instructions_active=$3 WHERE workspace_id=$1 AND id=$2`, [work.workspaceId, agent, parsed.data.text]);
+    await work.tx.query(`INSERT INTO events (workspace_id,actor_type,actor_user_id,kind,agent_id) VALUES ($1,'user',$2,'instruction.saved',$3)`, [work.workspaceId, work.userId, agent]);
+    const { rows } = await work.tx.query<InstructionRow>(`${INSTRUCTION_SELECT} AND iv.id=$2`, [work.workspaceId, id]);
+    return toInstruction(rows[0]!, id);
+  });
+  return c.json(entity, 201);
 }
 
 /** `accept` and `discard` are one transaction with two verbs. */
@@ -229,9 +300,12 @@ async function decideInstruction(
 
   const entity = await inWorkspace(c, async (work) => {
     work.requireAdmin(verdict === 'saved' ? 'saving agent instructions' : 'discarding a proposal');
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
+    await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [work.workspaceId, agent]);
     const existing = await work.tx.query<{ status: string }>(
-      `SELECT status FROM instruction_versions WHERE workspace_id = $1 AND id = $2`,
-      [work.workspaceId, id],
+      `SELECT status FROM instruction_versions WHERE workspace_id = $1 AND id = $2 AND agent_id = $3`,
+      [work.workspaceId, id, agent],
     );
     const status = existing.rows[0]?.status;
     if (!status) throw new RouteError('no such instruction version', 'not_found', 404);
@@ -255,6 +329,7 @@ async function decideInstruction(
     // row itself saying `discarded`, which is the record, and inventing a kind
     // here would mean a migration for an event nothing reads.
     if (verdict === 'saved') {
+      await work.tx.query(`UPDATE agents SET instructions_active=(SELECT body FROM instruction_versions WHERE id=$3 AND workspace_id=$1 AND agent_id=$2) WHERE workspace_id=$1 AND id=$2`, [work.workspaceId, agent, id]);
       await work.tx.query(
         `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
          VALUES ($1, 'user', $2, 'instruction.saved')`,
@@ -262,7 +337,7 @@ async function decideInstruction(
       );
     }
 
-    const current = await currentInstructionId(work);
+    const current = await currentInstructionId(work, agent);
     const { rows } = await work.tx.query<InstructionRow>(`${INSTRUCTION_SELECT} AND iv.id = $2`, [
       work.workspaceId,
       id,
@@ -304,10 +379,12 @@ const toContextField = (row: ContextRow): unknown =>
 
 export async function listContextFields(c: Context<{ Bindings: Env }>): Promise<Response> {
   const items = await inWorkspace(c, async (work) => {
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
     const { rows } = await work.tx.query<ContextRow>(
       `SELECT id, key, value, scope, updated_at FROM agent_context_fields
-        WHERE workspace_id = $1 ORDER BY key LIMIT $2`,
-      [work.workspaceId, LIST_LIMIT],
+        WHERE workspace_id = $1 AND agent_id = $2 ORDER BY key LIMIT $3`,
+      [work.workspaceId, agent, LIST_LIMIT],
     );
     return rows.map(toContextField);
   });
@@ -333,7 +410,8 @@ export async function patchContextField(c: Context<{ Bindings: Env }>): Promise<
   const scope = input.scope === 'future' ? 'future' : 'reply';
 
   const outcome = await inWorkspace(c, async (work) => {
-    const agent = await agentId(work);
+    const agent = await selectedAgentId(c, work);
+    await requireAgentConfigAccess(work, agent);
     const { rows } = await work.tx.query<ContextRow>(
       `INSERT INTO agent_context_fields (workspace_id, agent_id, key, value, scope, set_by)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -353,8 +431,8 @@ export async function patchContextField(c: Context<{ Bindings: Env }>): Promise<
     // session, but several sessions can be waiting on the same answer.
     const waiting = await work.tx.query<{ id: string; workflow_instance_id: string | null }>(
       `SELECT id, workflow_instance_id FROM runs
-        WHERE workspace_id = $1 AND status = 'waiting' AND waiting_for = $2`,
-      [work.workspaceId, field],
+        WHERE workspace_id = $1 AND status = 'waiting' AND waiting_for = $2 AND agent_id = $3`,
+      [work.workspaceId, field, agent],
     );
     return { entity: toContextField(row), waiting: waiting.rows };
   });

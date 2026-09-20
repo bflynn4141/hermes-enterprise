@@ -30,10 +30,11 @@ import { RuntimeDb } from '../runtime/store.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { runHermesAttempt } from '../runtime/adapter.js';
 import { HermesClient } from '../runtime/client.js';
-import { runtimeSkillManifests } from '../runtime/skills.js';
+import { loadRuntimeSkillSnapshot } from '../runtime/skills.js';
 import { runtimeLatency } from '../runtime/latency.js';
 import { logEvent } from '../keys/redact.js';
 import { recordHermesLatency, recordHermesStream, recordHermesTerminalFailure } from '../ops/analytics.js';
+import { exportRaindropRun } from '../ops/raindrop.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
   PROVIDER_STEP_CONFIG,
@@ -44,6 +45,8 @@ import {
   type StepConfig,
 } from '../engine/engine.js';
 import type { EmittedEvent } from '../engine/agent-db.js';
+import type { EngineRunRow, RunErrorInput } from '../engine/agent-db.js';
+import type { RuntimeBinding } from '../runtime/config.js';
 export {
   runAttemptInstanceId,
   WORKFLOW_ID_MAX_LENGTH,
@@ -281,6 +284,79 @@ function engineStep(step: WorkflowStep): EngineStep {
   };
 }
 
+interface AutomaticRecoveryExecutionDb {
+  loadRun(runId: string): Promise<EngineRunRow | null>;
+  failAutomaticRecoveryExecution(runId: string, attempt: number, error: RunErrorInput): Promise<boolean>;
+  withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T>;
+  runtimeQuery<T>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
+}
+
+type RuntimeBindingResolver = (
+  env: Env,
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  agentId: string,
+) => Promise<RuntimeBinding>;
+
+const AUTOMATIC_RECOVERY_RUNTIME_DRIFT: RunErrorInput = {
+  class: 'permanent',
+  retryable: false,
+  reason: 'automatic_recovery_runtime_drift',
+  message: 'The managed runtime changed before automatic recovery could start. Retry this task manually.',
+};
+
+/**
+ * Revalidate a scheduled recovery at the last safe boundary before the
+ * Workflow selects an engine or submits anything upstream. Admission and
+ * execution may happen under different deployments, so the persisted marker
+ * is authority; mutable environment and binding state are not.
+ */
+export async function prepareAutomaticRecoveryExecution(
+  env: Env,
+  db: AutomaticRecoveryExecutionDb,
+  params: Pick<RunAttemptParams, 'runId' | 'workspaceId' | 'attempt'>,
+  resolveBinding: RuntimeBindingResolver = resolveRuntimeBinding,
+): Promise<{ run: EngineRunRow; binding: RuntimeBinding } | null> {
+  // Automatic recovery is never a first attempt. Keep the ordinary chat
+  // critical path free of an additional database round trip.
+  if (params.attempt <= 1) return null;
+  const run = await db.loadRun(params.runId);
+  if (!run) throw new NonRetryableError('Automatic recovery run no longer exists');
+  if (!run.automaticRecovery) return null;
+  if (run.attempt !== params.attempt || run.status !== 'working' || run.stopRequested) {
+    throw new NonRetryableError('Automatic recovery attempt is no longer current');
+  }
+
+  const failClosed = async (): Promise<never> => {
+    await db.failAutomaticRecoveryExecution(run.id, params.attempt, AUTOMATIC_RECOVERY_RUNTIME_DRIFT);
+    throw new NonRetryableError(AUTOMATIC_RECOVERY_RUNTIME_DRIFT.message);
+  };
+  if (env.AGENT_RUNTIME !== 'hermes' || env.MODEL_SCRIPTED === '1' || !run.agentId) {
+    return failClosed();
+  }
+  let binding: RuntimeBinding;
+  try {
+    binding = await db.withRuntimeTransaction(() => resolveBinding(
+      env,
+      { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
+      params.workspaceId,
+      run.agentId!,
+    ));
+  } catch {
+    return failClosed();
+  }
+  if (binding.runtimeAuthMode !== 'token_digest') return failClosed();
+  // Binding resolution may await secret decryption or a database connection.
+  // Re-read after it yields so a successor admitted during that wait is never
+  // carried into native submission by this old Workflow invocation.
+  const current = await db.loadRun(params.runId);
+  if (!current || current.attempt !== params.attempt || current.status !== 'working'
+      || current.stopRequested || !current.automaticRecovery) {
+    throw new NonRetryableError('Automatic recovery attempt is no longer current');
+  }
+  return { run: current, binding };
+}
+
 export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
   override async run(event: WorkflowEvent<RunAttemptParams>, step: WorkflowStep): Promise<void> {
     const invocationStartedAt = Date.now();
@@ -292,6 +368,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
     const db = new RuntimeDb(this.env, params.workspaceId, params.traceId);
     let checkpointDb: RuntimeDb | null = null;
     try {
+      const automaticRecoveryRuntime = await prepareAutomaticRecoveryExecution(this.env, db, params);
       const deps = {
           db,
           // The scenario, honoured on the first attempt only: a Retry is the
@@ -350,14 +427,17 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         } satisfies import('../engine/engine.js').EngineDeps;
       const runInput = { runId: params.runId, attempt: params.attempt, traceId: params.traceId };
       if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
-        const run = await db.loadRun(params.runId);
-        if (!run?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
-        const binding = await resolveRuntimeBinding(
-          this.env,
-          { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
-          params.workspaceId,
-          run.agentId,
-        );
+        const { run, binding } = automaticRecoveryRuntime ?? await db.withRuntimeTransaction(async () => {
+          const loaded = await db.loadRun(params.runId);
+          if (!loaded?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
+          const resolved = await resolveRuntimeBinding(
+            this.env,
+            { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
+            params.workspaceId,
+            loaded.agentId,
+          );
+          return { run: loaded, binding: resolved };
+        });
         checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
         const onLatency = (measurement: import('../runtime/latency.js').RuntimeLatency) => {
           recordHermesLatency(this.env, params.workspaceId, {
@@ -369,14 +449,30 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
             release_ring: binding.releaseRing, ...measurement,
           });
         };
-        runtimeLatency(invocationStartedAt, params.receivedAt, onLatency).mark('workflow_setup');
+        const startupLatency = runtimeLatency(invocationStartedAt, params.receivedAt, onLatency);
+        startupLatency.mark('workflow_setup');
+        const skillSnapshot = await startupLatency.measure('skill_discovery', () =>
+          loadRuntimeSkillSnapshot(this.env, db, params.workspaceId, binding.agentId));
         await runHermesAttempt({
           db,
+          // A delayed automatic invocation must re-read attempt/status inside
+          // the adapter immediately before native work. Human and first-turn
+          // paths keep the already-loaded row and their existing latency.
+          ...(automaticRecoveryRuntime ? {} : { run }),
           startedAt: invocationStartedAt,
           receivedAt: params.receivedAt,
           onLatency,
           client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing),
           profile: binding.profile,
+          ...(binding.runtimeAuthMode === 'token_digest' ? {
+            managedRuntimeIdentity: {
+              workspaceId: binding.workspaceId,
+              agentId: binding.agentId,
+              enterpriseUrl: this.env.HERMES_ENTERPRISE_PUBLIC_URL,
+              pluginRevision: this.env.HERMES_ENTERPRISE_PLUGIN_REVISION,
+              pluginArtifactDigest: this.env.HERMES_ENTERPRISE_PLUGIN_SHA256,
+            },
+          } : {}),
           forward: deps.forward,
           checkpoint: (events) => checkpointDb!.emit(events),
           preview: (frame) =>
@@ -425,8 +521,20 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
               ...failure,
             });
           },
-          skillSnapshot: runtimeSkillManifests(this.env, run.agentId),
+          skillSnapshot,
         }, engineStep(step), runInput);
+        // The terminal message and status have already been committed and sent
+        // to the session hub. Raindrop is a post-run observer: a timeout,
+        // invalid key or vendor outage cannot change or delay that outcome.
+        const raindrop = await exportRaindropRun(this.env, db, run.id);
+        logEvent({
+          at: 'raindrop.export', run_id: run.id, trace_id: params.traceId,
+          status: raindrop.status,
+          ...('reason' in raindrop ? { reason: raindrop.reason } : {}),
+          ...('httpStatus' in raindrop ? { http_status: raindrop.httpStatus } : {}),
+          ...('eventId' in raindrop ? { event_id: raindrop.eventId } : {}),
+          ...('signal' in raindrop ? { signal: raindrop.signal } : {}),
+        });
       } else {
         await runAttempt(deps, engineStep(step), runInput);
       }

@@ -13,6 +13,11 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  contextNoteSchema,
+  agentPermissionsSchema,
+  approvalEvidenceViewSchema,
+  type ApprovalEvidenceView,
+  agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
   catalogPageSchema,
   errorBodySchema,
@@ -26,17 +31,43 @@ import {
   slackDisconnectSchema,
   slackLinkCodeSchema,
   slackOAuthStartSchema,
+  outboundEmailConnectionSchema,
+  outboundEmailOAuthStartSchema,
+  inboundEmailConnectionSchema,
+  inboundEmailOAuthStartSchema,
+  inboundEmailThreadImportSchema,
+  type InboundEmailThreadImportInput,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
+  cloudConnectionResponseSchema,
+  cloudConnectionStartSchema,
   runViewSchema,
+  sessionSnapshotSchema,
+  type SessionSettings,
   guidanceAcceptedSchema,
   queueStateSchema,
   attachmentSchema,
   attachmentDetailSchema,
   attachmentUploadSchema,
+  librarySourceSchema,
+  sharedIntelligenceProposalSchema,
+  sharedIntelligenceAdminWorkspaceSchema,
+  sharedIntelligenceAdminCandidateSchema,
+  sharedIntelligenceGoalSchema,
+  sharedIntelligenceSubmitResultSchema,
+  sharedIntelligenceTriageDecisionResultSchema,
+  sharedIntelligenceWorkspaceSchema,
   approvalViewSchema,
   directUploadResultSchema,
+  enterpriseSkillAssignmentPageSchema,
+  enterpriseSkillAssignmentSchema,
+  partnerWorkflowViewV2Schema,
+  partnerEngagementAuthorizationResultSchema,
+  partnerInvoiceIntakeResultSchema,
+  partnerInvoiceCorrectionResultSchema,
+  partnerHandoffResultSchema,
   type AttachmentUpload,
+  type AgentWakeInput,
   type ApprovalView,
   type Bootstrap,
   type CatalogPage,
@@ -46,6 +77,21 @@ import {
   type ReplayStream,
   type RunView,
   type WorkspaceCreateInput,
+  type EnterpriseSkillAssignmentUpdate,
+  type SaveAgentInstruction,
+  type PartnerWorkflowViewV2,
+  type PartnerWorkflowSetup,
+  type PartnerWorkflowAdmissionInput,
+  type PartnerEngagementAuthorizationInput,
+  type PartnerEngagementAuthorizationResult,
+  type PartnerInvoiceIntakeInput,
+  type PartnerInvoiceIntakeResult,
+  type PartnerInvoiceCorrectionInput,
+  type PartnerInvoiceCorrectionResult,
+  type PartnerHandoffResult,
+  type CreateSharedIntelligenceProposal,
+  type CreateSharedIntelligenceGoal,
+  type SharedIntelligenceTriageDecision,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -86,6 +132,14 @@ import {
 } from '@hermes/shared';
 import type { z } from 'zod';
 import type { AuthAdapter } from './auth.js';
+import {
+  hermesCapacitySchema,
+  runtimeDiscoveryGrantCreatedSchema,
+  runtimeDiscoveryGrantPageSchema,
+  runtimeDiscoveryGrantRevokedSchema,
+  type HermesCapacityInput,
+  type RuntimeDiscoveryGrantInput,
+} from './runtime-capacity.js';
 
 export class RestError extends Error {
   constructor(
@@ -93,6 +147,7 @@ export class RestError extends Error {
     readonly reason: string,
     message: string,
     readonly retryAfter: number | null = null,
+    readonly traceId: string | null = null,
   ) {
     super(message);
     this.name = 'RestError';
@@ -106,6 +161,19 @@ export class RestError extends Error {
 }
 
 export type FetchLike = typeof fetch;
+
+/**
+ * captureContext only accepts hash-bound agent_file / library_source rows.
+ * Drop file/skill/line chips and bare attachment ids so a turn never claims
+ * Iris read bytes the Worker cannot load.
+ */
+export function selectedSourcesForTurn(attachments: AttachmentRef[]): { id: string; sha256: string; kind: 'agent_file' | 'library_source' }[] {
+  return attachments.flatMap((source) => {
+    if (source.kind !== 'source' || !source.sha256) return [];
+    return [{ id: source.id, sha256: source.sha256, kind: source.source_kind ?? 'agent_file' }];
+  });
+}
+
 
 export interface RestOptions {
   baseUrl?: string;
@@ -172,11 +240,13 @@ export function createRest(options: RestOptions) {
       const retryAfter = Number(response.headers.get('Retry-After') ?? '') || null;
       let reason = 'http_error';
       let message = `${method} ${path} failed with ${response.status}`;
+      let traceId: string | null = null;
       try {
         const parsed = errorBodySchema.safeParse(await response.json());
         if (parsed.success) {
           reason = parsed.data.reason;
           message = parsed.data.error;
+          traceId = parsed.data.trace_id ?? null;
         }
       } catch {
         /* a non-JSON error body keeps the default reason */
@@ -188,7 +258,7 @@ export function createRest(options: RestOptions) {
         continue;
       }
 
-      const error = new RestError(response.status, reason, message, retryAfter);
+      const error = new RestError(response.status, reason, message, retryAfter, traceId);
       if (error.signedOut) options.onSignedOut?.();
       throw error;
     }
@@ -263,12 +333,18 @@ export function createRest(options: RestOptions) {
     // Every control is scoped to a run, not to a session: the Worker's routes
     // are `/sessions/:id/runs/:runId/...`, because "the session's current run"
     // is a race the client would have to win and the server already knows.
-    sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
+    sessionSnapshot: (workspaceId: string, sessionId: string) =>
+      request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
+    sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: selectedSourcesForTurn(body.attachments) }) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
-    retry: (workspaceId: string, sessionId: string, runId: string) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, {}) as Promise<RunView>,
+    retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/retry`, runViewSchema, { expected_attempt: expectedAttempt, ...(expectedSettings ? { expected_settings: expectedSettings } : {}) }) as Promise<RunView>,
+    agentRecovery: (workspaceId: string, agentId: string, runId?: string) =>
+      request('GET', `${ws(workspaceId)}/agents/${agentId}/recovery${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`, agentRecoveryViewSchema),
+    wakeAgent: (workspaceId: string, agentId: string, body: AgentWakeInput) =>
+      request('POST', `${ws(workspaceId)}/agents/${agentId}/wake`, agentRecoveryViewSchema, body),
     guide: (workspaceId: string, sessionId: string, runId: string, text: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/guide`, guidanceAcceptedSchema, { text }),
     enqueue: (workspaceId: string, sessionId: string, runId: string, text: string) =>
@@ -294,10 +370,12 @@ export function createRest(options: RestOptions) {
     // The decisions route is M4's and may not exist yet; `optional` is not used
     // here on purpose. A decision that silently did nothing is the one failure
     // this product cannot have, so a missing route surfaces as an error.
-    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string }) =>
+    decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string; expected_version?: number; expected_payload_hash?: `sha256:${string}` }) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
     getApproval: (workspaceId: string, requestId: string) =>
       request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
+    getApprovalEvidence: (workspaceId: string, requestId: string, evidenceId: string) =>
+      request('GET', `${ws(workspaceId)}/requests/${requestId}/approval/evidence/${encodeURIComponent(evidenceId)}`, approvalEvidenceViewSchema) as Promise<ApprovalEvidenceView>,
     decideApproval: (workspaceId: string, requestId: string, body: DecideApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/decisions`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     reviseApproval: (workspaceId: string, requestId: string, body: ReviseApprovalInput) =>
@@ -310,6 +388,8 @@ export function createRest(options: RestOptions) {
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
     addRequestNote: (workspaceId: string, id: string, body: { body: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${id}/notes`, requestEntitySchema, body),
+    patchRequestPresentation: (workspaceId: string, id: string, body: { hidden: boolean; reason?: string }) =>
+      request('PATCH', `${ws(workspaceId)}/requests/${id}/presentation`, requestEntitySchema, body),
     listRequests: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
     listEffects: (workspaceId: string, requestId: string) =>
@@ -319,6 +399,14 @@ export function createRest(options: RestOptions) {
       optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
+    runtimeDiscoveryGrants: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantPageSchema),
+    createRuntimeDiscoveryGrant: (workspaceId: string, body: RuntimeDiscoveryGrantInput) =>
+      request('POST', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantCreatedSchema, body),
+    revokeRuntimeDiscoveryGrant: (workspaceId: string, grantId: string) =>
+      request('DELETE', `${ws(workspaceId)}/admin/runtime-discovery-grants/${encodeURIComponent(grantId)}`, runtimeDiscoveryGrantRevokedSchema),
+    registerHermesCapacity: (workspaceId: string, body: HermesCapacityInput) =>
+      request('POST', `${ws(workspaceId)}/admin/hermes-capacity`, hermesCapacitySchema, body),
     listEvents: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/history${query}`, paginatedSchema(eventRowSchema)), emptyPage()),
     listTraces: (workspaceId: string, query = '') =>
@@ -326,31 +414,67 @@ export function createRest(options: RestOptions) {
     getTrace: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/traces/${id}`, traceEntitySchema),
     listContextFields: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/context-fields`, paginatedSchema(contextFieldSchema)), emptyPage()),
+    listContextNotes: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/context-notes`, paginatedSchema(contextNoteSchema)),
+    createContextNote: (workspaceId: string, agentId: string, body: { title: string; text: string }) => request('POST', `${ws(workspaceId)}/agents/${agentId}/context-notes`, contextNoteSchema, body),
+    updateContextNote: (workspaceId: string, agentId: string, id: string, body: { title: string; text: string; expected_revision: number }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, contextNoteSchema, body),
+    deleteContextNote: (workspaceId: string, agentId: string, id: string, expectedRevision: number) => send('DELETE', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, { expected_revision: expectedRevision }),
+    agentPermissions: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema),
+    setAgentPermission: (workspaceId: string, agentId: string, body: { revision: number; operation_id: string; require_human_approval: boolean }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema, body),
+    decideOperationApproval: (workspaceId: string, agentId: string, id: string, decision: 'approved' | 'denied') => request('POST', `${ws(workspaceId)}/agents/${agentId}/permissions/approvals/${id}`, agentPermissionsSchema, { decision }),
     setContextField: (workspaceId: string, field: string, body: { value: string; scope: 'reply' | 'future' }) =>
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
-    listInstructions: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)), emptyPage()),
-    /**
-     * Accept and discard, and no `propose`.
-     *
-     * `POST /w/:ws/instructions` does not exist on the server — the routing
-     * table has `:id/accept`, `:id/save`, `:id/discard` and the DELETE, and
-     * nothing that creates a version. A proposal is written by a run, through
-     * the engine, which is the design: an instruction the agent proposes is a
-     * thing a person reviews. The client used to offer "Propose a change" and
-     * it could only ever have 404ed, so the button is gone (decision C26) and
-     * the finding is in the README's table.
-     */
-    acceptInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
-    discardInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
-    listSkills: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/skills`, paginatedSchema(skillVersionSchema)), emptyPage()),
-    adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
+    listInstructions: (workspaceId: string, agentId?: string | null) =>
+      request('GET', `${ws(workspaceId)}/instructions${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(instructionVersionSchema)),
+    saveInstruction: (workspaceId: string, agentId: string, body: SaveAgentInstruction) =>
+      request('POST', `${ws(workspaceId)}/instructions?agent_id=${encodeURIComponent(agentId)}`, instructionVersionSchema, body, { requestedFrom: 'skills' }),
+    acceptInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/accept${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    discardInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/discard${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    listSkills: (workspaceId: string, agentId?: string | null) =>
+      optional(() => request('GET', `${ws(workspaceId)}/skills${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(skillVersionSchema)), emptyPage()),
+    adoptSkill: (workspaceId: string, id: string, agentId?: string | null) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, skillVersionSchema, {}),
+    listSkillAssignments: (workspaceId: string, agentId: string) =>
+      request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
+    updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
+      request('PATCH', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`, enterpriseSkillAssignmentSchema, body),
+    partnerWorkflow: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/partner-workflow`, partnerWorkflowViewV2Schema), {
+        configured: false,
+        admission_state: 'disabled' as const,
+        viewer_role: 'unrelated' as const,
+        actions: { configure: false, set_admission: false, propose_engagement: false, submit_invoice: false, correct_invoice: false, view_finance_review: false },
+        teams: [],
+        agents: [],
+        readiness: [
+          { role: 'partnerships' as const, configured: false, assignment_state: 'missing' as const, native_status: 'unknown' as const, skill_key: 'partner-program-screening' as const, skill_version: null, artifact_digest: null, missing: ['principal' as const, 'agent' as const, 'assignment' as const, 'skill' as const, 'tools' as const, 'provider' as const] },
+          { role: 'finance' as const, configured: false, assignment_state: 'missing' as const, native_status: 'unknown' as const, skill_key: 'partner-invoice-review' as const, skill_version: null, artifact_digest: null, missing: ['principal' as const, 'agent' as const, 'assignment' as const, 'skill' as const, 'tools' as const, 'provider' as const] },
+        ],
+        partner_options: [],
+        engagements: [],
+        handoffs: [],
+        connector: {
+          name: 'enterprise-partner-records' as const,
+          shared_code: true as const,
+          enforcement: 'server' as const,
+          summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.' as const,
+        },
+      }) as Promise<PartnerWorkflowViewV2>,
+    configurePartnerWorkflow: (workspaceId: string, body: PartnerWorkflowSetup) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/configure`, partnerWorkflowViewV2Schema, body) as Promise<PartnerWorkflowViewV2>,
+    setPartnerWorkflowAdmission: (workspaceId: string, body: PartnerWorkflowAdmissionInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/admission`, partnerWorkflowViewV2Schema, body) as Promise<PartnerWorkflowViewV2>,
+    proposePartnerEngagement: (workspaceId: string, body: PartnerEngagementAuthorizationInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/engagement-authorizations`, partnerEngagementAuthorizationResultSchema, body) as Promise<PartnerEngagementAuthorizationResult>,
+    submitPartnerInvoice: (workspaceId: string, body: PartnerInvoiceIntakeInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/invoice-intakes`, partnerInvoiceIntakeResultSchema, body) as Promise<PartnerInvoiceIntakeResult>,
+    correctPartnerInvoice: (workspaceId: string, handoffId: string, body: PartnerInvoiceCorrectionInput) =>
+      request('POST', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/corrections`, partnerInvoiceCorrectionResultSchema, body) as Promise<PartnerInvoiceCorrectionResult>,
+    partnerHandoffResult: (workspaceId: string, handoffId: string) =>
+      request('GET', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/result`, partnerHandoffResultSchema) as Promise<PartnerHandoffResult>,
 
     // --- members and invitations ---
-    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
+    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member'; role_template_key?: 'partnerships-agent' | 'finance-agent' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
     /**
@@ -384,7 +508,28 @@ export function createRest(options: RestOptions) {
     deleteUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
       send('DELETE', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`),
     /** The agent's Context sources, with their extraction status. */
-    listAgentFiles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/files`, paginatedSchema(attachmentDetailSchema)),
+    listAgentFiles: (workspaceId: string, agentId?: string | null) => request('GET', `${ws(workspaceId)}/files${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(attachmentDetailSchema)),
+    /** Team-granted, versioned references in Library. */
+    listLibrarySources: (workspaceId: string, agentId?: string | null) =>
+      request('GET', `${ws(workspaceId)}/library-sources${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(librarySourceSchema)),
+    sharedIntelligence: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/shared-intelligence`, sharedIntelligenceWorkspaceSchema),
+    createSharedIntelligenceProposal: (workspaceId: string, body: CreateSharedIntelligenceProposal) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals`, sharedIntelligenceProposalSchema, body),
+    queueSharedIntelligenceProposal: (workspaceId: string, proposalId: string, goalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/triage`, sharedIntelligenceProposalSchema, { goal_id: goalId }),
+    submitSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/submit`, sharedIntelligenceSubmitResultSchema, {}),
+    revokeSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/revoke`, sharedIntelligenceProposalSchema, {}),
+    sharedIntelligenceAdmin: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/admin/shared-intelligence`, sharedIntelligenceAdminWorkspaceSchema),
+    createSharedIntelligenceGoal: (workspaceId: string, body: CreateSharedIntelligenceGoal) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/goals`, sharedIntelligenceGoalSchema, body),
+    decideSharedIntelligenceTriage: (workspaceId: string, proposalId: string, body: SharedIntelligenceTriageDecision) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/proposals/${proposalId}/decision`, sharedIntelligenceTriageDecisionResultSchema, body),
+    reassessSharedIntelligenceTriage: (workspaceId: string, proposalId: string, goalId: string) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/proposals/${proposalId}/reassess`, sharedIntelligenceAdminCandidateSchema, { goal_id: goalId }),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`
@@ -416,7 +561,15 @@ export function createRest(options: RestOptions) {
     startSlackOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/oauth/start`, slackOAuthStartSchema, {}),
     createSlackLinkCode: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/slack/link-code`, slackLinkCodeSchema, {}),
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
+    outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
+    startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
+    inboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email/evidence`, inboundEmailConnectionSchema),
+    startGmailEvidenceOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/evidence/gmail/oauth/start`, inboundEmailOAuthStartSchema, {}),
+    importGmailEvidenceThread: (workspaceId: string, body: InboundEmailThreadImportInput) =>
+      request('POST', `${ws(workspaceId)}/integrations/email/evidence/threads`, inboundEmailThreadImportSchema, body),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
+    cloudConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/cloud/connection`, cloudConnectionResponseSchema),
+    startCloudConnection: (workspaceId: string) => request('POST', `${ws(workspaceId)}/cloud/connection/start`, cloudConnectionStartSchema, {}),
     pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**

@@ -21,7 +21,9 @@
 //     that property without a column that something has to remember to bump.
 import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
+import { loadApprovalListProjection } from './approvals.js';
 import { decisionSummary } from './request-summary.js';
+import { requestAudiencePredicate } from './audience.js';
 
 export interface RequestRow {
   id: string;
@@ -45,6 +47,11 @@ export interface RequestRow {
   triage_completed_at?: Date | null;
   triage_rubric_version?: string | null;
   triage_model_id?: string | null;
+  provenance_kind?: 'operational' | 'sample' | 'test' | 'unknown';
+  provenance_source?: string;
+  provenance_recorded_at?: Date;
+  presentation_hidden_at?: Date | null;
+  presentation_hidden_reason?: string | null;
 }
 
 /** Every column the shaping needs, plus the latest note and the decision. */
@@ -63,10 +70,18 @@ export const REQUEST_SELECT = `
          ta.reason_codes AS triage_reason_codes,
          ta.completed_at AS triage_completed_at,
          ta.rubric_version AS triage_rubric_version,
-         ta.model_id AS triage_model_id
+         ta.model_id AS triage_model_id,
+         COALESCE(provenance.kind, 'unknown') AS provenance_kind,
+         COALESCE(provenance.source, 'not_recorded') AS provenance_source,
+         COALESCE(provenance.recorded_at, r.created_at) AS provenance_recorded_at,
+         presentation.hidden_at AS presentation_hidden_at,
+         presentation.hidden_reason AS presentation_hidden_reason
     FROM requests r
     LEFT JOIN decisions d ON d.request_id = r.id
     LEFT JOIN users u ON u.id = d.decided_by
+    LEFT JOIN request_provenance provenance ON provenance.request_id = r.id
+    LEFT JOIN request_presentations presentation
+      ON presentation.request_id = r.id AND presentation.user_id = app_user_id()
     LEFT JOIN LATERAL (
       SELECT status, priority_score, priority_band, confidence, reason_codes,
              completed_at, rubric_version, model_id
@@ -76,6 +91,123 @@ export const REQUEST_SELECT = `
        ORDER BY created_at DESC
        LIMIT 1
     ) ta ON true`;
+
+/**
+ * Legacy requests with no audience rows remain workspace-visible. A scoped
+ * request is visible only to a named human principal, including direct-id
+ * reads. Keep this predicate beside REQUEST_SELECT so list and detail cannot
+ * drift.
+ */
+export const REQUEST_AUDIENCE_PREDICATE = requestAudiencePredicate('r.id', '$2');
+
+/** Default Inbox visibility is personal presentation state, never workflow state. */
+export const REQUEST_ACTIVE_PRESENTATION_PREDICATE = `NOT EXISTS (
+  SELECT 1 FROM request_presentations request_presentation
+   WHERE request_presentation.workspace_id=r.workspace_id
+     AND request_presentation.request_id=r.id
+     AND request_presentation.user_id=$2
+     AND request_presentation.hidden_at IS NOT NULL
+)`;
+
+/** Pending approvals that have expired do not remain actionable Inbox work. */
+export const REQUEST_REVIEWABLE_PREDICATE = `(r.status <> 'pending' OR r.kind <> 'approval' OR EXISTS (
+  SELECT 1 FROM approval_requests reviewable_approval
+   WHERE reviewable_approval.request_id=r.id
+     AND reviewable_approval.status='pending'
+     AND reviewable_approval.expires_at > now()
+))`;
+
+export const financeWorkflowRequest = (row: Pick<RequestRow, 'kind' | 'payload'>): boolean =>
+  row.kind === 'invoice'
+  && !!row.payload
+  && typeof row.payload === 'object'
+  && !Array.isArray(row.payload)
+  && 'workflow_provenance' in row.payload;
+
+export function canDecideLegacyRequest(
+  row: Pick<RequestRow, 'kind' | 'payload'>,
+  role: string,
+  reviewerRoles: readonly string[],
+): boolean {
+  return role === 'admin' || (financeWorkflowRequest(row) && reviewerRoles.includes('finance'));
+}
+
+/**
+ * Required work always wins over a user's older presentation preference. A
+ * hide can be recorded while a request is waiting on somebody else; routing,
+ * role, and sequential-step changes must still surface it when this viewer
+ * becomes the person who can act.
+ */
+export function requestRequiredForViewer(
+  row: Pick<RequestRow, 'kind' | 'status'>,
+  approval: ApprovalListProjection | null,
+  canDecideLegacy: boolean,
+): boolean {
+  if (row.status !== 'pending') return false;
+  if (row.kind === 'approval') return approval?.pending_for_viewer === true;
+  return row.kind !== 'task' && canDecideLegacy;
+}
+
+export function requestPresentationHidden(
+  row: Pick<RequestRow, 'kind' | 'status' | 'presentation_hidden_at'>,
+  approval: ApprovalListProjection | null,
+  canDecideLegacy: boolean,
+): boolean {
+  return row.presentation_hidden_at != null && !requestRequiredForViewer(row, approval, canDecideLegacy);
+}
+
+type PendingRequestRow = Pick<
+  RequestRow,
+  'id' | 'kind' | 'status' | 'label' | 'payload' | 'presentation_hidden_at'
+>;
+
+/** One authoritative pending set for bootstrap and every Inbox count. */
+export async function loadVisiblePendingRequests(
+  tx: Tx,
+  workspaceId: string,
+  userId: string,
+  role: string,
+  reviewerRoles: readonly string[],
+): Promise<{ rows: PendingRequestRow[]; pendingForMe: number; pendingForOthers: number }> {
+  const pending = await tx.query<PendingRequestRow>(
+    `SELECT r.id, r.kind, r.status, r.label, r.payload,
+            (SELECT hidden_at FROM request_presentations presentation
+              WHERE presentation.request_id=r.id AND presentation.user_id=$2) AS presentation_hidden_at
+       FROM requests r
+      WHERE r.workspace_id=$1 AND r.status='pending'
+        AND ${REQUEST_REVIEWABLE_PREDICATE}
+        AND ${REQUEST_AUDIENCE_PREDICATE}
+        AND (
+          ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
+          OR r.kind='approval'
+          OR ($3::boolean AND r.kind<>'task')
+          OR ($4::boolean AND r.kind='invoice' AND r.payload ? 'workflow_provenance')
+        )
+      ORDER BY r.created_at DESC`,
+    [workspaceId, userId, role === 'admin', reviewerRoles.includes('finance')],
+  );
+
+  const rows: PendingRequestRow[] = [];
+  let pendingForMe = 0;
+  let pendingForOthers = 0;
+  for (const request of pending.rows) {
+    const canDecide = canDecideLegacyRequest(request, role, reviewerRoles);
+    const approval = request.kind === 'approval'
+      ? await loadApprovalListProjection(tx, request.id, userId)
+      : null;
+    if (requestPresentationHidden(request, approval, canDecide)) continue;
+    rows.push(request);
+    if (request.kind === 'approval') {
+      if (approval?.pending_for_viewer) pendingForMe += 1;
+      else pendingForOthers += 1;
+    } else if (request.kind === 'task' || canDecide) {
+      pendingForMe += 1;
+    } else {
+      pendingForOthers += 1;
+    }
+  }
+  return { rows, pendingForMe, pendingForOthers };
+}
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -90,7 +222,7 @@ export function subjectOf(row: Pick<RequestRow, 'kind' | 'payload' | 'label'>): 
     case 'application':
       return text(asRecord(payload.applicant).name) ?? text(row.label);
     case 'invoice':
-      return text(asRecord(payload.payer).name) ?? text(asRecord(payload.payee).name) ?? text(row.label);
+      return text(asRecord(payload.payee).name) ?? text(row.label);
     case 'agreement': {
       const parties = Array.isArray(payload.parties) ? payload.parties : [];
       return text(asRecord(parties[0]).name) ?? text(row.label);
@@ -178,10 +310,11 @@ function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjec
   return result;
 }
 
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false): Record<string, unknown> {
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
+  const presentationHidden = requestPresentationHidden(row, approval, canDecideLegacy);
   return {
     id: row.id,
     kind: row.kind,
@@ -201,13 +334,26 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
-    decision_summary: decisionSummary(row, approval),
+    decision_summary: decisionSummary(row, approval, canDecideLegacy),
     triage: triageOf(row, triageActive, approval),
+    provenance: {
+      kind: row.provenance_kind ?? 'unknown',
+      source: row.provenance_source ?? 'not_recorded',
+      recorded_at: (row.provenance_recorded_at ?? row.created_at).toISOString(),
+    },
+    presentation: {
+      hidden: presentationHidden,
+      hidden_at: presentationHidden ? row.presentation_hidden_at?.toISOString() ?? null : null,
+      hidden_reason: row.presentation_hidden_reason ?? null,
+    },
   };
 }
 
 /** One request, or null. Runs under the caller's tenant transaction. */
-export async function loadRequest(tx: Tx, requestId: string): Promise<RequestRow | null> {
-  const { rows } = await tx.query<RequestRow>(`${REQUEST_SELECT} WHERE r.id = $1`, [requestId]);
+export async function loadRequest(tx: Tx, requestId: string, userId?: string): Promise<RequestRow | null> {
+  const { rows } = await tx.query<RequestRow>(
+    `${REQUEST_SELECT} WHERE r.id = $1${userId ? ` AND ${REQUEST_AUDIENCE_PREDICATE}` : ''}`,
+    userId ? [requestId, userId] : [requestId],
+  );
   return rows[0] ?? null;
 }

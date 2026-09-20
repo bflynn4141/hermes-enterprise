@@ -283,6 +283,8 @@ export async function loadCatalog(
 
 /** One row, for the engine: the transport, the effort map and the price. */
 export interface CatalogModel {
+  readonly disabled_reason: string | null;
+  readonly supports_tools: boolean;
   readonly model_id: string;
   readonly provider: string;
   readonly transport: string;
@@ -308,6 +310,8 @@ export async function loadModel(tx: Tx, modelId: string): Promise<CatalogModel |
   const row = rows[0];
   if (!row) return null;
   return {
+    disabled_reason: row.disabled_reason,
+    supports_tools: row.supports_tools,
     model_id: row.model_id,
     provider: row.provider,
     transport: row.transport,

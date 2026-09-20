@@ -5,6 +5,7 @@ import type { EngineRunRow } from '../engine/agent-db.js';
 import type { RunErrorInput } from '../engine/agent-db.js';
 import type { ProviderMessage, ToolCall } from '../model/types.js';
 import { RouteError } from '../routes/tenant.js';
+import type { ProviderRetryAfter } from './retry-after.js';
 import {
   RuntimeBudgetError,
   type RuntimeBudgetContext,
@@ -28,6 +29,15 @@ export interface RuntimeCallRecord {
   readonly ok: boolean | null;
 }
 export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
+  /**
+   * Group runtime-only reads and bookkeeping that already use this request-local
+   * database instance. This removes repeated BEGIN / tenant-context / COMMIT
+   * round trips while preserving the single-client, serial-query invariant.
+   */
+  async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
+    return this.runtimeTx(work);
+  }
+
   override async setRunStatus(
     runId: string,
     status: string,
@@ -44,6 +54,73 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
     const actual = rows[0]?.status;
     if (!actual || !['completed', 'stopped', 'error'].includes(actual)) return;
     await this.runtimeQuery('SELECT project_approval_continuation_outcome($1)', [runId]);
+    await this.runtimeQuery('SELECT project_partner_handoff_run_outcome($1)', [runId]);
+  }
+  async recoveryInput(runId: string, attempt: number): Promise<string | null> {
+    const { rows } = await this.runtimeQuery<{ recovery_input: string | null }>(
+      'SELECT recovery_input FROM runs WHERE id=$1 AND attempt=$2', [runId, attempt]);
+    return rows[0]?.recovery_input ?? null;
+  }
+  /**
+   * Fail only the exact automatic attempt whose runtime contract drifted.
+   * The expected-attempt predicate is the write fence: a delayed Workflow may
+   * never mark its successor errored after binding resolution yields.
+   */
+  async failAutomaticRecoveryExecution(runId: string, attempt: number, error: RunErrorInput): Promise<boolean> {
+    return this.runtimeTx(async (query) => {
+      const { rows } = await query<{ id: string }>(
+        `UPDATE runs
+            SET status='error', error=$3::jsonb, ended_at=now(),
+                recovery_cancelled=true, recovery_next_at=NULL, recovery_blocked_reason=$4
+          WHERE id=$1 AND attempt=$2 AND automatic_recovery
+            AND status='working' AND NOT stop_requested
+          RETURNING id`,
+        [runId, attempt, JSON.stringify(error), error.reason],
+      );
+      if (rows.length !== 1) return false;
+      // Terminal projections must commit with the fenced state transition. A
+      // stale no-op may not close approval budget or handoff state belonging
+      // to the successor attempt.
+      await query('SELECT project_approval_continuation_outcome($1)', [runId]);
+      await query('SELECT project_partner_handoff_run_outcome($1)', [runId]);
+      return true;
+    });
+  }
+  async lockAutomaticRecoveryExecution(runId: string, attempt: number): Promise<boolean> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `SELECT id FROM runs
+        WHERE id=$1 AND attempt=$2 AND automatic_recovery
+          AND status='working' AND NOT stop_requested
+        FOR UPDATE`,
+      [runId, attempt],
+    );
+    return rows.length === 1;
+  }
+  async recoveryAuthority(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=($2::integer-1) AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
+  async runtimeRequest(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=$2 AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
+  async recordProviderRetryAfter(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void> {
+    // A delayed provider response from the old attempt cannot postpone its
+    // successor. Concurrent failures keep the longest valid provider deadline.
+    await this.runtimeQuery(
+      `UPDATE runs SET recovery_not_before=GREATEST(recovery_not_before,$3::timestamptz),
+              recovery_blocked_reason=COALESCE(recovery_blocked_reason,$4)
+        WHERE workspace_id=app_workspace_id() AND id=$1 AND attempt=$2`,
+      [runId, attempt, delay.notBefore, delay.blockedReason],
+    );
   }
   async binding(runId: string): Promise<RunBinding | null> {
     const { rows } = await this.runtimeQuery<RunBinding>(
@@ -59,6 +136,29 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
           AND (runtime_attempt IS DISTINCT FROM $2 OR runtime_run_id IS NULL OR runtime_run_id = $3)
         RETURNING id`, [runId, attempt, remoteRunId, sessionId, profile]);
     return rows.length === 1;
+  }
+  async resolveRuntimeSessionId(run: EngineRunRow): Promise<string> {
+    if (!run.agentId) throw new RouteError('The run has no runtime agent.', 'runtime_run_inactive', 409);
+    const { rows } = await this.runtimeQuery<{ runtime_session_id: string }>(
+      `SELECT COALESCE((
+          SELECT prior.runtime_session_id
+            FROM runs prior
+           WHERE prior.workspace_id = $1
+             AND prior.session_id = $2
+             AND prior.agent_id = $4
+             AND prior.id <> $3
+             AND prior.created_at < (SELECT created_at FROM runs WHERE id = $3)
+             AND prior.runtime_kind = 'hermes'
+             AND prior.runtime_session_id IS NOT NULL
+           ORDER BY prior.created_at DESC, prior.id DESC
+           LIMIT 1
+        ), $3::text) AS runtime_session_id`,
+      [run.workspaceId, run.sessionId, run.id, run.agentId],
+    );
+    // The run id is globally fresh even when a deterministic staging seed
+    // recreates the same Enterprise session id. This prevents the native
+    // SessionDB from attaching an old transcript to a new conversation.
+    return rows[0]?.runtime_session_id ?? run.id;
   }
   async snapshotRequest(runId: string, attempt: number, proposed: Record<string, unknown>): Promise<Record<string, unknown>> {
     const run = await this.loadRun(runId);
@@ -158,9 +258,9 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
       Math.max(0, end - Math.max(begun, clock.runtime_wait_started_at.getTime()));
     return Math.max(0, end - begun - Number(clock.runtime_wait_ms) - pendingWait);
   }
-  async allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]> {
-    const { rows } = await this.runtimeQuery<{ model_id: string; provider: string }>(
-      `SELECT model_id, provider FROM catalog
+  async allowedRuntimeModels(): Promise<{ model_id: string; provider: string; context_length: number | null }[]> {
+    const { rows } = await this.runtimeQuery<{ model_id: string; provider: string; context_length: number | null }>(
+      `SELECT model_id, provider, context_length FROM catalog
          WHERE (provider, transport) IN (('openrouter', 'openrouter_chat'), ('nous_portal', 'nous_chat'))
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;

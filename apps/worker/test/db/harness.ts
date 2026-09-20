@@ -101,9 +101,40 @@ export function call(env: Env, path: string, options: CallOptions = {}): Promise
   return Promise.resolve(worker.fetch(request, env, ctx));
 }
 
+/** Call the Worker and then settle the promises it handed to waitUntil. */
+export async function callWithWaitUntil(env: Env, path: string, options: CallOptions = {}): Promise<Response> {
+  const headers = new Headers(options.headers ?? {});
+  if (options.origin !== null) headers.set('origin', options.origin ?? ALLOWED_ORIGIN);
+  if (options.body !== undefined) headers.set('content-type', 'application/json');
+  const request = new Request(`${ALLOWED_ORIGIN}${path}`, {
+    method: options.method ?? 'GET',
+    headers,
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+  });
+  const pending: Promise<unknown>[] = [];
+  const settledContext = {
+    waitUntil: (promise: Promise<unknown>) => { pending.push(promise); },
+    passThroughOnException: () => undefined,
+  } as unknown as ExecutionContext;
+  const response = await worker.fetch(request, env, settledContext);
+  await Promise.all(pending);
+  return response;
+}
+
 /** Call as a seeded user, the way `AUTH_MODE=fake` expects. */
 export const asUser = (env: Env, userId: string, path: string, options: CallOptions = {}): Promise<Response> =>
   call(env, path, { ...options, headers: { 'x-dev-user': userId, ...(options.headers ?? {}) } });
+
+export const asUserWithWaitUntil = (
+  env: Env,
+  userId: string,
+  path: string,
+  options: CallOptions = {},
+): Promise<Response> => callWithWaitUntil(
+  env,
+  path,
+  { ...options, headers: { 'x-dev-user': userId, ...(options.headers ?? {}) } },
+);
 
 /**
  * Point the Worker at an in-process WorkOS for the length of one test file.

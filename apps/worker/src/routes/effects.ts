@@ -6,13 +6,13 @@
 // The execute route is the most important honest surface in the product, so it
 // is worth being explicit about what it is:
 //
-// There is no executor. This repository contains no SMTP client, no payment
-// provider, no signature provider, no identity provider integration and no
-// webhook that would reach one — not behind a flag, not "just for testing"
-// (CONVENTIONS, invariant 5). So pressing Execute records an attempt, writes
-// `status = 'unavailable'` with the reason, appends an `effect.executed` audit
-// row, and tells the person in plain words that nothing was sent, paid, granted
-// or signed and that they will have to do it themselves for now.
+// There is no executor for these legacy ledger rows. Approved communications
+// can use the separate governed Gmail outbox when configured, but recording an
+// attempt on a legacy effect does not enqueue that outbox or prove delivery.
+// POST …/execute always answers unavailable: it writes `status = 'unavailable'`
+// with the reason, appends an `effect.executed` audit row (attempt recorded),
+// and states which work remains undone. It never claims bank, mail, access, or
+// signature work completed.
 //
 // That is a worse product than one that executes. It is a far better product
 // than one that *says* it executed, which is what a stub with a green tick
@@ -23,7 +23,11 @@
 // and step-up — because it writes an audit row against a person's name, and
 // "somebody walked past an unlocked laptop" should not be able to.
 import type { Context } from 'hono';
-import { effectEntitySchema, paginatedSchema, EFFECT_STATUSES } from '@hermes/shared';
+import {
+  effectEntitySchema,
+  paginatedSchema,
+  EFFECT_STATUSES,
+} from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, pathUuid, RouteError } from './tenant.js';
@@ -43,13 +47,13 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
     : undefined;
 
   const rows = await inWorkspace(c, (work) =>
-    effectRows(work.tx, status && status.length > 0 ? { status } : {}),
+    effectRows(work.tx, { ...(status && status.length > 0 ? { status } : {}), audienceUserId: work.userId }),
   );
   return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
 }
 
 /** Does this member hold the role the effect needs? */
-async function holdsRole(
+export async function holdsRole(
   tx: { query: (text: string, values?: readonly unknown[]) => Promise<{ rowCount: number | null }> },
   workspaceId: string,
   userId: string,
@@ -71,7 +75,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
 
   const row = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
-    const effect = await loadEffect(work.tx, effectId);
+    const effect = await loadEffect(work.tx, effectId, work.userId);
     if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
 
     if (!(await holdsRole(work.tx, work.workspaceId, work.userId, effect.required_role))) {
@@ -117,7 +121,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
       ])),
     );
 
-    const updated = await loadEffect(work.tx, effectId);
+    const updated = await loadEffect(work.tx, effectId, work.userId);
     return updated ?? effect;
   });
 

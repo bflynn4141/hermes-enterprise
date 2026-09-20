@@ -45,6 +45,7 @@ export interface RunInstanceParams {
   readonly attempt: number;
   readonly engineVersion: number;
   readonly traceId: string;
+  readonly receivedAt?: number;
   readonly scriptedScript?: string;
 }
 
@@ -82,6 +83,12 @@ export async function submitTurn(input: {
   readonly text: string;
   readonly jobIds: string[];
   readonly scriptedScript?: string;
+  /** Server-authored only; browser and external channel bodies cannot set it. */
+  readonly turnAuthor?: {
+    readonly id: string;
+    readonly name: string;
+    readonly is_bot: true;
+  };
 }): Promise<SubmitTurnResult> {
   const { tx, env, workspaceId, userId, session, clientTurnId, text, jobIds } = input;
   const existing = await tx.query<SubmittedRun>(
@@ -184,7 +191,11 @@ export async function submitTurn(input: {
   await tx.query(
     `INSERT INTO run_turns (workspace_id, run_id, turn, seq, role, provider_message)
      VALUES ($1,$2,0,0,'user',$3::jsonb)`,
-    [workspaceId, runId, JSON.stringify({ role: 'user', content: text })],
+    [workspaceId, runId, JSON.stringify({
+      role: 'user',
+      content: text,
+      ...(input.turnAuthor ? { enterprise_turn_author: input.turnAuthor } : {}),
+    })],
   );
   await tx.query(`DELETE FROM session_drafts WHERE session_id=$1 AND user_id=$2`, [session.id, userId]);
   jobIds.push(...(await publishEvents(tx, workspaceId, [{

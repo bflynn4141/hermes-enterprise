@@ -94,6 +94,7 @@ test('every main screen renders', async ({ page }) => {
   // 15. Library → Documents.
   await appPane.getByRole('tab', { name: 'Documents' }).click();
   await expect(appPane.getByText('Saved documents')).toBeVisible();
+  await expect(appPane.getByText('Partner Program Guide', { exact: true })).toBeVisible();
   await page.screenshot(shot('15-library-documents'));
 
   // 16. Settings → Provider keys.

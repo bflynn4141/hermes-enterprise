@@ -25,6 +25,15 @@ import { runEventsExport } from './ops/events-export.js';
 import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
 import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
+import type { HubEvent } from './hubs.js';
+import { scopeWorkspaceHubEvents } from './domain/audience.js';
+import {
+  classifyInvitationDeliveryFailure,
+  InvitationDeliveryError,
+  invitationCorrelationId,
+  logInvitationDiagnostic,
+  type InvitationDiagnosticAction,
+} from './ops/invitation-diagnostics.js';
 
 export interface Job {
   readonly id: string;
@@ -34,6 +43,9 @@ export interface Job {
   readonly payload: unknown;
   readonly attempts: number;
 }
+
+/** A successful runner may defer completion without entering retry backoff. */
+export type JobDisposition = 'paused' | void;
 
 /** How long a claimer holds a job before another may take it. */
 export const CLAIM_SECONDS = 120;
@@ -66,12 +78,22 @@ export const JOB_KINDS = [
   // Cloudflare Cron admits a configured discovery run; this durable job owns
   // the external fetch, evidence commit, and idempotent Iris handoff.
   'partner_screening',
+  'partner_invoice_review',
+  'partner_acknowledgment',
+  'run_recovery',
+  'run_launch',
   // Warm-pool invitation expiry and operator capacity alerts. Assignment is
   // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
   'hermes_capacity_alert',
+  // Local member setup orchestration. It reserves only pre-verified capacity;
+  // lifecycle creation and invitation delivery are separate, gated operations.
+  'member_provision',
   // Advisory Jev assessment for Inbox ordering. Approval policy remains the authority.
   'request_triage',
+  // Exact revision-bound outreach after a human approves and a dedicated
+  // sender account is connected.
+  'outbound_email_send',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -88,9 +110,14 @@ export async function claimJob(tx: Tx, jobId: string): Promise<Job | null> {
   const { rows } = await tx.query<Job>(
     `UPDATE jobs
         SET locked_until = now() + ($2 || ' seconds')::interval,
-            attempts = attempts + 1
+            attempts = attempts + 1,
+            last_error = CASE WHEN last_error='member_provisioning_disabled' THEN NULL ELSE last_error END
       WHERE id = $1
         AND done_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM job_ready paused
+           WHERE paused.job_id=jobs.id AND paused.pause_reason IS NOT NULL
+        )
         AND (locked_until IS NULL OR locked_until < now())
       RETURNING id, workspace_id, kind, key, payload, attempts`,
     [jobId, String(CLAIM_SECONDS)],
@@ -103,11 +130,16 @@ export async function claimNextJob(tx: Tx): Promise<Job | null> {
   const { rows } = await tx.query<Job>(
     `UPDATE jobs
         SET locked_until = now() + ($1 || ' seconds')::interval,
-            attempts = attempts + 1
+            attempts = attempts + 1,
+            last_error = CASE WHEN last_error='member_provisioning_disabled' THEN NULL ELSE last_error END
       WHERE id = (
         SELECT id FROM jobs
          WHERE done_at IS NULL
            AND next_at <= now()
+           AND NOT EXISTS (
+             SELECT 1 FROM job_ready paused
+              WHERE paused.job_id=jobs.id AND paused.pause_reason IS NOT NULL
+           )
            AND (locked_until IS NULL OR locked_until < now())
          ORDER BY next_at
          FOR UPDATE SKIP LOCKED
@@ -123,6 +155,35 @@ export async function finishJob(tx: Tx, jobId: string): Promise<void> {
   await tx.query('UPDATE jobs SET done_at = now(), locked_until = NULL WHERE id = $1', [jobId]);
   // The pointer the Cron reads exists only while there is work to point at.
   await tx.query('DELETE FROM job_ready WHERE job_id = $1', [jobId]);
+}
+
+/** Pause one known setup job and its platform pointer in the same commit. */
+export async function pauseMemberProvisioningJob(tx: Tx, jobId: string): Promise<void> {
+  const job = await tx.query(
+    `UPDATE jobs
+        SET locked_until=NULL, last_error='member_provisioning_disabled'
+      WHERE id=$1 AND kind='member_provision' AND done_at IS NULL
+      RETURNING id`,
+    [jobId],
+  );
+  const pointer = await tx.query(
+    `UPDATE job_ready
+        SET pause_reason='member_provisioning_disabled'
+      WHERE job_id=$1
+      RETURNING job_id`,
+    [jobId],
+  );
+  if (job.rowCount !== 1 || pointer.rowCount !== 1) {
+    throw new Error('member provisioning pause lost its durable job pointer');
+  }
+}
+
+async function finishFailedJob(tx: Tx, jobId: string, error: string): Promise<void> {
+  await tx.query(
+    `UPDATE jobs SET done_at=now(), locked_until=NULL, last_error=$2 WHERE id=$1`,
+    [jobId, error.slice(0, 1000)],
+  );
+  await tx.query('DELETE FROM job_ready WHERE job_id=$1', [jobId]);
 }
 
 /** Release a failed job for a later attempt, with backoff. */
@@ -245,13 +306,55 @@ interface OutboxRow {
 }
 
 /**
+ * A committed outbox batch that the request which created it can hand to the
+ * hub without re-reading it. The durable publish job remains the recovery
+ * path until the hub acknowledges and the job is marked done.
+ */
+export interface PreparedPublication {
+  readonly jobId: string;
+  readonly sessionId: string | null;
+  readonly events: readonly HubEvent[];
+}
+
+/** Deliver an already committed outbox batch without another database read. */
+export async function deliverPreparedPublications(
+  env: Env,
+  workspaceId: string,
+  publications: readonly PreparedPublication[],
+): Promise<void> {
+  for (const publication of publications) {
+    if (publication.sessionId) {
+      await env.SESSION_HUB.get(env.SESSION_HUB.idFromName(publication.sessionId)).publish(publication.events);
+    } else {
+      await env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(workspaceId)).publish(publication.events);
+    }
+  }
+}
+
+/**
+ * Retire jobs whose side effects were acknowledged on the request's fast path.
+ * One tenant transaction handles the whole handoff. If this background cleanup
+ * fails, Cron safely replays the idempotent publish / Workflow creation later.
+ */
+export async function finishJobsAfterCommit(
+  env: Env,
+  workspaceId: string,
+  jobIds: readonly string[],
+): Promise<void> {
+  if (jobIds.length === 0) return;
+  await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+    for (const jobId of jobIds) await finishJob(tx, jobId);
+  });
+}
+
+/**
  * `publish`: hand a committed range of outbox rows to the hub that fans them
  * out. The job is marked done only once the hub has acknowledged, so a Worker
  * that died between the commit and the RPC costs a minute of lag, not an event.
  */
 async function runPublish(env: Env, job: Job): Promise<void> {
   const payload = (job.payload ?? {}) as { session_id?: string | null; first_id?: string; last_id?: string };
-  const rows = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+  const events = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const result = await tx.query<OutboxRow>(
       `SELECT id::text AS id, session_id, kind, payload, schema_version, trace_id, created_at
          FROM stream_events
@@ -261,20 +364,19 @@ async function runPublish(env: Env, job: Job): Promise<void> {
         ORDER BY id`,
       [job.workspace_id, payload.first_id ?? '0', payload.last_id ?? '0', payload.session_id ?? null],
     );
-    return result.rows;
+    const envelopes: HubEvent[] = result.rows.map((row) => ({
+      id: row.id,
+      workspace_id: job.workspace_id,
+      session_id: row.session_id,
+      kind: row.kind,
+      payload: row.payload,
+      schema_version: row.schema_version,
+      trace_id: row.trace_id ?? 'unknown',
+      at: row.created_at.toISOString(),
+    }));
+    return scopeWorkspaceHubEvents(tx, envelopes);
   });
-  if (rows.length === 0) return;
-
-  const events = rows.map((row) => ({
-    id: row.id,
-    workspace_id: job.workspace_id,
-    session_id: row.session_id,
-    kind: row.kind,
-    payload: row.payload,
-    schema_version: row.schema_version,
-    trace_id: row.trace_id ?? 'unknown',
-    at: row.created_at.toISOString(),
-  }));
+  if (events.length === 0) return;
 
   if (payload.session_id) {
     const stub = env.SESSION_HUB.get(env.SESSION_HUB.idFromName(payload.session_id));
@@ -334,6 +436,7 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     organization_id?: string;
     email?: string;
     inviter_user_id?: string;
+    correlation_id?: string;
   };
   const port = optionalWorkosPort(env);
   const mark = async (status: 'done' | 'failed', error?: string): Promise<void> => {
@@ -346,11 +449,51 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     });
   };
 
+  const invitationAction: InvitationDiagnosticAction | null = payload.action === 'send_invitation'
+    ? 'send_delivery'
+    : payload.action === 'resend_invitation'
+      ? 'resend_delivery'
+      : null;
+  const correlationId = invitationCorrelationId(payload.correlation_id ?? job.id);
+  const invitationLog = (
+    checkpoint: string,
+    ok: boolean,
+    reason?: string,
+  ): void => {
+    if (!invitationAction) return;
+    logInvitationDiagnostic({
+      action: invitationAction,
+      checkpoint,
+      correlationId,
+      workspaceId: job.workspace_id,
+      invitationId: payload.invitation_id,
+      jobId: job.id,
+      ok,
+      reason,
+    });
+  };
+
+  invitationLog('job_claimed', true);
+
   if (!port) {
     if (env.AUTH_MODE === 'workos' || env.ENVIRONMENT === 'staging' || env.ENVIRONMENT === 'production') {
       // A production-mode sync is not complete when the system that owns the
       // organization or invitation was never called. Mark the evidence failed
       // and throw so the durable job keeps retrying instead of erasing the gap.
+      if (invitationAction) {
+        const reason = 'workos_invitation_delivery_not_configured';
+        if (payload.invitation_id) {
+          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+              WHERE workspace_id=$1 AND id=$2 AND status='pending'
+                AND delivery_status IN ('queued', 'sending', 'not_required')`,
+            [job.workspace_id, payload.invitation_id, reason],
+          ));
+        }
+        await mark('failed', reason);
+        invitationLog('provider_unavailable', false, reason);
+        throw new InvitationDeliveryError(reason);
+      }
       await mark('failed', 'workos not configured');
       throw new Error('WorkOS is required for this synchronization job');
     }
@@ -363,45 +506,96 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
     case 'send_invitation':
     case 'resend_invitation': {
       if (!payload.invitation_id || !payload.organization_id || !payload.email || !payload.role) {
-        throw new Error('WorkOS invitation delivery payload is incomplete');
+        const reason = 'workos_invitation_payload_invalid';
+        await mark('failed', reason);
+        invitationLog('job_payload_invalid', false, reason);
+        throw new InvitationDeliveryError(reason, 0, false);
       }
+      const invitationId = payload.invitation_id;
       // A delivery job may have been delayed behind an outage. Reconcile local
       // expiry before making the external call so an invitation cannot be sent
       // after the reservation that guaranteed its Iris should have expired.
       const { expireInvitationReservations } = await import('./hermes-cloud/capacity.js');
       const deliverable = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
         await expireInvitationReservations(tx, job.workspace_id);
-        const invitation = await tx.query<{ status: string; workos_invitation_id: string | null }>(
-          `SELECT status, workos_invitation_id FROM invitations
+        const invitation = await tx.query<{
+          status: string;
+          workos_invitation_id: string | null;
+          delivery_status: string;
+          delivery_error: string | null;
+        }>(
+          `SELECT status, workos_invitation_id, delivery_status, delivery_error FROM invitations
             WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
           [job.workspace_id, payload.invitation_id],
         );
         const row = invitation.rows[0];
-        if (!row || row.status !== 'pending') return { deliver: false, done: true };
+        if (!row || row.status !== 'pending') return { deliver: false, done: true, failure: null };
         if (row.workos_invitation_id) {
           await tx.query(
             `UPDATE invitations SET delivery_status='delivered', delivery_error=NULL WHERE id=$1`,
             [payload.invitation_id],
           );
-          return { deliver: false, done: true };
+          return { deliver: false, done: true, failure: null };
+        }
+        if (row.delivery_status === 'sending') {
+          return {
+            deliver: false,
+            done: false,
+            failure: 'workos_invitation_delivery_outcome_unknown',
+          };
+        }
+        const persistedTerminalReason = row.delivery_error;
+        if (row.delivery_status === 'failed' && persistedTerminalReason && [
+          'workos_invitation_delivery_outcome_unknown',
+          'workos_invitation_delivery_rejected',
+          'workos_invitation_local_commit_failed',
+          'iris_capacity_reservation_missing',
+        ].includes(persistedTerminalReason)) {
+          return { deliver: false, done: false, failure: persistedTerminalReason };
         }
         if (env.AGENT_RUNTIME === 'hermes') {
-          const capacity = await tx.query(
-            `SELECT 1 FROM hermes_cloud_capacity
-              WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'`,
-            [job.workspace_id, payload.invitation_id],
+          const { capacityRoleForInvitation, hasCurrentReservedCapacityForInvitation } =
+            await import('./hermes-cloud/capacity.js');
+          const role = await capacityRoleForInvitation(
+            tx, job.workspace_id, invitationId, { requireReadyOperation: true },
           );
-          if (capacity.rowCount !== 1) throw new Error('invitation delivery refused without reserved Iris capacity');
+          if (!await hasCurrentReservedCapacityForInvitation(
+            env, tx, job.workspace_id, invitationId, role,
+          )) {
+            return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
+          }
         }
         await tx.query(
           `UPDATE invitations SET delivery_status='sending', delivery_error=NULL WHERE id=$1`,
           [payload.invitation_id],
         );
-        return { deliver: true, done: false };
+        return { deliver: true, done: false, failure: null };
       });
+      if (deliverable.failure) {
+        await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+          `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+            WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+          [job.workspace_id, payload.invitation_id, deliverable.failure],
+        ));
+        try { await mark('failed', deliverable.failure); }
+        catch { /* The terminal delivery state remains authoritative. */ }
+        const checkpoint = deliverable.failure === 'workos_invitation_delivery_outcome_unknown'
+          ? 'ambiguous_delivery_detected'
+          : deliverable.failure === 'iris_capacity_reservation_missing'
+            ? 'reservation_recheck_failed'
+            : 'terminal_delivery_replayed';
+        try { invitationLog(checkpoint, false, deliverable.failure); }
+        catch { /* Logging cannot make a terminal delivery retryable. */ }
+        // These states require Admin reconciliation. The persisted terminal
+        // reason also prevents a later claim from re-entering provider send.
+        throw new InvitationDeliveryError(deliverable.failure, 0, false);
+      }
+      invitationLog(deliverable.done ? 'delivery_already_resolved' : 'pending_and_reservation_rechecked', true);
       if (deliverable.deliver) {
+        let sent: Awaited<ReturnType<typeof port.sendInvitation>>;
         try {
-          const sent = payload.action === 'resend_invitation' && payload.previous_workos_invitation_id
+          invitationLog('provider_attempted', true);
+          sent = payload.action === 'resend_invitation' && payload.previous_workos_invitation_id
             ? await port.resendInvitation(payload.previous_workos_invitation_id)
             : await port.sendInvitation({
                 email: payload.email,
@@ -410,6 +604,25 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
                 inviterUserId: payload.inviter_user_id,
                 expiresInDays: 7,
               });
+          invitationLog('provider_accepted', true);
+        } catch (error) {
+          const failure = classifyInvitationDeliveryFailure(error);
+          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+            [job.workspace_id, payload.invitation_id, failure.reason],
+          ));
+          if (failure.retryable) {
+            await mark('failed', failure.reason);
+          } else {
+            try { await mark('failed', failure.reason); } catch { /* Preserve the terminal provider outcome. */ }
+          }
+          try { invitationLog('provider_failed', false, failure.reason); }
+          catch { /* Logging cannot change provider retry safety. */ }
+          throw new InvitationDeliveryError(failure.reason, failure.retryAfterSeconds, failure.retryable);
+        }
+
+        try {
           await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
             await tx.query(
               `UPDATE invitations
@@ -429,14 +642,35 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
               [job.workspace_id, expiryKey, sent.expiresAt],
             );
           });
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
-            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
-              WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
-            [job.workspace_id, payload.invitation_id, detail.slice(0, 500)],
-          ));
-          throw error;
+          invitationLog('local_delivery_committed', true);
+        } catch {
+          const reason = 'workos_invitation_local_commit_failed';
+          try {
+            await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+              `UPDATE invitations
+                  SET workos_invitation_id=$3, expires_at=$4, delivery_status='failed', delivery_error=$5
+                WHERE workspace_id=$1 AND id=$2 AND status='pending'`,
+              [job.workspace_id, payload.invitation_id, sent.id, sent.expiresAt, reason],
+            ));
+          } catch {
+            // The provider response is still never replayed automatically. A
+            // later Admin reconciliation can use the shared correlation id.
+          }
+          try {
+            await mark('failed', reason);
+          } catch {
+            // Do not turn a post-acceptance bookkeeping failure into another
+            // provider call. The terminal error below remains authoritative.
+          }
+          try {
+            invitationLog('local_delivery_commit_failed', false, reason);
+          } catch {
+            // Logging cannot make an accepted provider write retryable.
+          }
+          // WorkOS already accepted the write. Replaying this job could send a
+          // second email because the provider id was the value we failed to
+          // persist, so keep the uncertainty visible for manual reconciliation.
+          throw new InvitationDeliveryError(reason, 0, false);
         }
       }
       break;
@@ -537,7 +771,7 @@ async function runApprovalContinue(env: Env, job: Job): Promise<void> {
 }
 
 /** Dispatch. An unknown kind is done rather than retried forever. */
-export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<void> {
+export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<JobDisposition> {
   switch (job.kind) {
     case 'publish':
       await runPublish(env, job);
@@ -548,6 +782,8 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'workos_sync':
       await runWorkosSync(env, job);
       return;
+    case 'member_provision':
+      return (await import('./member-provisioning/service.js')).runMemberProvisioningJob(env, job);
     case 'backup_uploads':
       // The nightly copy of one workspace's uploads prefix into the backup
       // bucket. A no-op where no backup bucket is bound (storage/backup.ts).
@@ -587,8 +823,20 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'slack_revoke':
       await (await import('./integrations/slack/revoke.js')).runSlackRevokeJob(env, job);
       return;
+    case 'run_recovery':
+      await (await import('./runs/recovery.js')).runRecoveryJob(env, job);
+      return;
+    case 'run_launch':
+      await (await import('./runs/recovery.js')).runLaunchJob(env, job);
+      return;
     case 'partner_screening':
       await (await import('./partner-screening/automation.js')).runPartnerScreeningAutomationJob(env, job);
+      return;
+    case 'partner_invoice_review':
+      await (await import('./partner-workflow/job.js')).runPartnerInvoiceReviewJob(env, job);
+      return;
+    case 'partner_acknowledgment':
+      await (await import('./partner-workflow/acknowledgment.js')).runPartnerAcknowledgmentJob(env, job);
       return;
     case 'hermes_invitation_expire':
       await (await import('./hermes-cloud/capacity.js')).runInvitationExpirationJob(env, job);
@@ -598,6 +846,9 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       return;
     case 'request_triage':
       await (await import('./inbox-triage/service.js')).runRequestTriageJob(env, job);
+      return;
+    case 'outbound_email_send':
+      await (await import('./outbound-email/send-job.js')).runOutboundEmailSendJob(env, job);
       return;
     case 'reverify':
       {
@@ -637,7 +888,11 @@ async function claimRunFinish(
   const job = await withWorkspaceTransaction(env, workspaceId, (tx) => claimJob(tx, jobId));
   if (!job) return false;
   try {
-    await runJob(env, job, adapterOptions);
+    const disposition = await runJob(env, job, adapterOptions);
+    if (disposition === 'paused') {
+      await withWorkspaceTransaction(env, workspaceId, (tx) => pauseMemberProvisioningJob(tx, job.id));
+      return false;
+    }
     await withWorkspaceTransaction(env, workspaceId, (tx) => finishJob(tx, job.id));
     return true;
   } catch (error) {
@@ -647,7 +902,10 @@ async function claimRunFinish(
       && typeof error.retryAfterSeconds === 'number'
       ? error.retryAfterSeconds
       : 0;
-    await withWorkspaceTransaction(env, workspaceId, (tx) => failJob(tx, job.id, message, job.attempts, retryAfter));
+    const retryable = !(error instanceof InvitationDeliveryError) || error.retryable;
+    await withWorkspaceTransaction(env, workspaceId, (tx) => retryable
+      ? failJob(tx, job.id, message, job.attempts, retryAfter)
+      : finishFailedJob(tx, job.id, message));
     logError({
       at: 'job.failed',
       kind: job.kind,
@@ -691,8 +949,17 @@ export async function drainJobs(
   const client = await connect(env, 'app');
   let due: { job_id: string; workspace_id: string }[];
   try {
+    if (env.HERMES_MEMBER_PROVISIONING_ENABLED === '1') {
+      await client.query(
+        `UPDATE job_ready
+            SET pause_reason=NULL, next_at=now()
+          WHERE pause_reason='member_provisioning_disabled'`,
+      );
+    }
     const { rows } = await client.query<{ job_id: string; workspace_id: string }>(
-      `SELECT job_id, workspace_id FROM job_ready WHERE next_at <= now() ORDER BY next_at LIMIT $1`,
+      `SELECT job_id, workspace_id FROM job_ready
+        WHERE pause_reason IS NULL AND next_at <= now()
+        ORDER BY next_at LIMIT $1`,
       [limit],
     );
     due = rows;
@@ -724,6 +991,56 @@ export interface OutboxEvent {
   readonly traceId?: string | null;
 }
 
+async function preparePublications(
+  tx: Tx,
+  workspaceId: string,
+  events: readonly OutboxEvent[],
+): Promise<PreparedPublication[]> {
+  const byStream = new Map<string | null, OutboxRow[]>();
+
+  for (const event of events) {
+    const { rows } = await tx.query<OutboxRow>(
+      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       RETURNING id::text AS id, session_id, kind, payload, schema_version, trace_id, created_at`,
+      [workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), event.traceId ?? null],
+    );
+    const row = rows[0];
+    if (!row) continue;
+    const key = row.session_id ?? null;
+    byStream.set(key, [...(byStream.get(key) ?? []), row]);
+  }
+
+  const publications: PreparedPublication[] = [];
+  for (const [sessionId, rows] of byStream) {
+    const first = rows[0]?.id;
+    const last = rows[rows.length - 1]?.id;
+    if (!first || !last) continue;
+    const jobId = await enqueueJob(tx, workspaceId, 'publish', `publish:${sessionId ?? 'workspace'}:${first}-${last}`, {
+      session_id: sessionId,
+      first_id: first,
+      last_id: last,
+    });
+    if (!jobId) continue;
+    const envelopes: HubEvent[] = rows.map((row) => ({
+      id: row.id,
+      workspace_id: workspaceId,
+      session_id: row.session_id,
+      kind: row.kind,
+      payload: row.payload,
+      schema_version: row.schema_version,
+      trace_id: row.trace_id ?? 'unknown',
+      at: row.created_at.toISOString(),
+    }));
+    publications.push({
+      jobId,
+      sessionId,
+      events: await scopeWorkspaceHubEvents(tx, envelopes),
+    });
+  }
+  return publications;
+}
+
 /**
  * Append to the outbox and queue its delivery, in the caller's transaction.
  *
@@ -736,34 +1053,18 @@ export async function publishEvents(
   workspaceId: string,
   events: readonly OutboxEvent[],
 ): Promise<string[]> {
-  const jobIds: string[] = [];
-  // One job per stream: the hub for a session and the hub for the workspace are
-  // different objects, and a single job could only acknowledge one of them.
-  const byStream = new Map<string | null, string[]>();
+  return (await preparePublications(tx, workspaceId, events)).map((publication) => publication.jobId);
+}
 
-  for (const event of events) {
-    const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO stream_events (workspace_id, session_id, kind, payload, trace_id)
-       VALUES ($1, $2, $3, $4::jsonb, $5)
-       RETURNING id::text AS id`,
-      [workspaceId, event.sessionId ?? null, event.kind, JSON.stringify(event.payload), event.traceId ?? null],
-    );
-    const id = rows[0]?.id;
-    if (!id) continue;
-    const key = event.sessionId ?? null;
-    byStream.set(key, [...(byStream.get(key) ?? []), id]);
-  }
-
-  for (const [sessionId, ids] of byStream) {
-    const first = ids[0];
-    const last = ids[ids.length - 1];
-    if (!first || !last) continue;
-    const jobId = await enqueueJob(tx, workspaceId, 'publish', `publish:${sessionId ?? 'workspace'}:${first}-${last}`, {
-      session_id: sessionId,
-      first_id: first,
-      last_id: last,
-    });
-    if (jobId) jobIds.push(jobId);
-  }
-  return jobIds;
+/**
+ * Append, queue and retain the exact committed envelopes for an ordered direct
+ * handoff. Callers must use this only after the surrounding transaction has
+ * committed; the durable jobs cover every crash before acknowledgement.
+ */
+export async function publishEventsForImmediateDelivery(
+  tx: Tx,
+  workspaceId: string,
+  events: readonly OutboxEvent[],
+): Promise<PreparedPublication[]> {
+  return preparePublications(tx, workspaceId, events);
 }

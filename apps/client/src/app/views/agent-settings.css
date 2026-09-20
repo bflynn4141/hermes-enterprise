@@ -1,0 +1,44 @@
+.agent-tabs-navigation { min-width: 0; }
+.pane-app { container-type: inline-size; container-name: app-pane; }
+.agent-tabs-mobile { display: none; }
+.agent-settings { gap: 24px; }
+.agent-settings-heading, .agent-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.agent-settings-heading > div, .agent-settings-row > div:first-child { min-width: 0; }
+.agent-settings-heading h2, .agent-settings-heading p { margin: 0; }
+.agent-settings-heading p { margin-top: 6px; }
+.agent-settings-row { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.agent-settings-row p { margin: 5px 0; overflow-wrap: anywhere; }
+.agent-settings-title { font-size: 1.125rem; font-weight: 500; }
+.agent-settings-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.agent-settings-editor { border: 1px solid var(--line); border-radius: 14px; background: var(--context); padding: 24px; display: flex; flex-direction: column; gap: 18px; }
+.agent-settings-editor label { display: flex; flex-direction: column; gap: 8px; }
+.agent-settings-editor input, .agent-settings-editor textarea { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--app); color: var(--body); font: inherit; }
+.agent-settings-editor textarea { min-height: 140px; resize: vertical; }
+.agent-settings-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-settings-status { min-height: 24px; color: var(--muted); }
+.agent-settings-error { color: #ffc7cb; }
+.agent-approval-toggle { display: flex; flex-shrink: 0; align-items: center; justify-content: flex-end; gap: 14px; min-width: 120px; }
+.agent-approval-toggle button { appearance: none; width: 48px; height: 44px; padding: 8px 0; border: 0; background: none; cursor: pointer; }
+.agent-approval-track { display: block; position: relative; width: 48px; height: 28px; border-radius: 14px; background: #48425d; transition: background-color 140ms ease-out; }
+.agent-approval-track::after { content: ''; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform 140ms ease-out; }
+[aria-checked='true'] > .agent-approval-track { background: #3434ff; }
+[aria-checked='true'] > .agent-approval-track::after { transform: translateX(20px); }
+.agent-approval-toggle button:disabled { cursor: default; opacity: .65; }
+.agent-approval-toggle button:focus-visible { outline: 2px solid var(--body); outline-offset: 4px; border-radius: 14px; }
+.agent-approval-mobile-label { display: none; }
+.agent-pending-approval pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@container app-pane (max-width: 560px) {
+  .agent-tabs-desktop { display: none; }
+  .agent-tabs-mobile { display: block; }
+  .agent-tabs-mobile select { width: 100%; min-height: 44px; background: var(--app); color: var(--body); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; }
+  .agent-settings-heading { align-items: flex-start; flex-wrap: wrap; }
+  .agent-settings-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .agent-approval-toggle { width: 100%; }
+  .agent-approval-mobile-label { display: block; margin-right: auto; }
+  .agent-approval-column-label { display: none; }
+  .agent-settings-editor { padding: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-approval-track, .agent-approval-track::after { transition: none; }
+}
+[data-reduce-motion='true'] .agent-approval-track, [data-reduce-motion='true'] .agent-approval-track::after { transition: none; }

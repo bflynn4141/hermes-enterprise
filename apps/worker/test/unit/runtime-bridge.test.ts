@@ -1,10 +1,17 @@
 // Runtime callbacks must retain tenant, attempt, mode, replay and BYOK gates.
 import { describe, expect, it, vi } from 'vitest';
 import { bridgeToken, requireBridgeAuth, runtimeBinding } from '../../src/runtime/config.js';
-import { dispatchRuntimeCall, parseRuntimeCall, proxyRuntimeModel, type RuntimeCall } from '../../src/runtime/bridge.js';
+import {
+  dispatchRuntimeCall,
+  parseRuntimeCall,
+  proxyRuntimeModel,
+  runtimeModelList,
+  type RuntimeCall,
+} from '../../src/runtime/bridge.js';
 import type { RuntimeCallRecord } from '../../src/runtime/store.js';
 import type { Env } from '../../src/env.js';
 import { FakeAgentDb } from './engine/fake-db.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 
 const workspaceId = FakeAgentDb.WORKSPACE_ID;
 const agentId = '33333333-3333-4333-8333-333333333333';
@@ -49,23 +56,12 @@ describe('official runtime configuration and authentication', () => {
     expect(runtimeBinding(env, workspaceId, agentId)).toMatchObject({
       profile: `agent-${agentId}`,
       transport: 'native',
-      releaseRing: 'stable',
     });
     const token = await bridgeToken(env, workspaceId, agentId);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     await expect(requireBridgeAuth(env, workspaceId, agentId, `Bearer ${token}`)).resolves.toMatchObject({ workspaceId, agentId });
     await expect(requireBridgeAuth(env, workspaceId, agentId, `Bearer ${'0'.repeat(64)}`)).rejects.toMatchObject({ reason: 'runtime_unauthorized' });
     await expect(requireBridgeAuth(env, workspaceId, agentId, null)).rejects.toMatchObject({ reason: 'runtime_unauthorized' });
-  });
-  it('attests an explicit canary ring and rejects unknown rollout rings', () => {
-    const withRing = (release_ring: string) => ({
-      ...env,
-      HERMES_RUNTIME_AGENTS: JSON.stringify({
-        [agentId]: { workspace_id: workspaceId, base_url: 'http://localhost:8642', api_key: 'runtime-key', release_ring },
-      }),
-    });
-    expect(runtimeBinding(withRing('canary'), workspaceId, agentId).releaseRing).toBe('canary');
-    expect(() => runtimeBinding(withRing('experimental'), workspaceId, agentId)).toThrow();
   });
   it('refuses cross-workspace paths even with the original valid token', async () => {
     const token = await bridgeToken(env, workspaceId, agentId);
@@ -116,6 +112,23 @@ describe('official runtime configuration and authentication', () => {
 });
 
 describe('enterprise runtime tool boundary', () => {
+  it('parks exact operation consent without creating spoofable context and resumes once', async () => {
+    const store = db();
+    let status: 'pending' | 'approved' = 'pending';
+    Object.assign(store, { operationConsent: async () => ({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status }) });
+    const input = call('propose_instruction', { body: 'Approved once.' });
+    expect((await dispatchRuntimeCall(store, workspaceId, agentId, input)).reply).toEqual({ status: 'pending' });
+    expect(store.instructions).toHaveLength(0);
+    expect(store.contextFields.size).toBe(0);
+    expect((await store.loadRun())!.status).toBe('waiting');
+    status = 'approved';
+    const result = await dispatchRuntimeCall(store, workspaceId, agentId, input);
+    expect(result.reply).toMatchObject({ ok: true });
+    expect(store.instructions).toHaveLength(1);
+    expect((await store.loadRun())!.status).toBe('working');
+    expect((await dispatchRuntimeCall(store, workspaceId, agentId, input)).reply).toEqual(result.reply);
+    expect(store.instructions).toHaveLength(1);
+  });
   it('executes the app-role approval domain outside the agent run-row lock', async () => {
     const store = db();
     store.capabilities = ['propose_approval'];
@@ -166,6 +179,16 @@ describe('enterprise runtime tool boundary', () => {
     await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('decide'))).rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
     store.capabilities = [];
     await expect(dispatchRuntimeCall(store, workspaceId, agentId, call())).rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
+  });
+  it('refuses every fresh enterprise tool call during a response-only recovery', async () => {
+    const store = db({ attempt: 2, recoveryInput: RESPONSE_ONLY_RECOVERY_INPUT });
+    store.capabilities = ['list_requests', 'propose_approval'];
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('list_requests')))
+      .rejects.toMatchObject({ reason: 'runtime_tool_forbidden', status: 403 });
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('propose_approval', {})))
+      .rejects.toMatchObject({ reason: 'runtime_tool_forbidden', status: 403 });
+    expect(store.turns).toHaveLength(1);
+    expect(store.events).toHaveLength(0);
   });
   it('replays identical results without another proposal or event and rejects argument changes', async () => {
     const store = db();
@@ -218,6 +241,33 @@ describe('workspace model credential proxy', () => {
     resolveCredential: vi.fn(async () => ({ provider: 'nous_portal', apiKey: 'workspace-provider-secret', keyId: 'key-1' })),
     recordModelCall: vi.fn(async () => undefined),
   });
+  it.each([
+    [429, '7200', '7200', new Date('2026-09-18T19:00:00.000Z'), null],
+    [503, 'Fri, 18 Sep 2026 20:00:00 GMT', '10800', new Date('2026-09-18T20:00:00.000Z'), null],
+    [429, '999999999999999999999999', null, null, 'provider_retry_after_excessive'],
+  ])('records a safe provider deadline for %i before returning its rejection', async (status, value, header, notBefore, blockedReason) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-18T17:00:00.000Z'));
+    try {
+      const store = { ...makeModelDb(), recordProviderRetryAfter: vi.fn(async () => undefined) };
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId,
+        { model: 'nousresearch/hermes-4', messages: [] },
+        vi.fn<typeof fetch>(async () => new Response('private provider details', { status, headers: { 'Retry-After': value } })));
+      expect(store.recordProviderRetryAfter).toHaveBeenCalledWith(expect.any(String), 1, { notBefore, blockedReason, header });
+      expect(response.headers.get('Retry-After')).toBe(header);
+      expect(await response.text()).not.toContain('private provider details');
+    } finally { clock.mockRestore(); }
+  });
+  it('does not persist Retry-After on authentication failures or malformed metadata', async () => {
+    for (const [status, value] of [[401, '120'], [429, 'secret=provider-key']] as const) {
+      const store = { ...makeModelDb(), recordProviderRetryAfter: vi.fn(async () => undefined) };
+      const response = await proxyRuntimeModel(env, store, workspaceId, agentId,
+        { model: 'nousresearch/hermes-4', messages: [] },
+        vi.fn<typeof fetch>(async () => new Response('', { status, headers: { 'Retry-After': value } })));
+      expect(store.recordProviderRetryAfter).not.toHaveBeenCalled();
+      expect(response.headers.get('Retry-After')).toBeNull();
+    }
+  });
+
   it('measures preparation, headers and first observed text without buffering or logging content', async () => {
     let clock = 1000;
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -336,6 +386,28 @@ describe('workspace model credential proxy', () => {
       usage: { input_tokens: 1000, output_tokens: 3, cached_input_tokens: 900, reasoning_tokens: 0 },
     }));
   });
+  it('strips tool definitions and tool choice at the model proxy during response-only recovery', async () => {
+    const base = makeModelDb();
+    const store = {
+      ...base,
+      activeProfileRun: async () => db({
+        modelId: selected, attempt: 2, recoveryInput: RESPONSE_ONLY_RECOVERY_INPUT,
+      }).loadRun(),
+    };
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+      choices: [], usage: { prompt_tokens: 4, completion_tokens: 2 },
+    }));
+    const response = await proxyRuntimeModel(env, store, workspaceId, agentId, {
+      model: 'nousresearch/hermes-4', messages: [],
+      tools: [{ type: 'function', function: { name: 'propose_instruction', parameters: { type: 'object' } } }],
+      tool_choice: 'required', parallel_tool_calls: true,
+    }, fetcher);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      model: 'nousresearch/hermes-4', messages: [],
+    });
+    await response.text();
+  });
   it('refuses provider redirects without forwarding their body or secret to another origin', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('workspace-provider-secret', { status: 307, headers: { Location: 'https://attacker.example' } }));
     const response = await proxyRuntimeModel(env, makeModelDb(), workspaceId, agentId, { model: 'nousresearch/hermes-4', messages: [] }, fetcher);
@@ -426,5 +498,25 @@ describe('workspace model credential proxy', () => {
     expect(store.resolveCredential).not.toHaveBeenCalled();
     expect(store.reserveRuntimeBudget).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('Hermes model metadata contract', () => {
+  it('publishes a known context window and omits unknown or invalid windows', () => {
+    expect(runtimeModelList([
+      { model_id: 'nous:nousresearch/hermes-4', provider: 'nous_portal', context_length: 131_072 },
+      { model_id: 'openrouter:fixture/unknown', provider: 'openrouter', context_length: null },
+      { model_id: 'openrouter:fixture/invalid', provider: 'openrouter', context_length: 0 },
+    ])).toEqual({
+      object: 'list',
+      data: [
+        {
+          id: 'nousresearch/hermes-4', object: 'model', created: 0,
+          owned_by: 'nous_portal', context_length: 131_072,
+        },
+        { id: 'fixture/unknown', object: 'model', created: 0, owned_by: 'openrouter' },
+        { id: 'fixture/invalid', object: 'model', created: 0, owned_by: 'openrouter' },
+      ],
+    });
   });
 });

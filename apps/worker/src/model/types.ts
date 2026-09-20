@@ -98,6 +98,12 @@ export interface ToolDefinition {
 export interface ProviderMessage {
   readonly role: 'user' | 'assistant' | 'tool';
   readonly content: string;
+  /** Trusted server attribution for a governed Hermes Bot Mode handoff turn. */
+  readonly enterprise_turn_author?: {
+    readonly id: string;
+    readonly name: string;
+    readonly is_bot: true;
+  };
   /** Set on a `tool` message: which call this is the result of. */
   readonly tool_call_id?: string;
   /** Set on an `assistant` message that asked for tools. */

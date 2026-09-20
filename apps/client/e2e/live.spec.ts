@@ -223,7 +223,7 @@ test('P7 · Stop pauses the queue, keeps completed work, and starts no further s
 // P8/P9 · a second attempt, and the text appearing exactly once
 // ---------------------------------------------------------------------------
 
-test('P8 · Retry runs a second attempt and the answer is shown once, not twice', async ({ browser }) => {
+test('P8 · completed work cannot be retried into a second copy', async ({ browser }) => {
   const context = await asUser(browser, SEED_ADMIN);
   const page = await context.newPage();
   const sessionId = await newSession(page, SEED_WORKSPACE, 'P8 retry');
@@ -232,15 +232,13 @@ test('P8 · Retry runs a second attempt and the answer is shown once, not twice'
 
   const runId = rows(`SELECT id::text FROM runs WHERE session_id = '${sessionId}' ORDER BY started_at DESC LIMIT 1;`)[0]!;
   const retried = await page.request.post(`/w/${SEED_WORKSPACE}/sessions/${sessionId}/runs/${runId}/retry`, {
-    data: {},
+    data: { expected_attempt: 1 },
     headers: { origin: ORIGIN },
   });
-  expect(retried.status(), await retried.text()).toBe(201);
-  expect((await retried.json()).attempt).toBe(2);
+  expect(retried.status(), await retried.text()).toBe(409);
+  expect((await retried.json()).reason).toBe('run_completed');
 
-  // The assertion the scenario is really about: a second attempt replaces the
-  // turn's assistant message rather than appending a second copy, so the
-  // reader never sees the same answer twice.
+  // Completed work stays in place; Retry cannot produce another approval.
   await expect
     .poll(
       () => rows(`SELECT count(*)::text FROM messages WHERE run_id = '${runId}' AND role = 'iris' AND turn = 1;`)[0],
@@ -325,7 +323,7 @@ test('P11 · add, verify, rotate and remove a provider key against the real rout
   expect(refused.status()).toBe(422);
   expect(await refused.json()).toMatchObject({
     reason: 'provider_not_allowed',
-    error: 'Only Nous Portal keys can be used in this workspace',
+    error: 'Only Nous Portal connections can be used in this workspace',
   });
 
   const added = await api('/provider-keys', { provider: 'nous_portal', label: 'P11 key', key: 'nous-fake-key-for-live-verification-p11' });
@@ -367,17 +365,23 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
+  // A fixture workspace has a started agent, so the shell opens on the Agents
+  // overview: idle, nothing to review. (A workspace made through
+  // `POST /workspaces` starts in the activation flow instead — see F2.)
+  await expect(page.getByRole('heading', { name: 'Iris', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('No active work right now')).toBeVisible();
   await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
-  await expect(page.getByText('Nothing needs you yet. Iris works when you message it.')).toBeVisible();
+  await expect(page.getByText(/Nothing needs you(r review)? yet/)).toBeVisible();
   // Zero renders no badge at all, because the count comes from `v_inbox_count`.
   await expect(page.getByRole('button', { name: /^Inbox/ })).not.toContainText(/[1-9]/);
 
   await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
   await expect(page.getByText('No reviews waiting')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Provider keys' }).click();
+  // Model providers live under Admin → Agents since the Admin split (PR92–96).
+  await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
+  await page.getByRole('tab', { name: 'Agents' }).click();
+  await page.getByRole('navigation', { name: 'Agents settings pages' }).getByRole('button', { name: 'Model providers', exact: true }).click();
   await expect(page.getByText('Connect Nous Portal to enable models')).toBeVisible();
   await context.close();
 });
@@ -388,8 +392,10 @@ test('P13 · the same fresh workspace, opened by a Member', async ({ browser }) 
   const page = await context.newPage();
   await page.goto(shell(fixture.workspaceId));
 
-  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
+  // The Admin owns the fixture's agent, so this Member is an agentless
+  // reviewer (PR92): no composer greeting, no Agents entry, the Inbox first.
+  await expect(page.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Agents', exact: true })).toHaveCount(0);
   await expect(page.getByText('No reviews waiting')).toBeVisible();
   await context.close();
 });

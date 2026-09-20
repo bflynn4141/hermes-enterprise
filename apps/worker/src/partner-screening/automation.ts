@@ -5,7 +5,8 @@ import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } fr
 import { allowedProviders } from '../model/allowed.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { createRunInstance, submitTurn, type RunInstanceParams, type TurnSession } from '../runs/submit.js';
-import { partnerAgentConfig, partnerScreeningAgentIds } from './config.js';
+import { partnerScreeningAgentIds, type PartnerAgentConfig } from './config.js';
+import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 import { discoverGitHubOrganizations, PartnerSourceError, type PartnerFetch } from './github.js';
 import {
   beginPartnerScreening,
@@ -84,7 +85,7 @@ export async function enqueueAutomatedPartnerScreening(
   const agentIds = partnerScreeningAgentIds(env);
   const useDefaultPolicy = env.PARTNER_SCREENING_AUTOMATE_DEFAULT_AGENTS === '1';
   const paidEnabled = paidPartnerScreeningEnabled(env);
-  if (!automatedTriggersEnabled(env) || (agentIds.length === 0 && !useDefaultPolicy)) {
+  if (!automatedTriggersEnabled(env)) {
     return {
       enabled: automatedTriggersEnabled(env), paidEnabled, workspaces: 0,
       candidateAgents: 0, startedAgents: 0, activeOwnedAgents: 0,
@@ -145,7 +146,13 @@ export async function enqueueAutomatedPartnerScreening(
               m.id
               LIMIT 1
            ) owner ON true
-          WHERE a.workspace_id=$1 AND ($3::boolean OR a.id=ANY($2::uuid[]))
+          WHERE a.workspace_id=$1 AND (
+            $3::boolean OR a.id=ANY($2::uuid[]) OR EXISTS (
+              SELECT 1 FROM enterprise_skill_assignments esa
+               WHERE esa.workspace_id=a.workspace_id AND esa.agent_id=a.id
+                 AND esa.skill_key='partner-program-screening' AND esa.state='active'
+            )
+          )
           ORDER BY a.id`,
         [workspaceId, agentIds, useDefaultPolicy],
       );
@@ -155,19 +162,25 @@ export async function enqueueAutomatedPartnerScreening(
         startedAgents += 1;
         if (!candidate.user_id) continue;
         activeOwnedAgents += 1;
-        const configured = partnerAgentConfig(env, candidate.agent_id).config;
+        const assigned = await resolvePartnerSkillAssignment(env, tx, workspaceId, candidate.agent_id, { materialize: true });
+        const configured = assigned.config;
         if (!configured) continue;
+        if (assigned.assignment && !assigned.assignment.schedule.enabled) continue;
         configuredAgents += 1;
         if (configured.source === 'agentcash_people' && !paidEnabled) {
           skippedPaid += 1;
           continue;
         }
+        // A failed cycle is recovered in place, never replaced by a new paid allowance.
+        if (await unresolvedPartnerWork(tx, workspaceId, candidate.agent_id)) continue;
+        const candidateInterval = assigned.assignment?.schedule.interval_minutes ?? interval;
+        const candidateBucket = `${candidateInterval}m-${Math.floor(now.getTime() / (candidateInterval * 60_000))}`;
         const id = await enqueueJob(
           tx,
           workspaceId,
           'partner_screening',
-          `partner-screening:auto:${workspaceId}:${candidate.agent_id}:${bucket}`,
-          { agent_id: candidate.agent_id, owner_user_id: candidate.user_id, bucket },
+          `partner-screening:auto:${workspaceId}:${candidate.agent_id}:${candidateBucket}`,
+          { agent_id: candidate.agent_id, owner_user_id: candidate.user_id, bucket: candidateBucket },
         );
         if (id) queued += 1;
       }
@@ -183,10 +196,12 @@ interface DraftPolicyContext {
   readonly memberId: string;
   readonly senderAddress: string;
   readonly policyKey: string;
+  readonly sendAfterApproval: boolean;
 }
 
 async function ensurePartnerOutreachDraftPolicy(
   tx: Tx,
+  env: Env,
   workspaceId: string,
   ownerUserId: string,
   agentId: string,
@@ -203,9 +218,10 @@ async function ensurePartnerOutreachDraftPolicy(
   const row = owner.rows[0];
   if (!row) throw new Error('partner_outreach_verified_owner_missing');
 
-  const policyKey = `partner-outreach-draft-${agentId}`;
+  const sendAfterApproval = env.PARTNER_OUTREACH_EMAIL_MODE === 'send_after_approval';
+  const policyKey = `partner-outreach-${sendAfterApproval ? 'send' : 'draft'}-${agentId}`;
   const steps = [{
-    id: 'owner-review', label: 'Review personalized outreach draft', order: 0,
+    id: 'owner-review', label: sendAfterApproval ? 'Approve personalized outreach email' : 'Review personalized outreach draft', order: 0,
     reviewers: [{ kind: 'member', member_id: row.member_id }], quorum: 1,
   }];
   await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${workspaceId}:${policyKey}`]);
@@ -226,7 +242,7 @@ async function ensurePartnerOutreachDraftPolicy(
       && current.requester_agent_id === agentId
       && current.step_count === 1
       && current.reviewer_member_id === row.member_id) {
-    return { memberId: row.member_id, senderAddress: row.email, policyKey };
+    return { memberId: row.member_id, senderAddress: row.email, policyKey, sendAfterApproval };
   }
 
   await tx.query(
@@ -245,18 +261,30 @@ async function ensurePartnerOutreachDraftPolicy(
      VALUES ($1,$2,$3,'communication',$4,1000000,'sequential',false,true,604800,$5::jsonb,true)`,
     [workspaceId, policyKey, version.rows[0]?.version ?? 1, agentId, JSON.stringify(steps)],
   );
-  return { memberId: row.member_id, senderAddress: row.email, policyKey };
+  return { memberId: row.member_id, senderAddress: row.email, policyKey, sendAfterApproval };
 }
 
 function outreachDraftInstructions(context: DraftPolicyContext): string {
+  const disposition = context.sendAfterApproval
+    ? [
+        'Set details.channel to email and details.draft_only to false.',
+        'Use preferred_verified_email as the recipient address. If it is null, stop without proposing approval.',
+        'State in summary and consequence that approval authorizes this exact email for the server-side outbox. Do not claim it has already been sent.',
+      ]
+    : [
+        'Set details.channel to email and details.draft_only to true.',
+        'Set the address only to preferred_verified_email; otherwise set it to null.',
+        'State in summary and consequence that this is a draft only: approval records reviewed copy and sends nothing.',
+      ];
   return [
-    'Choose exactly one strongest prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
-    'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. Never alter an argument, repeat a completed paid call, or use another contact source.',
+    'Choose exactly one strongest previously unengaged prospect whose stored professional evidence supports outreach. Do not enrich or draft for any other prospect in this run.',
+    'Call get_partner_candidate for that prospect. When next_contact_call is present, call mcp__agentcash__fetch with those exact arguments, then call get_partner_candidate again. Continue only through the returned enrichment, email-verification, and bounded verification-poll calls. When next_contact_call is absent, inspect professional_contact rather than inferring lookup failure: copy its stored phone_numbers and social_profiles when present; only when professional_contact is null use a null address and empty phone/social lists. Never alter an argument, repeat a completed paid call, use another contact source, or discard completed stored contact fields.',
     `Call propose_approval with policy_key ${JSON.stringify(context.policyKey)}, approval_type communication, illustrative false, target_member_ids [${JSON.stringify(context.memberId)}], and no target agents, resources, dependent requests, continuation, or scheduled_for.`,
-    `Set details.channel to email, details.draft_only to true, and details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
-    'Set one recipient with candidate_id and the candidate name. Set address only to preferred_verified_email; otherwise set it to null. Copy only the stored phone_numbers and social_profiles into the recipient for human review.',
+    ...disposition,
+    `Set details.sender to ${JSON.stringify({ member_id: context.memberId, address: context.senderAddress })}.`,
+    'Set one recipient with candidate_id and the candidate name. Copy only stored phone_numbers and social_profiles into the recipient for human review.',
     'Write a concise subject and body grounded in the cited professional evidence. Invite the person to explore or apply to the configured Partner Program without claiming prior interest, approval, benefits, or terms.',
-    'Cite the stored candidate artifacts and the contact enrichment id in proposal.evidence. State in summary and consequence that this is a draft only: approval records reviewed copy and does not send, call, text, or message anyone.',
+    'Cite the stored candidate artifacts and, when professional_contact is present, its contact enrichment id in proposal.evidence.',
     'Do not use propose_request for a discovered prospect. A prospect has not submitted an application.',
   ].join(' ');
 }
@@ -269,27 +297,6 @@ async function automationSession(
   agentId: string,
 ): Promise<TurnSession> {
   const allowed = allowedProviders(env);
-  const existing = await tx.query<TurnSession>(
-    `SELECT s.id, s.agent_id, s.owner_id, s.read_only, s.mode, s.model_id, s.effort
-       FROM sessions s
-       JOIN catalog c ON c.model_id=s.model_id
-      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
-        AND s.title=$4 AND NOT s.archived
-        AND c.provider=ANY($5::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
-      ORDER BY s.created_at LIMIT 1 FOR UPDATE OF s`,
-    [workspaceId, ownerId, agentId, AUTOMATION_TITLE, [...allowed]],
-  );
-  if (existing.rows[0]) return existing.rows[0];
-
-  const template = await tx.query<{ model_id: string; effort: string | null; runtime: string }>(
-    `SELECT s.model_id, s.effort, s.runtime
-       FROM sessions s
-       JOIN catalog c ON c.model_id=s.model_id
-      WHERE s.workspace_id=$1 AND s.owner_id=$2 AND s.agent_id=$3
-        AND c.provider=ANY($4::text[]) AND c.disabled_reason IS NULL AND c.supports_tools
-      ORDER BY s.last_activity_at DESC NULLS LAST, s.created_at DESC LIMIT 1`,
-    [workspaceId, ownerId, agentId, [...allowed]],
-  );
   const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
     `SELECT picked.model_id AS default_model_id,
             CASE
@@ -313,22 +320,30 @@ async function automationSession(
       WHERE ws.workspace_id=$1`,
     [workspaceId, [...allowed], DEFAULT_MODEL_ID],
   );
-  const source = template.rows[0] ?? settings.rows[0];
+  const source = settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
+  // Automation follows the workspace policy. Active run snapshots remain fixed.
+  const existing = await tx.query<TurnSession>(
+    `UPDATE sessions SET model_id=$5, effort=$6
+      WHERE id=(SELECT id FROM sessions WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3
+        AND title=$4 AND NOT archived AND NOT read_only ORDER BY created_at LIMIT 1 FOR UPDATE)
+      RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
+    [workspaceId,ownerId,agentId,AUTOMATION_TITLE,source.default_model_id,source.default_effort]);
+  if (existing.rows[0]) return existing.rows[0];
   const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
     ? await resolveRuntimeBinding(env, tx, workspaceId, agentId)
     : null;
   const runtime = resolvedRuntime
     ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
-    : ('runtime' in source ? source.runtime : source.default_runtime);
+    : source.default_runtime;
   const inserted = await tx.query<TurnSession>(
     `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
      VALUES ($1,$2,$3,$4,'work',$5,$6,$7)
      RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
     [
       workspaceId, ownerId, agentId, AUTOMATION_TITLE,
-      'model_id' in source ? source.model_id : source.default_model_id,
-      'effort' in source ? source.effort : source.default_effort,
+      source.default_model_id,
+      source.default_effort,
       runtime,
     ],
   );
@@ -360,7 +375,7 @@ export async function handoffPartnerScreeningToIris(
     const snapshot = await loadPartnerScreeningSnapshot(scoped, screeningRunId);
     if (snapshot.run.agent_id !== agentId ||
         (snapshot.run.source !== 'agentcash_people' && snapshot.handoff.candidate_ids.length === 0)) return;
-    const draftContext = await ensurePartnerOutreachDraftPolicy(tx, workspaceId, ownerUserId, agentId);
+    const draftContext = await ensurePartnerOutreachDraftPolicy(tx, env, workspaceId, ownerUserId, agentId);
     const session = await automationSession(tx, env, workspaceId, ownerUserId, agentId);
     const submitted = await submitTurn({
       tx,
@@ -399,26 +414,76 @@ export async function handoffPartnerScreeningToIris(
   return admitted;
 }
 
+/** Existing active work or the latest unresolved screening owns the agent. */
+export async function unresolvedPartnerWork(tx: Tx, workspaceId: string, agentId: string): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT r.id FROM runs r JOIN sessions s ON s.id=r.session_id
+      WHERE r.workspace_id=$1 AND r.agent_id=$2 AND NOT s.archived
+        AND (r.status IN ('working','waiting','stopping') OR
+          (r.status IN ('error','stopped') AND r.client_turn_id LIKE 'partner-screening:%'
+            AND (NOT EXISTS(SELECT 1 FROM requests q WHERE q.workspace_id=r.workspace_id AND q.run_id=r.id)
+              OR EXISTS(SELECT 1 FROM requests q WHERE q.workspace_id=r.workspace_id AND q.run_id=r.id AND q.status='pending'))
+            AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id
+              AND newer.agent_id=r.agent_id AND newer.client_turn_id LIKE 'partner-screening:%'
+              AND newer.created_at>r.created_at)))
+      ORDER BY r.created_at DESC LIMIT 1`, [workspaceId,agentId]);
+  return rows[0]?.id ?? null;
+}
+
 /** Durable discovery -> stored evidence -> Iris run. A retry reuses both ids. */
 export async function runPartnerScreeningAutomationJob(env: Env, job: Job): Promise<void> {
   const payload = (job.payload ?? {}) as { agent_id?: string; owner_user_id?: string; bucket?: string };
   if (!payload.agent_id || !payload.owner_user_id || !payload.bucket) {
     throw new Error('partner_screening_payload_invalid');
   }
-  const configured = partnerAgentConfig(env, payload.agent_id);
-  if (!configured.config) throw new Error('partner_screening_config_missing');
+  if (!automatedTriggersEnabled(env)) return;
   const idempotencyKey = `auto:${payload.bucket}`;
-  const authentication = configured.config.source === 'agentcash_people'
-    ? 'wallet' as const
-    : env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
-  const started = await withWorkspaceTransaction(env, job.workspace_id, (tx) => beginPartnerScreening(
-    work(tx, job.workspace_id, payload.owner_user_id!),
-    { agentId: payload.agent_id!, idempotencyKey, config: configured.config!, authentication },
-  ));
+  const admitted = await withWorkspaceTransaction(env, job.workspace_id, async tx => {
+    const configured = await resolvePartnerSkillAssignment(env, tx, job.workspace_id, payload.agent_id!, { materialize: true });
+    if (!configured.config) throw new Error('partner_screening_config_missing');
+    if (configured.assignment && !configured.assignment.schedule.enabled) return null;
+    if (configured.config.source === 'agentcash_people' && !paidPartnerScreeningEnabled(env)) return null;
+    const authentication = configured.config.source === 'agentcash_people'
+      ? 'wallet' as const
+      : env.PARTNER_GITHUB_TOKEN?.trim() ? 'authenticated' as const : 'unauthenticated' as const;
+    await tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [job.workspace_id,payload.agent_id]);
+    const unresolved = await unresolvedPartnerWork(tx,job.workspace_id,payload.agent_id!);
+    if (unresolved) {
+      const same = await tx.query(`SELECT 1 FROM runs r JOIN partner_screening_runs p
+        ON r.client_turn_id='partner-screening:' || p.id::text
+        WHERE r.id=$1 AND p.workspace_id=$2 AND p.idempotency_key=$3`,
+        [unresolved,job.workspace_id,idempotencyKey]);
+      if (!same.rows.length) return null;
+    }
+    let runConfig: PartnerAgentConfig = configured.config!;
+    if (runConfig.source === 'agentcash_people' && runConfig.people_search) {
+      const cursor = await tx.query<{ next_offset: number; search_after: string | null }>(
+        `SELECT next_offset, search_after
+           FROM partner_discovery_cursors
+          WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_people'
+          FOR UPDATE`,
+        [job.workspace_id, payload.agent_id],
+      );
+      const position = cursor.rows[0];
+      runConfig = {
+        ...runConfig,
+        people_search: {
+          ...runConfig.people_search,
+          offset: position?.next_offset ?? 0,
+          search_after: position?.search_after ?? null,
+        },
+      };
+    }
+    const started = await beginPartnerScreening(work(tx, job.workspace_id, payload.owner_user_id!),
+      { agentId: payload.agent_id!, idempotencyKey, config: runConfig, authentication });
+    return { started, config: runConfig };
+  });
+  if (!admitted) return;
+  const { started, config } = admitted;
 
-  if (configured.config.source === 'github' && started.run.status !== 'completed') {
+  if (config.source === 'github' && started.run.status !== 'completed') {
     try {
-      const result = await discoverGitHubOrganizations(configured.config, {
+      const result = await discoverGitHubOrganizations(config, {
         fetcher: sourceFetcher(env), token: env.PARTNER_GITHUB_TOKEN,
       });
       await withWorkspaceTransaction(env, job.workspace_id, (tx) => completePartnerScreening(

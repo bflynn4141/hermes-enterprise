@@ -17,6 +17,22 @@ const render = (node: React.ReactNode) => renderToStaticMarkup(
 );
 
 describe('Iris welcome', () => {
+  it.each([
+    { status: 'streaming' as const, runId: mockUuid(3), label: 'Guidance queued' },
+    { status: 'complete' as const, runId: mockUuid(3), label: 'Guidance applied' },
+    { status: 'streaming' as const, runId: null, label: 'Queued for next message' },
+  ])('renders the durable guidance state: $label', ({ status, runId, label }) => {
+    const current = session();
+    const html = render(<Transcript session={{ ...current, messages: [{
+      id: mockUuid(90), session_id: current.id, seq: 0, role: 'user', kind: 'guidance',
+      text: 'Use the newer source', blocks: [], status, run_id: runId,
+    }] }} find={null} />);
+    expect(html).toContain(`data-message-id="${mockUuid(90)}"`);
+    expect(html.match(/Use the newer source/g)).toHaveLength(1);
+    expect(html).toContain(`<div class="meta">${label}</div>`);
+    if (status === 'streaming') expect(html).not.toContain('Guidance applied');
+  });
+
   it('uses one centered prompt with the icon above it in an empty conversation', () => {
     const html = render(<Transcript session={session()} find={null} />);
     expect(html).toContain('transcript-empty');
@@ -34,10 +50,44 @@ describe('Iris welcome', () => {
     expect(html).toContain('Start');
   });
 
+  it('keeps only cancellation controls on read-only history with active work', () => {
+    const current = session();
+    const html = render(<Transcript session={{
+      ...current,
+      run: {
+        id: mockUuid(3), session_id: current.id, agent_id: mockUuid(4), status: 'working', attempt: 1,
+        title: null, steps: [], started_at: '2026-09-17T19:00:00.000Z',
+        queue: [{ id: mockUuid(5), text: 'Stale follow-up', status: 'queued', position: 0 }],
+      },
+    }} find={null} readOnly />);
+
+    expect(html).toContain('Stop work');
+    expect(html).toContain('Remove queued: Stale follow-up');
+    expect(html).not.toContain('>Edit<');
+    expect(html).not.toContain('>Retry<');
+  });
+
   it('keeps carried-context information separate from the welcome state', () => {
     const html = render(<Transcript session={{ ...session(), carried: { from: 'Review', context: 'Pending evidence' } }} find={null} />);
     expect(html).toContain('Pending evidence');
     expect(html).toContain('No completed actions were replayed.');
     expect(html).not.toContain('chat-welcome');
+  });
+
+  it('renders a Hermes Bot Mode handoff as an agent notice instead of a human bubble', () => {
+    const current = session();
+    const html = render(<Transcript session={{
+      ...current,
+      messages: [{
+        id: mockUuid(90), session_id: current.id, seq: 0, role: 'user', kind: null,
+        text: 'Message from 🤖 Iris (@agent-partnerships): Review the Finance handoff.',
+        blocks: [], status: 'complete', run_id: null,
+      }],
+    }} find={null} />);
+    expect(html).toContain('msg-agent-handoff');
+    expect(html).toContain('Message from');
+    expect(html).toContain('@agent-partnerships');
+    expect(html).toContain('Review the Finance handoff.');
+    expect(html).not.toContain('class="msg-user"');
   });
 });

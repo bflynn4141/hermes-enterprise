@@ -168,6 +168,37 @@ workspace creation, or a real enterprise IdP. Complete those items using the
 fresh invitation; an earlier magic-code challenge for an unknown user remains
 invalid by design.
 
+### Staging verification — September 20, 2026
+
+- **Environment:** WorkOS Staging; client suffix `…E90T`; host
+  `https://staging.hermes.brianflynn.dev`.
+- **1. Readiness:** `GET /health` returned `200` with `status: ok`.
+  `auth:config` = `configured`, `workos:jwks` = `reachable`, and
+  `hermes:runs` = `ready`.
+- **2. Login entry / state cookie:** `GET /auth/login` redirected to
+  WorkOS `user_management/authorize` with the staging `client_id` and
+  `redirect_uri=https://staging.hermes.brianflynn.dev/auth/callback`.
+  Set-Cookie `hermes_auth_transaction` was `HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Max-Age=600`, `Path=/auth/callback`.
+- **Invalid callback:** `GET /auth/callback?code=fake&state=wrong`
+  returned `400` with the “Your sign-in expired” page and a link to
+  `/auth/login` (no code exchange).
+- **Authenticated shell:** An existing sealed session opened the
+  workspace picker (one membership: Brian Interview Demo) and the
+  workspace shell (Agents / Inbox / Members / Admin). Session cookie
+  is not readable from JavaScript; only `hermes_csrf` appears in
+  `document.cookie`.
+- **8. Logout endpoint:** Unauthenticated `GET /auth/logout` cleared
+  `hermes_session` (`HttpOnly; SameSite=Strict; Secure; Max-Age=0`),
+  `hermes_csrf`, and `hermes_auth_transaction`, then redirected to `/`.
+  Visible **Sign out** in the account menu targets this route (UI
+  exercised in the staging browser session).
+
+Still open for a clean private-browser pass with a disposable inbox and
+SSO test IdP: invitation accept via emailed link, multi-org picker under
+forced choice, enterprise SSO IdP challenge, access-token refresh
+rotation, step-up / MFA, and workspace creation with WorkOS org mirror.
+
 ## What automated tests prove—and do not prove
 
 `FakeWorkOS` signs genuine RS256 JWTs and publishes an in-memory JWKS. Database

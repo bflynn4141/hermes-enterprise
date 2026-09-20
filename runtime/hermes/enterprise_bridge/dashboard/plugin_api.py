@@ -9,6 +9,7 @@ operation allowlist, never an arbitrary loopback proxy.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import pathlib
@@ -20,9 +21,15 @@ from typing import Any
 try:
     from fastapi import APIRouter, Request
     from fastapi.responses import JSONResponse, StreamingResponse
+    FASTAPI_AVAILABLE = True
 except Exception:  # Unit tests exercise the transport helper without FastAPI.
+    FASTAPI_AVAILABLE = False
+
     class APIRouter:  # type: ignore[no-redef]
         def post(self, *_args: Any, **_kwargs: Any):
+            return lambda function: function
+
+        def get(self, *_args: Any, **_kwargs: Any):
             return lambda function: function
 
     class Request:  # type: ignore[no-redef]
@@ -33,87 +40,121 @@ except Exception:  # Unit tests exercise the transport helper without FastAPI.
             self.content, self.status_code = content, status_code
 
     class StreamingResponse:  # type: ignore[no-redef]
-        def __init__(self, content: Any, status_code: int = 200, media_type: str = ""):
-            self.content, self.status_code, self.media_type = content, status_code, media_type
+        def __init__(
+            self,
+            content: Any,
+            status_code: int = 200,
+            media_type: str = "",
+            headers: dict[str, str] | None = None,
+        ):
+            self.content, self.status_code, self.media_type, self.headers = content, status_code, media_type, headers or {}
 
 
 router = APIRouter()
 
+CONNECTOR_VERSION = "1.7.0"
 MAX_BODY_BYTES = 2 * 1024 * 1024
+READINESS_MAX_BYTES = 64 * 1024
+RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
+MANAGED_PROFILE_MARKER_FILENAME = "enterprise-cloud-managed.json"
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
-CONTRACT_VERSION = 1
-TERMINAL_ERROR_SCHEMA_VERSION = 1
-SOURCE_REVISION = "5d59366010640c1d6b8f170d8a4ee109db2bbdef"
-TERMINAL_ERROR_CODES = {
-    "provider_auth": ("auth", False, "provider", "The selected model connection needs attention."),
-    "provider_quota": ("quota", False, "provider", "The selected model account has no available quota."),
-    "provider_rate_limited": ("rate_limit", True, "provider", "The selected model is rate limited."),
-    "request_rejected": ("rejected", False, "request", "The selected model rejected this request."),
-    "provider_unavailable": ("unavailable", True, "provider", "The model provider is temporarily unavailable."),
-    "runtime_interrupted": ("interrupted", True, "runtime", "Hermes restarted before this run settled."),
-    "runtime_unknown": ("unknown", True, "runtime", "Hermes could not finish this run."),
+SKILL_NAME = re.compile(r"[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\Z")
+SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
+SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+TOOL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
+SSE_CONNECTED = b": enterprise-bridge-connected\n\n"
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
 }
-
-
-def runtime_contract():
-    if os.environ.get("HERMES_ENTERPRISE_SOURCE_REVISION", "").strip() != SOURCE_REVISION:
-        raise RuntimeError("enterprise connector source revision is not attested")
-    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
-    if ring not in {"canary", "stable"}:
-        raise RuntimeError("enterprise connector release ring is invalid")
-    return {
-        "schema_version": CONTRACT_VERSION,
-        "source_revision": SOURCE_REVISION,
-        "release_ring": ring,
-        "terminal_errors": {"supported": True, "schema_version": TERMINAL_ERROR_SCHEMA_VERSION},
-    }
-
-
-def _terminal_error(error: Any = None, status: str = "failed"):
-    signal = str(error or "").lower()[:2000]
-    if status == "interrupted" or re.search(r"gateway restarted|runtime_run_inactive|run (?:was )?interrupted", signal):
-        code = "runtime_interrupted"
-    elif re.search(r"\b(?:http\s*)?401\b|unauthori[sz]ed|authentication failed|invalid (?:api )?key|token.*expired", signal):
-        code = "provider_auth"
-    elif re.search(r"\b(?:http\s*)?402\b|insufficient (?:credits?|balance|funds)|quota (?:exceeded|exhausted)|billing (?:limit|disabled|required)", signal):
-        code = "provider_quota"
-    elif re.search(r"\b(?:http\s*)?429\b|rate[ -]?limit(?:ed|ing)?|too many requests", signal):
-        code = "provider_rate_limited"
-    elif re.search(r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b|bad request|invalid request|context (?:length|window)|maximum context|unsupported model", signal):
-        code = "request_rejected"
-    elif re.search(r"\b(?:http\s*)?(?:500|502|503|504)\b|temporar(?:y|ily) unavailable|service unavailable|overloaded|timeout|connection (?:reset|closed|failed|error)", signal):
-        code = "provider_unavailable"
-    else:
-        code = "runtime_unknown"
-    category, retryable, source, _ = TERMINAL_ERROR_CODES[code]
-    return {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code, "category": category,
-            "retryable": retryable, "source": source}
-
-
-def govern_terminal_payload(payload: Any):
-    if not isinstance(payload, dict):
-        return payload
-    status = str(payload.get("status") or "")
-    if payload.get("event") == "run.failed":
-        status = "failed"
-    if status not in {"failed", "interrupted"}:
-        return payload
-    existing = payload.get("terminal_error")
-    code = existing.get("code") if isinstance(existing, dict) else None
-    if code in TERMINAL_ERROR_CODES:
-        category, retryable, source, message = TERMINAL_ERROR_CODES[code]
-        detail = {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code,
-                  "category": category, "retryable": retryable, "source": source}
-    else:
-        detail = _terminal_error(payload.get("error"), status)
-        message = TERMINAL_ERROR_CODES[detail["code"]][3]
-    return {**payload, "error": message, "terminal_error": detail}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise RuntimeError("native redirect refused")
+
+
+def load_runtime_attestation(home: pathlib.Path | None = None) -> dict[str, Any]:
+    """Read the inventory written only after native plugin/tool preflight."""
+    root = home or pathlib.Path(os.environ.get("HERMES_HOME", ""))
+    path = root / RUNTIME_READINESS_FILENAME
+    try:
+        unavailable = (not str(root) or path.is_symlink() or not path.is_file()
+                       or path.stat().st_size > READINESS_MAX_BYTES)
+    except OSError as error:
+        raise RuntimeError("native readiness attestation is unavailable") from error
+    if unavailable:
+        raise RuntimeError("native readiness attestation is unavailable")
+    try:
+        document = json.loads(path.read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("native readiness attestation is invalid") from error
+    if not isinstance(document, dict):
+        raise RuntimeError("native readiness attestation is invalid")
+    plugin = document.get("plugin")
+    skills, tools = document.get("skills"), document.get("tools")
+    if (document.get("schema_version") != 1
+            or not isinstance(document.get("runtime_revision"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", document["runtime_revision"])
+            or not isinstance(plugin, dict)
+            or plugin.get("name") != "enterprise_bridge"
+            or plugin.get("version") != CONNECTOR_VERSION
+            or not all(isinstance(document.get(key), str) and document[key]
+                       for key in ("workspace_id", "agent_id", "enterprise_url"))
+            or not isinstance(skills, list) or len(skills) > 16
+            or not isinstance(tools, list) or len(tools) > 128
+            or not isinstance(document.get("agentcash_enabled"), bool)
+            or not isinstance(document.get("native_cron_disabled"), bool)):
+        raise RuntimeError("native readiness attestation is invalid")
+    if document.get("managed_cloud") is True:
+        if (not isinstance(document.get("boot_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", document["boot_id"])
+                or set(plugin) != {"name", "version", "revision", "artifact_digest"}
+                or not isinstance(plugin.get("revision"), str)
+                or not re.fullmatch(r"[0-9a-f]{40}", plugin["revision"])
+                or not isinstance(plugin.get("artifact_digest"), str)
+                or not SHA256.fullmatch(plugin["artifact_digest"])):
+            raise RuntimeError("native readiness attestation is invalid")
+    elif ("boot_id" in document or document.get("managed_cloud") not in {None, False}
+            or set(plugin) != {"name", "version"}):
+        raise RuntimeError("native readiness attestation is invalid")
+    seen_skills = set()
+    for skill in skills:
+        if (not isinstance(skill, dict)
+                or set(skill) != {"name", "version", "artifact_digest", "content_digest"}
+                or not isinstance(skill.get("name"), str) or not SKILL_NAME.fullmatch(skill["name"])
+                or skill["name"] in seen_skills
+                or not isinstance(skill.get("version"), str) or not SEMVER.fullmatch(skill["version"])
+                or not isinstance(skill.get("artifact_digest"), str)
+                or not SHA256.fullmatch(skill["artifact_digest"])
+                or not isinstance(skill.get("content_digest"), str)
+                or not SHA256.fullmatch(skill["content_digest"])):
+            raise RuntimeError("native readiness attestation is invalid")
+        seen_skills.add(skill["name"])
+    if (len(set(tools)) != len(tools) or "skill_view" not in tools
+            or any(not isinstance(tool, str) or not TOOL_NAME.fullmatch(tool) for tool in tools)):
+        raise RuntimeError("native readiness attestation is invalid")
+    return document
+
+
+def managed_profile_requires_live_readiness(home: pathlib.Path | None = None) -> bool:
+    """Remember managed enrollment even when a later restart loses its flag.
+
+    Older managed profiles may predate the marker, so a managed readiness file
+    is also sticky evidence. Invalid marker objects fail closed.
+    """
+    root = home or pathlib.Path(os.environ.get("HERMES_HOME", ""))
+    marker = root / MANAGED_PROFILE_MARKER_FILENAME
+    try:
+        if marker.is_symlink() or marker.exists():
+            return True
+    except OSError:
+        return True
+    try:
+        return load_runtime_attestation(root).get("managed_cloud") is True
+    except RuntimeError:
+        return False
 
 
 class NativeControl:
@@ -159,40 +200,91 @@ class NativeControl:
                 return 502, {"error": "native response was not JSON"}
             return response.code, parsed
 
+    def _managed_readiness_is_live(self, attestation: dict[str, Any]) -> bool:
+        """Bind the dashboard's file to the currently serving gateway process."""
+        home = pathlib.Path(os.environ.get("HERMES_HOME", ""))
+        path = home / RUNTIME_READINESS_FILENAME
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            request = urllib.request.Request(
+                self.base_url + "/health",
+                method="GET",
+                headers={
+                    "Authorization": "Bearer " + self.api_key,
+                    "Accept": "application/json",
+                    "Connection": "close",
+                },
+            )
+            with self.opener.open(request, timeout=5) as response:
+                response.read(MAX_BODY_BYTES + 1)
+                return (
+                    response.code == 200
+                    and response.headers.get("X-Hermes-Enterprise-Boot") == attestation.get("boot_id")
+                    and response.headers.get("X-Hermes-Enterprise-Readiness-SHA256") == digest
+                )
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+            return False
+
+    def _managed_spend_is_live(self) -> bool:
+        if not managed_profile_requires_live_readiness():
+            return True
+        try:
+            attestation = load_runtime_attestation()
+        except RuntimeError:
+            return False
+        return (
+            attestation.get("managed_cloud") is True
+            and self._managed_readiness_is_live(attestation)
+        )
+
+    @staticmethod
+    def _readiness_unavailable():
+        return 503, {
+            "error": "native readiness attestation is not live",
+            "code": "native_readiness_unavailable",
+        }
+
     def dispatch(self, payload: dict[str, Any]):
         operation = payload.get("operation")
         if operation == "readiness":
+            try:
+                attestation = load_runtime_attestation()
+            except RuntimeError:
+                return 503, {
+                    "error": "native readiness attestation is unavailable",
+                    "code": "native_readiness_unavailable",
+                }
+            if attestation.get("managed_cloud") is True and not self._managed_readiness_is_live(attestation):
+                return self._readiness_unavailable()
             agentcash_home = os.environ.get("AGENTCASH_HOME", "").strip()
             wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
             return 200, {
                 "object": "hermes.enterprise_bridge.readiness",
-                "version": "1.6.0",
-                "workspace_id": os.environ.get("ENTERPRISE_WORKSPACE_ID", ""),
-                "agent_id": os.environ.get("ENTERPRISE_AGENT_ID", ""),
-                "enterprise_url": os.environ.get("ENTERPRISE_URL", ""),
-                "agentcash_enabled": os.environ.get("HERMES_AGENTCASH_MCP_ENABLED", "") == "1",
+                "version": CONNECTOR_VERSION,
+                "runtime_revision": attestation["runtime_revision"],
+                "plugin": attestation["plugin"],
+                "workspace_id": attestation["workspace_id"],
+                "agent_id": attestation["agent_id"],
+                "enterprise_url": attestation["enterprise_url"],
+                "skills": attestation["skills"],
+                "tools": attestation["tools"],
+                "agentcash_enabled": attestation["agentcash_enabled"],
                 "agentcash_wallet_present": bool(wallet_path and wallet_path.is_file()),
-                "native_cron_disabled": os.environ.get("HERMES_NATIVE_CRON_ENABLED", "") != "1",
+                "native_cron_disabled": attestation["native_cron_disabled"],
             }
         if operation == "capabilities":
-            status, body = self._request("GET", "/v1/capabilities")
-            if status == 200 and isinstance(body, dict):
-                expected = runtime_contract()
-                existing = body.get("enterprise_contract")
-                if existing is not None and existing != expected:
-                    return 502, {"error": "native Enterprise contract does not match connector"}
-                body = {**body, "enterprise_contract": expected}
-            return status, body
+            return self._request("GET", "/v1/capabilities")
         if operation == "submit":
             key = payload.get("idempotency_key")
             body = payload.get("body")
             if not isinstance(key, str) or not VISIBLE_ASCII.fullmatch(key) or not isinstance(body, dict):
                 return 400, {"error": "invalid submit envelope"}
+            if not self._managed_spend_is_live():
+                return self._readiness_unavailable()
             return self._request("POST", "/v1/runs", body, {"Idempotency-Key": key})
         if operation == "status":
             run_id = self.require_run_id(payload.get("run_id"))
-            status, body = self._request("GET", "/v1/runs/" + run_id)
-            return status, govern_terminal_payload(body)
+            return self._request("GET", "/v1/runs/" + run_id)
         if operation == "stop":
             run_id = self.require_run_id(payload.get("run_id"))
             return self._request("POST", "/v1/runs/" + run_id + "/stop", {})
@@ -201,6 +293,8 @@ class NativeControl:
             text = payload.get("input")
             if not isinstance(text, str) or not text.strip() or len(text) > 32768:
                 return 400, {"error": "invalid steer input"}
+            if not self._managed_spend_is_live():
+                return self._readiness_unavailable()
             return self._request("POST", "/v1/runs/" + run_id + "/steer", {"input": text})
         return 400, {"error": "unsupported enterprise control operation"}
 
@@ -221,52 +315,78 @@ class NativeControl:
             return error
 
 
-def _project_sse_frame(frame: bytes) -> bytes:
-    projected = []
-    for line in frame.splitlines():
-        if line.startswith(b"data:"):
-            data = line[5:]
-            if data.startswith(b" "):
-                data = data[1:]
-            if data == b"[DONE]":
-                projected.append(b"data: [DONE]")
-                continue
-            try:
-                payload = json.loads(data)
-                line = b"data: " + json.dumps(
-                    govern_terminal_payload(payload), separators=(",", ":"),
-                ).encode()
-            except (ValueError, UnicodeDecodeError):
-                line = b": enterprise malformed data"
-        projected.append(line)
-    return b"\n".join(projected) + b"\n\n"
+def _sse_boundary(buffer: bytes) -> tuple[int, int] | None:
+    """Return the first complete SSE-frame boundary in ``buffer``."""
+    lf = buffer.find(b"\n\n")
+    crlf = buffer.find(b"\r\n\r\n")
+    if lf < 0 and crlf < 0:
+        return None
+    if crlf >= 0 and (lf < 0 or crlf < lf):
+        return crlf, 4
+    return lf, 2
 
 
-def _stream_native(response):
-    buffered = b""
+async def _stream_native(response):
+    """Relay native SSE one complete frame at a time without blocking ASGI."""
     try:
+        # Commit the streaming response before the model's first token. This is
+        # a valid SSE comment, ignored by the Worker parser, and prevents an
+        # otherwise silent POST/GET response from being mistaken for a small
+        # bufferable payload by the dashboard edge.
+        yield SSE_CONNECTED
+
         # ``HTTPResponse.read(size)`` waits for the requested byte count or
         # EOF, which turns a short model response into one burst after the run
         # finishes. ``read1`` returns the bytes already available from the
         # socket, preserving the native SSE frame cadence through Hermes Cloud.
         read_available = getattr(response, "read1", None) or response.read
+        buffered = b""
         while True:
-            chunk = read_available(8192)
+            chunk = await asyncio.to_thread(read_available, 8192)
             if not chunk:
                 break
             buffered += chunk
-            while True:
-                boundary = re.search(br"\r?\n\r?\n", buffered)
-                if boundary is None:
-                    break
-                frame, buffered = buffered[:boundary.start()], buffered[boundary.end():]
-                yield _project_sse_frame(frame)
+            boundary = _sse_boundary(buffered)
+            while boundary is not None:
+                index, length = boundary
+                end = index + length
+                yield buffered[:end]
+                buffered = buffered[end:]
+                boundary = _sse_boundary(buffered)
         if buffered:
-            # A peer may close without the optional final blank line. Project
-            # that last frame through the same boundary before releasing it.
-            yield _project_sse_frame(buffered)
+            # Match the native parser's tolerance for a final SSE frame without
+            # a trailing blank line. The Worker still validates the JSON body.
+            yield buffered
     finally:
         response.close()
+
+
+async def _event_stream(control: NativeControl, run_id: Any):
+    response = await asyncio.to_thread(control.open_events, run_id)
+    if response.code >= 400:
+        raw_error = await asyncio.to_thread(response.read, MAX_BODY_BYTES + 1)
+        response.close()
+        try:
+            body = json.loads(raw_error)
+        except (ValueError, UnicodeDecodeError):
+            body = {"error": "native events request failed"}
+        return JSONResponse(body, status_code=response.code)
+    return StreamingResponse(
+        _stream_native(response),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
+
+
+@router.get("/control")
+async def enterprise_events(run_id: str):
+    """Compatibility route for hosts that expose plugin GET handlers."""
+    try:
+        return await _event_stream(NativeControl(), run_id)
+    except ValueError as error:
+        return JSONResponse({"error": str(error)}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "enterprise connector failed closed"}, status_code=502)
 
 
 @router.post("/control")
@@ -287,23 +407,10 @@ async def enterprise_control(request: Request):
     try:
         control = NativeControl()
         if payload.get("operation") == "events":
-            response = await asyncio.to_thread(control.open_events, payload.get("run_id"))
-            if response.code >= 400:
-                raw_error = await asyncio.to_thread(response.read, MAX_BODY_BYTES + 1)
-                response.close()
-                try:
-                    body = json.loads(raw_error)
-                except (ValueError, UnicodeDecodeError):
-                    body = {"error": "native events request failed"}
-                return JSONResponse(body, status_code=response.code)
-            return StreamingResponse(
-                _stream_native(response),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            # Hermes Dashboard's service-authenticated plugin edge dispatches
+            # POST envelopes. StreamingResponse and the priming comment still
+            # commit the SSE response before the first native model token.
+            return await _event_stream(control, payload.get("run_id"))
         status, body = await asyncio.to_thread(control.dispatch, payload)
         return JSONResponse(body, status_code=status)
     except ValueError as error:

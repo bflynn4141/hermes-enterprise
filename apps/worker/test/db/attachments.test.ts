@@ -467,7 +467,7 @@ describe('agent files reuse the same path', () => {
     const { batch } = fakeBatch('hermes-extract', queue.sent);
     await handleQueue(batch, env);
 
-    const listed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/files`);
+    const listed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/files?agent_id=${fx.agentId}`);
     const body = (await listed.json()) as { items: { kind: string; extraction_status: string; url: string | null }[] };
     expect(body.items[0]).toMatchObject({ kind: 'agent_file', extraction_status: 'ready' });
     // A presigned GET is a bearer credential; a list does not mint two hundred
@@ -491,7 +491,7 @@ describe('agent files reuse the same path', () => {
     expect(await response.json()).toMatchObject({ reason: 'admin_required' });
   });
 
-  it('lets any member read the Context list', async () => {
-    expect((await asUser(env, fx.memberId, `/w/${fx.workspaceId}/files`)).status).toBe(200);
+  it('lets any member read an explicitly workspace-shared Context list', async () => {
+    expect((await asUser(env, fx.memberId, `/w/${fx.workspaceId}/files?agent_id=${fx.agentId}`)).status).toBe(200);
   });
 });

@@ -31,6 +31,8 @@ describe('session execution location after a runtime rollout', () => {
       assignment: 'fixed',
       agentCash: false,
       releaseRing: 'stable',
+      runtimeAuthMode: 'legacy_hmac',
+      runtimeCredentialDigest: null,
     }]);
   });
 

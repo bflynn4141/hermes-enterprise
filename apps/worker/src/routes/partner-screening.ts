@@ -3,7 +3,8 @@ import { partnerScreeningSnapshotSchema, partnerScreeningStartInputSchema } from
 import { requireCsrf, requireOrigin } from '../auth.js';
 import type { Env } from '../env.js';
 import { handoffPartnerScreeningToIris } from '../partner-screening/automation.js';
-import { partnerAgentConfig, partnerSourceMatrix } from '../partner-screening/config.js';
+import { partnerSourceMatrix } from '../partner-screening/config.js';
+import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 import {
   discoverGitHubOrganizations,
   PartnerSourceError,
@@ -31,7 +32,8 @@ export async function partnerScreeningSources(c: Context<{ Bindings: Env }>): Pr
   const matrix = await inWorkspace(c, async (work) => {
     const agent = await work.tx.query(`SELECT 1 FROM agents WHERE workspace_id = $1 AND id = $2`, [work.workspaceId, agentId]);
     if (!agent.rowCount) throw new RouteError('no such agent', 'unknown_agent', 404);
-    return partnerSourceMatrix(c.env, agentId);
+    const resolved = await resolvePartnerSkillAssignment(c.env, work.tx, work.workspaceId, agentId);
+    return partnerSourceMatrix(c.env, agentId, { config: resolved.config, problem: resolved.problem });
   });
   return c.json(matrix);
 }
@@ -42,7 +44,10 @@ export async function startPartnerScreening(c: Context<{ Bindings: Env }>): Prom
   requireCsrf(c);
   const parsed = partnerScreeningStartInputSchema.safeParse(await jsonBody<unknown>(c));
   if (!parsed.success) throw new RouteError('agent_id or idempotency_key is invalid', 'bad_partner_screening_run', 422);
-  const configured = partnerAgentConfig(c.env, parsed.data.agent_id);
+  const configured = await inWorkspace(c, (work) => resolvePartnerSkillAssignment(
+    c.env, work.tx, work.workspaceId, parsed.data.agent_id,
+    { materialize: true, assignedBy: work.role === 'admin' ? work.userId : null },
+  ));
   if (!configured.config) {
     throw new RouteError(
       configured.problem ?? 'Real partner discovery is not configured.',

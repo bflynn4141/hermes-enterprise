@@ -17,6 +17,7 @@
 // Deleting on refusal matters. An object we declined to account for is an
 // object the daily sweep would eventually remove, and "eventually" is not the
 // answer for a file we just decided was lying about what it is.
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_PRESIGN_SECONDS,
@@ -25,7 +26,7 @@ import {
   type AttachmentDeclaration,
   type AttachmentKind,
 } from '@hermes/shared';
-import type { Env } from '../env.js';
+import { isDevelopment, type Env } from '../env.js';
 import { RouteError, type TenantWork } from '../routes/tenant.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { uploadKey } from '../storage/keys.js';
@@ -81,7 +82,7 @@ export function toAttachment(row: FileRow): {
 
 const SELECT_ATTACHMENT = `id, name, storage_key, size_bytes, mime, sha256, status,
          extraction_status, extraction_error, text_length, token_estimate, created_at`;
-const SELECT_AGENT_FILE = `id, name, storage_key, size_bytes, mime, sha256,
+const SELECT_AGENT_FILE = `id, agent_id, name, storage_key, size_bytes, mime, sha256,
          extraction_status, extraction_error, text_length, token_estimate, created_at`;
 
 export async function loadRow(work: TenantWork, kind: AttachmentKind, id: string): Promise<FileRow> {
@@ -98,6 +99,11 @@ export async function loadRow(work: TenantWork, kind: AttachmentKind, id: string
         );
   const row = rows[0];
   if (!row) throw new RouteError('no such file', 'unknown_attachment', 404);
+  if (kind === 'agent_file') {
+    const agentId = (row as FileRow & { agent_id: string | null }).agent_id;
+    if (!agentId) throw new RouteError('Source is not assigned to an agent', 'unknown_attachment', 404);
+    await requireAgentContextAccess(work, agentId);
+  }
   return row;
 }
 
@@ -119,6 +125,7 @@ export async function declareUpload(
   kind: AttachmentKind,
   input: unknown,
 ): Promise<{ row: FileRow; storageKey: string; declaration: AttachmentDeclaration }> {
+  requireUploadConfiguration(env);
   const parsed = attachmentDeclarationSchema.safeParse(input);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -152,6 +159,10 @@ export async function declareUpload(
   }
 
   const id = crypto.randomUUID();
+  if (kind === 'agent_file') {
+    if (!declaration.agent_id) throw new RouteError('Select an agent', 'bad_id', 400);
+    await requireAgentContextAccess(work, declaration.agent_id);
+  }
   const storageKey = uploadKey(work.workspaceId, id);
 
   const { rows } =
@@ -219,6 +230,7 @@ export async function uploadTarget(
   storageKey: string,
   mime: string,
 ): Promise<UploadTarget> {
+  requireUploadConfiguration(env);
   if (presigningAvailable(env)) {
     const signed = await presignPut(env, storageKey, ATTACHMENT_PRESIGN_SECONDS);
     return {
@@ -239,6 +251,12 @@ export async function uploadTarget(
     headers: { 'content-type': mime },
     direct: true,
   };
+}
+
+function requireUploadConfiguration(env: Env): void {
+  if (!isDevelopment(env) && !presigningAvailable(env)) {
+    throw new RouteError('File uploads are unavailable until storage is configured. Contact your workspace administrator.', 'uploads_unavailable', 503);
+  }
 }
 
 /** What verification concluded about the bytes. */
@@ -332,6 +350,9 @@ export async function recordVerdict(
   id: string,
   verdict: Verdict,
 ): Promise<FileRow | null> {
+  // Object verification runs outside the initial transaction. Recheck the
+  // current binding before committing either success or destructive refusal.
+  if (kind === 'agent_file') await loadRow(work, kind, id);
   if (verdict.ok) return markReady(work, kind, id, verdict.digest);
   await markFailed(work, kind, id, verdict.reason, verdict.detail);
   return null;

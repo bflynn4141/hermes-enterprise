@@ -11,249 +11,27 @@ import secrets
 import shlex
 import shutil
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 
 from install import ROOT, REVISION, verify_source
+from enterprise_bridge.runtime_policy import (
+    actual_plugin_attestation,
+    actual_skill_attestation,
+    actual_skill_prompt_attestation,
+    assert_native_cron_empty,
+    build_skill_prompt_sections,
+    install_native_api_policy,
+    load_enterprise_skills,
+    native_cron_route,
+    private_write,
+    write_runtime_attestation as _write_runtime_attestation,
+)
 
-NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/v1/capabilities"})
 MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
 AGENTCASH_TOOLS = ("fetch",)
-CONTRACT = json.loads((ROOT / "contract.json").read_text())
-if CONTRACT.get("source_revision") != REVISION:
-    raise RuntimeError("runtime/hermes/contract.json must match the pinned official source revision.")
-TERMINAL_ERROR_CODES = {
-    "provider_auth": ("auth", False, "provider"),
-    "provider_quota": ("quota", False, "provider"),
-    "provider_rate_limited": ("rate_limit", True, "provider"),
-    "request_rejected": ("rejected", False, "request"),
-    "provider_unavailable": ("unavailable", True, "provider"),
-    "runtime_interrupted": ("interrupted", True, "runtime"),
-    "runtime_unknown": ("unknown", True, "runtime"),
-}
-TERMINAL_ERROR_MESSAGES = {
-    "provider_auth": "The selected model connection needs attention.",
-    "provider_quota": "The selected model account has no available quota.",
-    "provider_rate_limited": "The selected model is rate limited.",
-    "request_rejected": "The selected model rejected this request.",
-    "provider_unavailable": "The model provider is temporarily unavailable.",
-    "runtime_interrupted": "Hermes restarted before this run settled.",
-    "runtime_unknown": "Hermes could not finish this run.",
-}
-ENTERPRISE_TERMINAL_PREFIX = "enterprise-terminal:"
-NATIVE_FAILURE_REASON_CODES = {
-    "auth": "provider_auth",
-    "auth_permanent": "provider_auth",
-    "billing": "provider_quota",
-    "rate_limit": "provider_rate_limited",
-    "upstream_rate_limit": "provider_rate_limited",
-    "overloaded": "provider_unavailable",
-    "server_error": "provider_unavailable",
-    "timeout": "provider_unavailable",
-    "ssl_cert_verification": "provider_unavailable",
-    "context_overflow": "request_rejected",
-    "payload_too_large": "request_rejected",
-    "image_too_large": "request_rejected",
-    "image_corrupt": "request_rejected",
-    "model_not_found": "request_rejected",
-    "provider_policy_blocked": "request_rejected",
-    "content_policy_blocked": "request_rejected",
-    "format_error": "request_rejected",
-    "invalid_encrypted_content": "request_rejected",
-    "multimodal_tool_content_unsupported": "request_rejected",
-    "reasoning_mandatory": "request_rejected",
-    "thinking_signature": "request_rejected",
-    "long_context_tier": "request_rejected",
-    "oauth_long_context_beta_forbidden": "request_rejected",
-    "llama_cpp_grammar_pattern": "request_rejected",
-    "unknown": "runtime_unknown",
-}
-
-
-def _matches(value, patterns):
-    return any(re.search(pattern, value) for pattern in patterns)
-
-
-def terminal_error(error=None, status="failed"):
-    """Project provider-controlled text into the versioned safe wire contract."""
-    signal = str(error or "").lower()[:2000]
-    sentinel = re.fullmatch(re.escape(ENTERPRISE_TERMINAL_PREFIX) + r"([a-z_]+)", signal)
-    if sentinel and sentinel.group(1) in TERMINAL_ERROR_CODES:
-        code = sentinel.group(1)
-    elif status == "interrupted" or _matches(signal, (
-            r"gateway restarted", r"runtime_run_inactive", r"run (?:was )?interrupted")):
-        code = "runtime_interrupted"
-    elif _matches(signal, (
-            r"provider authentication failed", r"\b(?:http\s*)?401\b", r"\bunauthori[sz]ed\b",
-            r"\binvalid (?:api )?key\b", r"\bapi key (?:is )?(?:invalid|expired|missing)\b",
-            r"\boauth\b.*\bexpired\b", r"\b(?:access |auth )?token\b.*\bexpired\b",
-            r"\bcredentials?\b.*\b(?:invalid|expired|missing)\b")):
-        code = "provider_auth"
-    elif _matches(signal, (
-            r"\b(?:http\s*)?402\b", r"\binsufficient (?:credits?|balance|funds)\b",
-            r"\b(?:credits?|balance) exhausted\b", r"\bquota (?:exceeded|exhausted)\b",
-            r"\bbilling (?:limit|disabled|required)\b")):
-        code = "provider_quota"
-    elif _matches(signal, (r"\b(?:http\s*)?429\b", r"\brate[ -]?limit(?:ed|ing)?\b", r"\btoo many requests\b")):
-        code = "provider_rate_limited"
-    elif _matches(signal, (
-            r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b", r"\bbad request\b",
-            r"\binvalid request\b", r"\bcontext (?:length|window)\b", r"\bmaximum context\b",
-            r"\bmodel (?:not found|is not supported|unsupported)\b", r"\bunsupported model\b")):
-        code = "request_rejected"
-    elif _matches(signal, (
-            r"\b(?:http\s*)?(?:500|502|503|504)\b", r"\binternal server error\b",
-            r"\btemporar(?:y|ily) unavailable\b", r"\bservice unavailable\b", r"\boverloaded\b",
-            r"\btime(?:d)? out\b", r"\btimeout\b", r"\bconnection (?:reset|closed|failed|error)\b",
-            r"\bnetwork (?:error|failure)\b")):
-        code = "provider_unavailable"
-    else:
-        code = "runtime_unknown"
-    category, retryable, source = TERMINAL_ERROR_CODES[code]
-    return {
-        "schema_version": CONTRACT["terminal_error_schema_version"],
-        "code": code,
-        "category": category,
-        "retryable": retryable,
-        "source": source,
-    }
-
-
-def governed_terminal_fields(status, fields):
-    """Replace native error prose before status persistence or SSE emission."""
-    if status not in {"failed", "interrupted"}:
-        return dict(fields)
-    existing = fields.get("terminal_error")
-    existing_code = existing.get("code") if isinstance(existing, dict) else None
-    if existing_code in TERMINAL_ERROR_CODES:
-        category, retryable, source = TERMINAL_ERROR_CODES[existing_code]
-        projected = {
-            "schema_version": CONTRACT["terminal_error_schema_version"],
-            "code": existing_code,
-            "category": category,
-            "retryable": retryable,
-            "source": source,
-        }
-    else:
-        projected = terminal_error(fields.get("error"), status)
-    return {
-        **fields,
-        "error": TERMINAL_ERROR_MESSAGES[projected["code"]],
-        "terminal_error": projected,
-    }
-
-
-def runtime_contract():
-    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
-    if ring not in CONTRACT["supported_release_rings"]:
-        raise RuntimeError("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable.")
-    return {
-        "schema_version": CONTRACT["contract_version"],
-        "source_revision": CONTRACT["source_revision"],
-        "release_ring": ring,
-        "terminal_errors": {
-            "supported": True,
-            "schema_version": CONTRACT["terminal_error_schema_version"],
-        },
-    }
-
-
-def native_cron_route(path):
-    return (
-        path == "/api/jobs"
-        or path.startswith("/api/jobs/")
-        or path == "/api/cron/fire"
-        or path.startswith("/api/cron/")
-    )
-
-
-def assert_native_cron_empty(load_jobs=None):
-    if load_jobs is None:
-        from cron.jobs import load_jobs
-    jobs = load_jobs()
-    if jobs:
-        raise RuntimeError("Enterprise Hermes profiles must not contain native cron jobs.")
-
-
-def install_native_api_policy():
-    """Install the Enterprise route, error-contract and native-cron policy."""
-    from aiohttp import web
-    from gateway.platforms.api_server import APIServerAdapter
-    from gateway.platforms import api_server_runs
-
-    original_run_agent_sync = api_server_runs._run_agent_sync
-    if not getattr(original_run_agent_sync, "_enterprise_contract", False):
-        def governed_run_agent_sync(*args, **kwargs):
-            result, usage = original_run_agent_sync(*args, **kwargs)
-            if isinstance(result, dict) and result.get("failed"):
-                code = NATIVE_FAILURE_REASON_CODES.get(str(result.get("failure_reason")), "runtime_unknown")
-                # The native enum is consumed before Hermes' or the provider's
-                # prose reaches the status/SSE functions. The sentinel is
-                # process-internal and is replaced by governed_terminal_fields.
-                result = {**result, "error": ENTERPRISE_TERMINAL_PREFIX + code}
-            return result, usage
-        governed_run_agent_sync._enterprise_contract = True
-        api_server_runs._run_agent_sync = governed_run_agent_sync
-
-    original_set_status = api_server_runs._set_run_status
-    if not getattr(original_set_status, "_enterprise_contract", False):
-        def governed_set_status(adapter, run_id, status, **fields):
-            return original_set_status(adapter, run_id, status, **governed_terminal_fields(status, fields))
-        governed_set_status._enterprise_contract = True
-        api_server_runs._set_run_status = governed_set_status
-
-    original_run_event = api_server_runs._run_event
-    if not getattr(original_run_event, "_enterprise_contract", False):
-        def governed_run_event(run_id, name, **fields):
-            status = name.removeprefix("run.") if name.startswith("run.") else ""
-            return original_run_event(run_id, name, **governed_terminal_fields(status, fields))
-        governed_run_event._enterprise_contract = True
-        api_server_runs._run_event = governed_run_event
-
-    original = APIServerAdapter._http_route_table
-    if getattr(original, "_enterprise_policy", False):
-        return
-
-    def governed_routes(adapter):
-        routes = []
-        for method, path, handler in original(adapter):
-            if native_cron_route(path):
-                continue
-            if path in NATIVE_HEALTH_PATHS or path == "/v1/runs/{run_id}":
-                async def guarded(request, _handler=handler):
-                    response = await _handler(request)
-                    if response.status >= 400:
-                        return response
-                    if request.path in NATIVE_HEALTH_PATHS:
-                        try:
-                            assert_native_cron_empty()
-                        except Exception:
-                            return web.json_response({
-                                "error": "Enterprise native cron policy failed.",
-                                "code": "native_cron_not_empty",
-                            }, status=503)
-                    if request.path == "/v1/capabilities":
-                        payload = json.loads(response.body)
-                        payload["enterprise_contract"] = runtime_contract()
-                        return web.json_response(payload, status=response.status)
-                    if request.path.startswith("/v1/runs/"):
-                        payload = json.loads(response.body)
-                        if isinstance(payload, dict) and payload.get("status") in {"failed", "interrupted"}:
-                            payload.update(governed_terminal_fields(payload["status"], payload))
-                        return web.json_response(payload, status=response.status)
-                    return response
-                handler = guarded
-            routes.append((method, path, handler))
-        return routes
-
-    governed_routes._enterprise_policy = True
-    APIServerAdapter._http_route_table = governed_routes
-
-
 def validate_profile_path(profile, platform=sys.platform, pid=None):
     # Match gateway.shutdown_watchdog.get_loop_tick_socket_path. execve keeps
     # this process's PID when it becomes the foreground official gateway.
@@ -262,156 +40,15 @@ def validate_profile_path(profile, platform=sys.platform, pid=None):
         raise ValueError("state-root is too long for the native macOS watchdog socket; use a shorter dedicated root")
 
 
-def private_write(path, text):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as file:
-        file.write(text)
-    temporary.chmod(0o600)
-    temporary.replace(path)
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise RuntimeError("Enterprise skill manifest redirects are not allowed.")
-
-
-def load_enterprise_cache_config(base_url, model, token, opener=None):
-    """Declare cache support for exact Claude models served by the governed proxy.
-
-    The Worker hostname hides the upstream Nous/OpenRouter identity from Hermes'
-    automatic cache policy. Its allowed-model manifest also covers per-run model
-    overrides when the profile's default is not Claude. Discovery is optional and
-    happens only at startup; an outage must not prevent a healthy profile running.
-    """
-    parsed = urllib.parse.urlsplit(base_url)
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
-        raise RuntimeError("Enterprise model manifest needs HTTPS or loopback HTTP.")
-    proxy_url = base_url.rstrip("/") + "/model/v1"
-    request = urllib.request.Request(proxy_url + "/models", method="GET", headers={
-        "Authorization": "Bearer " + token,
-        "Accept": "application/json",
-        "User-Agent": "Hermes-Enterprise-Bridge/1.0",
-    })
-    transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
-    try:
-        with transport.open(request, timeout=5) as response:
-            raw = response.read(262145)
-            if getattr(response, "status", 200) != 200 or len(raw) > 262144:
-                raise ValueError("Model manifest rejected")
-        payload = json.loads(raw)
-        rows = payload.get("data") if isinstance(payload, dict) else None
-        if (not isinstance(rows, list) or len(rows) > 1024
-                or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) for row in rows)):
-            raise ValueError("Invalid model manifest")
-        models = {row["id"] for row in rows}
-    except (OSError, ValueError, RuntimeError):
-        # No upstream response text or credentials in diagnostics. Only the
-        # configured default can be safely inferred when discovery is unavailable.
-        print("Enterprise prompt cache manifest unavailable; using configured model only.", file=sys.stderr)
-        models = {model}
-    cache_models = {
-        model_id: {"prompt_caching": True}
-        for model_id in sorted(models)
-        if re.fullmatch(r"(?:anthropic/)?claude-[a-z0-9][a-z0-9._-]{0,111}", model_id)
-    }
-    return {
-        "providers": {"enterprise": {
-            "api": proxy_url, "key_env": "ENTERPRISE_RUNTIME_TOKEN",
-            "transport": "chat_completions", "discover_models": False,
-            "models": cache_models,
-        }},
-        # Keep Hermes' default five-minute tier; the one-hour tier has a higher
-        # cache-write price and needs measured reuse before opting into it.
-        "prompt_caching": {"cache_ttl": "5m"},
-    }
-
-
-_SECRET_CONFIG_KEYS = {
-    "access_key", "api_key", "credential", "credentials", "password",
-    "private_key", "secret", "token",
-}
-
-
-def _validate_skill_config(value, *, depth=0, path="skills.config"):
-    """Bound non-secret config before it reaches config.yaml/model context."""
-    if depth > 6:
-        raise RuntimeError(f"{path} is too deeply nested.")
-    if value is None or isinstance(value, (bool, int, float)):
-        return
-    if isinstance(value, str):
-        if len(value) > 4096:
-            raise RuntimeError(f"{path} is too long.")
-        return
-    if isinstance(value, list):
-        if len(value) > 50:
-            raise RuntimeError(f"{path} has too many values.")
-        for index, item in enumerate(value):
-            _validate_skill_config(item, depth=depth + 1, path=f"{path}[{index}]")
-        return
-    if isinstance(value, dict):
-        if len(value) > 50:
-            raise RuntimeError(f"{path} has too many fields.")
-        for key, item in value.items():
-            if not isinstance(key, str) or not key or len(key) > 80:
-                raise RuntimeError(f"{path} contains an invalid key.")
-            if key.lower() in _SECRET_CONFIG_KEYS:
-                raise RuntimeError(f"{path}.{key} may not contain credentials.")
-            _validate_skill_config(item, depth=depth + 1, path=f"{path}.{key}")
-        return
-    raise RuntimeError(f"{path} contains an unsupported value.")
-
-
-def load_enterprise_skills(base_url, token, opener=None):
-    """Fetch the agent-scoped, non-secret skill manifest from the Worker."""
-    parsed = urllib.parse.urlsplit(base_url)
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
-        raise RuntimeError("Enterprise skill manifest needs HTTPS or loopback HTTP.")
-    request = urllib.request.Request(
-        base_url.rstrip("/") + "/skills", method="GET",
-        headers={
-            "Authorization": "Bearer " + token,
-            "Accept": "application/json",
-            "User-Agent": "Hermes-Enterprise-Bridge/1.0",
-        },
+def write_runtime_attestation(profile, metadata, plugin, skills, tool_names):
+    """Backwards-compatible launcher wrapper around the shared policy writer."""
+    return _write_runtime_attestation(
+        profile / "home",
+        {**metadata, "agentcash_enabled": "agentcash" in (metadata.get("mcp_servers") or {})},
+        plugin,
+        skills,
+        tool_names,
     )
-    transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
-    try:
-        response = transport.open(request, timeout=5)
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
-        raise RuntimeError("Enterprise skill manifest could not be loaded.") from error
-    with response:
-        raw = response.read(65537)
-        if getattr(response, "status", 200) != 200 or len(raw) > 65536:
-            raise RuntimeError("Enterprise skill manifest was rejected.")
-    try:
-        payload = json.loads(raw)
-    except (ValueError, UnicodeDecodeError) as error:
-        raise RuntimeError("Enterprise skill manifest returned invalid JSON.") from error
-    skills = payload.get("skills") if isinstance(payload, dict) else None
-    if not isinstance(skills, list) or len(skills) > 16:
-        raise RuntimeError("Enterprise skill manifest has an invalid skill list.")
-    auto_load, merged_config = [], {}
-    for skill in skills:
-        if not isinstance(skill, dict):
-            raise RuntimeError("Enterprise skill manifest contains an invalid skill.")
-        name, version, config = skill.get("name"), skill.get("version"), skill.get("config")
-        if (not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
-                or not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
-                or not isinstance(config, dict) or skill.get("auto_load") is not True):
-            raise RuntimeError("Enterprise skill manifest contains invalid metadata.")
-        _validate_skill_config(config)
-        for key, value in config.items():
-            if key in merged_config and merged_config[key] != value:
-                raise RuntimeError("Enterprise skill configuration conflicts across packages.")
-            merged_config[key] = value
-        if name not in auto_load:
-            auto_load.append(name)
-    return {"auto_load": auto_load, "config": merged_config}
 
 
 def reset_managed_skill_home(profile):
@@ -444,8 +81,10 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
         document["agentcash"] = {
             "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
             "env": {"HOME": "${AGENTCASH_HOME}"},
-            "tools": {"include": list(AGENTCASH_TOOLS)},
-            "policy": {"allowed_hosts": ["stableenrich.dev"], "max_amount_usd": 0.15},
+            "tools": {
+                "include": list(AGENTCASH_TOOLS), "resources": False, "prompts": False,
+            },
+            "policy": {"allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15},
         }
 
     servers, policies, passthrough = {}, [], {}
@@ -485,12 +124,17 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
             raise RuntimeError(f"MCP server {name} has an invalid host or spend policy.")
         servers[name] = {"command": command, "args": args, "env": configured_env,
                          "tools": {"include": include}}
+        for family in ("resources", "prompts"):
+            if family in tools:
+                if not isinstance(tools[family], bool):
+                    raise RuntimeError(f"MCP server {name} has an invalid tools.{family} switch.")
+                servers[name]["tools"][family] = tools[family]
         policies.append({"server": name, "tools": include, "allowed_hosts": hosts,
                          "max_amount_usd": float(maximum)})
     return servers, policies, passthrough
 
 
-def clean_environment(source, profile, token, api_key, release_ring="stable", extra=None):
+def clean_environment(source, profile, token, api_key, extra=None):
     # Nothing from personal provider config, bots, proxies, plugin paths or credentials survives.
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR") if key in os.environ}
     env.update({
@@ -498,11 +142,28 @@ def clean_environment(source, profile, token, api_key, release_ring="stable", ex
         "PYTHONPATH": str(source), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
         "ENTERPRISE_RUNTIME_TOKEN": token, "API_SERVER_KEY": api_key,
         "API_SERVER_ENABLED": "true", "API_SERVER_HOST": "127.0.0.1",
-        "HERMES_ENTERPRISE_SOURCE_REVISION": REVISION,
-        "HERMES_ENTERPRISE_RELEASE_RING": release_ring,
     })
     env.update(extra or {})
     return env
+
+
+def managed_agent_config(toolset_names):
+    """Keep retries durable and visible in Enterprise instead of sleeping inside one native run."""
+    return {
+        "max_iterations": 12,
+        # The Worker persists provider Retry-After and owns bounded recovery.
+        # A native retry can otherwise leave the product saying Working for up
+        # to ten minutes with no new output or recoverable enterprise state.
+        "api_max_retries": 1,
+        # `skills` stays out of platform_toolsets, but cannot be in the
+        # subtraction list because it owns skill_view too.
+        "disabled_toolsets": sorted(set(toolset_names) - {"enterprise_bridge", "enterprise_skill_reader", "skills"}),
+    }
+
+
+def mcp_platform_selectors(mcp_servers):
+    """Return the native platform selectors for configured MCP server aliases."""
+    return sorted(mcp_servers)
 
 
 def child(metadata_path):
@@ -514,9 +175,10 @@ def child(metadata_path):
     from hermes_cli.config import DEFAULT_CONFIG, load_config
     from toolsets import TOOLSETS
 
-    # Official Hermes gates skills.auto_load on the presence of a skills tool.
-    # A dedicated one-tool set keeps only the read-only viewer; the stock
-    # `skills` toolset would also expose discovery and mutation.
+    # The plugin pins the verified skill text into every new session's system
+    # prompt; Hermes 0.21.3 has no skills.auto_load. A dedicated one-tool set
+    # keeps only the read-only viewer for re-reading the assigned package; the
+    # stock `skills` toolset would also expose discovery and mutation.
     TOOLSETS["enterprise_skill_reader"] = {
         "description": "Read the assigned enterprise skill",
         "tools": ["skill_view"],
@@ -526,18 +188,16 @@ def child(metadata_path):
     base = metadata["enterprise_url"] + "/internal/runtime/w/" + metadata["workspace_id"] + "/agents/" + metadata["agent_id"]
     enterprise_skills = load_enterprise_skills(base, os.environ["ENTERPRISE_RUNTIME_TOKEN"])
     mcp_servers = metadata.get("mcp_servers") or {}
-    mcp_toolsets = ["mcp-" + name for name in sorted(mcp_servers)]
+    # Hermes platform selection names configured MCP server aliases and maps
+    # them to registry-owned mcp-<name> toolsets after discovery.
+    mcp_toolsets = mcp_platform_selectors(mcp_servers)
     platform_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),
-        **load_enterprise_cache_config(base, metadata["model"], os.environ["ENTERPRISE_RUNTIME_TOKEN"]),
         "model": {"provider": "custom", "default": metadata["model"],
                   "base_url": base + "/model/v1", "api_mode": "chat_completions",
                   "api_key": "${ENTERPRISE_RUNTIME_TOKEN}"},
-        "agent": {"max_iterations": 12,
-                  # `skills` stays out of platform_toolsets, but cannot be in
-                  # the subtraction list because it owns skill_view too.
-                  "disabled_toolsets": sorted(set(TOOLSETS) - {"enterprise_bridge", "enterprise_skill_reader", "skills"})},
+        "agent": managed_agent_config(TOOLSETS),
         "platform_toolsets": {"api_server": platform_toolsets},
         "mcp_servers": mcp_servers,
         "tools": {"tool_search": {"enabled": "off"}},
@@ -556,7 +216,7 @@ def child(metadata_path):
         "cron": {"allow_agent_scheduling": False},
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
         "skills": {"creation_nudge_interval": 0, "write_approval": True,
-                   "auto_load": enterprise_skills["auto_load"], "config": enterprise_skills["config"]},
+                   "config": enterprise_skills["config"]},
         "auxiliary": {"background_review": {"enabled": False}, "title_generation": {"enabled": False}},
     }
     private_write(profile / "home/config.yaml", json.dumps(config, indent=2) + "\n")
@@ -569,10 +229,18 @@ def child(metadata_path):
         install_native_api_policy()
     discover_plugins()
     from hermes_cli.plugins import get_plugin_manager
-    missing_skills = [name for name in enterprise_skills["auto_load"]
-                      if get_plugin_manager().find_plugin_skill(name) is None]
-    if missing_skills:
-        raise SystemExit("Governed skill preflight failed: " + ", ".join(missing_skills))
+    manager = get_plugin_manager()
+    try:
+        actual_plugin = actual_plugin_attestation(manager)
+        actual_skills = actual_skill_attestation(manager, enterprise_skills["manifests"])
+        # The reviewed source tree defines the expected sections; the live
+        # render comes from the profile's plugin copy. Equality proves the
+        # exact assigned text reaches every new session.
+        actual_skill_prompt_attestation(
+            manager, build_skill_prompt_sections(enterprise_skills["manifests"]),
+        )
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
     loaded = load_config()
     selected = _get_platform_tools(loaded, "api_server")
     definitions = get_tool_definitions(enabled_toolsets=sorted(selected),
@@ -596,6 +264,7 @@ def child(metadata_path):
             or runtime.get("api_key") != os.environ["ENTERPRISE_RUNTIME_TOKEN"]
             or runtime.get("api_mode") != "chat_completions"):
         raise SystemExit("Enterprise model proxy preflight failed.")
+    write_runtime_attestation(profile, metadata, actual_plugin, actual_skills, names)
     print(f"Verified official Hermes {REVISION[:12]}: {len(names)} governed tools; "
           f"native_cron={bool(metadata.get('native_cron_enabled'))}; mcp={sorted(mcp_servers)}; "
           f"isolated agent {metadata['agent_id']}", flush=True)
@@ -685,13 +354,9 @@ def main():
     for name in ("home", "os-home", "workspace"):
         (profile / name).mkdir(exist_ok=True, mode=0o700)
     metadata_path = profile / "runtime.json"
-    release_ring = supplied.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
-    if release_ring not in CONTRACT["supported_release_rings"]:
-        parser.error("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable")
     metadata = {"agent_id": agent_id, "workspace_id": args.workspace_id,
                 "enterprise_url": args.enterprise_url.rstrip("/"), "model": args.model,
                 "port": args.port, "source": str(source), "revision": REVISION,
-                "release_ring": release_ring,
                 "verify_only": args.verify_only,
                 "native_cron_enabled": supplied.get("HERMES_NATIVE_CRON_ENABLED") == "1",
                 "mcp_servers": mcp_servers, "mcp_policy": mcp_policy}
@@ -710,9 +375,18 @@ def main():
     reset_managed_skill_home(profile)
     shutil.copytree(ROOT / "enterprise_bridge", profile / "home/plugins/enterprise_bridge", dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    env = clean_environment(
-        source, profile, token, api_key_path.read_text().strip(), release_ring, mcp_environment,
-    )
+    runtime_environment = {
+        **mcp_environment,
+        "ENTERPRISE_WORKSPACE_ID": args.workspace_id,
+        "ENTERPRISE_AGENT_ID": agent_id,
+        "ENTERPRISE_URL": args.enterprise_url.rstrip("/"),
+        "HERMES_ENTERPRISE_NATIVE_URL": "http://127.0.0.1:" + str(args.port),
+        "HERMES_AGENTCASH_MCP_ENABLED": "1" if "agentcash" in mcp_servers else "0",
+        "HERMES_NATIVE_CRON_ENABLED": "1" if supplied.get("HERMES_NATIVE_CRON_ENABLED") == "1" else "0",
+    }
+    if supplied.get("HERMES_ENTERPRISE_CONTROL_SECRET"):
+        runtime_environment["HERMES_ENTERPRISE_CONTROL_SECRET"] = supplied["HERMES_ENTERPRISE_CONTROL_SECRET"]
+    env = clean_environment(source, profile, token, api_key_path.read_text().strip(), runtime_environment)
     print("Native API key file: " + str(api_key_path), flush=True)
     print("Native API URL: http://127.0.0.1:" + str(args.port), flush=True)
     os.execve(str(args.python.absolute()), [str(args.python.absolute()), str(ROOT / "start.py"), "_child", str(metadata_path)], env)

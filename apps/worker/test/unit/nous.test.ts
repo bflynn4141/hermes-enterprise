@@ -31,6 +31,12 @@ describe('the nous: model id convention', () => {
 });
 
 describe('the Nous Portal adapter', () => {
+  it('sends the exact V4.1 model and supported low effort when explicitly selected', async () => {
+    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === 'nous:deepseek/deepseek-v4.1-flash')!;
+    const rec = recorder(() => sseResponse([frame({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }), 'data: [DONE]']));
+    await collect(new NousPortalProvider({ fetch: rec.fetch }).stream(request({ model: 'nous:deepseek/deepseek-v4.1-flash', effort: 'low', effortMap: row.effort_map })));
+    expect(JSON.parse(String(rec.calls[0]?.init?.body))).toMatchObject({ model: 'deepseek/deepseek-v4.1-flash', reasoning: { effort: 'low' } });
+  });
   it('strips the durable prefix, fixes the endpoint, and maps effort', async () => {
     const rec = recorder(() => sseResponse([frame({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }), 'data: [DONE]']));
     await collect(new NousPortalProvider({ fetch: rec.fetch }).stream(request()));
@@ -72,6 +78,31 @@ describe('the Nous Portal adapter', () => {
 });
 
 describe('the Nous Portal catalog and local seam', () => {
+  it('uses per-model supported efforts and keeps the provider default', () => {
+    const row = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS).find((value) => value.model_id === 'nous:deepseek/deepseek-v4.1-flash');
+    expect(row).toMatchObject({ effort_map: { low: 'low', high: 'high', max: 'max' }, default_effort: 'high' });
+    expect(Object.keys(row!.effort_map!)).toEqual(['low', 'high', 'max']);
+    expect(row!.effort_map).not.toHaveProperty('medium');
+  });
+
+  it('does not invent a knob for explicit empty or malformed provider effort metadata', () => {
+    for (const supported_efforts of [[], [''], [5, null], 'high', null]) {
+      const rows = normaliseNousModels({ data: [{ id: 'vendor/model', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['reasoning'], reasoning: { supported_efforts, default_effort: 'high' } }] });
+      expect(rows[0]).toMatchObject({ effort_map: null, default_effort: null });
+    }
+  });
+
+  it('chooses only a listed effort when the provider default is absent or unsupported', () => {
+    const rows = normaliseNousModels({ data: [{ id: 'vendor/model', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['reasoning_effort'], reasoning: { supported_efforts: ['high', 'low', 'low', 5], default_effort: 'medium' } }] });
+    expect(rows[0]).toMatchObject({ supports_reasoning: true, effort_map: { low: 'low', high: 'high' }, default_effort: 'low' });
+  });
+
+  it('keeps the legacy fallback only when the model has no supported-efforts metadata', () => {
+    const rows = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS);
+    expect(rows.find((row) => row.model_id === 'nous:anthropic/claude-sonnet-5')).toMatchObject({ effort_map: { low: 'low', medium: 'medium', high: 'high' }, default_effort: 'medium' });
+    expect(rows.find((row) => row.model_id === 'nous:google/gemini-3-flash')).toMatchObject({ effort_map: null, default_effort: null });
+  });
+
   it('normalizes prices, capabilities, and the nous prefix', () => {
     const rows = normaliseNousModels(NOUS_PORTAL_FIXTURE_MODELS);
     const sonnet = rows.find((row) => row.model_id === 'nous:anthropic/claude-sonnet-5');

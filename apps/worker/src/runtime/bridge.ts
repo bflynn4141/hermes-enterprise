@@ -3,6 +3,8 @@
 import type { Context } from 'hono';
 import { nousModelId, openRouterModelId } from '@hermes/shared';
 import type { Env } from '../env.js';
+import type { Tx } from '../db/client.js';
+import { parseProviderRetryAfter, type ProviderRetryAfter } from './retry-after.js';
 import type { AgentDb, EmittedEvent, EngineRunRow, EmitInput } from '../engine/agent-db.js';
 import { allowedTools, executeTool, FOCUS_TOOLS, TOOL_SOURCE, toolResultEnvelope, type FetchUrlRunner } from '../engine/tools.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
@@ -23,12 +25,18 @@ import {
 import { logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
-import { PARTNER_PROGRAM_TOOLS, runtimeSkillManifests } from './skills.js';
+import { PARTNER_PROGRAM_TOOLS, preflightDiscoveryManifest, runtimeSkillManifestsForAgent } from './skills.js';
+import { requireRuntimeDiscoveryAuth, type RuntimeDiscoveryAuthorization } from './discovery-grants.js';
+import { toolsForSkillVersion } from '../enterprise-skills/registry.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
   AGENTCASH_CREATOR_SEARCH_ARGUMENTS,
+  AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS,
   parseAgentCashCreatorSearch,
+  parseAgentCashXCreatorSearch,
+  requestedCreatorSearchKinds,
+  type AgentCashCreatorSearchKind,
 } from '../partner-screening/agentcash-creators.js';
 import {
   AGENTCASH_CONTACT_ENRICH_URL,
@@ -42,6 +50,8 @@ import {
 } from '../partner-screening/agentcash-contact.js';
 import { partnerAgentConfigSchema } from '../partner-screening/config.js';
 import { completePartnerScreening } from '../partner-screening/service.js';
+import { scopeWorkspaceHubEvents } from '../domain/audience.js';
+import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 
 export interface BridgeDb extends AgentDb {
   findRuntimeRun(remoteRunId: string, agentId: string): Promise<EngineRunRow | null>;
@@ -159,13 +169,23 @@ async function dispatchRuntimeApprovalCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
-    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     const callId = await durableCallId(call);
     const existing = await db.runtimeCall(run.id, callId);
     if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
       throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
     }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)
+        && existing?.result !== null && existing?.result !== undefined) {
+      const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
+      return {
+        complete: { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } } as CallResult,
+      };
+    }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)) {
+      throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+    }
+    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
+    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     if (existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
       return {
@@ -265,13 +285,21 @@ export async function dispatchRuntimeCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
-    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     const callId = await durableCallId(call);
     const existing = await db.runtimeCall(run.id, callId);
     if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
       throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
     }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)
+        && existing?.result !== null && existing?.result !== undefined) {
+      const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
+      return { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } };
+    }
+    if (isResponseOnlyRecoveryInput(run.recoveryInput)) {
+      throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+    }
+    const tool = allowedTools(run.mode, await db.loadToolNames(agentId)).find((entry) => entry.name === call.name);
+    if (!tool) throw new RouteError('This tool is not available to this run.', 'runtime_tool_forbidden', 403);
     if (existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
       return { run, events: [], reply: { ok: existing.ok ?? !envelope.data?.error, content: existing.result } };
@@ -298,6 +326,14 @@ export async function dispatchRuntimeCall(
     let content: string;
     if (outcome.ok && outcome.waiting) {
       const { key, label } = outcome.waiting;
+      if (key.startsWith('operation_approval:')) {
+        await db.startRuntimeWait(run.id, run.attempt);
+        if (run.status !== 'waiting') {
+          await db.setRunStatus(run.id, 'waiting', { waitingFor: key, waitingLabel: label });
+          await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'waiting', waiting_for: key, waiting_label: label } }]);
+        }
+        return { run, events, reply: { status: 'pending' } };
+      }
       await db.ensureContextField({ runId: run.id, toolCallId: callId, agentId, key });
       const answer = await db.readContextField(agentId, key);
       if (!answer?.trim()) {
@@ -315,6 +351,11 @@ export async function dispatchRuntimeCall(
         await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'working' } }]);
       }
     } else {
+      if (run.status === 'waiting' && run.waitingFor?.startsWith('operation_approval:')) {
+        await db.endRuntimeWait(run.id, run.attempt);
+        await db.setRunStatus(run.id, 'working', { waitingFor: null, waitingLabel: null });
+        await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'working' } }]);
+      }
       content = outcome.ok ? toolResultEnvelope(call.name, TOOL_SOURCE[call.name] ?? 'engine', outcome.data, now()) : toolResultEnvelope(call.name, 'engine', { error: outcome.error }, now());
     }
     // The result id is reserved by this transaction's lock. A disconnected
@@ -341,6 +382,17 @@ async function authenticate(c: Context<{ Bindings: Env }>): Promise<{
     requireResolvedBridgeAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
   return { workspaceId, agentId, binding };
 }
+async function authenticateDiscovery(c: Context<{ Bindings: Env }>): Promise<{
+  workspaceId: string;
+  agentId: string;
+  authorization: RuntimeDiscoveryAuthorization;
+}> {
+  const workspaceId = pathUuid(c, 'ws');
+  const agentId = pathUuid(c, 'agentId');
+  const authorization = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+    requireRuntimeDiscoveryAuth(c.env, tx, workspaceId, agentId, c.req.header('Authorization') ?? null));
+  return { workspaceId, agentId, authorization };
+}
 async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   if (Number(c.req.header('Content-Length') ?? 0) > 1_048_576) throw new RouteError('Runtime body too large.', 'bad_body', 400);
   const text = await c.req.text();
@@ -348,7 +400,15 @@ async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
   try { return JSON.parse(text); } catch { throw new RouteError('Invalid JSON body.', 'bad_body', 400); }
 }
 export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { workspaceId, agentId, binding } = await authenticate(c);
+  const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
+  if (authorization.kind === 'preflight_grant') {
+    const manifest = preflightDiscoveryManifest(authorization.config, authorization.grant);
+    const tools = allowedTools('work', toolsForSkillVersion(
+      manifest.skill_key, manifest.version, manifest.capability_grants,
+    ));
+    return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
+  }
+  const binding = authorization.binding;
   const db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
   try {
     const configured = await db.loadToolNames(agentId);
@@ -363,13 +423,21 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
   } finally { await db.close(); }
 }
 export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const { agentId } = await authenticate(c);
-  return c.json({ skills: runtimeSkillManifests(c.env, agentId) });
+  const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
+  if (authorization.kind === 'preflight_grant') {
+    return c.json({ skills: [preflightDiscoveryManifest(authorization.config, authorization.grant)] });
+  }
+  const skills = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
+    runtimeSkillManifestsForAgent(c.env, tx, workspaceId, agentId));
+  return c.json({ skills });
 }
 async function publish(env: Env, workspaceId: string, result: CallResult): Promise<void> {
   const rows = result.events.map((event) => ({ id: event.id, workspace_id: workspaceId, session_id: event.sessionId, kind: event.kind, payload: event.payload, schema_version: 1, trace_id: event.traceId, at: event.at }));
   const session = rows.filter((event) => event.session_id !== null);
-  const workspace = rows.filter((event) => event.session_id === null);
+  const workspaceRows = rows.filter((event) => event.session_id === null);
+  const workspace = workspaceRows.length === 0 ? workspaceRows : await withWorkspaceTransaction(
+    env, workspaceId, (tx) => scopeWorkspaceHubEvents(tx, workspaceRows),
+  );
   // Delivery failure leaves a committed outbox for the existing replay route.
   try {
     if (session.length) await env.SESSION_HUB.get(env.SESSION_HUB.idFromName(result.run.sessionId)).forward(result.run.id, session);
@@ -389,6 +457,18 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
   } finally { await db.close(); }
 }
 
+/** A retry and a paid-call lease serialize on the same task row. */
+async function requireCurrentPaidRun(tx: Tx, workspaceId: string, agentId: string, runId: string, runtimeRunId: string): Promise<void> {
+  const { rows } = await tx.query<{ recovery_input: string | null }>(
+    `SELECT recovery_input FROM runs WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
+       AND runtime_run_id=$4 AND runtime_attempt=attempt AND status='working'
+       AND NOT stop_requested FOR UPDATE`, [workspaceId,agentId,runId,runtimeRunId]);
+  if (!rows.length) throw new RouteError('The task attempt is no longer active.', 'runtime_run_inactive', 409);
+  if (isResponseOnlyRecoveryInput(rows[0]?.recovery_input)) {
+    throw new RouteError('This recovery can only finish the response.', 'runtime_tool_forbidden', 403);
+  }
+}
+
 /** Atomically reserve the one paid call before the AgentCash MCP executes it. */
 export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
@@ -406,6 +486,7 @@ export async function authorizeAgentCashPeopleSearch(c: Context<{ Bindings: Env 
   const screeningRunId = match[1]!;
   let created = false;
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     const screening = await tx.query<{
       status: 'running' | 'completed' | 'failed';
       source: string;
@@ -519,9 +600,10 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       candidates_discovered: number;
       api_requests_used: number;
       agentcash_tool_call_id: string | null;
+      idempotency_key: string;
     }>(
       `SELECT created_by, status, source, config_snapshot, candidates_discovered,
-              api_requests_used, agentcash_tool_call_id
+              api_requests_used, agentcash_tool_call_id, idempotency_key
          FROM partner_screening_runs
         WHERE workspace_id=$1 AND id=$2 AND agent_id=$3
         FOR UPDATE`,
@@ -558,26 +640,50 @@ export async function importAgentCashPeopleSearch(c: Context<{ Bindings: Env }>)
       { tx, workspaceId, userId: row.created_by, role: 'admin', requireAdmin: () => undefined },
       { runId: screeningRunId, agentId, result },
     );
+    if (row.idempotency_key.startsWith('auto:')) {
+      await tx.query(
+        `INSERT INTO partner_discovery_cursors
+           (workspace_id, agent_id, source, next_offset, search_after, page_size, last_run_id)
+         VALUES ($1,$2,'agentcash_people',$3,$4,$5,$6)
+         ON CONFLICT (workspace_id, agent_id, source) DO UPDATE SET
+           next_offset=EXCLUDED.next_offset,
+           search_after=EXCLUDED.search_after,
+           page_size=EXCLUDED.page_size,
+           last_run_id=EXCLUDED.last_run_id`,
+        [workspaceId, agentId, result.nextOffset, result.nextSearchAfter, config.max_candidates, screeningRunId],
+      );
+    }
   });
   return c.json({ ok: true, screening_run_id: screeningRunId, imported_candidates: importedCandidates }, created ? 201 : 200);
 }
 
-function creatorPromptAuthorized(prompt: string | null): boolean {
-  const normalized = (prompt ?? '').toLowerCase();
-  return normalized.includes('hermes')
-    && (normalized.includes('youtube') || normalized.includes('linkedin'))
-    && (normalized.includes('consult') || normalized.includes('influenc') || normalized.includes('creator'));
+interface CreatorSearchSpec {
+  readonly kind: AgentCashCreatorSearchKind;
+  readonly cost: number;
 }
 
-function creatorRunKey(runtimeRunId: string): string {
-  return `creator:${runtimeRunId}`;
+function creatorSearchSpec(argumentsValue: Record<string, unknown>): CreatorSearchSpec | null {
+  if (canonical(argumentsValue) === canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+    return { kind: 'linkedin_youtube', cost: 0.01 };
+  }
+  if (canonical(argumentsValue) === canonical(AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS)) {
+    return { kind: 'x', cost: 0.005 };
+  }
+  return null;
+}
+
+function creatorRunKey(runtimeRunId: string, kind: AgentCashCreatorSearchKind): string {
+  // Preserve the deployed LinkedIn/YouTube idempotency key for recovery and
+  // use a separate namespace for X so one explicit multi-channel run is safe.
+  return kind === 'linkedin_youtube' ? `creator:${runtimeRunId}` : `creator:x:${runtimeRunId}`;
 }
 
 /** Reserve one fixed $0.01 public creator search only from an explicitly matching user turn. */
 export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const input = parseAgentCashCreatorAuthorization(await body(c));
-  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+  const spec = creatorSearchSpec(input.arguments);
+  if (!spec) {
     throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
   }
   const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
@@ -590,6 +696,7 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
   let screeningRunId = '';
   let created = false;
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-creators:${run.id}`]);
     const context = await tx.query<{ owner_id: string; prompt: string | null }>(
       `SELECT s.owner_id, user_turn.provider_message::text AS prompt
@@ -604,10 +711,10 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
       [workspaceId, run.id, agentId],
     );
     const authorized = context.rows[0];
-    if (!authorized || !creatorPromptAuthorized(authorized.prompt)) {
+    if (!authorized || !requestedCreatorSearchKinds(authorized.prompt).includes(spec.kind)) {
       throw new RouteError('This run does not contain an explicit Hermes creator-search request.', 'partner_creator_search_not_authorized', 403);
     }
-    const key = creatorRunKey(input.runtime_run_id);
+    const key = creatorRunKey(input.runtime_run_id, spec.kind);
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO partner_screening_runs
          (workspace_id, agent_id, created_by, idempotency_key, source, authentication,
@@ -617,12 +724,12 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
        RETURNING id`,
       [workspaceId, agentId, authorized.owner_id, key, JSON.stringify({
         runtime_run_id: input.runtime_run_id,
-        query_kind: 'hermes_creator_consultants',
+        query_kind: spec.kind === 'x' ? 'hermes_x_creator_posts' : 'hermes_creator_consultants',
         minimum_priority: 0,
         ranking_weights: { relevance: 40, activity: 25, adoption: 20, openness: 15 },
         max_candidates: 5,
         max_api_requests: 1,
-        max_spend_usd: 0.01,
+        max_spend_usd: spec.cost,
       }), input.tool_call_id],
     );
     if (inserted.rows[0]) {
@@ -643,16 +750,17 @@ export async function authorizeAgentCashCreatorSearch(c: Context<{ Bindings: Env
     }
     screeningRunId = row.id;
   });
-  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1, max_spend_usd: 0.01 }, created ? 201 : 200);
+  return c.json({ ok: true, screening_run_id: screeningRunId, reserved_requests: 1, max_spend_usd: spec.cost }, created ? 201 : 200);
 }
 
 /** Return a paid creator response that still needs import after a gateway restart. */
 export async function pendingAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const pending = await withWorkspaceTransaction(c.env, workspaceId, async (tx) => tx.query<{
-    runtime_run_id: string; agentcash_tool_call_id: string;
+    runtime_run_id: string; agentcash_tool_call_id: string; query_kind: string | null;
   }>(
-    `SELECT config_snapshot->>'runtime_run_id' AS runtime_run_id, agentcash_tool_call_id
+    `SELECT config_snapshot->>'runtime_run_id' AS runtime_run_id, agentcash_tool_call_id,
+            config_snapshot->>'query_kind' AS query_kind
        FROM partner_screening_runs
       WHERE workspace_id=$1 AND agent_id=$2 AND source='agentcash_creators'
         AND status='running' AND api_requests_used=1 AND agentcash_tool_call_id IS NOT NULL
@@ -665,14 +773,18 @@ export async function pendingAgentCashCreatorSearch(c: Context<{ Bindings: Env }
   if (!/^run_[0-9a-f]{32}$/.test(row.runtime_run_id) || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(row.agentcash_tool_call_id)) {
     throw new RouteError('The pending creator import has invalid runtime identity.', 'partner_screening_conflict', 409);
   }
-  return c.json({ runtime_run_id: row.runtime_run_id, tool_call_id: row.agentcash_tool_call_id, arguments: AGENTCASH_CREATOR_SEARCH_ARGUMENTS });
+  const argumentsValue = row.query_kind === 'hermes_x_creator_posts'
+    ? AGENTCASH_X_CREATOR_SEARCH_ARGUMENTS
+    : AGENTCASH_CREATOR_SEARCH_ARGUMENTS;
+  return c.json({ runtime_run_id: row.runtime_run_id, tool_call_id: row.agentcash_tool_call_id, arguments: argumentsValue });
 }
 
 /** Import one exact creator-search response as bounded public evidence. */
 export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const input = parseAgentCashCreatorImport(await body(c));
-  if (canonical(input.arguments) !== canonical(AGENTCASH_CREATOR_SEARCH_ARGUMENTS)) {
+  const spec = creatorSearchSpec(input.arguments);
+  if (!spec) {
     throw new RouteError('The creator search does not match the fixed policy.', 'partner_source_policy_mismatch', 422);
   }
   const runtime = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
@@ -694,7 +806,7 @@ export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>
          FROM partner_screening_runs
         WHERE workspace_id=$1 AND agent_id=$2 AND idempotency_key=$3 AND source='agentcash_creators'
         FOR UPDATE`,
-      [workspaceId, agentId, creatorRunKey(input.runtime_run_id)],
+      [workspaceId, agentId, creatorRunKey(input.runtime_run_id, spec.kind)],
     );
     const row = screening.rows[0];
     if (!row || row.status === 'failed' || row.api_requests_used !== 1 || row.agentcash_tool_call_id !== input.tool_call_id) {
@@ -706,7 +818,11 @@ export async function importAgentCashCreatorSearch(c: Context<{ Bindings: Env }>
       return;
     }
     let result;
-    try { result = parseAgentCashCreatorSearch(input.result); } catch {
+    try {
+      result = spec.kind === 'x'
+        ? parseAgentCashXCreatorSearch(input.result)
+        : parseAgentCashCreatorSearch(input.result);
+    } catch {
       throw new RouteError('AgentCash creator search returned an unsupported response shape.', 'partner_source_invalid_response', 422);
     }
     importedCandidates = result.candidates.length;
@@ -777,6 +893,7 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
   let created = false;
   let enrichmentId = '';
   await withWorkspaceTransaction(c.env, workspaceId, async (tx) => {
+    await requireCurrentPaidRun(tx, workspaceId, agentId, run.id, input.runtime_run_id);
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`partner-contact:${run.id}`]);
     const existing = await tx.query<ContactLeaseRow>(
       `SELECT e.id, e.candidate_id, e.run_id, e.runtime_run_id, e.status, e.pending_kind,
@@ -837,11 +954,11 @@ export async function authorizeAgentCashContact(c: Context<{ Bindings: Env }>): 
     }
     await tx.query(
       `UPDATE partner_contact_enrichments
-          SET status=$4, pending_kind=$5, pending_tool_call_id=$6,
+          SET status=$4, pending_kind=$5, pending_tool_call_id=$6, runtime_run_id=$7,
               verification_tool_call_id=COALESCE(verification_tool_call_id, $6),
               verification_poll_count=verification_poll_count + CASE WHEN $5='verification_poll' THEN 1 ELSE 0 END
         WHERE workspace_id=$1 AND agent_id=$2 AND id=$3`,
-      [workspaceId, agentId, row.id, kind === 'verification' ? 'verification_reserved' : 'verification_pending', kind, input.tool_call_id],
+      [workspaceId, agentId, row.id, kind === 'verification' ? 'verification_reserved' : 'verification_pending', kind, input.tool_call_id, input.runtime_run_id],
     );
     enrichmentId = row.id;
     created = true;
@@ -983,32 +1100,62 @@ const RUNTIME_PROVIDERS: Readonly<Record<string, RuntimeProviderConfig>> = {
   nous_portal: { base: NOUS_PORTAL_BASE, headers: NOUS_PORTAL_HEADERS, wireId: nousModelId },
 };
 
+export interface RuntimeModelRow {
+  readonly model_id: string;
+  readonly provider: string;
+  readonly context_length?: number | null;
+}
+
+/** OpenAI-compatible model metadata consumed by the pinned Hermes runtime. */
+export function runtimeModelList(models: readonly RuntimeModelRow[]): {
+  readonly object: 'list';
+  readonly data: readonly Record<string, unknown>[];
+} {
+  return {
+    object: 'list',
+    data: models.flatMap((model) => {
+      const config = RUNTIME_PROVIDERS[model.provider];
+      const id = config?.wireId(model.model_id);
+      if (!config || !id) return [];
+      return [{
+        id,
+        object: 'model',
+        created: 0,
+        owned_by: model.provider,
+        ...(Number.isSafeInteger(model.context_length) && Number(model.context_length) > 0
+          ? { context_length: model.context_length }
+          : {}),
+      }];
+    }),
+  };
+}
+
 export async function runtimeModels(c: Context<{ Bindings: Env }>): Promise<Response> {
   let db: RuntimeDb | undefined;
   try {
     const { workspaceId } = await authenticate(c);
     db = new RuntimeDb(c.env, workspaceId, crypto.randomUUID());
-    const models = (await db.allowedRuntimeModels()).filter((model) => isProviderAllowed(c.env, model.provider));
-    const providers = [...new Set(models.map((model) => model.provider))];
-    if (providers.length === 0) return modelError('provider_not_allowed', 403);
-    await Promise.all(providers.map((provider) => db!.resolveCredential(provider)));
-    return c.json({
-      object: 'list',
-      data: models.flatMap((model) => {
-        const config = RUNTIME_PROVIDERS[model.provider];
-        const id = config?.wireId(model.model_id);
-        return config && id ? [{ id, object: 'model', created: 0, owned_by: model.provider }] : [];
-      }),
+    const models = await db.withRuntimeTransaction(async () => {
+      const allowed = (await db!.allowedRuntimeModels()).filter((model) => isProviderAllowed(c.env, model.provider));
+      const providers = [...new Set(allowed.map((model) => model.provider))];
+      if (providers.length === 0) throw new RouteError('No runtime model provider is allowed.', 'provider_not_allowed', 403);
+      // RuntimeDb owns one pg client. Keep credential reads serial while the
+      // outer transaction removes repeated BEGIN / tenant settings / COMMIT.
+      for (const provider of providers) await db!.resolveCredential(provider);
+      return allowed;
     });
+    return c.json(runtimeModelList(models));
   } catch (error) {
     return modelError(error instanceof RouteError ? error.reason : 'runtime_model_unavailable', error instanceof RouteError ? error.status : 503);
   } finally { await db?.close(); }
 }
 export interface ModelBridgeDb extends RuntimeBudgetDb {
+  withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
   activeProfileRun(agentId: string): Promise<EngineRunRow | null>;
-  allowedRuntimeModels(): Promise<{ model_id: string; provider: string }[]>;
+  allowedRuntimeModels(): Promise<RuntimeModelRow[]>;
   resolveCredential: AgentDb['resolveCredential'];
   recordModelCall: AgentDb['recordModelCall'];
+  recordProviderRetryAfter?(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void>;
   settleRuntimeModelCall?(input: {
     reservation: {
       reservationId: string;
@@ -1040,34 +1187,47 @@ export async function proxyRuntimeModel(
 ): Promise<Response> {
   const proxyStartedAt = Date.now();
   if (!object(value) || typeof value.model !== 'string' || !Array.isArray(value.messages)) return modelError('bad_body', 400);
-  const run = await db.activeProfileRun(agentId);
-  if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
-  const allowed = await db.allowedRuntimeModels();
-  const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
-  const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
-  if (!selected || !config || value.model !== config.wireId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
-  // Whitelist request fields: fallback models, provider credentials,
-  // routing URLs, and other caller-controlled routing cannot bypass the catalog.
-  const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
-  for (const key of ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty']) {
-    if (key in value) forwarded[key] = value[key];
-  }
-  if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
-  // Every streamed native call needs its own authoritative usage; otherwise a
-  // multi-call run can only expose one terminal aggregate and key rotation can
-  // misattribute the spend. The approved-budget path also depends on this.
-  if (forwarded.stream === true) {
-    const existing = object(forwarded.stream_options) ? forwarded.stream_options : {};
-    forwarded.stream_options = { ...existing, include_usage: true };
-  }
-  let prepared;
+  const prepare = async () => {
+    const run = await db.activeProfileRun(agentId);
+    if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || run.status !== 'working') return modelError('runtime_run_inactive', 409);
+    const allowed = await db.allowedRuntimeModels();
+    const selected = allowed.find((model) => model.model_id === run.modelId && isProviderAllowed(env, model.provider));
+    const config = selected ? RUNTIME_PROVIDERS[selected.provider] : undefined;
+    if (!selected || !config || value.model !== config.wireId(selected.model_id)) return modelError('runtime_model_forbidden', 403);
+    // Whitelist request fields: fallback models, provider credentials,
+    // routing URLs, and other caller-controlled routing cannot bypass the catalog.
+    const forwarded: Record<string, unknown> = { model: value.model, messages: value.messages };
+    const responseOnly = isResponseOnlyRecoveryInput(run.recoveryInput);
+    const fields = ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'stream_options', 'reasoning', 'response_format', 'stop', 'seed', 'frequency_penalty', 'presence_penalty'];
+    if (!responseOnly) fields.push('tools', 'tool_choice', 'parallel_tool_calls');
+    for (const key of fields) {
+      if (key in value) forwarded[key] = value[key];
+    }
+    if (!('reasoning' in forwarded) && typeof value.reasoning_effort === 'string') forwarded.reasoning = { effort: value.reasoning_effort };
+    // Every streamed native call needs its own authoritative usage; otherwise a
+    // multi-call run can only expose one terminal aggregate and key rotation can
+    // misattribute the spend. The approved-budget path also depends on this.
+    if (forwarded.stream === true) {
+      const existing = object(forwarded.stream_options) ? forwarded.stream_options : {};
+      forwarded.stream_options = { ...existing, include_usage: true };
+    }
+    const prepared = await prepareRuntimeBudget(db, run.id, selected.model_id, forwarded);
+    return { run, selected, config, forwarded, prepared };
+  };
+  let preparation;
   try {
-    prepared = await prepareRuntimeBudget(db, run.id, selected.model_id, forwarded);
+    // These serial reads share one tenant context on the request-local client.
+    preparation = await (db.withRuntimeTransaction ? db.withRuntimeTransaction(prepare) : prepare());
   } catch (error) {
     const response = budgetError(error);
     if (response) return response;
     throw error;
   }
+  if (preparation instanceof Response) return preparation;
+  const { run, selected, config, forwarded, prepared } = preparation;
+  // Credential resolution must retain its own commit: OAuth refresh can
+  // quarantine a key before resolveCredential throws the refusal sentinel.
+  // Budget reservations likewise commit before the provider can accept a call.
   const credential = await db.resolveCredential(selected.provider);
   let reservation: RuntimeBudgetReservation | null = null;
   if (prepared) {
@@ -1182,13 +1342,18 @@ export async function proxyRuntimeModel(
   }
   if (!response.ok) {
     const failure = runtimeProviderError(response);
+    const delay = ['runtime_provider_rate_limited', 'runtime_provider_unavailable'].includes(failure.reason)
+      ? parseProviderRetryAfter(response.headers.get('Retry-After')) : null;
     try { await response.body?.cancel(); } catch { /* Rejection accounting must still settle. */ }
     await settle(null, 'error', reservation ? 'rejected' : null);
+    if (delay) await db.recordProviderRetryAfter?.(run.id, run.attempt, delay);
     console.warn(JSON.stringify({
       at: 'runtime.model_rejected', provider: selected.provider,
       modelId: selected.model_id, status: failure.status, reason: failure.reason,
     }));
-    return modelError(failure.reason, failure.status);
+    const rejection = modelError(failure.reason, failure.status);
+    if (delay?.header !== null && delay?.header !== undefined) rejection.headers.set('Retry-After', delay.header);
+    return rejection;
   }
   lifecycle?.defer();
   const safeResponse = new Response(response.body, {

@@ -13,7 +13,7 @@
 // me` in all three places. The share tests below are the ones that changed.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { seedWorkspace, withClient, type Fixture } from './helpers.js';
+import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { ALLOWED_ORIGIN, asUser, makeEnv, readTenant } from './harness.js';
 
 /** A session belonging to `ownerId`, with `count` messages in it. */
@@ -80,6 +80,52 @@ describe('POST /w/:ws/sessions', () => {
     });
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ reason: 'unknown_agent' });
+  });
+
+  it('never falls back to another member private agent when creating a session', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    const sharedAgentId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fixture.workspaceId, fixture.adminId);
+      await c.query(
+        `INSERT INTO agent_owners(workspace_id,agent_id,member_id)
+         SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`,
+        [fixture.workspaceId, fixture.agentId, fixture.adminId],
+      );
+      await c.query('COMMIT');
+    });
+
+    for (const body of [{ title: 'No fallback' }, { title: 'No explicit bypass', agent_id: fixture.agentId }]) {
+      const refused = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions`, {
+        method: 'POST', body,
+      });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toMatchObject({ reason: 'unknown_agent' });
+    }
+
+    const ownerSession = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/sessions`, {
+      method: 'POST', body: { title: 'Owned private agent', agent_id: fixture.agentId },
+    });
+    expect(ownerSession.status).toBe(201);
+    expect(await ownerSession.json()).toMatchObject({ agent_id: fixture.agentId });
+
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fixture.workspaceId, fixture.adminId);
+      await c.query(
+        `INSERT INTO agents(id,workspace_id,name,status,context_scope)
+         VALUES($1,$2,'Shared reviewer','started','workspace')`,
+        [sharedAgentId, fixture.workspaceId],
+      );
+      await c.query('COMMIT');
+    });
+    const sharedSession = await asUser(env, fixture.memberId, `/w/${fixture.workspaceId}/sessions`, {
+      method: 'POST', body: { title: 'Workspace agent' },
+    });
+    expect(sharedSession.status).toBe(201);
+    expect(await sharedSession.json()).toMatchObject({ agent_id: sharedAgentId });
   });
 });
 
