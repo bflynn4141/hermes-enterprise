@@ -5791,3 +5791,15 @@ wallet funding or paid provider call occurs in prepare, registration or
 acceptance. Revoking available capacity quarantines it; reserved capacity must
 first be released by withdrawing its invitation. Existing opaque
 `HERMES_RUNTIME_AGENTS` credentials are left unchanged.
+
+## C87. Admin controls and personal settings have separate navigation
+
+September 20, 2026. Settings previously rendered the same workspace-control tabs to every member, relying on individual controls and server checks to explain authority. This obscured which settings affected the organization and sent members into pages they could not manage.
+
+Use the existing Admin section for organization policy, inbox rules, agent defaults, shared provider credentials and runtime capacity, organization usage, workspace connections, and Shared Intelligence administration. Show it only to current workspace admins. Guard destinations before mounting data-fetching components, including direct links and legacy Settings URLs; role changes must remove the privileged view.
+
+Personal Settings remains available to everyone for their own notifications, personal Slack identity linking, and read-only privacy information. Own-agent configuration stays with Agents. Reading retention facts or linking a personal identity does not grant authority to change shared connections, attest provider policies, or inspect organization credentials.
+
+Navigation explains authority; server routes independently enforce it. Protect administrative reads and writes while preserving the member-readable settings information required by ordinary application behavior. Do not return privileged metadata solely because the UI hides it. Keep member notification writes scoped to the authenticated user. Regression checks cover direct navigation and direct API access as well as visible controls.
+
+Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
