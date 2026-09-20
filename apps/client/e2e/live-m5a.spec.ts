@@ -51,6 +51,18 @@ async function openShell(page: Page, workspaceId: string): Promise<void> {
   await expect(page.getByRole('button', { name: 'Agents', exact: true }).first()).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Workspace controls moved out of Settings and under the Admin entry (PR92,
+ * then grouped in PR95 and PR96): a group tab strip, then a page index for the
+ * group, then the page. Personal Settings kept only what belongs to the person.
+ */
+async function openAdminPage(page: Page, group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
+  await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
+  const app = pane(page);
+  await app.getByRole('tab', { name: group }).click();
+  await app.getByRole('navigation', { name: `${group} settings pages` }).getByRole('button', { name: item, exact: true }).click();
+}
+
 /** A turn through the real route, so the run is a real run. */
 async function runTurn(page: Page, workspaceId: string, title: string): Promise<string> {
   const session = await page.request.post(`/w/${workspaceId}/sessions`, {
@@ -107,7 +119,10 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   // refetch: without it the pane said "This run called no tools" for a run
   // that called one.
   const app = pane(page);
-  await expect(app.getByRole('heading', { name: /work · nous:anthropic\/claude-sonnet-5/ })).toBeVisible({ timeout: 15_000 });
+  // The detail heading is the session, the runtime and the mode; the model
+  // sits on the fact line beneath it.
+  await expect(app.getByRole('heading', { name: /M1 trace · .* · work/ })).toBeVisible({ timeout: 15_000 });
+  await expect(app.getByText('nous:anthropic/claude-sonnet-5').first()).toBeVisible();
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
   await expect(app.getByText('propose_request').first()).toBeVisible();
 
@@ -143,15 +158,21 @@ test('M2 · an Admin accepts a proposed instruction; a Member cannot', async ({ 
   const fixture = freshWorkspace('Instruction review');
   const proposalId = proposeInstruction(fixture, 'Lead every review with the evidence gaps.');
 
-  // The Member first: the proposal is readable, and the controls are not there.
+  // The Member first. The fixture's agent is owned by the Admin, so since the
+  // private-agent boundaries (PR92) this Member is an agentless reviewer: the
+  // shell opens on the Inbox with no Agents entry at all, and the accept route
+  // refuses them whatever the client shows.
   const memberContext = await asUser(browser, fixture.memberEmail);
   const memberPage = await memberContext.newPage();
-  await openShell(memberPage, fixture.workspaceId);
-  await memberPage.getByRole('button', { name: 'Agents', exact: true }).first().click();
-  await memberPage.getByRole('tab', { name: 'Skills' }).click();
-  await expect(pane(memberPage).getByText('Lead every review with the evidence gaps.').last()).toBeVisible();
-  await expect(pane(memberPage).getByText('Admin decision required')).toBeVisible();
-  await expect(pane(memberPage).getByRole('button', { name: 'Accept' })).toHaveCount(0);
+  await memberPage.goto(`/workspace/${fixture.workspaceId}`);
+  await expect(memberPage.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(memberPage.getByRole('button', { name: 'Agents', exact: true })).toHaveCount(0);
+  const refused = await memberPage.request.post(`/w/${fixture.workspaceId}/instructions/${proposalId}/accept`, {
+    data: {},
+    headers: { origin: ORIGIN, 'x-requested-from': 'skills' },
+  });
+  expect(refused.status(), await refused.text()).toBe(403);
+  expect(rows(`SELECT status FROM instruction_versions WHERE id = ${q(proposalId)};`)).toEqual(['proposed']);
   await memberContext.close();
 
   // The Admin: the DiffTable is there, and so are Accept and Discard.
@@ -161,17 +182,17 @@ test('M2 · an Admin accepts a proposed instruction; a Member cannot', async ({ 
   await adminPage.getByRole('button', { name: 'Agents', exact: true }).first().click();
   await adminPage.getByRole('tab', { name: 'Skills' }).click();
   const adminApp = pane(adminPage);
-  await expect(adminApp.getByText('Proposed screening instruction')).toBeVisible();
-  await expect(adminApp.getByText('written by Fresh Admin')).toBeVisible();
+  await expect(adminApp.getByRole('heading', { name: 'Suggested instruction change' })).toBeVisible();
+  await expect(adminApp.getByText('written by Fresh Admin', { exact: false })).toBeVisible();
 
-  await adminApp.getByRole('button', { name: 'Accept' }).click();
+  await adminApp.getByRole('button', { name: 'Accept for future runs' }).click();
   // The row moved, in the database, and the screen re-read the list rather
   // than assuming: the tab now says "Current".
   await expect
     .poll(() => rows(`SELECT status FROM instruction_versions WHERE id = ${q(proposalId)};`)[0], { timeout: 10_000 })
     .toBe('saved');
-  await expect(adminApp.getByText('Current', { exact: true }).first()).toBeVisible({ timeout: 10_000 });
-  await expect(adminApp.getByText('No change proposed')).toBeVisible();
+  await expect(adminApp.getByRole('heading', { name: 'Suggested instruction change' })).toHaveCount(0, { timeout: 10_000 });
+  await expect(adminApp.getByText('Lead every review with the evidence gaps.').first()).toBeVisible();
 
   // A second accept is a 409 the client explains rather than a silent move.
   // `X-Requested-From: skills` is what the client sends now: saving a proposal
@@ -272,8 +293,7 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await settle(page, fixture.workspaceId, sessionId);
 
   await page.reload();
-  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Usage' }).click();
+  await openAdminPage(page, 'Organization', 'Usage');
 
   // The disclaimer is the server's sentence, rendered beside the total rather
   // than in a footnote. It is asserted verbatim because a client that
@@ -318,7 +338,10 @@ test('M5 · create-workspace and accept-invite, driven from the stepper', async 
 
   // It lands on the shell of the workspace it made, at `/workspace/:ws`.
   await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}/, { timeout: 25_000 });
-  await expect(page.getByText('Let’s set up the work you want me to repeat. What do you own?')).toBeVisible({ timeout: 20_000 });
+  // The creator lands on the activation flow: Iris introduces herself, and
+  // the first step of the setup is on screen.
+  await expect(page.getByRole('region', { name: 'Activation with Iris' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Your organization has assigned you Iris.', { exact: false })).toBeVisible();
   const createdId = new URL(page.url()).pathname.split('/')[2]!;
   expect(rows(`SELECT role FROM members WHERE workspace_id = ${q(createdId)};`)).toEqual(['admin']);
 
@@ -378,8 +401,7 @@ test('M6 · an Admin schedules the workspace for deletion and then cancels it', 
   // the screen rather than about how long the suite has been running.
   refreshStepUp();
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Organization' }).click();
+  await openAdminPage(page, 'Organization', 'Workspace details');
   const app = pane(page);
   await app.getByRole('button', { name: 'Delete workspace…' }).click();
 
@@ -421,20 +443,20 @@ test('M6 · an Admin schedules the workspace for deletion and then cancels it', 
  * written. The point is not that they are empty — it is that each of them says
  * what is empty and why, rather than rendering nothing or "Not available yet".
  */
-async function sweepEmptyStates(page: Page, seat: 'admin' | 'member'): Promise<void> {
+async function sweepEmptyStates(page: Page): Promise<void> {
   const app = pane(page);
 
   await page.getByRole('button', { name: 'Agents', exact: true }).first().click();
-  await expect(app.getByText('Nothing needs you yet. Iris works when you message it.')).toBeVisible({ timeout: 15_000 });
+  // Two honest sentences, depending on whether the workspace has an automated
+  // partner check: neither says anything needs a person yet.
+  await expect(app.getByText(/Nothing needs you(r review)? yet/)).toBeVisible({ timeout: 15_000 });
 
   await app.getByRole('tab', { name: 'Context' }).click();
   await expect(app.getByText('No sources yet')).toBeVisible();
 
   await app.getByRole('tab', { name: 'Skills' }).click();
-  await expect(app.getByText('No shared skills yet')).toBeVisible();
-  await expect(app.getByText('No change proposed')).toBeVisible();
-  // The honest sentence about why there is no "propose" button here.
-  await expect(app.getByText('an instruction version is written by the engine', { exact: false })).toBeVisible();
+  await expect(app.getByText('No standing instructions saved yet')).toBeVisible();
+  await expect(app.getByText('No skills assigned yet.')).toBeVisible();
 
   await app.getByRole('tab', { name: 'Traces' }).click();
   await expect(app.getByText('No runs yet.')).toBeVisible();
@@ -452,39 +474,62 @@ async function sweepEmptyStates(page: Page, seat: 'admin' | 'member'): Promise<v
   await expect(app.getByText('No shared skills yet')).toBeVisible();
   await app.getByRole('tab', { name: 'Documents' }).click();
   await expect(app.getByText('No documents created yet.')).toBeVisible();
-  // The two that keep "Not available yet", because M6 owns both.
+  // Connections now report the real, unconfigured state of each source.
   await app.getByRole('tab', { name: 'Connections' }).click();
-  await expect(app.getByText('Not available yet')).toBeVisible();
-  await app.getByRole('tab', { name: 'Shared Intelligence' }).click();
-  await expect(app.getByText('Not available yet')).toBeVisible();
+  await expect(app.getByText('Read-only Gmail is not configured')).toBeVisible();
+  await expect(app.getByText('Outbound sender is not connected')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
-  await app.getByRole('tab', { name: 'Usage' }).click();
+  await openAdminPage(page, 'Organization', 'Usage');
   await expect(app.getByText('No usage yet')).toBeVisible({ timeout: 15_000 });
 
-  await app.getByRole('tab', { name: 'Agents' }).click();
+  await openAdminPage(page, 'Agents', 'Agent defaults');
   // Not an empty state: the Nous Portal rows are there — the default's row is
   // written by migration 0016 — and each says *why* it cannot be chosen. That
   // is the honest shape: "no models" would be wrong, and a silent list of
   // disabled rows would be worse. Only Nous Portal rows are listed, because the
   // others are not offered by this deployment at all (decision R12).
-  await expect(app.getByText('No verified Nous Portal key')).toBeVisible();
+  await expect(app.getByRole('menuitemradio', { name: /Catalog sync required/ })).toBeDisabled();
   await expect(app.getByText('Daily token cap')).toBeVisible();
 
-  await app.getByRole('tab', { name: 'Data and privacy' }).click();
+  await openAdminPage(page, 'Organization', 'Data & privacy');
   await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
   // The retention facts are the server's and are there with or without a key.
   await expect(app.getByText('Database point-in-time history')).toBeVisible();
   await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
 
-  await app.getByRole('tab', { name: 'Organization' }).click();
-  if (seat === 'admin') {
-    await expect(app.getByRole('button', { name: 'Delete workspace…' })).toBeVisible();
-  } else {
-    // A Member is not shown a control they cannot use, nor a disabled one that
-    // implies the seat is the problem: the section is simply not there.
-    await expect(app.getByRole('button', { name: 'Delete workspace…' })).toHaveCount(0);
-  }
+  await openAdminPage(page, 'Organization', 'Workspace details');
+  await expect(app.getByRole('button', { name: 'Delete workspace…' })).toBeVisible();
+}
+
+/**
+ * The Member seat in a fixture workspace is an agentless reviewer (PR92): the
+ * Admin owns the only agent, so there is no Agents entry, no session composer
+ * and no Admin entry. What is left is the review side of the product.
+ */
+async function sweepMemberEmptyStates(page: Page): Promise<void> {
+  const app = pane(page);
+  await expect(page.getByRole('button', { name: 'Agents', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Admin', exact: true })).toHaveCount(0);
+
+  await expect(app.getByText('No reviews waiting')).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'History', exact: true }).first().click();
+  await expect(app.getByText('No decisions yet').first()).toBeVisible();
+
+  await page.getByRole('button', { name: 'Members', exact: true }).first().click();
+  await expect(app.getByText("Read-only. Roles and removals are an Admin's.")).toBeVisible();
+  await expect(app.getByRole('button', { name: 'Invite member' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Library', exact: true }).first().click();
+  await app.getByRole('tab', { name: 'Documents' }).click();
+  await expect(app.getByText('No documents created yet.')).toBeVisible();
+
+  // Personal settings only: nothing here decides anything for the workspace.
+  await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
+  await expect(app.getByRole('tab', { name: 'Notifications' })).toBeVisible();
+  await expect(app.getByRole('tab', { name: 'Organization' })).toHaveCount(0);
+  await expect(app.getByRole('tab', { name: 'Provider keys' })).toHaveCount(0);
+  await expect(app.getByRole('button', { name: 'Delete workspace…' })).toHaveCount(0);
 }
 
 test('M7 · every empty state on a fresh workspace, for an Admin', async ({ browser }) => {
@@ -493,7 +538,7 @@ test('M7 · every empty state on a fresh workspace, for an Admin', async ({ brow
   const page = await context.newPage();
   await openShell(page, fixture.workspaceId);
   await expect(page.getByText('Connect Nous Portal in Settings to start').first()).toBeVisible();
-  await sweepEmptyStates(page, 'admin');
+  await sweepEmptyStates(page);
   await context.close();
 });
 
@@ -501,12 +546,9 @@ test('M7 · every empty state on a fresh workspace, for a Member', async ({ brow
   const fixture = freshWorkspace('Empty Member sweep');
   const context = await asUser(browser, fixture.memberEmail);
   const page = await context.newPage();
-  await openShell(page, fixture.workspaceId);
-  await sweepEmptyStates(page, 'member');
-  // And the Member-only copy on the two Admin surfaces.
-  await pane(page).getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(pane(page).getByText('Admin decision required')).toBeVisible();
-  await expect(pane(page).getByText('Keys are never shown to a Member, not even masked values.')).toBeVisible();
+  await page.goto(`/workspace/${fixture.workspaceId}`);
+  await expect(page.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await sweepMemberEmptyStates(page);
   await context.close();
 });
 

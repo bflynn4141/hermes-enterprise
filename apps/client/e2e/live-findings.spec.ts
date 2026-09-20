@@ -89,9 +89,10 @@ test('F2 · POST /workspaces creates a workspace the creator can open', async ({
   // The creator is its first Admin, and the workspace opens.
   expect(rows(`SELECT role FROM members WHERE workspace_id = ${q(body.workspace.id)};`)).toEqual(['admin']);
   await page.goto(`/w/${body.workspace.id}`);
-  await expect(page.getByText('Let’s set up the work you want me to repeat. What do you own?')).toBeVisible({
-    timeout: 15_000,
-  });
+  // The creator lands on the activation flow: Iris introduces herself, and
+  // the first step of the setup is on screen.
+  await expect(page.getByRole('region', { name: 'Activation with Iris' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText('Your organization has assigned you Iris.', { exact: false })).toBeVisible();
   await context.close();
 });
 
@@ -142,6 +143,71 @@ test('F2 · an invited person accepts and lands in the workspace', async ({ brow
   await expect(joinerPage.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible({
     timeout: 15_000,
   });
+  await admin.close();
+  await joiner.close();
+});
+
+test('F2 · an Admin invites from the Members page, and the card leaves when the invitation is accepted', async ({ browser }) => {
+  // The two F2 scenarios above drive `POST /w/:ws/invitations` directly. This
+  // one is the same flow through the screen an Admin actually uses: the
+  // Invite member dialog, the Invitations tab that lists the pending row, and
+  // the All members tab that shows the joiner once they have accepted.
+  const fixture = freshWorkspace('Invite from Members');
+  const joinerId = randomUUID();
+  const joinerEmail = `joiner-${joinerId.slice(0, 8)}@nous.example`;
+  psql(
+    `INSERT INTO users (id, email, email_verified, name) VALUES (${q(joinerId)}, ${q(joinerEmail)}, true, 'Jo Iner');`,
+  );
+
+  const admin = await asUser(browser, fixture.adminEmail);
+  const adminPage = await admin.newPage();
+  await adminPage.goto(`/w/${fixture.workspaceId}`);
+  await adminPage.getByRole('button', { name: 'Members', exact: true }).first().click();
+  await expect(adminPage.getByRole('heading', { name: 'Members', exact: true })).toBeVisible({ timeout: 15_000 });
+
+  await adminPage.getByRole('button', { name: 'Invite member' }).click();
+  const dialog = adminPage.getByRole('dialog', { name: 'Invite member' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByPlaceholder('name@example.com').fill(joinerEmail);
+  // The test stack runs with member provisioning off, so this is the legacy
+  // delivery path and the button says so. `setup_only` would say "Start setup".
+  await dialog.getByRole('button', { name: 'Send invitation' }).click();
+
+  // The dialog closes onto the Invitations tab with the new row on it, still
+  // pending, and the server agrees.
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+  const card = adminPage.getByRole('listitem').filter({ hasText: joinerEmail });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await expect(card).toContainText('Invited');
+  expect(
+    rows(`SELECT status || ':' || role FROM invitations WHERE workspace_id = ${q(fixture.workspaceId)} AND email = ${q(joinerEmail)};`),
+  ).toEqual(['pending:member']);
+  const [token] = rows(`SELECT id FROM invitations WHERE workspace_id = ${q(fixture.workspaceId)} AND email = ${q(joinerEmail)};`);
+  expect(token).toBeTruthy();
+
+  // The joiner accepts through the screen the emailed link opens.
+  const joiner = await asUser(browser, joinerEmail);
+  const joinerPage = await joiner.newPage();
+  await joinerPage.goto(`/onboarding/join?token=${token}`);
+  await joinerPage.getByRole('button', { name: 'Accept invitation' }).click();
+  await expect(joinerPage).toHaveURL(new RegExp(`/workspace/${fixture.workspaceId}`), { timeout: 25_000 });
+  await expect(joinerPage.getByRole('button', { name: 'Inbox', exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  expect(
+    rows(`SELECT role FROM members WHERE workspace_id = ${q(fixture.workspaceId)} AND user_id = ${q(joinerId)};`),
+  ).toEqual(['member']);
+
+  // Back on the Admin's screen: accepted invitations are history, so the
+  // Invitations tab is empty again and the joiner is on the All members tab.
+  await adminPage.reload();
+  await adminPage.getByRole('button', { name: 'Members', exact: true }).first().click();
+  await expect(adminPage.getByRole('heading', { name: 'Members', exact: true })).toBeVisible({ timeout: 15_000 });
+  await adminPage.getByRole('tab', { name: 'Invitations' }).click();
+  await expect(adminPage.getByText('No open invitations')).toBeVisible({ timeout: 15_000 });
+  await adminPage.getByRole('tab', { name: 'All members' }).click();
+  const memberCard = adminPage.getByRole('listitem').filter({ hasText: joinerEmail });
+  await expect(memberCard).toBeVisible({ timeout: 15_000 });
+  await expect(memberCard).toContainText('Joined');
+
   await admin.close();
   await joiner.close();
 });
