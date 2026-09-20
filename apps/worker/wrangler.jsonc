@@ -231,8 +231,8 @@
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.
-        "HERMES_ENTERPRISE_PLUGIN_REVISION": "d0806ecb2b8ac55b9ea52b02bbaed896fe0a2549",
-        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:e665ecfd3d5ae6e68c38a71f83a8821fd1a8093bef9489194901beaa9dd87adf",
+        "HERMES_ENTERPRISE_PLUGIN_REVISION": "6d692fdcd6b8479700c01336e7d068c358511b7c",
+        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:e6600d2ea716b893b56e672d03a1cde750e6dd504089bbd7ea9791df06c48261",
         "R2_BUCKET": "hermes-uploads-staging"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
