@@ -11,12 +11,13 @@ test.describe('Shared Intelligence', () => {
     await expect(app.getByText('Private until approved')).toBeVisible();
     await expect(app.getByText(/private traces, tool arguments\/results, hidden reasoning/)).toBeVisible();
     await expect(app.getByText('Review a repeatable evidence-provenance pattern')).toBeVisible();
+    await expect(app.getByText('possible pattern · unassessed')).toBeVisible();
     await expect(app.getByText('Record evidence provenance before escalation')).toBeVisible();
 
     await app.getByRole('button', { name: 'Review draft' }).click();
     await expect(app.getByRole('heading', { name: 'Review the private draft' })).toBeVisible();
     await expect(app.getByLabel('Reusable lesson')).toHaveValue(/Separate a claim/);
-    await expect(app.getByText('Must remain an exact quotation. A completed run is not proof the business outcome succeeded.')).toHaveCount(2);
+    await expect(app.getByText(/Must remain a verified, redacted excerpt/)).toHaveCount(2);
     await app.getByRole('button', { name: 'Check and save private draft' }).click();
 
     await expect(app.getByText('Private draft scored and saved. Check the evidence before requesting review.')).toBeVisible();

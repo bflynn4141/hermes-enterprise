@@ -40,7 +40,7 @@ export const sharedIntelligenceDiscoverySchema = z.object({
     approved_excerpt: z.string().trim().min(1).max(1_000),
     provenance: z.literal('verified_quote'),
   }).strict()).min(1).max(5),
-  evidence_strength: z.enum(['strong', 'limited', 'weak']),
+  evidence_strength: z.literal('unassessed'),
   warnings: z.array(z.string().max(300)).max(10),
 }).strict();
 export type SharedIntelligenceDiscovery = z.infer<typeof sharedIntelligenceDiscoverySchema>;
