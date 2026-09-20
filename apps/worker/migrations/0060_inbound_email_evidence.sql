@@ -5,17 +5,10 @@
 -- a sender. The application exposes no mailbox search/list endpoint: an Admin
 -- must choose one provider thread id for each import.
 
-CREATE UNIQUE INDEX IF NOT EXISTS effects_workspace_id_id_key ON effects (workspace_id, id);
-CREATE UNIQUE INDEX IF NOT EXISTS effects_workspace_binding_key
-  ON effects (workspace_id, id, request_id, decision_id);
-CREATE UNIQUE INDEX IF NOT EXISTS decisions_workspace_id_request_key
-  ON decisions (workspace_id, id, request_id);
 CREATE UNIQUE INDEX IF NOT EXISTS outbound_email_outbox_workspace_id_id_key
   ON outbound_email_outbox (workspace_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS library_source_versions_workspace_source_id_key
   ON library_source_versions (workspace_id, source_id, id);
-CREATE UNIQUE INDEX IF NOT EXISTS approval_revisions_workspace_binding_key
-  ON approval_revisions (workspace_id, request_id, revision, authorization_hash);
 
 CREATE TABLE IF NOT EXISTS gmail_evidence_accounts (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -78,9 +71,6 @@ CREATE TABLE IF NOT EXISTS mailbox_thread_snapshots (
     REFERENCES enterprise_teams (workspace_id, id) ON DELETE RESTRICT,
   CONSTRAINT mailbox_thread_snapshots_source_fk FOREIGN KEY (workspace_id, library_source_id)
     REFERENCES library_sources (workspace_id, id) ON DELETE RESTRICT,
-  CONSTRAINT mailbox_thread_snapshots_source_team_fk
-    FOREIGN KEY (workspace_id, library_source_id, team_id)
-    REFERENCES library_source_team_grants (workspace_id, source_id, team_id) ON DELETE RESTRICT,
   CONSTRAINT mailbox_thread_snapshots_version_fk
     FOREIGN KEY (workspace_id, library_source_id, library_version_id)
     REFERENCES library_source_versions (workspace_id, source_id, id) ON DELETE RESTRICT,
@@ -114,48 +104,12 @@ CREATE TABLE IF NOT EXISTS inbound_email_events (
 CREATE INDEX IF NOT EXISTS inbound_email_events_contact_idx
   ON inbound_email_events (workspace_id, contact_address, recorded_at DESC);
 
--- A manual external-completion receipt is evidence, not provider execution.
--- It does not mutate effects.status and is not available for payments/email.
-CREATE TABLE IF NOT EXISTS external_effect_evidence_receipts (
-  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id        uuid NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
-  effect_id           uuid NOT NULL,
-  request_id          uuid NOT NULL,
-  decision_id         uuid NOT NULL,
-  authorization_revision integer NOT NULL CHECK (authorization_revision > 0),
-  authorization_hash  text NOT NULL CHECK (authorization_hash ~ '^sha256:[0-9a-f]{64}$'),
-  snapshot_id         uuid NOT NULL,
-  library_source_id   uuid NOT NULL,
-  library_version_id  uuid NOT NULL,
-  snapshot_sha256     text NOT NULL CHECK (snapshot_sha256 ~ '^[0-9a-f]{64}$'),
-  claimed_outcome     text NOT NULL CHECK (claimed_outcome = 'completed_outside_hermes'),
-  verification        text NOT NULL CHECK (verification = 'evidence_recorded_not_provider_verified'),
-  occurred_at         timestamptz NOT NULL,
-  note                text NOT NULL CHECK (length(note) BETWEEN 1 AND 2000),
-  recorded_by         uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
-  recorded_at         timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT external_effect_evidence_receipts_time_check CHECK (occurred_at <= recorded_at),
-  CONSTRAINT external_effect_evidence_receipts_effect_fk
-    FOREIGN KEY (workspace_id, effect_id, request_id, decision_id)
-    REFERENCES effects (workspace_id, id, request_id, decision_id) ON DELETE CASCADE,
-  CONSTRAINT external_effect_evidence_receipts_revision_fk
-    FOREIGN KEY (workspace_id, request_id, authorization_revision, authorization_hash)
-    REFERENCES approval_revisions (workspace_id, request_id, revision, authorization_hash) ON DELETE RESTRICT,
-  CONSTRAINT external_effect_evidence_receipts_snapshot_fk
-    FOREIGN KEY (workspace_id, snapshot_id, library_source_id, library_version_id, snapshot_sha256)
-    REFERENCES mailbox_thread_snapshots
-      (workspace_id, id, library_source_id, library_version_id, normalized_sha256) ON DELETE RESTRICT,
-  CONSTRAINT external_effect_evidence_receipts_exact_key UNIQUE
-    (workspace_id, effect_id, snapshot_id, authorization_revision, authorization_hash)
-);
-
 DO $$
 DECLARE table_name text;
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'gmail_evidence_accounts', 'gmail_evidence_oauth_states',
-    'mailbox_thread_snapshots', 'inbound_email_events',
-    'external_effect_evidence_receipts'
+    'mailbox_thread_snapshots', 'inbound_email_events'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', table_name);
@@ -168,25 +122,19 @@ BEGIN
 END $$;
 
 GRANT SELECT, INSERT, UPDATE ON gmail_evidence_accounts, gmail_evidence_oauth_states TO app;
-GRANT SELECT, INSERT ON mailbox_thread_snapshots, inbound_email_events,
-  external_effect_evidence_receipts TO app;
+GRANT SELECT, INSERT ON mailbox_thread_snapshots, inbound_email_events TO app;
 -- The app role can publish immutable versions and explicit team grants only
 -- through tenant-scoped routes. Existing immutability triggers still refuse
 -- mutation of source versions.
 GRANT INSERT ON library_sources, library_source_versions, library_source_team_grants TO app;
 REVOKE DELETE ON gmail_evidence_accounts, gmail_evidence_oauth_states FROM app;
-REVOKE UPDATE, DELETE ON mailbox_thread_snapshots, inbound_email_events,
-  external_effect_evidence_receipts FROM app;
+REVOKE UPDATE, DELETE ON mailbox_thread_snapshots, inbound_email_events FROM app;
 REVOKE ALL ON gmail_evidence_accounts, gmail_evidence_oauth_states,
-  mailbox_thread_snapshots, inbound_email_events,
-  external_effect_evidence_receipts FROM agent;
+  mailbox_thread_snapshots, inbound_email_events FROM agent;
 
 DROP TRIGGER IF EXISTS mailbox_thread_snapshots_append_only ON mailbox_thread_snapshots;
 CREATE TRIGGER mailbox_thread_snapshots_append_only BEFORE UPDATE OR DELETE ON mailbox_thread_snapshots
   FOR EACH ROW EXECUTE FUNCTION refuse_mutation();
 DROP TRIGGER IF EXISTS inbound_email_events_append_only ON inbound_email_events;
 CREATE TRIGGER inbound_email_events_append_only BEFORE UPDATE OR DELETE ON inbound_email_events
-  FOR EACH ROW EXECUTE FUNCTION refuse_mutation();
-DROP TRIGGER IF EXISTS external_effect_evidence_receipts_append_only ON external_effect_evidence_receipts;
-CREATE TRIGGER external_effect_evidence_receipts_append_only BEFORE UPDATE OR DELETE ON external_effect_evidence_receipts
   FOR EACH ROW EXECUTE FUNCTION refuse_mutation();

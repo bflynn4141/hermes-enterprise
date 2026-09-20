@@ -37,8 +37,6 @@ import {
   inboundEmailOAuthStartSchema,
   inboundEmailThreadImportSchema,
   type InboundEmailThreadImportInput,
-  externalEffectEvidenceReceiptSchema,
-  type ExternalEffectEvidenceInput,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
   runViewSchema,
@@ -359,8 +357,6 @@ export function createRest(options: RestOptions) {
     routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
-    recordExternalEffectEvidence: (workspaceId: string, effectId: string, body: ExternalEffectEvidenceInput) =>
-      request('POST', `${ws(workspaceId)}/effects/${effectId}/external-evidence`, externalEffectEvidenceReceiptSchema, body),
 
     // --- entities ---
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),

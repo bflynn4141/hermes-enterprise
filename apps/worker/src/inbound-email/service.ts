@@ -22,7 +22,10 @@ interface SnapshotRow {
   message_count: number;
   normalized_sha256: string;
   imported_at: Date | string;
+  team_granted: boolean;
 }
+
+interface SourceRow { id: string; team_granted: boolean }
 
 const escapeMarkdown = (value: string): string => value.replace(/[\\`*_{}\[\]<>]/gu, '\\$&');
 const line = (value: string | null | undefined): string => escapeMarkdown((value ?? '').replace(/\s+/gu, ' ').trim());
@@ -240,22 +243,31 @@ export async function importSelectedGmailThread(
 
   const existing = await work.tx.query<SnapshotRow>(
     `SELECT s.id,s.library_source_id,s.library_version_id,v.version,s.title,s.message_count,
-            s.normalized_sha256,s.imported_at
+            s.normalized_sha256,s.imported_at,
+            EXISTS (
+              SELECT 1 FROM library_source_team_grants source_grant
+               WHERE source_grant.workspace_id=s.workspace_id
+                 AND source_grant.source_id=s.library_source_id
+                 AND source_grant.team_id=s.team_id
+            ) AS team_granted
        FROM mailbox_thread_snapshots s
        JOIN library_source_versions v
          ON v.workspace_id=s.workspace_id
         AND v.source_id=s.library_source_id
         AND v.id=s.library_version_id
-       JOIN library_source_team_grants source_grant
-         ON source_grant.workspace_id=s.workspace_id
-        AND source_grant.source_id=s.library_source_id
-        AND source_grant.team_id=s.team_id
       WHERE s.workspace_id=$1 AND s.account_id=$2 AND s.provider_thread_id=$3
         AND s.normalized_sha256=$4 AND s.team_id=$5`,
     [work.workspaceId, account.id, thread.provider_thread_id, digest, team.id],
   );
   if (existing.rows[0]) {
     const snapshot = existing.rows[0];
+    if (!snapshot.team_granted) {
+      throw new RouteError(
+        'Access to this imported Gmail thread was revoked',
+        'gmail_evidence_access_revoked',
+        409,
+      );
+    }
     return {
       kind: 'mailbox_thread_snapshot', snapshot_id: snapshot.id,
       source_id: snapshot.library_source_id, version_id: snapshot.library_version_id,
@@ -267,16 +279,43 @@ export async function importSelectedGmailThread(
   }
 
   const sourceId = crypto.randomUUID();
-  await work.tx.query(
+  const insertedSource = await work.tx.query<{ id: string }>(
     `INSERT INTO library_sources (id,workspace_id,slug,title,summary,created_by)
-     VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (workspace_id,slug) DO NOTHING`,
+     VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (workspace_id,slug) DO NOTHING
+     RETURNING id`,
     [sourceId, work.workspaceId, slug, title, 'Selected Gmail thread imported as immutable evidence.', work.userId],
   );
-  const source = await work.tx.query<{ id: string }>(
-    `SELECT id FROM library_sources WHERE workspace_id=$1 AND slug=$2 FOR UPDATE`,
-    [work.workspaceId, slug],
-  );
-  const actualSourceId = source.rows[0]?.id;
+  let actualSourceId = insertedSource.rows[0]?.id;
+  if (actualSourceId) {
+    await work.tx.query(
+      `INSERT INTO library_source_team_grants (workspace_id,source_id,team_id,granted_by)
+       VALUES ($1,$2,$3,$4)`,
+      [work.workspaceId, actualSourceId, team.id, work.userId],
+    );
+  } else {
+    const source = await work.tx.query<SourceRow>(
+      `SELECT source.id,
+              EXISTS (
+                SELECT 1 FROM library_source_team_grants source_grant
+                 WHERE source_grant.workspace_id=source.workspace_id
+                   AND source_grant.source_id=source.id
+                   AND source_grant.team_id=$3
+              ) AS team_granted
+         FROM library_sources source
+        WHERE source.workspace_id=$1 AND source.slug=$2
+        FOR UPDATE OF source`,
+      [work.workspaceId, slug, team.id],
+    );
+    const existingSource = source.rows[0];
+    actualSourceId = existingSource?.id;
+    if (existingSource && !existingSource.team_granted) {
+      throw new RouteError(
+        'Access to this imported Gmail thread was revoked',
+        'gmail_evidence_access_revoked',
+        409,
+      );
+    }
+  }
   if (!actualSourceId) throw new Error('gmail_evidence_library_source_missing');
   const current = await work.tx.query<{ version: number }>(
     `SELECT version FROM library_source_versions WHERE workspace_id=$1 AND source_id=$2
@@ -292,11 +331,6 @@ export async function importSelectedGmailThread(
     [versionId, work.workspaceId, actualSourceId, version, `Gmail snapshot ${version}`, markdownDigest,
       markdown, work.userId],
   );
-  await work.tx.query(
-    `INSERT INTO library_source_team_grants (workspace_id,source_id,team_id,granted_by)
-     VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
-    [work.workspaceId, actualSourceId, team.id, work.userId],
-  );
   const snapshotId = crypto.randomUUID();
   const inserted = await work.tx.query<SnapshotRow>(
     `INSERT INTO mailbox_thread_snapshots
@@ -304,7 +338,7 @@ export async function importSelectedGmailThread(
         provider_thread_id,title,message_count,normalized_sha256,normalized_thread,imported_by)
      VALUES ($1,$2,$3,$4,$5,$6,'gmail',$7,$8,$9,$10,$11::jsonb,$12)
      RETURNING id,library_source_id,library_version_id,$13::int AS version,title,message_count,
-       normalized_sha256,imported_at`,
+       normalized_sha256,imported_at,true AS team_granted`,
     [snapshotId, work.workspaceId, account.id, team.id, actualSourceId, versionId,
       thread.provider_thread_id, title, thread.messages.length, digest, normalized, work.userId, version],
   );

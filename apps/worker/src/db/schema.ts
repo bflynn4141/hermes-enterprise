@@ -1550,26 +1550,6 @@ export const inboundEmailEvents = pgTable('inbound_email_events', {
   recordedAt: now('recorded_at'),
 });
 
-export const externalEffectEvidenceReceipts = pgTable('external_effect_evidence_receipts', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workspaceId: uuid('workspace_id').notNull(),
-  effectId: uuid('effect_id').notNull(),
-  requestId: uuid('request_id').notNull(),
-  decisionId: uuid('decision_id').notNull(),
-  authorizationRevision: integer('authorization_revision').notNull(),
-  authorizationHash: text('authorization_hash').notNull(),
-  snapshotId: uuid('snapshot_id').notNull(),
-  librarySourceId: uuid('library_source_id').notNull(),
-  libraryVersionId: uuid('library_version_id').notNull(),
-  snapshotSha256: text('snapshot_sha256').notNull(),
-  claimedOutcome: text('claimed_outcome').notNull(),
-  verification: text('verification').notNull(),
-  occurredAt: ts('occurred_at').notNull(),
-  note: text('note').notNull(),
-  recordedBy: uuid('recorded_by').notNull(),
-  recordedAt: now('recorded_at'),
-});
-
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -2186,7 +2166,6 @@ export const ALL_TABLES = {
   gmail_evidence_oauth_states: gmailEvidenceOauthStates,
   mailbox_thread_snapshots: mailboxThreadSnapshots,
   inbound_email_events: inboundEmailEvents,
-  external_effect_evidence_receipts: externalEffectEvidenceReceipts,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

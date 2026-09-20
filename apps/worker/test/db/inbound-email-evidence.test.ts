@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { ApprovalProposal, ApprovalView } from '@hermes/shared';
+import { captureContext } from '../../src/context-snapshot.js';
 import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
-import type { Env } from '../../src/env.js';
 import type { NormalizedGmailThread } from '../../src/inbound-email/gmail-read-api.js';
 import { recordInboundEvents } from '../../src/inbound-email/service.js';
 import type { TenantWork } from '../../src/routes/tenant.js';
@@ -77,80 +77,13 @@ async function seedSnapshot(fx: Fixture): Promise<SeededSnapshot> {
   return { snapshotId, teamId, accountId, sourceId, versionId };
 }
 
-async function seedAdditionalSnapshot(
-  fx: Fixture,
-  parent: Pick<SeededSnapshot, 'teamId' | 'accountId'>,
-): Promise<SeededSnapshot> {
-  const sourceId = randomUUID();
-  const versionId = randomUUID();
-  const snapshotId = randomUUID();
-  await withClient('owner', async (c) => {
-    await c.query('BEGIN');
-    await setTenant(c, fx.workspaceId, fx.adminId);
-    await c.query(
-      `INSERT INTO library_sources (id,workspace_id,slug,title,summary,created_by)
-       VALUES ($1,$2,$3,'Other selected thread','Other immutable selected Gmail evidence.',$4)`,
-      [sourceId, fx.workspaceId, `gmail-thread-${sourceId.replaceAll('-', '')}`, fx.adminId],
-    );
-    await c.query(
-      `INSERT INTO library_source_versions
-         (id,workspace_id,source_id,version,version_label,sha256,content_markdown,created_by)
-       VALUES ($1,$2,$3,1,'Gmail snapshot 1',$4,'# Other selected thread',$5)`,
-      [versionId, fx.workspaceId, sourceId, 'e'.repeat(64), fx.adminId],
-    );
-    await c.query(
-      `INSERT INTO library_source_team_grants (workspace_id,source_id,team_id,granted_by)
-       VALUES ($1,$2,$3,$4)`,
-      [fx.workspaceId, sourceId, parent.teamId, fx.adminId],
-    );
-    await c.query(
-      `INSERT INTO mailbox_thread_snapshots
-         (id,workspace_id,account_id,team_id,library_source_id,library_version_id,provider,
-          provider_thread_id,title,message_count,normalized_sha256,normalized_thread,imported_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'gmail','thread_other','Other selected thread',1,$7,'{}'::jsonb,$8)`,
-      [snapshotId, fx.workspaceId, parent.accountId, parent.teamId, sourceId, versionId,
-        'e'.repeat(64), fx.adminId],
-    );
-    await c.query('COMMIT');
-  });
-  return { snapshotId, teamId: parent.teamId, accountId: parent.accountId, sourceId, versionId };
-}
-
-async function seedEffect(fx: Fixture, kind: 'access_grant' | 'signature' | 'payment'): Promise<string> {
-  const requestId = randomUUID();
-  const decisionId = randomUUID();
-  const effectId = randomUUID();
-  await withClient('owner', async (c) => {
-    await c.query('BEGIN');
-    await setTenant(c, fx.workspaceId, fx.adminId);
-    await c.query(
-      `INSERT INTO requests (id,workspace_id,kind,label,payload,status,session_id)
-       VALUES ($1,$2,'application','External completion','{}'::jsonb,'pending',$3)`,
-      [requestId, fx.workspaceId, fx.sessionId],
-    );
-    await c.query(
-      `INSERT INTO decisions (id,workspace_id,request_id,decision,resulting_status,decided_by)
-       VALUES ($1,$2,$3,'approve','admitted',$4)`,
-      [decisionId, fx.workspaceId, requestId, fx.adminId],
-    );
-    await c.query(
-      `INSERT INTO effects (id,workspace_id,decision_id,request_id,kind,status,required_role)
-       VALUES ($1,$2,$3,$4,$5,'pending','access')`,
-      [effectId, fx.workspaceId, decisionId, requestId, kind],
-    );
-    await c.query('COMMIT');
-  });
-  return effectId;
-}
-
-async function seedBoundEffect(
+async function seedMailboxApproval(
   fx: Fixture,
   snapshotId: string,
-  kind: 'access_grant' | 'signature' = 'access_grant',
-): Promise<{ effectId: string; view: ApprovalView }> {
+): Promise<ApprovalView> {
   let adminMemberId = '';
   const resourceKey = `mailbox-evidence-${snapshotId}`;
-  const policyKey = `external-evidence-${randomUUID()}`;
+  const policyKey = `mailbox-evidence-${randomUUID()}`;
   await withClient('owner', async (c) => {
     await c.query('BEGIN');
     await setTenant(c, fx.workspaceId, fx.adminId);
@@ -183,15 +116,15 @@ async function seedBoundEffect(
   });
   const proposal: ApprovalProposal = {
     kind: 'approval', approval_type: 'access', illustrative: false,
-    summary: 'Review evidence for an external access completion.',
-    consequence: 'Records a non-provider-verified receipt and executes nothing.',
+    summary: 'Review selected Gmail evidence.',
+    consequence: 'Makes the cited immutable snapshot available to the named approval audience.',
     evidence: [{ id: snapshotId, kind: 'source', label: 'Selected Gmail thread snapshot' }],
     details: {
       resource_id: resourceKey,
       resource_label: 'Selected Gmail evidence',
       requested_agent_id: fx.agentId,
       operations: ['read'],
-      purpose: 'Verify the exact externally completed access action.',
+      purpose: 'Review the exact selected Gmail thread snapshot.',
       access_expires_at: '2026-10-01T17:00:00-07:00',
     },
   };
@@ -204,37 +137,20 @@ async function seedBoundEffect(
         userId: fx.adminId, sessionId: fx.sessionId },
       { label: proposal.summary, policy_key: policyKey, proposal,
         target_agent_ids: [], target_member_ids: [], target_resource_ids: [], dependent_request_ids: [],
-        idempotency_key: `external-evidence:${randomUUID()}` },
+        idempotency_key: `mailbox-evidence:${randomUUID()}` },
     ),
   );
-  const effectId = randomUUID();
   await withClient('owner', async (c) => {
     await c.query('BEGIN');
     await setTenant(c, fx.workspaceId, fx.adminId);
-    await c.query(`UPDATE approval_requests SET status='approved' WHERE request_id=$1`, [view.request_id]);
-    await c.query(
-      `UPDATE approval_revisions SET status='approved' WHERE request_id=$1 AND revision=$2`,
-      [view.request_id, view.payload.authorization.revision],
-    );
     await c.query(
       `INSERT INTO request_audiences (workspace_id,request_id,user_id,purpose)
        VALUES ($1,$2,$3,'reviewer')`,
       [fx.workspaceId, view.request_id, fx.adminId],
     );
-    const decision = await c.query<{ id: string }>(
-      `INSERT INTO decisions (workspace_id,request_id,decision,resulting_status,decided_by)
-       VALUES ($1,$2,'approve','admitted',$3) RETURNING id`,
-      [fx.workspaceId, view.request_id, fx.adminId],
-    );
-    await c.query(
-      `INSERT INTO effects
-         (id,workspace_id,decision_id,request_id,kind,status,required_role)
-       VALUES ($1,$2,$3,$4,$5,'pending','access')`,
-      [effectId, fx.workspaceId, decision.rows[0]!.id, view.request_id, kind],
-    );
     await c.query('COMMIT');
   });
-  return { effectId, view };
+  return view;
 }
 
 async function seedOutreach(
@@ -287,10 +203,26 @@ async function seedOutreach(
   return { candidateId, requestId };
 }
 
-describe('inbound email and external evidence database boundaries', () => {
-  it('keeps snapshots append-only and hidden from the agent database role', async () => {
+describe('inbound email evidence database boundaries', () => {
+  it('keeps snapshots append-only while a removed Team grant revokes every read surface', async () => {
     const fx = await seedWorkspace();
     const { snapshotId, sourceId, teamId } = await seedSnapshot(fx);
+    const approval = await seedMailboxApproval(fx, snapshotId);
+    const evidencePath = `/w/${fx.workspaceId}/requests/${approval.request_id}/approval/evidence/${snapshotId}`;
+    const beforeLibrary = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/library-sources?agent_id=${fx.agentId}`);
+    expect(beforeLibrary.status).toBe(200);
+    expect((await beforeLibrary.json() as { items: Array<{ id: string }> }).items)
+      .toContainEqual(expect.objectContaining({ id: sourceId }));
+    expect((await asUser(env, fx.adminId, evidencePath)).status).toBe(200);
+    await withClient('app', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const work = { tx: c, workspaceId: fx.workspaceId, userId: fx.adminId } as unknown as TenantWork;
+      await expect(captureContext(work, env, fx.agentId, [{
+        id: sourceId, kind: 'library_source', sha256: 'a'.repeat(64),
+      }])).resolves.toMatchObject({ sources: [{ id: sourceId, kind: 'library_source' }] });
+      await c.query('ROLLBACK');
+    });
     await withClient('app', async (c) => {
       await c.query('BEGIN');
       await setTenant(c, fx.workspaceId, fx.adminId);
@@ -309,11 +241,32 @@ describe('inbound email and external evidence database boundaries', () => {
     await withClient('owner', async (c) => {
       await c.query('BEGIN');
       await setTenant(c, fx.workspaceId, fx.adminId);
-      await expect(c.query(
+      await c.query(
         `DELETE FROM library_source_team_grants
           WHERE workspace_id=$1 AND source_id=$2 AND team_id=$3`,
         [fx.workspaceId, sourceId, teamId],
-      )).rejects.toMatchObject({ code: '23503' });
+      );
+      const retained = await c.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM mailbox_thread_snapshots
+          WHERE workspace_id=$1 AND id=$2`,
+        [fx.workspaceId, snapshotId],
+      );
+      expect(retained.rows[0]?.count).toBe('1');
+      await c.query('COMMIT');
+    });
+    const afterLibrary = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/library-sources?agent_id=${fx.agentId}`);
+    expect(afterLibrary.status).toBe(200);
+    expect((await afterLibrary.json() as { items: Array<{ id: string }> }).items.some((item) => item.id === sourceId)).toBe(false);
+    const revokedEvidence = await asUser(env, fx.adminId, evidencePath);
+    expect(revokedEvidence.status).toBe(404);
+    expect(await revokedEvidence.json()).toMatchObject({ reason: 'approval_evidence_unavailable' });
+    await withClient('app', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const work = { tx: c, workspaceId: fx.workspaceId, userId: fx.adminId } as unknown as TenantWork;
+      await expect(captureContext(work, env, fx.agentId, [{
+        id: sourceId, kind: 'library_source', sha256: 'a'.repeat(64),
+      }])).rejects.toMatchObject({ reason: 'context_source_missing', status: 422 });
       await c.query('ROLLBACK');
     });
   });
@@ -376,7 +329,7 @@ describe('inbound email and external evidence database boundaries', () => {
            (workspace_id,account_id,team_id,library_source_id,library_version_id,provider,
             provider_thread_id,title,message_count,normalized_sha256,normalized_thread,imported_by)
          VALUES ($1,$2,$3,$4,$5,'gmail','foreign-version','Foreign version',1,$6,'{}'::jsonb,$7)`,
-        [fx.workspaceId, local.accountId, local.teamId, foreign.sourceId, foreignUnboundVersionId,
+        [fx.workspaceId, local.accountId, local.teamId, local.sourceId, foreignUnboundVersionId,
           'd'.repeat(64), fx.adminId],
       )).rejects.toMatchObject({ code: '23503' });
       await c.query('ROLLBACK');
@@ -445,87 +398,19 @@ describe('inbound email and external evidence database boundaries', () => {
     expect(teamBBody.items).toContainEqual(expect.objectContaining({ id: sourceB, version: 2, content_markdown: '# Team B v2 private' }));
   });
 
-  it('records access evidence without executing the effect or creating outbound work', async () => {
+  it('does not expose a receipt route that could imply an external action was executed', async () => {
     const fx = await seedWorkspace();
-    const { snapshotId } = await seedSnapshot(fx);
-    const { effectId, view } = await seedBoundEffect(fx, snapshotId);
-    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/external-evidence`, {
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/effects/${randomUUID()}/external-evidence`, {
       method: 'POST',
-      body: { snapshot_id: snapshotId, occurred_at: new Date(Date.now() - 60_000).toISOString(), note: 'Completed by the workspace owner in the provider.' },
+      body: {},
     });
-    expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({
-      effect_id: effectId,
-      effect_kind: 'access_grant',
-      claimed_outcome: 'completed_outside_hermes',
-      verification: 'evidence_recorded_not_provider_verified',
-      provider_execution_by_hermes: false,
-    });
-    await withClient('owner', async (c) => {
-      await c.query('BEGIN');
-      await setTenant(c, fx.workspaceId, fx.adminId);
-      const effect = await c.query<{ status: string; executed_at: Date | null }>(
-        `SELECT status,executed_at FROM effects WHERE id=$1`, [effectId],
-      );
-      expect(effect.rows[0]).toEqual({ status: 'pending', executed_at: null });
-      const jobs = await c.query<{ count: string }>(
-        `SELECT count(*)::text AS count FROM jobs WHERE workspace_id=$1 AND kind='outbound_email_send'`,
-        [fx.workspaceId],
-      );
-      const receipt = await c.query<{
-        request_id: string;
-        authorization_revision: number;
-        authorization_hash: string;
-        library_source_id: string;
-        library_version_id: string;
-      }>(
-        `SELECT request_id,authorization_revision,authorization_hash,
-                library_source_id,library_version_id
-           FROM external_effect_evidence_receipts
-          WHERE workspace_id=$1 AND effect_id=$2`,
-        [fx.workspaceId, effectId],
-      );
-      expect(jobs.rows[0]?.count).toBe('0');
-      expect(receipt.rows[0]).toMatchObject({
-        request_id: view.request_id,
-        authorization_revision: view.payload.authorization.revision,
-        authorization_hash: view.payload.authorization.hash,
-      });
-      expect(receipt.rows[0]?.library_source_id).toBeTruthy();
-      expect(receipt.rows[0]?.library_version_id).toBeTruthy();
-      await c.query('COMMIT');
-    });
-  });
-
-  it('rejects future external-evidence timestamps before writing a receipt', async () => {
-    const fx = await seedWorkspace();
-    const { snapshotId } = await seedSnapshot(fx);
-    const { effectId } = await seedBoundEffect(fx, snapshotId);
-    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/external-evidence`, {
-      method: 'POST',
-      body: { snapshot_id: snapshotId, occurred_at: new Date(Date.now() + 60_000).toISOString(), note: 'Impossible future completion.' },
-    });
-    expect(response.status).toBe(422);
-    expect(await response.json()).toMatchObject({ reason: 'future_evidence_time' });
-  });
-
-  it('rejects an accessible snapshot that is not cited by the approved effect revision', async () => {
-    const fx = await seedWorkspace();
-    const cited = await seedSnapshot(fx);
-    const uncited = await seedAdditionalSnapshot(fx, cited);
-    const { effectId } = await seedBoundEffect(fx, cited.snapshotId);
-    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/external-evidence`, {
-      method: 'POST',
-      body: { snapshot_id: uncited.snapshotId, occurred_at: new Date(Date.now() - 60_000).toISOString(), note: 'Wrong evidence.' },
-    });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ reason: 'evidence_binding_required' });
+    expect(response.status).toBe(404);
   });
 
   it('serves cited mailbox evidence to the approval audience, not the requester team principal', async () => {
     const fx = await seedWorkspace();
     const { snapshotId } = await seedSnapshot(fx);
-    const { view } = await seedBoundEffect(fx, snapshotId);
+    const view = await seedMailboxApproval(fx, snapshotId);
     await withClient('owner', async (c) => {
       await c.query('BEGIN');
       await setTenant(c, fx.workspaceId, fx.adminId);
@@ -696,15 +581,4 @@ describe('inbound email and external evidence database boundaries', () => {
     });
   });
 
-  it('refuses to use the receipt path for payments', async () => {
-    const fx = await seedWorkspace();
-    const { snapshotId } = await seedSnapshot(fx);
-    const effectId = await seedEffect(fx, 'payment');
-    const response = await asUser(env as Env, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/external-evidence`, {
-      method: 'POST',
-      body: { snapshot_id: snapshotId, occurred_at: '2026-09-19T12:00:00.000Z', note: 'Claimed payment evidence.' },
-    });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ reason: 'unsupported_effect_evidence' });
-  });
 });

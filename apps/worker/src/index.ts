@@ -114,7 +114,7 @@ import {
   listRequestEffects,
   listRequests,
 } from './routes/requests.js';
-import { executeEffect, listEffects, recordExternalEffectEvidence } from './routes/effects.js';
+import { executeEffect, listEffects } from './routes/effects.js';
 import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
 import {
   createDocumentVersion,
@@ -425,7 +425,6 @@ app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
 // nothing (CONVENTIONS, invariant 5).
 app.get('/w/:ws/effects', listEffects);
 app.post('/w/:ws/effects/:id/execute', executeEffect);
-app.post('/w/:ws/effects/:id/external-evidence', recordExternalEffectEvidence);
 
 // History is rendered at read time from ids, which is what lets an erasure
 // tombstone a subject and leave the audit trail standing.

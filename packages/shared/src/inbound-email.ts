@@ -55,28 +55,3 @@ export const inboundEmailThreadImportSchema = z.object({
   }).strict(),
 }).strict();
 export type InboundEmailThreadImport = z.infer<typeof inboundEmailThreadImportSchema>;
-
-/** Evidence that a person says an access/signature action happened elsewhere.
- * The receipt never claims that Hermes or the external provider executed it. */
-export const externalEffectEvidenceInputSchema = z.object({
-  snapshot_id: z.uuid(),
-  occurred_at: isoDateTime,
-  note: z.string().trim().min(1).max(2000),
-}).strict();
-export type ExternalEffectEvidenceInput = z.infer<typeof externalEffectEvidenceInputSchema>;
-
-export const externalEffectEvidenceReceiptSchema = z.object({
-  id: z.uuid(),
-  effect_id: z.uuid(),
-  effect_kind: z.enum(['access_grant', 'signature']),
-  snapshot_id: z.uuid(),
-  snapshot_sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  claimed_outcome: z.literal('completed_outside_hermes'),
-  verification: z.literal('evidence_recorded_not_provider_verified'),
-  provider_execution_by_hermes: z.literal(false),
-  occurred_at: isoDateTime,
-  note: z.string().min(1).max(2000),
-  recorded_by: z.uuid(),
-  recorded_at: isoDateTime,
-}).strict();
-export type ExternalEffectEvidenceReceipt = z.infer<typeof externalEffectEvidenceReceiptSchema>;

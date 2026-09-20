@@ -21,11 +21,11 @@ Primary selection references:
 - The evidence flow uses a separate Google OAuth client and token table from the outbound sender.
 - Consent requests exactly `https://www.googleapis.com/auth/gmail.readonly`, with `include_granted_scopes=false`. A returned token carrying any additional scope is rejected.
 - Hermes exposes no mailbox list or search route. An Admin pastes one provider thread ID for each import.
-- The imported snapshot is immutable, versioned in the Library, and granted only to the selected agent’s explicit Enterprise team.
+- The imported snapshot is immutable, versioned in the Library, and initially granted only to the selected agent’s explicit Enterprise team. Removing that Team grant revokes Library, context, and approval-evidence reads while retaining the immutable snapshot for audit. Importing the same thread again does not silently restore a revoked grant.
 - Imported text is labeled as untrusted external evidence. It is never interpreted as runtime instructions.
 - An inbound reply tied to the exact provider thread can mark a partner engagement replied and cancel later queued outreach. A strong explicit unsubscribe reply can also add a contact suppression. DSN-looking text is not authenticated delivery evidence: Hermes records it as unverified evidence only and does not suppress, change engagement state, or cancel outreach from it. These paths enqueue zero sends.
-- A named approval-audience reviewer can attach only a snapshot cited by the effect's exact approved request revision. The immutable receipt binds the effect, decision, request, authorization revision/hash, snapshot, Library source/version, and snapshot digest. It rejects future occurrence times, says `evidence_recorded_not_provider_verified`, sets `provider_execution_by_hermes=false`, and does not change the effect’s execution status.
-- External evidence receipts are unavailable for payment and email-send effects.
+- A named approval-audience reviewer can read only a snapshot cited by that request’s exact immutable approval revision, and only while the snapshot’s Team grant remains current.
+- Hermes exposes no external-completion receipt route. The typed approval flow does not create the legacy decision/effect binding that such a receipt would need, so recording one would overstate what the product can prove. Access, signature, email, and payment actions performed outside Hermes remain outside Hermes; pending effects remain pending or unavailable rather than being relabeled as executed.
 
 ## Deployment setup
 
@@ -63,8 +63,8 @@ Nous Hermes Agent’s Google Workspace skill combines Gmail, Calendar, and Drive
 1. Confirm the redirect URI belongs to the dedicated evidence OAuth client.
 2. Start consent from Library → Connections and verify the Google page shows only Gmail read-only access.
 3. Import one known thread ID and verify it appears as a new immutable Library source version for the expected team.
-4. Reimport unchanged content and verify the existing snapshot is returned.
+4. Reimport unchanged content and verify the existing snapshot is returned. Remove its Team grant, then verify Library, context, and approval-evidence reads deny access while the audit snapshot remains stored; a reimport must fail rather than silently recreate the grant.
 5. Import a test reply/unsubscribe and verify later queued outreach is cancelled, a suppression is recorded where applicable, and no `outbound_email_send` job is created. Separately import spoofable DSN-looking text and verify it remains unverified evidence without suppression or cancellation.
-6. Record external access/signature evidence and verify the effect remains pending/unavailable rather than executed.
+6. Verify `POST /w/:ws/effects/:id/external-evidence` is not exposed and ordinary effects remain pending/unavailable until a real executor exists.
 
 No live mailbox was connected while implementing this feature. Enabling it requires the deployment configuration and a user’s explicit Google consent.
