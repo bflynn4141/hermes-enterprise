@@ -19,13 +19,9 @@ import { withTenantTransaction, type Tx } from '../db/client.js';
 import { allowedProviders } from '../model/allowed.js';
 import { runtimeLocation } from '../runtime/config.js';
 import { getSession } from '../auth.js';
-import { loadApprovalListProjection } from '../domain/approvals.js';
 import { requestAudiencePredicate, streamEventAudiencePredicate } from '../domain/audience.js';
 import {
-  canDecideLegacyRequest,
-  REQUEST_ACTIVE_PRESENTATION_PREDICATE,
-  REQUEST_REVIEWABLE_PREDICATE,
-  type RequestRow,
+  loadVisiblePendingRequests,
 } from '../domain/requests.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
@@ -156,31 +152,9 @@ export async function loadBootstrap(
     [userId, agent.id],
   );
 
-  const requests = await tx.query<Pick<RequestRow, 'id' | 'kind' | 'status' | 'label' | 'payload'>>(
-    `SELECT r.id, r.kind, r.status, r.label, r.payload FROM requests r
-      WHERE r.workspace_id = $1 AND r.status = 'pending'
-        AND ${REQUEST_REVIEWABLE_PREDICATE}
-        AND ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
-        AND ${requestAudiencePredicate('r.id', '$2')}
-      ORDER BY r.created_at DESC`,
-    [workspaceId, userId],
-  );
-
-  let pendingForMe = 0;
-  let pendingForOthers = 0;
   const viewerRole = viewer.rows[0]?.role ?? 'member';
   const reviewerRoles = viewer.rows[0]?.reviewer_roles ?? [];
-  for (const request of requests.rows) {
-    if (request.kind === 'approval') {
-      const projection = await loadApprovalListProjection(tx, request.id, userId);
-      if (projection.pending_for_viewer) pendingForMe += 1;
-      else pendingForOthers += 1;
-    } else if (request.kind === 'task' || canDecideLegacyRequest(request, viewerRole, reviewerRoles)) {
-      pendingForMe += 1;
-    } else {
-      pendingForOthers += 1;
-    }
-  }
+  const requests = await loadVisiblePendingRequests(tx, workspaceId, userId, viewerRole, reviewerRoles);
 
   // A catalog row is offered only when this workspace holds a verified key for
   // the row's provider. "Add a provider key in Settings to start" is an empty
@@ -278,8 +252,8 @@ export async function loadBootstrap(
       pending_grants: count.grants,
       created_documents: count.documents,
       decisions: count.decisions,
-      pending_for_me: pendingForMe,
-      pending_for_others: pendingForOthers,
+      pending_for_me: requests.pendingForMe,
+      pending_for_others: requests.pendingForOthers,
     },
     // node-postgres returns a Date for timestamptz; the contract carries an
     // ISO string, because the client compares and sorts cursors as text.
@@ -287,7 +261,7 @@ export async function loadBootstrap(
       ...row,
       last_activity_at: row.last_activity_at === null ? null : row.last_activity_at.toISOString(),
     })),
-    requests: requests.rows.slice(0, 100).map(({ payload: _payload, ...request }) => request),
+    requests: requests.rows.slice(0, 100).map(({ payload: _payload, presentation_hidden_at: _hiddenAt, ...request }) => request),
     catalog: catalog.rows,
   });
 }

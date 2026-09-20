@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { paginatedSchema, requestEntitySchema } from '@hermes/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
-import { seedWorkspace, withClient, type Fixture } from './helpers.js';
+import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { FakeQueue } from '../stubs/fake-r2.js';
 import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
 import { SESSION_COOKIE, CSRF_COOKIE, CSRF_HEADER } from '../../src/auth/cookies.js';
@@ -193,6 +193,58 @@ describe('GET /w/:ws/requests', () => {
       return rows.map((row) => row.kind);
     });
     expect(auditKinds).toEqual(['request.hidden', 'request.restored']);
+  });
+
+  it('resurfaces a stored hidden request when a role change makes it required', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    const requestId = await seedRequest(fx, 'application');
+    const path = `/w/${fx.workspaceId}/requests/${requestId}/presentation`;
+
+    const hidden = await asUser(e, fx.memberId, path, {
+      method: 'PATCH',
+      body: { hidden: true, reason: 'Waiting until this is assigned to me.' },
+    });
+    expect(hidden.status).toBe(200);
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `UPDATE members SET role='admin' WHERE workspace_id=$1 AND user_id=$2`,
+        [fx.workspaceId, fx.memberId],
+      );
+      await client.query('COMMIT');
+    });
+
+    const active = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    expect(active.items.find((item) => item.id === requestId)?.presentation).toMatchObject({
+      hidden: false,
+      hidden_at: null,
+      hidden_reason: 'Waiting until this is assigned to me.',
+    });
+    const hiddenList = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests?visibility=hidden`)
+    ).json());
+    expect(hiddenList.items.map((item) => item.id)).not.toContain(requestId);
+
+    const bootstrap = await (await asUser(e, fx.memberId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      counts: { inbox: number; pending_for_me: number };
+    };
+    expect(bootstrap.counts).toMatchObject({ inbox: 1, pending_for_me: 1 });
+    const historyCounts = await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/history/counts`)
+    ).json() as { inbox: number };
+    expect(historyCounts.inbox).toBe(1);
+    const storedHiddenAt = await readTenant(fx.workspaceId, fx.memberId, async (client) => (
+      await client.query<{ hidden_at: Date | null }>(
+        `SELECT hidden_at FROM request_presentations WHERE request_id=$1 AND user_id=$2`,
+        [requestId, fx.memberId],
+      )
+    ).rows[0]?.hidden_at);
+    expect(storedHiddenAt).toBeInstanceOf(Date);
   });
 
   it('queues a bounded triage batch without running model work in the read request', async () => {

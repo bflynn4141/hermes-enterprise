@@ -21,6 +21,7 @@
 //     that property without a column that something has to remember to bump.
 import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
+import { loadApprovalListProjection } from './approvals.js';
 import { decisionSummary } from './request-summary.js';
 import { requestAudiencePredicate } from './audience.js';
 
@@ -131,6 +132,83 @@ export function canDecideLegacyRequest(
   return role === 'admin' || (financeWorkflowRequest(row) && reviewerRoles.includes('finance'));
 }
 
+/**
+ * Required work always wins over a user's older presentation preference. A
+ * hide can be recorded while a request is waiting on somebody else; routing,
+ * role, and sequential-step changes must still surface it when this viewer
+ * becomes the person who can act.
+ */
+export function requestRequiredForViewer(
+  row: Pick<RequestRow, 'kind' | 'status'>,
+  approval: ApprovalListProjection | null,
+  canDecideLegacy: boolean,
+): boolean {
+  if (row.status !== 'pending') return false;
+  if (row.kind === 'approval') return approval?.pending_for_viewer === true;
+  return row.kind !== 'task' && canDecideLegacy;
+}
+
+export function requestPresentationHidden(
+  row: Pick<RequestRow, 'kind' | 'status' | 'presentation_hidden_at'>,
+  approval: ApprovalListProjection | null,
+  canDecideLegacy: boolean,
+): boolean {
+  return row.presentation_hidden_at != null && !requestRequiredForViewer(row, approval, canDecideLegacy);
+}
+
+type PendingRequestRow = Pick<
+  RequestRow,
+  'id' | 'kind' | 'status' | 'label' | 'payload' | 'presentation_hidden_at'
+>;
+
+/** One authoritative pending set for bootstrap and every Inbox count. */
+export async function loadVisiblePendingRequests(
+  tx: Tx,
+  workspaceId: string,
+  userId: string,
+  role: string,
+  reviewerRoles: readonly string[],
+): Promise<{ rows: PendingRequestRow[]; pendingForMe: number; pendingForOthers: number }> {
+  const pending = await tx.query<PendingRequestRow>(
+    `SELECT r.id, r.kind, r.status, r.label, r.payload,
+            (SELECT hidden_at FROM request_presentations presentation
+              WHERE presentation.request_id=r.id AND presentation.user_id=$2) AS presentation_hidden_at
+       FROM requests r
+      WHERE r.workspace_id=$1 AND r.status='pending'
+        AND ${REQUEST_REVIEWABLE_PREDICATE}
+        AND ${REQUEST_AUDIENCE_PREDICATE}
+        AND (
+          ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
+          OR r.kind='approval'
+          OR ($3::boolean AND r.kind<>'task')
+          OR ($4::boolean AND r.kind='invoice' AND r.payload ? 'workflow_provenance')
+        )
+      ORDER BY r.created_at DESC`,
+    [workspaceId, userId, role === 'admin', reviewerRoles.includes('finance')],
+  );
+
+  const rows: PendingRequestRow[] = [];
+  let pendingForMe = 0;
+  let pendingForOthers = 0;
+  for (const request of pending.rows) {
+    const canDecide = canDecideLegacyRequest(request, role, reviewerRoles);
+    const approval = request.kind === 'approval'
+      ? await loadApprovalListProjection(tx, request.id, userId)
+      : null;
+    if (requestPresentationHidden(request, approval, canDecide)) continue;
+    rows.push(request);
+    if (request.kind === 'approval') {
+      if (approval?.pending_for_viewer) pendingForMe += 1;
+      else pendingForOthers += 1;
+    } else if (request.kind === 'task' || canDecide) {
+      pendingForMe += 1;
+    } else {
+      pendingForOthers += 1;
+    }
+  }
+  return { rows, pendingForMe, pendingForOthers };
+}
+
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
@@ -236,6 +314,7 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
+  const presentationHidden = requestPresentationHidden(row, approval, canDecideLegacy);
   return {
     id: row.id,
     kind: row.kind,
@@ -263,8 +342,8 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
       recorded_at: (row.provenance_recorded_at ?? row.created_at).toISOString(),
     },
     presentation: {
-      hidden: row.presentation_hidden_at != null,
-      hidden_at: row.presentation_hidden_at?.toISOString() ?? null,
+      hidden: presentationHidden,
+      hidden_at: presentationHidden ? row.presentation_hidden_at?.toISOString() ?? null : null,
       hidden_reason: row.presentation_hidden_reason ?? null,
     },
   };

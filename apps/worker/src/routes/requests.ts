@@ -30,8 +30,8 @@ import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './
 import {
   canDecideLegacyRequest,
   loadRequest,
+  requestRequiredForViewer,
   toRequestEntity,
-  REQUEST_ACTIVE_PRESENTATION_PREDICATE,
   REQUEST_AUDIENCE_PREDICATE,
   REQUEST_REVIEWABLE_PREDICATE,
   REQUEST_SELECT,
@@ -82,8 +82,6 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const rows = await inWorkspace(c, async (work) => {
     const values: unknown[] = [work.workspaceId, work.userId];
     const where: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE, REQUEST_REVIEWABLE_PREDICATE];
-    if (visibility === 'active') where.push(REQUEST_ACTIVE_PRESENTATION_PREDICATE);
-    if (visibility === 'hidden') where.push('presentation.hidden_at IS NOT NULL');
     if (provenance) {
       values.push(provenance);
       where.push(`COALESCE(provenance.kind, 'unknown') = $${values.length}`);
@@ -103,7 +101,10 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
       values.push(`%${q}%`);
       where.push(`r.label ILIKE $${values.length}`);
     }
-    values.push(limit);
+    // Effective visibility depends on the current approval step and viewer
+    // authority, not only the stored presentation row. Keep the candidate set
+    // bounded, project that state once, then apply active/hidden semantics.
+    values.push(LIST_LIMIT);
 
     const result = await work.tx.query<RequestRow>(
       `${REQUEST_SELECT}
@@ -137,30 +138,32 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
     return { rows: result.rows, projections, role: work.role, reviewerRoles: await reviewerRoles(work) };
   });
 
-  const items = rows.rows.map((row) => toRequestEntity(
+  let items = rows.rows.map((row) => requestEntitySchema.parse(toRequestEntity(
     row,
     rows.projections.get(row.id) ?? null,
     triageActive,
     canDecideLegacyRequest(row, rows.role, rows.reviewerRoles),
-  ));
+  )));
+  if (visibility !== 'all') {
+    items = items.filter((item) => item.presentation.hidden === (visibility === 'hidden'));
+  }
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
     items.sort((left, right) => {
-      const a = requestEntitySchema.parse(left);
-      const b = requestEntitySchema.parse(right);
-      return rank[a.triage?.band ?? 'assessing'] - rank[b.triage?.band ?? 'assessing']
-        || Number(Boolean(b.decision_summary?.approval_requirement.pending_for_viewer)) - Number(Boolean(a.decision_summary?.approval_requirement.pending_for_viewer))
-        || (b.triage?.score ?? -1) - (a.triage?.score ?? -1)
-        || Date.parse(a.created_at) - Date.parse(b.created_at)
-        || a.id.localeCompare(b.id);
+      return rank[left.triage?.band ?? 'assessing'] - rank[right.triage?.band ?? 'assessing']
+        || Number(Boolean(right.decision_summary?.approval_requirement.pending_for_viewer)) - Number(Boolean(left.decision_summary?.approval_requirement.pending_for_viewer))
+        || (right.triage?.score ?? -1) - (left.triage?.score ?? -1)
+        || Date.parse(left.created_at) - Date.parse(right.created_at)
+        || left.id.localeCompare(right.id);
     });
   }
+  items = items.slice(0, limit);
 
   return c.json(
     requestPage.parse({
       items,
       cursor: null,
-      total: rows.rows.length,
+      total: items.length,
     }),
   );
 }
@@ -261,17 +264,22 @@ export async function patchRequestPresentation(c: Context<{ Bindings: Env }>): P
   }
 
   const result = await inWorkspace(c, async (work) => {
-    const row = await loadRequest(work.tx, requestId, work.userId);
+    let row = await loadRequest(work.tx, requestId, work.userId);
     if (!row) throw new RouteError('no such request', 'unknown_request', 404);
+    if (row.kind === 'approval') {
+      // Approval decisions and routing lock this same row. Reloading after the
+      // lock closes the race where the next step becomes this viewer's turn
+      // between the eligibility check and the hide write.
+      await work.tx.query(`SELECT request_id FROM approval_requests WHERE request_id=$1 FOR UPDATE`, [requestId]);
+      row = await loadRequest(work.tx, requestId, work.userId);
+      if (!row) throw new RouteError('no such request', 'unknown_request', 404);
+    }
     const approval = row.kind === 'approval'
       ? await loadApprovalListProjection(work.tx, requestId, work.userId)
       : null;
     const roles = await reviewerRoles(work);
     const canDecide = canDecideLegacyRequest(row, work.role, roles);
-    const requiredForViewer = row.status === 'pending' && (
-      row.kind === 'approval' ? approval?.pending_for_viewer === true
-        : row.kind !== 'task' && canDecide
-    );
+    const requiredForViewer = requestRequiredForViewer(row, approval, canDecide);
     if (input.hidden && requiredForViewer) {
       throw new RouteError(
         'Decide or route this required review before hiding it.',
