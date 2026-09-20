@@ -250,4 +250,107 @@ describe('approved continuation runtime', () => {
       actual_tokens: '120', calls_reconciled: 1, model_calls: '1',
     });
   });
+
+  it('projects an exact fenced automatic failure but leaves successor approval state untouched', async () => {
+    const { fx, sourceRunId } = await installFixture('Use only cited partner evidence.');
+    const base = makeEnv();
+    const env = {
+      ...base.env,
+      ENVIRONMENT: 'development',
+      AGENT_RUNTIME: 'hermes',
+      MODEL_SCRIPTED: '1',
+      ALLOWED_PROVIDERS: 'openrouter',
+      HERMES_BRIDGE_SECRET: 'approval-runtime-test-secret-value-000000',
+      HERMES_RUNTIME_AGENTS: JSON.stringify({
+        [fx.agentId]: {
+          workspace_id: fx.workspaceId,
+          base_url: 'http://127.0.0.1:17777',
+          api_key: 'local-test-only',
+        },
+      }),
+      RUN_ATTEMPT: { create: async () => ({}) },
+    } as unknown as Env;
+    const approved = await withTenantTransaction(
+      env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+        const view = await proposeApproval(
+          { tx, workspaceId: fx.workspaceId, jobs: [], agentId: fx.agentId, sessionId: fx.sessionId, runId: sourceRunId },
+          {
+            label: 'Bounded partner research', policy_key: 'runtime-plan', proposal: proposal(fx),
+            target_agent_ids: [], target_member_ids: [], target_resource_ids: [], dependent_request_ids: [],
+            idempotency_key: `proposal:${randomUUID()}`,
+          },
+        );
+        await persistApprovalContinuation(tx, {
+          workspaceId: fx.workspaceId, runId: sourceRunId, toolCallId: 'automatic-failure-projection',
+          requesterAgentId: fx.agentId, sourceSessionId: fx.sessionId,
+          targetAgentId: fx.agentId, targetSessionId: fx.sessionId, approval: view,
+        });
+        return view;
+      },
+    );
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query("UPDATE runs SET status='completed',ended_at=now() WHERE id=$1", [sourceRunId]);
+      await client.query('COMMIT');
+    });
+    const decision = await asUser(
+      env, fx.memberId, `/w/${fx.workspaceId}/requests/${approved.request_id}/approval/decisions`,
+      {
+        method: 'POST', headers: INBOX_HEADERS,
+        body: {
+          decision: 'approve', expected_authorization_revision: approved.payload.authorization.revision,
+          expected_authorization_hash: approved.payload.authorization.hash,
+          idempotency_key: `vote:${randomUUID()}`, note: null,
+        },
+      },
+    );
+    expect(decision.status).toBe(201);
+    const admittedRunId = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ admitted_run_id: string }>(
+        'SELECT admitted_run_id FROM approval_continuations WHERE request_id=$1', [approved.request_id],
+      )).rows[0]!.admitted_run_id);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `UPDATE runs SET attempt=2,status='working',stop_requested=false,automatic_recovery=true,error=NULL
+          WHERE id=$1`,
+        [admittedRunId],
+      );
+      await client.query('COMMIT');
+    });
+    const drift = {
+      class: 'permanent', retryable: false, reason: 'automatic_recovery_runtime_drift',
+      message: 'The managed runtime changed before automatic recovery could start.',
+    };
+    const store = new RuntimeDb(env, fx.workspaceId, 'approval-automatic-failure-projection');
+    try {
+      expect(await store.failAutomaticRecoveryExecution(admittedRunId, 1, drift)).toBe(false);
+      expect(await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+        (await client.query(
+          `SELECT c.state,ar.work_status,b.state AS budget_state
+             FROM approval_continuations c
+             JOIN approval_requests ar ON ar.request_id=c.request_id
+             JOIN approval_runtime_budgets b ON b.continuation_id=c.id
+            WHERE c.request_id=$1`,
+          [approved.request_id],
+        )).rows[0])).toEqual({ state: 'admitted', work_status: 'admitted', budget_state: 'active' });
+      expect(await store.failAutomaticRecoveryExecution(admittedRunId, 2, drift)).toBe(true);
+    } finally {
+      await store.close();
+    }
+    expect(await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query(
+        `SELECT c.state,c.blocked_reason,ar.work_status,ar.work_reason,b.state AS budget_state
+           FROM approval_continuations c
+           JOIN approval_requests ar ON ar.request_id=c.request_id
+           JOIN approval_runtime_budgets b ON b.continuation_id=c.id
+          WHERE c.request_id=$1`,
+        [approved.request_id],
+      )).rows[0])).toEqual({
+      state: 'failed', blocked_reason: 'approval_retry_limit',
+      work_status: 'cancelled', work_reason: 'approval_retry_limit', budget_state: 'cancelled',
+    });
+  });
 });

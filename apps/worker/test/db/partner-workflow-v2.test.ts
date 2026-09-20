@@ -15,6 +15,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../../src/env.js';
 import type { Job } from '../../src/jobs.js';
+import { RuntimeDb } from '../../src/runtime/store.js';
 import { runPartnerInvoiceReviewJob } from '../../src/partner-workflow/job.js';
 import {
   configurePartnerWorkflow,
@@ -985,5 +986,55 @@ describe('Partnerships + Finance exact-authority workflow v2', () => {
       request_id: null,
       outcome: { validation: 'failed', human_decision: 'not_ready' },
     });
+  });
+
+  it('projects only the exact fenced automatic failure into the linked partner handoff', async () => {
+    const fx = await workflowFixture();
+    const terms = await authorizeTerms(fx, {
+      key: 'automatic-failure-terms',
+      source: await addSource(fx, 'automatic-failure-terms', 'One workshop for USD 1,200.00.'),
+    });
+    const intake = await submitIntake(fx, intakeInput(
+      terms,
+      await addSource(fx, 'automatic-failure-invoice', 'Invoice requests USD 1,200.00.'),
+      'automatic-failure-intake',
+    ));
+    const runId = await appTransaction(fx, fx.adminId, async (client) => {
+      await publishConfirmedPartnerInvoiceReview(
+        client, fx.workspaceId, intake.source_run_id, fx.agentId,
+        { intake_event_id: intake.intake_event_id, expected_payload_hash: intake.payload_hash },
+      );
+      const create = await preparePartnerInvoiceReviewModelTurn(
+        client, fx.env, fx.workspaceId, intake.handoff_id, [],
+      );
+      expect(create).not.toBeNull();
+      await client.query(
+        `UPDATE runs SET attempt=2,status='working',stop_requested=false,automatic_recovery=true,error=NULL
+          WHERE workspace_id=$1 AND id=$2`,
+        [fx.workspaceId, create!.runId],
+      );
+      return create!.runId;
+    });
+    const drift = {
+      class: 'permanent', retryable: false, reason: 'automatic_recovery_runtime_drift',
+      message: 'The managed runtime changed before automatic recovery could start.',
+    };
+    const runtime = new RuntimeDb(fx.env, fx.workspaceId, 'partner-automatic-failure-projection');
+    try {
+      expect(await runtime.failAutomaticRecoveryExecution(runId, 1, drift)).toBe(false);
+      expect(await appTransaction(fx, fx.adminId, async (client) =>
+        (await client.query<{ agent_explanation_status: string }>(
+          'SELECT agent_explanation_status FROM partner_handoffs WHERE workspace_id=$1 AND id=$2',
+          [fx.workspaceId, intake.handoff_id],
+        )).rows[0]!.agent_explanation_status)).toBe('running');
+      expect(await runtime.failAutomaticRecoveryExecution(runId, 2, drift)).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+    expect(await appTransaction(fx, fx.adminId, async (client) =>
+      (await client.query<{ agent_explanation_status: string }>(
+        'SELECT agent_explanation_status FROM partner_handoffs WHERE workspace_id=$1 AND id=$2',
+        [fx.workspaceId, intake.handoff_id],
+      )).rows[0]!.agent_explanation_status)).toBe('failed');
   });
 });

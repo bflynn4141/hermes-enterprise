@@ -18,6 +18,15 @@ const block = (blockedReason: string, message: string): RecoverySafety => ({
   blockedReason, message, resumeInput: null,
 });
 
+export const RESPONSE_ONLY_RECOVERY_INPUT = [
+  'Continue the interrupted task using the completed tool results already stored in this session.',
+  'Do not repeat completed tool calls or ask for the same approval again.',
+  'Finish only the remaining response. If a required result is missing, explain the gap instead of repeating a tool call.',
+].join(' ');
+
+export const isResponseOnlyRecoveryInput = (input: string | null | undefined): boolean =>
+  input === RESPONSE_ONLY_RECOVERY_INPUT;
+
 /**
  * Inspect before incrementing attempt or changing a native runtime mapping.
  * The caller owns admission/authorization and must serialize with tool writes.
@@ -127,7 +136,17 @@ export async function inspectRecoverySafety(
       'This task reached a tool that may have changed something. Review its trace before starting another attempt.');
   }
 
-  if (screening?.status !== 'completed') return { blockedReason: null, message: null, resumeInput: null };
+  if (screening?.status !== 'completed') {
+    // A normal chat retry must be a continuation, not another copy of the
+    // original user turn. The native session already holds these read-only
+    // results; a fixed server instruction keeps provider content out of the
+    // prompt and tells the model not to ask for the same approval again.
+    return {
+      blockedReason: null,
+      message: null,
+      resumeInput: screening || calls.rows.length === 0 ? null : RESPONSE_ONLY_RECOVERY_INPUT,
+    };
+  }
 
   const candidates = await tx.query<{ candidate_id: string }>(
     `SELECT candidate_id FROM partner_screening_run_candidates

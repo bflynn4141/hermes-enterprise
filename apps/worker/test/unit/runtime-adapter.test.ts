@@ -10,12 +10,29 @@ import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
 import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
 import { ENTERPRISE_BRIDGE_VERSION, HERMES_NATIVE_REVISION } from '../../src/runtime/readiness.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
 const NATIVE_ID = 'run_native-123';
 const MODEL = 'openrouter:anthropic/claude-sonnet-4';
 const PROFILE = 'enterprise-agent-1';
+const nativeCapabilities = {
+  object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+  auth: { type: 'bearer', required: true },
+  runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+  features: {
+    run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+    runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+  },
+  endpoints: {
+    runs: { method: 'POST', path: '/v1/runs' },
+    run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+    run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+    run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+    run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+  },
+};
 
 class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   nativeBinding: { runtimeRunId: string | null; runtimeAttempt: number | null } | null = null;
@@ -28,12 +45,20 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   submissionSessionId: string | null = null;
   acceptBinding = true;
   resumeInput: string | null = null;
+  priorAuthority: Record<string, unknown> | null = null;
   runtimeTransactions = 0;
+  runtimeTransactionDepth = 0;
+  automaticExecutionLocks = 0;
+  onAutomaticExecutionLock: ((count: number) => void) | null = null;
   recoveryInput() { return Promise.resolve(this.resumeInput); }
+  recoveryAuthority() { return Promise.resolve(this.priorAuthority); }
+  runtimeRequest(_runId: string, attempt: number) { return Promise.resolve(this.snapshots.get(attempt) ?? null); }
 
   async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
     this.runtimeTransactions += 1;
-    return work();
+    this.runtimeTransactionDepth += 1;
+    try { return await work(); }
+    finally { this.runtimeTransactionDepth -= 1; }
   }
 
   constructor(overrides: Partial<EngineRunRow> = {}) {
@@ -45,6 +70,14 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   }
 
   binding() { return Promise.resolve(this.nativeBinding); }
+
+  async lockAutomaticRecoveryExecution(_runId: string, attempt: number) {
+    this.automaticExecutionLocks += 1;
+    this.onAutomaticExecutionLock?.(this.automaticExecutionLocks);
+    const run = (await this.loadRun())!;
+    return run.attempt === attempt && run.automaticRecovery === true
+      && run.status === 'working' && !run.stopRequested;
+  }
 
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string) {
     if (this.acceptBinding) {
@@ -147,9 +180,9 @@ class FakeHermesClient extends HermesClient {
   }
 }
 
-async function execute(
+async function execute<TClient extends HermesClient = FakeHermesClient>(
   db = new FakeRuntimeDb(),
-  client = new FakeHermesClient(),
+  client: TClient = new FakeHermesClient() as unknown as TClient,
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
   timing: {
@@ -176,6 +209,83 @@ async function execute(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('does not contact the runtime when an automatic Workflow belongs to an older attempt', async () => {
+    const db = new FakeRuntimeDb({ attempt: 3, automaticRecovery: true });
+    const run = (await db.loadRun())!;
+    const client = new FakeHermesClient();
+    await expect(runHermesAttempt({
+      db, client, profile: PROFILE,
+      forward: async () => ({ stop_requested: false }),
+    }, new FakeStep(), { runId: run.id, attempt: 2, traceId: 'stale-automatic-workflow' }))
+      .rejects.toThrow('no current agent binding');
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.eventSubscriptions).toBe(0);
+  });
+
+  it('does not emit started or change state when an automatic attempt advances at the startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ attempt: 3 });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it('does not emit started or overwrite Stop when it arrives at the automatic startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ status: 'stopping', stopRequested: true });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect((await db.loadRun())?.status).toBe('stopping');
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it.each([
+    ['a successor attempt', { attempt: 3 }],
+    ['Stop', { status: 'stopping', stopRequested: true }],
+  ] as const)(
+    'does not submit when %s wins immediately before the automatic dispatch fence',
+    async (_label, transition) => {
+      const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+      db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+      db.onAutomaticExecutionLock = (count) => {
+        if (count === 2) db.setRunForTest(transition);
+      };
+      const { client } = await execute(db);
+      expect(db.snapshots.has(2)).toBe(true);
+      expect(db.automaticExecutionLocks).toBe(2);
+      expect(client.submissions).toHaveLength(0);
+      expect(client.eventSubscriptions).toBe(0);
+      expect(db.statusChanges).toHaveLength(0);
+    },
+  );
+
+  it('holds the automatic execution fence through native acknowledgement and binding only', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const client = new FakeHermesClient();
+    client.onSubmit = () => { expect(db.runtimeTransactionDepth).toBe(1); };
+    const bind = db.bindRun.bind(db);
+    vi.spyOn(db, 'bindRun').mockImplementation(async (...args) => {
+      expect(db.runtimeTransactionDepth).toBe(1);
+      return bind(...args);
+    });
+    await execute(db, client);
+    expect(db.runtimeTransactionDepth).toBe(0);
+    expect(client.eventSubscriptions).toBe(1);
+  });
+
   it('carries trusted Bot Mode attribution from the durable user turn', async () => {
     const db = new FakeRuntimeDb();
     db.turns.splice(0, 1, {
@@ -209,12 +319,62 @@ describe('official Hermes enterprise projection', () => {
 
   it('submits saved recovery instructions instead of replaying original discovery input', async () => {
     const db = new FakeRuntimeDb({ attempt: 2 });
-    db.resumeInput = 'Resume stored screening evidence. Do not repeat the paid search.';
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
     const { client } = await execute(db);
     expect(client.submissions).toHaveLength(1);
     expect(client.submissions[0]?.body.input).toBe(db.resumeInput);
     expect(client.submissions[0]?.key).toContain('-a2');
     expect(db.snapshots.get(2)?.input).toBe(db.resumeInput);
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual([]);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
+  });
+
+  it('keeps response-only authority empty through the real Hermes transport contract', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2 });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const nativeBodies: Record<string, unknown>[] = [];
+    const send = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/v1/capabilities')) return Response.json(nativeCapabilities);
+      if (url.endsWith('/v1/runs') && init?.method === 'POST') {
+        nativeBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Response.json({ run_id: NATIVE_ID, status: 'started' }, { status: 202 });
+      }
+      if (url.endsWith(`/v1/runs/${NATIVE_ID}/events`)) {
+        return new Response(`data: ${JSON.stringify({ event: 'run.completed', run_id: NATIVE_ID, output: 'Finished from stored results.' })}\n\n`, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`Unexpected native request: ${url}`);
+    });
+    await execute(db,new HermesClient('https://runtime.invalid','runtime-secret',send));
+    expect(db.snapshots.get(2)).toMatchObject({
+      input: RESPONSE_ONLY_RECOVERY_INPUT,_enterprise_tool_names: [],_enterprise_skills: [],
+    });
+    expect(nativeBodies).toHaveLength(1);
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_tool_names');
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_skills');
+    expect(nativeBodies[0]?.input).toBe(RESPONSE_ONLY_RECOVERY_INPUT);
+  });
+
+  it('records the prior/current authority intersection for audit without treating it as native enforcement', async () => {
+    class RestrictedRuntimeDb extends FakeRuntimeDb {
+      override loadToolNames() { return Promise.resolve(['list_requests', 'propose_instruction']); }
+    }
+    const db = new RestrictedRuntimeDb({ attempt: 2 });
+    db.resumeInput = 'Resume the bounded stored-evidence assessment.';
+    db.priorAuthority = { _enterprise_tool_names: ['list_requests', 'get_request'], _enterprise_skills: [] };
+    const newlyGrantedSkill = {
+      name: 'new-skill', skill_key: 'new-skill', runtime_name: 'new-skill', version: '1',
+      artifact_digest: `sha256:${'a'.repeat(64)}`, state: 'active', assignment_revision: 2,
+      grant_revision: null, binding_source: 'enterprise_assignment', binding_state: null,
+      grant_expires_at: null, capability_grants: ['read'], auto_load: true, config: {},
+    } as RuntimeSkillManifest;
+    const { client } = await execute(db, new FakeHermesClient(), new FakeStep(), undefined, {
+      skillSnapshot: [newlyGrantedSkill],
+    });
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual(['list_requests']);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
   });
 
   it('starts fresh streaming without a second remote readiness round trip', async () => {

@@ -763,6 +763,7 @@ export const runs = pgTable(
     recoveryCancelled: boolean('recovery_cancelled').notNull().default(false),
     recoveryBlockedReason: text('recovery_blocked_reason'),
     recoveryInput: text('recovery_input'),
+    automaticRecovery: boolean('automatic_recovery').notNull().default(false),
     recoveryHistory: jsonb('recovery_history').notNull().default([]),
     runtimeKind: text('runtime_kind').notNull().default('legacy'),
     runtimeProfile: text('runtime_profile'),

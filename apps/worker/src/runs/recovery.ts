@@ -17,12 +17,18 @@ import { resolveRuntimeBinding } from '../runtime/config.js';
 import { HermesClient } from '../runtime/client.js';
 import { createRunInstance, type RunInstanceParams } from './submit.js';
 import { runAttemptInstanceId } from './instance-id.js';
-import { inspectRecoverySafety } from './recovery-safety.js';
+import { inspectRecoverySafety, isResponseOnlyRecoveryInput } from './recovery-safety.js';
 import { automatedTriggersEnabled, automationIntervalMinutes, paidPartnerScreeningEnabled, unresolvedPartnerWork } from '../partner-screening/automation.js';
 import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 
 export const MAX_AUTOMATIC_ATTEMPTS = 3;
 const TRANSIENT_REASONS = new Set(['hermes_provider_unavailable', 'hermes_provider_rate_limited']);
+export const automaticRecoveryAuthBlocked = (
+  automatic: boolean,
+  runtimeAuthMode: 'legacy_hmac' | 'token_digest',
+): boolean => automatic && runtimeAuthMode !== 'token_digest';
+const isPartnerScreeningRun = (run: Pick<RecoveryRun, 'client_turn_id'>): boolean =>
+  run.client_turn_id.startsWith('partner-screening:');
 export function automaticRetryAt(run: {attempt:number;error:{reason?:string;retryable?:boolean}|null;ended_at:Date|null;recovery_cancelled:boolean;recovery_not_before?:Date|null}): Date | null {
   if (run.recovery_cancelled || run.attempt >= MAX_AUTOMATIC_ATTEMPTS || !run.ended_at || !run.error?.retryable || !TRANSIENT_REASONS.has(run.error.reason ?? '')) return null;
   const seconds = run.attempt === 1 ? 60 : 300;
@@ -31,6 +37,7 @@ export function automaticRetryAt(run: {attempt:number;error:{reason?:string;retr
 export interface RecoveryRun {
   id:string;session_id:string;agent_id:string;owner_id:string;status:string;attempt:number;
   model_id:string;effort:string|null;session_model_id:string;session_effort:string|null;
+  created_at:Date;
   client_turn_id:string;error:{reason?:string;message?:string;retryable?:boolean}|null;
   ended_at:Date|null;recovery_next_at:Date|null;recovery_not_before?:Date|null;recovery_cancelled:boolean;recovery_blocked_reason:string|null;
   trace_id:string;engine_version:number;stop_requested:boolean;
@@ -96,7 +103,7 @@ export async function recoveryView(work:RecoveryWork,env:Env,agentId:string,runI
     view.can_run_now = policy === null;
     return view;
   }
-  Object.assign(view,{run_id:run.id,session_id:run.session_id,attempt:run.attempt,model_id:run.session_model_id});
+  Object.assign(view,{run_id:run.id,session_id:run.session_id,attempt:run.attempt,model_id:run.model_id});
   if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) {
     view.model_id = run.model_id;
     view.state = run.status === 'working' ? 'working' : 'waiting';
@@ -118,8 +125,11 @@ export async function recoveryView(work:RecoveryWork,env:Env,agentId:string,runI
       : safety.message ?? 'Review the previous task before retrying.',
       can_run_now: !runId && reviewed && (await wakePolicy(work,env,agentId)) === null};
   }
-  const model = await loadModel(work.tx,run.session_model_id);
-  if (!model || model.disabled_reason || !model.supports_tools || !isProviderAllowed(env,model.provider)) return {...view,state:'blocked',message:'Choose an available model in the task before retrying.'};
+  const model = await loadModel(work.tx,run.model_id);
+  if (!model || model.disabled_reason || !model.supports_tools || !isProviderAllowed(env,model.provider)
+      || (run.effort !== null && model.effort_map?.[run.effort] === undefined)) {
+    return {...view,state:'blocked',message:'The failed attempt’s model settings are no longer available. Start a new turn instead.'};
+  }
   if (env.MODEL_SCRIPTED !== '1') {
     const key = await work.tx.query<{status:string}>(`SELECT status FROM workspace_provider_keys WHERE workspace_id=$1 AND provider=$2 AND revoked_at IS NULL`,[work.workspaceId,model.provider]);
     if (!['verified','verified_scoped'].includes(key.rows[0]?.status ?? '')) return {...view,state:'blocked',message:'Reconnect the model provider in Settings before retrying.'};
@@ -150,22 +160,96 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
   }
   if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) throw new RouteError('This task is already running.', 'run_active',409);
   if (!['error','stopped'].includes(run.status)) throw new RouteError('This task has already finished.', 'run_completed',409);
-  if (automatic && (run.recovery_cancelled || run.stop_requested || !automaticRetryAt(run))) return run;
+  if (automatic) {
+    // The agent row is already locked FOR UPDATE, the same row a new turn
+    // locks during admission. Rechecking here closes the queue-delay race:
+    // even a newer completed turn makes this recovery stale.
+    const newer = await work.tx.query(
+      `SELECT 1 FROM runs WHERE workspace_id=$1 AND session_id=$2 AND id<>$3
+        AND created_at>=$4 LIMIT 1`,
+      [work.workspaceId,run.session_id,run.id,run.created_at],
+    );
+    if (newer.rowCount) {
+      await work.tx.query(
+        `UPDATE runs SET recovery_next_at=NULL,recovery_cancelled=true,recovery_blocked_reason='newer_session_run'
+          WHERE workspace_id=$1 AND id=$2 AND attempt=$3 AND status IN ('error','stopped')`,
+        [work.workspaceId,run.id,run.attempt],
+      );
+      return {...run,recovery_next_at:null,recovery_cancelled:true,recovery_blocked_reason:'newer_session_run'};
+    }
+  }
+  const automaticDue = automaticRetryAt(run);
+  if (automatic) {
+    if (run.recovery_cancelled || run.stop_requested || !automaticDue) return run;
+    if (automaticDue.getTime() > Date.now()) {
+      const wait = new Error('run_recovery_not_due') as Error & { retryAfterSeconds?: number };
+      wait.retryAfterSeconds = Math.max(1, Math.ceil((automaticDue.getTime() - Date.now()) / 1000));
+      throw wait;
+    }
+  }
+  const providerDeadline = run.recovery_not_before?.getTime() ?? 0;
+  const boundedBackoff = automaticRetryAt({ ...run, recovery_cancelled: false })?.getTime() ?? 0;
+  if (!automatic && Math.max(providerDeadline, boundedBackoff) > Date.now()) {
+    throw new RouteError(
+      'The provider recovery cooldown is still active. Hermes will retry automatically after the safe backoff.',
+      'provider_retry_backoff_active',
+      429,
+    );
+  }
   if (isEnginePaused(env)) throw new RouteError('The engine is paused for a deployment.', 'engine_paused',409);
   const safety = await inspectRecoverySafety(work.tx,work.workspaceId,run.id);
   if (safety.blockedReason) throw new RouteError(safety.message ?? 'Review the previous task before retrying.',safety.blockedReason,409);
+  if (automatic && !isResponseOnlyRecoveryInput(safety.resumeInput)) {
+    throw new RouteError(
+      'Automatic recovery is limited to finishing a response from stored read-only results. Retry this task manually.',
+      'automatic_recovery_requires_response_only',
+      409,
+    );
+  }
+  if (automatic && (env.AGENT_RUNTIME !== 'hermes' || env.MODEL_SCRIPTED === '1')) {
+    throw new RouteError(
+      'Automatic recovery requires an attested managed runtime. Retry this task manually.',
+      'automatic_recovery_legacy_auth',
+      409,
+    );
+  }
+  if (env.MODEL_SCRIPTED !== '1' && env.AGENT_RUNTIME === 'hermes'
+      && !isResponseOnlyRecoveryInput(safety.resumeInput)) {
+    const authority = await work.tx.query(
+      `SELECT 1 FROM runs WHERE workspace_id=$1 AND id=$2 AND attempt=$3
+        AND runtime_request_attempt=$3 AND runtime_request IS NOT NULL LIMIT 1`,
+      [work.workspaceId,run.id,run.attempt],
+    );
+    if (!authority.rowCount) {
+      throw new RouteError(
+        'The failed attempt has no verified runtime authority snapshot. Start a new turn instead.',
+        'recovery_authority_snapshot_missing',
+        409,
+      );
+    }
+  }
   const approvalBlock = await approvalContinuationRetryBlock(work.tx,run.id,run.attempt+1);
   if (approvalBlock) throw new RouteError('This approved task needs renewed authorization before retrying.',approvalBlock,409);
   const busy = await work.tx.query(`SELECT 1 FROM runs WHERE workspace_id=$1 AND agent_id=$2 AND id<>$3 AND status IN ('working','waiting','stopping') LIMIT 1`,[work.workspaceId,agentId,run.id]);
   if (busy.rowCount) throw new RouteError('Iris already has another task in progress.', 'runtime_profile_busy',409);
-  const model = await loadModel(work.tx,run.session_model_id);
+  const model = await loadModel(work.tx,run.model_id);
   if (!model || model.disabled_reason || !model.supports_tools) throw new RouteError('Choose an available model before retrying.','model_unavailable',409);
+  if (run.effort && model.effort_map?.[run.effort] === undefined) {
+    throw new RouteError('The failed attempt’s reasoning setting is no longer available. Start a new turn instead.','model_effort_unavailable',409);
+  }
   requireAllowedProvider(env,model.provider);
   if (env.MODEL_SCRIPTED !== '1') {
     const key = await work.tx.query<{status:string}>(`SELECT status FROM workspace_provider_keys WHERE workspace_id=$1 AND provider=$2 AND revoked_at IS NULL`,[work.workspaceId,model.provider]);
     if (!['verified','verified_scoped'].includes(key.rows[0]?.status ?? '')) throw new RouteError('Reconnect the provider before retrying.','key_unverified',409);
     if (env.AGENT_RUNTIME === 'hermes') {
       const binding = await resolveRuntimeBinding(env,work.tx,work.workspaceId,agentId);
+      if (automaticRecoveryAuthBlocked(automatic,binding.runtimeAuthMode)) {
+        throw new RouteError(
+          'Automatic recovery requires an attested managed runtime. Retry manually or update the runtime binding.',
+          'automatic_recovery_legacy_auth',
+          409,
+        );
+      }
       await new HermesClient(binding.baseUrl,binding.apiKey,undefined,binding.transport).capabilities();
     }
   }
@@ -173,15 +257,15 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
   if (!caps.allowed) throw new RouteError('The workspace has reached its run or token limit.',caps.reason ?? 'cap_exceeded',429);
   await consumeRate(work.tx,work.userId,work.workspaceId,{action:'run.retry',limit:10,windowSeconds:60});
   await requireInstanceCapacity(work.tx,env,work.workspaceId);
-  const effort = run.session_effort && model.effort_map?.[run.session_effort] !== undefined ? run.session_effort : model.default_effort;
+  const effort = run.effort;
   const attempt=run.attempt+1, traceId=crypto.randomUUID(), engineVersion=Number(env.ENGINE_VERSION ?? '1') || 1;
   await work.tx.query(
     `UPDATE runs SET attempt=$3,status='working',stop_requested=false,error=NULL,ended_at=NULL,
       engine_version=$4,trace_id=$5,workflow_instance_id=$6,model_id=$7,effort=$8,
       recovery_next_at=NULL,recovery_not_before=NULL,recovery_cancelled=false,recovery_blocked_reason=NULL,recovery_input=$9,
-      recovery_history=recovery_history || $10::jsonb
+      automatic_recovery=$10,recovery_history=recovery_history || $11::jsonb
       WHERE workspace_id=$1 AND id=$2`,
-    [work.workspaceId,run.id,attempt,engineVersion,traceId,runAttemptInstanceId(run.id,attempt),model.model_id,effort,safety.resumeInput,
+    [work.workspaceId,run.id,attempt,engineVersion,traceId,runAttemptInstanceId(run.id,attempt),model.model_id,effort,safety.resumeInput,automatic,
      JSON.stringify([{attempt:run.attempt,model_id:run.model_id,effort:run.effort,trace_id:run.trace_id,status:run.status,reason:run.error?.reason ?? null,ended_at:run.ended_at?.toISOString() ?? null,next_model_id:model.model_id,trigger:automatic?'automatic':'manual'}])]);
   await work.tx.query(`UPDATE sessions SET last_activity_at=now() WHERE workspace_id=$1 AND id=$2`,[work.workspaceId,run.session_id]);
   const params:RunInstanceParams={runId:run.id,workspaceId:work.workspaceId,sessionId:run.session_id,attempt,engineVersion,traceId};
@@ -236,10 +320,15 @@ export async function runRecoveryJob(env:Env,job:Job):Promise<void> {
   try {
     await withWorkspaceTransaction(env,job.workspace_id,async tx=>{
       const work={tx,workspaceId:job.workspace_id,userId:payload.owner_id,jobs};
-      const policy = await wakePolicy(work,env,payload.agent_id);
-      if (policy) throw new RouteError(policy,'automation_disabled',409);
       const run=await loadRecoveryRun(work,payload.agent_id,payload.run_id);
       if (!run || run.attempt!==payload.expected_attempt || run.status!=='error' || run.recovery_cancelled) return;
+      // Partner screening is proactive work and keeps its explicit automation
+      // policy. A response continuation was already authorized by the user's
+      // chat turn, so recovering it must not depend on partner automation.
+      if (isPartnerScreeningRun(run)) {
+        const policy = await wakePolicy(work,env,payload.agent_id);
+        if (policy) throw new RouteError(policy,'automation_disabled',409);
+      }
       await retryTask(work,env,payload.agent_id,run.id,payload.expected_attempt,true);
     });
   } catch(error) {
@@ -251,7 +340,7 @@ export async function runRecoveryJob(env:Env,job:Job):Promise<void> {
 
 /** A bounded Cron scan repairs failed handoffs even if a terminal callback was lost. */
 export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
-  if(!automatedTriggersEnabled(env)) return {queued:0};
+  const includePartnerScreening = automatedTriggersEnabled(env);
   const client=await connect(env,'app');
   let workspaces:string[];
   try {workspaces=(await client.query<{workspace_id:string}>('SELECT workspace_id FROM workspace_directory ORDER BY workspace_id')).rows.map(r=>r.workspace_id);} finally {await client.end();}
@@ -260,23 +349,40 @@ export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
     const {rows}=await tx.query<RecoveryRun>(`SELECT r.*,s.owner_id,s.model_id AS session_model_id,s.effort AS session_effort
       FROM runs r JOIN sessions s ON s.id=r.session_id
       JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=s.owner_id AND m.status='active'
-      WHERE r.workspace_id=$1 AND r.status='error' AND r.client_turn_id LIKE 'partner-screening:%'
+      WHERE r.workspace_id=$1 AND r.status='error'
        AND r.created_at>now()-interval '24 hours' AND r.attempt<3 AND NOT r.stop_requested
        AND NOT r.recovery_cancelled AND r.recovery_next_at IS NULL AND (r.recovery_blocked_reason IS NULL OR r.recovery_blocked_reason='payment_result_pending')
        AND NOT s.archived AND NOT s.read_only
-       AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id AND newer.agent_id=r.agent_id
-          AND newer.client_turn_id LIKE 'partner-screening:%' AND newer.created_at>r.created_at)
-      ORDER BY r.created_at DESC LIMIT 20 FOR UPDATE OF r SKIP LOCKED`,[workspaceId]);
+       AND (
+         (r.client_turn_id LIKE 'partner-screening:%' AND $2::boolean
+          AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id AND newer.agent_id=r.agent_id
+            AND newer.client_turn_id LIKE 'partner-screening:%' AND newer.created_at>r.created_at))
+         OR
+         (r.client_turn_id NOT LIKE 'partner-screening:%'
+          AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id
+            AND newer.session_id=r.session_id AND newer.created_at>r.created_at))
+       )
+      ORDER BY r.created_at DESC LIMIT 20 FOR UPDATE OF r SKIP LOCKED`,[workspaceId,includePartnerScreening]);
     for(const run of rows) {
-      try {
-        if (await wakePolicy({tx,workspaceId,userId:run.owner_id,jobs:[]},env,run.agent_id)) continue;
-      } catch (error) {
-        if (error instanceof RouteError && error.reason === 'agent_not_bound') continue;
-        throw error;
+      if (isPartnerScreeningRun(run)) {
+        try {
+          if (await wakePolicy({tx,workspaceId,userId:run.owner_id,jobs:[]},env,run.agent_id)) continue;
+        } catch (error) {
+          if (error instanceof RouteError && error.reason === 'agent_not_bound') continue;
+          throw error;
+        }
       }
       const due=automaticRetryAt(run); if(!due) continue;
       const safety=await inspectRecoverySafety(tx,workspaceId,run.id);
       if(safety.blockedReason) {await tx.query('UPDATE runs SET recovery_blocked_reason=$2 WHERE id=$1',[run.id,safety.blockedReason]);continue;}
+      if(!isResponseOnlyRecoveryInput(safety.resumeInput)) {
+        await tx.query(
+          `UPDATE runs SET recovery_next_at=NULL,recovery_cancelled=true,
+             recovery_blocked_reason='automatic_recovery_requires_response_only' WHERE id=$1`,
+          [run.id],
+        );
+        continue;
+      }
       const id=await enqueueJob(tx,workspaceId,'run_recovery',`run-recovery:${run.id}:${run.attempt}`,{run_id:run.id,agent_id:run.agent_id,owner_id:run.owner_id,expected_attempt:run.attempt});
       if(!id) continue;
       await tx.query('UPDATE jobs SET next_at=$2 WHERE id=$1',[id,due]);

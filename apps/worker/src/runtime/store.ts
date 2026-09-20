@@ -61,6 +61,57 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
       'SELECT recovery_input FROM runs WHERE id=$1 AND attempt=$2', [runId, attempt]);
     return rows[0]?.recovery_input ?? null;
   }
+  /**
+   * Fail only the exact automatic attempt whose runtime contract drifted.
+   * The expected-attempt predicate is the write fence: a delayed Workflow may
+   * never mark its successor errored after binding resolution yields.
+   */
+  async failAutomaticRecoveryExecution(runId: string, attempt: number, error: RunErrorInput): Promise<boolean> {
+    return this.runtimeTx(async (query) => {
+      const { rows } = await query<{ id: string }>(
+        `UPDATE runs
+            SET status='error', error=$3::jsonb, ended_at=now(),
+                recovery_cancelled=true, recovery_next_at=NULL, recovery_blocked_reason=$4
+          WHERE id=$1 AND attempt=$2 AND automatic_recovery
+            AND status='working' AND NOT stop_requested
+          RETURNING id`,
+        [runId, attempt, JSON.stringify(error), error.reason],
+      );
+      if (rows.length !== 1) return false;
+      // Terminal projections must commit with the fenced state transition. A
+      // stale no-op may not close approval budget or handoff state belonging
+      // to the successor attempt.
+      await query('SELECT project_approval_continuation_outcome($1)', [runId]);
+      await query('SELECT project_partner_handoff_run_outcome($1)', [runId]);
+      return true;
+    });
+  }
+  async lockAutomaticRecoveryExecution(runId: string, attempt: number): Promise<boolean> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `SELECT id FROM runs
+        WHERE id=$1 AND attempt=$2 AND automatic_recovery
+          AND status='working' AND NOT stop_requested
+        FOR UPDATE`,
+      [runId, attempt],
+    );
+    return rows.length === 1;
+  }
+  async recoveryAuthority(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=($2::integer-1) AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
+  async runtimeRequest(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=$2 AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
   async recordProviderRetryAfter(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void> {
     // A delayed provider response from the old attempt cannot postpone its
     // successor. Concurrent failures keep the longest valid provider deadline.

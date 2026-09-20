@@ -5245,18 +5245,59 @@ Workflow starts. Prior model/effort, trace, failure and trigger remain in the
 recovery history. Paid authorization rechecks the active native attempt under the
 same task-row lock so a late callback cannot reserve work after recovery advances.
 
-For automated screening, only recognized provider outages and rate limits retry
-automatically, up to three total attempts with one- and five-minute delays.
-Sanitized provider Retry-After deadlines can extend those waits; excessive waits
-pause recovery. Cancellation, human review, stopped tasks, unavailable credentials,
+Only an ordinary-chat failure that has completed read-only tools and can be
+reduced to the server-enforced response-only contract retries automatically, up
+to three total attempts with one- and five-minute delays. Pre-tool failures and
+partner-screening recovery remain explicit manual Retry because the native Runs
+contract does not accept an exact per-attempt tool/skill inventory. Sanitized
+provider Retry-After deadlines can extend eligible waits; excessive waits pause
+recovery. Cancellation, human review, stopped tasks, unavailable credentials,
 quota and unresolved effects never become an unbounded retry loop. The UI uses
 server-confirmed state and existing button feedback; its countdown is motionless
 and does not repeatedly announce itself to screen readers.
 
+**Hardened September 20, 2026.** Recovery rechecks for any newer session run
+under the same agent admission lock immediately before it advances the failed
+attempt; even a newer completed turn makes the queued recovery stale. The failed
+attempt's model and effort are pinned rather than reread from mutable session
+settings. The Worker persists the intersection of prior tool/skill snapshots and
+current grants for audit, but does not treat those private fields as enforcement:
+the public native Runs API deliberately strips them. Post-tool ordinary-chat
+continuation is therefore a server-owned response-only mode: its native request
+contains no tools or skills, the model proxy strips runtime-supplied tool
+definitions, Enterprise tool dispatch rejects fresh calls, and direct paid-call
+leases are refused before reservation. Automatic recovery
+requires both that response-only contract and a managed token-digest runtime;
+legacy HMAC profiles remain manual-only.
+That automatic admission is persisted on the run rather than inferred later.
+Before a retry Workflow selects the Hermes or legacy engine, it re-resolves the
+managed binding and requires token-digest auth again. A deployment switch,
+missing Hermes configuration or binding downgrade marks the attempt as a
+non-retryable runtime-drift failure without provider or tool dispatch; the user
+can still choose explicit manual Retry. First attempts incur no extra recovery
+lookup. The drift write itself requires the exact expected attempt, automatic
+marker, active status and no Stop request in one SQL predicate. The Workflow
+rechecks after asynchronous binding resolution, and the adapter reloads an
+automatic attempt before native work, so a delayed invocation can neither
+fail nor submit work for its successor.
+Automatic startup revalidates and locks that same predicate before emitting
+`run.started`; it never resets a successor or a concurrent Stop to working.
+Hermes acknowledges an idempotent native run with a bounded HTTP 202 before
+streaming. The adapter therefore holds the exact-attempt row lock only across
+that acknowledgement and durable native binding. Retry and Stop serialize at
+that boundary, while model execution and streaming never hold the transaction.
+An exact drift failure projects approval-continuation budgets and partner
+handoffs in the same transaction; a stale no-op projects nothing.
+The current fixed/free-route Iris binding is legacy HMAC, so this change does
+not claim automatic continuation there: users retain explicit manual Retry until
+that profile is migrated to a managed token-digest identity. Dynamically managed
+token-digest profiles receive the bounded automatic path described above.
+
 Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
 `low`, `high`, `max`, with provider default `high`. Automation follows the
-workspace policy, and retries use the task's current selected model. The
-separate Jev typed classifier and production automation policy are unchanged.
+workspace policy, and retries preserve the failed attempt's exact model and
+effort. The separate Jev typed classifier and production automation policy are
+unchanged.
 
 **Default rollout held.** The requested all-workspace V4.1 Flash/low migration
 is prepared separately. A September 18 staging preflight of exact
@@ -5268,9 +5309,19 @@ acceptance pass. Recovery can ship independently while configured defaults and
 historical records remain intact.
 
 **Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
-reviewed-cycle recovery, current-model snapshots, paid receipts, cadence keys and
-cancellation. Runtime adapter tests assert saved evidence instructions reach the
-native submission. Browser tests cover Overview/trace actions, no-output failure,
+reviewed-cycle recovery, pinned-model snapshots, paid receipts, cadence keys,
+cancellation, newer completed-turn races, prior-authority snapshots and
+response-only paid-lease refusal. Runtime adapter and bridge tests assert saved
+instructions cross the real native transport without relying on stripped private
+fields, the provider sees no tool definitions, and fresh Enterprise calls are
+rejected before writes. Admission tests reject legacy and unset deployments
+before upstream I/O; execution-fence tests cover token-digest-to-legacy binding
+drift and Hermes-to-legacy or unset deployment drift before engine selection.
+Race tests move the attempt and request Stop at both startup and native dispatch;
+PostgreSQL acceptance proves both writes wait through binding, while exact-only
+failure tests prove approval budgets and partner handoffs cannot be projected by
+a stale attempt.
+Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.
 

@@ -130,7 +130,11 @@ describe('run recovery safety', () => {
 
   it('allows ordinary read-only failures', async () => {
     const { tx } = fixture({ calls: ['get_workspace_context', 'list_requests', 'get_request', 'fetch_url', 'set_focus'] });
-    expect(await inspectRecoverySafety(tx, WORKSPACE, RUN)).toEqual({ blockedReason: null, message: null, resumeInput: null });
+    const result = await inspectRecoverySafety(tx, WORKSPACE, RUN);
+    expect(result.blockedReason).toBeNull();
+    expect(result.resumeInput).toContain('completed tool results already stored in this session');
+    expect(result.resumeInput).toContain('Do not repeat completed tool calls');
+    expect(result.resumeInput).not.toContain('get_workspace_context');
   });
 
   it('fails closed when the linked screening or run has disappeared', async () => {

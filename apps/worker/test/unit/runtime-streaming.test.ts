@@ -24,6 +24,7 @@ class StreamingDb extends FakeAgentDb implements RuntimePersistence {
     return Promise.resolve({ model_id: MODEL, provider: 'openrouter', transport: 'openrouter', effort_map: null });
   }
   resolveRuntimeSessionId(run: { id: string }) { return Promise.resolve(run.id); }
+  lockAutomaticRecoveryExecution() { return Promise.resolve(false); }
   binding() { return Promise.resolve(null); }
   bindRun() { return Promise.resolve(true); }
   snapshotRequest(_id: string, _attempt: number, body: Record<string, unknown>) { return Promise.resolve(body); }
