@@ -272,6 +272,43 @@ export async function reserveCapacityForInvitation(
   return { id, remaining };
 }
 
+/**
+ * Whether this workspace holds verified, unreserved capacity for `role`, or
+ * whether `invitationId` already reserves one. A read-only projection used to
+ * advertise and admit a job role before any row is written: the reservation
+ * itself still revalidates the exact grant under row locks, so a stale answer
+ * here can only refuse early, never widen what `reserveCapacityForInvitation`
+ * would accept.
+ */
+export async function hasVerifiedCapacityForRole(
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  role: CapacityRoleTemplate,
+  invitationId?: string,
+): Promise<boolean> {
+  const { rows } = await tx.query<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM hermes_cloud_capacity capacity
+         JOIN runtime_discovery_grants grant_row
+           ON grant_row.workspace_id=capacity.workspace_id
+          AND grant_row.id=capacity.discovery_grant_id
+          AND grant_row.linked_capacity_id=capacity.id
+          AND grant_row.agent_id=capacity.preflight_agent_id
+        WHERE capacity.workspace_id=$1
+          AND grant_row.role_template_key=$2 AND grant_row.role_template_version=$3
+          AND grant_row.revoked_at IS NULL AND grant_row.consumed_at IS NULL AND grant_row.expires_at IS NULL
+          AND capacity.native_cron_disabled
+          AND capacity.agentcash_enabled=$4 AND capacity.agentcash_wallet_present=$4
+          AND (capacity.state='available'
+               OR (capacity.state='reserved' AND $5::uuid IS NOT NULL AND capacity.reserved_invitation_id=$5::uuid))
+     ) AS found`,
+    [workspaceId, role.roleTemplateKey, role.roleTemplateVersion,
+      role.roleTemplateKey === 'partnerships-agent', invitationId ?? null],
+  );
+  return rows[0]?.found === true;
+}
+
 /** Revalidate the exact reservation behind a persisted `ready` operation. */
 export async function hasCurrentReservedCapacityForInvitation(
   env: Env,

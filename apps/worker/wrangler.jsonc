@@ -228,6 +228,9 @@
         // Connection and read-only schema verification only. Paid provisioning
         // remains unreachable without the separate durable dispatch claim.
         "HERMES_CLOUD_MANAGEMENT_ENABLED": "1",
+        // Setup-first member invitations: a job role reserves verified capacity
+        // before any delivery. Enabled on staging for the Finance rehearsal.
+        "HERMES_MEMBER_PROVISIONING_ENABLED": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.

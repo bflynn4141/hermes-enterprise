@@ -7,7 +7,9 @@ import {
   releaseInvitationCapacity,
   reserveCapacityForInvitation,
   withCapacityGrantQuarantine,
+  hasVerifiedCapacityForRole,
 } from '../hermes-cloud/capacity.js';
+import { FINANCE_CAPACITY_ROLE } from '../runtime/discovery-grants.js';
 import { RouteError } from '../routes/tenant.js';
 
 interface OperationRow {
@@ -21,11 +23,38 @@ interface OperationRow {
   ready_reservation_current?: boolean;
 }
 
-/** Roles this local-only slice can actually make ready without a provider lifecycle adapter. */
-export const EXECUTABLE_MEMBER_SETUP_ROLES = ['partnerships-agent'] as const satisfies readonly MemberRoleTemplate[];
+/**
+ * Roles every deployment can prepare without a provider lifecycle adapter.
+ * Partnerships reuses the legacy warm pool. Finance is added per workspace
+ * only while verified Finance capacity exists there (`executableMemberSetupRoles`),
+ * so the Admin is never offered a job role whose setup is known to fail.
+ */
+export const ALWAYS_EXECUTABLE_MEMBER_SETUP_ROLES = ['partnerships-agent'] as const satisfies readonly MemberRoleTemplate[];
 
-export function memberSetupRoleExecutable(role: MemberRoleTemplate): boolean {
-  return EXECUTABLE_MEMBER_SETUP_ROLES.some((candidate) => candidate === role);
+/** The job roles an Admin may choose for a new invitation in this workspace right now. */
+export async function executableMemberSetupRoles(
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  invitationId?: string,
+): Promise<MemberRoleTemplate[]> {
+  const roles: MemberRoleTemplate[] = [...ALWAYS_EXECUTABLE_MEMBER_SETUP_ROLES];
+  if (await hasVerifiedCapacityForRole(tx, workspaceId, FINANCE_CAPACITY_ROLE, invitationId)) {
+    roles.push('finance-agent');
+  }
+  return roles;
+}
+
+/**
+ * Advertising and admission share this boundary. `invitationId` lets a resend
+ * of an existing Finance setup keep the capacity it already reserves.
+ */
+export async function memberSetupRoleExecutable(
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  role: MemberRoleTemplate,
+  invitationId?: string,
+): Promise<boolean> {
+  return (await executableMemberSetupRoles(tx, workspaceId, invitationId)).includes(role);
 }
 
 export function memberProvisioningEnabled(env: Env): boolean {
