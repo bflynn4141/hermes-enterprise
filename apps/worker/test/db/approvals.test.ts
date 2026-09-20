@@ -907,6 +907,49 @@ describe('enterprise approval policy and voting', () => {
     )).rejects.toMatchObject({ reason: 'invalid_source_run' });
   });
 
+  it('preserves the derived session owner as creator for an agent proposal without userId', async () => {
+    const runId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `INSERT INTO runs
+          (id, workspace_id, session_id, agent_id, status, model_id, client_turn_id, trace_id, stop_requested)
+         VALUES ($1, $2, $3, $4, 'working', 'deepseek-flash', 'derived-owner-run', 'derived-owner-run', false)`,
+        [runId, fx.workspaceId, fx.sessionId, fx.agentId],
+      );
+      await c.query('COMMIT');
+    });
+    const proposed = await withTenantTransaction(env().env, 'app', {
+      workspaceId: fx.workspaceId, userId: fx.adminId,
+    }, (tx) => proposeApproval(
+      { tx, workspaceId: fx.workspaceId, jobs: [], agentId: fx.agentId, sessionId: fx.sessionId, runId },
+      {
+        label: 'Agent proposal with derived owner', policy_key: 'run-plan-low', proposal: runPlan(fx),
+        target_agent_ids: [], target_member_ids: [], target_resource_ids: [], dependent_request_ids: [],
+        idempotency_key: `proposal:${randomUUID()}`,
+      },
+    ));
+    expect(proposed.payload.context.requester.user_id).toBe(fx.adminId);
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      const revision = (await c.query<{ created_by_type: string; created_by_user_id: string }>(
+        `SELECT created_by_type,created_by_user_id FROM approval_revisions
+          WHERE workspace_id=$1 AND request_id=$2 AND revision=1`,
+        [fx.workspaceId, proposed.request_id],
+      )).rows[0];
+      const audit = (await c.query<{ actor_type: string; actor_user_id: string }>(
+        `SELECT actor_type,actor_user_id FROM events
+          WHERE workspace_id=$1 AND request_id=$2 AND kind='approval.proposed'`,
+        [fx.workspaceId, proposed.request_id],
+      )).rows[0];
+      expect(revision).toEqual({ created_by_type: 'agent', created_by_user_id: fx.adminId });
+      expect(audit).toEqual({ actor_type: 'agent', actor_user_id: fx.adminId });
+      await c.query('ROLLBACK');
+    });
+  });
+
   it('supersedes old votes and rejects stale revision-bound commands', async () => {
     const e = env();
     const proposed = await propose(fx, runPlan(fx), `proposal:${randomUUID()}`);

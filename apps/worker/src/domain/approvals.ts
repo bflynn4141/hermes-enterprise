@@ -1045,6 +1045,10 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   }
 
   const requester = await requesterContext(context);
+  // Existing agent/session callers derive their human attribution inside
+  // requesterContext. Only the explicit delegated path separates actor from
+  // maker; preserving this fallback avoids erasing the session owner's audit.
+  const creationActorUserId = delegatedRequester ? actorUserId : requester.userId;
   if (input.proposal.approval_type === 'team_commitment' && input.proposal.details.requester_agent_id !== context.agentId) {
     throw new RouteError('the team commitment requester must be the authenticated agent', 'requester_agent_mismatch', 422);
   }
@@ -1112,11 +1116,11 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
        (workspace_id, request_id, revision, authorization_hash, payload, status,
         created_by_type, created_by_user_id, created_by_agent_id)
      VALUES ($1,$2,1,$3,$4::jsonb,'pending',$5,$6,$7)`,
-    [context.workspaceId, requestId, hash, JSON.stringify(payload), delegatedRequester ? 'user' : 'agent', actorUserId, context.agentId],
+    [context.workspaceId, requestId, hash, JSON.stringify(payload), delegatedRequester ? 'user' : 'agent', creationActorUserId, context.agentId],
   );
-  await audit(context.tx, context.workspaceId, delegatedRequester ? 'user' : 'agent', actorUserId, 'approval.proposed', requestId, requester.sessionId);
+  await audit(context.tx, context.workspaceId, delegatedRequester ? 'user' : 'agent', creationActorUserId, 'approval.proposed', requestId, requester.sessionId);
   await publishRequestChanged(context, requestId, { label: input.label, runId: requester.runId, sessionId: requester.sessionId });
-  return loadApprovalView(context.tx, requestId, actorUserId);
+  return loadApprovalView(context.tx, requestId, creationActorUserId);
 }
 
 async function commandReplay(tx: Tx, workspaceId: string, requestId: string, operation: string, key: string, hash: string): Promise<boolean> {
