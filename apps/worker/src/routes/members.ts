@@ -288,7 +288,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
               i.workos_invitation_id,
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
               op.revision AS operation_revision, op.preparation,
-              op.cancellation, op.issue, op.role_template_key,
+              op.cancellation, op.issue, op.role_template_key, op.role_template_version,
               EXISTS (
                 SELECT 1
                   FROM hermes_cloud_capacity capacity
@@ -304,6 +304,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
                    AND grant_row.consumed_at IS NULL
                    AND grant_row.expires_at IS NULL
                    AND grant_row.role_template_key=op.role_template_key
+                   AND grant_row.role_template_version=op.role_template_version
               ) AS ready_reservation_current,
               CASE
                 WHEN i.delivery_error IS NULL THEN NULL
@@ -360,6 +361,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
             revision: row.operation_revision, preparation: row.preparation,
             cancellation: row.cancellation, issue: row.issue,
             role_template_key: row.role_template_key,
+            role_template_version: row.role_template_version,
             ready_reservation_current: row.ready_reservation_current,
             invitation_status: row.status, delivery_status: row.delivery_status,
             delivery_error: row.delivery_reason,

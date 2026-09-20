@@ -209,6 +209,15 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
         input.capacityProof ?? null,
       );
     }
+    // Finance has no interactive setup wizard: its reviewed role, owner,
+    // assignment and (for Hermes) runtime binding are all materialized in this
+    // transaction. Expose it as started only after those authorities exist.
+    await input.tx.query(
+      `UPDATE agents
+          SET status='started', setup_step=NULL, started_at=COALESCE(started_at,now())
+        WHERE workspace_id=$1 AND id=$2`,
+      [input.workspaceId, agentId],
+    );
     const sessionId = crypto.randomUUID();
     await input.tx.query(
       `INSERT INTO sessions

@@ -56,6 +56,7 @@ interface Row {
   invitation_id: string;
   requested_by: string;
   role_template_key: 'partnerships-agent' | 'finance-agent';
+  role_template_version: '1.0.0';
   revision: number;
   preparation: Preparation;
   cancellation: Cancellation;
@@ -75,6 +76,7 @@ function baseRow(overrides: Partial<Row> = {}): Row {
     invitation_id: invitationId,
     requested_by: requestedBy,
     role_template_key: 'partnerships-agent',
+    role_template_version: '1.0.0',
     revision: 0,
     preparation: 'queued',
     cancellation: 'none',
@@ -303,17 +305,21 @@ describe('member provisioning reservation and recovery boundaries', () => {
 
     await runMemberProvisioningJob(env, job());
 
-    expect(mocks.reserveCapacityForInvitation).toHaveBeenCalledWith(env, db.tx, workspaceId, invitationId);
+    expect(mocks.reserveCapacityForInvitation).toHaveBeenCalledWith(env, db.tx, workspaceId, invitationId, {
+      roleTemplateKey: 'partnerships-agent', roleTemplateVersion: '1.0.0',
+    });
     expect(db.row()).toMatchObject({ preparation: 'ready', issue: null, revision: 1 });
   });
 
-  it('never consumes a Partnerships slot for Finance', async () => {
+  it('requests only an exact Finance slot for an existing Finance operation', async () => {
     const db = transaction(baseRow({ role_template_key: 'finance-agent' }));
     mocks.withWorkspaceTransaction.mockImplementation(async (_env, _workspace, operation) => operation(db.tx));
 
     await runMemberProvisioningJob(env, job());
 
-    expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
+    expect(mocks.reserveCapacityForInvitation).toHaveBeenCalledWith(env, db.tx, workspaceId, invitationId, {
+      roleTemplateKey: 'finance-agent', roleTemplateVersion: '1.0.0',
+    });
     expect(db.row()).toMatchObject({ preparation: 'failed', issue: 'cloud_contract_unverified' });
   });
 

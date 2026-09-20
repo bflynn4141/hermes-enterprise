@@ -503,6 +503,7 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
         invitationLog('job_payload_invalid', false, reason);
         throw new InvitationDeliveryError(reason, 0, false);
       }
+      const invitationId = payload.invitation_id;
       // A delivery job may have been delayed behind an outage. Reconcile local
       // expiry before making the external call so an invitation cannot be sent
       // after the reservation that guaranteed its Iris should have expired.
@@ -548,10 +549,10 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
           const { capacityRoleForInvitation, hasCurrentReservedCapacityForInvitation } =
             await import('./hermes-cloud/capacity.js');
           const role = await capacityRoleForInvitation(
-            tx, job.workspace_id, payload.invitation_id, { requireReadyOperation: true },
+            tx, job.workspace_id, invitationId, { requireReadyOperation: true },
           );
           if (!await hasCurrentReservedCapacityForInvitation(
-            env, tx, job.workspace_id, payload.invitation_id, role,
+            env, tx, job.workspace_id, invitationId, role,
           )) {
             return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
           }

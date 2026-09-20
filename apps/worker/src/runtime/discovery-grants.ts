@@ -45,11 +45,14 @@ export function discoveryProfileDescriptor(role: CapacityRoleTemplate): Discover
     definition: PARTNER_INVOICE_REVIEW_DEFINITION,
     expectsAgentCash: false,
   };
-  return {
+  if (role.roleTemplateKey === 'partnerships-agent') return {
     ...PARTNERSHIPS_CAPACITY_ROLE,
     definition: PARTNER_PROGRAM_DEFINITION,
     expectsAgentCash: true,
   };
+  throw new RouteError(
+    'The requested role template is not supported.', 'discovery_profile_mismatch', 409,
+  );
 }
 
 export interface DiscoveryGrantRow {
@@ -162,6 +165,23 @@ export async function exactDiscoveryConfig(
     tx, workspaceId, agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key,
   );
   const assignment = resolved.assignment;
+  if (!assignment) {
+    // The resolver intentionally returns no assignment for an unsupported
+    // stored version. Distinguish that drift from a truly unowned preflight
+    // identity so malformed persisted authority cannot fall back to defaults.
+    const existing = await tx.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM enterprise_skill_assignments
+          WHERE workspace_id=$1 AND agent_id=$2 AND skill_key=$3
+       ) AS exists`,
+      [workspaceId, agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key],
+    );
+    if (existing.rows[0]?.exists) throw new RouteError(
+      'This identity does not have the reviewed Finance profile required for discovery.',
+      'discovery_profile_mismatch',
+      409,
+    );
+  }
   if (assignment && (
     resolved.problem || !resolved.config ||
     assignment.skill_key !== descriptor.definition.key ||
