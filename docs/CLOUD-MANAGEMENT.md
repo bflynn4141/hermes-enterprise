@@ -1,10 +1,13 @@
 # Cloud management integration
 
-The first implementation slice is the read-only protocol boundary in
+The connection implementation begins with the protocol boundary in
 `apps/worker/src/hermes-cloud/management.ts`. It discovers Nous OAuth endpoints,
 constructs an S256 authorization URL, refreshes an existing management grant,
-and initializes MCP to retrieve the `agents` and `agent` tool schemas. It never
-calls either tool or creates an instance. The admin connection is wired to
+and initializes MCP to retrieve allowlisted management schemas. The separate
+`apps/worker/src/hermes-cloud/lifecycle.ts` adapter can list and reconcile agents
+through an exact read-only wrapper. Paid tool dispatch is intentionally not
+exported until the durable job executor owns a tenant-scoped atomic claim. The
+adapter is not wired to invitations. The admin connection is wired to
 encrypted storage and Organization Settings; invitation jobs and paid
 provisioning are not enabled.
 
@@ -34,9 +37,45 @@ list argument schemas only. It does not query instances, spend, or billing data.
 It refuses an inference-only grant. Do not use Enterprise runtime discovery
 bearers, API Server keys, or provider inference credentials here.
 
-Output schemas are external data. They must be reviewed before creating a typed
-adapter; they cannot authorize a lifecycle call. No automatic create retry is
-safe until the actual provider idempotency/reconciliation contract is known.
+Output schemas are external data and do not authorize lifecycle calls. Cloud's
+authenticated `agent(action='create')` schema has no idempotency key. A persisted
+`creating` label alone cannot prevent two workers from racing. The future paid
+executor must first win a tenant/workspace/operation/organization-connection
+one-use row transition; losers and every later wake use the separate read-only
+exact-name reconciliation path. After paid `tools/call` is dispatched, every
+response other than a fully validated exact-name result is outcome-unknown and
+may not be replayed automatically.
+
+## Authenticated contract verification — September 19, 2026
+
+Using the existing organization-bound OAuth session, read-only live discovery
+verified five tools: `agents`, `agent`, `team_gateway`, `service_credentials`
+and `usage`. No secrets, identifiers, names or dollar amounts were recorded.
+
+- `agents` successfully returned the organization inventory; `get`, `status`
+  and `cost_estimate` returned the documented bounded shapes.
+- `usage` successfully returned the organization ledger and complete daily
+  credit/debit totals. This verifies organization billing attribution, not a
+  current spend allowance or sufficient balance.
+- `service_credentials(action='list')` succeeded for the organization and
+  returned no existing credentials. The live schema supports owner/admin
+  `create`, `list` and `revoke`; a created credential uses OAuth
+  `client_credentials` for unattended short-lived management tokens.
+- `agent(action='create')` accepts `name`, `size`, optional `region`, optional
+  `model` and optional environment variables. It has no idempotency field. No
+  create wrapper is exported in the connection slice.
+
+The organization-bound refresh grant already supports background work after the
+one-time browser authorization, so an additional machine credential is not a
+prerequisite for the first executor. Creating one automatically would introduce
+another one-time-secret operation and is intentionally deferred.
+
+The authenticated contract still exposes no governed plugin install, profile
+import, or arbitrary configuration action. `update_env` and `update_image` are
+not sufficient to prove the reviewed Enterprise bridge and policy are present.
+Accordingly, lifecycle, usage and unattended-auth support are now verified, but
+`automatic_setup_ready` remains false until governed bootstrap and readiness are
+server-verifiable.
 
 ## Admin connection
 
@@ -71,19 +110,24 @@ unverified and can be reconnected. Users do not enter tokens or instance IDs.
 ## Remaining integration
 
 1. Release the connection slice and complete the already-authorized admin
-   management connection; inspect actual schemas and organization billing.
+   management connection in Enterprise; re-run authenticated contract
+   verification through the stored workspace grant.
 2. Integrate background health/refresh under a connection lock and atomically
    store token rotation; add disconnect/revocation before enabling new work.
-3. Retrieve the actual Cloud schemas and verify a supported governed plugin and
-   profile bootstrap. Instance creation and Enterprise readiness are distinct.
+3. Obtain a supported governed plugin/profile bootstrap contract from Nous, or
+   publish the reviewed Enterprise bridge in an approved image/profile. Instance
+   creation and Enterprise readiness remain distinct.
 4. Add durable invite/provisioning operations and transactional outbox jobs,
-   retaining exact reservation semantics, role-readiness gates and email ordering.
+   including the atomic one-use provider-dispatch claim, exact reservation
+   semantics, role-readiness gates and email ordering. Only that executor may
+   expose the paid create wrapper, with server-derived environment values.
 5. Connect the compact Members states. Only server-confirmed setup completion
    may queue WorkOS email; a generic live instance must not be marked ready.
 
-Initial live validation: public metadata passed. Authenticated schemas, selected
-organization billing association, governed bootstrap, and paid creation are not
-verified by this slice. No deployment flags or existing invitation behavior change.
+Live read-only validation: public metadata, authenticated schemas, selected
+organization billing attribution and read-only agent/usage operations passed.
+Governed bootstrap and paid creation were not attempted. No deployment flags or
+existing invitation behavior change.
 
 Sources: [Cloud MCP guide](https://hermes-agent.nousresearch.com/docs/guides/manage-hermes-cloud-with-mcp),
 [Business billing](https://portal.nousresearch.com/business),
