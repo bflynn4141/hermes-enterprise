@@ -82,7 +82,7 @@ async function managedEnvironment(fx: Fixture & { runId: string }) {
          (workspace_id,agent_id,profile,base_url,transport,assignment,agentcash,
           ciphertext,iv,wrapped_dek,wrap_iv,kek_version,runtime_credential_digest,runtime_auth_mode,ready_at)
        VALUES ($1,$2,$3,'https://managed-runtime.example.test','native','provisioned',false,
-               $4,$5,$6,$7,$8,'\\x01','token_digest',now())`,
+               $4,$5,$6,$7,$8,decode(repeat('01',32),'hex'),'token_digest',now())`,
       [fx.workspaceId, fx.agentId, `agent-${fx.agentId}`, Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv),
         Buffer.from(envelope.wrappedDek), Buffer.from(envelope.wrapIv), envelope.kekVersion],
     );
@@ -316,6 +316,11 @@ describe('durable run recovery admission', () => {
           'SELECT attempt,status,automatic_recovery FROM runs WHERE id=$1', [fx.runId],
         )).rows[0]).toEqual({ attempt: 1, status: 'error', automatic_recovery: false });
       });
+      // Keep this deliberately rejected fixture out of later file-scoped cron
+      // scans; production would persist the same choice through Cancel retry.
+      await work(fx, (context) => context.tx.query(
+        'UPDATE runs SET recovery_cancelled=true WHERE id=$1', [fx.runId],
+      ));
     },
   );
 
