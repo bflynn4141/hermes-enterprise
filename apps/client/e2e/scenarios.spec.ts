@@ -372,6 +372,8 @@ test.describe('P3 · review and admit', () => {
     // The receipt replaces the review, and it is honest about what is pending.
     await expect(appPane.getByText('Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.')).toBeVisible();
     await expect(appPane.getByText('What this implies')).toBeVisible();
+    // Legacy Execute must never appear as a successful external action control.
+    await expect(appPane.getByRole('button', { name: 'Execute', exact: true })).toHaveCount(0);
 
     // The badge came down by one, from the event rather than from a counter.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('3');

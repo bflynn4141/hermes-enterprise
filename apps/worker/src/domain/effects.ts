@@ -78,7 +78,7 @@ export const EFFECT_UNAVAILABLE_DETAIL =
   'The decision is recorded and this legacy effect remains unavailable. Approved communications use a separate governed outbox when configured; this row does not queue or prove delivery. ' +
   'Payment, access and signature executors are not configured, so a person holding the required role must complete that work outside the product.';
 
-/** The enforcement record written when someone presses Execute. */
+/** The enforcement record written when someone records a legacy-effect attempt. */
 export const unavailableEnforcement = (
   userId: string,
 ): { result: 'unavailable'; reason: string; detail: string; attempted_by: string; attempted_at: string } => ({
