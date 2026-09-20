@@ -25,8 +25,9 @@ import {
 import { logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
-import { PARTNER_PROGRAM_TOOLS, preflightPartnerManifest, runtimeSkillManifestsForAgent } from './skills.js';
+import { PARTNER_PROGRAM_TOOLS, preflightDiscoveryManifest, runtimeSkillManifestsForAgent } from './skills.js';
 import { requireRuntimeDiscoveryAuth, type RuntimeDiscoveryAuthorization } from './discovery-grants.js';
+import { toolsForSkillVersion } from '../enterprise-skills/registry.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { agentCashPeopleSearchArguments, parseAgentCashPeopleSearch } from '../partner-screening/agentcash-people.js';
 import {
@@ -401,7 +402,10 @@ async function body(c: Context<{ Bindings: Env }>): Promise<unknown> {
 export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
   if (authorization.kind === 'preflight_grant') {
-    const tools = allowedTools('work', PARTNER_PROGRAM_TOOLS);
+    const manifest = preflightDiscoveryManifest(authorization.config, authorization.grant);
+    const tools = allowedTools('work', toolsForSkillVersion(
+      manifest.skill_key, manifest.version, manifest.capability_grants,
+    ));
     return c.json({ tools: tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.input_schema })) });
   }
   const binding = authorization.binding;
@@ -421,7 +425,7 @@ export async function listRuntimeTools(c: Context<{ Bindings: Env }>): Promise<R
 export async function listRuntimeSkills(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId, authorization } = await authenticateDiscovery(c);
   if (authorization.kind === 'preflight_grant') {
-    return c.json({ skills: [preflightPartnerManifest(authorization.config, authorization.grant)] });
+    return c.json({ skills: [preflightDiscoveryManifest(authorization.config, authorization.grant)] });
   }
   const skills = await withWorkspaceTransaction(c.env, workspaceId, (tx) =>
     runtimeSkillManifestsForAgent(c.env, tx, workspaceId, agentId));

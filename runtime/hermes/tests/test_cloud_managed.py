@@ -75,6 +75,28 @@ class CloudManagedPolicyTests(unittest.TestCase):
             "get_partner_handoff_result", "list_requests", "get_request",
         })
 
+    def test_binding_accepts_exact_finance_preflight_without_cross_role_authority(self):
+        finance = self.binding(
+            name="enterprise_bridge:partner-invoice-review",
+            runtime_name="enterprise_bridge:partner-invoice-review",
+            skill_key="partner-invoice-review",
+            version="1.0.1",
+            capability_grants=sorted(cloud_managed.FINANCE_CAPABILITIES),
+        )
+        validated = cloud_managed._validate_binding(finance)
+        self.assertEqual(validated["tools"], {
+            "get_partner_handoff_result", "list_requests", "get_request",
+        })
+        self.assertNotIn("publish_partner_invoice_review", validated["tools"])
+        with self.assertRaisesRegex(RuntimeError, "identity or capabilities"):
+            cloud_managed._validate_binding({
+                **finance,
+                "bindings": [{
+                    **finance["bindings"][0],
+                    "capability_grants": sorted(cloud_managed.PARTNER_CAPABILITIES),
+                }],
+            })
+
     def test_same_role_preflight_to_assignment_is_a_stable_monotonic_transition(self):
         preflight = cloud_managed._validate_binding(self.binding())
         assigned = cloud_managed._validate_binding(self.binding(
@@ -141,13 +163,7 @@ class CloudManagedPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "identity or capabilities"):
             cloud_managed._validate_binding(self.binding(capability_grants=["partner.shared.read"]))
         with self.assertRaisesRegex(RuntimeError, "preflight binding"):
-            cloud_managed._validate_binding(self.binding(
-                name="enterprise_bridge:partner-invoice-review",
-                runtime_name="enterprise_bridge:partner-invoice-review",
-                skill_key="partner-invoice-review",
-                version="1.0.1",
-                capability_grants=sorted(cloud_managed.FINANCE_CAPABILITIES),
-            ))
+            cloud_managed._validate_binding(self.binding(grant_revision=2))
 
     def test_attestation_file_cannot_open_latch_and_drift_closes_it(self):
         with tempfile.TemporaryDirectory() as temporary:

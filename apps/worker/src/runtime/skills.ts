@@ -119,6 +119,44 @@ export function preflightPartnerManifest(
   });
 }
 
+export function preflightFinanceManifest(
+  config: Readonly<Record<string, unknown>>,
+  grant: {
+    grant_revision: number;
+    assignment_revision: number | null;
+    linked_capacity_id: string | null;
+    capacity_state: string | null;
+    expires_at: Date | null;
+  },
+): RuntimeSkillManifest {
+  return {
+    ...financeManifest({ ...config }),
+    assignment_revision: grant.assignment_revision,
+    grant_revision: grant.grant_revision,
+    binding_source: 'preflight_grant',
+    binding_state: grant.linked_capacity_id
+      ? grant.capacity_state === 'reserved' ? 'linked_reserved' : 'linked_available'
+      : 'prepared',
+    grant_expires_at: grant.expires_at?.toISOString() ?? null,
+  };
+}
+
+export function preflightDiscoveryManifest(
+  config: Readonly<Record<string, unknown>>,
+  grant: {
+    role_template_key: 'partnerships-agent' | 'finance-agent';
+    grant_revision: number;
+    assignment_revision: number | null;
+    linked_capacity_id: string | null;
+    capacity_state: string | null;
+    expires_at: Date | null;
+  },
+): RuntimeSkillManifest {
+  return grant.role_template_key === 'finance-agent'
+    ? preflightFinanceManifest(config, grant)
+    : preflightPartnerManifest(config, grant);
+}
+
 /**
  * Read-only Agent/app-role runtime path. Legacy policy may be projected for an
  * ungoverned rollout agent, but discovery never creates authority or a schedule.

@@ -4,14 +4,14 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { sealSecret } from '../keys/envelope.js';
 import { HermesClient } from '../runtime/client.js';
-import { matchesLegacyCapacityAttestation } from '../runtime/readiness.js';
+import { matchesManagedDiscoveryGrantAttestation } from '../runtime/readiness.js';
 import {
   DISCOVERY_GRANT_TTL_MS,
-  exactLegacyDiscoveryConfig,
+  exactDiscoveryConfig,
   lockCurrentPreparedGrant,
+  ROLE_TEMPLATE_VERSION,
 } from '../runtime/discovery-grants.js';
 import { newRuntimeBearer, runtimeCredentialDigest } from '../runtime/credentials.js';
-import { PARTNER_PROGRAM_DEFINITION } from '../enterprise-skills/registry.js';
 import { POOL_CONTROL_NAMESPACE } from '../hermes-cloud/capacity.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
 
@@ -24,18 +24,24 @@ const inputSchema = z.object({
   discovery_grant_id: z.uuid(),
 }).strict();
 
-const grantInputSchema = z.object({ preflight_agent_id: z.uuid() }).strict();
+const grantInputSchema = z.object({
+  preflight_agent_id: z.uuid(),
+  role_template_key: z.enum(['partnerships-agent', 'finance-agent']).default('partnerships-agent'),
+}).strict();
 
 export async function listRuntimeDiscoveryGrants(c: Context<{ Bindings: Env }>): Promise<Response> {
   const grants = await inWorkspace(c, async (work) => {
     work.requireAdmin('Viewing runtime discovery credentials');
     requireStepUp(work.session);
     const { rows } = await work.tx.query<{
-      id: string; agent_id: string; assignment_revision: number | null; grant_revision: number;
+      id: string; agent_id: string; role_template_key: 'partnerships-agent' | 'finance-agent';
+      role_template_version: string; skill_key: string; skill_version: string;
+      assignment_revision: number | null; grant_revision: number;
       linked_capacity_id: string | null; expires_at: Date | null; revoked_at: Date | null;
       consumed_at: Date | null; created_at: Date; capacity_state: string | null;
     }>(
-      `SELECT g.id, g.agent_id, g.assignment_revision, g.grant_revision,
+      `SELECT g.id, g.agent_id, g.role_template_key, g.role_template_version,
+              g.skill_key, g.skill_version, g.assignment_revision, g.grant_revision,
               g.linked_capacity_id, g.expires_at, g.revoked_at, g.consumed_at,
               g.created_at, c.state AS capacity_state
          FROM runtime_discovery_grants g
@@ -47,7 +53,11 @@ export async function listRuntimeDiscoveryGrants(c: Context<{ Bindings: Env }>):
     return rows.map((row) => ({
       id: row.id,
       preflight_agent_id: row.agent_id,
-      role: 'Partnerships P1.7',
+      role_template_key: row.role_template_key,
+      role_template_version: row.role_template_version,
+      role: row.role_template_key === 'finance-agent' ? 'Finance' : 'Partnerships P1.7',
+      skill_key: row.skill_key,
+      skill_version: row.skill_version,
       assignment_revision: row.assignment_revision,
       grant_revision: row.grant_revision,
       linked_capacity_id: row.linked_capacity_id,
@@ -72,7 +82,10 @@ export async function createRuntimeDiscoveryGrant(c: Context<{ Bindings: Env }>)
   const result = await inWorkspace(c, async (work) => {
     work.requireAdmin('Preparing a runtime discovery credential');
     requireStepUp(work.session);
-    const profile = await exactLegacyDiscoveryConfig(c.env, work.tx, work.workspaceId, parsed.data.preflight_agent_id);
+    const profile = await exactDiscoveryConfig(c.env, work.tx, work.workspaceId, parsed.data.preflight_agent_id, {
+      roleTemplateKey: parsed.data.role_template_key,
+      roleTemplateVersion: ROLE_TEMPLATE_VERSION,
+    });
     const existingIdentity = await work.tx.query(
       `SELECT EXISTS (
          SELECT 1 FROM agents WHERE workspace_id=$1 AND id=$2
@@ -99,14 +112,15 @@ export async function createRuntimeDiscoveryGrant(c: Context<{ Bindings: Env }>)
     const { rows } = await work.tx.query<{ id: string; expires_at: Date; created_at: Date }>(
       `INSERT INTO runtime_discovery_grants
          (workspace_id, agent_id, created_by, credential_digest,
-          role_template_key, skill_key, skill_version, runtime_name, artifact_digest,
+          role_template_key, role_template_version, skill_key, skill_version, runtime_name, artifact_digest,
           assignment_id, assignment_revision, config_digest, expires_at)
-       VALUES ($1,$2,$3,$4,'partnerships-agent',$5,$6,$7,$8,$9,$10,$11,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT DO NOTHING
        RETURNING id, expires_at, created_at`,
       [work.workspaceId, parsed.data.preflight_agent_id, work.userId, Buffer.from(digest),
-       PARTNER_PROGRAM_DEFINITION.key, PARTNER_PROGRAM_DEFINITION.version,
-       PARTNER_PROGRAM_DEFINITION.runtimeName, PARTNER_PROGRAM_DEFINITION.artifactDigest,
+       profile.descriptor.roleTemplateKey, profile.descriptor.roleTemplateVersion,
+       profile.descriptor.definition.key, profile.descriptor.definition.version,
+       profile.descriptor.definition.runtimeName, profile.descriptor.definition.artifactDigest,
        profile.assignmentId, profile.assignmentRevision, profile.configDigest,
        new Date(Date.now() + DISCOVERY_GRANT_TTL_MS)],
     );
@@ -119,6 +133,8 @@ export async function createRuntimeDiscoveryGrant(c: Context<{ Bindings: Env }>)
     return {
       id: row.id,
       preflight_agent_id: parsed.data.preflight_agent_id,
+      role_template_key: profile.descriptor.roleTemplateKey,
+      role_template_version: profile.descriptor.roleTemplateVersion,
       bearer: token,
       status: 'prepared' as const,
       expires_at: row.expires_at.toISOString(),
@@ -202,10 +218,10 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
   const verified = await inWorkspace(c, async (work) => {
     work.requireAdmin('Registering Hermes capacity');
     requireStepUp(work.session);
-    await lockCurrentPreparedGrant(
+    const prepared = await lockCurrentPreparedGrant(
       c.env, work.tx, work.workspaceId, input.preflight_agent_id, input.discovery_grant_id,
     );
-    return { workspaceId: work.workspaceId };
+    return { workspaceId: work.workspaceId, grant: prepared.grant };
   });
 
   let readiness;
@@ -220,7 +236,7 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
     throw new RouteError('The instance did not pass the Cloud and Enterprise readiness checks.', 'capacity_not_ready', 409);
   }
   if (!capabilities.durableIdempotency ||
-      !matchesLegacyCapacityAttestation(readiness, {
+      !matchesManagedDiscoveryGrantAttestation(readiness, verified.grant, {
         workspaceId: verified.workspaceId,
         agentId: input.preflight_agent_id,
         enterpriseUrl: c.env.HERMES_ENTERPRISE_PUBLIC_URL,
@@ -290,6 +306,8 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
       native_cron_disabled: readiness.nativeCronDisabled,
       verified_at: readinessCheckedAt.toISOString(),
       discovery_grant_id: grant.id,
+      role_template_key: grant.role_template_key,
+      role_template_version: grant.role_template_version,
     };
   });
   c.header('Cache-Control', 'no-store');

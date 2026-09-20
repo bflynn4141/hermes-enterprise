@@ -141,7 +141,7 @@ async function seedInvitation(
 
 describe('invitation-derived member and agent coordination', () => {
   afterEach(() => vi.unstubAllGlobals());
-  it('consumes the exact reserved instance and creates real, capped Inbox starter work', async () => {
+  it('preserves a pre-0064 P1.7 grant through reservation acceptance and creates real capped starter work', async () => {
     const fixture = await seedWorkspace();
     const joinerId = randomUUID();
     const invitationId = randomUUID();

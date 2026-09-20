@@ -34,6 +34,7 @@ import {
   transferInvitationCapacity,
   withCapacityGrantQuarantine,
 } from '../hermes-cloud/capacity.js';
+import { PARTNERSHIPS_CAPACITY_ROLE } from '../runtime/discovery-grants.js';
 import {
   invitationCorrelationId,
   logInvitationDiagnostic,
@@ -287,7 +288,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
               i.workos_invitation_id,
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
               op.revision AS operation_revision, op.preparation,
-              op.cancellation, op.issue, op.role_template_key,
+              op.cancellation, op.issue, op.role_template_key, op.role_template_version,
               EXISTS (
                 SELECT 1
                   FROM hermes_cloud_capacity capacity
@@ -303,6 +304,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
                    AND grant_row.consumed_at IS NULL
                    AND grant_row.expires_at IS NULL
                    AND grant_row.role_template_key=op.role_template_key
+                   AND grant_row.role_template_version=op.role_template_version
               ) AS ready_reservation_current,
               CASE
                 WHEN i.delivery_error IS NULL THEN NULL
@@ -359,6 +361,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
             revision: row.operation_revision, preparation: row.preparation,
             cancellation: row.cancellation, issue: row.issue,
             role_template_key: row.role_template_key,
+            role_template_version: row.role_template_version,
             ready_reservation_current: row.ready_reservation_current,
             invitation_status: row.status, delivery_status: row.delivery_status,
             delivery_error: row.delivery_reason,
@@ -482,8 +485,10 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         cancellation: MemberProvisioningOperation['cancellation'];
         issue: MemberProvisioningOperation['issue'];
         role_template_key: MemberRoleTemplate;
+        role_template_version: string;
       }>(
-        `SELECT id, workspace_id, revision, preparation, cancellation, issue, role_template_key
+        `SELECT id, workspace_id, revision, preparation, cancellation, issue,
+                role_template_key,role_template_version
            FROM member_provisioning_operations
           WHERE workspace_id=$1 AND invitation_id=$2 FOR UPDATE`,
         [work.workspaceId, row.id],
@@ -523,7 +528,9 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
           checkpoint = 'member_setup_queued';
         }
       } else if (!alreadyMember && c.env.AGENT_RUNTIME === 'hermes') {
-        const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
+        const reservation = await reserveCapacityForInvitation(
+          c.env, work.tx, work.workspaceId, row.id, PARTNERSHIPS_CAPACITY_ROLE,
+        );
         if (!reservation) {
           throw new RouteError(
             'No verified Partner Program Iris capacity is available. Add a ready pool instance before inviting another member.',
@@ -623,9 +630,10 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         status: string;
         workos_invitation_id: string | null;
         role_template_key: MemberRoleTemplate | null;
+        role_template_version: string | null;
       }>(
         `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id,
-                op.role_template_key
+                op.role_template_key,op.role_template_version
            FROM invitations i
            LEFT JOIN member_provisioning_operations op
              ON op.workspace_id=i.workspace_id AND op.invitation_id=i.id
@@ -681,9 +689,13 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       checkpoint = 'successor_stored';
 
       if (!setupBacked && c.env.AGENT_RUNTIME === 'hermes') {
-        const transferred = await transferInvitationCapacity(c.env, work.tx, work.workspaceId, invitation.id, row.id);
+        const transferred = await transferInvitationCapacity(
+          c.env, work.tx, work.workspaceId, invitation.id, row.id, PARTNERSHIPS_CAPACITY_ROLE,
+        );
         if (!transferred) {
-          const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
+          const reservation = await reserveCapacityForInvitation(
+            c.env, work.tx, work.workspaceId, row.id, PARTNERSHIPS_CAPACITY_ROLE,
+          );
           if (!reservation) throw new RouteError(
             'No verified Partner Program Iris capacity is available. Add a ready pool instance before resending.',
             'iris_capacity_unavailable',
@@ -696,6 +708,10 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       if (setupBacked) {
         const capacityTransferred = await transferInvitationCapacity(
           c.env, work.tx, work.workspaceId, invitation.id, row.id,
+          {
+            roleTemplateKey: invitation.role_template_key!,
+            roleTemplateVersion: invitation.role_template_version as '1.0.0',
+          },
         );
         const transferredOperation = await rebindMemberProvisioningOperation(
           work.tx, work.workspaceId, invitation.id, row.id, work.userId, capacityTransferred,

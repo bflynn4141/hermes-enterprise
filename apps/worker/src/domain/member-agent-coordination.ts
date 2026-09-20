@@ -3,12 +3,20 @@ import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
 import {
   consumeReservedCapacity,
+  capacityRoleForInvitation,
   reservedCapacityAgentId,
   type CapacityAcceptanceProof,
 } from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service.js';
 import { PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS } from '../enterprise-skills/role-instructions.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION, toolsForSkillVersion } from '../enterprise-skills/registry.js';
+import { configureAcceptedFinanceMember } from '../partner-workflow/service.js';
+import {
+  discoveryProfileDescriptor,
+  type CapacityRoleTemplate,
+} from '../runtime/discovery-grants.js';
+import { RouteError } from '../routes/tenant.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 
@@ -150,31 +158,154 @@ async function createStarterItems(
   return approval.request_id;
 }
 
-async function createOwnedIris(input: JoinCoordinationInput): Promise<{
+async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleTemplate): Promise<{
   agentId: string;
   sessionId: string;
   created: boolean;
 }> {
-  const owned = await input.tx.query<{ agent_id: string; session_id: string | null }>(
+  const owned = await input.tx.query<{
+    agent_id: string;
+    session_id: string | null;
+    capacity_state: string | null;
+    assigned_agent_id: string | null;
+    role_template_key: string | null;
+    role_template_version: string | null;
+    skill_key: string | null;
+    skill_version: string | null;
+    runtime_name: string | null;
+    artifact_digest: string | null;
+    grant_consumed: boolean;
+    grant_revoked: boolean;
+    binding_assignment: string | null;
+    binding_agentcash: boolean | null;
+    binding_ready: boolean;
+  }>(
     `SELECT ao.agent_id,
             (SELECT s.id FROM sessions s WHERE s.workspace_id=ao.workspace_id
-              AND s.agent_id=ao.agent_id AND s.owner_id=$3 ORDER BY s.created_at LIMIT 1) AS session_id
+              AND s.agent_id=ao.agent_id AND s.owner_id=$3 ORDER BY s.created_at LIMIT 1) AS session_id,
+            capacity.state AS capacity_state,
+            capacity.assigned_agent_id,
+            grant_row.role_template_key,
+            grant_row.role_template_version,
+            grant_row.skill_key,
+            grant_row.skill_version,
+            grant_row.runtime_name,
+            grant_row.artifact_digest,
+            grant_row.consumed_at IS NOT NULL AS grant_consumed,
+            grant_row.revoked_at IS NOT NULL AS grant_revoked,
+            binding.assignment AS binding_assignment,
+            binding.agentcash AS binding_agentcash,
+            binding.ready_at IS NOT NULL AS binding_ready
        FROM agent_owners ao
-      WHERE ao.workspace_id=$1 AND ao.member_id=$2 LIMIT 1`,
-    [input.workspaceId, input.joiningMemberId, input.joiningUserId],
+       LEFT JOIN hermes_cloud_capacity capacity
+         ON capacity.workspace_id=ao.workspace_id
+        AND capacity.assigned_agent_id=ao.agent_id
+        AND capacity.reserved_invitation_id=$4
+       LEFT JOIN runtime_discovery_grants grant_row
+         ON grant_row.workspace_id=capacity.workspace_id
+        AND grant_row.id=capacity.discovery_grant_id
+        AND grant_row.agent_id=ao.agent_id
+       LEFT JOIN agent_runtime_bindings binding
+         ON binding.workspace_id=ao.workspace_id AND binding.agent_id=ao.agent_id
+      WHERE ao.workspace_id=$1 AND ao.member_id=$2
+      ORDER BY ao.created_at,ao.agent_id`,
+    [input.workspaceId, input.joiningMemberId, input.joiningUserId, input.invitationId],
   );
-  if (owned.rows[0]) {
-    const sessionId = owned.rows[0].session_id;
-    if (!sessionId) throw new Error('owned Partner Program Iris has no session');
-    return { agentId: owned.rows[0].agent_id, sessionId, created: false };
+  if (owned.rows.length > 0) {
+    const existing = owned.rows[0]!;
+    const descriptor = discoveryProfileDescriptor(role);
+    const exactConsumedReplay = input.env.AGENT_RUNTIME === 'hermes' &&
+      owned.rows.length === 1 &&
+      existing.capacity_state === 'assigned' &&
+      existing.assigned_agent_id === existing.agent_id &&
+      existing.role_template_key === descriptor.roleTemplateKey &&
+      existing.role_template_version === descriptor.roleTemplateVersion &&
+      existing.skill_key === descriptor.definition.key &&
+      existing.skill_version === descriptor.definition.version &&
+      existing.runtime_name === descriptor.definition.runtimeName &&
+      existing.artifact_digest === descriptor.definition.artifactDigest &&
+      existing.grant_consumed && !existing.grant_revoked &&
+      existing.binding_assignment === 'invitee_pool' &&
+      existing.binding_agentcash === descriptor.expectsAgentCash &&
+      existing.binding_ready;
+    if (input.env.AGENT_RUNTIME === 'hermes' && !exactConsumedReplay) {
+      // A member may own only one managed Iris. Reusing an unrelated former
+      // role would publish the new role without consuming its reserved
+      // capacity. Fail inside the acceptance transaction so membership and
+      // invitation writes roll back and the reservation stays truthful.
+      throw new RouteError(
+        'This member already owns an Iris from a different assignment.',
+        'member_agent_assignment_conflict',
+        409,
+      );
+    }
+    const sessionId = existing.session_id;
+    if (!sessionId) throw new Error('owned Iris has no session');
+    return { agentId: existing.agent_id, sessionId, created: false };
   }
 
   // Warm capacity already carries its permanent runtime identity. Reusing it
   // here makes invitation acceptance an atomic ownership assignment instead
   // of a Cloud mutation/restart that could strand the new member.
   const agentId = input.env.AGENT_RUNTIME === 'hermes'
-    ? await reservedCapacityAgentId(input.tx, input.workspaceId, input.invitationId)
+    ? await reservedCapacityAgentId(input.tx, input.workspaceId, input.invitationId, role)
     : crypto.randomUUID();
+  if (role.roleTemplateKey === 'finance-agent') {
+    await input.tx.query(
+      `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
+       VALUES ($1,$2,'Iris',NULL,NULL,'draft',NULL)`,
+      [agentId, input.workspaceId],
+    );
+    await input.tx.query(
+      `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1,$2,$3)`,
+      [input.workspaceId, agentId, input.joiningMemberId],
+    );
+    await configureAcceptedFinanceMember(
+      input.tx, input.workspaceId, input.joiningUserId,
+      { agentId, principalUserId: input.joiningUserId },
+    );
+    const financeTools = toolsForSkillVersion(
+      PARTNER_INVOICE_REVIEW_DEFINITION.key,
+      PARTNER_INVOICE_REVIEW_DEFINITION.version,
+      PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants,
+    );
+    await input.tx.query(
+      `INSERT INTO agent_capabilities (workspace_id, agent_id, kind, title, scope, tool_names, position)
+       VALUES ($1,$2,'can','Review governed partner invoices','Finance',$3,0)`,
+      [input.workspaceId, agentId, financeTools],
+    );
+    if (input.env.AGENT_RUNTIME === 'hermes') {
+      await consumeReservedCapacity(
+        input.env, input.tx, input.workspaceId, input.invitationId, agentId, role,
+        input.capacityProof ?? null,
+      );
+    }
+    // Finance has no interactive setup wizard: its reviewed role, owner,
+    // assignment and (for Hermes) runtime binding are all materialized in this
+    // transaction. Expose it as started only after those authorities exist.
+    await input.tx.query(
+      `UPDATE agents
+          SET status='started', setup_step=NULL, started_at=COALESCE(started_at,now())
+        WHERE workspace_id=$1 AND id=$2`,
+      [input.workspaceId, agentId],
+    );
+    const sessionId = crypto.randomUUID();
+    await input.tx.query(
+      `INSERT INTO sessions
+         (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+       SELECT $1,$2,$3,$4,'Finance Iris','work',default_model_id,default_effort,default_runtime,1,
+              '{"section":"agents","view":"overview"}'::jsonb
+         FROM workspace_settings WHERE workspace_id=$2`,
+      [sessionId, input.workspaceId, input.joiningUserId, agentId],
+    );
+    await input.tx.query(
+      `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status)
+       VALUES ($1,$2,0,'iris','welcome',$3,'[]'::jsonb,'complete')`,
+      [input.workspaceId, sessionId,
+       'Your organization has assigned you Finance Iris. I can review governed partner invoice handoffs and explain missing or conflicting evidence, then stop for your decision. I cannot approve, decline, pay, send, sign, or change the source records.'],
+    );
+    return { agentId, sessionId, created: true };
+  }
   await input.tx.query(
     `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
      VALUES ($1,$2,'Iris','Partner Program',$3,'draft','identity')`,
@@ -216,6 +347,7 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
       input.workspaceId,
       input.invitationId,
       agentId,
+      role,
       input.capacityProof ?? null,
     );
   }
@@ -240,8 +372,11 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
 
 /** Consume the invitation's exact pool reservation and create real starter work. */
 export async function coordinateAcceptedMember(input: JoinCoordinationInput): Promise<JoinCoordinationResult> {
-  const iris = await createOwnedIris(input);
-  const firstSearchRequestId = iris.created
+  const role = await capacityRoleForInvitation(
+    input.tx, input.workspaceId, input.invitationId, { requireReadyOperation: true },
+  );
+  const iris = await createOwnedIris(input, role);
+  const firstSearchRequestId = iris.created && role.roleTemplateKey === 'partnerships-agent'
     ? await createStarterItems(input, iris.agentId, iris.sessionId)
     : null;
 
@@ -260,6 +395,8 @@ export async function coordinateAcceptedMember(input: JoinCoordinationInput): Pr
     payload: {
       source: 'invitation.accepted', invitation_id: input.invitationId,
       member_id: input.joiningMemberId, agent_id: iris.agentId,
+      role_template_key: role.roleTemplateKey,
+      role_template_version: role.roleTemplateVersion,
       coordination_request_id: firstSearchRequestId,
     },
   }]));

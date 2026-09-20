@@ -13,7 +13,8 @@ import { RouteError } from '../routes/tenant.js';
 interface OperationRow {
   id: string; workspace_id: string; invitation_id: string; revision: number;
   requested_by?: string | null; requester_authorized?: boolean;
-  role_template_key: MemberRoleTemplate; preparation: MemberProvisioningOperation['preparation'];
+  role_template_key: MemberRoleTemplate; role_template_version: string;
+  preparation: MemberProvisioningOperation['preparation'];
   cancellation: MemberProvisioningOperation['cancellation']; issue: MemberProvisioningOperation['issue'];
   invitation_status?: string; delivery_status?: string; delivery_error?: string | null; cloud_status?: string | null;
   /** Present on read-model projections that checked the exact reservation in SQL. */
@@ -207,15 +208,20 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobD
 
     // `ready` is a projection of a current exact reservation, not a terminal
     // bit. Only return while this invitation still owns verified capacity.
+    const expectedRole = {
+      roleTemplateKey: row.role_template_key,
+      roleTemplateVersion: row.role_template_version as '1.0.0',
+    };
     if (row.preparation === 'ready'
-        && row.role_template_key === 'partnerships-agent'
-        && await hasCurrentReservedCapacityForInvitation(env, tx, job.workspace_id, row.invitation_id)) return;
+        && await hasCurrentReservedCapacityForInvitation(
+          env, tx, job.workspace_id, row.invitation_id, expectedRole,
+        )) return;
 
     // Existing capacity is safe to use because reserveCapacityForInvitation
     // revalidates the exact reviewed discovery grant under the row lock.
-    const reservation = row.role_template_key === 'partnerships-agent'
-      ? await reserveCapacityForInvitation(env, tx, job.workspace_id, row.invitation_id)
-      : null;
+    const reservation = await reserveCapacityForInvitation(
+      env, tx, job.workspace_id, row.invitation_id, expectedRole,
+    );
     if (reservation) {
       await tx.query(
         `UPDATE member_provisioning_operations

@@ -13,16 +13,19 @@ import {
   enterpriseReadinessToolNames,
   LEGACY_PARTNER_CONTENT_DIGEST,
   matchesLegacyCapacityAttestation,
+  matchesManagedDiscoveryGrantAttestation,
   matchesExactEnterpriseAttestation,
   matchesExactManagedEnterpriseAttestation,
   matchesEnterpriseReadiness,
   matchesManagedRuntimeAttestation,
   requiresExactEnterpriseAttestation,
 } from '../../src/runtime/readiness.js';
+import type { DiscoveryGrantRow } from '../../src/runtime/discovery-grants.js';
 import {
   PARTNER_INVOICE_REVIEW_DEFINITION,
   PARTNER_PROGRAM_DEFINITION,
   PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+  toolsForSkillVersion,
 } from '../../src/enterprise-skills/registry.js';
 
 const PLUGIN_REVISION = 'a'.repeat(40);
@@ -92,7 +95,65 @@ const managedIdentity = {
   pluginArtifactDigest: PLUGIN_DIGEST,
 };
 
+function discoveryGrant(overrides: Partial<DiscoveryGrantRow> = {}): DiscoveryGrantRow {
+  return {
+    id: '33333333-3333-4333-8333-333333333333',
+    workspace_id: managedIdentity.workspaceId,
+    agent_id: managedIdentity.agentId,
+    credential_digest: new Uint8Array(32),
+    role_template_key: 'finance-agent', role_template_version: '1.0.0',
+    skill_key: PARTNER_INVOICE_REVIEW_DEFINITION.key,
+    skill_version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+    runtime_name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+    artifact_digest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+    assignment_id: null, assignment_revision: null,
+    config_digest: `sha256:${'c'.repeat(64)}`, grant_revision: 1,
+    linked_capacity_id: '44444444-4444-4444-8444-444444444444',
+    expires_at: null, revoked_at: null, consumed_at: null, capacity_state: 'available',
+    ...overrides,
+  };
+}
+
 describe('role-aware native readiness', () => {
+  it('accepts only the exact unowned Finance discovery profile', () => {
+    const grant = discoveryGrant();
+    const exact = readiness({
+      skills: [{
+        name: PARTNER_INVOICE_REVIEW_DEFINITION.runtimeName,
+        version: PARTNER_INVOICE_REVIEW_DEFINITION.version,
+        artifactDigest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+        contentDigest: PARTNER_INVOICE_REVIEW_DEFINITION.artifactDigest,
+      }],
+      toolNames: [
+        ...toolsForSkillVersion(
+          PARTNER_INVOICE_REVIEW_DEFINITION.key,
+          PARTNER_INVOICE_REVIEW_DEFINITION.version,
+          PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants,
+        ),
+        'skill_view',
+      ],
+      agentCashEnabled: false, agentCashWalletPresent: false,
+    });
+    expect(matchesManagedDiscoveryGrantAttestation(exact, grant, managedIdentity)).toBe(true);
+
+    const invalid = [
+      discoveryGrant({ role_template_key: 'partnerships-agent' }),
+      discoveryGrant({ skill_key: PARTNER_PROGRAM_DEFINITION.key }),
+      discoveryGrant({ grant_revision: 2 }),
+      discoveryGrant({ revoked_at: new Date() }),
+      discoveryGrant({ consumed_at: new Date() }),
+    ];
+    expect(invalid.every((candidate) =>
+      !matchesManagedDiscoveryGrantAttestation(exact, candidate, managedIdentity),
+    )).toBe(true);
+    expect(matchesManagedDiscoveryGrantAttestation({
+      ...exact, agentCashEnabled: true, agentCashWalletPresent: true,
+    }, grant, managedIdentity)).toBe(false);
+    expect(matchesManagedDiscoveryGrantAttestation({
+      ...exact, toolNames: [...exact.toolNames!, 'publish_partner_invoice_review'],
+    }, grant, managedIdentity)).toBe(false);
+  });
+
   it('accepts exact Finance attestation without AgentCash or a wallet', () => {
     const finance = assignment();
     expect(requiresExactEnterpriseAttestation(finance)).toBe(true);
