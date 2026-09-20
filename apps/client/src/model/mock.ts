@@ -131,9 +131,9 @@ interface MockOptions {
   /** Existing unfinished setup shown while the deployment is flag-off. */
   pausedMemberSetup?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
-  slack?: 'disconnected' | 'connected';
+  slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
-  email?: 'disconnected' | 'connected';
+  email?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
   /** Labeled two-team fixture for the role-template and invoice provenance UI. */
   partnerWorkflow?: boolean;
   /** Contract fixture for native execution over explicitly labeled sample inputs. */
@@ -1799,8 +1799,9 @@ export function createMockBackend(options: MockOptions = {}) {
       if (method === 'POST' && path.endsWith('/link-code')) {
         return json({ command: 'link hmx_fixture_only_not_a_credential', expires_at: iso(600) }, 201);
       }
+      if (options.slack === 'unavailable') return fail(503, 'unavailable');
       return json({
-        configured: true,
+        configured: options.slack !== 'unconfigured',
         status: slackConnected ? 'connected' : 'disconnected',
         installation_kind: slackConnected ? 'workspace' : null,
         team_name: slackConnected ? 'Fixture workspace' : null,
@@ -1855,8 +1856,9 @@ export function createMockBackend(options: MockOptions = {}) {
         emailConnected = true;
         return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=fixture', expires_at: iso(600) }, 201);
       }
+      if (options.email === 'unavailable') return fail(503, 'unavailable');
       return json({
-        configured: true,
+        configured: options.email !== 'unconfigured',
         status: emailConnected ? 'connected' : 'disconnected',
         address: emailConnected && seat === 'admin' ? 'iris-partners@example.com' : null,
         connected_at: emailConnected ? iso(0) : null,
