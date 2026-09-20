@@ -193,8 +193,24 @@ export const erasureTimingSchema = z
   })
   .strict();
 
+/**
+ * Data-use / sharing facts the server owns. The client must render these
+ * verbatim — paraphrasing them would be a client making a data-protection
+ * claim nobody reviewed.
+ */
+export const policyFactSchema = z
+  .object({
+    id: z.string().max(64),
+    label: z.string().max(120),
+    value: z.string().max(400),
+  })
+  .strict();
+export type PolicyFact = z.infer<typeof policyFactSchema>;
+
 export const dataPrivacySchema = z
   .object({
+    /** Server-owned policy statements shown above retention / processors. */
+    policy: z.array(policyFactSchema).max(20),
     keys: z.array(privacyKeySchema).max(50),
     retention: z.array(retentionFactSchema).max(40),
     erasure: erasureTimingSchema,

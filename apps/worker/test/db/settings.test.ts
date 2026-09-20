@@ -11,6 +11,7 @@ import type { Env } from '../../src/env.js';
 import {
   DEEPSEEK_WARNING,
   ERASURE_TIMING,
+  POLICY_FACTS,
 } from '../../src/routes/settings.js';
 import {
   DELETION_SLEEP,
@@ -209,6 +210,7 @@ describe('Settings > Data and privacy', () => {
     const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/settings/data-privacy`);
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
+      policy: { id: string; label: string; value: string }[];
       retention: { store: string }[];
       erasure: typeof ERASURE_TIMING;
       residency: Record<string, string>;
@@ -221,6 +223,35 @@ describe('Settings > Data and privacy', () => {
     expect(body.erasure.complete_after_days).toBe(30);
     expect(body.erasure.copy).toContain('30 days');
     expect(body.residency.identity_provider).toContain('Standard Contractual Clauses');
+  });
+
+  it('owns data-use policy facts on the wire, including workspace jurisdiction', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    await asTenant(local, (c) =>
+      c.query(`UPDATE workspaces SET jurisdiction = 'eu' WHERE id = $1`, [local.workspaceId]),
+    );
+
+    const response = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings/data-privacy`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      policy: { id: string; label: string; value: string }[];
+    };
+
+    expect(body.policy).toEqual([
+      ...POLICY_FACTS,
+      { id: 'jurisdiction', label: 'Jurisdiction', value: 'eu' },
+    ]);
+    expect(body.policy.find((fact) => fact.id === 'model_training')).toEqual({
+      id: 'model_training',
+      label: 'Model training',
+      value: 'Off',
+    });
+    expect(body.policy.find((fact) => fact.id === 'shared_intelligence')).toEqual({
+      id: 'shared_intelligence',
+      label: 'Shared Intelligence',
+      value: 'Human review required',
+    });
   });
 
   it('warns about DeepSeek by name, and does not warn about a provider that needs none', async () => {

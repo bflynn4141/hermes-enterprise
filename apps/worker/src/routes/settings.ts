@@ -96,6 +96,30 @@ export const RETENTION_FACTS = [
   { store: 'Identity provider (WorkOS)', retention: 'authentication data only', erasure: 'account deletion' },
 ] as const;
 
+/**
+ * Data-use and sharing policy the product enforces. These used to be hardcoded
+ * in the client PrivacyTab; a client that invented them would be making a
+ * data-protection claim nobody reviewed. The jurisdiction row is filled from
+ * the workspace row at request time.
+ */
+export const POLICY_FACTS = [
+  {
+    id: 'workspace_privacy',
+    label: 'Private to this workspace',
+    value: 'Context, agent history and shared skills stay in your organization',
+  },
+  {
+    id: 'model_training',
+    label: 'Model training',
+    value: 'Off',
+  },
+  {
+    id: 'shared_intelligence',
+    label: 'Shared Intelligence',
+    value: 'Human review required',
+  },
+] as const;
+
 const hasAttestation = (attestation: Record<string, unknown> | null): boolean =>
   typeof attestation?.kind === 'string' && attestation.kind.length > 0;
 
@@ -509,21 +533,28 @@ export async function patchSettings(c: Context<{ Bindings: Env }>): Promise<Resp
  */
 export async function getDataPrivacy(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await inWorkspace(c, async (work) => {
-    const { rows } = await work.tx.query<{
-      id: string;
-      provider: string;
-      label: string;
-      last4: string;
-      status: string;
-      attestation: Record<string, unknown> | null;
-      verified_at: Date | null;
-    }>(
-      `SELECT id, provider, label, last4, status, attestation, verified_at
-         FROM workspace_provider_keys
-        WHERE workspace_id = $1 AND revoked_at IS NULL
-        ORDER BY created_at`,
-      [work.workspaceId],
-    );
+    const [keysResult, workspace] = await Promise.all([
+      work.tx.query<{
+        id: string;
+        provider: string;
+        label: string;
+        last4: string;
+        status: string;
+        attestation: Record<string, unknown> | null;
+        verified_at: Date | null;
+      }>(
+        `SELECT id, provider, label, last4, status, attestation, verified_at
+           FROM workspace_provider_keys
+          WHERE workspace_id = $1 AND revoked_at IS NULL
+          ORDER BY created_at`,
+        [work.workspaceId],
+      ),
+      work.tx.query<{ jurisdiction: string }>(
+        `SELECT jurisdiction FROM workspaces WHERE id = $1`,
+        [work.workspaceId],
+      ),
+    ]);
+    const { rows } = keysResult;
 
     const keys = work.role === 'admin'
       ? rows.map((row) => ({
@@ -563,7 +594,13 @@ export async function getDataPrivacy(c: Context<{ Bindings: Env }>): Promise<Res
           };
         });
 
+    const jurisdiction = workspace.rows[0]?.jurisdiction ?? 'default';
+
     return {
+      policy: [
+        ...POLICY_FACTS,
+        { id: 'jurisdiction', label: 'Jurisdiction', value: jurisdiction },
+      ],
       keys,
       retention: RETENTION_FACTS,
       erasure: ERASURE_TIMING,

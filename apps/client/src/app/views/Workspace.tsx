@@ -2601,8 +2601,8 @@ function NotificationsTab() {
 /**
  * Data and privacy.
  *
- * Every fact on this screen is the server's. The retention table, the erasure
- * timing, the residency lines and the per-provider warnings all come from
+ * Every fact on this screen is the server's. The policy rows, retention table,
+ * erasure timing, residency lines and per-provider warnings all come from
  * `GET /w/:ws/settings/data-privacy`, because a client that paraphrased them
  * would be a client making a data-protection claim nobody reviewed. The one
  * control is the attestation, and it is Admin plus step-up: whoever writes it
@@ -2687,11 +2687,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
     <>
       <div>
         <h2 className="section-title">Data and privacy</h2>
-        <p className="meta">Server-reported retention, erasure, provider policy and data location for this workspace.</p>
-      </div>
-      <div className="kv">
-        <span className="grow">Workspace jurisdiction</span>
-        <span className="meta">{state.workspace.jurisdiction ?? 'default'}</span>
+        <p className="meta">Server-reported policy, retention, erasure, provider policy and data location for this workspace.</p>
       </div>
 
       {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
@@ -2699,6 +2695,15 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
 
       {privacy && (
         <>
+          {privacy.policy.map((fact) => (
+            <div className="kv" key={fact.id}>
+              <span className="grow">{fact.label}</span>
+              <span className="meta" style={{ textAlign: 'right', maxWidth: 380 }}>
+                {fact.value}
+              </span>
+            </div>
+          ))}
+
           <h2 className="section-title">Processors</h2>
           {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
           {privacy.keys.map((key) => admin ? (

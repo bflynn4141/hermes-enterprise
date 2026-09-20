@@ -799,6 +799,16 @@ export function createMockBackend(options: MockOptions = {}) {
   let importedEmailEvidence = 0;
 
   const dataPrivacy = {
+    policy: [
+      {
+        id: 'workspace_privacy',
+        label: 'Private to this workspace',
+        value: 'Context, agent history and shared skills stay in your organization',
+      },
+      { id: 'model_training', label: 'Model training', value: 'Off' },
+      { id: 'shared_intelligence', label: 'Shared Intelligence', value: 'Human review required' },
+      { id: 'jurisdiction', label: 'Jurisdiction', value: 'default' },
+    ],
     keys: providerKeys.map((key) => ({
       key_id: key.id,
       provider: key.provider,
