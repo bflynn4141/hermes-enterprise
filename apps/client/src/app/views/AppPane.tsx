@@ -70,7 +70,11 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
   const following = state.ui.follow;
   const agent = agentName(state);
   const [crumb, sub] = describe(state);
-  const key = `${app.section}/${app.view ?? ''}/${app.id ?? ''}/${app.sub ?? ''}/${app.step ?? ''}/${app.field ?? ''}`;
+  // Keep settings tabs mounted across section changes so keyboard focus and
+  // scroll position survive navigation. Individual content panels still unmount.
+  const key = app.section === 'admin' || app.section === 'settings'
+    ? app.section
+    : `${app.section}/${app.view ?? ''}/${app.id ?? ''}/${app.sub ?? ''}/${app.step ?? ''}/${app.field ?? ''}`;
 
   const view = useMemo(() => {
     if (app.section === 'agents') {
@@ -90,7 +94,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     if (app.section === 'settings') return <Settings view={app.view ?? 'Notifications'} />;
     return <AgentOverview />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, app.view]);
 
   const agentView = app.section === 'agents';
   const requestView = app.section === 'inbox' && app.view === 'request';
