@@ -915,6 +915,11 @@ export function reduce(state: AppState, action: Action): AppState {
             // because the PATCH that carries it may not have landed yet.
             titleSource: existing.titleSource === 'manual' ? 'manual' : fresh.titleSource,
             title: existing.titleSource === 'manual' || fresh.title === DEFAULT_SESSION_TITLE ? existing.title : fresh.title,
+            // A run's focus lives on the socket, not the row: nothing persists
+            // `focus_ref` for it, so a snapshot without one must not erase the
+            // link the reply is offering.
+            focus: fresh.focus ?? existing.focus,
+            focusRunId: fresh.focus ? null : existing.focusRunId ?? null,
           }
         : fresh;
       return {
