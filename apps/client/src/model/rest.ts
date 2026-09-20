@@ -35,6 +35,8 @@ import {
   outboundEmailOAuthStartSchema,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
+  cloudConnectionResponseSchema,
+  cloudConnectionStartSchema,
   runViewSchema,
   sessionSnapshotSchema,
   type SessionSettings,
@@ -514,6 +516,8 @@ export function createRest(options: RestOptions) {
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
+    cloudConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/cloud/connection`, cloudConnectionResponseSchema),
+    startCloudConnection: (workspaceId: string) => request('POST', `${ws(workspaceId)}/cloud/connection/start`, cloudConnectionStartSchema, {}),
     pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */
     /**

@@ -1568,6 +1568,10 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       return fail(404, 'not_found');
     }
+    if (p('/cloud/connection') && method === 'GET') {
+      // Fixture-only: the mock never authorizes a real Cloud organization.
+      return json({ status: 'not_connected', organization_name: null, automatic_setup_ready: false, available: false });
+    }
     if (path.startsWith(`/w/${WS}/integrations/slack`)) {
       if (method === 'POST' && path.endsWith('/oauth/start')) {
         return json({ authorize_url: 'https://slack.com/oauth/v2/authorize?client_id=fixture', expires_at: iso(600) }, 201);
