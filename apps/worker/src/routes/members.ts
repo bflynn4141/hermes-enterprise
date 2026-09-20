@@ -14,7 +14,12 @@
 // jobs that tell WorkOS and the hubs. One path, so the two ways in cannot drift
 // apart — and a test drives the WorkOS path and the route and compares the rows.
 import type { Context } from 'hono';
-import { invitationEntitySchema, memberEntitySchema, paginatedSchema } from '@hermes/shared';
+import {
+  invitationEntitySchema,
+  memberEntitySchema,
+  paginatedSchema,
+  type MemberProvisioningOperation,
+} from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
@@ -34,6 +39,15 @@ import {
   logInvitationDiagnostic,
   trackInvitationRequestFailure,
 } from '../ops/invitation-diagnostics.js';
+import {
+  createMemberProvisioningOperation,
+  memberProvisioningEnabled,
+  memberSetupRoleExecutable,
+  projectMemberProvisioning,
+  rebindMemberProvisioningOperation,
+  requestMemberProvisioningCancellation,
+} from '../member-provisioning/service.js';
+import type { MemberRoleTemplate } from '@hermes/shared';
 
 export type MemberRole = 'admin' | 'member';
 
@@ -270,6 +284,26 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
     await expireInvitationReservations(work.tx, work.workspaceId);
     const { rows } = await work.tx.query(
       `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status,
+              i.workos_invitation_id,
+              op.id AS operation_id, op.workspace_id AS operation_workspace_id,
+              op.revision AS operation_revision, op.preparation,
+              op.cancellation, op.issue, op.role_template_key,
+              EXISTS (
+                SELECT 1
+                  FROM hermes_cloud_capacity capacity
+                  JOIN runtime_discovery_grants grant_row
+                    ON grant_row.workspace_id=capacity.workspace_id
+                   AND grant_row.id=capacity.discovery_grant_id
+                   AND grant_row.linked_capacity_id=capacity.id
+                   AND grant_row.agent_id=capacity.preflight_agent_id
+                 WHERE capacity.workspace_id=i.workspace_id
+                   AND capacity.reserved_invitation_id=i.id
+                   AND capacity.state='reserved'
+                   AND grant_row.revoked_at IS NULL
+                   AND grant_row.consumed_at IS NULL
+                   AND grant_row.expires_at IS NULL
+                   AND grant_row.role_template_key=op.role_template_key
+              ) AS ready_reservation_current,
               CASE
                 WHEN i.delivery_error IS NULL THEN NULL
                 WHEN i.delivery_error IN (
@@ -285,6 +319,8 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
               END AS delivery_reason,
               sync.correlation_id AS delivery_trace_id
          FROM invitations i
+         LEFT JOIN member_provisioning_operations op
+           ON op.workspace_id=i.workspace_id AND op.invitation_id=i.id
          LEFT JOIN LATERAL (
            SELECT CASE
                     WHEN payload->>'correlation_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
@@ -304,13 +340,29 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
         id: row.id,
         email: row.email,
         role: row.role,
-        status:
-          row.status === 'pending' && (row.expires_at as Date).getTime() < Date.now() ? 'expired' : row.status,
+        status: row.status === 'pending'
+          && (row.expires_at as Date).getTime() < Date.now()
+          && !(row.operation_id && row.cancellation !== 'complete' && row.workos_invitation_id === null)
+          ? 'expired'
+          : row.status,
         invited_at: (row.created_at as Date).toISOString(),
         ...(work.role === 'admin' ? {
           delivery_status: row.delivery_status,
           delivery_reason: row.delivery_reason,
           delivery_trace_id: row.delivery_trace_id,
+        } : {}),
+        ...(row.operation_id ? {
+          role_template_key: row.role_template_key,
+          provisioning: projectMemberProvisioning({
+            id: row.operation_id, workspace_id: row.operation_workspace_id,
+            invitation_id: row.id,
+            revision: row.operation_revision, preparation: row.preparation,
+            cancellation: row.cancellation, issue: row.issue,
+            role_template_key: row.role_template_key,
+            ready_reservation_current: row.ready_reservation_current,
+            invitation_status: row.status, delivery_status: row.delivery_status,
+            delivery_error: row.delivery_reason,
+          }),
         } : {}),
         version: 0,
       })),
@@ -337,9 +389,36 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
   try {
     requireOrigin(c, { required: false });
     requireCsrf(c);
-    const input = await jsonBody<{ email?: string; role?: string }>(c);
+    const input = await jsonBody<{ email?: string; role?: string; role_template_key?: string }>(c);
     const email = (input.email ?? '').trim().toLowerCase();
     const role: MemberRole = input.role === 'admin' ? 'admin' : 'member';
+    if (input.role_template_key !== undefined && input.role_template_key !== 'partnerships-agent' && input.role_template_key !== 'finance-agent') {
+      throw new RouteError('choose a supported job role', 'bad_role_template', 422);
+    }
+    const preparing = memberProvisioningEnabled(c.env);
+    // `role_template_key` opts into the setup-only contract. Reject it before
+    // tenant admission or rate limiting when that contract is disabled, so a
+    // rolling or stale client cannot silently fall through to legacy delivery.
+    if (!preparing && input.role_template_key !== undefined) {
+      checkpoint = 'setup_mode_rejected';
+      throw new RouteError(
+        'Background member setup is not available in this deployment.',
+        'member_setup_unavailable',
+        409,
+      );
+    }
+    const roleTemplateKey: MemberRoleTemplate = input.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent';
+    // Advertising and admission share the same executable boundary. Keep the
+    // Finance schema value readable for persisted history, but never create a
+    // known-doomed operation until compatible capacity execution exists.
+    if (preparing && !memberSetupRoleExecutable(roleTemplateKey)) {
+      checkpoint = 'setup_role_rejected';
+      throw new RouteError(
+        'Finance agent setup is not available yet. Choose an available job role.',
+        'member_setup_role_unavailable',
+        409,
+      );
+    }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       throw new RouteError('an invitation needs an email address', 'bad_email', 422);
     }
@@ -356,18 +435,20 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       );
       const alreadyMember = existing.rows[0];
 
-      const organizationId = await workosOrganizationId(work);
-      if (!alreadyMember && c.env.AUTH_MODE === 'workos' && !organizationId) {
+      const organizationId = preparing ? null : await workosOrganizationId(work);
+      if (!preparing && !alreadyMember && c.env.AUTH_MODE === 'workos' && !organizationId) {
         throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
       }
       checkpoint = 'organization_binding_checked';
 
-      const { rows } = await work.tx.query<{ id: string; status: string; created_at: Date }>(
+      const { rows } = await work.tx.query<{
+        id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+      }>(
         `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by,
                                   status, accepted_by, delivery_status)
          VALUES ($1, $2, $3, now() + interval '7 days', $4, $5, $6, $7)
          ON CONFLICT (workspace_id, email) WHERE status = 'pending' DO NOTHING
-         RETURNING id, status, created_at`,
+         RETURNING id, status, created_at, delivery_status, delivery_error`,
         [
           work.workspaceId,
           email,
@@ -375,14 +456,16 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
           work.userId,
           alreadyMember ? 'accepted' : 'pending',
           alreadyMember?.user_id ?? null,
-          alreadyMember ? 'not_required' : c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
+          alreadyMember || preparing ? 'not_required' : c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
         ],
       );
       let row = rows[0];
       let duplicate = false;
       if (!row) {
-        const prior = await work.tx.query<{ id: string; status: string; created_at: Date }>(
-          `SELECT id, status, created_at FROM invitations
+        const prior = await work.tx.query<{
+          id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+        }>(
+          `SELECT id, status, created_at, delivery_status, delivery_error FROM invitations
             WHERE workspace_id=$1 AND email=$2 AND status='pending' FOR UPDATE`,
           [work.workspaceId, email],
         );
@@ -393,7 +476,53 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       trackedInvitationId = row.id;
       checkpoint = duplicate ? 'duplicate_resolved' : 'invitation_stored';
 
-      if (!alreadyMember && c.env.AGENT_RUNTIME === 'hermes') {
+      const operation = duplicate ? await work.tx.query<{
+        id: string; workspace_id: string; revision: number;
+        preparation: MemberProvisioningOperation['preparation'];
+        cancellation: MemberProvisioningOperation['cancellation'];
+        issue: MemberProvisioningOperation['issue'];
+        role_template_key: MemberRoleTemplate;
+      }>(
+        `SELECT id, workspace_id, revision, preparation, cancellation, issue, role_template_key
+           FROM member_provisioning_operations
+          WHERE workspace_id=$1 AND invitation_id=$2 FOR UPDATE`,
+        [work.workspaceId, row.id],
+      ) : null;
+      const existingOperation = operation?.rows[0] ?? null;
+      if (duplicate && !alreadyMember && preparing !== Boolean(existingOperation)) {
+        throw new RouteError(
+          preparing
+            ? 'This address already has a legacy invitation in progress.'
+            : 'This address already has background member setup in progress.',
+          'invitation_mode_conflict',
+          409,
+        );
+      }
+      if (existingOperation && existingOperation.role_template_key !== roleTemplateKey) {
+        throw new RouteError(
+          'This address already has setup in progress for a different job role.',
+          'invitation_role_conflict',
+          409,
+        );
+      }
+
+      let provisioning = existingOperation ? projectMemberProvisioning({
+        ...existingOperation,
+        invitation_id: row.id,
+        invitation_status: row.status,
+        delivery_status: row.delivery_status,
+        delivery_error: row.delivery_error,
+      }) : null;
+      if (!alreadyMember && preparing) {
+        if (!duplicate) {
+          const created = await createMemberProvisioningOperation(work.tx, {
+            workspaceId: work.workspaceId, invitationId: row.id, requestedBy: work.userId, roleTemplateKey,
+          });
+          provisioning = created.operation;
+          if (created.jobId) work.jobs.push(created.jobId);
+          checkpoint = 'member_setup_queued';
+        }
+      } else if (!alreadyMember && c.env.AGENT_RUNTIME === 'hermes') {
         const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
         if (!reservation) {
           throw new RouteError(
@@ -407,7 +536,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         await enqueueCapacityWarning(work.tx, work.workspaceId, reservation.remaining, threshold);
       }
 
-      if (!alreadyMember && !duplicate && c.env.AUTH_MODE === 'workos' && organizationId) {
+      if (!preparing && !alreadyMember && !duplicate && c.env.AUTH_MODE === 'workos' && organizationId) {
         const key = `workos:invitation:${row.id}:send`;
         await work.tx.query(
           `INSERT INTO workos_sync (workspace_id, resource_type, resource_id, direction, payload)
@@ -420,7 +549,10 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         });
         if (jobId) work.jobs.push(jobId);
       }
-      if (!alreadyMember && !duplicate) {
+      // Setup-backed invitations do not start their seven-day clock until the
+      // provider accepts delivery. Queuing expiry here would make a slow Cloud
+      // preparation silently consume the recipient's response window.
+      if (!preparing && !alreadyMember && !duplicate) {
         const expiryJob = await enqueueJob(
           work.tx, work.workspaceId, 'hermes_invitation_expire', `invitation-expire:${row.id}`, { invitation_id: row.id },
         );
@@ -443,6 +575,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         role,
         status: row.status,
         invited_at: row.created_at.toISOString(),
+        ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
         version: 0,
       }) };
     }));
@@ -451,7 +584,8 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
     logInvitationDiagnostic({
       action: 'create', checkpoint, correlationId, workspaceId,
       invitationId: result.entity.id, ok: true,
-      reason: result.alreadyMember ? 'already_member' : result.duplicate ? 'duplicate' : 'delivery_queued',
+      reason: result.alreadyMember ? 'already_member' : result.duplicate ? 'duplicate'
+        : result.entity.provisioning ? 'setup_queued' : 'delivery_queued',
       status: result.duplicate ? 200 : 201,
     });
     return c.json(result.entity, result.duplicate ? 200 : 201);
@@ -482,16 +616,21 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
     trackedInvitationId = invitationId;
     const body = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('resending an invitation');
-      await expireInvitationReservations(work.tx, work.workspaceId);
       const { rows } = await work.tx.query<{
         id: string;
         email: string;
         role: string;
         status: string;
         workos_invitation_id: string | null;
+        role_template_key: MemberRoleTemplate | null;
       }>(
-        `SELECT id, email, role, status, workos_invitation_id
-           FROM invitations WHERE workspace_id = $1 AND id = $2`,
+        `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id,
+                op.role_template_key
+           FROM invitations i
+           LEFT JOIN member_provisioning_operations op
+             ON op.workspace_id=i.workspace_id AND op.invitation_id=i.id
+          WHERE i.workspace_id = $1 AND i.id = $2
+          FOR UPDATE OF i`,
         [work.workspaceId, invitationId],
       );
       const invitation = rows[0];
@@ -501,11 +640,27 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       }
       checkpoint = 'invitation_locked';
 
-      const organizationId = await workosOrganizationId(work);
-      if (c.env.AUTH_MODE === 'workos' && !organizationId) {
+      const setupBacked = invitation.role_template_key !== null;
+      if (setupBacked && !memberProvisioningEnabled(c.env)) {
+        throw new RouteError(
+          'Background member setup is paused in this deployment. The existing setup was not changed.',
+          'member_setup_unavailable',
+          409,
+        );
+      }
+      if (setupBacked && !memberSetupRoleExecutable(invitation.role_template_key!)) {
+        throw new RouteError(
+          'Finance agent setup is not available yet. The existing setup was not changed.',
+          'member_setup_role_unavailable',
+          409,
+        );
+      }
+      const organizationId = setupBacked ? null : await workosOrganizationId(work);
+      if (!setupBacked && c.env.AUTH_MODE === 'workos' && !organizationId) {
         throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
       }
       checkpoint = 'organization_binding_checked';
+      await expireInvitationReservations(work.tx, work.workspaceId);
       await work.tx.query(`UPDATE invitations SET status = 'resent' WHERE id = $1`, [invitation.id]);
       const created = await work.tx.query<{ id: string; created_at: Date }>(
         `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by, delivery_status)
@@ -516,7 +671,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
           invitation.email,
           invitation.role,
           work.userId,
-          c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
+          setupBacked ? 'not_required' : c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
         ],
       );
       const row = created.rows[0];
@@ -525,7 +680,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       await work.tx.query(`UPDATE invitations SET superseded_by = $2 WHERE id = $1`, [invitation.id, row.id]);
       checkpoint = 'successor_stored';
 
-      if (c.env.AGENT_RUNTIME === 'hermes') {
+      if (!setupBacked && c.env.AGENT_RUNTIME === 'hermes') {
         const transferred = await transferInvitationCapacity(c.env, work.tx, work.workspaceId, invitation.id, row.id);
         if (!transferred) {
           const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
@@ -537,7 +692,23 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         }
         checkpoint = 'capacity_transferred_or_reserved';
       }
-      if (c.env.AUTH_MODE === 'workos' && organizationId) {
+      let provisioning = null;
+      if (setupBacked) {
+        const capacityTransferred = await transferInvitationCapacity(
+          c.env, work.tx, work.workspaceId, invitation.id, row.id,
+        );
+        const transferredOperation = await rebindMemberProvisioningOperation(
+          work.tx, work.workspaceId, invitation.id, row.id, work.userId, capacityTransferred,
+        );
+        if (!transferredOperation) throw new RouteError(
+          'This setup can no longer be resent. Start a new invitation after reviewing its state.',
+          'not_resendable',
+          409,
+        );
+        provisioning = transferredOperation.operation;
+        if (transferredOperation.jobId) work.jobs.push(transferredOperation.jobId);
+      }
+      if (!setupBacked && c.env.AUTH_MODE === 'workos' && organizationId) {
         const key = `workos:invitation:${row.id}:send`;
         await work.tx.query(
           `INSERT INTO workos_sync (workspace_id, resource_type, resource_id, direction, payload)
@@ -553,12 +724,14 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         });
         if (jobId) work.jobs.push(jobId);
       }
-      const expiryJob = await enqueueJob(
-        work.tx, work.workspaceId, 'hermes_invitation_expire', `invitation-expire:${row.id}`, { invitation_id: row.id },
-      );
-      if (expiryJob) {
-        await work.tx.query(`UPDATE jobs SET next_at=now()+interval '7 days' WHERE id=$1`, [expiryJob]);
-        await work.tx.query(`UPDATE job_ready SET next_at=now()+interval '7 days' WHERE job_id=$1`, [expiryJob]);
+      if (!setupBacked) {
+        const expiryJob = await enqueueJob(
+          work.tx, work.workspaceId, 'hermes_invitation_expire', `invitation-expire:${row.id}`, { invitation_id: row.id },
+        );
+        if (expiryJob) {
+          await work.tx.query(`UPDATE jobs SET next_at=now()+interval '7 days' WHERE id=$1`, [expiryJob]);
+          await work.tx.query(`UPDATE job_ready SET next_at=now()+interval '7 days' WHERE job_id=$1`, [expiryJob]);
+        }
       }
       checkpoint = 'sync_and_expiry_jobs_prepared';
 
@@ -568,13 +741,14 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         role: invitation.role,
         status: 'pending',
         invited_at: row.created_at.toISOString(),
+        ...(provisioning ? { provisioning, role_template_key: invitation.role_template_key! } : {}),
         version: 0,
       });
     }));
     checkpoint = 'committed';
     logInvitationDiagnostic({
       action: 'resend', checkpoint, correlationId, workspaceId,
-      invitationId: body.id, ok: true, reason: 'delivery_queued', status: 201,
+      invitationId: body.id, ok: true, reason: body.provisioning ? 'setup_queued' : 'delivery_queued', status: 201,
     });
     return c.json(body, 201);
   } catch (error) {
@@ -594,7 +768,8 @@ export async function withdrawInvitation(c: Context<{ Bindings: Env }>): Promise
   await inWorkspace(c, async (work) => {
     work.requireAdmin('withdrawing an invitation');
     const { rows } = await work.tx.query<{ id: string; status: string; workos_invitation_id: string | null }>(
-      `SELECT id, status, workos_invitation_id FROM invitations WHERE workspace_id = $1 AND id = $2`,
+      `SELECT id, status, workos_invitation_id FROM invitations
+        WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
       [work.workspaceId, invitationId],
     );
     const invitation = rows[0];
@@ -603,6 +778,8 @@ export async function withdrawInvitation(c: Context<{ Bindings: Env }>): Promise
       throw new RouteError('that invitation was already accepted', 'already_accepted', 409);
     }
     await work.tx.query(`UPDATE invitations SET status = 'withdrawn' WHERE id = $1`, [invitation.id]);
+    const cancellationJob = await requestMemberProvisioningCancellation(work.tx, work.workspaceId, invitation.id);
+    if (cancellationJob) work.jobs.push(cancellationJob);
     await releaseInvitationCapacity(work.tx, work.workspaceId, invitation.id);
 
     if (invitation.workos_invitation_id) {

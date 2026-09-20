@@ -113,10 +113,23 @@ export async function expireInvitationReservations(tx: Tx, workspaceId: string):
     `UPDATE invitations
         SET status='expired', delivery_status=CASE WHEN delivery_status='delivered' THEN delivery_status ELSE 'failed' END
       WHERE workspace_id=$1 AND status='pending' AND expires_at <= now()
+        AND NOT EXISTS (
+          SELECT 1 FROM member_provisioning_operations op
+           WHERE op.workspace_id=invitations.workspace_id
+             AND op.invitation_id=invitations.id
+             AND op.cancellation<>'complete'
+             AND invitations.workos_invitation_id IS NULL
+        )
       RETURNING id`,
     [workspaceId],
   );
   if (expired.rows.length === 0) return 0;
+  await tx.query(
+    `UPDATE member_provisioning_operations
+        SET cancellation='complete', completed_at=now(), revision=revision+1
+      WHERE workspace_id=$1 AND invitation_id=ANY($2::uuid[]) AND cancellation<>'complete'`,
+    [workspaceId, expired.rows.map((row) => row.id)],
+  );
   await tx.query(
     `UPDATE hermes_cloud_capacity
         SET state='available', reserved_invitation_id=NULL
@@ -182,6 +195,24 @@ export async function reserveCapacityForInvitation(
         await linkedGrantIsCurrent(env, tx, workspaceId, row.id, row.discovery_grant_id)) remaining += 1;
   }
   return { id, remaining };
+}
+
+/** Revalidate the exact reservation behind a persisted `ready` operation. */
+export async function hasCurrentReservedCapacityForInvitation(
+  env: Env,
+  tx: Tx,
+  workspaceId: string,
+  invitationId: string,
+): Promise<boolean> {
+  const { rows } = await tx.query<{ id: string; discovery_grant_id: string | null }>(
+    `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
+      WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'
+      FOR UPDATE`,
+    [workspaceId, invitationId],
+  );
+  const capacity = rows[0];
+  return Boolean(capacity?.discovery_grant_id
+    && await linkedGrantIsCurrent(env, tx, workspaceId, capacity.id, capacity.discovery_grant_id));
 }
 
 async function linkedGrantIsCurrent(

@@ -30,6 +30,9 @@ describe('Member provisioning public state and recovery', () => {
   it('requires confirmed readiness to queue and deliver', () => {
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready' })).toBe('queue_email');
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready', delivery: 'queued' })).toBe('deliver_email');
+    expect(memberProvisioningPresentation({ ...base, preparation: 'ready' })).toMatchObject({
+      label: 'Agent ready', detail: 'Setup is verified. Invitation delivery has not been queued.',
+    });
   });
   it('never presents a delayed cancellation as complete', () => {
     const operation = { ...base, preparation: 'creating' as const, cancellation: 'requested' as const };
@@ -41,12 +44,25 @@ describe('Member provisioning public state and recovery', () => {
     expect(memberProvisioningPresentation(operation).label).toBe('Invited');
     expect(nextMemberProvisioningStep(operation)).toBe('wait');
   });
+  it('shows unfinished setup as paused when the deployment is not advancing setup', () => {
+    expect(memberProvisioningPresentation(base, { setupEnabled: false })).toMatchObject({
+      label: 'Setup paused', canCancel: true, action: null,
+    });
+    expect(memberProvisioningPresentation({ ...base, preparation: 'ready' }, { setupEnabled: false }).label)
+      .toBe('Agent ready');
+    expect(memberProvisioningPresentation({
+      ...base, preparation: 'ready', delivery: 'sent',
+    }, { setupEnabled: false }).label).toBe('Invited');
+  });
   it('keeps billing and unsupported bootstrap blocked', () => {
     for (const issue of ['billing_unverified', 'insufficient_credits', 'bootstrap_unsupported'] as const) {
       expect(nextMemberProvisioningStep({ ...base, issue })).toBe('needs_attention');
     }
     expect(memberProvisioningPresentation({ ...base, issue: 'insufficient_credits' }).action).toBe('review_billing');
     expect(memberProvisioningPresentation({ ...base, issue: 'bootstrap_unsupported' }).label).toBe('Needs attention');
+    expect(memberProvisioningPresentation({ ...base, issue: 'authorization_revoked' })).toMatchObject({
+      label: 'Setup paused', action: 'contact_admin',
+    });
   });
   it('rejects provider data and secrets from the public contract', () => {
     expect(memberProvisioningOperationSchema.safeParse({ ...base, access_token: 'secret' }).success).toBe(false);

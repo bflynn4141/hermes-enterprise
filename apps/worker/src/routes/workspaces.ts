@@ -181,6 +181,7 @@ export async function createWorkspace(c: Context<{ Bindings: Env }>): Promise<Re
       // without a window where the workspace exists but reads as empty.
       const body = bootstrapSchema.parse(await loadBootstrap(
         client, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+        c.env.HERMES_MEMBER_PROVISIONING_ENABLED === '1',
       ));
       await client.query('COMMIT');
 

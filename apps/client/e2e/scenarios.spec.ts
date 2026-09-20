@@ -152,20 +152,21 @@ test.describe('members write feedback', () => {
     const app = page.getByRole('region', { name: 'Application' });
 
     await app.getByRole('tab', { name: 'Invitations' }).click();
-    await app.getByRole('button', { name: 'Resend' }).click();
+    const lena = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
+    await lena.getByRole('button', { name: 'Resend' }).click();
     await expect(app.getByRole('alert')).toHaveText(
       `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
     );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
-    await app.getByRole('button', { name: 'Withdraw' }).click();
+    await lena.getByRole('button', { name: 'Cancel' }).click();
     await expect(app.getByRole('alert')).toHaveText('Could not withdraw that invitation. Try again.');
 
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     const email = invite.getByRole('textbox', { name: 'Work email' });
     await email.fill('new.member@example.com');
-    await invite.getByRole('button', { name: 'Invite' }).click();
+    await invite.getByRole('button', { name: 'Send invitation' }).click();
     await expect(invite.getByRole('alert')).toHaveText(
       `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
     );
@@ -184,18 +185,96 @@ test.describe('members write feedback', () => {
     await expect(manage).toBeVisible();
   });
 
-  test('a successful invite appears in the Invitations tab', async ({ page }) => {
+  test('flag-off legacy delivery has truthful copy and queues the invitation', async ({ page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Members', exact: true }).click();
     const app = page.getByRole('region', { name: 'Application' });
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
+    await expect(invite.getByText('Job role')).toHaveCount(0);
+    await expect(invite.getByText('Capacity is reserved automatically, then the invitation email is queued for delivery.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
-    await invite.getByRole('button', { name: 'Invite' }).click();
+    await invite.getByRole('button', { name: 'Send invitation' }).click();
 
     await expect(invite).toHaveCount(0);
     await expect(app.getByText('new.member@example.com')).toBeVisible();
-    await expect(app.getByText('Invitation recorded · Email delivery queued')).toBeVisible();
+    await expect(app.getByText('Invitation queued')).toBeVisible();
+    const created = app.getByRole('listitem').filter({ hasText: 'new.member@example.com' });
+    await expect(created.getByText('Email delivery queued')).toBeVisible();
+    await expect(created.getByText('Setting up agent')).toHaveCount(0);
+  });
+
+  test('flag-on setup uses advertised roles without queuing email at creation', async ({ page }) => {
+    await page.goto('/?memberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const invite = page.getByRole('dialog', { name: 'Invite member' });
+    await expect(invite.getByText('Job role')).toBeVisible();
+    await expect(invite.getByRole('option', { name: 'Partnerships' })).toHaveCount(1);
+    await expect(invite.getByRole('option', { name: 'Finance' })).toHaveCount(0);
+    await invite.getByRole('combobox').selectOption('partnerships-agent');
+    await expect(invite.getByRole('combobox')).toHaveValue('partnerships-agent');
+    await expect(invite.getByText('Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.')).toBeVisible();
+    await invite.getByRole('textbox', { name: 'Work email' }).fill('partnerships.setup@example.com');
+    await invite.getByRole('button', { name: 'Start setup' }).click();
+
+    await expect(invite).toHaveCount(0);
+    await expect(app.getByText('Agent setup started')).toBeVisible();
+    const created = app.getByRole('listitem').filter({ hasText: 'partnerships.setup@example.com' });
+    await expect(created.getByText('Setting up agent').first()).toBeVisible();
+    await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
+    await expect(created.getByText('Partnerships', { exact: true })).toBeVisible();
+    await expect(created.getByText('Email delivery queued')).toHaveCount(0);
+  });
+
+  test('flag-off existing setup is shown as paused and remains cancellable', async ({ page }) => {
+    await page.goto('/?pausedMemberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    const card = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
+    await expect(card.getByText('Setup paused')).toBeVisible();
+    await expect(card.getByText('Setup is paused. You can cancel this invitation or wait for setup to resume.')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(card.getByText('Setting up agent')).toHaveCount(0);
+  });
+
+  test('invitation cards fit desktop and phone layouts', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/?memberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    await app.getByRole('button', { name: 'Invite member' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Invite member' });
+    await dialog.getByRole('textbox', { name: 'Work email' }).fill('design.check@example.com');
+    await dialog.getByRole('button', { name: 'Start setup' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(app.getByText('Agent setup started')).toHaveCount(0, { timeout: 3_000 });
+    const cards = app.locator('.member-card-list');
+    await expect(cards.getByRole('listitem')).toHaveCount(2);
+    await expect(cards.getByText('Setting up agent').first()).toBeVisible();
+    let layout = await cards.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    await page.screenshot({ path: testInfo.outputPath('members-desktop.png'), fullPage: true });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const showApp = page.locator('.pane-iris').getByRole('button', { name: 'App', exact: true });
+    if (await showApp.isVisible()) await showApp.click();
+    await expect(app).toHaveAttribute('data-active', 'true');
+    layout = await cards.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    const card = cards.getByRole('listitem').first();
+    const bounds = await card.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+    for (const button of await card.getByRole('button').all()) {
+      const buttonBounds = await button.boundingBox();
+      expect(buttonBounds?.height ?? 0).toBeGreaterThanOrEqual(42);
+    }
+    await page.screenshot({ path: testInfo.outputPath('members-mobile.png'), fullPage: true });
   });
 });
 

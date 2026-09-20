@@ -23,6 +23,7 @@ import { requestAudiencePredicate, streamEventAudiencePredicate } from '../domai
 import {
   loadVisiblePendingRequests,
 } from '../domain/requests.js';
+import { EXECUTABLE_MEMBER_SETUP_ROLES } from '../member-provisioning/service.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -55,6 +56,7 @@ export async function loadBootstrap(
   /** This deployment's providers; rows of any other are not sent (R12). */
   allowed: readonly string[],
   automatedTriggers = false,
+  memberProvisioning = false,
 ): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
@@ -245,6 +247,9 @@ export async function loadBootstrap(
       // Only explicitly selected, hash-bound agent sources are accepted.
       turn_attachments: true,
       automated_triggers: automatedTriggers,
+      member_invitations: memberProvisioning
+        ? { mode: 'setup_only', role_templates: [...EXECUTABLE_MEMBER_SETUP_ROLES] }
+        : { mode: 'legacy_delivery', role_templates: [] },
     },
     heads: { session: head.session_head, workspace: head.workspace_head },
     counts: {
@@ -275,6 +280,7 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
     { workspaceId, userId: session.userId },
     (tx) => loadBootstrap(
       tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
+      c.env.HERMES_MEMBER_PROVISIONING_ENABLED === '1',
     ),
   );
   return c.json({ ...body, sessions: body.sessions.map((row) => ({ ...row,

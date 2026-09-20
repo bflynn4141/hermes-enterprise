@@ -32,7 +32,7 @@ const env = { HERMES_CLOUD_MANAGEMENT_ENABLED: '1', HERMES_ENTERPRISE_PUBLIC_URL
 const secret = { clientId: 'client-private', redirectUri: `https://hermes.test/w/${workspaceId}/cloud/connection/callback`, verifier: 'pkce-private', sid: 'session-private' };
 let attempt: { id: string; initiated_by: string; status: string; expires_at: Date; ciphertext: Uint8Array; iv: Uint8Array; wrapped_dek: Uint8Array; wrap_iv: Uint8Array; kek_version: number } | null;
 let connection: Record<string, unknown> | null;
-let work: { tx: { query: typeof mocks.query }; workspaceId: string; userId: string; session: { sid: string }; requireAdmin: typeof mocks.requireAdmin };
+let work: { tx: { query: typeof mocks.query }; workspaceId: string; userId: string; session: { sid: string }; jobs: string[]; requireAdmin: typeof mocks.requireAdmin };
 
 function app() {
   const server = new Hono<{ Bindings: Env }>();
@@ -52,7 +52,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected network or paid call'); }));
   attempt = { id: attemptId, initiated_by: 'user-1', status: 'pending', expires_at: new Date(Date.now() + 60_000), ciphertext: new Uint8Array([1]), iv: new Uint8Array([2]), wrapped_dek: new Uint8Array([3]), wrap_iv: new Uint8Array([4]), kek_version: 1 };
   connection = null;
-  work = { tx: { query: mocks.query }, workspaceId, userId: 'user-1', session: { sid: secret.sid }, requireAdmin: mocks.requireAdmin };
+  work = { tx: { query: mocks.query }, workspaceId, userId: 'user-1', session: { sid: secret.sid }, jobs: [], requireAdmin: mocks.requireAdmin };
   mocks.inWorkspace.mockImplementation(async (_context, operation) => operation(work));
   mocks.query.mockImplementation(async (sql: string) => {
     if (sql.includes('SELECT * FROM cloud_connection_attempts')) return { rows: attempt ? [attempt] : [] };

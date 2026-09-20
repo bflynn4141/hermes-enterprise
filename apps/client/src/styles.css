@@ -336,7 +336,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .toggle[aria-checked="true"] .knob { transform: translateX(18px); }
 .field { display: flex; align-items: center; gap: 12px; min-height: 62px; padding: 18px 20px; border-radius: 10px; border: 1px solid var(--line); background-color: var(--context); background-image: var(--panel); color: var(--body); width: 100%; }
 .field:focus-within { border-color: #9B9AE0; }
-.field input, .field textarea { flex: 1; background: transparent; border: 0; outline: 0; font-size: 12.8px; line-height: 19.2px; color: var(--body); min-width: 0; }
+.field input, .field textarea, .field select { flex: 1; background: transparent; border: 0; outline: 0; font-size: 12.8px; line-height: 19.2px; color: var(--body); min-width: 0; }
 .field input::placeholder, .field textarea::placeholder { color: var(--muted); }
 
 .skill-assignment-shell { border-bottom: 1px solid var(--line); }
@@ -435,15 +435,38 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .pdf-embed { width: 100%; height: 100%; border: 0; background: #fff; border-radius: 4px; flex: 1 1 0; min-height: 420px; }
 .line-select-bar { display: flex; align-items: center; gap: 12px; font-size: 11.2px; color: var(--muted); }
 .history-summary .avatar { margin-left: auto; }
-.members-row .avatar { width: 40px; height: 40px; font-size: 11.2px; }
-/* The row's two facts about a person, in the same shape on both member tabs.
-   `muted` is the default because a role is not a state; only a status earns a
-   colour, and only two statuses earn a warning one. */
+.members-header { flex-wrap: wrap; gap: 10px 14px; }
+.member-card-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 14px; container-type: inline-size; }
+.member-card { display: grid; grid-template: "identity facts" auto "status actions" minmax(38px, auto) / minmax(0, 1fr) auto; align-items: center; gap: 14px 18px; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background-color: var(--context); background-image: var(--panel); }
+.member-card-identity { grid-area: identity; display: flex; align-items: center; gap: 12px; min-width: 0; }
+.member-card .avatar { width: 40px; height: 40px; flex: 0 0 40px; font-size: 11.2px; }
+.member-card .row-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; }
+.member-card-title { color: var(--body); font-size: 14.4px; line-height: 19.2px; }
+.member-card-email { color: var(--muted); font-size: 11.2px; line-height: 16px; overflow-wrap: anywhere; }
+.member-card-facts { grid-area: facts; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.member-card-summary { grid-area: status; align-self: center; color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.member-card-status { grid-area: status; display: grid; grid-template-columns: 8px minmax(0,1fr); align-items: start; gap: 10px; min-width: 0; }
+.member-card-status > i { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #85819D; box-shadow: 0 0 0 3px rgba(133,129,157,.12); }
+.member-card-status[data-tone="positive"] > i { background: #73CBA2; box-shadow: 0 0 0 3px rgba(115,203,162,.12); }
+.member-card-status[data-tone="attention"] > i { background: #E7C27D; box-shadow: 0 0 0 3px rgba(231,194,125,.12); }
+.member-card-status > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.member-card-status strong { font-size: 11.2px; line-height: 16px; font-weight: 500; }
+.member-card-status span { color: var(--muted); font-size: 10.4px; line-height: 15px; }
+.member-card-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+/* A role is not a state; only the status pill earns semantic colour. */
 .pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--line); font-size: 10.4px; line-height: 17.6px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 .pill-ok { color: var(--body); border-color: var(--line-strong); }
 .pill-warn { color: #E7C27D; border-color: #6A5A39; }
 .action-error { color: #E7C27D; }
-.members-row .joined { white-space: nowrap; flex-shrink: 0; }
+@container (max-width: 520px) {
+  .member-card { grid-template: "identity" auto "facts" auto "status" auto "actions" auto / minmax(0,1fr); gap: 13px; padding: 16px; }
+  .member-card-facts { justify-content: flex-start; }
+  .member-card-status, .member-card-summary, .member-card-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+  .member-card-actions { justify-content: stretch; }
+  .member-card-actions .btn:not(.link) { flex: 1 1 auto; min-height: 42px; }
+  .member-card-actions .btn.link { min-height: 42px; padding-inline: 10px; }
+  .member-card-actions .btn:only-child { margin-left: auto; }
+}
 .settings-row { display: flex; align-items: center; gap: 12px; height: 78px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 12.8px; }
 .kv { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--line); font-size: 12.8px; }
 .kv .k { color: var(--muted); font-size: 11.2px; }
