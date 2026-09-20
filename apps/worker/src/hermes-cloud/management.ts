@@ -35,6 +35,16 @@ function officialUrl(value: unknown): string {
 function includes(value: unknown, expected: string): boolean {
   return Array.isArray(value) && value.every(item => typeof item === 'string') && value.includes(expected);
 }
+function exactManagementScope(value: unknown): string {
+  if (typeof value !== 'string' || !value || value.length > 2048 || /[\r\n\0]/.test(value)) {
+    throw new CloudManagementError('cloud_scope_invalid');
+  }
+  const scopes = value.trim().split(/\s+/);
+  if (scopes.length !== 1 || scopes[0] !== CLOUD_SCOPE) {
+    throw new CloudManagementError('cloud_scope_invalid');
+  }
+  return CLOUD_SCOPE;
+}
 async function request(fetcher: typeof fetch, url: string, init: RequestInit = {}): Promise<Response> {
   try {
     return await fetcher(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(12_000) });
@@ -149,8 +159,7 @@ export async function exchangeCloudCode(metadata: CloudOAuthMetadata,
   });
   if (response.status === 400) throw new CloudManagementError('cloud_reconnect_required');
   const token = await json(response);
-  const scope = token.scope === undefined ? CLOUD_SCOPE : string(token.scope);
-  if (!scope.split(/\s+/).includes(CLOUD_SCOPE)) throw new CloudManagementError('cloud_scope_invalid');
+  const scope = exactManagementScope(token.scope === undefined ? CLOUD_SCOPE : token.scope);
   if (typeof token.expires_in !== 'number' || !Number.isInteger(token.expires_in) || token.expires_in < 1 || token.expires_in > 86400 ||
       typeof token.token_type !== 'string' || token.token_type.toLowerCase() !== 'bearer') return invalid();
   return { accessToken: string(token.access_token, 16384), refreshToken: string(token.refresh_token, 16384),
@@ -164,7 +173,7 @@ export async function refreshCloudCredential(
   fetcher: typeof fetch = fetch,
   now = Date.now(),
 ): Promise<CloudManagementCredential> {
-  if (!input.scope.split(/\s+/).includes(CLOUD_SCOPE)) throw new CloudManagementError('cloud_scope_invalid');
+  const inputScope = exactManagementScope(input.scope);
   const response = await request(fetcher, officialUrl(metadata.tokenEndpoint), {
     method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'refresh_token', client_id: string(input.clientId, 255),
@@ -176,8 +185,7 @@ export async function refreshCloudCredential(
     throw new CloudManagementError('cloud_unavailable');
   }
   const token = await json(response);
-  const scope = token.scope === undefined ? input.scope : string(token.scope);
-  if (!scope.split(/\s+/).includes(CLOUD_SCOPE)) throw new CloudManagementError('cloud_scope_invalid');
+  const scope = exactManagementScope(token.scope === undefined ? inputScope : token.scope);
   if (typeof token.expires_in !== 'number' || !Number.isInteger(token.expires_in) || token.expires_in < 1 || token.expires_in > 86400 ||
       typeof token.token_type !== 'string' || token.token_type.toLowerCase() !== 'bearer') return invalid();
   return { accessToken: string(token.access_token, 16384),
@@ -242,7 +250,7 @@ export async function inspectCloudTools(
   credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
   fetcher: typeof fetch = fetch,
 ): Promise<CloudToolContract[]> {
-  if (!credential.scope.split(/\s+/).includes(CLOUD_SCOPE)) throw new CloudManagementError('cloud_scope_invalid');
+  exactManagementScope(credential.scope);
   const headers: Record<string, string> = { Authorization: `Bearer ${string(credential.accessToken, 16384)}`,
     Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' };
   const initId = crypto.randomUUID();

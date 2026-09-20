@@ -3,9 +3,10 @@ import { cloudConnectionResponseSchema, cloudConnectionStartSchema } from '@herm
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { consumeRate } from '../auth/rate-limit.js';
-import { openKey, sealKey } from '../keys/envelope.js';
+import { openSecret, sealSecret } from '../keys/envelope.js';
 import { inWorkspace, RouteError } from './tenant.js';
 import { discoverCloudOAuth, exchangeCloudCode, inspectCloudTools, inspectCloudOrganization, makeCloudAuthorizationUrl, registerCloudClient } from '../hermes-cloud/management.js';
+import { cloudCredentialIdentity } from '../hermes-cloud/credential-envelope.js';
 
 type C = Context<{ Bindings: Env }>;
 interface EnvelopeRow {
@@ -70,7 +71,11 @@ export async function startCloudConnection(c: C): Promise<Response> {
     // Recheck the live session and membership after the external request.
     work.requireAdmin('connecting Cloud'); requireStepUp(work.session);
     await work.tx.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [workspaceId]);
-    const sealed = await sealKey(c.env, { workspaceId, keyId: id }, JSON.stringify({ clientId, redirectUri, verifier, sid: work.session.sid } satisfies AttemptSecret));
+    const sealed = await sealSecret(
+      c.env,
+      cloudCredentialIdentity('cloud_connection_attempt', workspaceId, id),
+      JSON.stringify({ clientId, redirectUri, verifier, sid: work.session.sid } satisfies AttemptSecret),
+    );
     await work.tx.query(`UPDATE cloud_connection_attempts SET status='cancelled', ciphertext=decode('00','hex'), wrapped_dek=decode('00','hex')
       WHERE workspace_id=$1 AND status IN ('pending','consumed')`, [workspaceId]);
     await work.tx.query(`INSERT INTO cloud_connection_attempts
@@ -97,7 +102,11 @@ export async function completeCloudConnection(c: C): Promise<Response> {
     const row = rows[0];
     if (!row || row.initiated_by !== work.userId || row.status !== 'pending' || row.expires_at.getTime() <= Date.now())
       throw new RouteError('Connection request expired', 'cloud_connection_expired', 400);
-    const secret = JSON.parse(await openKey(c.env, { workspaceId: work.workspaceId, keyId: row.id }, envelope(row))) as AttemptSecret;
+    const secret = JSON.parse(await openSecret(
+      c.env,
+      cloudCredentialIdentity('cloud_connection_attempt', work.workspaceId, row.id),
+      envelope(row),
+    )) as AttemptSecret;
     if (secret.sid !== work.session.sid) throw new RouteError('Use the session that started this connection', 'cloud_connection_expired', 403);
     await work.tx.query(`UPDATE cloud_connection_attempts SET status='consumed', ciphertext=decode('00','hex'), wrapped_dek=decode('00','hex') WHERE id=$1`, [row.id]);
     return { id: row.id, workspaceId: work.workspaceId, secret };
@@ -122,8 +131,12 @@ export async function completeCloudConnection(c: C): Promise<Response> {
       const existing = await work.tx.query<{ organization_id: string | null }>('SELECT organization_id FROM cloud_connections WHERE workspace_id=$1', [work.workspaceId]);
       const expectedOrganizationId = existing.rows[0]?.organization_id;
       if (expectedOrganizationId && (account?.id !== expectedOrganizationId || !toolsVerified)) throw safeFailure();
-      const sealed = await sealKey(c.env, { workspaceId: work.workspaceId, keyId: prepared.id }, JSON.stringify({ credential, clientId: prepared.secret.clientId,
-        expectedOrganizationId: expectedOrganizationId ?? null }));
+      const sealed = await sealSecret(
+        c.env,
+        cloudCredentialIdentity('cloud_connection', work.workspaceId, prepared.id),
+        JSON.stringify({ credential, clientId: prepared.secret.clientId,
+          expectedOrganizationId: expectedOrganizationId ?? null }),
+      );
       await work.tx.query(`INSERT INTO cloud_connections (id,workspace_id,initiated_by,status,ciphertext,iv,wrapped_dek,wrap_iv,kek_version)
         VALUES ($1,$2,$3,'verification_required',$4,$5,$6,$7,$8)
         ON CONFLICT (workspace_id) DO UPDATE SET id=EXCLUDED.id, initiated_by=EXCLUDED.initiated_by, status='verification_required',

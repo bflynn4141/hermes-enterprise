@@ -40,9 +40,12 @@ safe until the actual provider idempotency/reconciliation contract is known.
 
 ## Admin connection
 
-Migration `0056_cloud_management.sql` adds isolated management connection and
+Migration `0057_cloud_management.sql` adds isolated management connection and
 authorization-attempt tables. The agent role has no access to either table.
-Active envelopes participate in KEK rotation. No inference credentials are reused.
+OAuth attempts and durable organization grants use separate authenticated
+encryption namespaces; neither can authenticate as the other or as a provider
+inference key. Active envelopes participate in namespace-preserving KEK rotation.
+No inference credentials are reused.
 
 `GET /w/:ws/cloud/connection` returns safe status only. Admin-only
 `POST /w/:ws/cloud/connection/start` requires CSRF, allowed Origin and recent
