@@ -10,7 +10,8 @@ ALTER TABLE runtime_discovery_grants
   DROP CONSTRAINT IF EXISTS runtime_discovery_grants_skill_key_check,
   DROP CONSTRAINT IF EXISTS runtime_discovery_grants_skill_version_check,
   DROP CONSTRAINT IF EXISTS runtime_discovery_grants_runtime_name_check,
-  DROP CONSTRAINT IF EXISTS runtime_discovery_grants_artifact_digest_check;
+  DROP CONSTRAINT IF EXISTS runtime_discovery_grants_artifact_digest_check,
+  DROP CONSTRAINT IF EXISTS runtime_discovery_grants_exact_profile_check;
 
 ALTER TABLE runtime_discovery_grants
   ADD CONSTRAINT runtime_discovery_grants_exact_profile_check CHECK (

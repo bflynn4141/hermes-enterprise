@@ -89,6 +89,7 @@ async function seedInvitation(
     : null;
   const configDigest = await discoveryConfigDigest({
     role_template_key: PARTNER_PROGRAM_DEFINITION.roleTemplateKey,
+    role_template_version: '1.0.0',
     config: POLICY,
   });
   await withClient('owner', async (client) => {

@@ -1186,6 +1186,75 @@ describe('Hermes Cloud invitation capacity', () => {
     });
   });
 
+  it('rejects a stale acceptance proof and rolls member and agent writes back', async () => {
+    const fixture = await seedWorkspace();
+    const joinerId = randomUUID();
+    const email = `stale-proof-${randomUUID()}@example.test`;
+    const env = hermesEnv({
+      HERMES_BRIDGE_SECRET: 'bridge-secret-longer-than-thirty-two-characters',
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example.test',
+    });
+    const capacityId = (await seedCapacity(fixture, env))[0]!;
+    await withClient('owner', (client) => client.query(
+      `INSERT INTO users (id,email,email_verified,name) VALUES ($1,$2,true,'Stale Proof Member')`,
+      [joinerId, email],
+    ));
+    const invited = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST', body: { email },
+    });
+    expect(invited.status).toBe(201);
+    const invitationId = (await invited.json() as { id: string }).id;
+    let drifted = false;
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+      const body = init?.body ? JSON.parse(String(init.body)) as { operation?: string } : {};
+      if (url.hostname.startsWith('pool-') && body.operation === 'capabilities') {
+        return Response.json(capabilitiesBody());
+      }
+      if (url.hostname.startsWith('pool-') && body.operation === 'readiness') {
+        if (!drifted) {
+          drifted = true;
+          await withClient('owner', async (client) => {
+            await client.query('BEGIN');
+            await setTenant(client, fixture.workspaceId, fixture.adminId);
+            await client.query(
+              `UPDATE runtime_discovery_grants
+                  SET config_digest=$2
+                WHERE workspace_id=$1 AND linked_capacity_id=$3`,
+              [fixture.workspaceId, `sha256:${'0'.repeat(64)}`, capacityId],
+            );
+            await client.query('COMMIT');
+          });
+        }
+        return Response.json(readinessBody(fixture.workspaceId, capacityId));
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }));
+
+    const accepted = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, {
+      method: 'POST', body: {},
+    });
+    expect(accepted.status).toBe(409);
+    await expect(accepted.json()).resolves.toMatchObject({ reason: 'iris_capacity_unavailable' });
+    const persisted = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => ({
+      invitation: (await client.query<{ status: string }>(
+        `SELECT status FROM invitations WHERE id=$1`, [invitationId],
+      )).rows[0]!,
+      members: (await client.query(
+        `SELECT 1 FROM members WHERE workspace_id=$1 AND user_id=$2`,
+        [fixture.workspaceId, joinerId],
+      )).rowCount,
+      agents: (await client.query(`SELECT 1 FROM agents WHERE id=$1`, [capacityId])).rowCount,
+      capacity: (await client.query<{ state: string; quarantine_reason: string }>(
+        `SELECT state,quarantine_reason FROM hermes_cloud_capacity WHERE id=$1`, [capacityId],
+      )).rows[0]!,
+    }));
+    expect(persisted).toEqual({
+      invitation: { status: 'pending' }, members: 0, agents: 0,
+      capacity: { state: 'quarantined', quarantine_reason: 'discovery_profile_changed' },
+    });
+  });
+
   it('promotes an exact Finance reservation only after acceptance and creates no Partnerships or AgentCash artifacts', async () => {
     const fixture = await seedWorkspace();
     const joinerId = randomUUID();
@@ -1319,7 +1388,7 @@ describe('Hermes Cloud invitation capacity', () => {
       capability_grants: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
       schedule: { enabled: false }, approval_policy: { human_review_required: true },
     });
-    expect(after.binding).toEqual({ assignment: 'invitee_pool:finance-agent@1.0.0', agentcash: false });
+    expect(after.binding).toEqual({ assignment: 'invitee_pool', agentcash: false });
     expect(after.capacity).toEqual({
       state: 'assigned', agentcash_enabled: false, agentcash_wallet_present: false,
     });

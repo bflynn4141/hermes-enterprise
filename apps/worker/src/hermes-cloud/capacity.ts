@@ -622,7 +622,7 @@ export async function consumeReservedCapacity(
        runtime_credential_digest=EXCLUDED.runtime_credential_digest,
        ready_at=EXCLUDED.ready_at`,
     [workspaceId, agentId, `agent-${agentId}`, row.connector_url,
-     `invitee_pool:${expectedRole.roleTemplateKey}@${expectedRole.roleTemplateVersion}`,
+     'invitee_pool',
      expectedRole.roleTemplateKey === 'partnerships-agent',
      Buffer.from(binding.ciphertext), Buffer.from(binding.iv), Buffer.from(binding.wrappedDek),
      Buffer.from(binding.wrapIv), binding.kekVersion,
