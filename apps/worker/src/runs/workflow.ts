@@ -45,6 +45,8 @@ import {
   type StepConfig,
 } from '../engine/engine.js';
 import type { EmittedEvent } from '../engine/agent-db.js';
+import type { EngineRunRow, RunErrorInput } from '../engine/agent-db.js';
+import type { RuntimeBinding } from '../runtime/config.js';
 export {
   runAttemptInstanceId,
   WORKFLOW_ID_MAX_LENGTH,
@@ -282,6 +284,68 @@ function engineStep(step: WorkflowStep): EngineStep {
   };
 }
 
+interface AutomaticRecoveryExecutionDb {
+  loadRun(runId: string): Promise<EngineRunRow | null>;
+  setRunStatus(runId: string, status: string, detail?: { error?: RunErrorInput | null }): Promise<void>;
+  withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T>;
+  runtimeQuery<T>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
+}
+
+type RuntimeBindingResolver = (
+  env: Env,
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  agentId: string,
+) => Promise<RuntimeBinding>;
+
+const AUTOMATIC_RECOVERY_RUNTIME_DRIFT: RunErrorInput = {
+  class: 'permanent',
+  retryable: false,
+  reason: 'automatic_recovery_runtime_drift',
+  message: 'The managed runtime changed before automatic recovery could start. Retry this task manually.',
+};
+
+/**
+ * Revalidate a scheduled recovery at the last safe boundary before the
+ * Workflow selects an engine or submits anything upstream. Admission and
+ * execution may happen under different deployments, so the persisted marker
+ * is authority; mutable environment and binding state are not.
+ */
+export async function prepareAutomaticRecoveryExecution(
+  env: Env,
+  db: AutomaticRecoveryExecutionDb,
+  params: Pick<RunAttemptParams, 'runId' | 'workspaceId' | 'attempt'>,
+  resolveBinding: RuntimeBindingResolver = resolveRuntimeBinding,
+): Promise<{ run: EngineRunRow; binding: RuntimeBinding } | null> {
+  // Automatic recovery is never a first attempt. Keep the ordinary chat
+  // critical path free of an additional database round trip.
+  if (params.attempt <= 1) return null;
+  const run = await db.loadRun(params.runId);
+  if (!run) throw new NonRetryableError('Automatic recovery run no longer exists');
+  if (!run.automaticRecovery) return null;
+
+  const failClosed = async (): Promise<never> => {
+    await db.setRunStatus(run.id, 'error', { error: AUTOMATIC_RECOVERY_RUNTIME_DRIFT });
+    throw new NonRetryableError(AUTOMATIC_RECOVERY_RUNTIME_DRIFT.message);
+  };
+  if (env.AGENT_RUNTIME !== 'hermes' || env.MODEL_SCRIPTED === '1' || !run.agentId) {
+    return failClosed();
+  }
+  let binding: RuntimeBinding;
+  try {
+    binding = await db.withRuntimeTransaction(() => resolveBinding(
+      env,
+      { query: <T extends import('pg').QueryResultRow>(text: string, values: unknown[] = []) => db.runtimeQuery<T>(text, values) } as unknown as Pick<Tx, 'query'>,
+      params.workspaceId,
+      run.agentId!,
+    ));
+  } catch {
+    return failClosed();
+  }
+  if (binding.runtimeAuthMode !== 'token_digest') return failClosed();
+  return { run, binding };
+}
+
 export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
   override async run(event: WorkflowEvent<RunAttemptParams>, step: WorkflowStep): Promise<void> {
     const invocationStartedAt = Date.now();
@@ -293,6 +357,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
     const db = new RuntimeDb(this.env, params.workspaceId, params.traceId);
     let checkpointDb: RuntimeDb | null = null;
     try {
+      const automaticRecoveryRuntime = await prepareAutomaticRecoveryExecution(this.env, db, params);
       const deps = {
           db,
           // The scenario, honoured on the first attempt only: a Retry is the
@@ -351,7 +416,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         } satisfies import('../engine/engine.js').EngineDeps;
       const runInput = { runId: params.runId, attempt: params.attempt, traceId: params.traceId };
       if (this.env.AGENT_RUNTIME === 'hermes' && this.env.MODEL_SCRIPTED !== '1') {
-        const { run, binding } = await db.withRuntimeTransaction(async () => {
+        const { run, binding } = automaticRecoveryRuntime ?? await db.withRuntimeTransaction(async () => {
           const loaded = await db.loadRun(params.runId);
           if (!loaded?.agentId) throw new NonRetryableError('Hermes run has no agent binding');
           const resolved = await resolveRuntimeBinding(

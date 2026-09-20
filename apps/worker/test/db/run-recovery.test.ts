@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODEL_ID } from '@hermes/shared';
 import type { Tx } from '../../src/db/client.js';
 import type { Env } from '../../src/env.js';
 import type { Job } from '../../src/jobs.js';
 import { syncNousPortalCatalog } from '../../src/model/nous-catalog.js';
 import { NOUS_PORTAL_FIXTURE_MODELS } from '../../src/model/nous-dev.js';
+import { sealSecret } from '../../src/keys/envelope.js';
 import {
   loadRecoveryRun, recoveryView, retryTask, runRecoveryJob, scheduleRunRecovery, wakeAuthorizedWork,
   type RecoveryWork,
@@ -14,6 +15,8 @@ import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js
 import { asUser, makeEnv, readTenant } from './harness.js';
 
 const OLD_MODEL = 'deepseek-flash';
+const RECOVERY_KEK = Buffer.alloc(32, 61).toString('base64');
+const CONTROL_NAMESPACE = 'hermes/runtime-control/v1';
 const oldError = { reason: 'hermes_provider_unavailable', message: 'The model is temporarily unavailable.', retryable: true, class: 'transient' };
 const sourcePolicy = {
   source: 'github', source_purpose: 'organization_partner_research', organization_only: true,
@@ -26,16 +29,70 @@ beforeAll(async () => {
   });
 });
 
-function environment() {
+function environment(overrides: Partial<Env> = {}) {
   const created: unknown[] = [];
   const { env } = makeEnv({
     MODEL_SCRIPTED: '1', AGENT_RUNTIME: 'hermes', ALLOWED_PROVIDERS: 'nous_portal,openrouter,deepseek',
     AUTOMATED_TRIGGERS_ENABLED: '1', PARTNER_SCREENING_AUTOMATION_INTERVAL_MINUTES: '360',
     PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify(sourcePolicy),
     RUN_ATTEMPT: { create: async (value: unknown) => { created.push(value); return { id: 'test-instance' }; } } as unknown as Env['RUN_ATTEMPT'],
+    ...overrides,
   });
   return { env, created };
 }
+
+const capabilities = () => ({
+  object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+  auth: { type: 'bearer', required: true },
+  runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+  features: {
+    run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+    runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+  },
+  endpoints: {
+    runs: { method: 'POST', path: '/v1/runs' },
+    run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+    run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+    run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+    run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+  },
+});
+
+async function managedEnvironment(fx: Fixture & { runId: string }) {
+  const result = environment({
+    MODEL_SCRIPTED: '0', AGENT_RUNTIME: 'hermes', KEK_V1: RECOVERY_KEK,
+    HERMES_BRIDGE_SECRET: 'automatic-recovery-managed-runtime-test'.padEnd(32, '!'),
+  });
+  const envelope = await sealSecret(
+    result.env,
+    { workspaceId: fx.workspaceId, keyId: fx.agentId, namespace: CONTROL_NAMESPACE },
+    'managed-runtime-test-key',
+  );
+  await withClient('owner', async (client) => {
+    await client.query('BEGIN');
+    await setTenant(client, fx.workspaceId, fx.adminId);
+    await client.query(
+      `INSERT INTO workspace_provider_keys
+         (workspace_id,provider,label,ciphertext,iv,wrapped_dek,wrap_iv,kek_version,fingerprint,last4,status,verified_at)
+       VALUES ($1,'deepseek','Recovery test','\\x00','\\x00','\\x00','\\x00',1,$2,'test','verified',now())`,
+      [fx.workspaceId, `recovery-${fx.runId}`],
+    );
+    await client.query(
+      `INSERT INTO agent_runtime_bindings
+         (workspace_id,agent_id,profile,base_url,transport,assignment,agentcash,
+          ciphertext,iv,wrapped_dek,wrap_iv,kek_version,runtime_credential_digest,runtime_auth_mode,ready_at)
+       VALUES ($1,$2,$3,'https://managed-runtime.example.test','native','provisioned',false,
+               $4,$5,$6,$7,$8,'\\x01','token_digest',now())`,
+      [fx.workspaceId, fx.agentId, `agent-${fx.agentId}`, Buffer.from(envelope.ciphertext), Buffer.from(envelope.iv),
+        Buffer.from(envelope.wrappedDek), Buffer.from(envelope.wrapIv), envelope.kekVersion],
+    );
+    await client.query('COMMIT');
+  });
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(capabilities())));
+  return result;
+}
+
+afterEach(() => vi.unstubAllGlobals());
 
 async function fixture(options: {
   scheduled?: boolean;
@@ -177,7 +234,7 @@ describe('durable run recovery admission', () => {
     await recordReadOnlyResult(eligible);
     const capped = await fixture({ scheduled: true, attempt: 3 });
     const cancelled = await fixture({ scheduled: true, cancelled: true });
-    const { env, created } = environment();
+    const { env, created } = await managedEnvironment(eligible);
     await scheduleRunRecovery(env);
     await scheduleRunRecovery(env);
     const job = await recoveryJob(eligible);
@@ -242,10 +299,30 @@ describe('durable run recovery admission', () => {
     });
   });
 
+  it.each([undefined, 'legacy' as const])(
+    'rejects response-only automatic admission on a %s deployment before runtime dispatch',
+    async (runtime) => {
+      const fx = await fixture({ directory: true, rateLimited: true });
+      await recordReadOnlyResult(fx);
+      const upstream = vi.fn<typeof fetch>();
+      vi.stubGlobal('fetch', upstream);
+      const { env, created } = environment({ MODEL_SCRIPTED: '0', AGENT_RUNTIME: runtime });
+      await expect(work(fx, (context) => retryTask(context, env, fx.agentId, fx.runId, 1, true)))
+        .rejects.toMatchObject({ reason: 'automatic_recovery_legacy_auth', status: 409 });
+      expect(upstream).not.toHaveBeenCalled();
+      expect(created).toHaveLength(0);
+      await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+        expect((await client.query(
+          'SELECT attempt,status,automatic_recovery FROM runs WHERE id=$1', [fx.runId],
+        )).rows[0]).toEqual({ attempt: 1, status: 'error', automatic_recovery: false });
+      });
+    },
+  );
+
   it('marks a queued recovery stale when any newer session run completed during cooldown', async () => {
     const fx = await fixture({ directory: true, rateLimited: true });
     await recordReadOnlyResult(fx);
-    const { env, created } = environment();
+    const { env, created } = await managedEnvironment(fx);
     expect(await scheduleRunRecovery(env)).toMatchObject({ queued: 1 });
     const job = await recoveryJob(fx);
     expect(job).toBeDefined();
@@ -276,7 +353,7 @@ describe('durable run recovery admission', () => {
     const retryNotBefore = new Date(Date.now() + 10 * 60_000);
     const fx = await fixture({ directory: true, rateLimited: true, retryNotBefore });
     await recordReadOnlyResult(fx);
-    const { env, created } = environment();
+    const { env, created } = await managedEnvironment(fx);
     env.AUTOMATED_TRIGGERS_ENABLED = '0';
 
     await expect(work(fx, (context) => retryTask(context, env, fx.agentId, fx.runId, 1)))
@@ -306,9 +383,9 @@ describe('durable run recovery admission', () => {
     expect(created).toHaveLength(1);
     await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const run = (await client.query(
-        'SELECT attempt,status,model_id,recovery_input,recovery_history FROM runs WHERE id=$1', [fx.runId],
+        'SELECT attempt,status,model_id,recovery_input,automatic_recovery,recovery_history FROM runs WHERE id=$1', [fx.runId],
       )).rows[0];
-      expect(run).toMatchObject({ attempt: 2, status: 'working', model_id: OLD_MODEL });
+      expect(run).toMatchObject({ attempt: 2, status: 'working', model_id: OLD_MODEL, automatic_recovery: true });
       expect(run.recovery_input).toContain('completed tool results already stored in this session');
       expect(run.recovery_input).toContain('Do not repeat completed tool calls');
       expect(run.recovery_history).toEqual([expect.objectContaining({ trigger: 'automatic', reason: 'hermes_provider_rate_limited' })]);

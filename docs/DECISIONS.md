@@ -5269,6 +5269,13 @@ definitions, Enterprise tool dispatch rejects fresh calls, and direct paid-call
 leases are refused before reservation. Automatic recovery
 requires both that response-only contract and a managed token-digest runtime;
 legacy HMAC profiles remain manual-only.
+That automatic admission is persisted on the run rather than inferred later.
+Before a retry Workflow selects the Hermes or legacy engine, it re-resolves the
+managed binding and requires token-digest auth again. A deployment switch,
+missing Hermes configuration or binding downgrade marks the attempt as a
+non-retryable runtime-drift failure without provider or tool dispatch; the user
+can still choose explicit manual Retry. First attempts incur no extra recovery
+lookup.
 The current fixed/free-route Iris binding is legacy HMAC, so this change does
 not claim automatic continuation there: users retain explicit manual Retry until
 that profile is migrated to a managed token-digest identity. Dynamically managed
@@ -5295,7 +5302,9 @@ cancellation, newer completed-turn races, prior-authority snapshots and
 response-only paid-lease refusal. Runtime adapter and bridge tests assert saved
 instructions cross the real native transport without relying on stripped private
 fields, the provider sees no tool definitions, and fresh Enterprise calls are
-rejected before writes.
+rejected before writes. Admission tests reject legacy and unset deployments
+before upstream I/O; execution-fence tests cover token-digest-to-legacy binding
+drift and Hermes-to-legacy or unset deployment drift before engine selection.
 Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.

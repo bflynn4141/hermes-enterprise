@@ -182,6 +182,8 @@ export interface EngineRunRow {
   readonly clientTurnId: string;
   /** Exact server-owned retry instruction, never accepted from the runtime. */
   readonly recoveryInput?: string | null;
+  /** Server-owned admission marker; a Workflow must revalidate its managed runtime before execution. */
+  readonly automaticRecovery?: boolean;
 }
 
 export interface HistoryTurn {

@@ -206,6 +206,13 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
       409,
     );
   }
+  if (automatic && (env.AGENT_RUNTIME !== 'hermes' || env.MODEL_SCRIPTED === '1')) {
+    throw new RouteError(
+      'Automatic recovery requires an attested managed runtime. Retry this task manually.',
+      'automatic_recovery_legacy_auth',
+      409,
+    );
+  }
   if (env.MODEL_SCRIPTED !== '1' && env.AGENT_RUNTIME === 'hermes'
       && !isResponseOnlyRecoveryInput(safety.resumeInput)) {
     const authority = await work.tx.query(
@@ -256,9 +263,9 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
     `UPDATE runs SET attempt=$3,status='working',stop_requested=false,error=NULL,ended_at=NULL,
       engine_version=$4,trace_id=$5,workflow_instance_id=$6,model_id=$7,effort=$8,
       recovery_next_at=NULL,recovery_not_before=NULL,recovery_cancelled=false,recovery_blocked_reason=NULL,recovery_input=$9,
-      recovery_history=recovery_history || $10::jsonb
+      automatic_recovery=$10,recovery_history=recovery_history || $11::jsonb
       WHERE workspace_id=$1 AND id=$2`,
-    [work.workspaceId,run.id,attempt,engineVersion,traceId,runAttemptInstanceId(run.id,attempt),model.model_id,effort,safety.resumeInput,
+    [work.workspaceId,run.id,attempt,engineVersion,traceId,runAttemptInstanceId(run.id,attempt),model.model_id,effort,safety.resumeInput,automatic,
      JSON.stringify([{attempt:run.attempt,model_id:run.model_id,effort:run.effort,trace_id:run.trace_id,status:run.status,reason:run.error?.reason ?? null,ended_at:run.ended_at?.toISOString() ?? null,next_model_id:model.model_id,trigger:automatic?'automatic':'manual'}])]);
   await work.tx.query(`UPDATE sessions SET last_activity_at=now() WHERE workspace_id=$1 AND id=$2`,[work.workspaceId,run.session_id]);
   const params:RunInstanceParams={runId:run.id,workspaceId:work.workspaceId,sessionId:run.session_id,attempt,engineVersion,traceId};
