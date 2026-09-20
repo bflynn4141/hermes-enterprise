@@ -21,6 +21,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const DIAGNOSTIC_CHECKPOINTS = new Set([
   'request_received',
   'setup_mode_rejected',
+  'setup_role_rejected',
   'admin_and_rate_admitted',
   'organization_binding_checked',
   'invitation_stored',
@@ -47,7 +48,8 @@ const DIAGNOSTIC_CHECKPOINTS = new Set([
 ]);
 const DIAGNOSTIC_REASONS = new Set([
   'bad_body', 'bad_id', 'bad_email', 'admin_required', 'rate_limited', 'not_configured',
-  'bad_role_template', 'member_setup_unavailable', 'invitation_mode_conflict', 'invitation_role_conflict',
+  'bad_role_template', 'member_setup_unavailable', 'member_setup_role_unavailable',
+  'invitation_mode_conflict', 'invitation_role_conflict',
   'iris_capacity_unavailable', 'invite_failed', 'resend_failed', 'unknown_invitation',
   'not_resendable', 'already_accepted', 'no_session', 'unknown_user', 'invalid_session',
   'upstream_unavailable', 'forbidden_origin', 'csrf_failed', 'not_a_member', 'no_workspace',
@@ -100,6 +102,7 @@ const ROUTE_REASONS = new Set([
   'not_resendable',
   'already_accepted',
   'member_setup_unavailable',
+  'member_setup_role_unavailable',
   'invitation_mode_conflict',
   'invitation_role_conflict',
 ]);
@@ -119,6 +122,7 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   not_resendable: 'That invitation cannot be resent in its current state.',
   already_accepted: 'That invitation has already been accepted.',
   member_setup_unavailable: 'Background member setup is not available in this deployment.',
+  member_setup_role_unavailable: 'Finance agent setup is not available yet. Choose an available job role.',
   invitation_mode_conflict: 'This address already has an invitation in a different delivery flow.',
   invitation_role_conflict: 'This address already has setup in progress for a different job role.',
   no_session: 'Your session has ended. Sign in and try again.',

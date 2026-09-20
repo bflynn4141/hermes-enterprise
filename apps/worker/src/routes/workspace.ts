@@ -23,6 +23,7 @@ import { requestAudiencePredicate, streamEventAudiencePredicate } from '../domai
 import {
   loadVisiblePendingRequests,
 } from '../domain/requests.js';
+import { EXECUTABLE_MEMBER_SETUP_ROLES } from '../member-provisioning/service.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -247,7 +248,7 @@ export async function loadBootstrap(
       turn_attachments: true,
       automated_triggers: automatedTriggers,
       member_invitations: memberProvisioning
-        ? { mode: 'setup_only', role_templates: ['partnerships-agent', 'finance-agent'] }
+        ? { mode: 'setup_only', role_templates: [...EXECUTABLE_MEMBER_SETUP_ROLES] }
         : { mode: 'legacy_delivery', role_templates: [] },
     },
     heads: { session: head.session_head, workspace: head.workspace_head },

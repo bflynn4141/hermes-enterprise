@@ -272,7 +272,7 @@ export function Members() {
           <div className="member-card-list" role="list">
             {invitations.map((row) => {
               const provisioning = row.status !== 'expired' && row.provisioning
-                ? memberProvisioningPresentation(row.provisioning)
+                ? memberProvisioningPresentation(row.provisioning, { setupEnabled: setupOnly })
                 : null;
               const status = provisioning?.label ?? invitationStatusLabel(row.status);
               const delivery = invitationDeliveryMessage(row);

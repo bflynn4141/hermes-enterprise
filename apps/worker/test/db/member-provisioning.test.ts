@@ -7,6 +7,7 @@ import { drainJobs, runJobsAfterCommit } from '../../src/jobs.js';
 async function seedQueuedProvisioningJob(
   fx: Awaited<ReturnType<typeof seedWorkspace>>,
   email: string,
+  roleTemplateKey: 'partnerships-agent' | 'finance-agent' = 'partnerships-agent',
 ): Promise<{ invitationId: string; operationId: string; jobId: string }> {
   const invitationId = randomUUID();
   const operationId = randomUUID();
@@ -20,8 +21,8 @@ async function seedQueuedProvisioningJob(
     );
     await c.query(
       `INSERT INTO member_provisioning_operations(id,workspace_id,invitation_id,requested_by,role_template_key)
-       VALUES($1,$2,$3,$4,'partnerships-agent')`,
-      [operationId, fx.workspaceId, invitationId, fx.adminId],
+       VALUES($1,$2,$3,$4,$5)`,
+      [operationId, fx.workspaceId, invitationId, fx.adminId, roleTemplateKey],
     );
     await c.query(
       `INSERT INTO jobs(id,workspace_id,kind,key,payload) VALUES($1,$2,'member_provision',$3,$4::jsonb)`,
@@ -53,6 +54,34 @@ describe('durable member provisioning', () => {
       expect((await c.query(`SELECT id FROM invitations WHERE email='flag-off-finance@example.test'`)).rows).toHaveLength(0);
       expect((await c.query('SELECT id FROM member_provisioning_operations')).rows).toHaveLength(0);
       expect((await c.query(`SELECT id FROM jobs WHERE payload->>'email'='flag-off-finance@example.test'`)).rows).toHaveLength(0);
+      expect((await c.query(`SELECT id FROM events WHERE kind='member.invited'`)).rows).toHaveLength(0);
+      expect((await c.query(`SELECT id FROM hermes_cloud_capacity WHERE state='reserved'`)).rows).toHaveLength(0);
+      expect((await c.query(
+        `SELECT user_id FROM rate_counters WHERE user_id=$1 AND workspace_id=$2 AND action='member.invite'`,
+        [fx.adminId, fx.workspaceId],
+      )).rows).toHaveLength(0);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('rejects flag-on Finance before invitation, operation, job, reservation, event, or rate writes', async () => {
+    const fx = await seedWorkspace();
+    const { env } = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1', AGENT_RUNTIME: 'hermes' });
+    const network = vi.fn(() => { throw new Error('An unavailable setup role must not reach a provider'); });
+    vi.stubGlobal('fetch', network);
+    const email = 'unsupported-finance@example.test';
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
+      email, role: 'member', role_template_key: 'finance-agent',
+    } });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'member_setup_role_unavailable' });
+    expect(network).not.toHaveBeenCalled();
+
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT id FROM invitations WHERE email=$1`, [email])).rows).toHaveLength(0);
+      expect((await c.query('SELECT id FROM member_provisioning_operations')).rows).toHaveLength(0);
+      expect((await c.query(`SELECT id FROM jobs WHERE payload::text LIKE $1`, [`%${email}%`])).rows).toHaveLength(0);
       expect((await c.query(`SELECT id FROM events WHERE kind='member.invited'`)).rows).toHaveLength(0);
       expect((await c.query(`SELECT id FROM hermes_cloud_capacity WHERE state='reserved'`)).rows).toHaveLength(0);
       expect((await c.query(
@@ -111,7 +140,7 @@ describe('durable member provisioning', () => {
     };
     expect(legacyBody.capabilities.member_invitations).toEqual({ mode: 'legacy_delivery', role_templates: [] });
     expect(setupBody.capabilities.member_invitations).toEqual({
-      mode: 'setup_only', role_templates: ['partnerships-agent', 'finance-agent'],
+      mode: 'setup_only', role_templates: ['partnerships-agent'],
     });
   });
 
@@ -125,7 +154,7 @@ describe('durable member provisioning', () => {
       email: 'sticky-legacy@example.test', role: 'member',
     } })).status).toBe(201);
     const retrofit = await asUser(setup, fx.adminId, path, { method: 'POST', body: {
-      email: 'sticky-legacy@example.test', role: 'member', role_template_key: 'finance-agent',
+      email: 'sticky-legacy@example.test', role: 'member', role_template_key: 'partnerships-agent',
     } });
     expect(retrofit.status).toBe(409);
     expect(await retrofit.json()).toMatchObject({ reason: 'invitation_mode_conflict' });
@@ -133,11 +162,11 @@ describe('durable member provisioning', () => {
     expect((await asUser(setup, fx.adminId, path, { method: 'POST', body: {
       email: 'sticky-role@example.test', role: 'member', role_template_key: 'partnerships-agent',
     } })).status).toBe(201);
-    const roleChange = await asUser(setup, fx.adminId, path, { method: 'POST', body: {
+    const unsupportedRole = await asUser(setup, fx.adminId, path, { method: 'POST', body: {
       email: 'sticky-role@example.test', role: 'member', role_template_key: 'finance-agent',
     } });
-    expect(roleChange.status).toBe(409);
-    expect(await roleChange.json()).toMatchObject({ reason: 'invitation_role_conflict' });
+    expect(unsupportedRole.status).toBe(409);
+    expect(await unsupportedRole.json()).toMatchObject({ reason: 'member_setup_role_unavailable' });
 
     await withClient('app', async c => {
       await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
@@ -161,7 +190,7 @@ describe('durable member provisioning', () => {
     const fx = await seedWorkspace();
     const { env } = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' });
     const created = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
-      email: 'slow-setup@example.test', role: 'member', role_template_key: 'finance-agent',
+      email: 'slow-setup@example.test', role: 'member', role_template_key: 'partnerships-agent',
     } });
     expect(created.status).toBe(201);
     const invitation = await created.json() as { id: string };
@@ -180,13 +209,9 @@ describe('durable member provisioning', () => {
 
   it('never downgrades an existing setup resend to legacy delivery while the flag is off', async () => {
     const fx = await seedWorkspace();
-    const enabled = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1', AGENT_RUNTIME: 'hermes' }).env;
     const disabled = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '0', AGENT_RUNTIME: 'hermes' }).env;
-    const created = await asUser(enabled, fx.adminId, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
-      email: 'paused-finance@example.test', role: 'member', role_template_key: 'finance-agent',
-    } });
-    const invitation = await created.json() as { id: string };
-    const resend = await asUser(disabled, fx.adminId, `/w/${fx.workspaceId}/invitations/${invitation.id}/resend`, {
+    const seeded = await seedQueuedProvisioningJob(fx, 'paused-finance@example.test', 'finance-agent');
+    const resend = await asUser(disabled, fx.adminId, `/w/${fx.workspaceId}/invitations/${seeded.invitationId}/resend`, {
       method: 'POST', body: {},
     });
     expect(resend.status).toBe(409);
@@ -195,13 +220,44 @@ describe('durable member provisioning', () => {
     await withClient('app', async c => {
       await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
       expect((await c.query(`SELECT id,status FROM invitations WHERE email='paused-finance@example.test'`)).rows)
-        .toEqual([{ id: invitation.id, status: 'pending' }]);
+        .toEqual([{ id: seeded.invitationId, status: 'pending' }]);
       expect((await c.query(`SELECT role_template_key,invitation_id FROM member_provisioning_operations`)).rows)
-        .toEqual([{ role_template_key: 'finance-agent', invitation_id: invitation.id }]);
-      expect((await c.query(`SELECT id FROM jobs WHERE kind='workos_sync' AND payload->>'invitation_id'=$1`, [invitation.id])).rows)
+        .toEqual([{ role_template_key: 'finance-agent', invitation_id: seeded.invitationId }]);
+      expect((await c.query(`SELECT id FROM jobs WHERE kind='workos_sync' AND payload->>'invitation_id'=$1`, [seeded.invitationId])).rows)
         .toHaveLength(0);
-      expect((await c.query(`SELECT id FROM hermes_cloud_capacity WHERE reserved_invitation_id=$1`, [invitation.id])).rows)
+      expect((await c.query(`SELECT id FROM hermes_cloud_capacity WHERE reserved_invitation_id=$1`, [seeded.invitationId])).rows)
         .toHaveLength(0);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('keeps historical Finance setup readable and cancellable but refuses to restart it', async () => {
+    const fx = await seedWorkspace();
+    const env = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1', AGENT_RUNTIME: 'hermes' }).env;
+    const seeded = await seedQueuedProvisioningJob(fx, 'historical-finance@example.test', 'finance-agent');
+
+    const listed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations`);
+    const body = await listed.json() as { items: Array<Record<string, unknown>> };
+    expect(body.items.find((row) => row.id === seeded.invitationId)).toMatchObject({
+      role_template_key: 'finance-agent',
+      provisioning: { preparation: 'queued', cancellation: 'none' },
+    });
+
+    const resend = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations/${seeded.invitationId}/resend`, {
+      method: 'POST', body: {},
+    });
+    expect(resend.status).toBe(409);
+    expect(await resend.json()).toMatchObject({ reason: 'member_setup_role_unavailable' });
+    expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations/${seeded.invitationId}/withdraw`, {
+      method: 'POST', body: {},
+    })).status).toBe(204);
+
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT status FROM invitations WHERE id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ status: 'withdrawn' }]);
+      expect((await c.query(`SELECT cancellation FROM member_provisioning_operations WHERE id=$1`, [seeded.operationId])).rows)
+        .toEqual([{ cancellation: 'complete' }]);
       await c.query('COMMIT');
     });
   });
@@ -363,7 +419,7 @@ describe('durable member provisioning', () => {
     const first = await seedWorkspace(); const second = await seedWorkspace();
     const { env } = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1', AGENT_RUNTIME: 'hermes' });
     const created = await asUser(env, first.adminId, `/w/${first.workspaceId}/invitations`, { method: 'POST', body: {
-      email: 'finance@example.test', role: 'member', role_template_key: 'finance-agent',
+      email: 'finance@example.test', role: 'member', role_template_key: 'partnerships-agent',
     } });
     const invitation = await created.json() as { id: string };
     await withClient('app', async c => {
@@ -401,7 +457,7 @@ describe('durable member provisioning', () => {
     const fx = await seedWorkspace();
     const { env } = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' });
     const created = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
-      email: `accept-race-${action}@example.test`, role: 'member', role_template_key: 'finance-agent',
+      email: `accept-race-${action}@example.test`, role: 'member', role_template_key: 'partnerships-agent',
     } });
     const invitation = await created.json() as { id: string };
     const locker = await client('app');

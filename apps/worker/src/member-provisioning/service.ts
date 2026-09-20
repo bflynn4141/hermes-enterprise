@@ -16,6 +16,15 @@ interface OperationRow {
   role_template_key: MemberRoleTemplate; preparation: MemberProvisioningOperation['preparation'];
   cancellation: MemberProvisioningOperation['cancellation']; issue: MemberProvisioningOperation['issue'];
   invitation_status?: string; delivery_status?: string; delivery_error?: string | null; cloud_status?: string | null;
+  /** Present on read-model projections that checked the exact reservation in SQL. */
+  ready_reservation_current?: boolean;
+}
+
+/** Roles this local-only slice can actually make ready without a provider lifecycle adapter. */
+export const EXECUTABLE_MEMBER_SETUP_ROLES = ['partnerships-agent'] as const satisfies readonly MemberRoleTemplate[];
+
+export function memberSetupRoleExecutable(role: MemberRoleTemplate): boolean {
+  return EXECUTABLE_MEMBER_SETUP_ROLES.some((candidate) => candidate === role);
 }
 
 export function memberProvisioningEnabled(env: Env): boolean {
@@ -23,6 +32,10 @@ export function memberProvisioningEnabled(env: Env): boolean {
 }
 
 export function projectMemberProvisioning(row: OperationRow): MemberProvisioningOperation {
+  const lostReadyReservation = row.preparation === 'ready'
+    && row.ready_reservation_current === false
+    && (row.delivery_status === undefined || row.delivery_status === 'not_required')
+    && row.invitation_status !== 'accepted';
   const delivery = row.invitation_status === 'accepted' ? 'sent' : row.delivery_status === 'queued' ? 'queued'
     : row.delivery_status === 'sending' ? 'sending'
       : row.delivery_status === 'delivered' ? 'sent'
@@ -31,9 +44,9 @@ export function projectMemberProvisioning(row: OperationRow): MemberProvisioning
           : row.delivery_status === 'failed' ? 'failed' : 'not_queued';
   return memberProvisioningOperationSchema.parse({
     id: row.id, workspace_id: row.workspace_id, revision: row.revision,
-    preparation: row.preparation, delivery,
+    preparation: lostReadyReservation ? 'queued' : row.preparation, delivery,
     membership: row.invitation_status === 'accepted' ? 'joined' : 'not_joined',
-    cancellation: row.cancellation, issue: row.issue,
+    cancellation: row.cancellation, issue: lostReadyReservation ? 'readiness_failed' : row.issue,
   });
 }
 

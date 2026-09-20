@@ -44,6 +44,16 @@ describe('Member provisioning public state and recovery', () => {
     expect(memberProvisioningPresentation(operation).label).toBe('Invited');
     expect(nextMemberProvisioningStep(operation)).toBe('wait');
   });
+  it('shows unfinished setup as paused when the deployment is not advancing setup', () => {
+    expect(memberProvisioningPresentation(base, { setupEnabled: false })).toMatchObject({
+      label: 'Setup paused', canCancel: true, action: null,
+    });
+    expect(memberProvisioningPresentation({ ...base, preparation: 'ready' }, { setupEnabled: false }).label)
+      .toBe('Agent ready');
+    expect(memberProvisioningPresentation({
+      ...base, preparation: 'ready', delivery: 'sent',
+    }, { setupEnabled: false }).label).toBe('Invited');
+  });
   it('keeps billing and unsupported bootstrap blocked', () => {
     for (const issue of ['billing_unverified', 'insufficient_credits', 'bootstrap_unsupported'] as const) {
       expect(nextMemberProvisioningStep({ ...base, issue })).toBe('needs_attention');

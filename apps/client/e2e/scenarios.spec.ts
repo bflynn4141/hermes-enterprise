@@ -211,18 +211,33 @@ test.describe('members write feedback', () => {
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     await expect(invite.getByText('Job role')).toBeVisible();
-    await invite.getByRole('combobox').selectOption('finance-agent');
+    await expect(invite.getByRole('option', { name: 'Partnerships' })).toHaveCount(1);
+    await expect(invite.getByRole('option', { name: 'Finance' })).toHaveCount(0);
+    await invite.getByRole('combobox').selectOption('partnerships-agent');
+    await expect(invite.getByRole('combobox')).toHaveValue('partnerships-agent');
     await expect(invite.getByText('Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.')).toBeVisible();
-    await invite.getByRole('textbox', { name: 'Work email' }).fill('finance.setup@example.com');
+    await invite.getByRole('textbox', { name: 'Work email' }).fill('partnerships.setup@example.com');
     await invite.getByRole('button', { name: 'Start setup' }).click();
 
     await expect(invite).toHaveCount(0);
     await expect(app.getByText('Agent setup started')).toBeVisible();
-    const created = app.getByRole('listitem').filter({ hasText: 'finance.setup@example.com' });
+    const created = app.getByRole('listitem').filter({ hasText: 'partnerships.setup@example.com' });
     await expect(created.getByText('Setting up agent').first()).toBeVisible();
     await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
-    await expect(created.getByText('Finance', { exact: true })).toBeVisible();
+    await expect(created.getByText('Partnerships', { exact: true })).toBeVisible();
     await expect(created.getByText('Email delivery queued')).toHaveCount(0);
+  });
+
+  test('flag-off existing setup is shown as paused and remains cancellable', async ({ page }) => {
+    await page.goto('/?pausedMemberSetup=1');
+    await page.getByRole('button', { name: 'Members', exact: true }).click();
+    const app = page.getByRole('region', { name: 'Application' });
+    await app.getByRole('tab', { name: 'Invitations' }).click();
+    const card = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
+    await expect(card.getByText('Setup paused')).toBeVisible();
+    await expect(card.getByText('Setup is paused. You can cancel this invitation or wait for setup to resume.')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await expect(card.getByText('Setting up agent')).toHaveCount(0);
   });
 
   test('invitation cards fit desktop and phone layouts', async ({ page }, testInfo) => {
