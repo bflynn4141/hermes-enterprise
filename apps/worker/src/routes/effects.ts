@@ -7,10 +7,12 @@
 // is worth being explicit about what it is:
 //
 // There is no executor for these legacy ledger rows. Approved communications
-// can use the separate governed Gmail outbox when configured, but executing a
-// legacy effect does not enqueue that outbox or prove delivery. Pressing
-// Execute records an attempt, writes `status = 'unavailable'` with the reason,
-// appends an `effect.executed` audit row, and states which work remains undone.
+// can use the separate governed Gmail outbox when configured, but recording an
+// attempt on a legacy effect does not enqueue that outbox or prove delivery.
+// POST …/execute always answers unavailable: it writes `status = 'unavailable'`
+// with the reason, appends an `effect.executed` audit row (attempt recorded),
+// and states which work remains undone. It never claims bank, mail, access, or
+// signature work completed.
 //
 // That is a worse product than one that executes. It is a far better product
 // than one that *says* it executed, which is what a stub with a green tick

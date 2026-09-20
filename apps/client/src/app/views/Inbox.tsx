@@ -1062,18 +1062,81 @@ export function DocumentView({
   );
 }
 
+/** Honesty copy shown whenever a legacy effect is pending or already unavailable. */
+export const LEGACY_EFFECT_HONESTY =
+  'Legacy effects have no executor here. Recording an attempt does not send mail, move money, grant access, or apply a signature. Approved email delivery uses a separate governed outbox when configured; this record is not a delivery receipt.';
+
+/** Status line for a legacy ledger effect — never implies an external action completed. */
+export function legacyEffectStatusLabel(effect: EffectEntity): string {
+  const base =
+    effect.status === 'unavailable'
+      ? 'Unavailable · nothing sent, paid, granted or signed'
+      : effect.status === 'cancelled'
+        ? 'Cancelled'
+        : `Pending · no executor · needs the ${effect.required_role} role`;
+  return effect.reason ? `${base} · ${effect.reason}` : base;
+}
+
+/**
+ * Presentational list for legacy effects on a receipt. Kept separate from data
+ * loading so tests can assert honesty without waiting on effects.
+ */
+export function LegacyEffectsPanel({
+  effects,
+  busy = null,
+  reauthed = false,
+  notice = null,
+  onRecordAttempt,
+}: {
+  effects: readonly EffectEntity[];
+  busy?: string | null;
+  reauthed?: boolean;
+  notice?: string | null;
+  onRecordAttempt?: (effect: EffectEntity) => void;
+}) {
+  const showsHonesty = effects.some((effect) => effect.status === 'pending' || effect.status === 'unavailable');
+  return (
+    <>
+      {reauthed && <p className="meta">Re-authenticated — press Record attempt again to continue.</p>}
+      {showsHonesty && (
+        <p className="meta" style={{ maxWidth: 760 }} data-testid="legacy-effect-honesty">
+          {LEGACY_EFFECT_HONESTY}
+        </p>
+      )}
+      <div className="col">
+        {effects.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>Nothing else is required.</div>}
+        {effects.map((effect) => (
+          <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
+            <Glass name="context" size={22} className="row-icon" />
+            <div className="row-main">
+              <span className="t">{effect.label}</span>
+              <span className="s">{legacyEffectStatusLabel(effect)}</span>
+            </div>
+            {effect.status === 'pending' && (
+              <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>
+                {busy === effect.id ? 'Recording…' : 'Record attempt'}
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+      {notice && <p className="meta" role="alert">{notice}</p>}
+    </>
+  );
+}
+
 /**
  * The receipt: what was decided, and what is still pending as an effect.
  *
  * Legacy ledger effects do not execute. Approved communications can use a
- * separate governed outbox when configured, but pressing Execute here records
- * an unavailable attempt and says in the server's own words what remains
- * undone. The copy is the server's `reason` string because that sentence is
- * relied on and should have one author.
+ * separate governed outbox when configured, but "Record attempt" here only
+ * records an unavailable attempt and says in the server's own words what
+ * remains undone. The copy is the server's `reason` string because that
+ * sentence is relied on and should have one author.
  *
- * Execute needs the reviewer role the effect names, and step-up. A second press
- * finds the row already `unavailable` and is answered with it rather than
- * appending a second audit row.
+ * Recording an attempt needs the reviewer role the effect names, and step-up.
+ * A second press finds the row already `unavailable` and is answered with it
+ * rather than appending a second audit row.
  */
 export function Receipt({ request }: { request: RequestEntity }) {
   const state = useAppState();
@@ -1105,7 +1168,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
     }
   }, [adapter, request.id]);
 
-  const execute = (effect: EffectEntity): void => {
+  const recordAttempt = (effect: EffectEntity): void => {
     setBusy(effect.id);
     setNotice(null);
     void adapter.rest
@@ -1125,7 +1188,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
         }
         setNotice(
           error.reason === 'role_required'
-            ? `Executing this needs the ${effect.required_role} role.`
+            ? `Recording this attempt needs the ${effect.required_role} role.`
             : error.reason === 'effect_cancelled'
               ? 'A later version of this document cancelled that effect.'
               : 'Could not record that attempt. Try again.',
@@ -1153,35 +1216,13 @@ export function Receipt({ request }: { request: RequestEntity }) {
         </div>
         <Panel selected icon={KIND_ICON[request.kind] ?? 'context'} title={title} subtitle={sub} right={<span className="meta">{request.decided_at ? new Date(request.decided_at).toLocaleString() : ''}</span>} />
         <h2 className="section-title">What this implies</h2>
-        {reauthed && <p className="meta">Re-authenticated — press Execute again to continue.</p>}
-        <div className="col">
-          {effects.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>Nothing else is required.</div>}
-          {effects.map((effect) => {
-            return (
-              <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
-                <Glass name="context" size={22} className="row-icon" />
-                <div className="row-main">
-                  <span className="t">{effect.label}</span>
-                  <span className="s">
-                    {effect.status === 'unavailable' ? 'Unavailable' : effect.status === 'cancelled' ? 'Cancelled' : `Pending · needs the ${effect.required_role} role`}
-                    {effect.reason ? ` · ${effect.reason}` : ''}
-                  </span>
-                </div>
-                {effect.status === 'pending' && (
-                  <Button disabled={busy === effect.id} onClick={() => execute(effect)}>
-                    {busy === effect.id ? 'Recording…' : 'Execute'}
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {effects.some((effect) => effect.status === 'unavailable') && (
-          <p className="meta" style={{ maxWidth: 760 }}>
-            Nothing was sent, paid, granted or signed by this legacy effect. Approved email delivery uses a separate governed outbox when configured; this record is not a delivery receipt. Payment, access and signature executors remain unavailable here.
-          </p>
-        )}
-        {notice && <p className="meta" role="alert">{notice}</p>}
+        <LegacyEffectsPanel
+          effects={effects}
+          busy={busy}
+          reauthed={reauthed}
+          notice={notice}
+          onRecordAttempt={recordAttempt}
+        />
         {request.note && !documentRequest && (
           <div className="note-block">
             <span className="k">Review note · Not sent</span>
