@@ -40,7 +40,16 @@ export default defineConfig({
   ...(process.env.E2E_BASE_URL
     ? { testMatch: '**/live*.spec.ts' }
     : { testIgnore: ['**/live*.spec.ts'] }),
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // `devices['Desktop Chrome']` carries its own 1280×720 viewport, which wins
+  // over the top-level `use.viewport` above. The mock suite has always run at
+  // 1280 and its screenshots are cut for it; the live suite is written for the
+  // 1680 desktop layout, where the app pane beside an open Iris panel is wide
+  // enough for the tab lists. At 1280 that pane is 520px, under the 560px
+  // container breakpoint, and Agents and Settings render their mobile selects.
+  projects: [{
+    name: 'chromium',
+    use: { ...devices['Desktop Chrome'], ...(process.env.E2E_BASE_URL ? { viewport: { width: 1680, height: 1000 } } : {}) },
+  }],
   ...(process.env.E2E_BASE_URL
     ? {}
     : {
