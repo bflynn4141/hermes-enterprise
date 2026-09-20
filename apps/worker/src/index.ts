@@ -84,6 +84,12 @@ import {
 import { completeFile, createFile, deleteFile, getFile, listFiles, uploadFile } from './routes/files.js';
 import { listLibrarySources } from './routes/library-sources.js';
 import {
+  createSharedIntelligenceProposal,
+  getSharedIntelligence,
+  revokeSharedIntelligence,
+  submitSharedIntelligence,
+} from './routes/shared-intelligence.js';
+import {
   answerContext,
   createTurn,
   editQueueItem,
@@ -390,6 +396,10 @@ app.delete('/w/:ws/attachments/:id', deleteAttachment);
 
 app.get('/w/:ws/files', listFiles);
 app.get('/w/:ws/library-sources', listLibrarySources);
+app.get('/w/:ws/shared-intelligence', getSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals', createSharedIntelligenceProposal);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/submit', submitSharedIntelligence);
+app.post('/w/:ws/shared-intelligence/proposals/:proposalId/revoke', revokeSharedIntelligence);
 app.post('/w/:ws/files', createFile);
 app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);

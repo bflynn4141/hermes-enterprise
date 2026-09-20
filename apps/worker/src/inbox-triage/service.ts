@@ -2,10 +2,10 @@ import { approvalPayloadSchema } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { publishEvents, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
+import { callSystemOne } from '../jev/client.js';
 
 export const JEV_MODEL_ID = 'jev-latest';
 export const SUMMARY_VERSION = '1';
-const TYPESAFE_SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
 
 type Band = 'urgent' | 'high' | 'normal' | 'low';
 type Signals = {
@@ -58,17 +58,7 @@ export async function callJev(
   state: Record<string, unknown>,
   fetcher: typeof fetch = fetch,
 ): Promise<unknown> {
-  const response = await fetcher(TYPESAFE_SYSTEM_ONE_URL, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ state, model: JEV_MODEL_ID, questions: TRIAGE_QUESTIONS }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`typesafe_http_${response.status}`);
-  return response.json();
+  return callSystemOne(apiKey, { state, model: JEV_MODEL_ID, questions: TRIAGE_QUESTIONS }, fetcher);
 }
 
 export function normalizedTriageState(input: {

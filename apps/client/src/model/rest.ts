@@ -46,6 +46,9 @@ import {
   attachmentDetailSchema,
   attachmentUploadSchema,
   librarySourceSchema,
+  sharedIntelligenceProposalSchema,
+  sharedIntelligenceSubmitResultSchema,
+  sharedIntelligenceWorkspaceSchema,
   approvalViewSchema,
   directUploadResultSchema,
   enterpriseSkillAssignmentPageSchema,
@@ -78,6 +81,7 @@ import {
   type PartnerInvoiceCorrectionInput,
   type PartnerInvoiceCorrectionResult,
   type PartnerHandoffResult,
+  type CreateSharedIntelligenceProposal,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -482,6 +486,14 @@ export function createRest(options: RestOptions) {
     /** Team-granted, versioned references in Library. */
     listLibrarySources: (workspaceId: string, agentId?: string | null) =>
       request('GET', `${ws(workspaceId)}/library-sources${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(librarySourceSchema)),
+    sharedIntelligence: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/shared-intelligence`, sharedIntelligenceWorkspaceSchema),
+    createSharedIntelligenceProposal: (workspaceId: string, body: CreateSharedIntelligenceProposal) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals`, sharedIntelligenceProposalSchema, body),
+    submitSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/submit`, sharedIntelligenceSubmitResultSchema, {}),
+    revokeSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/revoke`, sharedIntelligenceProposalSchema, {}),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`
