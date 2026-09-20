@@ -105,6 +105,34 @@ class CloudManagedPolicyTests(unittest.TestCase):
                 "enterprise_assignment", "preflight_grant",
             )
 
+    def test_partnership_mcp_home_matches_the_resolved_config_value(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "agentcash"
+            wallet = root / ".agentcash/wallet.json"
+            wallet.parent.mkdir(parents=True)
+            wallet.write_text("{}\n")
+            assignment = {"auto_load": ["enterprise_bridge:partner-program-screening"]}
+            settings = {"mcp_policy": cloud_managed.AGENTCASH_POLICY}
+            server = {
+                **cloud_managed.AGENTCASH_SERVER,
+                "env": {"HOME": str(root)},
+            }
+            with patch.dict(cloud_managed.os.environ, {
+                "HERMES_AGENTCASH_MCP_ENABLED": "1",
+                "AGENTCASH_HOME": str(root),
+            }, clear=False):
+                partnership, tools = cloud_managed._validate_role_config(
+                    {"mcp_servers": {"agentcash": server}}, settings, assignment,
+                )
+                self.assertTrue(partnership)
+                self.assertEqual(tools, {"mcp__agentcash__fetch"})
+                with self.assertRaisesRegex(RuntimeError, "MCP configuration"):
+                    cloud_managed._validate_role_config(
+                        {"mcp_servers": {"agentcash": cloud_managed.AGENTCASH_SERVER}},
+                        settings,
+                        assignment,
+                    )
+
     def test_binding_rejects_expired_or_role_drifted_preflight(self):
         with self.assertRaisesRegex(RuntimeError, "expired"):
             cloud_managed._validate_binding(self.binding(

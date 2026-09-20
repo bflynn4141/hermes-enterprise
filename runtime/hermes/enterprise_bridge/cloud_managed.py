@@ -49,7 +49,9 @@ AGENTCASH_SERVER = {
     "command": "npx",
     "args": ["--yes", "agentcash@0.17.1"],
     "env": {"HOME": "${AGENTCASH_HOME}"},
-    "tools": {"include": ["fetch"]},
+    # Hermes otherwise synthesizes four resource/prompt utility tools when an
+    # MCP SDK advertises those capabilities. This role exposes only fetch.
+    "tools": {"include": ["fetch"], "resources": False, "prompts": False},
 }
 AGENTCASH_POLICY = [{
     "server": "agentcash",
@@ -292,21 +294,29 @@ def _validate_role_config(config, settings, assignment):
                             ["enterprise_bridge:partner-program-screening-v1-8"])
     if not finance and not partnership:
         raise RuntimeError("Cloud-managed profile has an unsupported role assignment")
-    expected_mcp = {} if finance else {"agentcash": AGENTCASH_SERVER}
     expected_policy = [] if finance else AGENTCASH_POLICY
-    if (config.get("mcp_servers") or {}) != expected_mcp:
-        raise RuntimeError("Enterprise MCP configuration does not match the assigned role")
     if settings.get("mcp_policy", []) != expected_policy:
         raise RuntimeError("Enterprise MCP policy does not match the assigned role")
     enabled = os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1"
     if enabled != partnership:
         raise RuntimeError("AgentCash enablement does not match the assigned role")
+    expected_mcp = {}
     if partnership:
-        root = pathlib.Path(os.environ.get("AGENTCASH_HOME", "")).expanduser()
+        configured_home = os.environ.get("AGENTCASH_HOME", "")
+        root = pathlib.Path(configured_home).expanduser()
         wallet = root / ".agentcash" / "wallet.json"
         if (not root.is_absolute() or root == pathlib.Path.home() or root == pathlib.Path(root.anchor)
                 or wallet.is_symlink() or not wallet.is_file()):
             raise RuntimeError("Partnerships requires its dedicated AgentCash wallet")
+        # Hermes expands ${AGENTCASH_HOME} while loading config.yaml. Compare
+        # the resolved value to the same validated environment path rather than
+        # the source placeholder retained in AGENTCASH_SERVER.
+        expected_mcp = {"agentcash": {
+            **AGENTCASH_SERVER,
+            "env": {"HOME": configured_home},
+        }}
+    if (config.get("mcp_servers") or {}) != expected_mcp:
+        raise RuntimeError("Enterprise MCP configuration does not match the assigned role")
     return partnership, ({"mcp__agentcash__fetch"} if partnership else set())
 
 
@@ -331,7 +341,9 @@ def _validate_config(identity, settings, assignment):
             or config.get("skills", {}).get("write_approval") is not True):
         raise RuntimeError("Managed skill configuration is not exact")
     partnership, expected_mcp_names = _validate_role_config(config, settings, assignment)
-    mcp_toolsets = ["mcp-agentcash"] if partnership else []
+    # platform_toolsets names the configured MCP server alias. Hermes resolves
+    # that alias to the registry-owned mcp-agentcash toolset after discovery.
+    mcp_toolsets = ["agentcash"] if partnership else []
     expected_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
     if _nested(config, "platform_toolsets", "api_server") != expected_toolsets:
         raise RuntimeError("API Server toolsets are not the governed role inventory")

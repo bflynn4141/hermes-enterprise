@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 
@@ -36,6 +37,7 @@ from enterprise_bridge.runtime_policy import EXPECTED_PLUGIN_SOURCES, plugin_tre
 
 
 FINANCE = packaged_skills()["enterprise_bridge:partner-invoice-review"]
+PARTNER = packaged_skills()["enterprise_bridge:partner-program-screening"]
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 AGENT_ID = "22222222-2222-4222-8222-222222222222"
 MODEL = "test/cloud-managed-fixture"
@@ -45,6 +47,45 @@ FINANCE_TOOLS = ("get_partner_handoff_result", "list_requests", "get_request")
 FINANCE_CAPABILITIES = (
     "partner.shared.read", "partner.invoice.read", "partner.invoice.review.prepare",
 )
+PARTNER_TOOLS = (
+    "list_partner_candidates", "get_partner_candidate",
+    "list_requests", "get_request", "get_approval_status", "get_document_text",
+    "save_review_note", "set_context_field", "ask_for_context", "set_focus",
+    "propose_request", "propose_approval", "propose_instruction",
+)
+PARTNER_CAPABILITIES = (
+    "partner.discovery.read", "partner.review.prepare", "partner.outreach.draft",
+    "partner.records.qualification.write", "partner.handoff.publish",
+)
+PARTNER_PROGRAM = {
+    "program_name": "Hermes Partner Program",
+    "source": "agentcash_people",
+    "source_purpose": "person_partner_research",
+    "organization_only": False,
+    "no_outreach": True,
+    "role_label": "Potential ecosystem lead",
+    "search_queries": [],
+    "intake_urls": [],
+    "keywords": ["artificial intelligence", "developer relations"],
+    "people_search": {
+        "current_position_seniority_level": ["Founder", "Head", "Director"],
+        "person_skills": ["Artificial Intelligence (AI)", "Developer Relations"],
+        "current_position_titles": [],
+        "person_locations": [],
+        "offset": 0,
+        "search_after": None,
+    },
+    "ranking_weights": {"relevance": 40, "activity": 25, "adoption": 20, "openness": 15},
+    "minimum_priority": 40,
+    "lookback_days": 365,
+    "max_candidates": 5,
+    "max_api_requests": 1,
+    "minimum_rate_remaining": 0,
+    "max_spend_usd": 0.15,
+    "screening_dimensions": ["Track Record", "Capacity", "Fit"],
+    "human_review_required": True,
+}
+PARTNER_CONFIG = {"partner_program": PARTNER_PROGRAM}
 
 
 def free_port():
@@ -89,13 +130,29 @@ def request(port, key, method, path, body=None, timeout=10):
         return response.code, payload, dict(response.headers.items())
 
 
-def config_for(port, worker_port, token, native_key, toolsets):
-    from enterprise_bridge.cloud_managed import install_enterprise_reader_toolset
+def config_for(port, worker_port, token, native_key, toolsets, *, role="finance"):
+    from enterprise_bridge.cloud_managed import (
+        AGENTCASH_POLICY, AGENTCASH_SERVER, install_enterprise_reader_toolset,
+    )
     from start import managed_agent_config
     from toolsets import TOOLSETS
 
     install_enterprise_reader_toolset()
     base = f"http://127.0.0.1:{worker_port}/internal/runtime/w/{WORKSPACE_ID}/agents/{AGENT_ID}"
+    partnership = role == "partner"
+    skill = PARTNER if partnership else FINANCE
+    skill_config = PARTNER_CONFIG if partnership else {"invoice_review": {
+        "duplicate_window_days": 365,
+        "require_engagement_evidence": True,
+        "connector": "enterprise-partner-records",
+        "human_review_required": True,
+        "payment_execution_available": False,
+    }}
+    agent = managed_agent_config(TOOLSETS)
+    if partnership:
+        agent["disabled_toolsets"] = [
+            name for name in agent["disabled_toolsets"] if name != "agentcash"
+        ]
     return {
         "_config_version": 12,
         "model": {
@@ -103,18 +160,18 @@ def config_for(port, worker_port, token, native_key, toolsets):
             "base_url": base + "/model/v1", "api_mode": "chat_completions",
             "api_key": token,
         },
-        "agent": managed_agent_config(TOOLSETS),
+        "agent": agent,
         "platform_toolsets": {"api_server": list(toolsets)},
-        "mcp_servers": {},
+        "mcp_servers": {"agentcash": AGENTCASH_SERVER} if partnership else {},
         "tools": {"tool_search": {"enabled": "off"}},
         "plugins": {"enabled": ["enterprise_bridge"], "entries": {"enterprise_bridge": {"settings": {
             "base_url": base,
             "native_url": f"http://127.0.0.1:{port}",
             "request_timeout_seconds": 2,
             "pending_timeout_seconds": 30,
-            "allowed_skills": [FINANCE["name"]],
-            "mcp_policy": [],
-            "partner_program": {},
+            "allowed_skills": [skill["name"]],
+            "mcp_policy": AGENTCASH_POLICY if partnership else [],
+            "partner_program": PARTNER_PROGRAM if partnership else {},
         }}}},
         "gateway": {
             "multiplex_profiles": False,
@@ -128,14 +185,8 @@ def config_for(port, worker_port, token, native_key, toolsets):
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
         "skills": {
             "creation_nudge_interval": 0, "write_approval": True,
-            "auto_load": [FINANCE["name"]],
-            "config": {"invoice_review": {
-                "duplicate_window_days": 365,
-                "require_engagement_evidence": True,
-                "connector": "enterprise-partner-records",
-                "human_review_required": True,
-                "payment_execution_available": False,
-            }},
+            "auto_load": [skill["name"]],
+            "config": skill_config,
         },
         "auxiliary": {
             "background_review": {"enabled": False},
@@ -162,7 +213,7 @@ def main():
     native_key = secrets.token_hex(32)
     control_key = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
     assert assess_control_secret(control_key) is None
-    mode = {"artifact": "valid", "tools": "valid"}
+    mode = {"artifact": "valid", "tools": "valid", "role": "finance"}
     model_calls = []
     skills_gate = {
         "count": 0,
@@ -205,25 +256,35 @@ def main():
                     if not skills_gate["release"].wait(15):
                         self.reply(503, {})
                         return
-                digest = FINANCE["artifact_digest"] if mode["artifact"] == "valid" else "sha256:" + "0" * 64
+                partnership = mode["role"] == "partner"
+                skill = PARTNER if partnership else FINANCE
+                capabilities = PARTNER_CAPABILITIES if partnership else FINANCE_CAPABILITIES
+                skill_config = PARTNER_CONFIG if partnership else {"invoice_review": {
+                    "duplicate_window_days": 365,
+                    "require_engagement_evidence": True,
+                    "connector": "enterprise-partner-records",
+                    "human_review_required": True,
+                    "payment_execution_available": False,
+                }}
+                digest = skill["artifact_digest"] if mode["artifact"] == "valid" else "sha256:" + "0" * 64
                 self.reply(200, {"skills": [{
-                    "name": FINANCE["name"], "runtime_name": FINANCE["name"],
-                    "skill_key": "partner-invoice-review", "version": FINANCE["version"],
+                    "name": skill["name"], "runtime_name": skill["name"],
+                    "skill_key": "partner-program-screening" if partnership else "partner-invoice-review",
+                    "version": skill["version"],
                     "artifact_digest": digest, "auto_load": True,
-                    "state": "active", "assignment_revision": 1,
-                    "grant_revision": None, "binding_source": "enterprise_assignment",
-                    "binding_state": None, "grant_expires_at": None,
-                    "capability_grants": list(FINANCE_CAPABILITIES),
-                    "config": {"invoice_review": {
-                        "duplicate_window_days": 365,
-                        "require_engagement_evidence": True,
-                        "connector": "enterprise-partner-records",
-                        "human_review_required": True,
-                        "payment_execution_available": False,
-                    }},
+                    "state": "active", "assignment_revision": None if partnership else 1,
+                    "grant_revision": 1 if partnership else None,
+                    "binding_source": "preflight_grant" if partnership else "enterprise_assignment",
+                    "binding_state": "prepared" if partnership else None,
+                    "grant_expires_at": (
+                        (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+                        if partnership else None
+                    ),
+                    "capability_grants": list(capabilities),
+                    "config": skill_config,
                 }]})
             elif self.path.endswith("/tools"):
-                names = list(FINANCE_TOOLS)
+                names = list(PARTNER_TOOLS if mode["role"] == "partner" else FINANCE_TOOLS)
                 if mode["tools"] == "drifted":
                     names.append("publish_partner_invoice_review")
                 self.reply(200, {"tools": [schema(name) for name in names]})
@@ -235,6 +296,11 @@ def main():
                 self.reply(404, {})
 
         def do_POST(self):
+            if self.path == "/v1/query":
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                self.reply(200, {"vulns": []})
+                return
             if not self.authorized():
                 self.reply(401, {})
                 return
@@ -277,9 +343,9 @@ def main():
 
     def start_case(
         name, *, artifact="valid", tools="valid", provider_escape=None, plugin_drift=False,
-        seed_stale=True, managed=True,
+        seed_stale=True, managed=True, role="finance",
     ):
-        mode.update(artifact=artifact, tools=tools)
+        mode.update(artifact=artifact, tools=tools, role=role)
         profile = root / name
         home = profile / "home"
         for path in (home / "plugins", home / "skills", profile / "os-home", profile / "workspace"):
@@ -302,10 +368,31 @@ def main():
                 file.write("\n# executable plugin drift\n")
         (home / "skills/.no-bundled-skills").write_text("managed by Hermes Enterprise\n")
         port = free_port()
+        partnership = role == "partner"
+        agentcash_home = profile / "agentcash-home"
+        if partnership:
+            wallet = agentcash_home / ".agentcash/wallet.json"
+            wallet.parent.mkdir(parents=True, mode=0o700)
+            wallet.write_text("{}\n")
+            bin_dir = profile / "bin"
+            bin_dir.mkdir(mode=0o700)
+            fake_npx = bin_dir / "npx"
+            fake_npx.write_text(
+                f"#!{python}\n"
+                "from mcp.server import MCPServer\n"
+                "server = MCPServer('agentcash-process-probe')\n"
+                "@server.tool(name='fetch')\n"
+                "def fetch(url: str) -> str:\n"
+                "    return 'unused local process fixture: ' + url\n"
+                "server.run()\n"
+            )
+            fake_npx.chmod(0o700)
         toolsets = ["enterprise_bridge", "enterprise_skill_reader"]
+        if partnership:
+            toolsets.append("agentcash")
         if tools == "drifted":
             toolsets.append("terminal")
-        config = config_for(port, server.server_port, token, native_key, toolsets)
+        config = config_for(port, server.server_port, token, native_key, toolsets, role=role)
         if provider_escape == "fallback":
             config["fallback_providers"] = [{
                 "provider": "openrouter", "model": "escape/model",
@@ -344,9 +431,13 @@ def main():
             "HERMES_ENTERPRISE_CONTROL_SECRET": control_key,
             "HERMES_ENTERPRISE_PLUGIN_REVISION": PLUGIN_REVISION,
             "HERMES_ENTERPRISE_PLUGIN_SHA256": reviewed_plugin_digest,
-            "HERMES_AGENTCASH_MCP_ENABLED": "0",
+            "HERMES_AGENTCASH_MCP_ENABLED": "1" if partnership else "0",
             "HERMES_NATIVE_CRON_ENABLED": "0",
+            "OSV_ENDPOINT": f"http://127.0.0.1:{server.server_port}/v1/query",
         })
+        if partnership:
+            env["PATH"] = str(profile / "bin") + os.pathsep + env.get("PATH", "")
+            env["AGENTCASH_HOME"] = str(agentcash_home)
         if managed:
             env["HERMES_ENTERPRISE_CLOUD_MANAGED"] = "1"
         log = (profile / "gateway.log").open("w")
@@ -563,8 +654,50 @@ def main():
         assert len(model_calls) == calls_before_drift, "provider was called after managed plugin drift"
         stop_latest()
 
+        partner_before = len(model_calls)
+        profile, port, readiness = start_case(
+            "partner-preflight", seed_stale=False, role="partner",
+        )
+        deadline = time.monotonic() + 150
+        while not readiness.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not readiness.exists():
+            raise AssertionError(
+                "P1.7 preflight case never became ready:\n"
+                + (profile / "gateway.log").read_text()
+            )
+        document = json.loads(readiness.read_text())
+        assert document["agentcash_enabled"] is True
+        assert document["skills"] == [{
+            "name": PARTNER["name"], "version": PARTNER["version"],
+            "artifact_digest": PARTNER["artifact_digest"],
+            "content_digest": PARTNER["content_digest"],
+        }]
+        assert set(document["tools"]) == {
+            *PARTNER_TOOLS, "skill_view", "mcp__agentcash__fetch",
+        }
+        status, _, headers = request(port, native_key, "GET", "/health")
+        assert status == 200
+        normalized_headers = {key.lower(): value for key, value in headers.items()}
+        assert normalized_headers.get("x-hermes-enterprise-boot") == document["boot_id"]
+        assert normalized_headers.get("x-hermes-enterprise-readiness-sha256")
+        accepted = request(port, native_key, "POST", "/v1/runs", {
+            "input": "Return one short sentence without tools.",
+            "session_id": "managed-partner-preflight-probe",
+            "provider": "custom", "model": MODEL,
+        })
+        assert accepted[0] == 202, accepted
+        deadline = time.monotonic() + 60
+        while len(model_calls) == partner_before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert len(model_calls) > partner_before, (
+            "ready P1.7 submission never reached the local model fixture: "
+            + (profile / "gateway.log").read_text()
+        )
+        stop_latest()
+
         print("PASS: ordinary pinned Hermes Cloud gateway installs the gate before fallible registration validation.")
-        print("Verified pre-ready capabilities, stale/artifact/tool/config rejection, post-202 provider gating, lost-flag restart closure, exact Finance readiness, live boot-bound health, and dynamic post-ready closure using local fixtures only.")
+        print("Verified pre-ready capabilities, stale/artifact/tool/config rejection, post-202 provider gating, lost-flag restart closure, exact Finance and authenticated P1.7 preflight readiness (including local AgentCash MCP discovery), live boot-bound health, and dynamic post-ready closure using local fixtures only.")
     finally:
         while processes:
             stop_latest()

@@ -79,7 +79,9 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
         document["agentcash"] = {
             "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
             "env": {"HOME": "${AGENTCASH_HOME}"},
-            "tools": {"include": list(AGENTCASH_TOOLS)},
+            "tools": {
+                "include": list(AGENTCASH_TOOLS), "resources": False, "prompts": False,
+            },
             "policy": {"allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15},
         }
 
@@ -120,6 +122,11 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
             raise RuntimeError(f"MCP server {name} has an invalid host or spend policy.")
         servers[name] = {"command": command, "args": args, "env": configured_env,
                          "tools": {"include": include}}
+        for family in ("resources", "prompts"):
+            if family in tools:
+                if not isinstance(tools[family], bool):
+                    raise RuntimeError(f"MCP server {name} has an invalid tools.{family} switch.")
+                servers[name]["tools"][family] = tools[family]
         policies.append({"server": name, "tools": include, "allowed_hosts": hosts,
                          "max_amount_usd": float(maximum)})
     return servers, policies, passthrough
@@ -152,6 +159,11 @@ def managed_agent_config(toolset_names):
     }
 
 
+def mcp_platform_selectors(mcp_servers):
+    """Return the native platform selectors for configured MCP server aliases."""
+    return sorted(mcp_servers)
+
+
 def child(metadata_path):
     metadata = json.loads(pathlib.Path(metadata_path).read_text())
     source, profile = pathlib.Path(metadata["source"]), pathlib.Path(metadata_path).parent
@@ -173,7 +185,9 @@ def child(metadata_path):
     base = metadata["enterprise_url"] + "/internal/runtime/w/" + metadata["workspace_id"] + "/agents/" + metadata["agent_id"]
     enterprise_skills = load_enterprise_skills(base, os.environ["ENTERPRISE_RUNTIME_TOKEN"])
     mcp_servers = metadata.get("mcp_servers") or {}
-    mcp_toolsets = ["mcp-" + name for name in sorted(mcp_servers)]
+    # Hermes platform selection names configured MCP server aliases and maps
+    # them to registry-owned mcp-<name> toolsets after discovery.
+    mcp_toolsets = mcp_platform_selectors(mcp_servers)
     platform_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),
