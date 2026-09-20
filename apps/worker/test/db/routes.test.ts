@@ -117,7 +117,7 @@ describe('GET /w/:ws/bootstrap', () => {
     } } });
   });
 
-  it('selects only an accessible private agent and fails closed when the viewer has none', async () => {
+  it('selects only an accessible private agent and returns no agent when the viewer has none', async () => {
     const fx = await seedWorkspace();
     const memberAgentId = randomUUID();
     await withClient('owner', async (c) => {
@@ -159,8 +159,8 @@ describe('GET /w/:ws/bootstrap', () => {
       await c.query('COMMIT');
     });
     const refused = await call(`/w/${fx.workspaceId}/bootstrap`, { 'x-dev-user': fx.adminId });
-    expect(refused.status).toBe(404);
-    expect(await refused.json()).toMatchObject({ reason: 'not_found' });
+    expect(refused.status).toBe(200);
+    expect(await refused.json()).toMatchObject({ agent: null });
   });
 
   it('refuses a caller who is not a member, without confirming the workspace exists', async () => {

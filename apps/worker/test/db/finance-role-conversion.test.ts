@@ -62,6 +62,8 @@ async function inviteAndAccept() {
   });
   expect(accepted.status).toBe(200);
   const bootstrap = await accepted.json() as Bootstrap;
+  if (!bootstrap.agent) throw new Error('accepted Finance invitation did not provision an agent');
+  const financeAgent = bootstrap.agent;
   const starter = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
     const row = await client.query<{ request_id: string; policy_id: string }>(
       `SELECT ar.request_id,ar.policy_id
@@ -69,12 +71,12 @@ async function inviteAndAccept() {
          JOIN approval_policies ap ON ap.id=ar.policy_id
         WHERE ar.workspace_id=$1 AND ar.requester_agent_id=$2
           AND ap.key=$3 AND ar.status='pending'`,
-      [fx.workspaceId, bootstrap.agent.id, `partner-first-search-${bootstrap.agent.id}`],
+      [fx.workspaceId, financeAgent.id, `partner-first-search-${financeAgent.id}`],
     );
     return row.rows[0]!;
   });
   expect(starter).toBeTruthy();
-  return { ...fx, env, joinerId, invitationId, financeAgentId: bootstrap.agent.id, starter };
+  return { ...fx, env, joinerId, invitationId, financeAgentId: financeAgent.id, starter };
 }
 
 async function configure(fx: Awaited<ReturnType<typeof inviteAndAccept>>): Promise<void> {

@@ -208,9 +208,13 @@ describe('enterprise approval policy and voting', () => {
     ).json());
     expect(hiddenList.items.map((item) => item.id)).not.toContain(proposed.request_id);
 
-    const bootstrap = await (
-      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/bootstrap`)
-    ).json() as { counts: { inbox: number; pending_for_me: number } };
+    const bootstrapResponse = await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/bootstrap`);
+    expect(bootstrapResponse.status).toBe(200);
+    const bootstrap = await bootstrapResponse.json() as {
+      agent: null;
+      counts: { inbox: number; pending_for_me: number };
+    };
+    expect(bootstrap.agent).toBeNull();
     expect(bootstrap.counts).toMatchObject({ inbox: 1, pending_for_me: 1 });
     const historyCounts = await (
       await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/history/counts`)
@@ -861,7 +865,13 @@ describe('enterprise approval policy and voting', () => {
     expect(mineCounts).toMatchObject({ pending_for_me: 1, pending_for_others: 0 });
 
     const notMine = await asUser(e.env, fx.outsiderUserId, `/w/${fx.workspaceId}/bootstrap`);
-    const otherCounts = (await notMine.json() as { counts: { pending_for_me: number; pending_for_others: number } }).counts;
+    expect(notMine.status).toBe(200);
+    const otherBootstrap = await notMine.json() as {
+      agent: null;
+      counts: { pending_for_me: number; pending_for_others: number };
+    };
+    expect(otherBootstrap.agent).toBeNull();
+    const otherCounts = otherBootstrap.counts;
     expect(otherCounts).toMatchObject({ pending_for_me: 0, pending_for_others: 1 });
 
     await asUser(e.env, fx.memberId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {

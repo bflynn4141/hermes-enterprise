@@ -234,6 +234,7 @@ describe('invitation-derived member and agent coordination', () => {
       };
     });
 
+    if (!bootstrap.agent) throw new Error('accepted member invitation did not provision an agent');
     expect(bootstrap.agent.id).toBe(persisted.joiner.agent_id);
     expect(bootstrap.agent.id).toBe(seeded.preflightAgentId);
     expect(bootstrap.agent.provisioning_status).toBe('ready');

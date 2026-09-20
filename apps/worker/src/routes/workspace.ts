@@ -24,7 +24,6 @@ import {
   loadVisiblePendingRequests,
 } from '../domain/requests.js';
 import { EXECUTABLE_MEMBER_SETUP_ROLES } from '../member-provisioning/service.js';
-import { RouteError } from './tenant.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -125,8 +124,7 @@ export async function loadBootstrap(
       LIMIT 1`,
     [workspaceId, userId],
   );
-  const agent = agents.rows[0];
-  if (!agent) throw new RouteError('No accessible agent', 'not_found', 404);
+  const agent = agents.rows[0] ?? null;
 
   // Counts are derived from current rows and the document view, never stored.
   // Audience filtering happens before aggregation so a private request does
@@ -170,7 +168,7 @@ export async function loadBootstrap(
       WHERE s.owner_id = $1 AND NOT s.archived
       ORDER BY s.pinned DESC, s.last_activity_at DESC
       LIMIT 50`,
-    [userId, agent.id],
+    [userId, agent?.id ?? null],
   );
 
   const requests = await loadVisiblePendingRequests(tx, workspaceId, userId, viewerRole, reviewerRoles);
@@ -257,14 +255,14 @@ export async function loadBootstrap(
       role: viewer.rows[0]?.role ?? 'member',
       reviewer_roles: viewer.rows[0]?.reviewer_roles ?? [],
     },
-    agent: {
+    agent: agent ? {
       id: agent.id,
       name: agent.name,
       email: null,
       responsibility: agent.responsibility,
       setup_step: agent.setup_step,
       provisioning_status: agent.provisioning_status,
-    },
+    } : null,
     capabilities: {
       email_ingress: false,
       // Only explicitly selected, hash-bound agent sources are accepted.

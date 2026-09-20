@@ -21,6 +21,7 @@ import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { requireRecoveryAgent, retryTask } from '../runs/recovery.js';
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import { HermesClient } from '../runtime/client.js';
 import { getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
@@ -317,6 +318,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     const session = admission.session;
     const already = admission.existing;
     if (already) return { status: 200 as const, run: already, duplicate: true };
+    await requireAgentContextAccess(work, session.agent_id);
     requireExpectedSettings(session, expectedSettings);
 
     if (c.env.AGENT_RUNTIME === 'hermes' && c.env.MODEL_SCRIPTED !== '1') {
@@ -730,7 +732,8 @@ export async function guideRun(c: Context<{ Bindings: Env }>): Promise<Response>
   if (!text) throw new RouteError('text is required', 'empty_guidance', 422);
 
   const body = await inWorkspace(c, async (work) => {
-    await loadSessionForWrite(work, sessionId);
+    const session = await loadSessionForWrite(work, sessionId);
+    await requireAgentContextAccess(work, session.agent_id);
     const run = await loadRun(work, sessionId, runId);
     // Guidance typed while the run was in its final step arrives after the last
     // provider step has already read its guidance: there is no next step of
@@ -799,7 +802,8 @@ export async function queueMessage(c: Context<{ Bindings: Env }>): Promise<Respo
   if (!text) throw new RouteError('text is required', 'empty_queue_item', 422);
 
   const body = await inWorkspace(c, async (work) => {
-    await loadSessionForWrite(work, sessionId);
+    const session = await loadSessionForWrite(work, sessionId);
+    await requireAgentContextAccess(work, session.agent_id);
     const run = await loadRun(work, sessionId, runId);
     // A stopped run's queue is paused, not queued: the item is kept and the
     // client shows it as paused rather than pretending it will be sent.
@@ -832,7 +836,8 @@ export async function editQueueItem(c: Context<{ Bindings: Env }>): Promise<Resp
   if (!text) throw new RouteError('text is required', 'empty_queue_item', 422);
 
   const body = await inWorkspace(c, async (work) => {
-    await loadSessionForWrite(work, sessionId);
+    const session = await loadSessionForWrite(work, sessionId);
+    await requireAgentContextAccess(work, session.agent_id);
     await loadRun(work, sessionId, runId);
     const { rowCount } = await work.tx.query(
       `UPDATE run_queue SET text = $4 WHERE workspace_id = $1 AND run_id = $2 AND id = $3
@@ -906,6 +911,7 @@ export async function retryRun(c: Context<{ Bindings: Env }>): Promise<Response>
 
   const result = await inWorkspace(c, async (work) => {
     const session = await loadSessionForWrite(work, sessionId);
+    await requireAgentContextAccess(work, session.agent_id);
     // Match the recovery service's agent → run → session lock order, including
     // automatic retries. An already admitted attempt wins before settings CAS.
     await requireRecoveryAgent(work, session.agent_id, true);
@@ -943,7 +949,8 @@ export async function answerContext(c: Context<{ Bindings: Env }>): Promise<Resp
   if (!key) throw new RouteError('key is required', 'key_required', 422);
 
   const outcome = await inWorkspace(c, async (work) => {
-    await loadSessionForWrite(work, sessionId);
+    const session = await loadSessionForWrite(work, sessionId);
+    await requireAgentContextAccess(work, session.agent_id);
     const run = await loadRun(work, sessionId, runId);
     if (run.status !== 'waiting') throw new RouteError('this run is not waiting', 'run_not_waiting', 409);
     if (run.waiting_for !== key) {
