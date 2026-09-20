@@ -169,11 +169,11 @@ export function SharedIntelligence() {
             </div>
           </fieldset>
           <fieldset>
-            <legend>Exact visible evidence</legend>
+            <legend>Visible evidence excerpts</legend>
             <div className="shared-intelligence-evidence-list">
               {draft.evidence.map((evidence, index) => {
                 const run = runsById.get(evidence.run_id);
-                return <label key={evidence.run_id}><span>{run?.session_title ?? 'Completed run'} · {run ? new Date(run.ended_at).toLocaleDateString() : ''}</span><textarea required maxLength={1000} rows={3} value={evidence.approved_excerpt} onChange={(event) => setDraft({ ...draft, evidence: draft.evidence.map((item, itemIndex) => itemIndex === index ? { ...item, approved_excerpt: event.target.value } : item) })} /><small>Must remain an exact quotation. A completed run is not proof the business outcome succeeded.</small></label>;
+                return <label key={evidence.run_id}><span>{run?.session_title ?? 'Completed run'} · {run ? new Date(run.ended_at).toLocaleDateString() : ''}</span><textarea required maxLength={1000} rows={3} value={evidence.approved_excerpt} onChange={(event) => setDraft({ ...draft, evidence: draft.evidence.map((item, itemIndex) => itemIndex === index ? { ...item, approved_excerpt: event.target.value } : item) })} /><small>Must remain a verified, redacted excerpt. Hermes separately hash-pins the complete source message, so any later edit blocks publication.</small></label>;
               })}
             </div>
           </fieldset>
@@ -193,7 +193,7 @@ export function SharedIntelligence() {
         <div className="shared-intelligence-grid">
           {workspace.discoveries.map((discovery) => (
             <article className="shared-intelligence-card" key={discovery.id}>
-              <div className="shared-intelligence-card-head"><span>{discovery.evidence_strength} evidence</span><span>{discovery.source_run_ids.length} run{discovery.source_run_ids.length === 1 ? '' : 's'}</span></div>
+              <div className="shared-intelligence-card-head"><span>possible pattern · {discovery.evidence_strength}</span><span>{discovery.source_run_ids.length} run{discovery.source_run_ids.length === 1 ? '' : 's'}</span></div>
               <h4>{discovery.suggested_title}</h4>
               <p>{discovery.suggested_lesson}</p>
               <p className="meta">{discovery.warnings.join(' ')}</p>

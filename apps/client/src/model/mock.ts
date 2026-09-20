@@ -544,7 +544,7 @@ export function createMockBackend(options: MockOptions = {}) {
       suggested_rationale: 'A local scan found two owner-visible completed runs with the same observable review step. Confirm whether the quoted outcome is reusable.',
       source_run_ids: [mockUuid(910), mockUuid(911)],
       approved_excerpts: [{ run_id: mockUuid(910), approved_excerpt: sharedEvidence(0).approved_excerpt, provenance: 'verified_quote' }, { run_id: mockUuid(911), approved_excerpt: sharedEvidence(1).approved_excerpt, provenance: 'verified_quote' }],
-      evidence_strength: 'limited', warnings: ['Private suggestion only. Edit and verify the lesson before asking for review.', 'Runtime completion does not establish business success.'],
+      evidence_strength: 'unassessed', warnings: ['Unassessed possible pattern only. Edit and verify it before asking for scored review.', 'Frequency is not corroboration or priority. Runtime completion does not establish business success.'],
     }],
     proposals: sharedIntelligenceProposals,
     data_boundary: 'Only completed runs you own are shown. A proposal uses verified excerpts from final user-visible messages; private traces, tool arguments/results, hidden reasoning, credentials, and other members\' work stay out.',
