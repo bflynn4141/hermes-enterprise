@@ -12,6 +12,14 @@ export function invitationFailureMessage(error: unknown): string {
   }
   const message = error.reason === 'iris_capacity_unavailable'
     ? 'No verified Iris profile is available. Add ready capacity, then try again.'
+    : error.reason === 'member_setup_unavailable'
+      ? 'Background member setup is paused right now. The existing setup was not changed.'
+    : error.reason === 'member_setup_role_unavailable'
+      ? 'Finance agent setup is not available yet. Choose an available job role.'
+    : error.reason === 'invitation_mode_conflict'
+      ? 'This address already has an invitation in a different delivery flow. Use the existing invitation card.'
+    : error.reason === 'invitation_role_conflict'
+      ? 'This address already has setup in progress for a different job role.'
     : error.reason === 'not_configured'
       ? 'This workspace is not connected to WorkOS invitation delivery.'
       : error.reason === 'rate_limited'
@@ -32,6 +40,13 @@ export function invitationFailureMessage(error: unknown): string {
                       ? 'That invitation can no longer be resent. Refresh the member list.'
                 : 'Could not record the invitation. Try again.';
   return withReference(message, error);
+}
+
+/** Acknowledge the state the server actually persisted, not a cached rollout mode. */
+export function invitationSuccessMessage(invitation: InvitationEntity): string {
+  if (invitation.status === 'accepted') return 'Already a member';
+  if (invitation.provisioning) return 'Agent setup started';
+  return 'Invitation queued';
 }
 
 export function invitationDeliveryMessage(invitation: InvitationEntity): string | null {

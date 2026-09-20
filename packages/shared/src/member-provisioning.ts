@@ -15,8 +15,10 @@ export const memberProvisioningIssueSchema = z.enum([
   'cloud_not_connected', 'cloud_reconnect_required', 'billing_unverified',
   'insufficient_credits', 'cloud_contract_unverified', 'bootstrap_unsupported',
   'readiness_failed', 'creation_outcome_unknown', 'delivery_outcome_unknown',
-  'delivery_rejected', 'temporary_failure',
+  'delivery_rejected', 'authorization_revoked', 'temporary_failure',
 ]);
+export const memberRoleTemplateSchema = z.enum(['partnerships-agent', 'finance-agent']);
+export type MemberRoleTemplate = z.infer<typeof memberRoleTemplateSchema>;
 
 export const memberProvisioningOperationSchema = z.object({
   id: uuidSchema,
@@ -49,7 +51,10 @@ export interface MemberProvisioningPresentation {
 }
 
 /** No provider text, simulated progress or optimistic completion in the cards. */
-export function memberProvisioningPresentation(operation: MemberProvisioningOperation): MemberProvisioningPresentation {
+export function memberProvisioningPresentation(
+  operation: MemberProvisioningOperation,
+  options: { setupEnabled?: boolean } = {},
+): MemberProvisioningPresentation {
   const value = memberProvisioningOperationSchema.parse(operation);
   const result = (label: string, detail: string, tone: MemberProvisioningPresentation['tone'],
     action: MemberProvisioningPresentation['action'] = null): MemberProvisioningPresentation => ({
@@ -59,6 +64,9 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   if (value.cancellation === 'complete') return result('Cancelled', 'This invitation has been cancelled.', 'neutral');
   if (value.cancellation === 'requested') return result('Cancelling', 'Confirming that setup and the invitation have stopped.', 'neutral');
   if (value.delivery === 'sent') return result('Invited', 'Waiting for them to join.', 'positive', 'resend');
+  if (options.setupEnabled === false && value.preparation !== 'ready') {
+    return result('Setup paused', 'Setup is paused. You can cancel this invitation or wait for setup to resume.', 'attention');
+  }
   if (value.preparation === 'reconciliation_required' || value.delivery === 'reconciliation_required') {
     return result('Needs attention', 'Checking the previous attempt before trying again.', 'attention', 'contact_admin');
   }
@@ -67,6 +75,9 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   }
   if (value.issue === 'billing_unverified' || value.issue === 'insufficient_credits') {
     return result('Check billing', 'An admin needs to check the organization’s Cloud billing.', 'attention', 'review_billing');
+  }
+  if (value.issue === 'authorization_revoked') {
+    return result('Setup paused', 'An active Admin needs to start this setup again.', 'attention', 'contact_admin');
   }
   if (value.delivery === 'failed' && value.issue === 'delivery_rejected') {
     return result('Invite not sent', 'Check the email address before resending.', 'attention', 'resend');
@@ -77,7 +88,10 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   if (value.delivery === 'queued' || value.delivery === 'sending') {
     return result('Sending invite', 'Their agent is ready. Sending the invitation.', 'neutral');
   }
-  return result('Setting up agent', 'We’ll send the invitation when their agent is ready.', 'neutral');
+  if (value.preparation === 'ready') {
+    return result('Agent ready', 'Setup is verified. Invitation delivery has not been queued.', 'positive');
+  }
+  return result('Setting up agent', 'Hermes is preparing verified capacity in the background.', 'neutral');
 }
 
 export type MemberProvisioningNextStep =

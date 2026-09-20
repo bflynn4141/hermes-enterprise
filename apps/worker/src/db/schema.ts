@@ -2161,6 +2161,7 @@ export const jobReady = pgTable('job_ready', {
   jobId: uuid('job_id').primaryKey(),
   workspaceId: uuid('workspace_id').notNull(),
   nextAt: now('next_at'),
+  pauseReason: text('pause_reason'),
 });
 
 /**
@@ -2185,10 +2186,20 @@ export const cloudConnectionAttempts = pgTable('cloud_connection_attempts', {
   wrappedDek: bytea('wrapped_dek').notNull(), wrapIv: bytea('wrap_iv').notNull(),
   kekVersion: integer('kek_version').notNull(), expiresAt: ts('expires_at').notNull(), createdAt: now('created_at'),
 });
+export const memberProvisioningOperations = pgTable('member_provisioning_operations', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(),
+  invitationId: uuid('invitation_id').notNull(), requestedBy: uuid('requested_by'),
+  roleTemplateKey: text('role_template_key').notNull(), roleTemplateVersion: text('role_template_version').notNull().default('1.0.0'),
+  createIntentId: uuid('create_intent_id').notNull().defaultRandom(), revision: integer('revision').notNull().default(0),
+  preparation: text('preparation').notNull().default('queued'), cancellation: text('cancellation').notNull().default('none'),
+  issue: text('issue'), cloudAgentId: text('cloud_agent_id'),
+  requestedAt: now('requested_at'), completedAt: ts('completed_at'), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
 
 export const ALL_TABLES = {
   cloud_connections: cloudConnections,
   cloud_connection_attempts: cloudConnectionAttempts,
+  member_provisioning_operations: memberProvisioningOperations,
   schema_migrations: schemaMigrations,
   users,
   auth_sessions: authSessions,

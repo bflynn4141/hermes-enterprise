@@ -13,7 +13,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -24,7 +24,7 @@ import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import { PartnerWorkflow } from './PartnerWorkflow.js';
-import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
+import { invitationDeliveryMessage, invitationFailureMessage, invitationSuccessMessage } from '../../model/invitation-copy.js';
 import { RuntimeCapacityTab } from './RuntimeCapacity.js';
 import { SharedIntelligence } from './SharedIntelligence.js';
 import { CloudConnection } from './CloudConnection.js';
@@ -155,11 +155,13 @@ function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: string
 export function Members() {
   const state = useAppState();
   const adapter = useAdapter();
+  const nav = useNav();
   const admin = useIsAdmin();
   const lists = useWorkspaceLists();
   const [tab, setTab] = useState('all');
   const [invite, setInvite] = useState(false);
   const [email, setEmail] = useState('');
+  const [jobRole, setJobRole] = useState<MemberRoleTemplate>('partnerships-agent');
   const [manage, setManage] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
@@ -167,6 +169,9 @@ export function Members() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
+  const setupRoles = state.capabilities.memberRoleTemplates;
+  const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -203,11 +208,11 @@ export function Members() {
   return (
     <div className="scroll">
       <div className="app-body">
-        <div className="row" style={{ height: 42 }}>
+        <div className="row members-header" style={{ minHeight: 42 }}>
           <h1 className="display-32">Members</h1>
           <span className="grow" />
           <span className="meta">
-            {counts.joined} joined · {counts.invited} invited
+            {counts.joined} joined · {counts.invited} pending
           </span>
           {admin && <Button onClick={() => {
             setNotice(null);
@@ -231,30 +236,31 @@ export function Members() {
           all.length === 0 ? (
             <EmptyState icon="people" title="No members yet" />
           ) : (
-            <div className="col" role="list">
+            <div className="member-card-list" role="list">
               {all.map((member) => {
                 const status = memberStatusLabel(member.status);
                 return (
-                  <div className="list-row members-row" role="listitem" key={member.id} style={{ minHeight: 84 }}>
-                    <Avatar person={{ name: member.name }} size={40} />
-                    {/* The name column flexes and truncates: the row has to fit
-                        the app pane with the Iris panel open, and the action is
-                        the part that must never be pushed off the edge. */}
-                    <div className="row-main">
-                      <span className="t truncate" style={{ fontSize: 14.4 }}>
-                        {member.name}
-                        {member.user_id === state.user.id && <span className="meta"> · You</span>}
-                      </span>
-                      <span className="s truncate">{member.email}</span>
+                  <div className="member-card" role="listitem" key={member.id}>
+                    <div className="member-card-identity">
+                      <Avatar person={{ name: member.name }} size={40} />
+                      <div className="row-main">
+                        <span className="member-card-title truncate">
+                          {member.name}
+                          {member.user_id === state.user.id && <span className="meta"> · You</span>}
+                        </span>
+                        <span className="member-card-email truncate">{member.email}</span>
+                      </div>
                     </div>
-                    <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
-                    <Pill tone={statusTone(status)}>{status}</Pill>
-                    <span className="meta joined">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
-                    {admin && <Button onClick={() => {
+                    <div className="member-card-facts">
+                      <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
+                      <Pill tone={statusTone(status)}>{status}</Pill>
+                    </div>
+                    <p className="member-card-summary">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</p>
+                    {admin && <div className="member-card-actions"><Button onClick={() => {
                       setNotice(null);
                       setManageNotice(null);
                       setManage(member.id);
-                    }}>Manage</Button>}
+                    }}>Manage</Button></div>}
                   </div>
                 );
               })}
@@ -263,44 +269,60 @@ export function Members() {
         ) : invitations.length === 0 ? (
           <EmptyState icon="people" title={EMPTY.invitations} />
         ) : (
-          <div className="col" role="list">
+          <div className="member-card-list" role="list">
             {invitations.map((row) => {
-              const status = invitationStatusLabel(row.status);
+              const provisioning = row.status !== 'expired' && row.provisioning
+                ? memberProvisioningPresentation(row.provisioning, { setupEnabled: setupOnly })
+                : null;
+              const status = provisioning?.label ?? invitationStatusLabel(row.status);
               const delivery = invitationDeliveryMessage(row);
               return (
-                <div className="list-row members-row" role="listitem" key={row.id} style={{ minHeight: 84 }}>
-                  <Avatar person={{ name: row.email }} size={40} />
-                  <div className="row-main">
-                    <span className="t truncate" style={{ fontSize: 14.4 }}>
-                      {row.email}
-                    </span>
-                    <span className="s">Invited {new Date(row.invited_at).toLocaleDateString()}</span>
-                    {delivery && <span className="meta">{delivery}</span>}
+                <div className="member-card member-invitation-card" role="listitem" key={row.id}>
+                  <div className="member-card-identity">
+                    <Avatar person={{ name: row.email }} size={40} />
+                    <div className="row-main">
+                      <span className="member-card-title truncate">{row.email}</span>
+                      <span className="member-card-email">
+                        {row.provisioning && row.provisioning.delivery === 'not_queued' ? 'Setup requested' : 'Invited'}{' '}
+                        {new Date(row.invited_at).toLocaleDateString()}
+                      </span>
+                    </div>
                   </div>
-                  <Pill>{row.role === 'admin' ? 'Admin' : 'Member'}</Pill>
-                  <Pill tone={statusTone(status)}>{status}</Pill>
+                  <div className="member-card-facts">
+                    <Pill>{row.role_template_key === 'finance-agent' ? 'Finance' : row.role_template_key === 'partnerships-agent' ? 'Partnerships' : row.role === 'admin' ? 'Admin' : 'Member'}</Pill>
+                  </div>
+                  <div className="member-card-status" data-tone={provisioning?.tone ?? 'neutral'}>
+                    <i aria-hidden="true" />
+                    <div>
+                      <strong>{status}</strong>
+                      <span>{provisioning?.detail ?? delivery ?? 'Waiting for them to join.'}</span>
+                    </div>
+                  </div>
                   {admin && (
-                    <>
+                    <div className="member-card-actions">
+                      {(provisioning?.action === 'connect_cloud' || provisioning?.action === 'review_billing') && (
+                        <Button onClick={() => nav(SETTINGS('Organization'))}>Cloud settings</Button>
+                      )}
                       {/* One route behind two words: the server resends a
                           pending invitation and an expired one alike. */}
-                      <Button
+                      {(!provisioning || provisioning.action === 'resend') && <Button
                         disabled={pending !== null}
                         onClick={() => {
                           runInvitationAction('resend', row);
                         }}
                       >
                         {pending === `resend:${row.id}` ? 'Sending…' : row.status === 'expired' ? 'Reinvite' : 'Resend'}
-                      </Button>
-                      <Button
+                      </Button>}
+                      {(!provisioning || provisioning.canCancel) && <Button
                         link
                         disabled={pending !== null}
                         onClick={() => {
                           runInvitationAction('withdraw', row);
                         }}
                       >
-                        {pending === `withdraw:${row.id}` ? 'Withdrawing…' : 'Withdraw'}
-                      </Button>
-                    </>
+                        {pending === `withdraw:${row.id}` ? 'Cancelling…' : provisioning ? 'Cancel' : 'Withdraw'}
+                      </Button>}
+                    </div>
                   )}
                 </div>
               );
@@ -328,24 +350,27 @@ export function Members() {
               }}>Cancel</Button>
               <Button
                 primary
-                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
+                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email) || (setupOnly && !selectedJobRole)}
                 onClick={() => {
                   setPending('invite');
                   setInviteError(null);
+                  const request = setupOnly && selectedJobRole
+                    ? { email, role: 'member' as const, role_template_key: selectedJobRole }
+                    : { email, role: 'member' as const };
                   void adapter.rest
-                    .invite(state.workspace.id, { email, role: 'member' })
-                    .then(() => {
+                    .invite(state.workspace.id, request)
+                    .then((created) => {
                       invitationsChanged();
                       setEmail('');
                       setInvite(false);
                       setTab('invites');
-                      showAck('Invitation recorded · Email delivery queued');
+                      showAck(invitationSuccessMessage(created));
                     })
                     .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
                     .finally(() => setPending(null));
                 }}
               >
-                {pending === 'invite' ? 'Inviting…' : 'Invite'}
+                {pending === 'invite' ? setupOnly ? 'Starting…' : 'Sending…' : setupOnly ? 'Start setup' : 'Send invitation'}
               </Button>
             </>
           }
@@ -354,7 +379,15 @@ export function Members() {
             <span className="sr-only">Work email</span>
             <input type="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
-          <p className="meta">The invitation is recorded first. The identity provider sends the email after it is queued.</p>
+          {setupOnly && <label className="field">
+            <span>Job role</span>
+            <select value={selectedJobRole ?? ''} onChange={(event) => setJobRole(event.target.value as MemberRoleTemplate)}>
+              {setupRoles.map((role) => <option key={role} value={role}>{role === 'finance-agent' ? 'Finance' : 'Partnerships'}</option>)}
+            </select>
+          </label>}
+          <p className="meta">{setupOnly
+            ? 'Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.'
+            : 'Capacity is reserved automatically, then the invitation email is queued for delivery.'}</p>
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

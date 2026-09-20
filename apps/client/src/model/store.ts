@@ -21,6 +21,7 @@ import {
   type Message,
   type Run,
   type RunQueueItem,
+  type MemberRoleTemplate,
   type StreamEvent,
   type SessionSnapshot,
 } from '@hermes/shared';
@@ -243,7 +244,13 @@ export interface AppState {
     id: string | null; name: string; email: string | null; summary: string; setupStep: string | null;
     provisioningStatus: 'getting_ready' | 'ready' | 'retrying' | null;
   };
-  capabilities: { emailIngress: boolean; turnAttachments: boolean; automatedTriggers: boolean };
+  capabilities: {
+    emailIngress: boolean;
+    turnAttachments: boolean;
+    automatedTriggers: boolean;
+    memberInvitationMode: 'legacy_delivery' | 'setup_only';
+    memberRoleTemplates: MemberRoleTemplate[];
+  };
   entities: EntityCache;
   sessions: Record<string, SessionState>;
   sessionOrder: string[];
@@ -321,7 +328,13 @@ export function initialState(): AppState {
     workspace: { id: '', name: '', role: 'member', jurisdiction: null },
     user: { id: '', name: '', email: '', role: 'member' },
     agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null },
-    capabilities: { emailIngress: false, turnAttachments: false, automatedTriggers: false },
+    capabilities: {
+      emailIngress: false,
+      turnAttachments: false,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    },
     entities: emptyEntities(),
     sessions: {},
     sessionOrder: [],

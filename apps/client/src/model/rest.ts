@@ -454,7 +454,7 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/result`, partnerHandoffResultSchema) as Promise<PartnerHandoffResult>,
 
     // --- members and invitations ---
-    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
+    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member'; role_template_key?: 'partnerships-agent' | 'finance-agent' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
     /**

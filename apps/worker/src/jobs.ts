@@ -44,6 +44,9 @@ export interface Job {
   readonly attempts: number;
 }
 
+/** A successful runner may defer completion without entering retry backoff. */
+export type JobDisposition = 'paused' | void;
+
 /** How long a claimer holds a job before another may take it. */
 export const CLAIM_SECONDS = 120;
 
@@ -83,6 +86,9 @@ export const JOB_KINDS = [
   // synchronous because every slot is already configured and verified.
   'hermes_invitation_expire',
   'hermes_capacity_alert',
+  // Local member setup orchestration. It reserves only pre-verified capacity;
+  // lifecycle creation and invitation delivery are separate, gated operations.
+  'member_provision',
   // Advisory Jev assessment for Inbox ordering. Approval policy remains the authority.
   'request_triage',
   // Exact revision-bound outreach after a human approves and a dedicated
@@ -104,9 +110,14 @@ export async function claimJob(tx: Tx, jobId: string): Promise<Job | null> {
   const { rows } = await tx.query<Job>(
     `UPDATE jobs
         SET locked_until = now() + ($2 || ' seconds')::interval,
-            attempts = attempts + 1
+            attempts = attempts + 1,
+            last_error = CASE WHEN last_error='member_provisioning_disabled' THEN NULL ELSE last_error END
       WHERE id = $1
         AND done_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM job_ready paused
+           WHERE paused.job_id=jobs.id AND paused.pause_reason IS NOT NULL
+        )
         AND (locked_until IS NULL OR locked_until < now())
       RETURNING id, workspace_id, kind, key, payload, attempts`,
     [jobId, String(CLAIM_SECONDS)],
@@ -119,11 +130,16 @@ export async function claimNextJob(tx: Tx): Promise<Job | null> {
   const { rows } = await tx.query<Job>(
     `UPDATE jobs
         SET locked_until = now() + ($1 || ' seconds')::interval,
-            attempts = attempts + 1
+            attempts = attempts + 1,
+            last_error = CASE WHEN last_error='member_provisioning_disabled' THEN NULL ELSE last_error END
       WHERE id = (
         SELECT id FROM jobs
          WHERE done_at IS NULL
            AND next_at <= now()
+           AND NOT EXISTS (
+             SELECT 1 FROM job_ready paused
+              WHERE paused.job_id=jobs.id AND paused.pause_reason IS NOT NULL
+           )
            AND (locked_until IS NULL OR locked_until < now())
          ORDER BY next_at
          FOR UPDATE SKIP LOCKED
@@ -139,6 +155,27 @@ export async function finishJob(tx: Tx, jobId: string): Promise<void> {
   await tx.query('UPDATE jobs SET done_at = now(), locked_until = NULL WHERE id = $1', [jobId]);
   // The pointer the Cron reads exists only while there is work to point at.
   await tx.query('DELETE FROM job_ready WHERE job_id = $1', [jobId]);
+}
+
+/** Pause one known setup job and its platform pointer in the same commit. */
+export async function pauseMemberProvisioningJob(tx: Tx, jobId: string): Promise<void> {
+  const job = await tx.query(
+    `UPDATE jobs
+        SET locked_until=NULL, last_error='member_provisioning_disabled'
+      WHERE id=$1 AND kind='member_provision' AND done_at IS NULL
+      RETURNING id`,
+    [jobId],
+  );
+  const pointer = await tx.query(
+    `UPDATE job_ready
+        SET pause_reason='member_provisioning_disabled'
+      WHERE job_id=$1
+      RETURNING job_id`,
+    [jobId],
+  );
+  if (job.rowCount !== 1 || pointer.rowCount !== 1) {
+    throw new Error('member provisioning pause lost its durable job pointer');
+  }
 }
 
 async function finishFailedJob(tx: Tx, jobId: string, error: string): Promise<void> {
@@ -723,7 +760,7 @@ async function runApprovalContinue(env: Env, job: Job): Promise<void> {
 }
 
 /** Dispatch. An unknown kind is done rather than retried forever. */
-export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<void> {
+export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions = {}): Promise<JobDisposition> {
   switch (job.kind) {
     case 'publish':
       await runPublish(env, job);
@@ -734,6 +771,8 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'workos_sync':
       await runWorkosSync(env, job);
       return;
+    case 'member_provision':
+      return (await import('./member-provisioning/service.js')).runMemberProvisioningJob(env, job);
     case 'backup_uploads':
       // The nightly copy of one workspace's uploads prefix into the backup
       // bucket. A no-op where no backup bucket is bound (storage/backup.ts).
@@ -838,7 +877,11 @@ async function claimRunFinish(
   const job = await withWorkspaceTransaction(env, workspaceId, (tx) => claimJob(tx, jobId));
   if (!job) return false;
   try {
-    await runJob(env, job, adapterOptions);
+    const disposition = await runJob(env, job, adapterOptions);
+    if (disposition === 'paused') {
+      await withWorkspaceTransaction(env, workspaceId, (tx) => pauseMemberProvisioningJob(tx, job.id));
+      return false;
+    }
     await withWorkspaceTransaction(env, workspaceId, (tx) => finishJob(tx, job.id));
     return true;
   } catch (error) {
@@ -895,8 +938,17 @@ export async function drainJobs(
   const client = await connect(env, 'app');
   let due: { job_id: string; workspace_id: string }[];
   try {
+    if (env.HERMES_MEMBER_PROVISIONING_ENABLED === '1') {
+      await client.query(
+        `UPDATE job_ready
+            SET pause_reason=NULL, next_at=now()
+          WHERE pause_reason='member_provisioning_disabled'`,
+      );
+    }
     const { rows } = await client.query<{ job_id: string; workspace_id: string }>(
-      `SELECT job_id, workspace_id FROM job_ready WHERE next_at <= now() ORDER BY next_at LIMIT $1`,
+      `SELECT job_id, workspace_id FROM job_ready
+        WHERE pause_reason IS NULL AND next_at <= now()
+        ORDER BY next_at LIMIT $1`,
       [limit],
     );
     due = rows;

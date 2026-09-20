@@ -8,14 +8,17 @@ and initializes MCP to retrieve allowlisted management schemas. The separate
 through an exact read-only wrapper. Paid tool dispatch is intentionally not
 exported until the durable job executor owns a tenant-scoped atomic claim. The
 adapter is not wired to invitations. The admin connection is wired to
-encrypted storage and Organization Settings; invitation jobs and paid
-provisioning are not enabled.
+encrypted storage and Organization Settings. Local member-setup jobs are
+feature-gated; invitation delivery and paid provisioning are not enabled by
+this work.
 
 The independent shared operation contract in `packages/shared/src/member-provisioning.ts`
 defines validated preparation/delivery/cancellation states, concise UI presentation,
-and a recovery-step planner. It is scaffolding for a revision-checked durable job,
-not an executor. Unknown creation or delivery outcomes require reconciliation;
-they do not authorize replay. Email states require verified preparation.
+and a recovery-step planner. Migration `0061_member_provisioning_operations.sql`
+and `apps/worker/src/member-provisioning/service.ts` now persist and execute the
+local, revision-checked part of that state machine. Unknown creation or delivery
+outcomes require reconciliation; they do not authorize replay. Email states
+require verified preparation.
 
 ## Public protocol preflight
 
@@ -117,17 +120,21 @@ unverified and can be reconnected. Users do not enter tokens or instance IDs.
 3. Obtain a supported governed plugin/profile bootstrap contract from Nous, or
    publish the reviewed Enterprise bridge in an approved image/profile. Instance
    creation and Enterprise readiness remain distinct.
-4. Add durable invite/provisioning operations and transactional outbox jobs,
-   including the atomic one-use provider-dispatch claim, exact reservation
-   semantics, role-readiness gates and email ordering. Only that executor may
-   expose the paid create wrapper, with server-derived environment values.
-5. Connect the compact Members states. Only server-confirmed setup completion
-   may queue WorkOS email; a generic live instance must not be marked ready.
+4. Complete the authenticated lifecycle executor behind the durable member-setup
+   operation. This slice may reserve only compatible, pre-existing local capacity;
+   it must fail closed as `cloud_contract_unverified` when the stored Cloud grant
+   cannot prove the required lifecycle/bootstrap contract. Paid creation remains
+   unavailable until a separate reviewed executor owns an atomic, tenant-scoped,
+   one-use provider-dispatch claim.
+5. After exact role readiness, add a separately reviewed transactional delivery
+   handoff. The compact Members states are connected, but this runner does not
+   queue WorkOS email and must not present setup completion as delivery.
 
 Live read-only validation: public metadata, authenticated schemas, selected
 organization billing attribution and read-only agent/usage operations passed.
-Governed bootstrap and paid creation were not attempted. No deployment flags or
-existing invitation behavior change.
+Governed bootstrap and paid creation were not attempted. The member-setup behavior is behind
+`HERMES_MEMBER_PROVISIONING_ENABLED`, which defaults off. No deployment flags or
+existing invitation behavior changed.
 
 Sources: [Cloud MCP guide](https://hermes-agent.nousresearch.com/docs/guides/manage-hermes-cloud-with-mcp),
 [Business billing](https://portal.nousresearch.com/business),

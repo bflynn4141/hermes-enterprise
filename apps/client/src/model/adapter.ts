@@ -655,6 +655,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
           emailIngress: boot.capabilities.email_ingress,
           turnAttachments: boot.capabilities.turn_attachments,
           automatedTriggers: boot.capabilities.automated_triggers,
+          // An older Worker has only the legacy invitation route. Defaulting a
+          // missing rolling-deploy field to that behavior is fail-closed: the
+          // client never sends a setup request unless the server advertised it.
+          memberInvitationMode: boot.capabilities.member_invitations?.mode ?? 'legacy_delivery',
+          memberRoleTemplates: boot.capabilities.member_invitations?.role_templates ?? [],
         },
         sessions,
         sessionOrder: [...localIds, ...boot.sessions.map((row) => row.id)],

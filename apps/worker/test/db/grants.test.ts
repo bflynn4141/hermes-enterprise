@@ -118,6 +118,7 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'shared_intelligence_evidence', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'cloud_connections', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'cloud_connection_attempts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'member_provisioning_operations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
