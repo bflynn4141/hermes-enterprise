@@ -124,11 +124,13 @@ async function seedCapacity(
     { workspaceId: fixture.workspaceId, keyId: id, namespace: POOL_CONTROL_NAMESPACE },
     `pool-control-${id}-long-enough`,
   )));
-  const configDigest = await discoveryConfigDigest({
-    role_template_key: role.roleTemplateKey,
-    role_template_version: role.roleTemplateVersion,
-    config,
-  });
+  const configDigest = await discoveryConfigDigest(role.roleTemplateKey === 'partnerships-agent'
+    ? { role_template_key: role.roleTemplateKey, config }
+    : {
+        role_template_key: role.roleTemplateKey,
+        role_template_version: role.roleTemplateVersion,
+        config,
+      });
   await withClient('owner', async (client) => {
     await client.query('BEGIN');
     await setTenant(client, fixture.workspaceId, fixture.adminId);

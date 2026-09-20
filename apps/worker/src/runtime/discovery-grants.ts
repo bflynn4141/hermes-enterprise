@@ -135,9 +135,11 @@ export async function exactLegacyDiscoveryConfig(
     config: resolved.config,
     assignmentId: resolved.assignment?.id ?? null,
     assignmentRevision: resolved.assignment?.revision ?? null,
+    // Preserve the historical P1.7 digest byte-for-byte. Migration 0064 adds
+    // role-template version as separately constrained metadata; folding it
+    // into this digest would quarantine every unchanged pre-0064 warm slot.
     configDigest: await discoveryConfigDigest({
       role_template_key: PARTNER_PROGRAM_DEFINITION.roleTemplateKey,
-      role_template_version: ROLE_TEMPLATE_VERSION,
       config: resolved.config,
     }),
   };
