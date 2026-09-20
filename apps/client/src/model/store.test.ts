@@ -216,6 +216,13 @@ describe('follow and pin', () => {
     expect(mine.sessions[SESSION_A]!.focus).toEqual(CTX);
   });
 
+  it('a session row without a focus keeps the one the run recorded', () => {
+    const focused = feed(base(), event('run.focus', { run_id: RUN, session_id: SESSION_A, ref: CTX, entity_type: null, entity_id: null }, 1n));
+    const upserted = reduce(focused, { type: 'session/upsert', session: { id: SESSION_A, agent_id: AGENT, title: 'Session', mode: 'work', model_id: 'deepseek-flash', effort: 'high', runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Ready', last_activity_at: null } });
+    expect(upserted.sessions[SESSION_A]!.focus).toEqual(CTX);
+    expect(upserted.sessions[SESSION_A]!.focusRunId).toBe(RUN);
+  });
+
   it('selecting a session shows the object it was working on', () => {
     const start = base({ sessions: { [SESSION_A]: session(SESSION_A), [SESSION_B]: session(SESSION_B, { focus: CTX }) } });
     const selected = reduce(start, { type: 'session/select', id: SESSION_B });
