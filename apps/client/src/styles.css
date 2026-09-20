@@ -468,9 +468,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .app-footer.inline { border-top: 1px solid var(--line); padding: 20px 0 0; margin-top: auto; background: transparent; }
 .agent-head { display: flex; align-items: center; gap: 14px; }
 .agent-head .mark { width: 32px; height: 32px; }
-.follow-btn { display: inline-flex; align-items: center; gap: 12px; padding: 7px 12px; border-radius: 7px; border: 1px solid var(--line); background-color: var(--context); background-image: var(--panel); font-size: 11.2px; line-height: 16px; color: var(--body); }
-.follow-btn.ghost { background: none; border-color: transparent; color: var(--muted); }
-.follow-btn.ghost:hover { color: var(--body); }
+.focus-link { display: flex; }
+.focus-link .suggestion { display: inline-flex; align-items: center; gap: 6px; }
 .object-view { display: flex; flex-direction: column; min-height: 0; flex: 1 1 0; container-type: inline-size; }
 .score-panel { padding: 18px 20px; }
 .score-panel .score { font-size: 24px; line-height: 28.8px; }
@@ -1431,8 +1430,6 @@ html[data-reduce-motion="true"] *, html[data-reduce-motion="true"] *::before, ht
 .share-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.4px; line-height: 14.4px; color: var(--muted); padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; margin-left: 4px; }
 .ws-btn { display: flex; align-items: center; gap: 12px; width: 100%; height: 40px; text-align: left; border-radius: 8px; padding: 0 6px; margin-left: -6px; color: inherit; transition: background-color 120ms ease-out; }
 .ws-btn:hover, .ws-btn[aria-expanded="true"] { background: rgba(255,255,255,.05); }
-.follow-btn[aria-pressed] { cursor: pointer; transition: border-color 120ms ease-out; }
-.follow-btn[aria-pressed]:hover { border-color: #4a4a80; }
 .dialog-actions .grow { flex: 1; }
 
 /* ---------- added by the M2 client port ---------- */
@@ -1901,7 +1898,6 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .shell.is-phone .pane-header .text-btn,
 .shell.is-phone .pane-header .icon-btn,
 .phone-navigation .icon-btn { min-width: 44px; min-height: 44px; justify-content: center; }
-.shell.is-phone .pane-header .follow-btn { min-height: 44px; }
 /* The pinned badge is passive. Keep the action in the single phone header and
    let the active agent tab continue to communicate the pinned destination. */
 .shell.is-phone .pane-header .follow-status { display: none; }
