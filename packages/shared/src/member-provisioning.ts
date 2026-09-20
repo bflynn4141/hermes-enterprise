@@ -51,7 +51,10 @@ export interface MemberProvisioningPresentation {
 }
 
 /** No provider text, simulated progress or optimistic completion in the cards. */
-export function memberProvisioningPresentation(operation: MemberProvisioningOperation): MemberProvisioningPresentation {
+export function memberProvisioningPresentation(
+  operation: MemberProvisioningOperation,
+  options: { setupEnabled?: boolean } = {},
+): MemberProvisioningPresentation {
   const value = memberProvisioningOperationSchema.parse(operation);
   const result = (label: string, detail: string, tone: MemberProvisioningPresentation['tone'],
     action: MemberProvisioningPresentation['action'] = null): MemberProvisioningPresentation => ({
@@ -61,6 +64,9 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   if (value.cancellation === 'complete') return result('Cancelled', 'This invitation has been cancelled.', 'neutral');
   if (value.cancellation === 'requested') return result('Cancelling', 'Confirming that setup and the invitation have stopped.', 'neutral');
   if (value.delivery === 'sent') return result('Invited', 'Waiting for them to join.', 'positive', 'resend');
+  if (options.setupEnabled === false && value.preparation !== 'ready') {
+    return result('Setup paused', 'Setup is paused. You can cancel this invitation or wait for setup to resume.', 'attention');
+  }
   if (value.preparation === 'reconciliation_required' || value.delivery === 'reconciliation_required') {
     return result('Needs attention', 'Checking the previous attempt before trying again.', 'attention', 'contact_admin');
   }

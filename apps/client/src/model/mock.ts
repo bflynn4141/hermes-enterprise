@@ -126,6 +126,8 @@ interface MockOptions {
   memberWrites?: 'ok' | 'fail';
   /** Server-advertised invitation contract; default mirrors flag-off deployments. */
   memberInvitations?: 'legacy_delivery' | 'setup_only';
+  /** Existing unfinished setup shown while the deployment is flag-off. */
+  pausedMemberSetup?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
@@ -350,9 +352,11 @@ export function createMockBackend(options: MockOptions = {}) {
     ? []
     : [{
         id: mockUuid(210), email: 'lena@nous.example', role: 'member', status: 'pending', invited_at: iso(-4000),
-        role_template_key: 'finance-agent',
+        role_template_key: options.pausedMemberSetup ? 'partnerships-agent' : 'finance-agent',
         provisioning: {
-          id: mockUuid(211), workspace_id: WS, revision: 1, preparation: 'ready', delivery: 'sent',
+          id: mockUuid(211), workspace_id: WS, revision: 1,
+          preparation: options.pausedMemberSetup ? 'queued' : 'ready',
+          delivery: options.pausedMemberSetup ? 'not_queued' : 'sent',
           membership: 'not_joined', cancellation: 'none', issue: null,
         },
         version: 1,
@@ -1042,7 +1046,7 @@ export function createMockBackend(options: MockOptions = {}) {
         turn_attachments: Boolean(options.agentSettings),
         automated_triggers: false,
         member_invitations: setupOnly
-          ? { mode: 'setup_only' as const, role_templates: ['partnerships-agent' as const, 'finance-agent' as const] }
+          ? { mode: 'setup_only' as const, role_templates: ['partnerships-agent' as const] }
           : { mode: 'legacy_delivery' as const, role_templates: [] },
       },
       heads: { session: head.toString(), workspace: head.toString() },
@@ -1427,6 +1431,9 @@ export function createMockBackend(options: MockOptions = {}) {
       if (!setupOnly && body.role_template_key !== undefined) {
         return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
       }
+      if (setupOnly && body.role_template_key === 'finance-agent') {
+        return fail(409, 'member_setup_role_unavailable', 'Finance agent setup is not available yet.');
+      }
       if (options.memberWrites === 'fail') {
         return json({
           error: 'No verified Iris profile is available',
@@ -1439,7 +1446,7 @@ export function createMockBackend(options: MockOptions = {}) {
         role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0),
         delivery_status: setupOnly ? 'not_required' : 'queued',
         ...(setupOnly ? {
-          role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' as const : 'partnerships-agent' as const,
+          role_template_key: 'partnerships-agent' as const,
           provisioning: {
             id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
             preparation: 'queued' as const, delivery: 'not_queued' as const,

@@ -43,6 +43,7 @@ import {
 import {
   createMemberProvisioningOperation,
   memberProvisioningEnabled,
+  memberSetupRoleExecutable,
   projectMemberProvisioning,
   rebindMemberProvisioningOperation,
   requestMemberProvisioningCancellation,
@@ -288,6 +289,22 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
               op.revision AS operation_revision, op.preparation,
               op.cancellation, op.issue, op.role_template_key,
+              EXISTS (
+                SELECT 1
+                  FROM hermes_cloud_capacity capacity
+                  JOIN runtime_discovery_grants grant_row
+                    ON grant_row.workspace_id=capacity.workspace_id
+                   AND grant_row.id=capacity.discovery_grant_id
+                   AND grant_row.linked_capacity_id=capacity.id
+                   AND grant_row.agent_id=capacity.preflight_agent_id
+                 WHERE capacity.workspace_id=i.workspace_id
+                   AND capacity.reserved_invitation_id=i.id
+                   AND capacity.state='reserved'
+                   AND grant_row.revoked_at IS NULL
+                   AND grant_row.consumed_at IS NULL
+                   AND grant_row.expires_at IS NULL
+                   AND grant_row.role_template_key=op.role_template_key
+              ) AS ready_reservation_current,
               CASE
                 WHEN i.delivery_error IS NULL THEN NULL
                 WHEN i.delivery_error IN (
@@ -343,6 +360,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
             revision: row.operation_revision, preparation: row.preparation,
             cancellation: row.cancellation, issue: row.issue,
             role_template_key: row.role_template_key,
+            ready_reservation_current: row.ready_reservation_current,
             invitation_status: row.status, delivery_status: row.delivery_status,
             delivery_error: row.delivery_reason,
           }),
@@ -391,6 +409,17 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       );
     }
     const roleTemplateKey: MemberRoleTemplate = input.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent';
+    // Advertising and admission share the same executable boundary. Keep the
+    // Finance schema value readable for persisted history, but never create a
+    // known-doomed operation until compatible capacity execution exists.
+    if (preparing && !memberSetupRoleExecutable(roleTemplateKey)) {
+      checkpoint = 'setup_role_rejected';
+      throw new RouteError(
+        'Finance agent setup is not available yet. Choose an available job role.',
+        'member_setup_role_unavailable',
+        409,
+      );
+    }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       throw new RouteError('an invitation needs an email address', 'bad_email', 422);
     }
@@ -592,7 +621,6 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
     trackedInvitationId = invitationId;
     const body = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('resending an invitation');
-      await expireInvitationReservations(work.tx, work.workspaceId);
       const { rows } = await work.tx.query<{
         id: string;
         email: string;
@@ -626,11 +654,19 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
           409,
         );
       }
+      if (setupBacked && !memberSetupRoleExecutable(invitation.role_template_key!)) {
+        throw new RouteError(
+          'Finance agent setup is not available yet. The existing setup was not changed.',
+          'member_setup_role_unavailable',
+          409,
+        );
+      }
       const organizationId = setupBacked ? null : await workosOrganizationId(work);
       if (!setupBacked && c.env.AUTH_MODE === 'workos' && !organizationId) {
         throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
       }
       checkpoint = 'organization_binding_checked';
+      await expireInvitationReservations(work.tx, work.workspaceId);
       await work.tx.query(`UPDATE invitations SET status = 'resent' WHERE id = $1`, [invitation.id]);
       const created = await work.tx.query<{ id: string; created_at: Date }>(
         `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by, delivery_status)

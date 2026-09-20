@@ -14,6 +14,8 @@ export function invitationFailureMessage(error: unknown): string {
     ? 'No verified Iris profile is available. Add ready capacity, then try again.'
     : error.reason === 'member_setup_unavailable'
       ? 'Background member setup is paused right now. The existing setup was not changed.'
+    : error.reason === 'member_setup_role_unavailable'
+      ? 'Finance agent setup is not available yet. Choose an available job role.'
     : error.reason === 'invitation_mode_conflict'
       ? 'This address already has an invitation in a different delivery flow. Use the existing invitation card.'
     : error.reason === 'invitation_role_conflict'

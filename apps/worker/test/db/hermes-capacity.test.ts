@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../src/env.js';
-import { POOL_CONTROL_NAMESPACE } from '../../src/hermes-cloud/capacity.js';
+import { POOL_CONTROL_NAMESPACE, verifyReservedCapacityForInvitation } from '../../src/hermes-cloud/capacity.js';
 import { sealSecret } from '../../src/keys/envelope.js';
 import { discoveryConfigDigest } from '../../src/runtime/discovery-grants.js';
 import { runtimeCredentialDigest } from '../../src/runtime/credentials.js';
@@ -311,6 +311,52 @@ describe('Hermes Cloud invitation capacity', () => {
     expect(state).toEqual({
       capacity: { state: 'quarantined', quarantine_reason: 'discovery_profile_changed' },
       grant: { revoked: true },
+    });
+  });
+
+  it('stops projecting ready after a finished setup loses its reservation to normal drift quarantine', async () => {
+    const fixture = await seedWorkspace();
+    const env = hermesEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' });
+    const [capacityId] = await seedCapacity(fixture, env);
+    const created = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST',
+      body: {
+        email: `ready-drift-${randomUUID()}@example.test`,
+        role: 'member',
+        role_template_key: 'partnerships-agent',
+      },
+    });
+    expect(created.status).toBe(201);
+    const invitation = await created.json() as { id: string };
+    const before = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => ({
+      operation: (await client.query(
+        `SELECT preparation,issue FROM member_provisioning_operations WHERE invitation_id=$1`,
+        [invitation.id],
+      )).rows[0],
+      jobs: (await client.query(
+        `SELECT done_at IS NOT NULL AS done FROM jobs WHERE kind='member_provision' AND payload->>'operation_id'=(
+           SELECT id::text FROM member_provisioning_operations WHERE invitation_id=$1
+         )`,
+        [invitation.id],
+      )).rows,
+    }));
+    expect(before.operation).toEqual({ preparation: 'ready', issue: null });
+    expect(before.jobs).toEqual([{ done: true }]);
+
+    const driftedEnv = hermesEnv({
+      HERMES_MEMBER_PROVISIONING_ENABLED: '1',
+      PARTNER_SCREENING_DEFAULT_CONFIG_JSON: JSON.stringify({ ...POLICY, max_candidates: 4 }),
+    });
+    await expect(verifyReservedCapacityForInvitation(driftedEnv, fixture.workspaceId, invitation.id))
+      .rejects.toMatchObject({ reason: 'iris_capacity_unavailable' });
+    expect(await capacityRows(fixture)).toEqual([expect.objectContaining({
+      id: capacityId, state: 'quarantined', reserved_invitation_id: null,
+    })]);
+
+    const listed = await asUser(driftedEnv, fixture.adminId, `/w/${fixture.workspaceId}/invitations`);
+    const items = (await listed.json() as { items: Array<Record<string, unknown>> }).items;
+    expect(items.find((row) => row.id === invitation.id)).toMatchObject({
+      provisioning: { preparation: 'queued', issue: 'readiness_failed' },
     });
   });
 

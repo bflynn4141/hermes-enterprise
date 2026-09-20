@@ -65,6 +65,7 @@ interface Row {
   delivery_error: string | null;
   cloud_status: string | null;
   requester_authorized: boolean;
+  ready_reservation_current?: boolean;
 }
 
 function baseRow(overrides: Partial<Row> = {}): Row {
@@ -259,6 +260,15 @@ describe('member provisioning persistence and projection', () => {
     expect(uncertain.delivery).toBe('reconciliation_required');
     expect(JSON.stringify([sent, uncertain])).not.toContain('provider-secret');
     expect(JSON.stringify(uncertain)).not.toContain('workos_invitation');
+  });
+
+  it('does not project ready after the read model proves the exact reservation is gone', () => {
+    expect(projectMemberProvisioning(baseRow({
+      preparation: 'ready', ready_reservation_current: false,
+    }))).toMatchObject({ preparation: 'queued', issue: 'readiness_failed' });
+    expect(projectMemberProvisioning(baseRow({
+      preparation: 'ready', ready_reservation_current: true,
+    }))).toMatchObject({ preparation: 'ready', issue: null });
   });
 
   it.each([

@@ -67,6 +67,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       workspaceName: readMockWorkspaceName(),
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
       memberInvitations: params.get('memberSetup') === '1' ? 'setup_only' : 'legacy_delivery',
+      pausedMemberSetup: params.get('pausedMemberSetup') === '1',
       slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
       email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
