@@ -1397,4 +1397,136 @@ describe('Hermes Cloud invitation capacity', () => {
     expect(after.grant).toEqual({ consumed: true, assignment_revision: 1 });
     expect(after.partnershipArtifacts).toBe(0);
   });
+
+  it('keeps a Finance reservation truthful when an inactive former Partnerships member already owns Iris', async () => {
+    const fixture = await seedWorkspace();
+    const joinerId = randomUUID();
+    const oldAgentId = randomUUID();
+    const oldSessionId = randomUUID();
+    const email = `returning-finance-${randomUUID()}@example.test`;
+    const env = hermesEnv({
+      HERMES_BRIDGE_SECRET: 'bridge-secret-longer-than-thirty-two-characters',
+      HERMES_ENTERPRISE_PUBLIC_URL: 'https://enterprise.example.test',
+    });
+    const capacityId = (await seedCapacity(fixture, env, 1, FINANCE_CAPACITY_ROLE))[0]!;
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+      const body = init?.body ? JSON.parse(String(init.body)) as { operation?: string } : {};
+      if (url.hostname.startsWith('pool-') && body.operation === 'capabilities') {
+        return Response.json(capabilitiesBody());
+      }
+      if (url.hostname.startsWith('pool-') && body.operation === 'readiness') {
+        return Response.json(readinessBody(fixture.workspaceId, capacityId, FINANCE_CAPACITY_ROLE));
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }));
+
+    const invitationId = await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO users (id,email,email_verified,name)
+         VALUES ($1,$2,true,'Returning Partnerships Member')`,
+        [joinerId, email],
+      );
+      await setTenant(client, fixture.workspaceId, fixture.adminId);
+      const member = await client.query<{ id: string }>(
+        `INSERT INTO members (workspace_id,user_id,role,status,reviewer_roles)
+         VALUES ($1,$2,'member','inactive',ARRAY[]::text[]) RETURNING id`,
+        [fixture.workspaceId, joinerId],
+      );
+      await client.query(
+        `INSERT INTO agents
+           (id,workspace_id,name,responsibility,instructions_active,status,setup_step)
+         VALUES ($1,$2,'Iris','Partner Program','Former Partnerships instructions','started',NULL)`,
+        [oldAgentId, fixture.workspaceId],
+      );
+      await client.query(
+        `INSERT INTO agent_owners (workspace_id,agent_id,member_id) VALUES ($1,$2,$3)`,
+        [fixture.workspaceId, oldAgentId, member.rows[0]!.id],
+      );
+      await client.query(
+        `INSERT INTO sessions (id,workspace_id,owner_id,agent_id,title,model_id)
+         VALUES ($1,$2,$3,$4,'Former Partner Program Iris','deepseek-flash')`,
+        [oldSessionId, fixture.workspaceId, joinerId, oldAgentId],
+      );
+      const invitation = await client.query<{ id: string }>(
+        `INSERT INTO invitations
+           (workspace_id,email,role,expires_at,invited_by,status,delivery_status)
+         VALUES ($1,$2,'member',now()+interval '7 days',$3,'pending','not_required')
+         RETURNING id`,
+        [fixture.workspaceId, email, fixture.adminId],
+      );
+      const id = invitation.rows[0]!.id;
+      await client.query(
+        `INSERT INTO member_provisioning_operations
+           (workspace_id,invitation_id,requested_by,role_template_key,role_template_version,preparation)
+         VALUES ($1,$2,$3,'finance-agent','1.0.0','ready')`,
+        [fixture.workspaceId, id, fixture.adminId],
+      );
+      const reserved = await reserveCapacityForInvitation(
+        env, client as never, fixture.workspaceId, id, FINANCE_CAPACITY_ROLE,
+      );
+      expect(reserved?.id).toBe(capacityId);
+      await client.query('COMMIT');
+      return id;
+    });
+
+    const accepted = await asUser(env, joinerId, `/invitations/${invitationId}/accept`, {
+      method: 'POST', body: {},
+    });
+    expect(accepted.status).toBe(409);
+    await expect(accepted.json()).resolves.toMatchObject({
+      reason: 'member_agent_assignment_conflict',
+    });
+
+    const after = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
+      const member = (await client.query<{ status: string; reviewer_roles: string[] }>(
+        `SELECT status,reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2`,
+        [fixture.workspaceId, joinerId],
+      )).rows[0]!;
+      const invitation = (await client.query<{ status: string; accepted_by: string | null }>(
+        `SELECT status,accepted_by FROM invitations WHERE id=$1`, [invitationId],
+      )).rows[0]!;
+      const ownership = (await client.query<{ agent_id: string }>(
+        `SELECT ao.agent_id FROM agent_owners ao JOIN members m ON m.id=ao.member_id
+          WHERE ao.workspace_id=$1 AND m.user_id=$2 ORDER BY ao.created_at,ao.agent_id`,
+        [fixture.workspaceId, joinerId],
+      )).rows;
+      const capacity = (await client.query<{
+        state: string; reserved_invitation_id: string; assigned_agent_id: string | null;
+      }>(
+        `SELECT state,reserved_invitation_id,assigned_agent_id
+           FROM hermes_cloud_capacity WHERE id=$1`, [capacityId],
+      )).rows[0]!;
+      const grant = (await client.query<{ consumed: boolean; revoked: boolean }>(
+        `SELECT consumed_at IS NOT NULL AS consumed,revoked_at IS NOT NULL AS revoked
+           FROM runtime_discovery_grants WHERE workspace_id=$1 AND linked_capacity_id=$2`,
+        [fixture.workspaceId, capacityId],
+      )).rows[0]!;
+      const financeArtifacts = (await client.query(
+        `SELECT 1 FROM agents WHERE workspace_id=$1 AND id=$2
+         UNION ALL
+         SELECT 1 FROM enterprise_team_agents
+          WHERE workspace_id=$1 AND (agent_id=$2 OR principal_user_id=$3)
+         UNION ALL
+         SELECT 1 FROM enterprise_skill_assignments
+          WHERE workspace_id=$1 AND (agent_id=$2 OR agent_id=$4) AND skill_key='partner-invoice-review'
+         UNION ALL
+         SELECT 1 FROM agent_runtime_bindings WHERE workspace_id=$1 AND agent_id=$2
+         UNION ALL
+         SELECT 1 FROM events WHERE workspace_id=$1 AND invitation_id=$5
+           AND kind IN ('member.joined','agent.joined')`,
+        [fixture.workspaceId, capacityId, joinerId, oldAgentId, invitationId],
+      )).rowCount;
+      return { member, invitation, ownership, capacity, grant, financeArtifacts };
+    });
+    expect(after).toEqual({
+      member: { status: 'inactive', reviewer_roles: [] },
+      invitation: { status: 'pending', accepted_by: null },
+      ownership: [{ agent_id: oldAgentId }],
+      capacity: { state: 'reserved', reserved_invitation_id: invitationId, assigned_agent_id: null },
+      grant: { consumed: false, revoked: false },
+      financeArtifacts: 0,
+    });
+  });
 });

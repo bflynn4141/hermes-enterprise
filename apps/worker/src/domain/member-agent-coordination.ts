@@ -12,7 +12,11 @@ import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service
 import { PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS } from '../enterprise-skills/role-instructions.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION, toolsForSkillVersion } from '../enterprise-skills/registry.js';
 import { configureAcceptedFinanceMember } from '../partner-workflow/service.js';
-import type { CapacityRoleTemplate } from '../runtime/discovery-grants.js';
+import {
+  discoveryProfileDescriptor,
+  type CapacityRoleTemplate,
+} from '../runtime/discovery-grants.js';
+import { RouteError } from '../routes/tenant.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 
@@ -159,18 +163,85 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
   sessionId: string;
   created: boolean;
 }> {
-  const owned = await input.tx.query<{ agent_id: string; session_id: string | null }>(
+  const owned = await input.tx.query<{
+    agent_id: string;
+    session_id: string | null;
+    capacity_state: string | null;
+    assigned_agent_id: string | null;
+    role_template_key: string | null;
+    role_template_version: string | null;
+    skill_key: string | null;
+    skill_version: string | null;
+    runtime_name: string | null;
+    artifact_digest: string | null;
+    grant_consumed: boolean;
+    grant_revoked: boolean;
+    binding_assignment: string | null;
+    binding_agentcash: boolean | null;
+    binding_ready: boolean;
+  }>(
     `SELECT ao.agent_id,
             (SELECT s.id FROM sessions s WHERE s.workspace_id=ao.workspace_id
-              AND s.agent_id=ao.agent_id AND s.owner_id=$3 ORDER BY s.created_at LIMIT 1) AS session_id
+              AND s.agent_id=ao.agent_id AND s.owner_id=$3 ORDER BY s.created_at LIMIT 1) AS session_id,
+            capacity.state AS capacity_state,
+            capacity.assigned_agent_id,
+            grant_row.role_template_key,
+            grant_row.role_template_version,
+            grant_row.skill_key,
+            grant_row.skill_version,
+            grant_row.runtime_name,
+            grant_row.artifact_digest,
+            grant_row.consumed_at IS NOT NULL AS grant_consumed,
+            grant_row.revoked_at IS NOT NULL AS grant_revoked,
+            binding.assignment AS binding_assignment,
+            binding.agentcash AS binding_agentcash,
+            binding.ready_at IS NOT NULL AS binding_ready
        FROM agent_owners ao
-      WHERE ao.workspace_id=$1 AND ao.member_id=$2 LIMIT 1`,
-    [input.workspaceId, input.joiningMemberId, input.joiningUserId],
+       LEFT JOIN hermes_cloud_capacity capacity
+         ON capacity.workspace_id=ao.workspace_id
+        AND capacity.assigned_agent_id=ao.agent_id
+        AND capacity.reserved_invitation_id=$4
+       LEFT JOIN runtime_discovery_grants grant_row
+         ON grant_row.workspace_id=capacity.workspace_id
+        AND grant_row.id=capacity.discovery_grant_id
+        AND grant_row.agent_id=ao.agent_id
+       LEFT JOIN agent_runtime_bindings binding
+         ON binding.workspace_id=ao.workspace_id AND binding.agent_id=ao.agent_id
+      WHERE ao.workspace_id=$1 AND ao.member_id=$2
+      ORDER BY ao.created_at,ao.agent_id`,
+    [input.workspaceId, input.joiningMemberId, input.joiningUserId, input.invitationId],
   );
-  if (owned.rows[0]) {
-    const sessionId = owned.rows[0].session_id;
-    if (!sessionId) throw new Error('owned Partner Program Iris has no session');
-    return { agentId: owned.rows[0].agent_id, sessionId, created: false };
+  if (owned.rows.length > 0) {
+    const existing = owned.rows[0]!;
+    const descriptor = discoveryProfileDescriptor(role);
+    const exactConsumedReplay = input.env.AGENT_RUNTIME === 'hermes' &&
+      owned.rows.length === 1 &&
+      existing.capacity_state === 'assigned' &&
+      existing.assigned_agent_id === existing.agent_id &&
+      existing.role_template_key === descriptor.roleTemplateKey &&
+      existing.role_template_version === descriptor.roleTemplateVersion &&
+      existing.skill_key === descriptor.definition.key &&
+      existing.skill_version === descriptor.definition.version &&
+      existing.runtime_name === descriptor.definition.runtimeName &&
+      existing.artifact_digest === descriptor.definition.artifactDigest &&
+      existing.grant_consumed && !existing.grant_revoked &&
+      existing.binding_assignment === 'invitee_pool' &&
+      existing.binding_agentcash === descriptor.expectsAgentCash &&
+      existing.binding_ready;
+    if (input.env.AGENT_RUNTIME === 'hermes' && !exactConsumedReplay) {
+      // A member may own only one managed Iris. Reusing an unrelated former
+      // role would publish the new role without consuming its reserved
+      // capacity. Fail inside the acceptance transaction so membership and
+      // invitation writes roll back and the reservation stays truthful.
+      throw new RouteError(
+        'This member already owns an Iris from a different assignment.',
+        'member_agent_assignment_conflict',
+        409,
+      );
+    }
+    const sessionId = existing.session_id;
+    if (!sessionId) throw new Error('owned Iris has no session');
+    return { agentId: existing.agent_id, sessionId, created: false };
   }
 
   // Warm capacity already carries its permanent runtime identity. Reusing it
