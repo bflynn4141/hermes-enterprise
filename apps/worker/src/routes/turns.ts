@@ -14,6 +14,7 @@
 // `stop_requested` and `status = 'stopping'` in one transaction and *then* calls
 // `SessionHub.requestStop`; if that call is lost the engine still reads the flag
 // from the row at the next step boundary.
+import { autoTitleFrom } from '@hermes/shared';
 import type { Context } from 'hono';
 import { captureContext } from '../context-snapshot.js';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
@@ -490,6 +491,18 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
         JSON.stringify({ role: 'user', content: text }),
       ],
     );
+    // The first turn names the session, here rather than from the client: a
+    // name written by the route survives a reload and a second device, and
+    // the provenance it records is what lets a finished run rename it later
+    // without ever touching a name a person chose (decision C34).
+    const provisionalTitle = autoTitleFrom(text);
+    if (provisionalTitle) {
+      await work.tx.query(
+        `UPDATE sessions SET title = $3, title_source = 'turn'
+          WHERE workspace_id = $1 AND id = $2 AND title_source = 'default'`,
+        [work.workspaceId, sessionId, provisionalTitle],
+      );
+    }
     const message = initial.rows[0];
     if (!message) throw new RouteError('the user message was not created', 'create_failed', 409);
     const seq = message.seq;

@@ -308,6 +308,12 @@ export interface AgentDb extends AgentWrites {
     detail?: { waitingFor?: string | null; waitingLabel?: string | null; error?: RunErrorInput | null },
   ): Promise<void>;
   addActiveMs(runId: string, ms: number): Promise<number>;
+  /**
+   * Name the session after the object this run produced, unless a person
+   * already named it. Returns the new title and the committed `entity.updated`
+   * rows to deliver, or null when nothing changed.
+   */
+  nameSessionFromRun(runId: string): Promise<{ sessionId: string; title: string; events: readonly EmittedEvent[] } | null>;
   /** Keyed on (run_id, turn), so a retry replaces rather than duplicates. */
   upsertAssistantMessage(input: AssistantMessageInput): Promise<{ messageId: string; seq: number }>;
   recordModelCall(input: {

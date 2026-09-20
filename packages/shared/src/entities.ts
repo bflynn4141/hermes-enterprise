@@ -53,6 +53,8 @@ export const sessionSchema = z
     id: uuidSchema,
     agent_id: uuidSchema,
     title: z.string().max(200),
+    /** Who named it; absent from older rows and mock data, which the client reads as unknown. */
+    title_source: z.enum(['default', 'turn', 'run', 'manual']).optional(),
     mode: sessionModeSchema,
     model_id: z.string().max(64),
     effort: z.string().max(32).nullable(),
