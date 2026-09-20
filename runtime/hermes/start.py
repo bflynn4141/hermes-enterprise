@@ -18,7 +18,9 @@ from install import ROOT, REVISION, verify_source
 from enterprise_bridge.runtime_policy import (
     actual_plugin_attestation,
     actual_skill_attestation,
+    actual_skill_prompt_attestation,
     assert_native_cron_empty,
+    build_skill_prompt_sections,
     install_native_api_policy,
     load_enterprise_skills,
     native_cron_route,
@@ -173,9 +175,10 @@ def child(metadata_path):
     from hermes_cli.config import DEFAULT_CONFIG, load_config
     from toolsets import TOOLSETS
 
-    # Official Hermes gates skills.auto_load on the presence of a skills tool.
-    # A dedicated one-tool set keeps only the read-only viewer; the stock
-    # `skills` toolset would also expose discovery and mutation.
+    # The plugin pins the verified skill text into every new session's system
+    # prompt; Hermes 0.21.3 has no skills.auto_load. A dedicated one-tool set
+    # keeps only the read-only viewer for re-reading the assigned package; the
+    # stock `skills` toolset would also expose discovery and mutation.
     TOOLSETS["enterprise_skill_reader"] = {
         "description": "Read the assigned enterprise skill",
         "tools": ["skill_view"],
@@ -213,7 +216,7 @@ def child(metadata_path):
         "cron": {"allow_agent_scheduling": False},
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
         "skills": {"creation_nudge_interval": 0, "write_approval": True,
-                   "auto_load": enterprise_skills["auto_load"], "config": enterprise_skills["config"]},
+                   "config": enterprise_skills["config"]},
         "auxiliary": {"background_review": {"enabled": False}, "title_generation": {"enabled": False}},
     }
     private_write(profile / "home/config.yaml", json.dumps(config, indent=2) + "\n")
@@ -230,6 +233,12 @@ def child(metadata_path):
     try:
         actual_plugin = actual_plugin_attestation(manager)
         actual_skills = actual_skill_attestation(manager, enterprise_skills["manifests"])
+        # The reviewed source tree defines the expected sections; the live
+        # render comes from the profile's plugin copy. Equality proves the
+        # exact assigned text reaches every new session.
+        actual_skill_prompt_attestation(
+            manager, build_skill_prompt_sections(enterprise_skills["manifests"]),
+        )
     except RuntimeError as error:
         raise SystemExit(str(error)) from error
     loaded = load_config()

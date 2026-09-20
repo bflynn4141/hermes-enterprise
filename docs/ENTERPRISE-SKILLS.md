@@ -31,7 +31,7 @@ Official Hermes supports:
 
 - `SKILL.md` packages with versioned procedure and metadata;
 - read-only skills registered by a plugin;
-- `skills.auto_load`, which preloads selected skills for a session;
+- plugin system prompt sections, which freeze bounded plugin text into every new session's prompt;
 - `metadata.hermes.config`, whose non-secret values are resolved from `skills.config` and injected when the skill loads; and
 - skill bundles and external skill directories for other deployment shapes.
 
@@ -47,19 +47,19 @@ reviewed SKILL.md in enterprise_bridge
              +
 agent-scoped non-secret config from Worker
              ↓
-dedicated Hermes profile · skills.auto_load
+dedicated Hermes profile · plugin-pinned skill sections
              ↓
 Iris procedure + governed enterprise tools
              ↓
 pending draft-only Inbox review · human decision
 ```
 
-The runtime fetches `GET /internal/runtime/w/:workspace/agents/:agent/skills` with its agent-scoped bridge credential before it starts. The response is derived from that agent's active Enterprise skill assignment, names reviewed plugin skills and contains bounded non-secret configuration. The launcher validates the payload, rejects credential-shaped keys, writes `skills.auto_load` and `skills.config`, and fails startup if a named plugin skill is absent.
+The runtime fetches `GET /internal/runtime/w/:workspace/agents/:agent/skills` with its agent-scoped bridge credential before it starts. The response is derived from that agent's active Enterprise skill assignment, names reviewed plugin skills and contains bounded non-secret configuration. The launcher validates the payload, rejects credential-shaped keys, writes `skills.config`, and fails startup if a named plugin skill is absent. The plugin fetches the same authenticated assignment when Hermes registers it, verifies the packaged `SKILL.md` bytes against the reviewed version and digests, and registers that text as numbered system prompt sections; startup and Cloud readiness fail unless the live render equals the sections recomputed from the reviewed bytes.
 
-The dedicated enterprise profile removes Hermes's general bundled-skill catalog on startup and marks the profile as managed. Only plugin-packaged enterprise skills are available. The runtime exposes Hermes's read-only `skill_view` only for the exact assigned package because official `skills.auto_load` is gated on a skills tool being present. `skills_list`, `skill_manage`, native skill discovery, background review and automatic skill creation remain disabled. The plugin vetoes any attempt to view another skill or a linked file. This prevents a bundled or agent-authored procedure from expanding the governed tool boundary.
+The dedicated enterprise profile removes Hermes's general bundled-skill catalog on startup and marks the profile as managed. Only plugin-packaged enterprise skills are available. The runtime exposes Hermes's read-only `skill_view` only for the exact assigned package so the model can re-read it; the pinned 0.21.3 release has no `skills.auto_load`, and the launcher and Cloud validator reject that key. `skills_list`, `skill_manage`, native skill discovery, background review and automatic skill creation remain disabled. The plugin vetoes any attempt to view another skill or a linked file. This prevents a bundled or agent-authored procedure from expanding the governed tool boundary.
 
 New multi-party admission requires exact native readiness: runtime revision
-`5d59366010640c1d6b8f170d8a4ee109db2bbdef`, plugin/version `1.7.0`, one current
+`345cd2b057a452236de401d3534b8502a7465e8d`, plugin/version `1.7.0`, one current
 skill with artifact and content digests equal to the assignment, the exact tool
 inventory, and native cron disabled. Partnerships 1.8 requires AgentCash and a
 wallet; Finance 1.0.1 requires both absent. Compatibility readiness keeps old

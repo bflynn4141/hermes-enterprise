@@ -10,7 +10,7 @@ import shutil
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent
-REVISION = "5d59366010640c1d6b8f170d8a4ee109db2bbdef"
+REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
 REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
 
 
@@ -36,13 +36,16 @@ def verify_source(source):
 
 def sync_command(uv, source, python):
     # `sms` is the pinned tree's smallest declared extra containing aiohttp,
-    # which the API-server platform imports. `uv sync --locked` consumes the
-    # upstream lock's artifact hashes, overrides and exclude-newer policy. The
-    # pinned project refuses wheel builds, so the launcher imports the verified
-    # source tree directly instead of installing an editable package.
+    # which the API-server platform imports. `mcp` is the locked MCP client SDK
+    # Hermes needs to connect any configured MCP server, including the governed
+    # AgentCash demo; without it native startup never registers the tool.
+    # `uv sync --locked` consumes the upstream lock's artifact hashes, overrides
+    # and exclude-newer policy. The pinned project refuses wheel builds, so the
+    # launcher imports the verified source tree directly instead of installing
+    # an editable package.
     return [
         uv, "--quiet", "sync", "--locked", "--no-dev", "--no-install-project",
-        "--extra", "sms", "--project", str(source), "--python", str(python),
+        "--extra", "sms", "--extra", "mcp", "--project", str(source), "--python", str(python),
     ]
 
 

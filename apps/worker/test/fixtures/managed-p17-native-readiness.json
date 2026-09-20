@@ -1,7 +1,7 @@
 {
   "object": "hermes.enterprise_bridge.readiness",
   "version": "1.7.0",
-  "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+  "runtime_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
   "plugin": {
     "name": "enterprise_bridge",
     "version": "1.7.0",
