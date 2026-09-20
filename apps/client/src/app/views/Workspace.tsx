@@ -18,7 +18,7 @@ import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } f
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
 import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
-import { LIST_KEYS, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
+import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
@@ -726,7 +726,7 @@ function LibraryDocuments() {
               <span className="s">{source.version_label} · {source.audiences.join(' + ')} · {source.summary}</span>
             </div>
             <Button link onClick={() => setOpenSource(source)}>Open →</Button>
-            {state.capabilities.turnAttachments && <Button disabled={!canSelectSource || selected} onClick={() => selectSource(source)}>{selected ? 'Selected' : 'Use with Iris'}</Button>}
+            {state.capabilities.turnAttachments && <Button disabled={!canSelectSource || selected} onClick={() => selectSource(source)}>{selected ? 'Selected' : `Use with ${agentName(state)}`}</Button>}
           </div>;
         })}
       </div>
@@ -773,7 +773,7 @@ function LibraryDocuments() {
         open={openSource !== null}
         title={openSource?.title ?? 'Shared source'}
         onClose={() => setOpenSource(null)}
-        actions={openSource && state.capabilities.turnAttachments ? <Button primary disabled={!canSelectSource || (session?.draft.attachments.some((item) => item.id === openSource.id) ?? false)} onClick={() => { selectSource(openSource); setOpenSource(null); }}>Use with Iris</Button> : undefined}
+        actions={openSource && state.capabilities.turnAttachments ? <Button primary disabled={!canSelectSource || (session?.draft.attachments.some((item) => item.id === openSource.id) ?? false)} onClick={() => { selectSource(openSource); setOpenSource(null); }}>Use with {agentName(state)}</Button> : undefined}
       >
         {openSource && <>
           <p className="meta">{openSource.version_label} · Shared with {openSource.audiences.join(' and ')}</p>

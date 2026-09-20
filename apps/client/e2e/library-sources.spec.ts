@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-test('a team member can open the shared Partner Program Guide and select its exact version for Iris', async ({ page }) => {
-  await page.goto('/?partnerWorkflow=1&workflowRole=partnerships&seat=member&agentSettings=ok');
+test('a Finance member can open the shared Partner Program Guide and select its exact version for Ledger', async ({ page }) => {
+  await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member&agentSettings=ok');
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   const pane = page.getByRole('region', { name: 'Application' });
   await pane.getByRole('tab', { name: 'Documents' }).click();
@@ -13,7 +13,7 @@ test('a team member can open the shared Partner Program Guide and select its exa
 
   const dialog = page.getByRole('dialog', { name: 'Partner Program Guide' });
   await expect(dialog.getByRole('heading', { name: 'From prospect to invoice' })).toBeVisible();
-  await dialog.getByRole('button', { name: 'Use with Iris' }).click();
+  await dialog.getByRole('button', { name: 'Use with Ledger' }).click();
   await expect(dialog).toBeHidden();
   await expect(pane.getByText('Partner Program Guide selected for your next message. Nothing has been sent.')).toBeVisible();
   await expect(source.getByRole('button', { name: 'Selected' })).toBeDisabled();
