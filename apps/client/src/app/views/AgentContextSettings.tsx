@@ -6,6 +6,7 @@ import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AgentContext, AgentHead, AgentTabsRow } from './Agent.js';
 import { agentName, LIST_KEYS } from '../selectors.js';
 import './agent-settings.css';
+import { sourceUploadError } from './source-upload-error.js';
 
 type NoteDraft = { note: ContextNote | 'new'; title: string; text: string };
 const noteDrafts = new Map<string, NoteDraft>();
@@ -88,7 +89,7 @@ function ContextContents() {
       await adapter.upload(file, { kind: 'agent_file', agentId });
       await refresh(); adapter.invalidateList(LIST_KEYS.agentFiles);
       setStatus('Source uploaded. It will be available to select once processing finishes.');
-    } catch { setError('Could not upload this source. Use a PDF, Markdown or text file up to 20 MB, and try again.'); }
+    } catch (error) { setError(sourceUploadError(error)); }
     finally { setUploading(false); if (input.current) input.current.value = ''; }
   };
   const attach = (file: AttachmentDetail) => {
