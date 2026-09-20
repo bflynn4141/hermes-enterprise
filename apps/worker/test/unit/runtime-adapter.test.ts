@@ -27,7 +27,7 @@ const nativeCapabilities = {
   },
   enterprise_contract: {
     schema_version: 1,
-    source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+    source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
     release_ring: 'stable',
     terminal_errors: { supported: true, schema_version: 1 },
   },
@@ -153,7 +153,7 @@ class FakeHermesClient extends HermesClient {
           retentionSeconds: 86_400,
           contractVersion: 1 as const,
           terminalErrorSchemaVersion: 1 as const,
-          sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+          sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
           releaseRing: 'stable' as const,
         });
   }
@@ -1006,11 +1006,19 @@ describe('official Hermes enterprise projection', () => {
     class ConcurrentSubmitClient extends FakeHermesClient {
       override capabilities() {
         this.capabilityReads += 1;
+        const caps = {
+          durableIdempotency: true as const,
+          retentionSeconds: 86_400,
+          contractVersion: 1 as const,
+          terminalErrorSchemaVersion: 1 as const,
+          sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+          releaseRing: 'stable' as const,
+        };
         if (this.capabilityReads !== 1) {
-          return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+          return Promise.resolve(caps);
         }
-        return new Promise<{ durableIdempotency: true; retentionSeconds: number }>((resolve) => {
-          releaseReadiness = () => resolve({ durableIdempotency: true, retentionSeconds: 86_400 });
+        return new Promise<typeof caps>((resolve) => {
+          releaseReadiness = () => resolve(caps);
         });
       }
     }

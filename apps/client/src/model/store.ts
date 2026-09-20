@@ -142,6 +142,16 @@ export interface PendingTurn {
   previousRun?: Run | null;
 }
 
+const MAX_STREAM_FENCES = 64;
+function addStreamFence(fences: Record<string, number> | undefined, runId: string, turn: number): Record<string, number> {
+  const next = { ...(fences ?? {}) };
+  const value = Math.max(next[runId] ?? -1, turn);
+  delete next[runId];
+  next[runId] = value;
+  const entries = Object.entries(next);
+  return entries.length <= MAX_STREAM_FENCES ? next : Object.fromEntries(entries.slice(-MAX_STREAM_FENCES));
+}
+
 /** Local sequence numbers are layout hints, never proof of turn identity. */
 function confirmsPendingTurn(pending: PendingTurn | null, message: Message, clientTurnId?: string | null): boolean {
   if (!pending || message.role !== 'user') return false;
@@ -179,6 +189,8 @@ export interface SessionState {
   pendingTurn: PendingTurn | null;
   run: Run | null;
   stream: StreamAccumulator | null;
+  /** Highest authoritative final turn per run; late transport frames cannot reopen it. */
+  streamFences?: Record<string, number>;
   focus: Ref | null;
   context: { label: string; ref: Ref | null } | null;
   scrollTop: number | null;
@@ -551,7 +563,7 @@ export type Action =
   | { type: 'stream/reset'; sessionId: string; runId: string; turn: number; stepAttempt: number }
   | { type: 'stream/delta'; sessionId: string; runId: string; turn: number; stepAttempt: number; delta: string; seq?: number }
   | { type: 'stream/preview'; sessionId: string; runId: string; turn: number; stepAttempt: number; offset: number; delta: string }
-  | { type: 'stream/final'; sessionId: string; message: Message }
+  | { type: 'stream/final'; sessionId: string; message: Message; turn?: number }
   | { type: 'stream/reveal-complete'; sessionId: string; runId: string }
   | { type: 'entity/upsert'; kind: EntityKind; id: string; version?: number | null; data?: unknown; state?: EntityState }
   | { type: 'entity/loading'; kind: EntityKind; id: string }
@@ -1135,12 +1147,14 @@ export function reduce(state: AppState, action: Action): AppState {
     // --- streaming text, keyed by step_attempt (spec §4.5) ---
     case 'stream/reset':
       return withSession(state, action.sessionId, (s) => {
+        if ((s.streamFences?.[action.runId] ?? -1) >= action.turn) return s;
         if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
         if (s.stream?.runId === action.runId && (s.stream.turn > action.turn || (s.stream.turn === action.turn && s.stream.stepAttempt >= action.stepAttempt))) return s;
         return { ...s, stream: { runId: action.runId, turn: action.turn, stepAttempt: action.stepAttempt, text: '', durableText: '', seq: -1, blocks: [], status: 'streaming' } };
       });
     case 'stream/delta':
       return withSession(state, action.sessionId, (s) => {
+        if ((s.streamFences?.[action.runId] ?? -1) >= action.turn) return s;
         const current = s.stream;
         if (s.run && (s.run.id !== action.runId || terminalRun(s.run.status))) return s;
         if (current?.runId === action.runId && current.turn > action.turn) return s;
@@ -1162,6 +1176,7 @@ export function reduce(state: AppState, action: Action): AppState {
       });
     case 'stream/preview':
       return withSession(state, action.sessionId, (s) => {
+        if ((s.streamFences?.[action.runId] ?? -1) >= action.turn) return s;
         const current = s.stream;
         // Best-effort RPCs may finish after the final's reveal was cleared or
         // after a new run started. They must not resurrect an old accumulator.
@@ -1203,6 +1218,13 @@ export function reduce(state: AppState, action: Action): AppState {
               status: action.message.status === 'incomplete' || action.message.incomplete ? 'incomplete' : 'complete',
             }
           : s.stream,
+        streamFences: action.message.run_id
+          ? addStreamFence(
+              s.streamFences,
+              action.message.run_id,
+              action.turn ?? (s.stream?.runId === action.message.run_id ? s.stream.turn : 0),
+            )
+          : s.streamFences,
         lastActivity: Date.now(),
         messages: seen ? s.messages.map((m) => (m.id === action.message.id ? action.message : m)) : [...s.messages, action.message],
       }));
@@ -1496,6 +1518,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       out.push({
         type: 'stream/final',
         sessionId: p.session_id,
+        turn: p.turn,
         message: {
           id: p.message_id,
           session_id: p.session_id,

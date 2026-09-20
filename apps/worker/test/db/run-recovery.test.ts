@@ -63,6 +63,12 @@ const capabilities = () => ({
     run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
     run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
   },
+  enterprise_contract: {
+    schema_version: 1,
+    source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+    release_ring: 'stable',
+    terminal_errors: { supported: true, schema_version: 1 },
+  },
 });
 
 async function managedEnvironment(fx: Fixture & { runId: string }) {

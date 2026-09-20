@@ -209,6 +209,14 @@ gateway:
     max_concurrent_runs: 1
 ```
 
+At startup the launcher also reads the authenticated model manifest once and
+declares `providers.enterprise.models.<exact Claude model ID>.prompt_caching:
+true` for the governed custom proxy, including allowed per-run Claude overrides
+when the configured default is another model. The policy uses the five-minute
+cache tier and does not change model, effort, routing, or tool permissions. An
+unavailable manifest falls back to the configured model only. See
+[Iris latency verification](../../docs/IRIS-LATENCY.md).
+
 The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, both built-in memory stores, memory/skill nudges, the autonomous skill curator, background review and title generation. MCP is empty by default. `ENTERPRISE_MCP_SERVERS_JSON` may add explicitly named stdio servers, but every one needs a bounded `tools.include` list and env values may only reference scoped variables from the credentials file. `HERMES_AGENTCASH_MCP_ENABLED=1` is the demo shortcut documented in that file. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package so the model can re-read it. A plugin pre-tool hook vetoes every other name outside its discovered enterprise or configured MCP tools. Startup fails closed unless the resolved static tool definitions contain only enterprise tools plus that viewer. It rejects provider fallback chains, alternate provider maps and API `model_routes`; the resolved custom provider, model, base URL, API mode and secret value are rechecked at each model request. Native `agent.max_iterations` is 12 and `agent.api_max_retries` is 1: the Worker persists provider retry deadlines and owns visible, durable recovery instead of letting one native process sleep for a provider's full `Retry-After`. The enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
 ### Assigned skill text in every session

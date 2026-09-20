@@ -32,7 +32,7 @@ const capabilities = (durable = true) => ({
   },
   enterprise_contract: {
     schema_version: 1,
-    source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+    source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
     release_ring: 'stable',
     terminal_errors: { supported: true, schema_version: 1 },
   },
@@ -43,7 +43,7 @@ const expectedCapabilities = {
   retentionSeconds: 86_400,
   contractVersion: 1 as const,
   terminalErrorSchemaVersion: 1 as const,
-  sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+  sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
   releaseRing: 'stable' as const,
 };
 
