@@ -3808,6 +3808,20 @@ client shows the first-turn name optimistically and persists nothing for it;
 on the event it re-reads the row, and the reducer's manual-wins merge is
 unchanged. The `Follow Iris` state no longer has any part in naming.
 
+### C34, and the follow mode itself (September 20, 2026): the pane never moves on its own
+
+"Following Iris" let a run's `set_focus` move the app pane, and manual
+navigation "pinned" it until Follow was pressed. It was the one piece of the
+interface that moved without the person touching it, and its state machine
+(follow, pinned, resume, filters retained through a resume) was where two of
+the day's unexplained failures lived. It is removed. A run's focus is still
+recorded on the session — `session.focus`, with the run that set it — and the
+reply carries one line, `Open Inbox · Resolved`, that dispatches an ordinary
+manual navigation when clicked. Selecting a session still shows the object it
+was working on, because choosing the session is the person's act. The engine,
+the `set_focus` tool and the `run.focus` event are unchanged; only the client
+stopped acting on them uninvited.
+
 ## C35. The session row's status rides in its label, because the library has no slot
 
 **Decided.** `SidebarNav` renders a recent's `label` and nothing else: `prompt`

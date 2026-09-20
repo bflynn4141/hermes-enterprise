@@ -512,7 +512,7 @@ describe('the adapter', () => {
     expect(state().agent).toEqual({ id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null });
     expect(state().activeSessionId).toBeNull();
     expect(state().sessions[SESSION]).toBeDefined();
-    expect(state().ui).toMatchObject({ app: { section: 'inbox', view: 'list' }, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(state().ui).toMatchObject({ app: { section: 'inbox', view: 'list' }, irisPanel: 'hidden', pane: 'app' });
     expect(calls.some((call) => call.path.includes(`/sessions/${SESSION}/snapshot`))).toBe(false);
     expect(FakeSocket.instances.some((socket) => socket.url.includes('/hub/session/'))).toBe(false);
     await adapter.activateSession(SESSION);
