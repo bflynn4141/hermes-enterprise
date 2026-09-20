@@ -202,13 +202,52 @@ class CloudControlTests(unittest.TestCase):
             captured["timeout"] = timeout
             return Response(200, {"object": "hermes.api_server.capabilities"})
 
-        with patch.object(control.opener, "open", side_effect=open_request):
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": cloud.SOURCE_REVISION}), \
+                patch.object(control.opener, "open", side_effect=open_request):
             status, body = control.dispatch({"operation": "capabilities"})
         self.assertEqual(status, 200)
         self.assertEqual(body["object"], "hermes.api_server.capabilities")
+        self.assertEqual(body["enterprise_contract"], {
+            "schema_version": 1,
+            "source_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
+            "release_ring": "stable",
+            "terminal_errors": {"supported": True, "schema_version": 1},
+        })
         self.assertEqual(captured["url"], "http://127.0.0.1:8642/v1/capabilities")
         self.assertEqual(captured["auth"], "Bearer native-secret")
         self.assertNotIn("native-secret", json.dumps(body))
+
+    def test_connector_rejects_a_conflicting_native_contract(self):
+        control = self.control()
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": cloud.SOURCE_REVISION}), \
+                patch.object(control, "_request", return_value=(200, {
+                    "object": "hermes.api_server.capabilities",
+                    "enterprise_contract": {"schema_version": 99},
+                })):
+            status, body = control.dispatch({"operation": "capabilities"})
+        self.assertEqual(status, 502)
+        self.assertNotIn("schema_version", json.dumps(body))
+
+    def test_connector_requires_an_explicit_reviewed_source_attestation(self):
+        control = self.control()
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": "different"}), \
+                patch.object(control, "_request", return_value=(200, {
+                    "object": "hermes.api_server.capabilities",
+                })):
+            with self.assertRaisesRegex(RuntimeError, "source revision"):
+                control.dispatch({"operation": "capabilities"})
+
+    def test_status_projects_provider_text_before_it_crosses_the_connector(self):
+        control = self.control()
+        secret = "SECRET_NATIVE_PROVIDER_BODY"
+        with patch.object(control, "_request", return_value=(200, {
+                "run_id": RUN_ID, "status": "failed",
+                "error": "HTTP 429 too many requests " + secret,
+        })):
+            status, body = control.dispatch({"operation": "status", "run_id": RUN_ID})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["terminal_error"]["code"], "provider_rate_limited")
+        self.assertNotIn(secret, json.dumps(body))
 
     def test_native_stream_uses_read1_instead_of_a_buffer_filling_read(self):
         class IncrementalResponse:
@@ -258,7 +297,7 @@ class CloudControlTests(unittest.TestCase):
         self.assertEqual(asyncio.run(collect()), [
             cloud.SSE_CONNECTED,
             b"data: {\"delta\":\"one\"}\n\n",
-            b"data: {\"delta\":\"two\"}\r\n\r\n",
+            b"data: {\"delta\":\"two\"}\n\n",
         ])
 
 
