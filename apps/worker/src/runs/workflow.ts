@@ -33,7 +33,7 @@ import { HermesClient } from '../runtime/client.js';
 import { loadRuntimeSkillSnapshot } from '../runtime/skills.js';
 import { runtimeLatency } from '../runtime/latency.js';
 import { logEvent } from '../keys/redact.js';
-import { recordHermesLatency } from '../ops/analytics.js';
+import { recordHermesLatency, recordHermesStream, recordHermesTerminalFailure } from '../ops/analytics.js';
 import { exportRaindropRun } from '../ops/raindrop.js';
 import { denyHostsFor, fetchUrl } from '../security/fetch-url.js';
 import {
@@ -441,12 +441,12 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
         checkpointDb = new RuntimeDb(this.env, params.workspaceId, params.traceId);
         const onLatency = (measurement: import('../runtime/latency.js').RuntimeLatency) => {
           recordHermesLatency(this.env, params.workspaceId, {
-            runId: run.id, modelId: run.modelId, ...measurement,
+            runId: run.id, modelId: run.modelId, releaseRing: binding.releaseRing, ...measurement,
           });
           logEvent({
             at: 'hermes.latency', run_id: run.id, trace_id: params.traceId,
             attempt: params.attempt, model_id: run.modelId,
-            ...measurement,
+            release_ring: binding.releaseRing, ...measurement,
           });
         };
         const startupLatency = runtimeLatency(invocationStartedAt, params.receivedAt, onLatency);
@@ -462,7 +462,7 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           startedAt: invocationStartedAt,
           receivedAt: params.receivedAt,
           onLatency,
-          client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport),
+          client: new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing),
           profile: binding.profile,
           ...(binding.runtimeAuthMode === 'token_digest' ? {
             managedRuntimeIdentity: {
@@ -477,14 +477,50 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           checkpoint: (events) => checkpointDb!.emit(events),
           preview: (frame) =>
             this.env.SESSION_HUB.get(this.env.SESSION_HUB.idFromName(frame.session_id)).preview(frame),
-          onStreamMetrics: (metrics) => logEvent({
-            at: 'hermes.stream', run_id: run.id, attempt: params.attempt,
-            trace_id: params.traceId, ...metrics,
-          }),
-          onTerminalFailure: (failure) => logEvent({
-            at: 'hermes.terminal_failure', run_id: run.id, attempt: params.attempt,
-            trace_id: params.traceId, ...failure,
-          }),
+          onStreamMetrics: (metrics) => {
+            recordHermesStream(this.env, params.workspaceId, {
+              runId: run.id,
+              releaseRing: binding.releaseRing,
+              streamEnd: metrics.stream_end,
+              firstDeltaMs: metrics.first_delta_ms,
+              firstPreviewMs: metrics.first_preview_ms,
+              firstCheckpointMs: metrics.first_checkpoint_ms,
+              deltaCount: metrics.delta_count,
+              deltaCharacters: metrics.delta_characters,
+            });
+            logEvent({
+              at: metrics.stream_end === 'disconnected' || metrics.stream_end === 'drain_timeout'
+                ? 'hermes.alert.stream'
+                : 'hermes.stream',
+              release_ring: binding.releaseRing,
+              run_id: run.id,
+              attempt: params.attempt,
+              trace_id: params.traceId,
+              ...metrics,
+            });
+          },
+          onTerminalFailure: (failure) => {
+            recordHermesTerminalFailure(this.env, params.workspaceId, {
+              runId: run.id,
+              releaseRing: binding.releaseRing,
+              code: failure.failure_code,
+              source: failure.terminal_error_source,
+              structured: failure.structured_error,
+              retryable: failure.retryable,
+              workedMs: failure.worked_ms,
+              partialCharacters: failure.partial_characters,
+            });
+            logEvent({
+              at: !failure.structured_error || failure.failure_code === 'unknown'
+                ? 'hermes.alert.contract'
+                : 'hermes.terminal_failure',
+              release_ring: binding.releaseRing,
+              run_id: run.id,
+              attempt: params.attempt,
+              trace_id: params.traceId,
+              ...failure,
+            });
+          },
           skillSnapshot,
         }, engineStep(step), runInput);
         // The terminal message and status have already been committed and sent

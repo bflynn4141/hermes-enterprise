@@ -138,6 +138,14 @@ describe('the workflow files', () => {
     }
   });
 
+  it('gates deployable commits on the exact pinned Hermes runtime contract', () => {
+    const ci = read('ci.yml');
+    expect(ci).toContain('Hermes runtime contract canary');
+    expect(ci).toContain('runtime/hermes/install.py --python-version 3.12');
+    expect(ci).toContain('runtime/hermes/tests/probe_native.py');
+    expect(ci).toContain('runtime/hermes/.state/venv/bin/python');
+  });
+
   describe('the deploys', () => {
     const deploys = ['deploy-staging.yml', 'deploy-production.yml'];
 

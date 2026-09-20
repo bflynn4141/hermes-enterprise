@@ -2,6 +2,24 @@
 // The native SSE queue is not replayable; durable enterprise events are our
 // replay source, and GET run is authoritative after a stream disconnect.
 import { readSse } from '../model/sse.js';
+import runtimeContract from '../../../../runtime/hermes/contract.json';
+
+export type HermesReleaseRing = 'canary' | 'stable';
+export type HermesTerminalErrorCode =
+  | 'provider_auth'
+  | 'provider_quota'
+  | 'provider_rate_limited'
+  | 'request_rejected'
+  | 'provider_unavailable'
+  | 'runtime_interrupted'
+  | 'runtime_unknown';
+export interface HermesTerminalError {
+  readonly schema_version: 1;
+  readonly code: HermesTerminalErrorCode;
+  readonly category: 'auth' | 'quota' | 'rate_limit' | 'rejected' | 'unavailable' | 'interrupted' | 'unknown';
+  readonly retryable: boolean;
+  readonly source: 'provider' | 'request' | 'runtime';
+}
 
 export interface HermesEvent {
   event: string;
@@ -15,6 +33,7 @@ export interface HermesEvent {
   preview?: string;
   duration?: number;
   error?: string | boolean;
+  terminal_error?: HermesTerminalError;
   usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
 }
 export interface HermesStatus {
@@ -22,6 +41,7 @@ export interface HermesStatus {
   status: string;
   output?: string;
   error?: string;
+  terminal_error?: HermesTerminalError;
   session_id?: string;
   usage?: HermesEvent['usage'];
   pending_steer?: string;
@@ -29,6 +49,10 @@ export interface HermesStatus {
 export interface HermesCapabilities {
   durableIdempotency: true;
   retentionSeconds: number;
+  contractVersion: 1;
+  terminalErrorSchemaVersion: 1;
+  sourceRevision: string;
+  releaseRing: HermesReleaseRing;
 }
 export interface HermesEnterpriseReadiness {
   object: 'hermes.enterprise_bridge.readiness';
@@ -60,6 +84,11 @@ export class HermesCapabilitiesError extends Error {
     super('Hermes does not expose the required durable Runs contract');
   }
 }
+export class HermesContractError extends Error {
+  constructor() {
+    super('Hermes returned data outside the negotiated Enterprise contract');
+  }
+}
 
 const REQUIRED_RUN_ENDPOINTS = {
   runs: { method: 'POST', path: '/v1/runs' },
@@ -71,6 +100,27 @@ const REQUIRED_RUN_ENDPOINTS = {
 
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+const TERMINAL_ERROR_SHAPES = {
+  provider_auth: ['auth', false, 'provider'],
+  provider_quota: ['quota', false, 'provider'],
+  provider_rate_limited: ['rate_limit', true, 'provider'],
+  request_rejected: ['rejected', false, 'request'],
+  provider_unavailable: ['unavailable', true, 'provider'],
+  runtime_interrupted: ['interrupted', true, 'runtime'],
+  runtime_unknown: ['unknown', true, 'runtime'],
+} as const satisfies Record<HermesTerminalErrorCode, readonly [HermesTerminalError['category'], boolean, HermesTerminalError['source']]>;
+
+export function parseHermesTerminalError(value: unknown): HermesTerminalError | null {
+  const candidate = record(value);
+  if (!candidate || candidate.schema_version !== runtimeContract.terminal_error_schema_version ||
+      typeof candidate.code !== 'string' || !(candidate.code in TERMINAL_ERROR_SHAPES)) return null;
+  const code = candidate.code as HermesTerminalErrorCode;
+  const [category, retryable, source] = TERMINAL_ERROR_SHAPES[code];
+  if (candidate.category !== category || candidate.retryable !== retryable || candidate.source !== source ||
+      Object.keys(candidate).some((key) => !['schema_version', 'code', 'category', 'retryable', 'source'].includes(key))) return null;
+  return { schema_version: 1, code, category, retryable, source };
+}
 
 function nativeTurnAuthor(value: unknown): { id: string; name: string; is_bot: true } | null {
   if (value === undefined) return null;
@@ -89,6 +139,7 @@ export class HermesClient {
     private readonly apiKey: string,
     private readonly send: typeof fetch = (input, init) => fetch(input, init),
     private readonly transport: HermesTransport = 'native',
+    private readonly expectedReleaseRing: HermesReleaseRing = 'stable',
   ) {}
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
@@ -141,6 +192,8 @@ export class HermesClient {
     const runtime = record(body?.runtime);
     const features = record(body?.features);
     const idempotency = record(features?.runs_idempotency);
+    const enterpriseContract = record(body?.enterprise_contract);
+    const terminalErrors = record(enterpriseContract?.terminal_errors);
     const endpoints = record(body?.endpoints);
     const endpointContract = Object.entries(REQUIRED_RUN_ENDPOINTS).every(([name, expected]) => {
       const actual = record(endpoints?.[name]);
@@ -154,10 +207,22 @@ export class HermesClient {
         features.run_events_sse !== true || features.run_stop !== true || features.run_steer !== true ||
         idempotency?.supported !== true || idempotency.durable !== true ||
         typeof retentionSeconds !== 'number' || !Number.isFinite(retentionSeconds) || retentionSeconds <= 0 ||
+        enterpriseContract?.schema_version !== runtimeContract.contract_version ||
+        enterpriseContract.source_revision !== runtimeContract.source_revision ||
+        enterpriseContract.release_ring !== this.expectedReleaseRing ||
+        terminalErrors?.supported !== true ||
+        terminalErrors.schema_version !== runtimeContract.terminal_error_schema_version ||
         !endpointContract) {
       throw new HermesCapabilitiesError();
     }
-    return { durableIdempotency: true, retentionSeconds };
+    return {
+      durableIdempotency: true,
+      retentionSeconds,
+      contractVersion: 1,
+      terminalErrorSchemaVersion: 1,
+      sourceRevision: runtimeContract.source_revision,
+      releaseRing: this.expectedReleaseRing,
+    };
   }
   async enterpriseReadiness(): Promise<HermesEnterpriseReadiness> {
     if (this.transport !== 'dashboard_connector') throw new HermesCapabilitiesError();
@@ -235,9 +300,15 @@ export class HermesClient {
     const response = this.transport === 'dashboard_connector'
       ? await this.connector('status', { run_id: id })
       : await this.request(`/v1/runs/${encodeURIComponent(id)}`);
-    const result = await response.json() as HermesStatus;
-    if (result.run_id !== id || typeof result.status !== 'string') throw new Error('Hermes returned an invalid run status');
-    return result;
+    const raw = await response.json();
+    const result = record(raw);
+    if (result?.run_id !== id || typeof result.status !== 'string') throw new HermesContractError();
+    if (['failed', 'interrupted'].includes(result.status)) {
+      const terminalError = parseHermesTerminalError(result.terminal_error);
+      if (!terminalError) throw new HermesContractError();
+      return { ...result, terminal_error: terminalError } as unknown as HermesStatus;
+    }
+    return result as unknown as HermesStatus;
   }
   async stop(id: string): Promise<void> {
     const response = this.transport === 'dashboard_connector'
@@ -265,6 +336,11 @@ export class HermesClient {
       if (!frame.data || frame.data === '[DONE]') continue;
       const event = JSON.parse(frame.data) as HermesEvent;
       if (event.run_id !== id || typeof event.event !== 'string') throw new Error('Hermes returned an unrelated run event');
+      if (event.event === 'run.failed') {
+        const terminalError = parseHermesTerminalError(event.terminal_error);
+        if (!terminalError) throw new HermesContractError();
+        event.terminal_error = terminalError;
+      }
       yield event;
     }
   }

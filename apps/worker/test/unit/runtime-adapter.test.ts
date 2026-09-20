@@ -25,6 +25,12 @@ const nativeCapabilities = {
     run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
     runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
   },
+  enterprise_contract: {
+    schema_version: 1,
+    source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+    release_ring: 'stable',
+    terminal_errors: { supported: true, schema_version: 1 },
+  },
   endpoints: {
     runs: { method: 'POST', path: '/v1/runs' },
     run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
@@ -142,7 +148,14 @@ class FakeHermesClient extends HermesClient {
     this.capabilityReads += 1;
     return this.capabilityFailure
       ? Promise.reject(this.capabilityFailure)
-      : Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+      : Promise.resolve({
+          durableIdempotency: true as const,
+          retentionSeconds: 86_400,
+          contractVersion: 1 as const,
+          terminalErrorSchemaVersion: 1 as const,
+          sourceRevision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+          releaseRing: 'stable' as const,
+        });
   }
 
   override submit(body: Record<string, unknown>, key: string) {
@@ -1145,7 +1158,19 @@ describe('official Hermes enterprise projection', () => {
 
   it('classifies failed native execution, logs only safe fields and does not duplicate proxy accounting', async () => {
     const client = new FakeHermesClient();
-    client.final = { run_id: NATIVE_ID, status: 'failed', error: 'HTTP 429: provider-key-and-private-request-must-not-leak' };
+    const nativeError = 'HTTP 429: provider-key-and-private-request-must-not-leak';
+    client.final = {
+      run_id: NATIVE_ID,
+      status: 'failed',
+      error: nativeError,
+      terminal_error: {
+        schema_version: 1,
+        code: 'provider_rate_limited',
+        category: 'rate_limit',
+        retryable: true,
+        source: 'provider',
+      },
+    };
     const terminalFailures: RuntimeTerminalFailure[] = [];
     const { db } = await execute(new FakeRuntimeDb(), client, new FakeStep(), undefined, {
       onTerminalFailure: (failure) => terminalFailures.push(failure),
@@ -1160,7 +1185,7 @@ describe('official Hermes enterprise projection', () => {
     })]);
     expect(db.messages.get(0)?.status).toBe('incomplete');
     expect(db.modelCalls).toEqual([]);
-    expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges, terminalFailures })).not.toContain(client.final.error);
+    expect(JSON.stringify({ events: db.events, messages: [...db.messages], status: db.statusChanges, terminalFailures })).not.toContain(nativeError);
   });
 
   it('reports stopped after native authority revocation beats the stop poll to a terminal failure', async () => {

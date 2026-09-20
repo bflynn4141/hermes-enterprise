@@ -7,7 +7,7 @@ import { buildSystemPrompt } from '../engine/prompt.js';
 import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
-import { HermesClient, HermesApiError, terminalHermesStatus, type HermesStatus } from './client.js';
+import { HermesClient, HermesApiError, HermesCapabilitiesError, HermesContractError, terminalHermesStatus, type HermesStatus } from './client.js';
 import { StreamBuffer } from './stream-buffer.js';
 import type { RuntimeSkillManifest } from './skills.js';
 import { classifyHermesFailure } from './errors.js';
@@ -91,6 +91,10 @@ export interface RuntimeTerminalFailure {
   reason: string;
   retryable: boolean;
   native_error_present: boolean;
+  structured_error: boolean;
+  terminal_error_schema_version: number | null;
+  terminal_error_source: string;
+  native_error_code: string | null;
   worked_ms: number;
   partial_characters: number;
 }
@@ -604,6 +608,10 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
             reason: classified.error.reason,
             retryable: classified.error.retryable,
             native_error_present: classified.nativeErrorPresent,
+            structured_error: classified.structured,
+            terminal_error_schema_version: classified.contractVersion,
+            terminal_error_source: classified.source,
+            native_error_code: classified.nativeCode,
             worked_ms: workedMs,
             partial_characters: parsed.text.length,
           });
@@ -637,7 +645,34 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   } catch (error) {
     if (remoteId && !terminal) await client.stop(remoteId).catch(() => undefined);
     await nativeToolControl.close?.(true).catch(() => undefined);
-    const detail: RunErrorInput = { class: 'transient', retryable: true, reason: 'hermes_unavailable', message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.' };
+    const contractViolation = error instanceof HermesContractError || error instanceof HermesCapabilitiesError;
+    const detail: RunErrorInput = contractViolation
+      ? {
+          class: 'permanent', retryable: false, reason: 'hermes_contract_violation',
+          message: 'This Hermes runtime needs an Enterprise compatibility update before it can continue.',
+        }
+      : {
+          class: 'transient', retryable: true, reason: 'hermes_unavailable',
+          message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.',
+        };
+    if (contractViolation) {
+      try {
+        deps.onTerminalFailure?.({
+          native_status: 'contract_violation',
+          failure_code: 'contract_violation',
+          error_class: detail.class,
+          reason: detail.reason,
+          retryable: detail.retryable,
+          native_error_present: false,
+          structured_error: false,
+          terminal_error_schema_version: null,
+          terminal_error_source: 'contract',
+          native_error_code: null,
+          worked_ms: 0,
+          partial_characters: visibleText.length,
+        });
+      } catch { /* Telemetry cannot change run outcome. */ }
+    }
     // Close the visible activity and preserve partial output even when the
     // runtime disappears. A stale attempt may not overwrite its successor.
     const failedEvents = await latency.measure('final_persistence', () => db.finalizeRuntime(run.id, run.attempt, async () => {

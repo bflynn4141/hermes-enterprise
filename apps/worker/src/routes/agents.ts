@@ -191,7 +191,7 @@ export async function verifyAgentProvisioning(c: Context<{ Bindings: Env }>): Pr
       );
       return { ...resolved, readinessAssignment };
     });
-    const client = new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport);
+    const client = new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing);
     const [capabilities, readiness] = await Promise.all([client.capabilities(), client.enterpriseReadiness()]);
     if (!capabilities.durableIdempotency || readiness.workspaceId !== binding.workspaceId || readiness.agentId !== agentId ||
         !matchesEnterpriseReadiness(readiness, binding.readinessAssignment)) {

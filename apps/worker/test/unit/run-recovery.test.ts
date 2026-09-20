@@ -64,7 +64,7 @@ const automaticRun = (): EngineRunRow => ({
 const tokenDigestBinding = (runtimeAuthMode: RuntimeBinding['runtimeAuthMode']): RuntimeBinding => ({
   workspaceId: 'workspace-1', agentId: 'agent-1', profile: 'agent-agent-1',
   baseUrl: 'https://runtime.example.test', apiKey: 'test-key', transport: 'native',
-  assignment: 'provisioned', agentCash: false, runtimeAuthMode,
+  assignment: 'provisioned', agentCash: false, releaseRing: 'stable', runtimeAuthMode,
   runtimeCredentialDigest: runtimeAuthMode === 'token_digest' ? new Uint8Array([1]) : null,
 });
 

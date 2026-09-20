@@ -30,6 +30,7 @@ describe('session execution location after a runtime rollout', () => {
       transport: 'native',
       assignment: 'fixed',
       agentCash: false,
+      releaseRing: 'stable',
       runtimeAuthMode: 'legacy_hmac',
       runtimeCredentialDigest: null,
     }]);

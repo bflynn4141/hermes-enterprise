@@ -44,6 +44,10 @@ function capabilitiesBody(): Record<string, unknown> {
       run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
       run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
     },
+    enterprise_contract: {
+      schema_version: 1, source_revision: '5d59366010640c1d6b8f170d8a4ee109db2bbdef',
+      release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
+    },
   };
 }
 

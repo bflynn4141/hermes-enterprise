@@ -169,7 +169,7 @@ async function checkHermesRuntimes(env: Env): Promise<string> {
   if (!env.HERMES_RUNTIME_AGENTS?.trim()) return 'configured';
   const bindings = runtimeBindings(env);
   await Promise.all(bindings.map((binding) =>
-    new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities()));
+    new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing).capabilities()));
   return 'ready';
 }
 

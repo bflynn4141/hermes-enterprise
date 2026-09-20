@@ -167,7 +167,9 @@ describe('Analytics Engine', () => {
       'stop.latency',
       'instance.subrequests',
       'spend.daily',
+      'hermes.stream',
       'hermes.latency',
+      'hermes.terminal_failure',
     ]) {
       expect(METRICS).toContain(metric);
     }
@@ -181,7 +183,7 @@ describe('Hermes startup latency', () => {
       ANALYTICS: { writeDataPoint: (point: Record<string, unknown>) => written.push(point) },
     } as unknown as Partial<Env>);
     recordHermesLatency(e, 'ws-1', {
-      runId: 'run-1', modelId: 'nous:example/model',
+      runId: 'run-1', modelId: 'nous:example/model', releaseRing: 'stable',
       phase: 'first_delta', duration_ms: 750, elapsed_ms: 750, turn_elapsed_ms: null,
     });
     expect(written[0]?.blobs).toEqual(['hermes.latency', 'ws-1', 'run-1', 'nous:example/model', 'first_delta']);

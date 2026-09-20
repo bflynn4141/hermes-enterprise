@@ -102,7 +102,7 @@ export async function submitTurn(input: {
   if (env.AGENT_RUNTIME === 'hermes' && env.MODEL_SCRIPTED !== '1') {
     const binding = await resolveRuntimeBinding(env, tx, workspaceId, session.agent_id);
     try {
-      await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport).capabilities();
+      await new HermesClient(binding.baseUrl, binding.apiKey, undefined, binding.transport, binding.releaseRing).capabilities();
     } catch (error) {
       console.error(JSON.stringify({ at: 'runtime.admission', ok: false, error: String(error) }));
       throw new RouteError('The official Hermes runtime is not healthy enough to accept this turn.', 'runtime_unhealthy', 503);
