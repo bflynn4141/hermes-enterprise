@@ -7,6 +7,12 @@ and initializes MCP to retrieve the `agents` and `agent` tool schemas. It never
 calls either tool or creates an instance. It is not yet connected to routes,
 credential storage, invitation jobs, or UI.
 
+The independent shared operation contract in `packages/shared/src/member-provisioning.ts`
+defines validated preparation/delivery/cancellation states, concise UI presentation,
+and a recovery-step planner. It is scaffolding for a revision-checked durable job,
+not an executor. Unknown creation or delivery outcomes require reconciliation;
+they do not authorize replay. Email states require verified preparation.
+
 ## Public protocol preflight
 
 With the repository's required Node 26 runtime:
