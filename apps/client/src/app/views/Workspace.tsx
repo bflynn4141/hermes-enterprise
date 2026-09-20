@@ -2542,6 +2542,7 @@ function NotificationsTab() {
   const state = useAppState();
   const adapter = useAdapter();
   const [ack, setAck] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
 
   useEffect(() => {
@@ -2560,12 +2561,18 @@ function NotificationsTab() {
 
   const notifications = view?.notifications ?? { approvals: false, blocked: false, digest: false };
   const set = (key: 'approvals' | 'blocked' | 'digest', value: boolean): void => {
+    setError(null);
     void adapter.rest
       .patchSettings(state.workspace.id, { notifications: { [key]: value } })
-      .then((next) => setView(next as SettingsView))
-      .catch(() => undefined);
-    setAck(true);
-    setTimeout(() => setAck(false), 1400);
+      .then((next) => {
+        setView(next as SettingsView);
+        setAck(true);
+        setTimeout(() => setAck(false), 1400);
+      })
+      .catch(() => {
+        setAck(false);
+        setError('Could not save that. Try again.');
+      });
   };
   return (
     <>
@@ -2581,6 +2588,7 @@ function NotificationsTab() {
           <Toggle checked={notifications[key] === true} onChange={(value) => set(key, value)} label={label} />
         </div>
       ))}
+      {error && <p className="meta" role="alert">{error}</p>}
       <div className="app-footer inline">
         <span className="meta">Preferences only · The Inbox stays on · No notification email is sent</span>
         <span className="grow" />
@@ -2595,8 +2603,8 @@ function NotificationsTab() {
 /**
  * Data and privacy.
  *
- * Every fact on this screen is the server's. The retention table, the erasure
- * timing, the residency lines and the per-provider warnings all come from
+ * Every fact on this screen is the server's. The policy rows, retention table,
+ * erasure timing, residency lines and per-provider warnings all come from
  * `GET /w/:ws/settings/data-privacy`, because a client that paraphrased them
  * would be a client making a data-protection claim nobody reviewed. The one
  * control is the attestation, and it is Admin plus step-up: whoever writes it
@@ -2681,11 +2689,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
     <>
       <div>
         <h2 className="section-title">Data and privacy</h2>
-        <p className="meta">Server-reported retention, erasure, provider policy and data location for this workspace.</p>
-      </div>
-      <div className="kv">
-        <span className="grow">Workspace jurisdiction</span>
-        <span className="meta">{state.workspace.jurisdiction ?? 'default'}</span>
+        <p className="meta">Server-reported policy, retention, erasure, provider policy and data location for this workspace.</p>
       </div>
 
       {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
@@ -2693,6 +2697,15 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
 
       {privacy && (
         <>
+          {privacy.policy.map((fact) => (
+            <div className="kv" key={fact.id}>
+              <span className="grow">{fact.label}</span>
+              <span className="meta" style={{ textAlign: 'right', maxWidth: 380 }}>
+                {fact.value}
+              </span>
+            </div>
+          ))}
+
           <h2 className="section-title">Processors</h2>
           {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
           {privacy.keys.map((key) => admin ? (

@@ -1,5 +1,19 @@
 import { expect, test } from '@playwright/test';
 
+test('narrow Chat/App switcher can return to chat', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  const chat = page.locator('.pane-iris');
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(chat).toBeVisible();
+  await chat.getByRole('button', { name: 'App', exact: true }).click();
+  await expect(app).toHaveAttribute('data-active', 'true');
+  await app.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(chat).toHaveAttribute('data-active', 'true');
+  await chat.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(chat).toHaveAttribute('data-active', 'true');
+});
+
 for (const width of [390, 900, 1280, 1680]) {
   test(`chat content fits its actual pane at window width ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 950 });

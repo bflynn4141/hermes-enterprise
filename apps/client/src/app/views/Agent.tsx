@@ -17,6 +17,7 @@ import { useWorkspaceLists } from './lists.js';
 import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from '../approval-copy.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
 import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
+import { persistSetupStep } from './setup-progress.js';
 
 export function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
@@ -872,15 +873,29 @@ export function Setup({ step }: { step: string }) {
   const adapter = useAdapter();
   const nav = useNav();
   const lists = useWorkspaceLists();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const tabs = [
     { id: 'identity', label: 'Identity' },
     { id: 'context', label: 'Context' },
     { id: 'permissions', label: 'Permissions' },
     { id: 'ready', label: 'Ready' },
   ];
+  const saveAndGo = (next: string | null, onSuccess: () => void): void => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const patch = state.agent.id
+      ? (body: { setup_step: string | null }) => adapter.rest.patchAgent(state.workspace.id, state.agent.id!, body)
+      : null;
+    void persistSetupStep(patch, next).then((result) => {
+      setBusy(false);
+      if (result.ok) onSuccess();
+      else setError(result.message);
+    });
+  };
   const goto = (next: string): void => {
-    nav({ section: 'agents', view: 'setup', step: next });
-    if (state.agent.id) void adapter.rest.patchAgent(state.workspace.id, state.agent.id, { setup_step: next }).catch(() => undefined);
+    saveAndGo(next, () => nav({ section: 'agents', view: 'setup', step: next }));
   };
   return (
     <div className="scroll">
@@ -889,11 +904,12 @@ export function Setup({ step }: { step: string }) {
           <h1 className="display-32">Start {agentName(state)}</h1>
         </div>
         <Tabs tabs={tabs} value={step} onChange={goto} label="Setup steps" />
+        {error && <p className="meta" role="alert">{error}</p>}
         {step === 'identity' && (
           <>
             <Panel icon="iris" title={agentName(state)} subtitle={state.agent.email ?? 'Email not connected'} right={<span className="meta">Loop not started</span>} />
             <div className="row">
-              <Button primary onClick={() => goto('context')}>
+              <Button primary disabled={busy} onClick={() => goto('context')}>
                 Continue
               </Button>
             </div>
@@ -915,7 +931,7 @@ export function Setup({ step }: { step: string }) {
               {lists.agentFiles.length === 0 && <EmptyState icon="context" title={EMPTY.context} />}
             </div>
             <div className="row">
-              <Button primary onClick={() => goto('permissions')}>
+              <Button primary disabled={busy} onClick={() => goto('permissions')}>
                 Continue
               </Button>
             </div>
@@ -942,7 +958,7 @@ export function Setup({ step }: { step: string }) {
               </div>
             </div>
             <div className="row">
-              <Button primary onClick={() => goto('ready')}>
+              <Button primary disabled={busy} onClick={() => goto('ready')}>
                 Continue
               </Button>
             </div>
@@ -957,10 +973,8 @@ export function Setup({ step }: { step: string }) {
               <span className="grow" />
               <Button
                 primary
-                onClick={() => {
-                  if (state.agent.id) void adapter.rest.patchAgent(state.workspace.id, state.agent.id, { setup_step: null }).catch(() => undefined);
-                  nav(OV);
-                }}
+                disabled={busy}
+                onClick={() => saveAndGo(null, () => nav(OV))}
               >
                 Start {agentName(state)}
               </Button>
