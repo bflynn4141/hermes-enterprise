@@ -9,6 +9,7 @@ import { defineConfig } from 'vitest/config';
 // project, where the real modules exist.
 const here = dirname(fileURLToPath(import.meta.url));
 const nodeAlias = {
+  '@hermes/shared': join(here, '../../packages/shared/src/index.ts'),
   'cloudflare:workers': join(here, 'test/stubs/cloudflare-workers.ts'),
   'cloudflare:workflows': join(here, 'test/stubs/cloudflare-workflows.ts'),
 };

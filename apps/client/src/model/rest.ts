@@ -115,6 +115,13 @@ import {
 } from '@hermes/shared';
 import type { z } from 'zod';
 import type { AuthAdapter } from './auth.js';
+import {
+  hermesCapacitySchema,
+  runtimeDiscoveryGrantCreatedSchema,
+  runtimeDiscoveryGrantPageSchema,
+  runtimeDiscoveryGrantRevokedSchema,
+  type HermesCapacityInput,
+} from './runtime-capacity.js';
 
 export class RestError extends Error {
   constructor(
@@ -359,6 +366,14 @@ export function createRest(options: RestOptions) {
       optional(() => request('GET', `${ws(workspaceId)}/documents${query}`, paginatedSchema(documentEntitySchema)), emptyPage()),
     listMembers: (workspaceId: string) => request('GET', `${ws(workspaceId)}/members`, paginatedSchema(memberEntitySchema)),
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
+    runtimeDiscoveryGrants: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantPageSchema),
+    createRuntimeDiscoveryGrant: (workspaceId: string, preflightAgentId: string) =>
+      request('POST', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantCreatedSchema, { preflight_agent_id: preflightAgentId }),
+    revokeRuntimeDiscoveryGrant: (workspaceId: string, grantId: string) =>
+      request('DELETE', `${ws(workspaceId)}/admin/runtime-discovery-grants/${encodeURIComponent(grantId)}`, runtimeDiscoveryGrantRevokedSchema),
+    registerHermesCapacity: (workspaceId: string, body: HermesCapacityInput) =>
+      request('POST', `${ws(workspaceId)}/admin/hermes-capacity`, hermesCapacitySchema, body),
     listEvents: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/history${query}`, paginatedSchema(eventRowSchema)), emptyPage()),
     listTraces: (workspaceId: string, query = '') =>

@@ -400,6 +400,59 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .settings-row { display: flex; align-items: center; gap: 12px; height: 78px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 12.8px; }
 .kv { display: flex; align-items: center; gap: 12px; min-height: 64px; border-bottom: 1px solid var(--line); font-size: 12.8px; }
 .kv .k { color: var(--muted); font-size: 11.2px; }
+.settings-page > .tabs { overflow-x: auto; overflow-y: hidden; }
+.settings-page > .tabs .tab { flex: 0 0 auto; white-space: nowrap; }
+
+/* Runtime capacity is a two-step Admin flow. Secrets stay in the form only;
+   success states use the existing reduced-motion-aware Ack primitive. */
+.runtime-capacity { display: flex; flex-direction: column; gap: 18px; }
+.runtime-capacity-heading { display: flex; align-items: flex-start; gap: 16px; }
+.runtime-capacity-heading > div { flex: 1 1 0; min-width: 0; }
+.runtime-capacity-heading h2 { font: 500 20.8px/24px var(--font-display); }
+.runtime-capacity-heading p { max-width: 760px; margin-top: 6px; color: var(--muted); }
+.runtime-capacity-step { display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--context); }
+.runtime-capacity-step > header { display: flex; align-items: flex-start; gap: 12px; }
+.runtime-capacity-step > header > div { min-width: 0; }
+.runtime-capacity-step h3, .runtime-grants h3 { font-size: 13.6px; line-height: 20px; }
+.runtime-capacity-step header p, .runtime-grants-title p { margin-top: 3px; color: var(--muted); }
+.runtime-step-number { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--body); font-size: 11.2px; }
+.runtime-capacity-form { display: flex; flex-direction: column; gap: 14px; }
+.runtime-capacity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.runtime-capacity-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.runtime-capacity-field :is(input, select) { width: 100%; min-width: 0; min-height: 42px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; background: rgba(5, 3, 42, .7); color: var(--body); }
+.runtime-capacity-field :is(input, select):focus { border-color: #9B9AE0; box-shadow: 0 0 0 2px rgba(155,154,224,.14); }
+.runtime-capacity-field input[readonly] { color: var(--muted); background: rgba(5, 3, 42, .38); }
+.runtime-capacity-field small { color: var(--muted); }
+.runtime-capacity-wide { grid-column: 1 / -1; }
+.runtime-capacity-form > footer { display: flex; align-items: center; gap: 16px; }
+.runtime-capacity-form > footer > span { flex: 1 1 0; min-width: 0; color: var(--muted); }
+.runtime-secret { display: grid; grid-template-columns: minmax(180px, .6fr) minmax(260px, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid rgba(115, 203, 162, .34); border-radius: 8px; background: rgba(35, 88, 68, .14); }
+.runtime-secret > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.runtime-secret > div:first-child span { color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.runtime-secret code, .runtime-grant-row code, .runtime-dialog-id { min-width: 0; overflow-wrap: anywhere; font: 10.4px/16px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.runtime-secret code { padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: rgba(8, 4, 22, .36); user-select: all; }
+.runtime-secret-actions { position: relative; display: flex; align-items: center; gap: 6px; }
+.runtime-capacity-error { padding: 11px 13px; border: 1px solid rgba(240, 125, 134, .34); border-radius: 8px; background: rgba(77, 18, 43, .4); color: #F2A2A8; }
+.runtime-capacity-notice, .runtime-capacity-result { padding: 11px 13px; border: 1px solid rgba(115, 203, 162, .32); border-radius: 8px; background: rgba(35, 88, 68, .16); }
+.runtime-capacity-result { display: flex; align-items: center; gap: 12px; }
+.runtime-capacity-result span { color: var(--muted); }
+.runtime-grants { border: 1px solid var(--line); border-radius: 10px; padding: 0 18px; background: rgba(13, 9, 52, .4); }
+.runtime-grants-title { display: flex; align-items: center; gap: 16px; padding: 16px 0; }
+.runtime-grants-title > div { flex: 1 1 0; min-width: 0; }
+.runtime-grants-empty { padding: 18px 0; border-top: 1px solid var(--line); color: var(--muted); }
+.runtime-grant-row { display: flex; align-items: center; gap: 16px; min-height: 86px; padding: 12px 0; border-top: 1px solid var(--line); }
+.runtime-grant-main { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 4px; }
+.runtime-grant-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.runtime-dialog-id { display: block; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: rgba(8, 4, 22, .36); }
+
+@media (max-width: 760px) {
+  .runtime-capacity-grid { grid-template-columns: 1fr; }
+  .runtime-capacity-wide { grid-column: auto; }
+  .runtime-capacity-form > footer, .runtime-grants-title, .runtime-grant-row { align-items: stretch; flex-direction: column; }
+  .runtime-capacity-form > footer .btn, .runtime-grant-row > .btn, .runtime-grants-title > .btn { width: 100%; min-height: 44px; }
+  .runtime-secret { grid-template-columns: 1fr; }
+  .runtime-secret-actions { flex-wrap: wrap; }
+}
 .diff-block { border: 1px solid var(--line); border-radius: 10px; background-color: var(--context); background-image: var(--panel); padding: 18px 20px; display: flex; flex-direction: column; gap: 6px; }
 .diff-block .k { font-size: 11.2px; line-height: 16px; color: var(--muted); }
 .diff-block .v { font-size: 12.8px; line-height: 19.2px; }

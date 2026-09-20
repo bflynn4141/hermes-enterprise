@@ -45,6 +45,10 @@ import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
 import { runJobsAfterCommit } from '../jobs.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
+import {
+  persistCapacityGrantDrift,
+  verifyPendingInvitationCapacityForEmail,
+} from '../hermes-cloud/capacity.js';
 import { streamEventAudiencePredicate } from '../domain/audience.js';
 
 /**
@@ -184,9 +188,6 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
   let workspaceId: string | null = null;
   const jobs: string[] = [];
   try {
-    await client.query('BEGIN');
-    userId = await upsertUser(client, authentication.user);
-
     if (organizationId) {
       const { rows } = await client.query<{ workspace_id: string }>(
         `SELECT workspace_id FROM workspace_directory WHERE workos_organization_id = $1`,
@@ -194,6 +195,14 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
       );
       workspaceId = rows[0]?.workspace_id ?? null;
     }
+    const capacityProof = workspaceId
+      ? await verifyPendingInvitationCapacityForEmail(
+        c.env, workspaceId, authentication.user.email,
+      )
+      : null;
+
+    await client.query('BEGIN');
+    userId = await upsertUser(client, authentication.user);
 
     // WorkOS keeps `sid` stable across reauthentication and advances
     // `auth_time`. Persist that claim rather than token `iat`, which also moves
@@ -232,6 +241,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
           joiningUserId: userId,
           joiningMemberId: mirrored.memberId,
           invitationId: mirrored.acceptedInvitation.id,
+          capacityProof,
           jobs,
         });
       }
@@ -239,6 +249,7 @@ export async function callback(c: Context<{ Bindings: Env }>): Promise<Response>
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
+    await persistCapacityGrantDrift(c.env, error);
     throw error;
   } finally {
     await client.end();

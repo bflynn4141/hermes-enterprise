@@ -27,6 +27,7 @@ import {
   releaseInvitationCapacity,
   reserveCapacityForInvitation,
   transferInvitationCapacity,
+  withCapacityGrantQuarantine,
 } from '../hermes-cloud/capacity.js';
 import {
   invitationCorrelationId,
@@ -343,7 +344,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       throw new RouteError('an invitation needs an email address', 'bad_email', 422);
     }
 
-    const result = await inWorkspace(c, async (work) => {
+    const result = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('inviting someone');
       await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.invite);
       checkpoint = 'admin_and_rate_admitted';
@@ -393,7 +394,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       checkpoint = duplicate ? 'duplicate_resolved' : 'invitation_stored';
 
       if (!alreadyMember && c.env.AGENT_RUNTIME === 'hermes') {
-        const reservation = await reserveCapacityForInvitation(work.tx, work.workspaceId, row.id);
+        const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
         if (!reservation) {
           throw new RouteError(
             'No verified Partner Program Iris capacity is available. Add a ready pool instance before inviting another member.',
@@ -444,7 +445,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         invited_at: row.created_at.toISOString(),
         version: 0,
       }) };
-    });
+    }));
 
     checkpoint = 'committed';
     logInvitationDiagnostic({
@@ -479,7 +480,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
     requireCsrf(c);
     const invitationId = pathUuid(c, 'id');
     trackedInvitationId = invitationId;
-    const body = await inWorkspace(c, async (work) => {
+    const body = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('resending an invitation');
       await expireInvitationReservations(work.tx, work.workspaceId);
       const { rows } = await work.tx.query<{
@@ -525,9 +526,9 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       checkpoint = 'successor_stored';
 
       if (c.env.AGENT_RUNTIME === 'hermes') {
-        const transferred = await transferInvitationCapacity(work.tx, work.workspaceId, invitation.id, row.id);
+        const transferred = await transferInvitationCapacity(c.env, work.tx, work.workspaceId, invitation.id, row.id);
         if (!transferred) {
-          const reservation = await reserveCapacityForInvitation(work.tx, work.workspaceId, row.id);
+          const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
           if (!reservation) throw new RouteError(
             'No verified Partner Program Iris capacity is available. Add a ready pool instance before resending.',
             'iris_capacity_unavailable',
@@ -569,7 +570,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         invited_at: row.created_at.toISOString(),
         version: 0,
       });
-    });
+    }));
     checkpoint = 'committed';
     logInvitationDiagnostic({
       action: 'resend', checkpoint, correlationId, workspaceId,

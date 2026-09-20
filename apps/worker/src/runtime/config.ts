@@ -4,6 +4,7 @@ import { RouteError } from '../routes/tenant.js';
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { openSecret, type StoredEnvelope } from '../keys/envelope.js';
+import { requireDigestBearer, runtimeBearer } from './credentials.js';
 
 export interface RuntimeEnv {
   readonly ENVIRONMENT: string;
@@ -22,6 +23,8 @@ export interface RuntimeBinding {
   readonly assignment: 'fixed' | 'invitee_pool' | 'provisioned';
   /** Deployment attestation that this profile was launched with the bounded AgentCash MCP. */
   readonly agentCash: boolean;
+  readonly runtimeAuthMode: 'legacy_hmac' | 'token_digest';
+  readonly runtimeCredentialDigest: Uint8Array | null;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const misconfigured = (): never => {
@@ -57,6 +60,8 @@ export function runtimeBinding(env: RuntimeEnv, workspaceId: string, agentId: st
     transport,
     assignment,
     agentCash: row.agentcash === true,
+    runtimeAuthMode: 'legacy_hmac',
+    runtimeCredentialDigest: null,
   };
 }
 export function runtimeBindings(env: RuntimeEnv): RuntimeBinding[] {
@@ -117,7 +122,7 @@ export async function provisioningBridgeToken(env: RuntimeEnv, workspaceId: stri
 }
 export async function requireBridgeAuth(env: RuntimeEnv, workspaceId: string, agentId: string, authorization: string | null): Promise<RuntimeBinding> {
   const binding = runtimeBinding(env, workspaceId, agentId);
-  const token = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
+  const token = runtimeBearer(authorization);
   const bytes = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
   const valid = await crypto.subtle.verify('HMAC', await signingKey(env), bytes, new TextEncoder().encode(`${workspaceId}:${agentId}`));
   if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
@@ -135,7 +140,7 @@ const envelopeBytes = (value: unknown): Uint8Array => {
  * Resolve a ready, dynamically-provisioned binding first, then fall back to
  * deployment configuration for the original fixed staging profile.
  */
-async function dynamicRuntimeBinding(
+export async function dynamicRuntimeBinding(
   env: Env,
   tx: RuntimeBindingQuery,
   workspaceId: string,
@@ -148,16 +153,26 @@ async function dynamicRuntimeBinding(
     profile: string; base_url: string; transport: 'native' | 'dashboard_connector';
     assignment: 'fixed' | 'invitee_pool' | 'provisioned'; agentcash: boolean;
     ciphertext: Uint8Array; iv: Uint8Array; wrapped_dek: Uint8Array; wrap_iv: Uint8Array; kek_version: number;
+    runtime_auth_mode: 'legacy_hmac' | 'token_digest'; runtime_credential_digest: Uint8Array | null;
+    ready_at: Date | null; capacity_quarantined: boolean;
   }>(
     `SELECT profile, base_url, transport, assignment, agentcash,
-            ciphertext, iv, wrapped_dek, wrap_iv, kek_version
+            ciphertext, iv, wrapped_dek, wrap_iv, kek_version,
+            runtime_auth_mode, runtime_credential_digest, ready_at,
+            EXISTS (
+              SELECT 1 FROM hermes_cloud_capacity c
+               WHERE c.workspace_id=agent_runtime_bindings.workspace_id
+                 AND c.assigned_agent_id=agent_runtime_bindings.agent_id
+                 AND c.state='quarantined'
+            ) AS capacity_quarantined
        FROM agent_runtime_bindings
       WHERE workspace_id=$1 AND agent_id=$2 AND base_url IS NOT NULL
-        AND ($3::boolean = false OR ready_at IS NOT NULL)`,
-    [workspaceId, agentId, readyOnly],
+      LIMIT 1`,
+    [workspaceId, agentId],
   );
   const row = dynamic.rows[0];
   if (!row) return null;
+  if (readyOnly && (!row.ready_at || row.capacity_quarantined)) return misconfigured();
   const apiKey = await openSecret(env, { workspaceId, keyId: agentId, namespace: CONTROL_NAMESPACE }, {
     ciphertext: envelopeBytes(row.ciphertext), iv: envelopeBytes(row.iv), wrappedDek: envelopeBytes(row.wrapped_dek),
     wrapIv: envelopeBytes(row.wrap_iv), kekVersion: row.kek_version,
@@ -168,6 +183,8 @@ async function dynamicRuntimeBinding(
   return {
     workspaceId, agentId, profile: row.profile, baseUrl: url.toString().replace(/\/$/, ''), apiKey,
     transport: row.transport, assignment: row.assignment, agentCash: row.agentcash,
+    runtimeAuthMode: row.runtime_auth_mode,
+    runtimeCredentialDigest: row.runtime_credential_digest,
   };
 }
 
@@ -200,10 +217,62 @@ export async function requireResolvedBridgeAuth(
   agentId: string,
   authorization: string | null,
 ): Promise<RuntimeBinding> {
-  const binding = await resolveRuntimeBinding(env, tx, workspaceId, agentId);
-  const token = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? '')?.[1];
-  const candidate = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
-  const valid = await crypto.subtle.verify('HMAC', await signingKey(env), candidate, new TextEncoder().encode(`${workspaceId}:${agentId}`));
-  if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
+  const dynamic = await dynamicRuntimeBinding(env, tx, workspaceId, agentId, true);
+  if (dynamic) {
+    await requireRuntimeBindingAuth(env, dynamic, authorization);
+    return dynamic;
+  }
+  // Once an identity has entered discovery, revoked and expired credentials
+  // must not reopen execution through an older deployment-map HMAC entry.
+  const discovery = await tx.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM runtime_discovery_grants
+        WHERE workspace_id=$1 AND agent_id=$2
+     ) AS exists`,
+    [workspaceId, agentId],
+  );
+  if (discovery.rows[0]?.exists) {
+    throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
+  }
+  const binding = runtimeBinding(env, workspaceId, agentId);
+  await requireRuntimeBindingAuth(env, binding, authorization);
   return binding;
+}
+
+export async function requireDynamicBridgeAuth(
+  env: Env,
+  tx: RuntimeBindingQuery,
+  workspaceId: string,
+  agentId: string,
+  authorization: string | null,
+): Promise<RuntimeBinding> {
+  const binding = await dynamicRuntimeBinding(env, tx, workspaceId, agentId, true);
+  if (!binding) return misconfigured();
+  await requireRuntimeBindingAuth(env, binding, authorization);
+  return binding;
+}
+
+async function requireRuntimeBindingAuth(
+  env: Env,
+  binding: RuntimeBinding,
+  authorization: string | null,
+): Promise<void> {
+  if (binding.runtimeAuthMode === 'token_digest') {
+    await requireDigestBearer(
+      binding.runtimeCredentialDigest,
+      binding.workspaceId,
+      binding.agentId,
+      authorization,
+    );
+    return;
+  }
+  const token = runtimeBearer(authorization);
+  const candidate = Uint8Array.from((token ?? '0'.repeat(64)).match(/../g) ?? [], (part) => Number.parseInt(part, 16));
+  const valid = await crypto.subtle.verify(
+    'HMAC',
+    await signingKey(env),
+    candidate,
+    new TextEncoder().encode(`${binding.workspaceId}:${binding.agentId}`),
+  );
+  if (!token || !valid) throw new RouteError('Invalid runtime credential.', 'runtime_unauthorized', 403);
 }
