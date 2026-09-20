@@ -19,7 +19,11 @@ export const contextNoteSchema = contextNoteInputSchema.extend({
 });
 export type ContextNote = z.infer<typeof contextNoteSchema>;
 export const selectedSourceSchema = z
-  .object({ id: z.uuid(), sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: z.literal('agent_file') })
+  .object({
+    id: z.uuid(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    kind: z.enum(['agent_file', 'library_source']),
+  })
   .strict();
 export const selectedSourcesSchema = z
   .array(selectedSourceSchema)

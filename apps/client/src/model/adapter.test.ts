@@ -1303,6 +1303,23 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('preserves the Library source kind when admitting a selected shared guide', async () => {
+    const { adapter, calls, store } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: { emailIngress: false, turnAttachments: true, automatedTriggers: false } } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(61), label: 'Partner Program Guide', kind: 'source', source_kind: 'library_source',
+      sha256: 'b'.repeat(64), icon: 'context',
+    } });
+    await adapter.send(SESSION, 'Use the shared guide');
+    expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({
+      attachments: [{ id: mockUuid(61), sha256: 'b'.repeat(64), kind: 'library_source' }],
+    });
+    adapter.dispose();
+  });
+
   const reauthOverride = {
     [`POST /w/${WS}/requests/${REQUEST}/decisions`]: () =>
       new Response(JSON.stringify({ error: 'reauthenticate', reason: 'reauth_required' }), { status: 401, headers: { 'content-type': 'application/json' } }),
