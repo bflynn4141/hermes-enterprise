@@ -814,7 +814,16 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
     turnIds.set(sessionId, turnId);
     const attachments = state().capabilities.turnAttachments
-      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: a.kind ?? 'file' as const, status: 'ready' as const, ...(a.sha256 ? { sha256: a.sha256 } : {}), ...(a.source_kind ? { source_kind: a.source_kind } : {}) }))
+      ? opts.attachments ?? session.draft.attachments
+        .filter((a): a is typeof a & { kind: 'source'; sha256: string } => a.kind === 'source' && Boolean(a.sha256))
+        .map((a) => ({
+          id: a.id,
+          label: a.label,
+          kind: 'source' as const,
+          status: 'ready' as const,
+          sha256: a.sha256,
+          ...(a.source_kind ? { source_kind: a.source_kind } : {}),
+        }))
       : [];
     // Live finals lack a session sequence and use MAX_SAFE_INTEGER as an
     // ordering sentinel. Never propagate that sentinel into another turn.

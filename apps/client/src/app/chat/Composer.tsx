@@ -4,14 +4,15 @@
 // row shows its `disabled_reason` rather than vanishing — a model you cannot
 // pick and cannot see why is worse than one you can see is unavailable. When a
 // verified provider key is known to be missing, the composer greys and says so.
-// The server capability contract keeps attachment controls out of the live
-// composer until uploaded content can actually reach the agent runtime.
+// Turn context is only hash-bound agent_file / library_source selections —
+// drag-drop and turn-attachment uploads are omitted until those bytes can
+// reach Iris through captureContext.
 //
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ADMIN, type AttachmentDetail } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
-import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitives.js';
+import { Button, Chip, IrisMark, MenuItem, Popover } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
 import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
@@ -20,16 +21,6 @@ import { refusalFor, type Refusal } from './refusal.js';
 import type { SessionState } from '../../model/store.js';
 
 const COMPOSER_MAX_HEIGHT = 132;
-const DOCUMENT_ACCEPT = '.pdf,.md,.txt,application/pdf,text/markdown,text/plain';
-
-function isDocument(file: File): boolean {
-  if (['application/pdf', 'text/markdown', 'text/plain'].includes(file.type)) return true;
-  return /\.(pdf|md|txt)$/i.test(file.name);
-}
-
-function carriesFiles(event: DragEvent<HTMLElement>): boolean {
-  return Array.from(event.dataTransfer.types).includes('Files');
-}
 
 export function Composer({ session }: { session: SessionState }) {
   const state = useAppState();
@@ -39,10 +30,6 @@ export function Composer({ session }: { session: SessionState }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [sendMode, setSendMode] = useState<'guide' | 'queue'>('guide');
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const dragDepth = useRef(0);
   /**
    * The last refusal, shown above the field until the next keystroke.
    *
@@ -72,10 +59,10 @@ export function Composer({ session }: { session: SessionState }) {
   const model = catalog.find((row) => row.model_id === session.model) ?? catalog[0];
   const modelRoute = model ? modelRouteLabel(model) : null;
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
+  // Source-picker only: turnAttachments gates selecting stored agent_file /
+  // library_source rows. Composer does not accept drag-drop or turn-attachment
+  // uploads — those never reach captureContext.
   const attachmentsAvailable = state.capabilities.turnAttachments;
-  // Only hash-bound stored sources have a runtime contract. Direct uploads
-  // and skill chips stay hidden until those paths can actually be consumed.
-  const directUploadsAvailable = false;
 
   useEffect(() => {
     const el = textarea.current;
@@ -144,58 +131,6 @@ export function Composer({ session }: { session: SessionState }) {
     });
   };
 
-  /**
-   * Context picker and drag-and-drop share one upload path. A dropped file is
-   * only attached after the Worker has verified the bytes, so a chip always
-   * means the document is ready for Iris to read.
-   */
-  const uploadFiles = async (list: FileList | readonly File[]): Promise<void> => {
-    const files = Array.from(list);
-    const documents = files.filter(isDocument);
-    const unsupported = files.length - documents.length;
-    if (!documents.length) {
-      setUploadError('Use PDF, Markdown, or text files.');
-      return;
-    }
-
-    setUploadError(null);
-    setUploading((count) => count + documents.length);
-    let failed = 0;
-    for (const file of documents) {
-      try {
-        const ready = await adapter.upload(file, { kind: 'attachment', sessionId: session.id });
-        dispatch({ type: 'session/attach', id: session.id, attachment: { id: ready.id, label: ready.name, icon: 'context' } });
-      } catch {
-        failed += 1;
-      }
-    }
-    setUploading((count) => Math.max(0, count - documents.length));
-    if (failed) setUploadError(`${failed === 1 ? 'One document' : `${failed} documents`} couldn’t be added. Try again.`);
-    else if (unsupported) setUploadError(`${unsupported === 1 ? 'One file was' : `${unsupported} files were`} skipped. Use PDF, Markdown, or text.`);
-  };
-
-  const enterDropZone = (event: DragEvent<HTMLDivElement>): void => {
-    if (!carriesFiles(event)) return;
-    event.preventDefault();
-    dragDepth.current += 1;
-    setDragging(true);
-  };
-
-  const leaveDropZone = (event: DragEvent<HTMLDivElement>): void => {
-    if (dragDepth.current === 0) return;
-    event.preventDefault();
-    dragDepth.current = Math.max(0, dragDepth.current - 1);
-    if (dragDepth.current === 0) setDragging(false);
-  };
-
-  const dropDocuments = (event: DragEvent<HTMLDivElement>): void => {
-    if (!carriesFiles(event)) return;
-    event.preventDefault();
-    dragDepth.current = 0;
-    setDragging(false);
-    if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
-  };
-
   const status = run && ['working', 'waiting', 'stopped', 'error'].includes(run.status) ? run : null;
 
   return (
@@ -227,33 +162,7 @@ export function Composer({ session }: { session: SessionState }) {
         </div>
       )}
 
-      <div
-        className="composer"
-        data-blocked={blocked}
-        data-dragging={attachmentsAvailable && dragging}
-        aria-busy={attachmentsAvailable && uploading > 0}
-        onDragEnter={directUploadsAvailable ? enterDropZone : undefined}
-        onDragOver={(event) => {
-          if (!directUploadsAvailable) return;
-          if (!carriesFiles(event)) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'copy';
-        }}
-        onDragLeave={directUploadsAvailable ? leaveDropZone : undefined}
-        onDrop={directUploadsAvailable ? dropDocuments : undefined}
-      >
-        {attachmentsAvailable && dragging && (
-          <div className="composer-drop-hint" role="status">
-            <span className="composer-drop-icon" aria-hidden="true">
-              <Glass name="context" size={24} />
-              <Icon name="plus" size={14} />
-            </span>
-            <span>
-              <strong>Drop documents</strong>
-              <small>PDF, Markdown, or text</small>
-            </span>
-          </div>
-        )}
+      <div className="composer" data-blocked={blocked}>
         {session.settingsPending && <div className="composer-refusal" role="status">Saving model choice…</div>}
         {session.settingsError && <div className="composer-refusal" role="alert">{session.settingsError}</div>}
         {session.hydrationError && <div className="composer-refusal" role="alert">{session.hydrationError}</div>}
@@ -299,11 +208,6 @@ export function Composer({ session }: { session: SessionState }) {
             </Chip>
           ))}
         </div>
-        {attachmentsAvailable && (uploading > 0 || uploadError) && (
-          <div className={`composer-upload-status${uploadError ? ' error' : ''}`} role={uploadError ? 'alert' : 'status'}>
-            {uploading > 0 ? <><span className="upload-pulse" aria-hidden="true" />Adding {uploading === 1 ? 'document' : `${uploading} documents`}…</> : uploadError}
-          </div>
-        )}
         <textarea
           id={`composer-${session.id}`}
           ref={textarea}
@@ -405,9 +309,9 @@ export function Composer({ session }: { session: SessionState }) {
 }
 
 /**
- * Attach: workspace sources, adopted skills, and an upload that goes through
- * the presign flow. Extraction status comes back as `entity.updated`, so a file
- * that is still being read says so instead of looking ready.
+ * Select hash-bound agent sources already stored for this agent. Upload and
+ * processing live under Agent → Context; only ready rows appear here so a chip
+ * always names content captureContext can load.
  */
 function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState }) {
   const state = useAppState();
