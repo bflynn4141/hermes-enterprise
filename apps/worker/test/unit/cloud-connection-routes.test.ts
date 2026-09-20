@@ -5,7 +5,7 @@ import type { Env } from '../../src/env.js';
 const mocks = vi.hoisted(() => ({
   query: vi.fn(), requireAdmin: vi.fn(), inWorkspace: vi.fn(),
   requireOrigin: vi.fn(), requireCsrf: vi.fn(), requireStepUp: vi.fn(), consumeRate: vi.fn(),
-  openKey: vi.fn(), sealKey: vi.fn(), discover: vi.fn(), register: vi.fn(), authorization: vi.fn(),
+  openSecret: vi.fn(), sealSecret: vi.fn(), discover: vi.fn(), register: vi.fn(), authorization: vi.fn(),
   exchange: vi.fn(), inspect: vi.fn(), account: vi.fn(),
 }));
 vi.mock('../../src/routes/tenant.js', () => ({
@@ -16,7 +16,7 @@ vi.mock('../../src/routes/tenant.js', () => ({
 }));
 vi.mock('../../src/auth.js', () => ({ requireOrigin: mocks.requireOrigin, requireCsrf: mocks.requireCsrf, requireStepUp: mocks.requireStepUp }));
 vi.mock('../../src/auth/rate-limit.js', () => ({ consumeRate: mocks.consumeRate }));
-vi.mock('../../src/keys/envelope.js', () => ({ openKey: mocks.openKey, sealKey: mocks.sealKey }));
+vi.mock('../../src/keys/envelope.js', () => ({ openSecret: mocks.openSecret, sealSecret: mocks.sealSecret }));
 vi.mock('../../src/hermes-cloud/management.js', () => ({
   CLOUD_ORIGIN: 'https://portal.nousresearch.com', discoverCloudOAuth: mocks.discover,
   registerCloudClient: mocks.register, makeCloudAuthorizationUrl: mocks.authorization,
@@ -63,8 +63,8 @@ beforeEach(() => {
     if (sql.includes('FROM cloud_connections')) return { rows: connection ? [connection] : [] };
     return { rows: [], rowCount: 1 };
   });
-  mocks.openKey.mockResolvedValue(JSON.stringify(secret));
-  mocks.sealKey.mockResolvedValue({ ciphertext: new Uint8Array([8]), iv: new Uint8Array([9]), wrappedDek: new Uint8Array([10]), wrapIv: new Uint8Array([11]), kekVersion: 1 });
+  mocks.openSecret.mockResolvedValue(JSON.stringify(secret));
+  mocks.sealSecret.mockResolvedValue({ ciphertext: new Uint8Array([8]), iv: new Uint8Array([9]), wrappedDek: new Uint8Array([10]), wrapIv: new Uint8Array([11]), kekVersion: 1 });
   mocks.discover.mockResolvedValue({});
   mocks.register.mockResolvedValue(secret.clientId);
   mocks.authorization.mockResolvedValue('https://portal.nousresearch.com/oauth/authorize?state=public');
@@ -105,6 +105,11 @@ describe('Cloud connection route boundaries', () => {
     const inserted = mocks.query.mock.calls.find(([statement]) => statement.includes('INSERT INTO cloud_connection_attempts'))!;
     expect(inserted[1][3]).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(inserted[1])).not.toContain('pkce-private');
+    expect(mocks.sealSecret).toHaveBeenCalledWith(
+      env,
+      { workspaceId, keyId: expect.any(String), namespace: 'hermes/cloud-oauth-attempt/v1' },
+      expect.stringContaining('"clientId":"client-private"'),
+    );
   });
 
   it('does not initiate OAuth when step-up is rejected or Cloud is disabled', async () => {
@@ -141,6 +146,16 @@ describe('Cloud connection route boundaries', () => {
     expect(mocks.exchange).toHaveBeenCalledOnce();
     expect(mocks.inspect).toHaveBeenCalledOnce();
     expect(mocks.account).toHaveBeenCalledOnce();
+    expect(mocks.openSecret).toHaveBeenCalledWith(
+      env,
+      { workspaceId, keyId: attemptId, namespace: 'hermes/cloud-oauth-attempt/v1' },
+      expect.any(Object),
+    );
+    expect(mocks.sealSecret).toHaveBeenCalledWith(
+      env,
+      { workspaceId, keyId: attemptId, namespace: 'hermes/cloud-management-grant/v1' },
+      expect.stringContaining('access-private'),
+    );
     expect(fetch).not.toHaveBeenCalled();
     const clientResponse = JSON.stringify([...response.headers]) + await response.text();
     for (const token of ['access-private', 'refresh-private', 'pkce-private', 'code-private']) expect(clientResponse).not.toContain(token);
@@ -167,7 +182,7 @@ describe('Cloud connection route boundaries', () => {
     if (condition === 'tools_unverified') mocks.inspect.mockRejectedValue(new Error('private-provider-data'));
     const response = await callback();
     expect(response.headers.get('location')).toContain('cloud=failed');
-    expect(mocks.sealKey).not.toHaveBeenCalled();
+    expect(mocks.sealSecret).not.toHaveBeenCalled();
     expect(mocks.query.mock.calls.some(([sql]) => sql.includes('INSERT INTO cloud_connections'))).toBe(false);
     expect(mocks.query.mock.calls.some(([sql]) => sql.includes("SET status='connected'"))).toBe(false);
   });

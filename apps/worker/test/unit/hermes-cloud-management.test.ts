@@ -37,9 +37,16 @@ describe('Cloud management discovery and grants', () => {
       return Response.json({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 600 });
     }), 0);
     expect(result.expiresAt).toBe('1970-01-01T00:10:00.000Z');
-    for (const changed of [{ scope: 'inference:invoke' }, { refresh_token: undefined }, { token_type: 'Other' }, { expires_in: 0 }]) {
+    for (const changed of [{ scope: 'inference:invoke' }, { scope: `${CLOUD_SCOPE} inference:invoke` },
+      { refresh_token: undefined }, { token_type: 'Other' }, { expires_in: 0 }]) {
       await expect(exchangeCloudCode(metadata, input, fake(() => Response.json({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 600, ...changed })))).rejects.toThrow();
     }
+  });
+  it('normalizes the exact management scope returned by the token endpoint', async () => {
+    const result = await exchangeCloudCode(metadata,
+      { clientId: 'client', redirectUri: 'https://enterprise.example/callback', code: 'code-secret', verifier: 'v'.repeat(43) },
+      fake(() => Response.json({ access_token: 'access', refresh_token: 'refresh', scope: `  ${CLOUD_SCOPE}\t`, token_type: 'Bearer', expires_in: 600 })));
+    expect(result.scope).toBe(CLOUD_SCOPE);
   });
   it('attributes only an authenticated organization and bounds provider responses', async () => {
     expect(await inspectCloudOrganization('test-token', fake((url, init) => {
@@ -94,15 +101,27 @@ describe('Cloud management discovery and grants', () => {
     const result = await refreshCloudCredential(metadata, { clientId: 'client', refreshToken: 'old-test-refresh', scope: CLOUD_SCOPE },
       fake(() => Response.json({ access_token: 'new-test-access', token_type: 'Bearer', expires_in: 600 })));
     expect(result.refreshToken).toBe('old-test-refresh');
+    expect(result.scope).toBe(CLOUD_SCOPE);
+  });
+  it('rejects extra refresh scopes in stored input or provider output', async () => {
+    let calls = 0;
+    await expect(refreshCloudCredential(metadata,
+      { clientId: 'client', refreshToken: 'old-test-refresh', scope: `${CLOUD_SCOPE} inference:invoke` },
+      fake(() => { calls++; return Response.json({}); }))).rejects.toMatchObject({ reason: 'cloud_scope_invalid' });
+    expect(calls).toBe(0);
+    await expect(refreshCloudCredential(metadata,
+      { clientId: 'client', refreshToken: 'old-test-refresh', scope: CLOUD_SCOPE },
+      fake(() => Response.json({ access_token: 'access', refresh_token: 'refresh', scope: `${CLOUD_SCOPE} inference:invoke`, token_type: 'Bearer', expires_in: 600 }))))
+      .rejects.toMatchObject({ reason: 'cloud_scope_invalid' });
   });
   it('requires reconnection after revocation and suppresses provider detail', async () => {
     await expect(refreshCloudCredential(metadata, { clientId: 'client', refreshToken: 'test-refresh', scope: CLOUD_SCOPE },
       fake(() => Response.json({ error: 'invalid_grant', error_description: 'SECRET' }, { status: 400 }))))
       .rejects.toThrow('cloud_reconnect_required');
   });
-  it('refuses inference grants before any network access', async () => {
+  it.each(['inference:invoke', `${CLOUD_SCOPE} inference:invoke`])('refuses non-exact scope %s before any network access', async scope => {
     let calls = 0;
-    await expect(inspectCloudTools({ ...credential, scope: 'inference:invoke' }, fake(() => { calls++; return Response.json({}); })))
+    await expect(inspectCloudTools({ ...credential, scope }, fake(() => { calls++; return Response.json({}); })))
       .rejects.toMatchObject({ reason: 'cloud_scope_invalid' });
     expect(calls).toBe(0);
   });

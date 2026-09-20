@@ -1,7 +1,8 @@
 import type { Tx } from '../db/client.js';
-import { rewrapDek, type KekEnv } from '../keys/envelope.js';
+import { rewrapSecretDek, type KekEnv } from '../keys/envelope.js';
+import { cloudCredentialIdentity, type CloudCredentialKind } from './credential-envelope.js';
 
-export type CloudCredentialKind = 'cloud_connection' | 'cloud_connection_attempt';
+export type { CloudCredentialKind } from './credential-envelope.js';
 // Identifiers and predicates are fixed here; callers cannot supply SQL.
 const targets = {
   cloud_connection: { table: 'cloud_connections', live: "status IN ('verification_required','connected','reconnect_required')" },
@@ -18,8 +19,8 @@ export async function rewrapCloudCredential(tx: Tx, env: KekEnv, workspaceId: st
   const row = rows[0];
   // An attempt may have been consumed/erased since enumeration.
   if (!row || row.kek_version === toVersion) return false;
-  const wrapped = await rewrapDek(env, { workspaceId, keyId }, {
-    // rewrapDek uses only the wrapped DEK; payload bytes are not fetched.
+  const wrapped = await rewrapSecretDek(env, cloudCredentialIdentity(kind, workspaceId, keyId), {
+    // rewrapSecretDek uses only the wrapped DEK; payload bytes are not fetched.
     ciphertext: new Uint8Array(), iv: new Uint8Array(),
     wrappedDek: new Uint8Array(row.wrapped_dek), wrapIv: new Uint8Array(row.wrap_iv), kekVersion: row.kek_version,
   }, toVersion);
