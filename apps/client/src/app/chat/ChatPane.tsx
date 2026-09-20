@@ -130,7 +130,7 @@ export function ChatPane({ narrow, active, firstRun = null, readOnly = false }: 
         </button>}
         {narrow && (
           <span className="pane-switch" role="group" aria-label="Pane">
-            <button type="button" aria-pressed onClick={() => undefined}>
+            <button type="button" aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'chat' } })}>
               Chat
             </button>
             <button type="button" aria-pressed={false} onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'app' } })}>
