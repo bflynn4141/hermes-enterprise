@@ -14,6 +14,7 @@ import {
   LEGACY_PARTNER_CONTENT_DIGEST,
   matchesLegacyCapacityAttestation,
   matchesExactEnterpriseAttestation,
+  matchesExactManagedEnterpriseAttestation,
   matchesEnterpriseReadiness,
   matchesManagedRuntimeAttestation,
   requiresExactEnterpriseAttestation,
@@ -99,6 +100,29 @@ describe('role-aware native readiness', () => {
     expect(matchesEnterpriseReadiness(
       readiness({ toolNames: enterpriseReadinessToolNames(finance) }), finance,
     )).toBe(true);
+  });
+
+  it('binds exact workflow admission to the reviewed managed plugin identity', () => {
+    const finance = assignment();
+    const exact = readiness({ toolNames: enterpriseReadinessToolNames(finance) });
+    expect(matchesExactManagedEnterpriseAttestation(exact, finance, managedIdentity)).toBe(true);
+
+    const invalidReadiness = [
+      { ...exact, enterpriseUrl: 'https://other.example' },
+      { ...exact, workspaceId: 'other-workspace' },
+      { ...exact, agentId: '33333333-3333-4333-8333-333333333333' },
+      { ...exact, plugin: { ...exact.plugin!, revision: 'b'.repeat(40) } },
+      { ...exact, plugin: { ...exact.plugin!, artifactDigest: `sha256:${'e'.repeat(64)}` } },
+    ];
+    expect(invalidReadiness.every((candidate) =>
+      !matchesExactManagedEnterpriseAttestation(candidate, finance, managedIdentity),
+    )).toBe(true);
+    expect(matchesExactManagedEnterpriseAttestation(exact, finance, {
+      ...managedIdentity, pluginRevision: undefined,
+    })).toBe(false);
+    expect(matchesExactManagedEnterpriseAttestation(exact, finance, {
+      ...managedIdentity, pluginArtifactDigest: undefined,
+    })).toBe(false);
   });
 
   it('rejects Finance with a legacy payload, wrong digest, extra tool or AgentCash enabled', () => {
