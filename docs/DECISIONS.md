@@ -5280,6 +5280,14 @@ marker, active status and no Stop request in one SQL predicate. The Workflow
 rechecks after asynchronous binding resolution, and the adapter reloads an
 automatic attempt before native work, so a delayed invocation can neither
 fail nor submit work for its successor.
+Automatic startup revalidates and locks that same predicate before emitting
+`run.started`; it never resets a successor or a concurrent Stop to working.
+Hermes acknowledges an idempotent native run with a bounded HTTP 202 before
+streaming. The adapter therefore holds the exact-attempt row lock only across
+that acknowledgement and durable native binding. Retry and Stop serialize at
+that boundary, while model execution and streaming never hold the transaction.
+An exact drift failure projects approval-continuation budgets and partner
+handoffs in the same transaction; a stale no-op projects nothing.
 The current fixed/free-route Iris binding is legacy HMAC, so this change does
 not claim automatic continuation there: users retain explicit manual Retry until
 that profile is migrated to a managed token-digest identity. Dynamically managed
@@ -5309,6 +5317,10 @@ fields, the provider sees no tool definitions, and fresh Enterprise calls are
 rejected before writes. Admission tests reject legacy and unset deployments
 before upstream I/O; execution-fence tests cover token-digest-to-legacy binding
 drift and Hermes-to-legacy or unset deployment drift before engine selection.
+Race tests move the attempt and request Stop at both startup and native dispatch;
+PostgreSQL acceptance proves both writes wait through binding, while exact-only
+failure tests prove approval budgets and partner handoffs cannot be projected by
+a stale attempt.
 Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.

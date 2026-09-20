@@ -20,6 +20,11 @@ import { isResponseOnlyRecoveryInput } from '../runs/recovery-safety.js';
 export interface RuntimePersistence extends AgentDb {
   /** Collapse a serial runtime phase into one tenant-scoped database transaction. */
   withRuntimeTransaction?<T>(work: () => Promise<T>): Promise<T>;
+  /**
+   * Lock and revalidate the exact automatic attempt before a side effect that
+   * must serialize with Retry and Stop. Call only inside a runtime transaction.
+   */
+  lockAutomaticRecoveryExecution(runId: string, attempt: number): Promise<boolean>;
   binding(runId: string): Promise<{runtimeRunId:string|null;runtimeAttempt:number|null}|null>;
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string): Promise<boolean>;
   snapshotRequest(runId: string, attempt: number, body: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -187,20 +192,26 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       await emit([{ kind: 'run.status', payload: { run_id: run.id, attempt: run.attempt, status: 'stopped' } }]);
       return;
     }
-    await step.do('hermes-started', CHECKPOINT, async () => {
+    const started = await step.do('hermes-started', CHECKPOINT, async () => {
       const saved = await latency.measure('startup_event_persistence', () => withRuntimeTransaction(async () => {
-        if (!stopAtStart) await db.setRunStatus(run.id, 'working');
+        if (run.automaticRecovery) {
+          if (!await db.lockAutomaticRecoveryExecution(run.id, run.attempt)) return null;
+        } else if (!stopAtStart) {
+          await db.setRunStatus(run.id, 'working');
+        }
         return db.emit([{ kind: 'run.started', sessionId: run.sessionId, payload: {
           run_id: run.id, session_id: run.sessionId, attempt: run.attempt,
           engine_version: run.engineVersion, client_turn_id: run.clientTurnId,
           mode: run.mode, model_id: run.modelId, effort: run.effort, title: null, steps: [],
         } }]);
       }));
+      if (!saved) return { ok: false };
       await latency.measure('startup_delivery', async () => {
         await deps.forward(run.sessionId, run.id, saved);
       });
       return { ok: true };
     });
+    if (!started.ok) return;
     const submitted = await step.do('hermes-submit', CHECKPOINT, async () => {
       // A Workflow callback may be replaying after either process restarted.
       // Re-read the live contract before trusting a persisted binding or
@@ -261,20 +272,34 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
       if (readinessAge < 0 || readinessAge > FRESH_CAPABILITIES_MS) {
         checkedAt = await latency.measure('submit_capabilities', attestRuntime);
       }
-      const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
       // Bind the exact snapshotted value. A Workflow replay may carry a request
       // created by an older release, and changing its session id would violate
       // the native idempotency fingerprint.
       const runtimeSessionId = typeof body.session_id === 'string' && body.session_id.trim()
         ? body.session_id
         : run.id;
-      if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, runtimeSessionId, deps.profile))) {
-        await client.stop(id);
-        throw new Error('Hermes run attempt was superseded');
-      }
+      const submitAndBind = async (): Promise<string> => {
+        const id = await latency.measure('native_submit', () => client.submit(body, `enterprise-${run.id}-a${run.attempt}`));
+        if (!await latency.measure('native_binding', () => db.bindRun(run.id, run.attempt, id, runtimeSessionId, deps.profile))) {
+          await client.stop(id);
+          throw new Error('Hermes run attempt was superseded');
+        }
+        return id;
+      };
+      const id = run.automaticRecovery
+        ? await withRuntimeTransaction(async () => {
+            if (!await db.lockAutomaticRecoveryExecution(run.id, run.attempt)) return null;
+            // Hermes acknowledges the durable idempotent run before executing
+            // it. Hold this row lock only through that bounded acknowledgement
+            // and binding so Retry/Stop cannot move authority between them.
+            return submitAndBind();
+          })
+        : await submitAndBind();
+      if (!id) return { id: null, enterpriseToolNames: [] };
       freshSubmissionCheckedAt = checkedAt;
       return { id, enterpriseToolNames: requestToolNames(body) };
     });
+    if (!submitted.id) return;
     remoteId = submitted.id;
     const id = submitted.id;
     await step.do('hermes-execute', EXECUTION, async () => {

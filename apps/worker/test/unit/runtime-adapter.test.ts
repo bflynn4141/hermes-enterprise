@@ -47,13 +47,18 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   resumeInput: string | null = null;
   priorAuthority: Record<string, unknown> | null = null;
   runtimeTransactions = 0;
+  runtimeTransactionDepth = 0;
+  automaticExecutionLocks = 0;
+  onAutomaticExecutionLock: ((count: number) => void) | null = null;
   recoveryInput() { return Promise.resolve(this.resumeInput); }
   recoveryAuthority() { return Promise.resolve(this.priorAuthority); }
   runtimeRequest(_runId: string, attempt: number) { return Promise.resolve(this.snapshots.get(attempt) ?? null); }
 
   async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
     this.runtimeTransactions += 1;
-    return work();
+    this.runtimeTransactionDepth += 1;
+    try { return await work(); }
+    finally { this.runtimeTransactionDepth -= 1; }
   }
 
   constructor(overrides: Partial<EngineRunRow> = {}) {
@@ -65,6 +70,14 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   }
 
   binding() { return Promise.resolve(this.nativeBinding); }
+
+  async lockAutomaticRecoveryExecution(_runId: string, attempt: number) {
+    this.automaticExecutionLocks += 1;
+    this.onAutomaticExecutionLock?.(this.automaticExecutionLocks);
+    const run = (await this.loadRun())!;
+    return run.attempt === attempt && run.automaticRecovery === true
+      && run.status === 'working' && !run.stopRequested;
+  }
 
   bindRun(runId: string, attempt: number, remoteId: string, sessionId: string, profile: string) {
     if (this.acceptBinding) {
@@ -208,6 +221,69 @@ describe('official Hermes enterprise projection', () => {
     expect(client.capabilityReads).toBe(0);
     expect(client.submissions).toHaveLength(0);
     expect(client.eventSubscriptions).toBe(0);
+  });
+
+  it('does not emit started or change state when an automatic attempt advances at the startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ attempt: 3 });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it('does not emit started or overwrite Stop when it arrives at the automatic startup checkpoint', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const step = new FakeStep();
+    step.beforeAttempt = (name) => {
+      if (name === 'hermes-started') db.setRunForTest({ status: 'stopping', stopRequested: true });
+    };
+    const { client } = await execute(db, new FakeHermesClient(), step);
+    expect(db.events.filter((event) => event.kind === 'run.started')).toHaveLength(0);
+    expect(db.statusChanges).toHaveLength(0);
+    expect((await db.loadRun())?.status).toBe('stopping');
+    expect(client.submissions).toHaveLength(0);
+  });
+
+  it.each([
+    ['a successor attempt', { attempt: 3 }],
+    ['Stop', { status: 'stopping', stopRequested: true }],
+  ] as const)(
+    'does not submit when %s wins immediately before the automatic dispatch fence',
+    async (_label, transition) => {
+      const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+      db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+      db.onAutomaticExecutionLock = (count) => {
+        if (count === 2) db.setRunForTest(transition);
+      };
+      const { client } = await execute(db);
+      expect(db.snapshots.has(2)).toBe(true);
+      expect(db.automaticExecutionLocks).toBe(2);
+      expect(client.submissions).toHaveLength(0);
+      expect(client.eventSubscriptions).toBe(0);
+      expect(db.statusChanges).toHaveLength(0);
+    },
+  );
+
+  it('holds the automatic execution fence through native acknowledgement and binding only', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2, automaticRecovery: true });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const client = new FakeHermesClient();
+    client.onSubmit = () => { expect(db.runtimeTransactionDepth).toBe(1); };
+    const bind = db.bindRun.bind(db);
+    vi.spyOn(db, 'bindRun').mockImplementation(async (...args) => {
+      expect(db.runtimeTransactionDepth).toBe(1);
+      return bind(...args);
+    });
+    await execute(db, client);
+    expect(db.runtimeTransactionDepth).toBe(0);
+    expect(client.eventSubscriptions).toBe(1);
   });
 
   it('carries trusted Bot Mode attribution from the durable user turn', async () => {

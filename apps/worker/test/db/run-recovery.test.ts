@@ -24,6 +24,12 @@ const sourcePolicy = {
   no_outreach: true, role_label: 'Partner', search_queries: ['topic:agents'], keywords: ['agents'],
 };
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 beforeAll(async () => {
   await withClient('owner', async (client) => {
     await syncNousPortalCatalog(client as unknown as Tx, NOUS_PORTAL_FIXTURE_MODELS);
@@ -367,6 +373,59 @@ describe('durable run recovery admission', () => {
         });
       });
     } finally {
+      await runtime.close();
+    }
+  });
+
+  it('holds the automatic dispatch fence through binding against both successor and Stop writes', async () => {
+    const fx = await fixture({ directory: true, rateLimited: true });
+    await work(fx, (context) => context.tx.query(
+      `UPDATE runs SET attempt=2,status='working',stop_requested=false,automatic_recovery=true,error=NULL
+        WHERE id=$1`,
+      [fx.runId],
+    ));
+    const runtime = new RuntimeDb(environment().env, fx.workspaceId, fx.traceId);
+    const locked = deferred();
+    const release = deferred();
+    const remoteId = `run_${'d'.repeat(32)}`;
+    const dispatch = runtime.withRuntimeTransaction(async () => {
+      expect(await runtime.lockAutomaticRecoveryExecution(fx.runId, 2)).toBe(true);
+      locked.resolve();
+      await release.promise;
+      expect(await runtime.bindRun(fx.runId, 2, remoteId, fx.runId, `agent-${fx.agentId}`)).toBe(true);
+    });
+    const contend = async (statement: string) => withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      try {
+        await setTenant(client, fx.workspaceId, fx.adminId);
+        await client.query("SET LOCAL lock_timeout='100ms'");
+        await client.query(statement, [fx.runId]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+    try {
+      await locked.promise;
+      await expect(contend('UPDATE runs SET attempt=3 WHERE id=$1')).rejects.toThrow(/lock timeout/i);
+      await expect(contend("UPDATE runs SET stop_requested=true,status='stopping' WHERE id=$1")).rejects.toThrow(/lock timeout/i);
+      release.resolve();
+      await dispatch;
+      await work(fx, (context) => context.tx.query(
+        "UPDATE runs SET stop_requested=true,status='stopping' WHERE id=$1", [fx.runId],
+      ));
+      await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+        expect((await client.query(
+          'SELECT attempt,status,stop_requested,runtime_run_id,runtime_attempt FROM runs WHERE id=$1', [fx.runId],
+        )).rows[0]).toEqual({
+          attempt: 2, status: 'stopping', stop_requested: true,
+          runtime_run_id: remoteId, runtime_attempt: 2,
+        });
+      });
+    } finally {
+      release.resolve();
+      await dispatch.catch(() => undefined);
       await runtime.close();
     }
   });

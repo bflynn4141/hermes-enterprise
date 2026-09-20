@@ -104,6 +104,12 @@ export class FakeAgentDb implements AgentDb {
     });
   }
 
+  /** Test-only state transition for races that happen after the startup read. */
+  setRunForTest(overrides: Partial<EngineRunRow>): void {
+    this.run = { ...this.run, ...overrides };
+    if (overrides.stopRequested !== undefined) this.stopFlag = overrides.stopRequested;
+  }
+
   /** Every id the event contract validates is a uuid, so they all are. */
   private uuid(): string {
     this.nextId += 1;
