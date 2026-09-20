@@ -61,6 +61,23 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
       'SELECT recovery_input FROM runs WHERE id=$1 AND attempt=$2', [runId, attempt]);
     return rows[0]?.recovery_input ?? null;
   }
+  /**
+   * Fail only the exact automatic attempt whose runtime contract drifted.
+   * The expected-attempt predicate is the write fence: a delayed Workflow may
+   * never mark its successor errored after binding resolution yields.
+   */
+  async failAutomaticRecoveryExecution(runId: string, attempt: number, error: RunErrorInput): Promise<boolean> {
+    const { rows } = await this.runtimeQuery<{ id: string }>(
+      `UPDATE runs
+          SET status='error', error=$3::jsonb, ended_at=now(),
+              recovery_cancelled=true, recovery_next_at=NULL, recovery_blocked_reason=$4
+        WHERE id=$1 AND attempt=$2 AND automatic_recovery
+          AND status='working' AND NOT stop_requested
+        RETURNING id`,
+      [runId, attempt, JSON.stringify(error), error.reason],
+    );
+    return rows.length === 1;
+  }
   async recoveryAuthority(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
     const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
       `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2

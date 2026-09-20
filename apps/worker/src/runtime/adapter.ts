@@ -140,6 +140,9 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   const startup = await latency.measure('startup_read', () => withRuntimeTransaction(async () => {
     const run = deps.run ?? await db.loadRun(input.runId);
     if (!run || run.attempt !== input.attempt || !run.agentId) throw new Error('Hermes run has no current agent binding');
+    if (run.automaticRecovery && !['working', 'stopping'].includes(run.status)) {
+      throw new Error('Hermes automatic recovery attempt is no longer active');
+    }
     return {
       run,
       existingBinding: await db.binding(run.id),

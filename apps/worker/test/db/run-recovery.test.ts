@@ -7,6 +7,7 @@ import type { Job } from '../../src/jobs.js';
 import { syncNousPortalCatalog } from '../../src/model/nous-catalog.js';
 import { NOUS_PORTAL_FIXTURE_MODELS } from '../../src/model/nous-dev.js';
 import { sealSecret } from '../../src/keys/envelope.js';
+import { RuntimeDb } from '../../src/runtime/store.js';
 import {
   loadRecoveryRun, recoveryView, retryTask, runRecoveryJob, scheduleRunRecovery, wakeAuthorizedWork,
   type RecoveryWork,
@@ -323,6 +324,52 @@ describe('durable run recovery admission', () => {
       ));
     },
   );
+
+  it('atomically refuses to fail a newer or stopped automatic attempt', async () => {
+    const fx = await fixture({ directory: true, rateLimited: true });
+    await work(fx, (context) => context.tx.query(
+      `UPDATE runs SET attempt=3,status='working',stop_requested=false,automatic_recovery=true,error=NULL
+        WHERE id=$1`, [fx.runId],
+    ));
+    const runtime = new RuntimeDb(environment().env, fx.workspaceId, fx.traceId);
+    const drift = {
+      class: 'permanent', retryable: false, reason: 'automatic_recovery_runtime_drift',
+      message: 'The managed runtime changed before automatic recovery could start.',
+    };
+    try {
+      expect(await runtime.failAutomaticRecoveryExecution(fx.runId, 2, drift)).toBe(false);
+      await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+        expect((await client.query(
+          'SELECT attempt,status,error FROM runs WHERE id=$1', [fx.runId],
+        )).rows[0]).toEqual({ attempt: 3, status: 'working', error: null });
+      });
+      await work(fx, (context) => context.tx.query(
+        `UPDATE runs SET stop_requested=true,status='stopping' WHERE id=$1`, [fx.runId],
+      ));
+      expect(await runtime.failAutomaticRecoveryExecution(fx.runId, 3, drift)).toBe(false);
+      await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+        expect((await client.query(
+          'SELECT attempt,status,stop_requested,error FROM runs WHERE id=$1', [fx.runId],
+        )).rows[0]).toEqual({ attempt: 3, status: 'stopping', stop_requested: true, error: null });
+      });
+      await work(fx, (context) => context.tx.query(
+        `UPDATE runs SET stop_requested=false,status='working' WHERE id=$1`, [fx.runId],
+      ));
+      expect(await runtime.failAutomaticRecoveryExecution(fx.runId, 3, drift)).toBe(true);
+      await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+        expect((await client.query(
+          `SELECT attempt,status,recovery_cancelled,recovery_blocked_reason,error->>'reason' AS reason
+             FROM runs WHERE id=$1`, [fx.runId],
+        )).rows[0]).toEqual({
+          attempt: 3, status: 'error', recovery_cancelled: true,
+          recovery_blocked_reason: 'automatic_recovery_runtime_drift',
+          reason: 'automatic_recovery_runtime_drift',
+        });
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
 
   it('marks a queued recovery stale when any newer session run completed during cooldown', async () => {
     const fx = await fixture({ directory: true, rateLimited: true });

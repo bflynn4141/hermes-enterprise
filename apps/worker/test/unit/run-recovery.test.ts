@@ -70,13 +70,20 @@ const tokenDigestBinding = (runtimeAuthMode: RuntimeBinding['runtimeAuthMode']):
 
 function executionDb(run: EngineRunRow) {
   const terminal: { status?: string; error?: RunErrorInput | null } = {};
+  let current = run;
   return {
     terminal,
+    current: () => current,
+    setRun: (next: EngineRunRow) => { current = next; },
     db: {
-      loadRun: vi.fn(async () => run),
-      setRunStatus: vi.fn(async (_runId: string, status: string, detail?: { error?: RunErrorInput | null }) => {
-        terminal.status = status;
-        terminal.error = detail?.error;
+      loadRun: vi.fn(async () => current),
+      failAutomaticRecoveryExecution: vi.fn(async (_runId: string, attempt: number, error: RunErrorInput) => {
+        if (current.attempt !== attempt || !current.automaticRecovery
+            || current.status !== 'working' || current.stopRequested) return false;
+        terminal.status = 'error';
+        terminal.error = error;
+        current = { ...current, status: 'error' };
+        return true;
       }),
       withRuntimeTransaction: <T>(work: () => Promise<T>) => work(),
       runtimeQuery: vi.fn(async () => ({ rows: [] })),
@@ -139,5 +146,57 @@ describe('automatic recovery execution fence', () => {
     )).resolves.toBeNull();
     expect(resolve).not.toHaveBeenCalled();
     expect(terminal).toEqual({});
+  });
+
+  it('terminates a stale Workflow without mutating or resolving a newer automatic attempt', async () => {
+    const fixture = executionDb({ ...automaticRun(), attempt: 3 });
+    const resolve = vi.fn(async () => tokenDigestBinding('token_digest'));
+    await expect(prepareAutomaticRecoveryExecution(
+      { AGENT_RUNTIME: 'hermes', MODEL_SCRIPTED: '0' } as Env,
+      fixture.db,
+      { runId: 'run-1', workspaceId: 'workspace-1', attempt: 2 },
+      resolve,
+    )).rejects.toThrow('no longer current');
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fixture.db.failAutomaticRecoveryExecution).not.toHaveBeenCalled();
+    expect(fixture.current()).toMatchObject({ attempt: 3, status: 'working' });
+    expect(fixture.terminal).toEqual({});
+  });
+
+  it('cannot mark a successor failed when the attempt advances during binding resolution', async () => {
+    const fixture = executionDb(automaticRun());
+    const dispatch = vi.fn();
+    const guarded = prepareAutomaticRecoveryExecution(
+      { AGENT_RUNTIME: 'hermes', MODEL_SCRIPTED: '0' } as Env,
+      fixture.db,
+      { runId: 'run-1', workspaceId: 'workspace-1', attempt: 2 },
+      async () => {
+        fixture.setRun({ ...automaticRun(), attempt: 3 });
+        return tokenDigestBinding('legacy_hmac');
+      },
+    ).then(dispatch);
+    await expect(guarded).rejects.toThrow('managed runtime changed');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(fixture.db.failAutomaticRecoveryExecution).toHaveBeenCalledOnce();
+    expect(fixture.current()).toMatchObject({ attempt: 3, status: 'working' });
+    expect(fixture.terminal).toEqual({});
+  });
+
+  it.each([
+    ['stopped', { status: 'stopped', stopRequested: false }],
+    ['stop-requested', { status: 'working', stopRequested: true }],
+  ])('leaves a %s automatic attempt unchanged', async (_label, changed) => {
+    const fixture = executionDb({ ...automaticRun(), ...changed });
+    const resolve = vi.fn(async () => tokenDigestBinding('token_digest'));
+    await expect(prepareAutomaticRecoveryExecution(
+      { AGENT_RUNTIME: 'hermes', MODEL_SCRIPTED: '0' } as Env,
+      fixture.db,
+      { runId: 'run-1', workspaceId: 'workspace-1', attempt: 2 },
+      resolve,
+    )).rejects.toThrow('no longer current');
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fixture.db.failAutomaticRecoveryExecution).not.toHaveBeenCalled();
+    expect(fixture.current()).toMatchObject(changed);
+    expect(fixture.terminal).toEqual({});
   });
 });

@@ -196,6 +196,20 @@ async function execute<TClient extends HermesClient = FakeHermesClient>(
 }
 
 describe('official Hermes enterprise projection', () => {
+  it('does not contact the runtime when an automatic Workflow belongs to an older attempt', async () => {
+    const db = new FakeRuntimeDb({ attempt: 3, automaticRecovery: true });
+    const run = (await db.loadRun())!;
+    const client = new FakeHermesClient();
+    await expect(runHermesAttempt({
+      db, client, profile: PROFILE,
+      forward: async () => ({ stop_requested: false }),
+    }, new FakeStep(), { runId: run.id, attempt: 2, traceId: 'stale-automatic-workflow' }))
+      .rejects.toThrow('no current agent binding');
+    expect(client.capabilityReads).toBe(0);
+    expect(client.submissions).toHaveLength(0);
+    expect(client.eventSubscriptions).toBe(0);
+  });
+
   it('carries trusted Bot Mode attribution from the durable user turn', async () => {
     const db = new FakeRuntimeDb();
     db.turns.splice(0, 1, {

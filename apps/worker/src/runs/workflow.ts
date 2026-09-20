@@ -286,7 +286,7 @@ function engineStep(step: WorkflowStep): EngineStep {
 
 interface AutomaticRecoveryExecutionDb {
   loadRun(runId: string): Promise<EngineRunRow | null>;
-  setRunStatus(runId: string, status: string, detail?: { error?: RunErrorInput | null }): Promise<void>;
+  failAutomaticRecoveryExecution(runId: string, attempt: number, error: RunErrorInput): Promise<boolean>;
   withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T>;
   runtimeQuery<T>(text: string, values?: readonly unknown[]): Promise<{ rows: T[] }>;
 }
@@ -323,9 +323,12 @@ export async function prepareAutomaticRecoveryExecution(
   const run = await db.loadRun(params.runId);
   if (!run) throw new NonRetryableError('Automatic recovery run no longer exists');
   if (!run.automaticRecovery) return null;
+  if (run.attempt !== params.attempt || run.status !== 'working' || run.stopRequested) {
+    throw new NonRetryableError('Automatic recovery attempt is no longer current');
+  }
 
   const failClosed = async (): Promise<never> => {
-    await db.setRunStatus(run.id, 'error', { error: AUTOMATIC_RECOVERY_RUNTIME_DRIFT });
+    await db.failAutomaticRecoveryExecution(run.id, params.attempt, AUTOMATIC_RECOVERY_RUNTIME_DRIFT);
     throw new NonRetryableError(AUTOMATIC_RECOVERY_RUNTIME_DRIFT.message);
   };
   if (env.AGENT_RUNTIME !== 'hermes' || env.MODEL_SCRIPTED === '1' || !run.agentId) {
@@ -343,7 +346,15 @@ export async function prepareAutomaticRecoveryExecution(
     return failClosed();
   }
   if (binding.runtimeAuthMode !== 'token_digest') return failClosed();
-  return { run, binding };
+  // Binding resolution may await secret decryption or a database connection.
+  // Re-read after it yields so a successor admitted during that wait is never
+  // carried into native submission by this old Workflow invocation.
+  const current = await db.loadRun(params.runId);
+  if (!current || current.attempt !== params.attempt || current.status !== 'working'
+      || current.stopRequested || !current.automaticRecovery) {
+    throw new NonRetryableError('Automatic recovery attempt is no longer current');
+  }
+  return { run: current, binding };
 }
 
 export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
@@ -444,7 +455,10 @@ export class RunAttempt extends WorkflowEntrypoint<Env, RunAttemptParams> {
           loadRuntimeSkillSnapshot(this.env, db, params.workspaceId, binding.agentId));
         await runHermesAttempt({
           db,
-          run,
+          // A delayed automatic invocation must re-read attempt/status inside
+          // the adapter immediately before native work. Human and first-turn
+          // paths keep the already-loaded row and their existing latency.
+          ...(automaticRecoveryRuntime ? {} : { run }),
           startedAt: invocationStartedAt,
           receivedAt: params.receivedAt,
           onLatency,

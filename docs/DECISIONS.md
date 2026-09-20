@@ -5275,7 +5275,11 @@ managed binding and requires token-digest auth again. A deployment switch,
 missing Hermes configuration or binding downgrade marks the attempt as a
 non-retryable runtime-drift failure without provider or tool dispatch; the user
 can still choose explicit manual Retry. First attempts incur no extra recovery
-lookup.
+lookup. The drift write itself requires the exact expected attempt, automatic
+marker, active status and no Stop request in one SQL predicate. The Workflow
+rechecks after asynchronous binding resolution, and the adapter reloads an
+automatic attempt before native work, so a delayed invocation can neither
+fail nor submit work for its successor.
 The current fixed/free-route Iris binding is legacy HMAC, so this change does
 not claim automatic continuation there: users retain explicit manual Retry until
 that profile is migrated to a managed token-digest identity. Dynamically managed
