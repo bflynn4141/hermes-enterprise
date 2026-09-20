@@ -5,19 +5,17 @@
 // Settings carries personal preferences and member-safe connection/privacy facts.
 // Admin carries workspace configuration and the irreversible controls behind step-up.
 //
-// Three library components are adopted here (plan 10b): `FilterTable` over
-// History, `InsightCards` over the usage report and `FineTuneCard` over the
-// two integer caps. Each is given real rows and real callbacks; none of them
-// is given a demo fixture. Members went back to the product's own inline rows
+// FilterTable supports History and InsightCards supports usage reports.
+// Run limits use explicit saves. Members use the product’s own inline rows
 // (decision C46) — `RecordsTable` is a database surface and a membership list
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
-import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
+import { FilterTable, InsightCards } from '@hermes/motion-components';
 import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
-import { ADMIN_SETTINGS_GROUPS, ADMIN_SETTINGS_LABELS, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
+import { ADMIN_SETTINGS_GROUPS, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
 import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
@@ -31,6 +29,8 @@ import { CloudConnection } from './CloudConnection.js';
 import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
 import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
+import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -1032,7 +1032,6 @@ export function AdminSettings({ view }: { view: string }) {
   const admin = useIsAdmin();
   const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
   const group = ADMIN_SETTINGS_GROUPS.find((entry) => entry.items.some((item) => item.id === selected))!;
-  const [collapsed, setCollapsed] = useState<string | null>(null);
   if (!admin) return null;
   const panel = (
     <div className="admin-settings-view">
@@ -1056,37 +1055,13 @@ export function AdminSettings({ view }: { view: string }) {
           <Tabs
             tabs={ADMIN_SETTINGS_GROUPS.map((entry) => ({ id: entry.items[0].id, label: entry.label }))}
             value={group.items[0].id}
-            onChange={(next) => { setCollapsed(null); nav(ADMIN(next)); }}
+            onChange={(next) => nav(ADMIN(next))}
             label="Admin sections"
           />
         </div>
-        <section className="admin-settings-content" aria-label={`${group.label} admin settings`}>
-          {group.items.length === 1 ? panel : group.items.map((item) => {
-            const open = selected === item.id && collapsed !== item.id;
-            const panelId = `admin-panel-${item.id.replaceAll(' ', '-')}`;
-            return (
-              <div className="admin-settings-disclosure" key={item.id}>
-                <h2>
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    aria-controls={panelId}
-                    onClick={() => {
-                      setCollapsed(open ? item.id : null);
-                      if (selected !== item.id) nav(ADMIN(item.id));
-                    }}
-                  >
-                    {item.id === 'Organization' ? 'Workspace details' : ADMIN_SETTINGS_LABELS[item.id]}
-                    <span aria-hidden="true">{open ? '−' : '+'}</span>
-                  </button>
-                </h2>
-                <div id={panelId} hidden={!open} className="admin-settings-disclosure-body">
-                  {open && panel}
-                </div>
-              </div>
-            );
-          })}
-        </section>
+        <AdminDetailLayout group={group.label} items={group.items} selected={selected}>
+          {panel}
+        </AdminDetailLayout>
       </div>
     </div>
   );
@@ -1097,15 +1072,19 @@ function EmailTab() {
   const adapter = useAdapter();
   const admin = useIsAdmin();
   const [connection, setConnection] = useState<OutboundEmailConnection | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = (): void => {
     if (!state.workspace.id) return;
-    void adapter.rest.outboundEmailConnection(state.workspace.id).then(setConnection).catch(() => {
-      setNotice('Email status could not be loaded. Try again.');
-    });
-  }, [adapter, state.workspace.id]);
+    setConnection(null);
+    setStatusError(null);
+    void adapter.rest.outboundEmailConnection(state.workspace.id)
+      .then(setConnection)
+      .catch(() => setStatusError('Email status could not be loaded. Try again.'));
+  };
+  useEffect(load, [adapter, state.workspace.id]);
 
   const connect = async (): Promise<void> => {
     setBusy(true);
@@ -1128,45 +1107,98 @@ function EmailTab() {
     }
   };
 
-  if (!connection) return <Skeleton rows={4} label="Loading email connection" />;
-  const connected = connection.status === 'connected';
-  const sendingEnabled = connection.mode === 'send_after_approval';
-  const discoveryCadence = connection.discovery_interval_minutes % 60 === 0
-    ? `${connection.discovery_interval_minutes / 60} hours`
-    : `${connection.discovery_interval_minutes} minutes`;
+  if (!connection && !statusError) return <Skeleton rows={4} label="Loading email connection" />;
+  const connected = connection?.status === 'connected';
+  const sendingEnabled = connection?.mode === 'send_after_approval';
+  const discoveryCadence = connection
+    ? connection.discovery_interval_minutes % 60 === 0
+      ? `${connection.discovery_interval_minutes / 60} hours`
+      : `${connection.discovery_interval_minutes} minutes`
+    : null;
+  const statusLabel = statusError
+    ? 'Status unavailable'
+    : !connection?.configured
+      ? 'Not configured'
+      : connection.status === 'connected'
+        ? 'Connected'
+        : connection.status === 'error'
+          ? 'Needs attention'
+          : connection.status === 'unavailable'
+            ? 'Unavailable'
+            : 'Disconnected';
+  const statusTone = connected ? 'ok' : connection?.status === 'error' || statusError ? 'warn' : 'muted';
   return (
-    <>
-      <div className="row">
+    <div className="admin-detail-page">
+      <div className="admin-detail-heading">
         <div>
-          <h2 className="section-title">Email</h2>
+          <h2>Email</h2>
           <p className="meta">Connect one dedicated Gmail sender for reviewed partner outreach.</p>
         </div>
-        <span className="grow" />
-        {admin && connection.configured && (
-          <Button primary={!connected} disabled={busy} onClick={connect}>
-            {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
-          </Button>
-        )}
+        <Pill tone={statusTone}>{statusLabel}</Pill>
       </div>
       {notice && <Ack show>{notice}</Ack>}
-      {!connection.configured ? (
-        <EmptyState icon="context" title="Email is not configured" detail="An operator must configure the Google OAuth app before an Admin can connect the outreach mailbox." />
-      ) : (
-        <Panel
-          icon="context"
-          title={connected ? `Connected as ${connection.address}` : connection.status === 'error' ? 'Gmail needs to be reconnected' : 'Connect a dedicated Gmail sender'}
-          subtitle={connected
-            ? 'Hermes can use this identity only for the exact message revision a reviewer approves.'
-            : 'A workspace Admin completes Google OAuth. The Gmail credential stays encrypted on the server.'}
-        >
-          <div className="kv"><span className="grow">Discovery</span><span className="meta">{connection.discovery_enabled ? `New candidates every ${discoveryCadence}` : 'Automated discovery is off'}</span></div>
+      <AdminSettingsCard
+        title={statusError
+          ? 'Gmail status is unavailable'
+          : connected
+            ? connection?.address ? `Connected as ${connection.address}` : 'Gmail is connected'
+            : connection?.status === 'error'
+              ? 'Gmail needs to be reconnected'
+              : connection?.configured
+                ? 'Connect a dedicated Gmail sender'
+                : 'Email is not configured'}
+        description={connected
+          ? 'This workspace uses this identity for approved partner outreach.'
+          : statusError
+            ? 'Hermes could not read the current connection state.'
+            : connection?.configured
+              ? 'A workspace Admin completes Google OAuth to choose the sender.'
+              : 'An operator must configure the Google OAuth app before an Admin can connect the outreach mailbox.'}
+        footer={<>
+          <p className="meta">{statusError
+            ? 'Retrying reads the current state without changing the connection.'
+            : connected
+              ? 'Reconnect to replace or refresh the authorized Gmail identity.'
+              : connection?.configured
+                ? 'Google opens in a new authorization flow; no password is entered in Hermes.'
+                : 'Google OAuth setup is managed by the Hermes operator.'}</p>
+          {statusError ? (
+            <Button disabled={busy} onClick={load}>Retry</Button>
+          ) : admin && connection?.configured ? (
+            <Button primary={!connected} disabled={busy} onClick={connect}>
+              {connected ? 'Reconnect Gmail' : busy ? 'Opening Google…' : 'Connect Gmail'}
+            </Button>
+          ) : null}
+        </>}
+      >
+          {statusError ? (
+            <p className="meta" role="alert">{statusError}</p>
+          ) : connection && (
+            <>
+              <div className="kv"><span className="grow">Connection status</span><span className="meta">{statusLabel}</span></div>
+              {connection.address && <div className="kv"><span className="grow">Sender</span><span className="meta">{connection.address}</span></div>}
+              {connection.configured && <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{connection.pending_messages}</span></div>}
+            </>
+          )}
+      </AdminSettingsCard>
+
+      <AdminSettingsCard title="How email outreach works" description="Discovery, drafting, and sending stay separate so a person controls what leaves the workspace.">
+          <div className="kv"><span className="grow">Discovery</span><span className="meta">{connection
+            ? connection.discovery_enabled ? `New candidates every ${discoveryCadence}` : 'Automated discovery is off'
+            : 'Available after connection status loads'}</span></div>
           <div className="kv"><span className="grow">Drafts</span><span className="meta">Iris prepares personalized copy for Inbox review</span></div>
-          <div className="kv"><span className="grow">Sending</span><span className="meta">{sendingEnabled ? 'Exact approved revision only' : 'Draft-only until enabled by the operator'}</span></div>
-          <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{connection.pending_messages}</span></div>
-          {!admin && <p className="meta">A workspace Admin manages this connection.</p>}
-        </Panel>
-      )}
-    </>
+          <div className="kv"><span className="grow">Sending</span><span className="meta">{connection
+            ? sendingEnabled ? 'Exact approved revision only' : 'Draft-only until enabled by the operator'
+            : 'The current sending mode could not be loaded'}</span></div>
+      </AdminSettingsCard>
+
+      <AdminSettingsCard title="Access and approval boundaries" description="Connection access and message approval are controlled independently.">
+          <div className="kv"><span className="grow">Authorization</span><span className="meta">A workspace Admin starts Google OAuth</span></div>
+          <div className="kv"><span className="grow">Credential storage</span><span className="meta">The Gmail credential stays encrypted on the server</span></div>
+          <div className="kv"><span className="grow">Message approval</span><span className="meta">Review happens in the Hermes Inbox</span></div>
+          <div className="kv"><span className="grow">Approved content</span><span className="meta">Only the exact approved revision can be sent when sending is enabled</span></div>
+      </AdminSettingsCard>
+    </div>
   );
 }
 
@@ -1175,6 +1207,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
   const adapter = useAdapter();
   const admin = useIsAdmin();
   const [connection, setConnection] = useState<SlackConnection | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -1182,9 +1215,11 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
 
   const load = (): void => {
     if (!state.workspace.id) return;
-    void adapter.rest.slackConnection(state.workspace.id).then(setConnection).catch(() => {
-      setNotice('Slack status could not be loaded. Try again.');
-    });
+    setConnection(null);
+    setStatusError(null);
+    void adapter.rest.slackConnection(state.workspace.id)
+      .then(setConnection)
+      .catch(() => setStatusError('Slack status could not be loaded. Try again.'));
   };
   useEffect(load, [adapter, state.workspace.id]);
 
@@ -1255,7 +1290,35 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
     }
   };
 
-  if (!connection) return <Skeleton rows={5} label="Loading Slack connection" />;
+  if (!connection && (personal || !statusError)) return <Skeleton rows={5} label="Loading Slack connection" />;
+  if (!connection) {
+    return (
+      <div className="admin-detail-page">
+        <div className="admin-detail-heading">
+          <div>
+            <h2>Slack</h2>
+            <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
+          </div>
+          <Pill tone="warn">Status unavailable</Pill>
+        </div>
+        <AdminSettingsCard
+          title="Slack status is unavailable"
+          description="Hermes could not read the current connection state."
+          footer={<>
+            <p className="meta">Retrying reads the current state without changing the connection.</p>
+            <Button disabled={busy} onClick={load}>Retry</Button>
+          </>}
+        >
+          <p className="meta" role="alert">{statusError}</p>
+        </AdminSettingsCard>
+        <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
+          <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
+          <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
+          <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
+        </AdminSettingsCard>
+      </div>
+    );
+  }
   const connected = connection.status === 'connected';
   const destination = connection.enterprise_name ?? connection.team_name ?? 'Slack';
   if (personal) {
@@ -1283,50 +1346,95 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
       </>
     );
   }
+  const statusLabel = !connection.configured
+    ? 'Not configured'
+    : connection.status === 'connected'
+      ? 'Connected'
+      : connection.status === 'error'
+        ? 'Needs attention'
+        : connection.status === 'unavailable'
+          ? 'Unavailable'
+          : 'Disconnected';
+  const statusTone = connected ? 'ok' : connection.status === 'error' ? 'warn' : 'muted';
   return (
-    <>
-      <div className="row">
+    <div className="admin-detail-page">
+      <div className="admin-detail-heading">
         <div>
-          <h2 className="section-title">Slack</h2>
+          <h2>Slack</h2>
           <p className="meta">Use the same Hermes agent and skills from direct messages or mentioned channel threads.</p>
         </div>
-        <span className="grow" />
-        {admin && connection.configured && (
-          <Button primary={!connected} disabled={busy} onClick={connected ? () => setDisconnectOpen(true) : connect}>
-            {connected ? 'Disconnect' : busy ? 'Opening Slack…' : 'Connect Slack'}
-          </Button>
-        )}
+        <Pill tone={statusTone}>{statusLabel}</Pill>
       </div>
       {notice && <Ack show>{notice}</Ack>}
-      {!connection.configured ? (
-        <EmptyState icon="context" title="Slack is not configured" detail="An operator must set the Slack app credentials before an Admin can connect this workspace." />
-      ) : (
-        <Panel
-          icon="context"
-          title={connected ? `Connected to ${destination}` : connection.status === 'error' ? 'Slack needs to be reconnected' : 'Connect this workspace to Slack'}
-          subtitle={connected
-            ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Your Hermes agent'}`
-            : 'A workspace Admin completes Slack OAuth. No Slack credential is entered into Hermes.'}
-        >
+      <AdminSettingsCard
+        title={connected
+          ? `Connected to ${destination}`
+          : connection.status === 'error'
+            ? 'Slack needs to be reconnected'
+            : connection.configured
+              ? 'Connect this workspace to Slack'
+              : 'Slack is not configured'}
+        description={connected
+          ? `${connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'} · ${connection.agent?.name ?? 'Hermes agent'}`
+          : connection.configured
+            ? 'A workspace Admin completes Slack OAuth. No Slack credential is entered into Hermes.'
+            : 'An operator must set the Slack app credentials before an Admin can connect this workspace.'}
+        footer={<>
+          <p className="meta">{connected
+            ? 'Slack is ready for direct messages and mentioned channel threads.'
+            : connection.configured
+              ? 'Slack opens in a new authorization flow for this workspace.'
+              : 'Slack app setup is managed by the Hermes operator.'}</p>
+          {admin && connection.configured && !connected ? (
+            <Button primary disabled={busy} onClick={connect}>
+              {busy ? 'Opening Slack…' : connection.status === 'error' ? 'Reconnect Slack' : 'Connect Slack'}
+            </Button>
+          ) : null}
+        </>}
+      >
+        <div className="kv"><span className="grow">Connection status</span><span className="meta">{statusLabel}</span></div>
+        {connected && <div className="kv"><span className="grow">Destination</span><span className="meta">{destination}</span></div>}
+        {connected && connection.installation_kind && <div className="kv"><span className="grow">Installation</span><span className="meta">{connection.installation_kind === 'organization' ? 'Enterprise Grid organization' : 'Slack workspace'}</span></div>}
+      </AdminSettingsCard>
+
+      <AdminSettingsCard title="How Slack works" description="Slack is another way to reach the same Hermes agent; it does not create a separate approval path.">
           <div className="kv"><span className="grow">Direct messages</span><span className="meta">One private Hermes session</span></div>
           <div className="kv"><span className="grow">Channels</span><span className="meta">Mention the app; replies stay in the thread</span></div>
           <div className="kv"><span className="grow">Approvals</span><span className="meta">Review only in the Hermes Inbox</span></div>
-          {connected && <div className="kv"><span className="grow">Permissions</span><span className="meta">{connection.granted_scopes.join(', ')}</span></div>}
-          {connected && (
-            <div className="col" style={{ gap: 8, marginTop: 12 }}>
-              <div className="row">
-                <div className="grow">
-                  <div className="panel-title">Link your Slack identity</div>
-                  <div className="meta">Create a one-time command, then send it to the app in a direct message. It expires in 10 minutes.</div>
-                </div>
-                <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
-              </div>
-              {linkCommand && <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>}
-            </div>
-          )}
-          {!admin && <p className="meta">A workspace Admin manages this connection.</p>}
-          {admin && connection.status === 'error' && <Button disabled={busy} onClick={connect}>Reconnect Slack</Button>}
-        </Panel>
+      </AdminSettingsCard>
+
+      <AdminSettingsCard title="Permissions and identity" description="Workspace installation and member identity linking are separate steps.">
+          <div className="kv"><span className="grow">Workspace authorization</span><span className="meta">A workspace Admin completes Slack OAuth</span></div>
+          <div className="kv"><span className="grow">Member identity</span><span className="meta">Each member links with an explicit one-time command</span></div>
+          <div className="kv"><span className="grow">Approval boundary</span><span className="meta">Slack cannot approve Inbox actions</span></div>
+          {connected && connection.granted_scopes.length > 0 && <div className="kv"><span className="grow">Permissions</span><span className="meta">{connection.granted_scopes.join(', ')}</span></div>}
+      </AdminSettingsCard>
+
+      {connected && (
+        <AdminSettingsCard
+          title="Link your Slack identity"
+          description="Create a one-time command, then send it to the app in a direct message. It expires in 10 minutes."
+          footer={<>
+            <p className="meta">The command links only your signed-in Hermes account.</p>
+            <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
+          </>}
+        >
+            {linkCommand
+              ? <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>
+              : <p className="meta">No link command has been created in this session.</p>}
+        </AdminSettingsCard>
+      )}
+
+      {admin && connected && (
+        <AdminSettingsCard
+          title="Disconnect Slack"
+          description="New Slack messages will stop reaching Hermes. Existing Hermes sessions and their history stay in Hermes."
+          danger
+          footer={<>
+            <p className="meta">You will confirm before the workspace is disconnected.</p>
+            <Button disabled={busy} onClick={() => setDisconnectOpen(true)}>Disconnect</Button>
+          </>}
+        />
       )}
       <Dialog
         open={disconnectOpen}
@@ -1336,7 +1444,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
       >
         <p>New Slack messages will stop reaching Hermes immediately. Existing Hermes sessions and their history stay in Hermes.</p>
       </Dialog>
-    </>
+    </div>
   );
 }
 
@@ -1451,6 +1559,8 @@ function OrganizationTab() {
 
   return (
     <>
+      <header className="admin-detail-heading"><div><h2>Workspace details</h2><p>Manage your organization, its members, and its Cloud connection.</p></div></header>
+      <AdminSettingsCard title="Workspace information">
       {[
         ['Workspace', state.workspace.name],
         ['Your role', state.user.role === 'admin' ? 'Admin' : 'Member'],
@@ -1469,11 +1579,12 @@ function OrganizationTab() {
           )}
         </div>
       ))}
+      </AdminSettingsCard>
 
       {admin && (
         <>
           <OrganizationCloudConnection />
-          <h2 className="section-title">Deleting this workspace</h2>
+          <AdminSettingsCard title="Delete workspace" danger>
           {pending ? (
             <>
               <Panel
@@ -1511,6 +1622,7 @@ function OrganizationTab() {
             </div>
           )}
           {notice && <p className="meta" role="alert">{notice}</p>}
+          </AdminSettingsCard>
         </>
       )}
 
@@ -1583,7 +1695,8 @@ function OrganizationTab() {
 function InboxRulesTab() {
   return (
     <>
-      <Panel icon="admission" title="Manual review" subtitle="Admissions, documents and external actions require a human." />
+      <header className="admin-detail-heading"><div><h2>Inbox rules</h2><p>Human approval requirements for workspace actions.</p></div></header>
+      <AdminSettingsCard title="Required reviews" description="Admissions, documents, and external actions require a human.">
       {[
         ['Program admission and benefits', 'Admin'],
         ['Document creation', 'Admin'],
@@ -1595,7 +1708,8 @@ function InboxRulesTab() {
           <span className="meta">{who}</span>
         </div>
       ))}
-      <p className="meta">These are properties of the database and the routes, not settings. They cannot be turned off here.</p>
+      </AdminSettingsCard>
+      <p className="meta">These approval requirements are enforced automatically and cannot be turned off here.</p>
     </>
   );
 }
@@ -1606,12 +1720,8 @@ function InboxRulesTab() {
  * A catalog row is enabled only when a verified key exists for its provider, so
  * this screen and the composer agree by construction.
  *
- * The caps are a `FineTuneCard` (plan 10b). It scrubs integers, which is what
- * `daily_token_cap` and `max_concurrent_runs` are, and its `onChange` fires on
- * every scrub — so the write is debounced and the *answer* is what the screen
- * re-renders from. A cap the server rejected must not sit on screen looking
- * saved. Zero tokens is a deliberate stop and the card can express it; the
- * server reads zero the same way.
+ * Run limits save explicitly and render the server response. Zero tokens
+ * is a deliberate stop; an empty daily limit means no limit.
  */
 function AgentsTab() {
   const state = useAppState();
@@ -1641,18 +1751,20 @@ function AgentsTab() {
     };
   }, [adapter, state.workspace.id]);
 
-  const save = (patch: Record<string, unknown>): void => {
+  const save = (patch: Record<string, unknown>): Promise<boolean> => {
     setError(null);
-    void adapter.rest
+    return adapter.rest
       .patchSettings(state.workspace.id, patch)
       .then((next) => {
         setView(next);
         setAck(true);
         setTimeout(() => setAck(false), 1600);
+        return true;
       })
       .catch((caught: unknown) => {
         const reason = (caught as { reason?: string }).reason;
         setError(reason === 'not_admin' ? EMPTY.adminOnly : reason === 'bad_cap' ? 'A cap is a whole number of tokens, or none.' : 'Could not save that. Try again.');
+        return false;
       });
   };
 
@@ -1666,6 +1778,8 @@ function AgentsTab() {
 
   return (
     <>
+      <header className="admin-detail-heading"><div><h2>Agent defaults</h2><p>Choose defaults for new sessions and set workspace run limits.</p></div></header>
+      <AdminSettingsCard title="Your agent">
       <div className="list-row">
         <Glass name="iris" size={32} className="row-icon" />
         <div className="row-main">
@@ -1674,8 +1788,9 @@ function AgentsTab() {
         </div>
         <Button onClick={() => nav(CTX)}>Manage</Button>
       </div>
+      </AdminSettingsCard>
+      <AdminSettingsCard title="Model defaults">
       <div className="row">
-        <h2 className="section-title">Model defaults</h2>
         <span className="grow" />
         <span style={{ position: 'relative' }}>
           <span className="meta">Applies to new sessions</span>
@@ -1716,28 +1831,9 @@ function AgentsTab() {
         )}
       </div>
 
-      <h2 className="section-title">Caps</h2>
-      {admin ? (
-        <div className="hermes-ui">
-          <FineTuneCard
-            labels={{ title: 'Run caps', layout: 'Limits', type: 'Default effort', adjust: 'Drag to change', edited: 'Unsaved' }}
-            options={(current?.effort ?? ['low', 'medium', 'high', 'max']).slice()}
-            fields={[
-              { key: 'daily_token_cap', label: 'Daily tokens', value: caps.daily_token_cap ?? 0, min: 0, max: 5_000_000, step: 10_000 },
-              { key: 'max_concurrent_runs', label: 'Concurrent runs', value: caps.max_concurrent_runs, min: 1, max: 20, step: 1 },
-            ]}
-            onChange={(next) => {
-              const cap = Math.round(next.values.daily_token_cap ?? 0);
-              const runs = Math.round(next.values.max_concurrent_runs ?? caps.max_concurrent_runs);
-              // Zero means "stop", not "unset": the server reads it that way
-              // too, and a cap of none is chosen with the button below.
-              scheduleCapWrite(() => save({ daily_token_cap: cap, max_concurrent_runs: runs }));
-            }}
-          />
-        </div>
-      ) : (
-        <p className="meta">{EMPTY.adminOnly}</p>
-      )}
+      </AdminSettingsCard>
+      {admin && <AdminRunLimits key={`${caps.daily_token_cap}:${caps.max_concurrent_runs}`} dailyLimit={caps.daily_token_cap} concurrentLimit={caps.max_concurrent_runs} onSave={save} />}
+      <AdminSettingsCard title="Current usage">
       <div className="kv">
         <span className="grow">Daily token cap</span>
         <span className="meta">
@@ -1755,24 +1851,11 @@ function AgentsTab() {
           {caps.active_runs} of {caps.max_concurrent_runs} active
         </span>
       </div>
+      </AdminSettingsCard>
       {error && <p className="meta" role="alert">{error}</p>}
-      <p className="meta">Durable defaults live here and are recorded in History. A per-session choice applies only to that session&apos;s next turn. Caps are enforced server-side: this screen re-renders from the server&apos;s answer, never from what it hoped it sent.</p>
+      <p className="meta">Model defaults apply to new sessions. Run limits apply across this workspace. Changes are recorded in History.</p>
     </>
   );
-}
-
-/**
- * One timer for the cap sliders.
- *
- * `FineTuneCard` fires `onChange` on every pointer move, and a PATCH per pixel
- * is a PATCH per pixel. 600 ms after the last move is one write per gesture,
- * which is also one audit row per gesture — `settings.changed` is an event
- * somebody reads.
- */
-let capWriteHandle: ReturnType<typeof setTimeout> | null = null;
-function scheduleCapWrite(write: () => void): void {
-  if (capWriteHandle) clearTimeout(capWriteHandle);
-  capWriteHandle = setTimeout(write, 600);
 }
 
 const STATUS_LABEL: Record<string, string> = { unverified: 'Unverified', verified: 'Verified', verified_scoped: 'Verified (scoped)', invalid: 'Invalid', revoked: 'Revoked' };
@@ -2241,6 +2324,7 @@ function UsageTab() {
 
   return (
     <>
+      <header className="admin-detail-heading"><div><h2>Usage</h2><p>Review workspace model usage and estimated costs over time.</p></div></header>
       <div className="row" style={{ gap: 16 }}>
         <Tabs
           tabs={[

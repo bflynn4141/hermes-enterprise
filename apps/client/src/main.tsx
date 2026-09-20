@@ -69,8 +69,8 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
       memberInvitations: params.get('memberSetup') === '1' ? 'setup_only' : 'legacy_delivery',
       pausedMemberSetup: params.get('pausedMemberSetup') === '1',
-      slack: params.get('slack') === 'connected' ? 'connected' : 'disconnected',
-      email: params.get('email') === 'connected' ? 'connected' : 'disconnected',
+      slack: params.get('slack') === 'unconfigured' ? 'unconfigured' : params.get('slack') === 'unavailable' ? 'unavailable' : params.get('slack') === 'connected' ? 'connected' : 'disconnected',
+      email: params.get('email') === 'unconfigured' ? 'unconfigured' : params.get('email') === 'unavailable' ? 'unavailable' : params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
       partnerWorkflowNative: params.get('workflowExecution') === 'native',
       workflowRole: params.get('workflowRole') === 'partnerships' ? 'partnerships'

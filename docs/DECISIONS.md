@@ -5815,3 +5815,10 @@ September 20: Brian prefers a top-right Admin View / User View selector with sec
 ### C87 navigation refinement — four consolidated tabs
 
 Brian’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
+
+
+### C87 detail-page design — September20
+
+Brian requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
+
+References: https://vercel.com/docs/project-configuration/general-settings and https://vercel.com/docs/integrations/install-an-integration/manage-integrations-reference. Adapt section hierarchy and integration management concepts to Hermes tokens, rather than copying Vercel’s brand.

@@ -144,3 +144,40 @@ test('Model provider details and actions remain readable in the standard desktop
   expect(overflow).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath('admin-settings-1280.png'), fullPage: true });
 });
+
+test('run limits save explicitly and distinguish zero from no limit', async ({ page }) => {
+  await recordMockRequests(page);
+  await page.goto('/#admin/Agents');
+  const app = page.getByRole('region', { name: 'Application' });
+  const daily = app.getByRole('spinbutton', { name: 'Daily token limit' });
+  const concurrent = app.getByRole('spinbutton', { name: 'Concurrent runs' });
+  await expect(daily).toBeVisible();
+  await daily.fill('0');
+  await concurrent.fill('3');
+  expect((await mockRequests(page)).filter((r) => r.method === 'PATCH' && r.path.endsWith('/settings'))).toHaveLength(0);
+  await app.getByRole('button', { name: 'Save limits' }).click();
+  const usage = app.getByRole('region', { name: 'Current usage' });
+  await expect(usage.getByText(/of 0 today/)).toBeVisible();
+  await expect(usage.getByText(/of 3 active/)).toBeVisible();
+  await daily.fill('');
+  await app.getByRole('button', { name: 'Save limits' }).click();
+  await expect(usage.getByText('None', { exact: true })).toBeVisible();
+  await concurrent.fill('51');
+  await expect(app.getByRole('button', { name: 'Save limits' })).toBeDisabled();
+  expect((await mockRequests(page)).filter((r) => r.method === 'PATCH' && r.path.endsWith('/settings'))).toHaveLength(2);
+});
+
+for (const channel of ['Slack', 'Email']) {
+  test(`${channel} explains unconfigured setup and can retry a failed status read`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/?${channel.toLowerCase()}=unconfigured#admin/${channel}`);
+    const app = page.getByRole('region', { name: 'Application' });
+    await expect(app.getByRole('heading', { name: `${channel} is not configured` })).toBeVisible();
+    await expect(app.getByRole('button', { name: channel === 'Email' ? 'Connect Gmail' : 'Connect Slack' })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`${channel.toLowerCase()}-detail.png`), fullPage: true });
+    await page.goto(`/?${channel.toLowerCase()}=unavailable#admin/${channel}`);
+    await expect(app.getByRole('alert')).toContainText('could not be loaded');
+    await app.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(app.getByRole('alert')).toContainText('could not be loaded');
+  });
+}
