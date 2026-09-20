@@ -130,6 +130,15 @@ admission rehashes the installed tree. The digest covers framed relative paths
 and file bytes, ignores only Python bytecode caches, and rejects symlinks; the
 install metadata lives outside the tree, so there is no self-hash cycle.
 
+Also persist `HERMES_ENTERPRISE_SOURCE_REVISION` as the full 40-character
+pinned official Hermes commit (`345cd2b057a452236de401d3534b8502a7465e8d` for
+this pin; it must equal `contract.json`'s `source_revision`). The connector
+refuses to build its `enterprise_contract` block without this attestation, and
+the Worker then reports `hermes:runs` as "Hermes request failed (502)". The
+verified native launcher supplies this value itself; a stock Hermes Cloud
+profile must set it explicitly. Every `update_env` on Hermes Cloud restarts the
+instance, so set all three identity values in one call.
+
 The managed flag is opt-in, so installing the additive bundle does not change
 an existing Iris 1.7 gateway. In managed mode the plugin installs a persistent
 API route gate before control authentication or Worker discovery. Only inert
