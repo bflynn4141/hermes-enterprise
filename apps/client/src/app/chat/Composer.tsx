@@ -4,9 +4,10 @@
 // row shows its `disabled_reason` rather than vanishing — a model you cannot
 // pick and cannot see why is worse than one you can see is unavailable. When a
 // verified provider key is known to be missing, the composer greys and says so.
-// Turn context is only hash-bound agent_file / library_source selections —
-// drag-drop and turn-attachment uploads are omitted until those bytes can
-// reach Iris through captureContext.
+// Turn context is hash-bound agent_file / library_source selections that
+// captureContext can load. Local uploads go through kind: 'agent_file' (never
+// turn-attachment / kind: 'file'), wait for extraction, then attach as source
+// chips. Drag-drop stays off so a dropped file cannot bypass that path.
 //
 import { useEffect, useRef, useState } from 'react';
 import { ADMIN, type AttachmentDetail } from '@hermes/shared';
@@ -14,10 +15,12 @@ import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.j
 import { Glass, Icon } from '../ui/icons.js';
 import { Button, Chip, IrisMark, MenuItem, Popover } from '../ui/primitives.js';
 import { MODES, EMPTY } from '../../model/constants.js';
-import { agentName, catalogRows, hasVerifiedKey } from '../selectors.js';
+import { agentName, catalogRows, hasVerifiedKey, LIST_KEYS } from '../selectors.js';
 import { FOCUS_COMPOSER, takeComposerFocus } from '../panel.js';
+import { sourceUploadError } from '../views/source-upload-error.js';
 import { ModelMenu, modelRouteLabel } from './ModelMenu.js';
 import { refusalFor, type Refusal } from './refusal.js';
+import { AgentFileExtractionError, waitForAgentFileReady } from './wait-agent-file-ready.js';
 import type { SessionState } from '../../model/store.js';
 
 const COMPOSER_MAX_HEIGHT = 132;
@@ -58,9 +61,8 @@ export function Composer({ session }: { session: SessionState }) {
   const model = catalog.find((row) => row.model_id === session.model) ?? catalog[0];
   const modelRoute = model ? modelRouteLabel(model) : null;
   const mode = MODES.find((m) => m.id === session.mode) ?? MODES[0];
-  // Source-picker only: turnAttachments gates selecting stored agent_file /
-  // library_source rows. Composer does not accept drag-drop or turn-attachment
-  // uploads — those never reach captureContext.
+  // turnAttachments gates source chips: pick stored agent_file / library_source
+  // rows, or upload a local file as agent_file then attach once extraction is ready.
   const attachmentsAvailable = state.capabilities.turnAttachments;
 
   useEffect(() => {
@@ -299,42 +301,117 @@ export function Composer({ session }: { session: SessionState }) {
 }
 
 /**
- * Select hash-bound agent sources already stored for this agent. Upload and
- * processing live under Agent → Context; only ready rows appear here so a chip
- * always names content captureContext can load.
+ * Select or upload hash-bound agent sources. Uploads use kind: 'agent_file' and
+ * only become draft chips after extraction is ready, so every chip names content
+ * captureContext can load. Turn-attachment / kind: 'file' uploads are not used.
  */
 function SourcePopover({ open, onClose, anchorRef, session }: { open: boolean; onClose: () => void; anchorRef: React.RefObject<HTMLElement | null>; session: SessionState }) {
   const state = useAppState();
   const adapter = useAdapter();
   const dispatch = useDispatch();
   const nav = useNav();
+  const input = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<AttachmentDetail[]>([]);
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const agentId = session.agentId ?? state.agent.id;
+  const canUpload = Boolean(agentId) && state.capabilities.turnAttachments && session.draft.attachments.length < 5 && !uploading;
+
   useEffect(() => {
-    if (!open || !session.agentId) return;
+    if (!open) return;
     let live = true;
-    setFiles([]); setLoading(true); setError('');
-    void adapter.rest.listAgentFiles(state.workspace.id, session.agentId).then((page) => { if (live) setFiles(page.items); }).catch(() => { if (live) setError('Could not load sources. Close and reopen to try again.'); }).finally(() => { if (live) setLoading(false); });
+    setFiles([]); setError(''); setStatus('');
+    if (!agentId) {
+      setLoading(false);
+      setError('No agent is available to attach sources.');
+      return () => { live = false; };
+    }
+    setLoading(true);
+    void adapter.rest.listAgentFiles(state.workspace.id, agentId).then((page) => {
+      if (live) setFiles(page.items);
+    }).catch(() => {
+      if (live) setError('Could not load sources. Close and reopen to try again.');
+    }).finally(() => {
+      if (live) setLoading(false);
+    });
     return () => { live = false; };
-  }, [open, adapter, state.workspace.id, session.agentId]);
+  }, [open, adapter, state.workspace.id, agentId]);
+
+  const attachSource = (file: AttachmentDetail) => {
+    if (!file.sha256 || file.extraction_status !== 'ready' || file.status !== 'ready') return;
+    dispatch({
+      type: 'session/attach',
+      id: session.id,
+      attachment: {
+        id: file.id,
+        label: file.name,
+        icon: 'context',
+        kind: 'source',
+        source_kind: 'agent_file',
+        sha256: file.sha256,
+      },
+    });
+    onClose();
+  };
+
+  const uploadLocal = async (file: File) => {
+    if (!agentId || !canUpload) return;
+    setUploading(true); setError(''); setStatus('Uploading…');
+    try {
+      const uploaded = await adapter.upload(file, { kind: 'agent_file', agentId });
+      setStatus('Processing source…');
+      const ready = await waitForAgentFileReady(
+        () => adapter.rest.getUpload(state.workspace.id, 'agent_file', uploaded.id),
+      );
+      adapter.invalidateList(LIST_KEYS.agentFiles);
+      const page = await adapter.rest.listAgentFiles(state.workspace.id, agentId);
+      setFiles(page.items);
+      attachSource(ready);
+    } catch (caught) {
+      setStatus('');
+      setError(caught instanceof AgentFileExtractionError ? caught.message : sourceUploadError(caught));
+    } finally {
+      setUploading(false);
+      if (input.current) input.current.value = '';
+    }
+  };
+
   return <Popover open={open} onClose={onClose} anchorRef={anchorRef} width={440} label="Select sources" above align="left">
     <div className="row"><span className="p-title">Select sources</span><span className="grow" /><Button link onClick={onClose}>Close</Button></div>
-    <p className="meta">Choose up to five ready sources for your next message.</p>
+    <p className="meta">Choose or upload up to five ready sources for your next message.</p>
+    <input
+      hidden
+      ref={input}
+      type="file"
+      accept=".pdf,.md,.txt,application/pdf,text/markdown,text/plain"
+      onChange={(event) => {
+        const file = event.target.files?.[0];
+        if (file) void uploadLocal(file);
+      }}
+    />
+    <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+      <Button
+        disabled={!canUpload}
+        title={!agentId ? 'No agent is available' : session.draft.attachments.length >= 5 ? 'Five sources already selected' : undefined}
+        onClick={() => input.current?.click()}
+      >
+        {uploading ? 'Uploading…' : 'Upload file'}
+      </Button>
+      <span className="grow" />
+    </div>
     <div className="search"><Icon name="search" /><input aria-label="Search sources" placeholder="Search sources…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
     {error && <p role="alert">{error}</p>}
+    {status && !error && <p role="status">{status}</p>}
     {loading && <p role="status">Loading sources…</p>}
     <div className="col" style={{ maxHeight: 260, overflowY: 'auto' }}>{files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())).map((file) => {
       const already = session.draft.attachments.some((item) => item.id === file.id);
       const ready = file.extraction_status === 'ready' && file.status === 'ready' && file.sha256;
-      return <button type="button" className="menu-item small" key={file.id} disabled={already || !ready || session.draft.attachments.length >= 5} onClick={() => {
-        if (!file.sha256) return;
-        dispatch({ type: 'session/attach', id: session.id, attachment: { id: file.id, label: file.name, icon: 'context', kind: 'source', sha256: file.sha256 } });
-        onClose();
-      }}><Glass name="context" size={18} /><span className="mi-body"><span>{file.name}</span><span className="mi-sub">{already ? 'Selected' : ready ? 'Available to select' : file.extraction_status === 'failed' ? 'Processing failed' : 'Processing…'}</span></span></button>;
+      return <button type="button" className="menu-item small" key={file.id} disabled={already || !ready || session.draft.attachments.length >= 5 || uploading} onClick={() => attachSource(file)}><Glass name="context" size={18} /><span className="mi-body"><span>{file.name}</span><span className="mi-sub">{already ? 'Selected' : ready ? 'Available to select' : file.extraction_status === 'failed' ? 'Processing failed' : 'Processing…'}</span></span></button>;
     })}</div>
-    {!loading && !error && files.length === 0 && <p className="meta">No stored sources yet.</p>}
+    {!loading && !error && files.length === 0 && <p className="meta">No stored sources yet. Upload a PDF, Markdown, or text file.</p>}
     <Button link onClick={() => { onClose(); nav({ section: 'agents', view: 'context' }); }}>Manage sources →</Button>
   </Popover>;
 }

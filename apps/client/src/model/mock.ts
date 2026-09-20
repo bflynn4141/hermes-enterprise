@@ -1630,6 +1630,10 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({ proposal: updated, goal, submitted_by: { id: USER, name: 'Brian' }, library_comparisons: [], assessment_stale: false, stale_reason: null, decision_note: null });
     }
     const sourceMatch = match(new RegExp(`^/w/${WS}/files/([^/]+)$`));
+    if (sourceMatch && method === 'GET') {
+      const row = storedSources.find((item) => item.id === sourceMatch[1]);
+      return row ? json(row) : fail(404, 'not_found');
+    }
     if (sourceMatch && method === 'DELETE') { const index = storedSources.findIndex((row) => row.id === sourceMatch[1]); if (index >= 0) storedSources.splice(index, 1); return new Response(null, { status: 204 }); }
     if (p('/context-fields')) return page(contextFields);
     const contextMatch = match(new RegExp(`^/w/${WS}/context-fields/([^/]+)$`));
@@ -2016,19 +2020,40 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     // Uploads: declare, PUT the bytes at the dev-direct URL, complete.
     if ((p('/attachments') || p('/files')) && method === 'POST') {
-      const attachment = { id: mockUuid(800), name: String(body.name ?? 'file.pdf'), size: Number(body.size ?? 1), mime: String(body.mime ?? 'application/pdf'), sha256: null, status: 'uploading' };
+      const kind = p('/files') ? 'agent_file' as const : 'attachment' as const;
+      const mime = body.mime === 'text/markdown' || body.mime === 'text/plain' || body.mime === 'application/pdf'
+        ? body.mime
+        : 'application/pdf';
+      const attachment = { id: mockUuid(800), name: String(body.name ?? 'file.pdf'), size: Number(body.size ?? 1), mime, sha256: null, status: 'uploading' as const };
       declaredUploads.set(attachment.id, { name: attachment.name, size: attachment.size, mime: attachment.mime });
+      const prefix = kind === 'agent_file' ? 'files' : 'attachments';
       return json(
-        { attachment, upload: { method: 'PUT', url: `/w/${WS}/attachments/${attachment.id}/upload`, expires_at: iso(900), headers: {}, direct: true } },
+        { attachment, upload: { method: 'PUT', url: `/w/${WS}/${prefix}/${attachment.id}/upload`, expires_at: iso(900), headers: {}, direct: true } },
         201,
       );
     }
     if (path.endsWith('/upload') && method === 'PUT') return json({ ok: true, size: 1 });
     if (path.endsWith('/complete') && method === 'POST') {
       const id = path.split('/')[4] ?? mockUuid(800);
-      const upload = declaredUploads.get(id) ?? { name: 'Invoice.pdf', size: 1, mime: 'application/pdf' };
-      if (path.includes('/files/')) storedSources.push({ id, ...upload, mime: 'text/plain', sha256: 'a'.repeat(64), status: 'ready', kind: 'agent_file', extraction_status: 'ready', extraction_error: null, text_length: 100, token_estimate: 25, created_at: iso(), url: null, url_expires_at: null });
-      return json({ id, ...upload, sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
+      const upload = declaredUploads.get(id) ?? { name: 'Invoice.pdf', size: 1, mime: 'application/pdf' as const };
+      const mime = (upload.mime === 'text/markdown' || upload.mime === 'text/plain' || upload.mime === 'application/pdf'
+        ? upload.mime
+        : 'application/pdf') as 'application/pdf' | 'text/markdown' | 'text/plain';
+      const ready = { id, name: upload.name, size: upload.size, mime, sha256: 'a'.repeat(64), status: 'ready' as const };
+      if (path.includes('/files/')) {
+        storedSources.push({
+          ...ready,
+          kind: 'agent_file' as const,
+          extraction_status: 'ready' as const,
+          extraction_error: null,
+          text_length: 100,
+          token_estimate: 25,
+          created_at: iso(),
+          url: null,
+          url_expires_at: null,
+        });
+      }
+      return json(ready);
     }
 
     if (p('/usage')) return seat === 'admin' ? json(usage) : fail(403, 'admin_required');

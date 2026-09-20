@@ -138,15 +138,11 @@ test('only extracted sources can be selected, and selection does not send a turn
   await expect(page.getByRole('button', { name: 'Remove Partner criteria.md' })).toBeVisible();
 });
 
-test('composer source picker works while drag-drop turn uploads stay disabled', async ({ page }) => {
+test('composer uploads a local file as agent_file context and keeps drag-drop off', async ({ page }) => {
   await page.goto('/?agentSettings=1');
   const composer = page.locator('.composer');
   await expect(composer.getByRole('button', { name: 'Add context' })).toBeVisible();
 
-  const uploads: string[] = [];
-  page.on('request', (request) => {
-    if (request.method() === 'POST' && /\/attachments$/.test(new URL(request.url()).pathname)) uploads.push(request.url());
-  });
   const transfer = await page.evaluateHandle(() => {
     const data = new DataTransfer();
     data.items.add(new File(['Composer drop must not become a turn attachment.'], 'drag-check.txt', { type: 'text/plain' }));
@@ -156,12 +152,23 @@ test('composer source picker works while drag-drop turn uploads stay disabled', 
   await composer.dispatchEvent('drop', { dataTransfer: transfer });
   await page.waitForTimeout(100);
   await expect(page.getByText('Drop documents', { exact: true })).toHaveCount(0);
-  expect(uploads).toEqual([]);
+  await expect(page.getByRole('button', { name: 'Remove drag-check.txt' })).toHaveCount(0);
 
   await composer.getByRole('button', { name: 'Add context' }).click();
   const picker = page.getByRole('dialog', { name: 'Select sources' });
   await expect(picker).toBeVisible();
-  await picker.getByRole('button', { name: /Partner criteria\.md/ }).click();
+  await expect(picker.getByRole('button', { name: 'Upload file' })).toBeEnabled();
+  await picker.locator('input[type="file"]').setInputFiles({
+    name: 'composer-upload.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('Uploaded from the composer as an agent_file source.'),
+  });
+  await expect(page.getByRole('button', { name: 'Remove composer-upload.txt' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  await composer.getByRole('button', { name: 'Add context' }).click();
+  await expect(page.getByRole('dialog', { name: 'Select sources' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Select sources' }).getByRole('button', { name: /Partner criteria\.md/ }).click();
   await expect(page.getByRole('button', { name: 'Remove Partner criteria.md' })).toBeVisible();
 });
 
