@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { mockUuid, type Ref, type RequestEntity } from '@hermes/shared';
+import { mockUuid, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState, reduce } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { DocumentView, InboxList, RequestReview } from './Inbox.js';
+import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, legacyEffectStatusLabel } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
   const payload = kind === 'application'
@@ -321,5 +321,43 @@ describe('the Inbox renders the focused view', () => {
     expect(html).toContain('Manual review');
     expect(html).not.toContain('Ada pending');
     expect(html).not.toContain('Search requests');
+  });
+});
+
+
+describe('legacy effect execute honesty', () => {
+  const pending: EffectEntity = {
+    id: mockUuid(501),
+    request_id: mockUuid(101),
+    kind: 'access_grant',
+    status: 'pending',
+    required_role: 'access',
+    label: 'Grant workspace access',
+    reason: null,
+  };
+  const unavailable: EffectEntity = {
+    ...pending,
+    id: mockUuid(502),
+    status: 'unavailable',
+    reason: 'Not executed. This legacy effect has no configured executor; no email, payment, access or signature action was completed.',
+  };
+
+  it('labels pending effects as having no executor and offers Record attempt, never Execute', () => {
+    expect(legacyEffectStatusLabel(pending)).toContain('no executor');
+    expect(legacyEffectStatusLabel(pending)).toBe('Pending · no executor · needs the access role');
+    const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[pending]} />);
+    expect(html).toContain(LEGACY_EFFECT_HONESTY);
+    expect(html).toContain('>Record attempt</button>');
+    expect(html).not.toContain('>Execute</button>');
+    expect(html).toContain('Pending · no executor · needs the access role');
+  });
+
+  it('keeps unavailable outcomes explicit before implying any external work happened', () => {
+    expect(legacyEffectStatusLabel(unavailable)).toContain('nothing sent, paid, granted or signed');
+    const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[unavailable]} />);
+    expect(html).toContain(LEGACY_EFFECT_HONESTY);
+    expect(html).toContain('Unavailable · nothing sent, paid, granted or signed');
+    expect(html).not.toContain('>Execute</button>');
+    expect(html).not.toContain('>Record attempt</button>');
   });
 });

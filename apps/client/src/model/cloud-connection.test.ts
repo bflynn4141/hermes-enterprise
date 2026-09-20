@@ -21,14 +21,27 @@ describe('Cloud connection user contract', () => {
     }
   });
 
-  it('exposes only verified organization names and disables unavailable or busy connection actions', () => {
+  it('exposes only verified organization names and hides Connect when Cloud is unavailable', () => {
     const render = (status: CloudConnectionStatus, available = true, busy = false) => renderToStaticMarkup(createElement(CloudConnection, { status, available, busy, error: null, onConnect: () => {} }));
     expect(render(connected)).toContain('Acme');
     expect(render({ ...connected, status: 'verification_required' })).not.toContain('Acme');
-    expect(render({ ...connected, status: 'not_connected' }, false)).toContain('disabled=""');
     expect(render({ ...connected, status: 'not_connected' }, true, true)).toContain('disabled=""');
     expect(render({ ...connected, status: 'connecting' })).toContain('Connect again');
     expect(render(connected)).not.toContain('<button');
+
+    const unavailable = render({ ...connected, status: 'not_connected' }, false);
+    expect(unavailable).not.toContain('<button');
+    expect(unavailable).not.toContain('Connect Cloud');
+    expect(unavailable).toContain('Not available');
+    expect(unavailable).toContain('Cloud connection is not available yet.');
+    expect(unavailable).toContain('data-available="false"');
+    expect(cloudConnectionPresentation({ status: 'reconnect_required', organization_name: null, automatic_setup_ready: false }, false)).toEqual({
+      label: 'Not available',
+      description: 'Cloud connection is not available yet.',
+      action: null,
+      tone: 'neutral',
+    });
+    expect(cloudConnectionPresentation({ status: 'not_connected', organization_name: null, automatic_setup_ready: false }, true).action).toBe('Connect Cloud');
   });
 
   it('does not surface unknown provider errors or credentials', () => {
