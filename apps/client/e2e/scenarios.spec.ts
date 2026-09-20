@@ -305,13 +305,13 @@ test.describe('P2 · triage', () => {
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
-    // Following: nothing the agent said moved the pane off Overview. The
-    // Agents surface has one header, so content begins directly below it and
-    // the follow control stays with the surviving breadcrumb.
+    // Nothing the agent said moved the pane off Overview. The Agents surface
+    // has one header, so content begins directly below it; there is no follow
+    // control any more, because the pane only moves when a person moves it.
     const appHeader = appPane.locator('.pane-header');
     await expect(appHeader.getByText('Agents', { exact: true })).toBeVisible();
     await expect(appHeader.getByText('Iris', { exact: true })).toBeVisible();
-    await expect(appHeader.getByRole('button', { name: 'Following Iris', exact: true })).toBeVisible();
+    await expect(appHeader.getByRole('button', { name: /Following|Follow Iris/ })).toHaveCount(0);
     await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
     await expect(appPane.getByText('Iris / Overview', { exact: true })).toHaveCount(0);
     const headerLayout = await appPane.evaluate((pane) => {
@@ -325,7 +325,7 @@ test.describe('P2 · triage', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('4');
   });
 
-  test('a manual navigation pins the view, and Follow returns it', async ({ page }) => {
+  test('a run never moves the pane; its reply offers the view as a link', async ({ page }) => {
     await page.goto(SEEDED);
     const appPane = page.getByRole('region', { name: 'Application' });
     await expect(appPane.locator('.agent-tabs-navigation')).toBeVisible();
@@ -333,24 +333,29 @@ test.describe('P2 · triage', () => {
     if (await sections.isVisible()) await sections.selectOption('skills');
     else await appPane.getByRole('tab', { name: 'Skills' }).click();
     const appHeader = appPane.locator('.pane-header');
-    await expect(appHeader.getByText('View pinned')).toBeVisible();
+    await expect(appHeader.getByText('View pinned')).toHaveCount(0);
     await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
 
+    // The mock run opens Overview. The pane stays on Skills; the reply offers Overview.
+    const composer = page.getByRole('textbox', { name: /^Message/ });
+    await composer.fill('Screen the application');
+    await page.getByRole('button', { name: 'Send message' }).click();
+    const offered = page.locator('.focus-link').getByRole('button', { name: 'Open Iris · Overview' });
+    await expect(offered).toBeVisible({ timeout: 20_000 });
+    // Narrow panes render the agent views as a select; wide ones as tabs.
+    const selectedView = async (): Promise<string> => (await sections.isVisible())
+      ? sections.inputValue()
+      : (await appPane.getByRole('tab', { selected: true }).first().textContent() ?? '').trim().toLowerCase();
+    expect(await selectedView()).toBe('skills');
+    await offered.click();
+    await expect.poll(selectedView).toBe('overview');
+
+    // Narrow: the header still fits, and the link switches to the App pane.
     await page.setViewportSize({ width: 390, height: 844 });
-    const showApp = page.locator('.pane-iris').getByRole('button', { name: 'App', exact: true });
-    if (await showApp.isVisible()) await showApp.click();
-    await expect(appPane).toHaveAttribute('data-active', 'true');
-    await expect(appHeader.getByText('View pinned')).toBeHidden();
-    await expect(appHeader.getByRole('button', { name: 'Follow Iris', exact: true })).toBeVisible();
     const headerWidth = await appHeader.evaluate((header) => ({ client: header.clientWidth, scroll: header.scrollWidth }));
     expect(headerWidth.scroll).toBeLessThanOrEqual(headerWidth.client);
-
-    await appHeader.getByRole('button', { name: /^Follow / }).click();
-    await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
   });
-});
 
-test.describe('P3 · review and admit', () => {
   test('the review pane shows the evidence, and Admit records one decision', async ({ page }) => {
     await page.goto(SEEDED);
     const appPane = page.getByRole('region', { name: 'Application' });

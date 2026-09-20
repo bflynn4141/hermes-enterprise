@@ -138,7 +138,7 @@ describe('follow and pin', () => {
     });
     const booted = reduce(withHistory, { type: 'bootstrap/apply', patch: { ready: true } });
     expect(booted.activeSessionId).toBeNull();
-    expect(booted.ui).toMatchObject({ app: INBOX, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(booted.ui).toMatchObject({ app: INBOX, irisPanel: 'hidden', pane: 'app' });
     expect(reduce(booted, { type: 'nav/app', object: OV, manual: true }).ui.app).toEqual(INBOX);
     const selected = reduce(booted, { type: 'session/select', id: SESSION_A });
     expect(selected.activeSessionId).toBe(SESSION_A);
@@ -160,7 +160,7 @@ describe('follow and pin', () => {
     expect(evicted.settings).toEqual({ default_model_id: 'model' });
   });
 
-  it('stores an Admin focus for history but never follows it into a Member view', () => {
+  it('stores an Admin focus for history, and opening it as a Member lands on personal settings', () => {
     const member = base({
       workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
       user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
@@ -168,7 +168,9 @@ describe('follow and pin', () => {
     const object: Ref = { section: 'admin', view: 'Provider keys' };
     const next = reduce(member, { type: 'iris/focus', sessionId: SESSION_A, object });
     expect(next.sessions[SESSION_A]!.focus).toEqual(object);
-    expect(next.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    expect(next.ui.app).toEqual(member.ui.app);
+    const opened = reduce(next, { type: 'nav/app', object, manual: true });
+    expect(opened.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
   });
 
   it('does not restore an Admin focus when a Member selects an older session', () => {
@@ -184,24 +186,15 @@ describe('follow and pin', () => {
     expect(selected.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
   });
 
-  it('manual navigation pins the view', () => {
+  it('manual navigation shows the app pane', () => {
     const state = apply(base(), [{ type: 'nav/app', object: CTX, manual: true }]);
-    expect(state.ui.follow).toBe(false);
+    expect(state.ui.app).toEqual(CTX);
     expect(state.ui.pane).toBe('app');
   });
 
-  it('navigating to the session focus does not pin', () => {
-    const start = base({ sessions: { [SESSION_A]: session(SESSION_A, { focus: CTX }), [SESSION_B]: session(SESSION_B) } });
-    const state = apply(start, [{ type: 'nav/app', object: CTX, manual: true }]);
-    expect(state.ui.follow).toBe(true);
-  });
-
-  it('the CTX_DEST bug is fixed: `field` participates in sameRef', () => {
+  it('`field` participates in sameRef', () => {
     expect(sameRef(CTX, CTX_DEST)).toBe(false);
-    const start = base({ sessions: { [SESSION_A]: session(SESSION_A, { focus: CTX }), [SESSION_B]: session(SESSION_B) } });
-    // Navigating from the blocker card to the destination field must pin.
-    const state = apply(start, [{ type: 'nav/app', object: CTX_DEST, manual: true }]);
-    expect(state.ui.follow).toBe(false);
+    expect(sameRef(CTX, CTX)).toBe(true);
   });
 
   it('a ref round-trips through the URL serialiser, `field` included', () => {
@@ -211,24 +204,23 @@ describe('follow and pin', () => {
     expect(parseRef(`#${serialiseRef(deep)}`)).toEqual(deep);
   });
 
-  it('follow/resume returns to the session focus, and select restores follow', () => {
-    const start = base({ sessions: { [SESSION_A]: session(SESSION_A, { focus: CTX }), [SESSION_B]: session(SESSION_B) } });
-    const pinned = apply(start, [{ type: 'nav/app', object: OV, manual: true }]);
-    expect(pinned.ui.follow).toBe(false);
-    const resumed = reduce(pinned, { type: 'follow/resume' });
-    expect(resumed.ui.follow).toBe(true);
-    expect(resumed.ui.app).toEqual(CTX);
-    const selected = reduce(pinned, { type: 'session/select', id: SESSION_B });
-    expect(selected.ui.follow).toBe(true);
-  });
-
-  it('a focus event moves the app pane only for the active session while following', () => {
+  it('a focus event is recorded on its session, with the run that set it, and never moves the app pane', () => {
     const start = base();
     const other = feed(start, event('run.focus', { run_id: RUN, session_id: SESSION_B, ref: CTX, entity_type: null, entity_id: null }, 1n, SESSION_B));
     expect(other.ui.app).toEqual(OV);
     expect(other.sessions[SESSION_B]!.focus).toEqual(CTX);
+    expect(other.sessions[SESSION_B]!.focusRunId).toBe(RUN);
+    // The active session too: nothing Iris does replaces the view on screen.
     const mine = feed(start, event('run.focus', { run_id: RUN, session_id: SESSION_A, ref: CTX, entity_type: null, entity_id: null }, 1n));
-    expect(mine.ui.app).toEqual(CTX);
+    expect(mine.ui.app).toEqual(OV);
+    expect(mine.sessions[SESSION_A]!.focus).toEqual(CTX);
+  });
+
+  it('selecting a session shows the object it was working on', () => {
+    const start = base({ sessions: { [SESSION_A]: session(SESSION_A), [SESSION_B]: session(SESSION_B, { focus: CTX }) } });
+    const selected = reduce(start, { type: 'session/select', id: SESSION_B });
+    expect(selected.ui.app).toEqual(CTX);
+    expect(selected.ui.pane).toBe('chat');
   });
 });
 
@@ -238,55 +230,54 @@ describe('prompt-driven views and filters', () => {
   const hiddenSamples: Ref = { section: 'inbox', view: 'list', filters: { status: 'pending', provenance: 'sample', visibility: 'hidden', sort: 'recent' } };
   const focusEvent = (ref: Ref, id: bigint = 1n, sessionId = SESSION_A): StreamEvent =>
     event('run.focus', { run_id: RUN, session_id: sessionId, ref, entity_type: null, entity_id: null }, id, sessionId);
+  /** What the link in the reply dispatches. */
+  const open = (state: AppState, ref: Ref): AppState => reduce(state, { type: 'nav/app', object: ref, manual: true });
 
-  it('applies the complete incoming Inbox view without making a request or incrementing a badge', () => {
+  it('records the complete incoming Inbox view on the session without moving the pane, making a request or incrementing a badge', () => {
     const start = base({ counts: { inbox: 4, pendingGrants: 2, createdDocuments: 3, decisions: 6 } });
     const state = feed(start, focusEvent(resolvedInvoices));
-    expect(state.ui.app).toEqual(resolvedInvoices);
-    expect(state.ui.inboxTab).toBe('resolved');
-    expect(state.ui.follow).toBe(true);
+    expect(state.ui.app).toEqual(OV);
+    expect(state.sessions[SESSION_A]!.focus).toEqual(resolvedInvoices);
     expect(state.counts).toBe(start.counts);
     expect(state.entities).toBe(start.entities);
   });
 
-  it('replaces previous filters, including resetting an unfiltered Inbox to Needs review', () => {
-    const first = feed(base(), focusEvent(resolvedInvoices));
-    const second = feed(first, focusEvent(pendingApplications, 2n));
+  it('opening an offered view applies its complete filters, and a later one replaces them', () => {
+    const first = open(base(), resolvedInvoices);
+    expect(first.ui.app).toEqual(resolvedInvoices);
+    expect(first.ui.inboxTab).toBe('resolved');
+    const second = open(first, pendingApplications);
     expect(second.ui.app.filters).toEqual({ status: 'pending', kind: 'application' });
     expect(second.ui.inboxTab).toBe('needs-review');
-    const third = feed(second, focusEvent({ section: 'inbox', view: 'list' }, 3n));
+    const third = open(second, { section: 'inbox', view: 'list' });
     expect(third.ui.app.filters).toBeUndefined();
     expect(third.ui.inboxTab).toBe('needs-review');
   });
 
-  it('pins manual filters, holds them during a new focus, and resumes the latest full view', () => {
-    const focused = feed(base(), focusEvent(pendingApplications));
+  it('a person\'s filters survive a new focus, which waits on the session as an offer', () => {
     const pinnedRef: Ref = { ...pendingApplications, filters: { ...pendingApplications.filters, query: 'Leah' } };
-    const pinned = reduce(focused, { type: 'nav/app', object: pinnedRef, manual: true });
-    expect(pinned.ui.follow).toBe(false);
+    const pinned = open(base(), pinnedRef);
     const waiting = feed(pinned, focusEvent(resolvedInvoices, 2n));
     expect(waiting.ui.app).toEqual(pinnedRef);
     expect(waiting.ui.inboxTab).toBe('needs-review');
     expect(waiting.sessions[SESSION_A]!.focus).toEqual(resolvedInvoices);
-    const resumed = reduce(waiting, { type: 'follow/resume' });
-    expect(resumed.ui.app).toEqual(resolvedInvoices);
-    expect(resumed.ui.inboxTab).toBe('resolved');
-    expect(resumed.ui.follow).toBe(true);
+    const opened = open(waiting, waiting.sessions[SESSION_A]!.focus!);
+    expect(opened.ui.app).toEqual(resolvedInvoices);
+    expect(opened.ui.inboxTab).toBe('resolved');
   });
 
-  it('manual Inbox tabs update the canonical ref, retain list filters and pin the view', () => {
-    const focused = feed(base(), focusEvent(pendingApplications));
+  it('manual Inbox tabs update the canonical ref and retain list filters', () => {
+    const focused = open(base(), pendingApplications);
     const resolved = reduce(focused, { type: 'nav/tab', key: 'inboxTab', value: 'resolved' });
     expect(resolved.ui.app).toEqual({ section: 'inbox', view: 'list', filters: { kind: 'application', status: 'resolved' } });
     expect(resolved.ui.inboxTab).toBe('resolved');
-    expect(resolved.ui.follow).toBe(false);
     const rules = reduce(resolved, { type: 'nav/tab', key: 'inboxTab', value: 'rules' });
     expect(rules.ui.app).toEqual({ section: 'inbox', view: 'rules' });
     expect(rules.ui.inboxTab).toBe('rules');
   });
 
-  it('does not let an inactive session alter the visible tab or filters, but restores them on selection', () => {
-    const focused = feed(base(), focusEvent(pendingApplications));
+  it('an inactive session\'s focus alters nothing visible, and selecting it shows what it opened', () => {
+    const focused = open(base(), pendingApplications);
     const other = feed(focused, focusEvent(resolvedInvoices, 1n, SESSION_B));
     expect(other.ui.app).toEqual(pendingApplications);
     expect(other.ui.inboxTab).toBe('needs-review');
@@ -295,22 +286,19 @@ describe('prompt-driven views and filters', () => {
     expect(selected.ui.inboxTab).toBe('resolved');
   });
 
-  it('opens the Rules and History tabs and keeps manual History navigation pinned', () => {
-    const rules = feed(base(), focusEvent({ section: 'inbox', view: 'rules' }));
+  it('opens the Rules and History tabs, and manual History navigation updates the ref', () => {
+    const rules = open(base(), { section: 'inbox', view: 'rules' });
     expect(rules.ui.inboxTab).toBe('rules');
-    const history = feed(rules, focusEvent({ section: 'history', view: 'blocked' }, 2n));
+    const history = open(rules, { section: 'history', view: 'blocked' });
     expect(history.ui.historyTab).toBe('blocked');
     const manual = reduce(history, { type: 'nav/tab', key: 'historyTab', value: 'all' });
     expect(manual.ui.app).toEqual({ section: 'history', view: 'all' });
     expect(manual.ui.historyTab).toBe('all');
-    expect(manual.ui.follow).toBe(false);
-    const resumed = reduce(manual, { type: 'follow/resume' });
-    expect(resumed.ui.historyTab).toBe('blocked');
   });
 
   it('keeps legacy session refs from selecting a History tab that does not exist', () => {
-    const history = feed(base(), focusEvent({ section: 'history', view: 'blocked' }));
-    const sessionFocus = feed(history, focusEvent({ section: 'history', view: 'sessions', id: SESSION_B }, 2n));
+    const history = open(base(), { section: 'history', view: 'blocked' });
+    const sessionFocus = open(history, { section: 'history', view: 'sessions', id: SESSION_B });
     expect(sessionFocus.ui.app).toEqual({ section: 'history', view: 'sessions', id: SESSION_B });
     expect(sessionFocus.ui.historyTab).toBe('blocked');
   });
@@ -791,7 +779,6 @@ describe('resync', () => {
     expect(state.cursors.workspace).toBe(500n);
     expect(state.sessions[SESSION_A]!.draft.text).toBe('half a sentence');
     expect(state.ui.app).toEqual(CTX);
-    expect(state.ui.follow).toBe(false);
   });
 });
 

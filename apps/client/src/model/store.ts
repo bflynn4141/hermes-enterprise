@@ -192,6 +192,8 @@ export interface SessionState {
   /** Highest authoritative final turn per run; late transport frames cannot reopen it. */
   streamFences?: Record<string, number>;
   focus: Ref | null;
+  /** The run that set `focus`, so the reply can offer it as a link. */
+  focusRunId?: string | null;
   context: { label: string; ref: Ref | null } | null;
   scrollTop: number | null;
   share: { id: string; url: string | null; audience: string } | null;
@@ -257,7 +259,6 @@ export interface UiState {
   irisWidth: number | null;
   /** Iris messages and decision receipts that arrived while not `open`. */
   irisUnread: number;
-  follow: boolean;
   app: Ref;
   inboxTab: string;
   historyTab: string;
@@ -387,7 +388,6 @@ export function initialState(): AppState {
       irisPanel: 'open',
       irisWidth: null,
       irisUnread: 0,
-      follow: true,
       app: OVERVIEW,
       inboxTab: 'needs-review',
       historyTab: 'decisions',
@@ -515,8 +515,7 @@ export type Action =
   | { type: 'bootstrap/apply'; patch: Partial<AppState> }
   | { type: 'nav/app'; object: Ref; manual?: boolean }
   | { type: 'nav/tab'; key: keyof UiState; value: string }
-  | { type: 'follow/resume' }
-  | { type: 'iris/focus'; sessionId: string; object: Ref }
+  | { type: 'iris/focus'; sessionId: string; object: Ref; runId?: string | null }
   | { type: 'iris/toggle'; open?: boolean }
   | { type: 'iris/panel'; panel: IrisPanel }
   | { type: 'iris/width'; width: number | null; workArea?: number }
@@ -661,7 +660,7 @@ function upsertEntity(state: AppState, kind: EntityKind, id: string, version: nu
 /**
  * The ref is the complete view, including list filters. Keep the older tab
  * fields in sync for existing callers, but never let yesterday's tab override
- * a new focus (or a pinned view restored with Follow Iris).
+ * a new ref.
  */
 function uiForRef(ui: UiState, app: Ref): UiState {
   const historyView = app.view ?? 'decisions';
@@ -684,20 +683,20 @@ export function reduce(state: AppState, action: Action): AppState {
       const app = authorisedRef(next.user.role, next.ui.app, next.agent.id);
       const ui = uiForRef(next.ui, app);
       return next.agent.id === null
-        ? { ...next, activeSessionId: null, ui: { ...ui, irisPanel: 'hidden', pane: 'app', follow: false } }
+        ? { ...next, activeSessionId: null, ui: { ...ui, irisPanel: 'hidden', pane: 'app' } }
         : { ...next, ui };
     }
 
-    // --- navigation / follow ---
+    // --- navigation ---
+    // The app pane moves only when a person moves it. Iris records where it is
+    // working on the session (`iris/focus`) and the reply offers that as a link;
+    // nothing Iris does replaces the view somebody is looking at.
     case 'nav/app': {
       const object = authorisedRef(state.user.role, action.object, state.agent.id);
-      const target = activeSession(state)?.focus ?? null;
-      const same = sameRef(target, object);
       return {
         ...state,
         ui: {
           ...uiForRef(state.ui, object),
-          follow: action.manual ? (same ? state.ui.follow : false) : state.ui.follow,
           pane: action.manual ? 'app' : state.ui.pane,
         },
       };
@@ -718,18 +717,12 @@ export function reduce(state: AppState, action: Action): AppState {
       }
       return { ...state, ui: { ...state.ui, [action.key]: action.value } };
     }
-    case 'follow/resume': {
-      const target = activeSession(state)?.focus;
-      const object = authorisedRef(state.user.role, target ?? state.ui.app, state.agent.id);
-      return { ...state, ui: { ...uiForRef(state.ui, object), follow: true } };
-    }
-    case 'iris/focus': {
-      const next = withSession(state, action.sessionId, (session) => ({ ...session, focus: action.object }));
-      if (state.ui.follow && action.sessionId === state.activeSessionId) {
-        return { ...next, ui: uiForRef(next.ui, authorisedRef(state.user.role, action.object, state.agent.id)) };
-      }
-      return next;
-    }
+    case 'iris/focus':
+      return withSession(state, action.sessionId, (session) => ({
+        ...session,
+        focus: action.object,
+        focusRunId: action.runId === undefined ? session.focusRunId ?? null : action.runId,
+      }));
     // `iris/toggle` predates the three states and every existing caller still
     // dispatches it, so it keeps its meaning: `open: true` opens, `open: false`
     // is the *rail* rather than nothing (the affordance to come back is the
@@ -850,6 +843,7 @@ export function reduce(state: AppState, action: Action): AppState {
         run: null,
         stream: null,
         focus: null,
+        focusRunId: null,
         context: action.context ?? null,
         scrollTop: null,
         share: null,
@@ -863,7 +857,7 @@ export function reduce(state: AppState, action: Action): AppState {
         sessions: { ...state.sessions, [action.id]: session },
         sessionOrder: [action.id, ...state.sessionOrder],
         activeSessionId: action.id,
-        ui: { ...state.ui, follow: true, pane: 'chat' },
+        ui: { ...state.ui, pane: 'chat' },
       };
     }
     case 'session/reconcile': {
@@ -937,7 +931,7 @@ export function reduce(state: AppState, action: Action): AppState {
         ...state,
         activeSessionId: action.id,
         sessions: { ...state.sessions, [action.id]: { ...session, unread: false } },
-        ui: { ...uiForRef(state.ui, object), follow: true, pane: 'chat', ...(state.agent.id ? {} : { irisPanel: 'open' as const }) },
+        ui: { ...uiForRef(state.ui, object), pane: 'chat', ...(state.agent.id ? {} : { irisPanel: 'open' as const }) },
       };
     }
     case 'session/rename':
@@ -1321,7 +1315,6 @@ export function reduce(state: AppState, action: Action): AppState {
           ...state.ui,
           app: { section: 'settings', view: 'Notifications' },
           settingsTab: 'Notifications',
-          follow: false,
           pane: 'app',
           banner: 'evicted',
           providerKeysLocked: true,
@@ -1463,7 +1456,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
     }
     case 'run.focus': {
       const p = event.payload;
-      out.push({ type: 'iris/focus', sessionId: p.session_id, object: p.ref });
+      out.push({ type: 'iris/focus', sessionId: p.session_id, object: p.ref, runId: p.run_id });
       // The session socket can outrun the workspace socket: name the entity now,
       // so a miss shows a skeleton and a fetch rather than "Request not found".
       if (p.entity_type && p.entity_id && p.entity_type !== 'session' && p.entity_type !== 'agent') {

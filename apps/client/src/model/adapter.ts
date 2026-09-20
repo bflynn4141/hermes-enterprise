@@ -698,7 +698,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         settings: { ...boot.workspace.settings },
         cursors: { workspace: BigInt(boot.heads.workspace), session: {} },
         ...(!state().ready && selectedBootstrapSession?.focus_ref
-          ? { ui: { ...state().ui, app: selectedBootstrapSession.focus_ref, follow: true } }
+          ? { ui: { ...state().ui, app: selectedBootstrapSession.focus_ref } }
           : {}),
         ready: true,
       },
