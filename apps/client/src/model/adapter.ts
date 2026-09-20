@@ -233,8 +233,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
     persistDrafts();
   }
 
+  let evictionRefresh: Promise<void> | null = null;
   function evicted(): void {
-    dispatch({ type: 'ui/set', patch: { banner: 'evicted' } });
+    // Close privileged surfaces and caches immediately. The authoritative
+    // bootstrap then distinguishes a role change from full workspace removal.
+    dispatch({ type: 'auth/evicted' });
+    if (evictionRefresh || disposed) return;
+    evictionRefresh = resync().finally(() => { evictionRefresh = null; });
   }
 
   const wsBase =
@@ -583,18 +588,23 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * the list the Provider keys tab renders as "Admin decision required" rather
    * than a failed bootstrap.
    */
-  async function loadExtra(): Promise<BootstrapExtra> {
+  async function loadExtra(viewerRole: 'admin' | 'member'): Promise<BootstrapExtra> {
     const [session, members, invitations, keys] = await Promise.all([
       rest.authSession(workspaceId).catch(() => null),
       rest.listMembers(workspaceId).catch(() => null),
-      rest.listInvitations(workspaceId).catch(() => null),
+      viewerRole === 'admin' ? rest.listInvitations(workspaceId).catch(() => null) : Promise.resolve(null),
       // Current Workers expose masked connection health to an Admin's ordinary
       // session. Preserve the older `reauth_required` response as a distinct
       // locked state during rolling deploys; it must never look like no key.
-      rest.providerKeys(workspaceId).then(
-        (page) => ({ keys: page.keys, locked: false }),
-        (error: unknown) => ({ keys: [], locked: error instanceof RestError && error.reauthRequired }),
-      ),
+      viewerRole === 'admin'
+        ? rest.providerKeys(workspaceId).then(
+            (page) => ({ keys: page.keys, locked: false }),
+            (error: unknown) => ({ keys: [], locked: error instanceof RestError && error.reauthRequired }),
+          )
+        // Members are intentionally not allowed to read masked key rows. That
+        // makes availability unknown, not absent; the run route remains the
+        // authority on whether a model can execute.
+        : Promise.resolve({ keys: [], locked: true }),
     ]);
     return {
       user: session?.user ?? null,
@@ -609,7 +619,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
   async function start(): Promise<void> {
     const boot = await rest.bootstrap(workspaceId);
-    const extra = await loadExtra();
+    const extra = await loadExtra(boot.viewer.role);
     ticket = extra.hubTicket;
 
     // The shell reuses its store across workspaces and sign-ins. Only a

@@ -16,12 +16,12 @@ import { AgentSkillsSettings } from './AgentSkillsSettings.js';
 import { AgentContextSettings } from './AgentContextSettings.js';
 import { AgentPermissions } from './AgentPermissions.js';
 import { InboxList, RequestReview } from './Inbox.js';
-import { History, Members, Library, Settings } from './Workspace.js';
-import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
+import { AdminSettings, History, Members, Library, Settings } from './Workspace.js';
 import { agentName } from '../selectors.js';
 import { TOGGLE_SHORTCUT } from '../panel.js';
 import { entityData } from '../../model/store.js';
 import type { AppState } from '../../model/store.js';
+import { ADMIN_SETTINGS_LABELS } from '../../model/constants.js';
 
 const SECTION_LABEL: Record<string, string> = { agents: 'Agents', inbox: 'Inbox', members: 'Members', admin: 'Admin', history: 'History', library: 'Library', settings: 'Settings' };
 
@@ -48,7 +48,10 @@ function describe(state: AppState): [string, string] {
     return [label, label];
   }
   if (section === 'members') return ['Team', 'Members and invitations'];
-  if (section === 'admin') return ['Shared Intelligence', 'Shared Intelligence'];
+  if (section === 'admin') {
+    const label = ADMIN_SETTINGS_LABELS[app.view ?? 'Organization'] ?? 'Organization';
+    return [label, label];
+  }
   if (section === 'history') return ['History', { all: 'All activity', decisions: 'Decisions', blocked: 'Blocked' }[state.ui.historyTab] ?? 'Decisions'];
   if (section === 'library') {
     const label = { skills: 'Shared skills', documents: 'Documents', connections: 'Connections', intelligence: 'Shared Intelligence' }[view ?? 'skills'] ?? 'Skills';
@@ -81,7 +84,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     }
     if (app.section === 'inbox') return app.view === 'request' ? <RequestReview id={app.id ?? null} /> : <InboxList />;
     if (app.section === 'members') return <Members />;
-    if (app.section === 'admin') return <AdminSharedIntelligence />;
+    if (app.section === 'admin') return <AdminSettings view={app.view ?? 'Organization'} />;
     if (app.section === 'history') return <History />;
     if (app.section === 'library') return <Library view={app.view ?? 'skills'} id={app.id ?? null} />;
     if (app.section === 'settings') return <Settings view={app.view ?? 'Notifications'} />;

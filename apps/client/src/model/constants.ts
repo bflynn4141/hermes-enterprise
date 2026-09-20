@@ -8,20 +8,60 @@ export const MODES = [
 ] as const;
 export type ModeId = (typeof MODES)[number]['id'];
 
-/** Revision 4 adds Provider keys and Usage (client-port spec §2, `fixtures.mjs` row). */
+/** Personal/member settings. Workspace controls live under the role-gated Admin section. */
 export const SETTINGS_TABS = [
-  'Organization',
-  'Inbox rules',
-  'Agents',
-  'Slack',
-  'Email',
-  'Provider keys',
-  'Runtime capacity',
-  'Usage',
   'Notifications',
+  'Slack account',
   'Data and privacy',
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+/** Grouped Admin navigation avoids a ten-item horizontal tab strip. */
+export const ADMIN_SETTINGS_GROUPS = [
+  {
+    label: 'Workspace',
+    items: [
+      { id: 'Organization', label: 'Organization' },
+      { id: 'Inbox rules', label: 'Inbox rules' },
+      { id: 'Data and privacy', label: 'Data & privacy' },
+      { id: 'Usage', label: 'Usage' },
+    ],
+  },
+  {
+    label: 'Agents',
+    items: [
+      { id: 'Agents', label: 'Agent defaults' },
+      { id: 'Provider keys', label: 'Model providers' },
+      { id: 'Runtime capacity', label: 'Agent capacity' },
+    ],
+  },
+  {
+    label: 'Connections',
+    items: [
+      { id: 'Slack', label: 'Slack' },
+      { id: 'Email', label: 'Email' },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    items: [{ id: 'intelligence', label: 'Shared Intelligence' }],
+  },
+] as const;
+
+export const ADMIN_SETTINGS_VIEWS = ADMIN_SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.id));
+export type AdminSettingsView = (typeof ADMIN_SETTINGS_VIEWS)[number];
+export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
+  Organization: 'Organization',
+  'Inbox rules': 'Inbox rules',
+  'Data and privacy': 'Data & privacy',
+  Usage: 'Usage',
+  Agents: 'Agent defaults',
+  'Provider keys': 'Model providers',
+  'Runtime capacity': 'Agent capacity',
+  Slack: 'Slack',
+  Email: 'Email',
+  intelligence: 'Shared Intelligence',
+};
 
 /** Copy strings from the spec's §7 table. Exact, and asserted by the e2e suite. */
 export const EMPTY = {

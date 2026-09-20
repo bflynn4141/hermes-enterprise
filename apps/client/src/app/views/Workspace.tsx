@@ -2,8 +2,8 @@
 //
 // History reads `events` rows — the demo's fabricated local event log is gone,
 // along with `eventTime()` and `uid('evt')`. Members read the WorkOS mirror.
-// Settings carries Provider keys, Usage and the data-and-privacy page, and the
-// one control in the product with no undo behind a confirmation and a step-up.
+// Settings carries personal preferences and member-safe connection/privacy facts.
+// Admin carries workspace configuration and the irreversible controls behind step-up.
 //
 // Three library components are adopted here (plan 10b): `FilterTable` over
 // History, `InsightCards` over the usage report and `FineTuneCard` over the
@@ -13,11 +13,11 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, FineTuneCard, InsightCards } from '@hermes/motion-components';
-import { CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
-import { DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
+import { ADMIN_SETTINGS_GROUPS, ADMIN_SETTINGS_LABELS, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
 import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
@@ -30,6 +30,7 @@ import { SharedIntelligence } from './SharedIntelligence.js';
 import { CloudConnection } from './CloudConnection.js';
 import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
+import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
 
 /**
  * History, with `FilterTable` over the rows (plan 10b).
@@ -169,6 +170,7 @@ export function Members() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => { if (!admin && tab !== 'all') setTab('all'); }, [admin, tab]);
   const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
   const setupRoles = state.capabilities.memberRoleTemplates;
   const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
@@ -223,7 +225,7 @@ export function Members() {
         <Tabs
           tabs={[
             { id: 'all', label: 'All members' },
-            { id: 'invites', label: 'Invitations' },
+            ...(admin ? [{ id: 'invites', label: 'Invitations' }] : []),
           ]}
           value={tab}
           onChange={(next) => {
@@ -248,7 +250,7 @@ export function Members() {
                           {member.name}
                           {member.user_id === state.user.id && <span className="meta"> · You</span>}
                         </span>
-                        <span className="member-card-email truncate">{member.email}</span>
+                        {member.email && <span className="member-card-email truncate">{member.email}</span>}
                       </div>
                     </div>
                     <div className="member-card-facts">
@@ -301,7 +303,7 @@ export function Members() {
                   {admin && (
                     <div className="member-card-actions">
                       {(provisioning?.action === 'connect_cloud' || provisioning?.action === 'review_billing') && (
-                        <Button onClick={() => nav(SETTINGS('Organization'))}>Cloud settings</Button>
+                        <Button onClick={() => nav(ADMIN('Organization'))}>Cloud settings</Button>
                       )}
                       {/* One route behind two words: the server resends a
                           pending invitation and an expired one alike. */}
@@ -600,7 +602,7 @@ function LibraryConnections() {
       )}
       <Panel
         icon="context"
-        title={connected ? `Read-only Gmail · ${inbound.address}` : inbound.configured ? 'Connect read-only Gmail evidence' : 'Read-only Gmail is not configured'}
+        title={connected ? (admin && inbound.address ? `Read-only Gmail · ${inbound.address}` : 'Read-only Gmail connected') : inbound.configured ? 'Connect read-only Gmail evidence' : 'Read-only Gmail is not configured'}
         subtitle={connected
           ? 'Hermes reads only the exact thread ID an Admin enters. It cannot use this credential to send.'
           : 'This uses separate Google consent from the outreach sender and never lists or searches the mailbox.'}
@@ -612,7 +614,7 @@ function LibraryConnections() {
       >
         <div className="kv"><span className="grow">Authorization</span><span className="meta">Separate gmail.readonly consent</span></div>
         <div className="kv"><span className="grow">Selection</span><span className="meta">One exact thread per import</span></div>
-        <div className="kv"><span className="grow">Imported snapshots</span><span className="meta">{inbound.imported_threads}</span></div>
+        {admin && <div className="kv"><span className="grow">Imported snapshots</span><span className="meta">{inbound.imported_threads}</span></div>}
         {!admin && <p className="meta">A workspace Admin manages this connection and imports evidence.</p>}
       </Panel>
       {connected && admin && (
@@ -641,12 +643,12 @@ function LibraryConnections() {
       )}
       <Panel
         icon="send"
-        title={outbound.status === 'connected' ? `Outbound sender · ${outbound.address}` : 'Outbound sender is not connected'}
+        title={outbound.status === 'connected' ? (admin && outbound.address ? `Outbound sender · ${outbound.address}` : 'Outbound sender connected') : 'Outbound sender is not connected'}
         subtitle="Sending is a separate Settings connection. Read permission is never reused as send permission."
-        right={<Button link onClick={() => nav(SETTINGS('Email'))}>Open Email settings</Button>}
+        right={admin ? <Button link onClick={() => nav(ADMIN('Email'))}>Open Email settings</Button> : undefined}
       >
         <div className="kv"><span className="grow">Mode</span><span className="meta">{outbound.mode === 'send_after_approval' ? 'Exact approved revision only' : 'Draft only'}</span></div>
-        <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{outbound.pending_messages}</span></div>
+        {admin && <div className="kv"><span className="grow">Waiting messages</span><span className="meta">{outbound.pending_messages}</span></div>}
       </Panel>
     </div>
   );
@@ -990,23 +992,69 @@ function SavedDocument({ id }: { id: string }) {
 
 export function Settings({ view }: { view: string }) {
   const nav = useNav();
+  const selected = SETTINGS_TABS.includes(view as (typeof SETTINGS_TABS)[number]) ? view : 'Notifications';
   return (
     <div className="scroll">
       <div className="app-body settings-page" style={{ minHeight: '100%' }}>
         <div className="row" style={{ height: 42 }}>
           <h1 className="display-32">Settings</h1>
         </div>
-        <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={view} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
-        {view === 'Organization' && <OrganizationTab />}
-        {view === 'Inbox rules' && <InboxRulesTab />}
-        {view === 'Agents' && <AgentsTab />}
-        {view === 'Slack' && <SlackTab />}
-        {view === 'Email' && <EmailTab />}
-        {view === 'Provider keys' && <ProviderKeysTab />}
-        {view === 'Runtime capacity' && <RuntimeCapacityTab />}
-        {view === 'Usage' && <UsageTab />}
-        {view === 'Notifications' && <NotificationsTab />}
-        {view === 'Data and privacy' && <PrivacyTab />}
+        <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={selected} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
+        {selected === 'Notifications' && <NotificationsTab />}
+        {selected === 'Slack account' && <SlackTab personal />}
+        {selected === 'Data and privacy' && <PrivacyTab />}
+      </div>
+    </div>
+  );
+}
+
+export function AdminSettings({ view }: { view: string }) {
+  const nav = useNav();
+  const admin = useIsAdmin();
+  const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
+  if (!admin) return null;
+  return (
+    <div className="scroll">
+      <div className="app-body admin-settings-page">
+        <div className="row" style={{ height: 42 }}><h1 className="display-32">Admin</h1></div>
+        <div className="admin-settings-layout">
+          <nav className="admin-settings-nav" aria-label="Admin sections">
+            {ADMIN_SETTINGS_GROUPS.map((group) => (
+              <div className="admin-settings-group" key={group.label}>
+                <h2>{group.label}</h2>
+                {group.items.map((item) => (
+                  <button type="button" key={item.id} aria-current={selected === item.id ? 'page' : undefined} onClick={() => nav(ADMIN(item.id))}>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
+          <label className="admin-settings-mobile-select">
+            <span>Admin section</span>
+            <select value={selected} onChange={(event) => nav(ADMIN(event.target.value))}>
+              {ADMIN_SETTINGS_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <section className="admin-settings-content" aria-label={`${ADMIN_SETTINGS_LABELS[selected] ?? 'Admin'} admin settings`}>
+            <div className="admin-settings-view">
+              {selected === 'Organization' && <OrganizationTab />}
+              {selected === 'Inbox rules' && <InboxRulesTab />}
+              {selected === 'Agents' && <AgentsTab />}
+              {selected === 'Slack' && <SlackTab />}
+              {selected === 'Email' && <EmailTab />}
+              {selected === 'Provider keys' && <ProviderKeysTab />}
+              {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
+              {selected === 'Usage' && <UsageTab />}
+              {selected === 'Data and privacy' && <PrivacyTab adminControls />}
+              {selected === 'intelligence' && <AdminSharedIntelligence />}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -1090,7 +1138,7 @@ function EmailTab() {
   );
 }
 
-function SlackTab() {
+function SlackTab({ personal = false }: { personal?: boolean }) {
   const state = useAppState();
   const adapter = useAdapter();
   const admin = useIsAdmin();
@@ -1178,6 +1226,31 @@ function SlackTab() {
   if (!connection) return <Skeleton rows={5} label="Loading Slack connection" />;
   const connected = connection.status === 'connected';
   const destination = connection.enterprise_name ?? connection.team_name ?? 'Slack';
+  if (personal) {
+    return (
+      <>
+        <div>
+          <h2 className="section-title">Slack account</h2>
+          <p className="meta">Link your own Slack identity to the same Hermes account you use here.</p>
+        </div>
+        {notice && <Ack show>{notice}</Ack>}
+        {!connected ? (
+          <EmptyState icon="context" title="Slack is not connected to this workspace" detail="Ask a workspace Admin to connect Slack before linking your account." />
+        ) : (
+          <Panel icon="context" title={`Available in ${destination}`} subtitle="A one-time command links only your identity. It expires in 10 minutes.">
+            <div className="row">
+              <div className="grow">
+                <div className="panel-title">Link your Slack identity</div>
+                <div className="meta">Create the command here, then send it to the Hermes app in a direct message.</div>
+              </div>
+              <Button disabled={busy} onClick={createLinkCode}>Create link command</Button>
+            </div>
+            {linkCommand && <code className="meta" style={{ userSelect: 'all' }}>{linkCommand}</code>}
+          </Panel>
+        )}
+      </>
+    );
+  }
   return (
     <>
       <div className="row">
@@ -1580,7 +1653,7 @@ function AgentsTab() {
         </span>
       </div>
       {catalog.length === 0 ? (
-        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(SETTINGS('Provider keys'))}>Connect Nous Portal</Button>} />
+        <EmptyState icon="skill" title={EMPTY.noProvider} detail={EMPTY.providerKeys} action={<Button onClick={() => nav(ADMIN('Provider keys'))}>Connect Nous Portal</Button>} />
       ) : (
         <div className="col" role="radiogroup" aria-label="Default model" style={{ gap: 4 }}>
           {catalog.map((row) => (
@@ -1911,7 +1984,7 @@ function ProviderKeysTab() {
   return (
     <>
       <div className="row">
-        <h2 className="section-title">Provider keys</h2>
+        <h2 className="section-title">Model providers</h2>
         <span className="grow" />
         {!locked && (
           <Button
@@ -1942,7 +2015,7 @@ function ProviderKeysTab() {
       ) : (
         <div className="col">
           {keys.map((key) => (
-            <div className="list-row" key={key.id} style={{ minHeight: 96 }}>
+            <div className="list-row provider-key-row" key={key.id} style={{ minHeight: 96 }}>
               <Glass name="skill" size={28} className="row-icon" />
               <div className="row-id" style={{ width: 220 }}>
                 <span className="t">{key.label}</span>
@@ -1966,34 +2039,36 @@ function ProviderKeysTab() {
                   `provider_not_allowed` to verify and rotate (decision R12), so
                   offering them would be offering a refusal. Remove still works,
                   which is the only thing left worth doing to it. */}
-              {usable(key) && (
-                <>
+              <div className="provider-key-actions">
+                {usable(key) && (
+                  <>
                   {key.provider === 'nous_portal' && (
                     <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>Sync models</Button>
                   )}
                   <Button onClick={() => void guarded(() => adapter.rest.verifyProviderKey(state.workspace.id, key.id))}>{key.status === 'verified' || key.status === 'verified_scoped' ? 'Re-verify' : 'Verify'}</Button>
-                </>
-              )}
-              {key.credential_kind === 'api_key' && (
+                  </>
+                )}
+                {key.credential_kind === 'api_key' && (
+                  <Button
+                    onClick={() => {
+                      setTarget(key);
+                      setDialog('rotate');
+                    }}
+                    disabled={!usable(key)}
+                  >
+                    Rotate
+                  </Button>
+                )}
                 <Button
+                  quiet
                   onClick={() => {
                     setTarget(key);
-                    setDialog('rotate');
+                    setDialog('remove');
                   }}
-                  disabled={!usable(key)}
                 >
-                  Rotate
+                  Remove
                 </Button>
-              )}
-              <Button
-                quiet
-                onClick={() => {
-                  setTarget(key);
-                  setDialog('remove');
-                }}
-              >
-                Remove
-              </Button>
+              </div>
             </div>
           ))}
         </div>
@@ -2410,10 +2485,26 @@ function NotificationsTab() {
  * is asserting to a future auditor that a zero-retention arrangement or a DPA
  * exists.
  */
-function PrivacyTab() {
+function privacyProviderLabel(provider: string): string {
+  return provider === 'nous_portal' ? 'Nous Portal' : provider.replaceAll('_', ' ');
+}
+
+function privacyErasureLabel(value: string): string {
+  const labels: Record<string, string> = {
+    redact_subject: 'Removed when a deletion request is processed',
+    'redact_subject plus subject_key search': 'Removed with the related person’s data',
+    'deleted by row': 'Deleted with the stored item',
+    expires: 'Expires automatically',
+    'ids only; redaction tested': 'Identifiers only; deleted data stays redacted',
+    'account deletion': 'Removed when the account is deleted',
+  };
+  return labels[value] ?? value;
+}
+
+function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
   const state = useAppState();
   const adapter = useAdapter();
-  const admin = useIsAdmin();
+  const admin = useIsAdmin() && adminControls;
   const [privacy, setPrivacy] = useState<DataPrivacy | null>(null);
   const [failed, setFailed] = useState(false);
   const [target, setTarget] = useState<DataPrivacy['keys'][number] | null>(null);
@@ -2470,19 +2561,14 @@ function PrivacyTab() {
 
   return (
     <>
-      {[
-        ['Private to this workspace', 'Context, agent history and shared skills stay in your organization'],
-        ['Model training', 'Off'],
-        ['Shared Intelligence', 'Human review required'],
-        ['Jurisdiction', state.workspace.jurisdiction ?? 'default'],
-      ].map(([key, value]) => (
-        <div className="kv" key={key}>
-          <span className="grow">{key}</span>
-          <span className="meta" style={{ textAlign: 'right', maxWidth: 380 }}>
-            {value}
-          </span>
-        </div>
-      ))}
+      <div>
+        <h2 className="section-title">Data and privacy</h2>
+        <p className="meta">Server-reported retention, erasure, provider policy and data location for this workspace.</p>
+      </div>
+      <div className="kv">
+        <span className="grow">Workspace jurisdiction</span>
+        <span className="meta">{state.workspace.jurisdiction ?? 'default'}</span>
+      </div>
 
       {failed && <EmptyState icon="context" title="The privacy page did not answer" detail="Retention and residency facts are the server's; nothing is shown from memory." />}
       {!privacy && !failed && <Skeleton rows={4} label="Loading retention facts" />}
@@ -2491,7 +2577,7 @@ function PrivacyTab() {
         <>
           <h2 className="section-title">Processors</h2>
           {privacy.keys.length === 0 && <div className="meta" style={{ padding: '12px 0' }}>No provider is configured, so no prompt text leaves this workspace.</div>}
-          {privacy.keys.map((key) => (
+          {privacy.keys.map((key) => admin ? (
             <div className="col" key={key.key_id} style={{ gap: 8, padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
               <div className="row">
                 <div className="row-main">
@@ -2504,18 +2590,16 @@ function PrivacyTab() {
                   </span>
                 </div>
                 <span className="meta">{key.attested ? `Attested · ${String(key.attestation?.kind ?? '')}` : 'No attestation'}</span>
-                {admin && (
-                  <Button
-                    onClick={() => {
-                      setTarget(key);
-                      setKind(String(key.attestation?.kind ?? 'zdr'));
-                      setReference(String(key.attestation?.reference ?? ''));
-                      setNotice(null);
-                    }}
-                  >
-                    {key.attested ? 'Update attestation' : 'Record attestation'}
-                  </Button>
-                )}
+                <Button
+                  onClick={() => {
+                    setTarget(key);
+                    setKind(String(key.attestation?.kind ?? 'zdr'));
+                    setReference(String(key.attestation?.reference ?? ''));
+                    setNotice(null);
+                  }}
+                >
+                  {key.attested ? 'Update attestation' : 'Record attestation'}
+                </Button>
               </div>
               <span className="meta">{key.real_data_allowed ? 'Real applicant data is allowed on this key: an Admin has recorded an attestation and the provider carries no jurisdiction warning.' : 'Real applicant data is not allowed on this key. Use synthetic or consented data.'}</span>
               {key.warnings.map((warning) => (
@@ -2523,6 +2607,14 @@ function PrivacyTab() {
                   {warning}
                 </p>
               ))}
+            </div>
+          ) : (
+            <div className="col" key={key.key_id} style={{ gap: 8, padding: '14px 0', borderBottom: '1px solid var(--line)' }}>
+              <div className="row">
+                <span className="grow">{privacyProviderLabel(key.provider)}</span>
+                <span className="meta">{key.real_data_allowed ? 'Approved for real workspace data' : 'Synthetic or consented data only'}</span>
+              </div>
+              {key.warnings.map((warning) => <p className="meta" key={warning} style={{ maxWidth: 720 }}>{warning}</p>)}
             </div>
           ))}
 
@@ -2532,7 +2624,7 @@ function PrivacyTab() {
               <div className="kv" key={fact.store}>
                 <span className="grow">{fact.store}</span>
                 <span className="meta" style={{ textAlign: 'right', maxWidth: 420 }}>
-                  {fact.retention} · {fact.erasure}
+                  {fact.retention} · {privacyErasureLabel(fact.erasure)}
                 </span>
               </div>
             ))}
@@ -2586,7 +2678,7 @@ function PrivacyTab() {
         </span>
       </div>
 
-      <Dialog
+      {adminControls && <Dialog
         open={!!target}
         title={`Attestation for ${target?.label ?? ''}`}
         onClose={() => setTarget(null)}
@@ -2620,7 +2712,7 @@ function PrivacyTab() {
         </label>
         <p className="meta">Recorded against your name and the time. It is a statement about retention, not about jurisdiction: a provider&apos;s storage warning is not answered by it.</p>
         {notice && <p className="meta" role="alert">{notice}</p>}
-      </Dialog>
+      </Dialog>}
     </>
   );
 }

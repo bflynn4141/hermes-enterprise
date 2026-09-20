@@ -25,7 +25,7 @@ const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'agents', label: 'Agents', icon: 'iris', ref: OV },
   { key: 'inbox', label: 'Inbox', icon: 'inbox', ref: INBOX },
   { key: 'members', label: 'Members', icon: 'people', ref: MEMBERS },
-  { key: 'admin', label: 'Admin', icon: 'shield', ref: ADMIN() },
+  { key: 'admin', label: 'Admin', icon: 'shield', ref: ADMIN('Organization') },
   { key: 'history', label: 'History', icon: 'trace', ref: HISTORY() },
   { key: 'library', label: 'Library', icon: 'context', ref: LIB('skills') },
   { key: 'settings', label: 'Settings', icon: 'settings', ref: SETTINGS() },
@@ -168,7 +168,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
         }}
         onWorkspaceAction={(action) => {
           if (action === 'Switch workspace') window.location.assign('/');
-          if (action === 'Workspace settings') go(SETTINGS('Organization'));
+          if (action === 'Workspace settings') go(state.user.role === 'admin' ? ADMIN('Organization') : SETTINGS('Notifications'));
           if (action === 'Invite team members') go(MEMBERS);
         }}
         onFooterClick={() => {
@@ -190,9 +190,9 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
         <MenuItem small icon="mail" onClick={() => go(SETTINGS('Notifications'))}>
           Notification settings
         </MenuItem>
-        <MenuItem small icon="key" onClick={() => go(SETTINGS('Provider keys'))}>
-          Provider keys
-        </MenuItem>
+        {state.user.role === 'admin' && <MenuItem small icon="key" onClick={() => go(ADMIN('Provider keys'))}>
+          Model providers
+        </MenuItem>}
         <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
           Data and privacy
         </MenuItem>

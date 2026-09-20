@@ -104,6 +104,71 @@ function event(kind: string, payload: unknown, id: bigint, sessionId: string | n
 // ---------------------------------------------------------------------------
 
 describe('follow and pin', () => {
+  it('moves legacy Admin settings links for Admins and refuses them for Members before mount', () => {
+    const admin = reduce(base(), { type: 'nav/app', object: { section: 'settings', view: 'Runtime capacity' }, manual: true });
+    expect(admin.ui.app).toEqual({ section: 'admin', view: 'Runtime capacity' });
+
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+    });
+    const direct = reduce(member, { type: 'nav/app', object: { section: 'admin', view: 'Runtime capacity' }, manual: true });
+    expect(direct.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    const legacy = reduce(member, { type: 'nav/app', object: { section: 'settings', view: 'Provider keys' }, manual: true });
+    expect(legacy.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('unmounts an open Admin page when bootstrap demotes the viewer', () => {
+    const open = reduce(base(), { type: 'nav/app', object: { section: 'admin', view: 'Usage' }, manual: true });
+    const demoted = reduce(open, {
+      type: 'bootstrap/apply',
+      patch: {
+        workspace: { ...open.workspace, role: 'member' },
+        user: { ...open.user, role: 'member' },
+      },
+    });
+    expect(demoted.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('closes privileged views and drops cached Admin records as soon as a hub evicts the viewer', () => {
+    let open = reduce(base({ settings: { default_model_id: 'model', flags: { secret: true } } }), {
+      type: 'nav/app', object: { section: 'admin', view: 'Provider keys' }, manual: true,
+    });
+    open = reduce(open, { type: 'entity/upsert', kind: 'provider_key', id: 'key-1', version: 1, data: { label: 'Private key' } });
+    open = reduce(open, { type: 'list/set', key: 'invitations', ids: ['invite-1'], total: 1 });
+
+    const evicted = reduce(open, { type: 'auth/evicted' });
+    expect(evicted.user.role).toBe('member');
+    expect(evicted.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    expect(evicted.entities.provider_key).toEqual({});
+    expect(evicted.entities.lists).toEqual({});
+    expect(evicted.settings).toEqual({ default_model_id: 'model' });
+  });
+
+  it('stores an Admin focus for history but never follows it into a Member view', () => {
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+    });
+    const object: Ref = { section: 'admin', view: 'Provider keys' };
+    const next = reduce(member, { type: 'iris/focus', sessionId: SESSION_A, object });
+    expect(next.sessions[SESSION_A]!.focus).toEqual(object);
+    expect(next.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('does not restore an Admin focus when a Member selects an older session', () => {
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+      sessions: {
+        [SESSION_A]: session(SESSION_A),
+        [SESSION_B]: session(SESSION_B, { focus: { section: 'admin', view: 'Usage' } }),
+      },
+    });
+    const selected = reduce(member, { type: 'session/select', id: SESSION_B });
+    expect(selected.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
   it('manual navigation pins the view', () => {
     const state = apply(base(), [{ type: 'nav/app', object: CTX, manual: true }]);
     expect(state.ui.follow).toBe(false);

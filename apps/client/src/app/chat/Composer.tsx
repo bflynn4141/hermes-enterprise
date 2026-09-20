@@ -8,7 +8,7 @@
 // composer until uploaded content can actually reach the agent runtime.
 //
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { SETTINGS, type AttachmentDetail } from '@hermes/shared';
+import { ADMIN, type AttachmentDetail } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Button, Chip, IrisMark, MenuItem, Popover, Tabs } from '../ui/primitives.js';
@@ -261,8 +261,8 @@ export function Composer({ session }: { session: SessionState }) {
           <div className="composer-refusal" role="alert">
             <Glass name="trace" size={18} />
             <span className="grow">{refusal.text}</span>
-            {refusal.action && (
-              <Button small onClick={() => nav(SETTINGS('Provider keys'))}>
+            {refusal.action && state.user.role === 'admin' && (
+              <Button small onClick={() => nav(ADMIN('Provider keys'))}>
                 {refusal.action.label}
               </Button>
             )}
@@ -273,10 +273,12 @@ export function Composer({ session }: { session: SessionState }) {
         )}
         {blocked && (
           <div className="composer-blocked" role="status">
-            <span>{keys.rejected ? EMPTY.keyRejected(keys.rejected) : EMPTY.noKey}</span>
-            <Button small onClick={() => nav(SETTINGS('Provider keys'))}>
-              Open Settings
-            </Button>
+            <span>{state.user.role === 'admin'
+              ? (keys.rejected ? EMPTY.keyRejected(keys.rejected) : 'Connect Nous Portal in Admin to start')
+              : 'Ask a workspace Admin to connect Nous Portal.'}</span>
+            {state.user.role === 'admin' && <Button small onClick={() => nav(ADMIN('Provider keys'))}>
+              Open Admin
+            </Button>}
           </div>
         )}
         {active && !contextKey && (

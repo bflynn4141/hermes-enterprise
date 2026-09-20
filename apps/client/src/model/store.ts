@@ -26,6 +26,32 @@ import {
   type SessionSnapshot,
 } from '@hermes/shared';
 
+const PERSONAL_SETTINGS_VIEWS = new Set(['Notifications', 'Slack account', 'Data and privacy']);
+const LEGACY_ADMIN_SETTINGS_VIEWS = new Set([
+  'Organization', 'Inbox rules', 'Agents', 'Slack', 'Email', 'Provider keys', 'Runtime capacity', 'Usage',
+]);
+
+/**
+ * Enforce the navigation boundary before a view can mount and start effects.
+ * This also migrates old Settings deep links for Admins while making the same
+ * forged link a personal Settings fallback for Members.
+ */
+export function authorisedRef(role: 'admin' | 'member', object: Ref): Ref {
+  if (object.section === 'admin') {
+    return role === 'admin' ? object : { section: 'settings', view: 'Notifications' };
+  }
+  if (object.section !== 'settings') return object;
+  const view = object.view ?? 'Notifications';
+  if (LEGACY_ADMIN_SETTINGS_VIEWS.has(view)) {
+    return role === 'admin'
+      ? { section: 'admin', view }
+      : { section: 'settings', view: 'Notifications' };
+  }
+  return PERSONAL_SETTINGS_VIEWS.has(view)
+    ? { ...object, view }
+    : { section: 'settings', view: 'Notifications' };
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -535,6 +561,7 @@ export type Action =
   | { type: 'cursor/advance'; stream: 'workspace' | 'session'; sessionId?: string; id: bigint }
   | { type: 'link/state'; kind: 'session' | 'workspace'; patch: Partial<LinkState> }
   | { type: 'auth/refreshed'; at: number }
+  | { type: 'auth/evicted' }
   | { type: 'counts/set'; patch: Partial<AppState['counts']> }
   | { type: 'settings/merge'; patch: Record<string, unknown> }
   | { type: 'cache/clear' };
@@ -639,17 +666,21 @@ function uiForRef(ui: UiState, app: Ref): UiState {
 
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case 'bootstrap/apply':
-      return { ...state, ...action.patch };
+    case 'bootstrap/apply': {
+      const next = { ...state, ...action.patch };
+      const app = authorisedRef(next.user.role, next.ui.app);
+      return { ...next, ui: uiForRef(next.ui, app) };
+    }
 
     // --- navigation / follow ---
     case 'nav/app': {
+      const object = authorisedRef(state.user.role, action.object);
       const target = activeSession(state)?.focus ?? null;
-      const same = sameRef(target, action.object);
+      const same = sameRef(target, object);
       return {
         ...state,
         ui: {
-          ...uiForRef(state.ui, action.object),
+          ...uiForRef(state.ui, object),
           follow: action.manual ? (same ? state.ui.follow : false) : state.ui.follow,
           pane: action.manual ? 'app' : state.ui.pane,
         },
@@ -673,11 +704,14 @@ export function reduce(state: AppState, action: Action): AppState {
     }
     case 'follow/resume': {
       const target = activeSession(state)?.focus;
-      return { ...state, ui: { ...uiForRef(state.ui, target ?? state.ui.app), follow: true } };
+      const object = authorisedRef(state.user.role, target ?? state.ui.app);
+      return { ...state, ui: { ...uiForRef(state.ui, object), follow: true } };
     }
     case 'iris/focus': {
       const next = withSession(state, action.sessionId, (session) => ({ ...session, focus: action.object }));
-      if (state.ui.follow && action.sessionId === state.activeSessionId) return { ...next, ui: uiForRef(next.ui, action.object) };
+      if (state.ui.follow && action.sessionId === state.activeSessionId) {
+        return { ...next, ui: uiForRef(next.ui, authorisedRef(state.user.role, action.object)) };
+      }
       return next;
     }
     // `iris/toggle` predates the three states and every existing caller still
@@ -882,11 +916,12 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'session/select': {
       const session = state.sessions[action.id];
       if (!session) return state;
+      const object = authorisedRef(state.user.role, session.focus ?? state.ui.app);
       return {
         ...state,
         activeSessionId: action.id,
         sessions: { ...state.sessions, [action.id]: { ...session, unread: false } },
-        ui: { ...uiForRef(state.ui, session.focus ?? state.ui.app), follow: true, pane: 'chat' },
+        ui: { ...uiForRef(state.ui, object), follow: true, pane: 'chat' },
       };
     }
     case 'session/rename':
@@ -1245,6 +1280,28 @@ export function reduce(state: AppState, action: Action): AppState {
     }
     case 'auth/refreshed':
       return { ...state, connection: { ...state.connection, authRefreshedAt: action.at } };
+    case 'auth/evicted': {
+      const settings = state.settings as Record<string, unknown>;
+      const personalSettings = Object.fromEntries(
+        ['default_model_id', 'default_effort', 'default_runtime'].flatMap((key) => key in settings ? [[key, settings[key]]] : []),
+      );
+      return {
+        ...state,
+        workspace: { ...state.workspace, role: 'member' },
+        user: { ...state.user, role: 'member' },
+        entities: emptyEntities(),
+        settings: personalSettings,
+        ui: {
+          ...state.ui,
+          app: { section: 'settings', view: 'Notifications' },
+          settingsTab: 'Notifications',
+          follow: false,
+          pane: 'app',
+          banner: 'evicted',
+          providerKeysLocked: true,
+        },
+      };
+    }
     case 'counts/set':
       return { ...state, counts: { ...state.counts, ...action.patch } };
     case 'settings/merge':

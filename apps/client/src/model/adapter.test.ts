@@ -10,6 +10,7 @@ import { createHub, PING_MS, SILENCE_MS, type SocketLike } from './hub.js';
 import { createStore, initialState, type AppState } from './store.js';
 import { createAuth } from './auth.js';
 import { draftsKey } from './constants.js';
+import { hasVerifiedKey } from '../app/selectors.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
@@ -477,6 +478,19 @@ describe('the hub keepalive', () => {
 });
 
 describe('the adapter', () => {
+  it('does not fetch Admin inventories for a Member and keeps chat availability unknown rather than blocked', async () => {
+    const memberBootstrap = { ...bootstrapBody, viewer: { ...bootstrapBody.viewer, role: 'member' as const } };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(memberBootstrap),
+    });
+    await adapter.start();
+    expect(calls.some((call) => call.path.endsWith('/provider-keys'))).toBe(false);
+    expect(calls.some((call) => call.path.endsWith('/invitations'))).toBe(false);
+    expect(state().ui.providerKeysLocked).toBe(true);
+    expect(hasVerifiedKey(state()).any).toBe(true);
+    adapter.dispose();
+  });
+
   it.each(['workspace', 'viewer', 'same identity'] as const)('scopes draft, pending-turn, and settings preservation across a %s change', async (boundary) => {
     const first = makeAdapter();
     await first.adapter.start();
@@ -1168,6 +1182,38 @@ describe('the adapter', () => {
     expect(state().connection.workspace.status).toBe('signed-out');
     expect(localStorage.getItem(draftsKey(WS, USER))).toContain('half a sentence');
     expect(state().sessions[SESSION]!.draft.text).toBe('half a sentence');
+    adapter.dispose();
+  });
+
+  it('a 4403 closes Admin state immediately and reboots with the authoritative Member projection', async () => {
+    let bootCount = 0;
+    const memberBootstrap = {
+      ...bootstrapBody,
+      viewer: { ...bootstrapBody.viewer, role: 'member' as const },
+      workspace: { ...bootstrapBody.workspace, settings: { default_model_id: 'deepseek-flash', default_effort: 'high', default_runtime: 'cloud' } },
+    };
+    const { adapter, store, state, calls } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(bootCount++ === 0 ? bootstrapBody : memberBootstrap),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'nav/app', object: { section: 'admin', view: 'Provider keys' }, manual: true });
+    store.dispatch({ type: 'entity/upsert', kind: 'provider_key', id: 'key-1', version: 1, data: { label: 'Private key' } });
+    store.dispatch({ type: 'list/set', key: 'invitations', ids: ['invite-1'], total: 1 });
+
+    const socket = FakeSocket.instances.find((item) => item.url.includes('/hub/workspace'))!;
+    socket.open();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.serverClose(4403);
+
+    expect(state().user.role).toBe('member');
+    expect(state().ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    expect(state().entities.provider_key).toEqual({});
+    expect(state().entities.lists.invitations).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(bootCount).toBe(2);
+    expect(calls.filter((call) => call.path.endsWith('/provider-keys'))).toHaveLength(1);
+    expect(calls.filter((call) => call.path.endsWith('/invitations'))).toHaveLength(1);
     adapter.dispose();
   });
 
