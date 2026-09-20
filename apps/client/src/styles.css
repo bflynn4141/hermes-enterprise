@@ -575,7 +575,14 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .settings-page > .tabs .tab-indicator, .settings-section-tabs .tab-indicator { display: none; }
 .settings-page > .tabs .tab[aria-selected="true"], .settings-section-tabs .tab[aria-selected="true"] { border-bottom-color: var(--glass); }
 .admin-settings-page { min-height: 100%; }
-.admin-settings-layout { min-width: 0; }
+.admin-group-tabs > .tabs { flex-wrap: nowrap; gap: 24px; overflow-x: auto; }
+.admin-settings-disclosure { border-bottom: 1px solid var(--line); }
+.admin-settings-disclosure > h2 { margin: 0; }
+.admin-settings-disclosure > h2 > button { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 52px; padding: 12px 0; text-align: left; font-size: 15px; font-weight: 500; color: var(--body); cursor: pointer; }
+.admin-settings-disclosure > h2 > button > span { color: var(--muted); font-size: 20px; font-weight: 400; }
+.admin-settings-disclosure > h2 > button:focus-visible { outline: 2px solid #9B9AE0; outline-offset: 3px; border-radius: 4px; }
+.admin-settings-disclosure-body:not([hidden]) { padding: 8px 0 24px; }
+
 .admin-settings-content { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .admin-settings-view { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .admin-settings-view > .kv { min-height: 52px; }

@@ -20,7 +20,8 @@ async function openRuntimeCapacity(page: Page): Promise<ReturnType<Page['getByRo
   await page.goto(START);
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
   const app = page.getByRole('region', { name: 'Application' });
-  await app.getByRole('tab', { name: 'Agent capacity', exact: true }).click();
+  await app.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await app.getByRole('button', { name: 'Agent capacity', exact: true }).click();
   await expect(app.getByRole('heading', { name: 'Hermes capacity' })).toBeVisible();
   return app;
 }
