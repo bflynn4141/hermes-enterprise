@@ -2548,6 +2548,7 @@ function NotificationsTab() {
   const state = useAppState();
   const adapter = useAdapter();
   const [ack, setAck] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
 
   useEffect(() => {
@@ -2566,12 +2567,18 @@ function NotificationsTab() {
 
   const notifications = view?.notifications ?? { approvals: false, blocked: false, digest: false };
   const set = (key: 'approvals' | 'blocked' | 'digest', value: boolean): void => {
+    setError(null);
     void adapter.rest
       .patchSettings(state.workspace.id, { notifications: { [key]: value } })
-      .then((next) => setView(next as SettingsView))
-      .catch(() => undefined);
-    setAck(true);
-    setTimeout(() => setAck(false), 1400);
+      .then((next) => {
+        setView(next as SettingsView);
+        setAck(true);
+        setTimeout(() => setAck(false), 1400);
+      })
+      .catch(() => {
+        setAck(false);
+        setError('Could not save that. Try again.');
+      });
   };
   return (
     <>
@@ -2587,6 +2594,7 @@ function NotificationsTab() {
           <Toggle checked={notifications[key] === true} onChange={(value) => set(key, value)} label={label} />
         </div>
       ))}
+      {error && <p className="meta" role="alert">{error}</p>}
       <div className="app-footer inline">
         <span className="meta">Preferences only · The Inbox stays on · No notification email is sent</span>
         <span className="grow" />
