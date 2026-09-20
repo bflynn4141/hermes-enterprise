@@ -13,7 +13,7 @@ import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js
 import { FakeQueue } from '../stubs/fake-r2.js';
 import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
 import { SESSION_COOKIE, CSRF_COOKIE, CSRF_HEADER } from '../../src/auth/cookies.js';
-import { INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
+import { applicationPayload, INBOX_HEADERS, seedQueue, seedRequest } from './m4-fixtures.js';
 
 const env = () => makeEnv({ RENDERS_QUEUE: new FakeQueue() } as never);
 
@@ -245,6 +245,52 @@ describe('GET /w/:ws/requests', () => {
       )
     ).rows[0]?.hidden_at);
     expect(storedHiddenAt).toBeInstanceOf(Date);
+  });
+
+  it('scans past a full hidden candidate page to return older active work', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    const visibleId = randomUUID();
+    const hiddenIds = Array.from({ length: 100 }, () => randomUUID());
+    const payload = JSON.stringify(applicationPayload('Queued candidate', 'Delivery partner'));
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.memberId);
+      await client.query(
+        `INSERT INTO requests
+           (id, workspace_id, kind, subject_key, label, payload, session_id, created_at)
+         VALUES ($1,$2,'application','older-visible','Older visible review',$3::jsonb,$4,now()-interval '2 days')`,
+        [visibleId, fx.workspaceId, payload, fx.sessionId],
+      );
+      await client.query(
+        `INSERT INTO requests
+           (id, workspace_id, kind, subject_key, label, payload, session_id, created_at)
+         SELECT seeded.id,$1,'application','hidden-' || seeded.ordinality,
+                'Hidden review ' || seeded.ordinality,$2::jsonb,$3,now()
+           FROM unnest($4::uuid[]) WITH ORDINALITY AS seeded(id, ordinality)`,
+        [fx.workspaceId, payload, fx.sessionId, hiddenIds],
+      );
+      await client.query(
+        `INSERT INTO request_presentations
+           (workspace_id, request_id, user_id, hidden_at, hidden_reason)
+         SELECT $1, seeded.id, $2, now(), 'Deferred while another reviewer works.'
+           FROM unnest($3::uuid[]) AS seeded(id)`,
+        [fx.workspaceId, fx.memberId, hiddenIds],
+      );
+      await client.query('COMMIT');
+    });
+
+    const active = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests?limit=1`)
+    ).json());
+    expect(active.items).toHaveLength(1);
+    expect(active.items[0]).toMatchObject({ id: visibleId, presentation: { hidden: false } });
+
+    const bootstrap = await (await asUser(e, fx.memberId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      counts: { inbox: number; pending_for_others: number };
+    };
+    expect(bootstrap.counts).toMatchObject({ inbox: 1, pending_for_others: 1 });
   });
 
   it('queues a bounded triage batch without running model work in the read request', async () => {

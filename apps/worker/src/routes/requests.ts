@@ -79,74 +79,94 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const visibility = visibilityRaw === 'hidden' || visibilityRaw === 'all' ? visibilityRaw : 'active';
   const triageActive = c.env.INBOX_TRIAGE_MODE === 'active';
 
-  const rows = await inWorkspace(c, async (work) => {
-    const values: unknown[] = [work.workspaceId, work.userId];
-    const where: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE, REQUEST_REVIEWABLE_PREDICATE];
+  let items = await inWorkspace(c, async (work) => {
+    const baseValues: unknown[] = [work.workspaceId, work.userId];
+    const baseWhere: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE, REQUEST_REVIEWABLE_PREDICATE];
     if (provenance) {
-      values.push(provenance);
-      where.push(`COALESCE(provenance.kind, 'unknown') = $${values.length}`);
+      baseValues.push(provenance);
+      baseWhere.push(`COALESCE(provenance.kind, 'unknown') = $${baseValues.length}`);
     }
     if (statuses.length > 0) {
-      values.push(statuses);
-      where.push(`r.status = ANY ($${values.length}::text[])`);
+      baseValues.push(statuses);
+      baseWhere.push(`r.status = ANY ($${baseValues.length}::text[])`);
     }
     if (kind) {
-      values.push(kind);
-      where.push(`r.kind = $${values.length}`);
+      baseValues.push(kind);
+      baseWhere.push(`r.kind = $${baseValues.length}`);
     }
     if (q) {
       // The label only. The payload holds the applicant's evidence, and a
       // search that reached into it would be a way to read one field of a
       // record the reader has not opened.
-      values.push(`%${q}%`);
-      where.push(`r.label ILIKE $${values.length}`);
+      baseValues.push(`%${q}%`);
+      baseWhere.push(`r.label ILIKE $${baseValues.length}`);
     }
-    // Effective visibility depends on the current approval step and viewer
-    // authority, not only the stored presentation row. Keep the candidate set
-    // bounded, project that state once, then apply active/hidden semantics.
-    values.push(LIST_LIMIT);
 
-    const result = await work.tx.query<RequestRow>(
-      `${REQUEST_SELECT}
-        WHERE ${where.join(' AND ')}
-        ORDER BY r.created_at DESC, r.id DESC
-        LIMIT $${values.length}`,
-      values,
-    );
-    const projections = new Map<string, Awaited<ReturnType<typeof loadApprovalListProjection>>>();
+    const roles = await reviewerRoles(work);
+    const visible: Array<ReturnType<typeof requestEntitySchema.parse>> = [];
     const jobs: string[] = [];
-    for (const row of result.rows) {
-      if (row.kind === 'approval') projections.set(row.id, await loadApprovalListProjection(work.tx, row.id, work.userId));
-      if (
-        jobs.length < TRIAGE_ENQUEUE_LIMIT
-        && row.status === 'pending'
-        && c.env.INBOX_TRIAGE_MODE !== 'off'
-        && (row.triage_model_id !== JEV_MODEL_ID
-          || row.triage_rubric_version !== (c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1')
-          || !row.triage_status)
-      ) {
-        const jobId = await enqueueRequestTriage(
-          work.tx,
-          work.workspaceId,
-          row.id,
-          row.version,
-          c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1',
-        );
-        if (jobId) jobs.push(jobId);
-      }
-    }
-    return { rows: result.rows, projections, role: work.role, reviewerRoles: await reviewerRoles(work) };
-  });
+    let before: { createdAt: Date; id: string } | null = null;
 
-  let items = rows.rows.map((row) => requestEntitySchema.parse(toRequestEntity(
-    row,
-    rows.projections.get(row.id) ?? null,
-    triageActive,
-    canDecideLegacyRequest(row, rows.role, rows.reviewerRoles),
-  )));
-  if (visibility !== 'all') {
-    items = items.filter((item) => item.presentation.hidden === (visibility === 'hidden'));
-  }
+    // Presentation is effective state: routing or a role change can override
+    // an older stored hide. Scan in bounded keyset pages until the requested
+    // visible page is full or the matching request set is exhausted, so a run
+    // of newer hidden rows cannot starve an older visible/required request.
+    while (visible.length < limit) {
+      const values = [...baseValues];
+      const where = [...baseWhere];
+      if (before) {
+        values.push(before.createdAt, before.id);
+        where.push(`(r.created_at, r.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+      }
+      values.push(LIST_LIMIT);
+      const result = await work.tx.query<RequestRow>(
+        `${REQUEST_SELECT}
+          WHERE ${where.join(' AND ')}
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT $${values.length}`,
+        values,
+      );
+      if (result.rows.length === 0) break;
+
+      for (const row of result.rows) {
+        const approval = row.kind === 'approval'
+          ? await loadApprovalListProjection(work.tx, row.id, work.userId)
+          : null;
+        if (
+          jobs.length < TRIAGE_ENQUEUE_LIMIT
+          && row.status === 'pending'
+          && c.env.INBOX_TRIAGE_MODE !== 'off'
+          && (row.triage_model_id !== JEV_MODEL_ID
+            || row.triage_rubric_version !== (c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1')
+            || !row.triage_status)
+        ) {
+          const jobId = await enqueueRequestTriage(
+            work.tx,
+            work.workspaceId,
+            row.id,
+            row.version,
+            c.env.INBOX_TRIAGE_RUBRIC_VERSION ?? '1',
+          );
+          if (jobId) jobs.push(jobId);
+        }
+        const item = requestEntitySchema.parse(toRequestEntity(
+          row,
+          approval,
+          triageActive,
+          canDecideLegacyRequest(row, work.role, roles),
+        ));
+        if (visibility === 'all' || item.presentation.hidden === (visibility === 'hidden')) {
+          visible.push(item);
+          if (visible.length === limit) break;
+        }
+      }
+
+      const last = result.rows[result.rows.length - 1];
+      if (!last || result.rows.length < LIST_LIMIT) break;
+      before = { createdAt: last.created_at, id: last.id };
+    }
+    return visible;
+  });
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
     items.sort((left, right) => {
@@ -157,8 +177,6 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         || left.id.localeCompare(right.id);
     });
   }
-  items = items.slice(0, limit);
-
   return c.json(
     requestPage.parse({
       items,
