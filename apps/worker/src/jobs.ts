@@ -545,12 +545,14 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
           return { deliver: false, done: false, failure: persistedTerminalReason };
         }
         if (env.AGENT_RUNTIME === 'hermes') {
-          const capacity = await tx.query(
-            `SELECT 1 FROM hermes_cloud_capacity
-              WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'`,
-            [job.workspace_id, payload.invitation_id],
+          const { capacityRoleForInvitation, hasCurrentReservedCapacityForInvitation } =
+            await import('./hermes-cloud/capacity.js');
+          const role = await capacityRoleForInvitation(
+            tx, job.workspace_id, payload.invitation_id, { requireReadyOperation: true },
           );
-          if (capacity.rowCount !== 1) {
+          if (!await hasCurrentReservedCapacityForInvitation(
+            env, tx, job.workspace_id, payload.invitation_id, role,
+          )) {
             return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
           }
         }

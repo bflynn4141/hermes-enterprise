@@ -4,9 +4,14 @@ import { RouteError } from '../routes/tenant.js';
 import type { Job } from '../jobs.js';
 import { enqueueJob, withWorkspaceTransaction } from '../jobs.js';
 import { openSecret, sealSecret, type StoredEnvelope } from '../keys/envelope.js';
-import { requireCurrentGrantConfig, type DiscoveryGrantRow } from '../runtime/discovery-grants.js';
+import {
+  PARTNERSHIPS_CAPACITY_ROLE,
+  requireCurrentGrantConfig,
+  type CapacityRoleTemplate,
+  type DiscoveryGrantRow,
+} from '../runtime/discovery-grants.js';
 import { HermesClient } from '../runtime/client.js';
-import { matchesLegacyCapacityAttestation } from '../runtime/readiness.js';
+import { matchesManagedDiscoveryGrantAttestation } from '../runtime/readiness.js';
 
 export const POOL_CONTROL_NAMESPACE = 'hermes/pool-control/v1';
 export const RUNTIME_CONTROL_NAMESPACE = 'hermes/runtime-control/v1';
@@ -40,8 +45,55 @@ export interface CapacityAcceptanceProof {
   readonly discoveryGrantId: string;
   readonly agentId: string;
   readonly connectorUrl: string;
+  readonly roleTemplateKey: CapacityRoleTemplate['roleTemplateKey'];
+  readonly roleTemplateVersion: CapacityRoleTemplate['roleTemplateVersion'];
+  readonly skillKey: string;
+  readonly skillVersion: string;
+  readonly artifactDigest: string;
+  readonly grantRevision: number;
+  readonly configDigest: string;
   readonly pluginVersion: string;
   readonly checkedAt: Date;
+}
+
+function sameRole(actual: Pick<DiscoveryGrantRow, 'role_template_key' | 'role_template_version'>,
+  expected: CapacityRoleTemplate): boolean {
+  return actual.role_template_key === expected.roleTemplateKey &&
+    actual.role_template_version === expected.roleTemplateVersion;
+}
+
+export async function capacityRoleForInvitation(
+  tx: Pick<Tx, 'query'>,
+  workspaceId: string,
+  invitationId: string,
+  options: { requireReadyOperation?: boolean } = {},
+): Promise<CapacityRoleTemplate> {
+  const { rows } = await tx.query<{
+    role_template_key: CapacityRoleTemplate['roleTemplateKey'];
+    role_template_version: string;
+    preparation: string;
+    cancellation: string;
+  }>(
+    `SELECT role_template_key,role_template_version,preparation,cancellation
+       FROM member_provisioning_operations
+      WHERE workspace_id=$1 AND invitation_id=$2`,
+    [workspaceId, invitationId],
+  );
+  const operation = rows[0];
+  if (!operation) return PARTNERSHIPS_CAPACITY_ROLE;
+  if (operation.role_template_version !== '1.0.0' ||
+      (options.requireReadyOperation &&
+        (operation.preparation !== 'ready' || operation.cancellation !== 'none'))) {
+    throw new RouteError(
+      'This invitation does not have a current role-ready capacity contract.',
+      'invitation_capacity_unavailable',
+      409,
+    );
+  }
+  return {
+    roleTemplateKey: operation.role_template_key,
+    roleTemplateVersion: '1.0.0',
+  };
 }
 
 class CapacityGrantDriftError extends RouteError {
@@ -144,6 +196,7 @@ export async function reserveCapacityForInvitation(
   tx: Tx,
   workspaceId: string,
   invitationId: string,
+  expectedRole: CapacityRoleTemplate,
 ): Promise<{ id: string; remaining: number } | null> {
   await expireInvitationReservations(tx, workspaceId);
   const existing = await tx.query<{ id: string; discovery_grant_id: string | null }>(
@@ -156,22 +209,33 @@ export async function reserveCapacityForInvitation(
   const current = existing.rows[0];
   if (current) {
     if (current.discovery_grant_id &&
-        await linkedGrantIsCurrent(env, tx, workspaceId, current.id, current.discovery_grant_id)) {
+        await linkedGrantIsCurrent(env, tx, workspaceId, current.id, current.discovery_grant_id, expectedRole)) {
       id = current.id;
     }
   }
   if (!id) {
     const candidates = await tx.query<{ id: string; discovery_grant_id: string | null }>(
-      `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
-        WHERE workspace_id=$1 AND state='available'
-          AND agentcash_enabled AND agentcash_wallet_present AND native_cron_disabled
-        ORDER BY readiness_checked_at, created_at
-        FOR UPDATE SKIP LOCKED`,
-      [workspaceId],
+      `SELECT capacity.id,capacity.discovery_grant_id
+         FROM hermes_cloud_capacity capacity
+         JOIN runtime_discovery_grants grant_row
+           ON grant_row.workspace_id=capacity.workspace_id
+          AND grant_row.id=capacity.discovery_grant_id
+          AND grant_row.linked_capacity_id=capacity.id
+          AND grant_row.agent_id=capacity.preflight_agent_id
+        WHERE capacity.workspace_id=$1 AND capacity.state='available'
+          AND grant_row.role_template_key=$2 AND grant_row.role_template_version=$3
+          AND capacity.native_cron_disabled
+          AND capacity.agentcash_enabled=$4 AND capacity.agentcash_wallet_present=$4
+        ORDER BY capacity.readiness_checked_at,capacity.created_at
+        FOR UPDATE OF capacity SKIP LOCKED`,
+      [workspaceId, expectedRole.roleTemplateKey, expectedRole.roleTemplateVersion,
+        expectedRole.roleTemplateKey === 'partnerships-agent'],
     );
     for (const candidate of candidates.rows) {
       if (!candidate.discovery_grant_id ||
-          !await linkedGrantIsCurrent(env, tx, workspaceId, candidate.id, candidate.discovery_grant_id)) continue;
+          !await linkedGrantIsCurrent(
+            env, tx, workspaceId, candidate.id, candidate.discovery_grant_id, expectedRole,
+          )) continue;
       const claimed = await tx.query<{ id: string }>(
         `UPDATE hermes_cloud_capacity SET state='reserved', reserved_invitation_id=$3
           WHERE workspace_id=$1 AND id=$2 AND state='available' RETURNING id`,
@@ -183,16 +247,27 @@ export async function reserveCapacityForInvitation(
   }
   if (!id) return null;
   const remainingRows = await tx.query<{ id: string; discovery_grant_id: string | null }>(
-    `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
-      WHERE workspace_id=$1 AND state='available'
-        AND agentcash_enabled AND agentcash_wallet_present AND native_cron_disabled
-      ORDER BY readiness_checked_at, created_at FOR UPDATE`,
-    [workspaceId],
+    `SELECT capacity.id,capacity.discovery_grant_id
+       FROM hermes_cloud_capacity capacity
+       JOIN runtime_discovery_grants grant_row
+         ON grant_row.workspace_id=capacity.workspace_id
+        AND grant_row.id=capacity.discovery_grant_id
+        AND grant_row.linked_capacity_id=capacity.id
+        AND grant_row.agent_id=capacity.preflight_agent_id
+      WHERE capacity.workspace_id=$1 AND capacity.state='available'
+        AND grant_row.role_template_key=$2 AND grant_row.role_template_version=$3
+        AND capacity.native_cron_disabled
+        AND capacity.agentcash_enabled=$4 AND capacity.agentcash_wallet_present=$4
+      ORDER BY capacity.readiness_checked_at,capacity.created_at FOR UPDATE OF capacity`,
+    [workspaceId, expectedRole.roleTemplateKey, expectedRole.roleTemplateVersion,
+      expectedRole.roleTemplateKey === 'partnerships-agent'],
   );
   let remaining = 0;
   for (const row of remainingRows.rows) {
     if (row.discovery_grant_id &&
-        await linkedGrantIsCurrent(env, tx, workspaceId, row.id, row.discovery_grant_id)) remaining += 1;
+        await linkedGrantIsCurrent(
+          env, tx, workspaceId, row.id, row.discovery_grant_id, expectedRole,
+        )) remaining += 1;
   }
   return { id, remaining };
 }
@@ -203,6 +278,7 @@ export async function hasCurrentReservedCapacityForInvitation(
   tx: Tx,
   workspaceId: string,
   invitationId: string,
+  expectedRole: CapacityRoleTemplate,
 ): Promise<boolean> {
   const { rows } = await tx.query<{ id: string; discovery_grant_id: string | null }>(
     `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
@@ -212,7 +288,9 @@ export async function hasCurrentReservedCapacityForInvitation(
   );
   const capacity = rows[0];
   return Boolean(capacity?.discovery_grant_id
-    && await linkedGrantIsCurrent(env, tx, workspaceId, capacity.id, capacity.discovery_grant_id));
+    && await linkedGrantIsCurrent(
+      env, tx, workspaceId, capacity.id, capacity.discovery_grant_id, expectedRole,
+    ));
 }
 
 async function linkedGrantIsCurrent(
@@ -221,11 +299,13 @@ async function linkedGrantIsCurrent(
   workspaceId: string,
   capacityId: string,
   grantId: string,
-  options: { allowLegacyAssignmentPromotion?: boolean } = {},
-): Promise<boolean> {
+  expectedRole: CapacityRoleTemplate,
+  options: { allowAssignmentPromotion?: boolean } = {},
+): Promise<DiscoveryGrantRow | null> {
   const { rows } = await tx.query<DiscoveryGrantRow>(
     `SELECT g.id, g.workspace_id, g.agent_id, g.credential_digest,
-            g.role_template_key, g.skill_key, g.skill_version, g.runtime_name,
+            g.role_template_key, g.role_template_version,
+            g.skill_key, g.skill_version, g.runtime_name,
             g.artifact_digest, g.assignment_id, g.assignment_revision,
             g.config_digest, g.grant_revision, g.linked_capacity_id,
             g.expires_at, g.revoked_at, g.consumed_at, c.state AS capacity_state
@@ -246,7 +326,7 @@ async function linkedGrantIsCurrent(
   }
   try {
     await requireCurrentGrantConfig(env, tx, grant, options);
-    return true;
+    return sameRole(grant, expectedRole) ? grant : null;
   } catch (error) {
     if (error instanceof RouteError && error.reason === 'discovery_profile_changed') {
       throw new CapacityGrantDriftError(workspaceId, capacityId, grantId);
@@ -262,8 +342,12 @@ export async function verifyReservedCapacityForInvitation(
   env: Env,
   workspaceId: string,
   invitationId: string,
+  expectedRole?: CapacityRoleTemplate,
 ): Promise<CapacityAcceptanceProof> {
   const snapshot = await withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, workspaceId, async (tx) => {
+    const role = expectedRole ?? await capacityRoleForInvitation(
+      tx, workspaceId, invitationId, { requireReadyOperation: true },
+    );
     const { rows } = await tx.query<CapacityRow>(
       `SELECT id, cloud_agent_id, instance_name, preflight_agent_id, discovery_grant_id,
               dashboard_url, connector_url, state, reserved_invitation_id,
@@ -274,8 +358,12 @@ export async function verifyReservedCapacityForInvitation(
       [workspaceId, invitationId],
     );
     const capacity = rows[0];
-    if (!capacity?.discovery_grant_id ||
-        !await linkedGrantIsCurrent(env, tx, workspaceId, capacity.id, capacity.discovery_grant_id)) {
+    const grant = capacity?.discovery_grant_id
+      ? await linkedGrantIsCurrent(
+        env, tx, workspaceId, capacity.id, capacity.discovery_grant_id, role,
+      )
+      : null;
+    if (!capacity?.discovery_grant_id || !grant) {
       throw new RouteError(
         'This invitation no longer has verified Iris capacity.',
         'invitation_capacity_unavailable',
@@ -287,7 +375,7 @@ export async function verifyReservedCapacityForInvitation(
       { workspaceId, keyId: capacity.id, namespace: POOL_CONTROL_NAMESPACE },
       stored(capacity),
     );
-    return { capacity, controlSecret };
+    return { capacity, controlSecret, grant, role };
   }));
 
   try {
@@ -302,7 +390,7 @@ export async function verifyReservedCapacityForInvitation(
       runtime.enterpriseReadiness(),
     ]);
     if (!capabilities.durableIdempotency ||
-        !matchesLegacyCapacityAttestation(readiness, {
+        !matchesManagedDiscoveryGrantAttestation(readiness, snapshot.grant, {
           workspaceId,
           agentId: snapshot.capacity.preflight_agent_id,
           enterpriseUrl: env.HERMES_ENTERPRISE_PUBLIC_URL,
@@ -318,6 +406,13 @@ export async function verifyReservedCapacityForInvitation(
       discoveryGrantId: snapshot.capacity.discovery_grant_id!,
       agentId: snapshot.capacity.preflight_agent_id,
       connectorUrl: snapshot.capacity.connector_url,
+      roleTemplateKey: snapshot.role.roleTemplateKey,
+      roleTemplateVersion: snapshot.role.roleTemplateVersion,
+      skillKey: snapshot.grant.skill_key,
+      skillVersion: snapshot.grant.skill_version,
+      artifactDigest: snapshot.grant.artifact_digest,
+      grantRevision: snapshot.grant.grant_revision,
+      configDigest: snapshot.grant.config_digest,
       pluginVersion: readiness.version,
       checkedAt: new Date(),
     };
@@ -336,17 +431,24 @@ export async function verifyPendingInvitationCapacityForEmail(
   email: string,
 ): Promise<CapacityAcceptanceProof | null> {
   if (env.AGENT_RUNTIME !== 'hermes') return null;
-  const invitationId = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+  const pending = await withWorkspaceTransaction(env, workspaceId, async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
       `SELECT id FROM invitations
         WHERE workspace_id=$1 AND email=$2 AND status='pending' AND expires_at > now()
         ORDER BY created_at DESC LIMIT 1`,
       [workspaceId, email.toLowerCase()],
     );
-    return rows[0]?.id ?? null;
+    const invitationId = rows[0]?.id ?? null;
+    if (!invitationId) return null;
+    return {
+      invitationId,
+      role: await capacityRoleForInvitation(
+        tx, workspaceId, invitationId, { requireReadyOperation: true },
+      ),
+    };
   });
-  return invitationId
-    ? verifyReservedCapacityForInvitation(env, workspaceId, invitationId)
+  return pending
+    ? verifyReservedCapacityForInvitation(env, workspaceId, pending.invitationId, pending.role)
     : null;
 }
 
@@ -365,6 +467,7 @@ export async function transferInvitationCapacity(
   workspaceId: string,
   fromInvitationId: string,
   toInvitationId: string,
+  expectedRole: CapacityRoleTemplate,
 ): Promise<boolean> {
   const { rows } = await tx.query<{ id: string; discovery_grant_id: string | null }>(
     `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
@@ -374,7 +477,9 @@ export async function transferInvitationCapacity(
   );
   const capacity = rows[0];
   if (!capacity?.discovery_grant_id ||
-      !await linkedGrantIsCurrent(env, tx, workspaceId, capacity.id, capacity.discovery_grant_id)) return false;
+      !await linkedGrantIsCurrent(
+        env, tx, workspaceId, capacity.id, capacity.discovery_grant_id, expectedRole,
+      )) return false;
   const moved = await tx.query(
     `UPDATE hermes_cloud_capacity SET reserved_invitation_id=$3
       WHERE workspace_id=$1 AND id=$4 AND reserved_invitation_id=$2 AND state='reserved'`,
@@ -388,12 +493,21 @@ export async function reservedCapacityAgentId(
   tx: Tx,
   workspaceId: string,
   invitationId: string,
+  expectedRole: CapacityRoleTemplate,
 ): Promise<string> {
   const result = await tx.query<{ preflight_agent_id: string }>(
-    `SELECT preflight_agent_id FROM hermes_cloud_capacity
-      WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'
-      FOR UPDATE`,
-    [workspaceId, invitationId],
+    `SELECT capacity.preflight_agent_id
+       FROM hermes_cloud_capacity capacity
+       JOIN runtime_discovery_grants grant_row
+         ON grant_row.workspace_id=capacity.workspace_id
+        AND grant_row.id=capacity.discovery_grant_id
+        AND grant_row.linked_capacity_id=capacity.id
+        AND grant_row.agent_id=capacity.preflight_agent_id
+      WHERE capacity.workspace_id=$1 AND capacity.reserved_invitation_id=$2
+        AND capacity.state='reserved'
+        AND grant_row.role_template_key=$3 AND grant_row.role_template_version=$4
+      FOR UPDATE OF capacity`,
+    [workspaceId, invitationId, expectedRole.roleTemplateKey, expectedRole.roleTemplateVersion],
   );
   const agentId = result.rows[0]?.preflight_agent_id;
   if (!agentId) {
@@ -412,6 +526,7 @@ export async function consumeReservedCapacity(
   workspaceId: string,
   invitationId: string,
   agentId: string,
+  expectedRole: CapacityRoleTemplate,
   proof: CapacityAcceptanceProof | null,
 ): Promise<CapacityRow> {
   const result = await tx.query<CapacityRow>(
@@ -441,6 +556,8 @@ export async function consumeReservedCapacity(
   if (!proof || proof.workspaceId !== workspaceId || proof.invitationId !== invitationId ||
       proof.capacityId !== row.id || proof.discoveryGrantId !== row.discovery_grant_id ||
       proof.agentId !== row.preflight_agent_id || proof.connectorUrl !== row.connector_url ||
+      proof.roleTemplateKey !== expectedRole.roleTemplateKey ||
+      proof.roleTemplateVersion !== expectedRole.roleTemplateVersion ||
       !Number.isFinite(proof.checkedAt.getTime()) || proof.checkedAt > new Date() ||
       Date.now() - proof.checkedAt.getTime() > 30_000) {
     throw new RouteError(
@@ -449,11 +566,17 @@ export async function consumeReservedCapacity(
       409,
     );
   }
-  if (!row.discovery_grant_id ||
-      !await linkedGrantIsCurrent(
+  const currentGrant = row.discovery_grant_id
+    ? await linkedGrantIsCurrent(
         env, tx, workspaceId, row.id, row.discovery_grant_id,
-        { allowLegacyAssignmentPromotion: true },
-      )) {
+        expectedRole, { allowAssignmentPromotion: true },
+      )
+    : null;
+  if (!currentGrant || proof.skillKey !== currentGrant.skill_key ||
+      proof.skillVersion !== currentGrant.skill_version ||
+      proof.artifactDigest !== currentGrant.artifact_digest ||
+      proof.grantRevision !== currentGrant.grant_revision ||
+      proof.configDigest !== currentGrant.config_digest) {
     throw new RouteError(
       'The reserved Iris profile no longer matches its reviewed discovery configuration.',
       'invitation_capacity_unavailable',
@@ -488,7 +611,7 @@ export async function consumeReservedCapacity(
        (workspace_id, agent_id, profile, base_url, transport, assignment, agentcash,
         ciphertext, iv, wrapped_dek, wrap_iv, kek_version,
         runtime_auth_mode, runtime_credential_digest, ready_at)
-     VALUES ($1,$2,$3,$4,'dashboard_connector','invitee_pool',true,$5,$6,$7,$8,$9,$10,$11,$12)
+     VALUES ($1,$2,$3,$4,'dashboard_connector',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (agent_id) DO UPDATE SET
        base_url=EXCLUDED.base_url, transport=EXCLUDED.transport,
        assignment=EXCLUDED.assignment, agentcash=EXCLUDED.agentcash,
@@ -499,6 +622,8 @@ export async function consumeReservedCapacity(
        runtime_credential_digest=EXCLUDED.runtime_credential_digest,
        ready_at=EXCLUDED.ready_at`,
     [workspaceId, agentId, `agent-${agentId}`, row.connector_url,
+     `invitee_pool:${expectedRole.roleTemplateKey}@${expectedRole.roleTemplateVersion}`,
+     expectedRole.roleTemplateKey === 'partnerships-agent',
      Buffer.from(binding.ciphertext), Buffer.from(binding.iv), Buffer.from(binding.wrappedDek),
      Buffer.from(binding.wrapIv), binding.kekVersion,
      'token_digest', Buffer.from(runtimeCredentialDigest), proof.checkedAt],

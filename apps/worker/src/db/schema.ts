@@ -290,6 +290,7 @@ export const runtimeDiscoveryGrants = pgTable('runtime_discovery_grants', {
   createdBy: uuid('created_by'),
   credentialDigest: bytea('credential_digest').notNull(),
   roleTemplateKey: text('role_template_key').notNull(),
+  roleTemplateVersion: text('role_template_version').notNull().default('1.0.0'),
   skillKey: text('skill_key').notNull(),
   skillVersion: text('skill_version').notNull(),
   runtimeName: text('runtime_name').notNull(),

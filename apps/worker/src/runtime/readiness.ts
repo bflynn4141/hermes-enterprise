@@ -7,6 +7,10 @@ import {
 import type { HermesEnterpriseReadiness } from './client.js';
 import type { RuntimeSkillManifest } from './skills.js';
 import {
+  requireExactGrantMetadata,
+  type DiscoveryGrantRow,
+} from './discovery-grants.js';
+import {
   enterpriseSkillDefinition,
   PARTNER_PROGRAM_DEFINITION,
   PARTNER_PROGRAM_TOOLS,
@@ -193,6 +197,43 @@ export function matchesManagedRuntimeAttestation(
     readiness.agentCashWalletPresent === expectsAgentCash &&
     skill.name === manifest.runtime_name && skill.version === manifest.version &&
     skill.artifactDigest === manifest.artifact_digest &&
+    skill.contentDigest === expectedContentDigest &&
+    sameNames(readiness.toolNames, expectedTools);
+}
+
+/** Exact managed readiness for an unowned warm profile. The discovery grant is
+ * the role/profile authority until acceptance atomically promotes the same
+ * config and manifest to an Enterprise assignment. */
+export function matchesManagedDiscoveryGrantAttestation(
+  readiness: HermesEnterpriseReadiness,
+  grant: DiscoveryGrantRow,
+  expected: ManagedRuntimeIdentity,
+): boolean {
+  let descriptor;
+  try {
+    descriptor = requireExactGrantMetadata(grant);
+  } catch {
+    return false;
+  }
+  if (!matchesManagedRuntimeIdentity(readiness, expected) ||
+      !readiness.skills || readiness.skills.length !== 1 || !readiness.toolNames ||
+      grant.grant_revision !== 1 || grant.revoked_at !== null || grant.consumed_at !== null) return false;
+  const definition = descriptor.definition;
+  const skill = readiness.skills[0]!;
+  const expectedContentDigest = definition.key === PARTNER_PROGRAM_DEFINITION.key &&
+      definition.version === PARTNER_PROGRAM_DEFINITION.version
+    ? LEGACY_PARTNER_CONTENT_DIGEST
+    : definition.artifactDigest;
+  const expectedTools = [
+    ...toolsForSkillVersion(definition.key, definition.version, definition.defaultCapabilityGrants),
+    'skill_view',
+    ...(descriptor.expectsAgentCash ? [AGENTCASH_MCP_TOOL] : []),
+  ];
+  return readiness.agentCashEnabled === descriptor.expectsAgentCash &&
+    readiness.agentCashWalletPresent === descriptor.expectsAgentCash &&
+    readiness.nativeCronDisabled &&
+    skill.name === definition.runtimeName && skill.version === definition.version &&
+    skill.artifactDigest === definition.artifactDigest &&
     skill.contentDigest === expectedContentDigest &&
     sameNames(readiness.toolNames, expectedTools);
 }

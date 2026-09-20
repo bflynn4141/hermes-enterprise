@@ -3,12 +3,16 @@ import type { Tx } from '../db/client.js';
 import { publishEvents } from '../jobs.js';
 import {
   consumeReservedCapacity,
+  capacityRoleForInvitation,
   reservedCapacityAgentId,
   type CapacityAcceptanceProof,
 } from '../hermes-cloud/capacity.js';
 import { PARTNER_PROGRAM_TOOLS } from '../runtime/skills.js';
 import { materializeLegacyPartnerAssignment } from '../enterprise-skills/service.js';
 import { PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS } from '../enterprise-skills/role-instructions.js';
+import { PARTNER_INVOICE_REVIEW_DEFINITION, toolsForSkillVersion } from '../enterprise-skills/registry.js';
+import { configureAcceptedFinanceMember } from '../partner-workflow/service.js';
+import type { CapacityRoleTemplate } from '../runtime/discovery-grants.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 
@@ -150,7 +154,7 @@ async function createStarterItems(
   return approval.request_id;
 }
 
-async function createOwnedIris(input: JoinCoordinationInput): Promise<{
+async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleTemplate): Promise<{
   agentId: string;
   sessionId: string;
   created: boolean;
@@ -173,8 +177,55 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
   // here makes invitation acceptance an atomic ownership assignment instead
   // of a Cloud mutation/restart that could strand the new member.
   const agentId = input.env.AGENT_RUNTIME === 'hermes'
-    ? await reservedCapacityAgentId(input.tx, input.workspaceId, input.invitationId)
+    ? await reservedCapacityAgentId(input.tx, input.workspaceId, input.invitationId, role)
     : crypto.randomUUID();
+  if (role.roleTemplateKey === 'finance-agent') {
+    await input.tx.query(
+      `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
+       VALUES ($1,$2,'Iris',NULL,NULL,'draft',NULL)`,
+      [agentId, input.workspaceId],
+    );
+    await input.tx.query(
+      `INSERT INTO agent_owners (workspace_id, agent_id, member_id) VALUES ($1,$2,$3)`,
+      [input.workspaceId, agentId, input.joiningMemberId],
+    );
+    await configureAcceptedFinanceMember(
+      input.tx, input.workspaceId, input.joiningUserId,
+      { agentId, principalUserId: input.joiningUserId },
+    );
+    const financeTools = toolsForSkillVersion(
+      PARTNER_INVOICE_REVIEW_DEFINITION.key,
+      PARTNER_INVOICE_REVIEW_DEFINITION.version,
+      PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants,
+    );
+    await input.tx.query(
+      `INSERT INTO agent_capabilities (workspace_id, agent_id, kind, title, scope, tool_names, position)
+       VALUES ($1,$2,'can','Review governed partner invoices','Finance',$3,0)`,
+      [input.workspaceId, agentId, financeTools],
+    );
+    if (input.env.AGENT_RUNTIME === 'hermes') {
+      await consumeReservedCapacity(
+        input.env, input.tx, input.workspaceId, input.invitationId, agentId, role,
+        input.capacityProof ?? null,
+      );
+    }
+    const sessionId = crypto.randomUUID();
+    await input.tx.query(
+      `INSERT INTO sessions
+         (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+       SELECT $1,$2,$3,$4,'Finance Iris','work',default_model_id,default_effort,default_runtime,1,
+              '{"section":"agents","view":"overview"}'::jsonb
+         FROM workspace_settings WHERE workspace_id=$2`,
+      [sessionId, input.workspaceId, input.joiningUserId, agentId],
+    );
+    await input.tx.query(
+      `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status)
+       VALUES ($1,$2,0,'iris','welcome',$3,'[]'::jsonb,'complete')`,
+      [input.workspaceId, sessionId,
+       'Your organization has assigned you Finance Iris. I can review governed partner invoice handoffs and explain missing or conflicting evidence, then stop for your decision. I cannot approve, decline, pay, send, sign, or change the source records.'],
+    );
+    return { agentId, sessionId, created: true };
+  }
   await input.tx.query(
     `INSERT INTO agents (id, workspace_id, name, responsibility, instructions_active, status, setup_step)
      VALUES ($1,$2,'Iris','Partner Program',$3,'draft','identity')`,
@@ -216,6 +267,7 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
       input.workspaceId,
       input.invitationId,
       agentId,
+      role,
       input.capacityProof ?? null,
     );
   }
@@ -240,8 +292,11 @@ async function createOwnedIris(input: JoinCoordinationInput): Promise<{
 
 /** Consume the invitation's exact pool reservation and create real starter work. */
 export async function coordinateAcceptedMember(input: JoinCoordinationInput): Promise<JoinCoordinationResult> {
-  const iris = await createOwnedIris(input);
-  const firstSearchRequestId = iris.created
+  const role = await capacityRoleForInvitation(
+    input.tx, input.workspaceId, input.invitationId, { requireReadyOperation: true },
+  );
+  const iris = await createOwnedIris(input, role);
+  const firstSearchRequestId = iris.created && role.roleTemplateKey === 'partnerships-agent'
     ? await createStarterItems(input, iris.agentId, iris.sessionId)
     : null;
 
@@ -260,6 +315,8 @@ export async function coordinateAcceptedMember(input: JoinCoordinationInput): Pr
     payload: {
       source: 'invitation.accepted', invitation_id: input.invitationId,
       member_id: input.joiningMemberId, agent_id: iris.agentId,
+      role_template_key: role.roleTemplateKey,
+      role_template_version: role.roleTemplateVersion,
       coordination_request_id: firstSearchRequestId,
     },
   }]));

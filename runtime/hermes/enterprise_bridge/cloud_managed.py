@@ -241,9 +241,10 @@ def _validate_binding(assignment):
         raise RuntimeError("Managed Enterprise binding identity or capabilities are invalid")
     source = item.get("binding_source")
     if source == "preflight_grant":
-        if ((item.get("name"), item.get("version")) != (
-                "enterprise_bridge:partner-program-screening", "1.7.0"
-        ) or item.get("grant_revision") != 1
+        if ((item.get("name"), item.get("version")) not in {
+                ("enterprise_bridge:partner-program-screening", "1.7.0"),
+                ("enterprise_bridge:partner-invoice-review", "1.0.1"),
+        } or item.get("grant_revision") != 1
                 or item.get("binding_state") not in {
                     "prepared", "linked_available", "linked_reserved",
                 }

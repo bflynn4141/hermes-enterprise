@@ -432,6 +432,38 @@ async function retireInvitationFirstSearch(
   );
 }
 
+/** Promote one accepted member's exact Finance warm profile without enabling
+ * the two-role workflow. The member already exists and owns the agent before
+ * this helper binds any Enterprise principal or business capability. */
+export async function configureAcceptedFinanceMember(
+  tx: Tx,
+  workspaceId: string,
+  configuredBy: string,
+  input: { readonly agentId: string; readonly principalUserId: string },
+): Promise<void> {
+  const financeTeam = await team(tx, workspaceId, 'finance');
+  const financeArtifact = await artifact(tx, PARTNER_INVOICE_REVIEW_DEFINITION);
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`agent-setup:${input.agentId}`]);
+  await bindPrincipal(
+    tx, workspaceId, financeTeam.id, input.agentId, input.principalUserId, 'finance-agent',
+  );
+  await applyFinanceRoleInstructions(
+    tx, workspaceId, input.agentId, input.principalUserId, configuredBy,
+  );
+  await tx.query(
+    `UPDATE members
+        SET reviewer_roles=(SELECT ARRAY(SELECT DISTINCT unnest(reviewer_roles || ARRAY['finance']::text[])))
+      WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+    [workspaceId, input.principalUserId],
+  );
+  await pauseOtherRoleSkills(tx, workspaceId, input.agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key);
+  await assignRoleSkill(
+    tx, workspaceId, financeTeam.id, input.agentId, configuredBy,
+    PARTNER_INVOICE_REVIEW_DEFINITION, financeArtifact, DEFAULT_FINANCE_CONFIG,
+  );
+  await bindConnector(tx, workspaceId, financeTeam.id, configuredBy, ROLE_SCOPES.finance);
+}
+
 export async function configurePartnerWorkflow(
   tx: Tx,
   workspaceId: string,
