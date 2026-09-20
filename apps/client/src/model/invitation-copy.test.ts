@@ -19,6 +19,12 @@ describe('invitation diagnostics copy', () => {
   it('acknowledges the state returned by the server instead of a cached rollout mode', () => {
     expect(invitationSuccessMessage({ ...INVITATION, status: 'accepted' })).toBe('Already a member');
     expect(invitationSuccessMessage({ ...INVITATION, delivery_status: 'queued' })).toBe('Invitation queued');
+    expect(invitationSuccessMessage({ ...INVITATION, delivery_status: 'delivered' })).toBe('Invitation sent');
+    expect(invitationSuccessMessage({ ...INVITATION, delivery_status: 'failed' }))
+      .toBe('Invitation recorded · email not delivered');
+    expect(invitationSuccessMessage({ ...INVITATION, delivery_status: 'not_required' }))
+      .toBe('Invitation recorded');
+    expect(invitationSuccessMessage(INVITATION)).toBe('Invitation recorded');
     expect(invitationSuccessMessage({
       ...INVITATION,
       delivery_status: 'not_required',
@@ -78,17 +84,25 @@ describe('invitation diagnostics copy', () => {
     });
   });
 
-  it('describes queued, accepted, and sanitized failed delivery states', () => {
+  it('describes queued, accepted, local, and sanitized failed delivery states', () => {
     expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'queued' }))
       .toBe('Email delivery queued');
     expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'delivered' }))
       .toBe('Sent by WorkOS');
+    expect(invitationDeliveryMessage({ ...INVITATION, delivery_status: 'not_required' }))
+      .toBe('No invitation email was sent.');
     expect(invitationDeliveryMessage({
       ...INVITATION,
       delivery_status: 'failed',
       delivery_reason: 'workos_invitation_delivery_unavailable',
       delivery_trace_id: TRACE,
     })).toBe(`Email delivery will retry automatically. Reference: ${TRACE}.`);
+    expect(invitationDeliveryMessage({
+      ...INVITATION,
+      delivery_status: 'failed',
+      delivery_reason: 'workos_invitation_delivery_not_configured',
+      delivery_trace_id: TRACE,
+    })).toBe(`Email delivery is waiting for WorkOS configuration. Reference: ${TRACE}.`);
     expect(invitationDeliveryMessage({
       ...INVITATION,
       delivery_status: 'failed',

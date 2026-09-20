@@ -192,7 +192,7 @@ test.describe('members write feedback', () => {
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     await expect(invite.getByText('Job role')).toHaveCount(0);
-    await expect(invite.getByText('Capacity is reserved automatically, then the invitation email is queued for delivery.')).toBeVisible();
+    await expect(invite.getByText('Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
 
