@@ -75,6 +75,53 @@ const redirectUri = (c: Context<{ Bindings: Env }>): string =>
   c.env.WORKOS_REDIRECT_URI ?? `${new URL(c.req.url).origin}/auth/callback`;
 
 /**
+ * A callback can outlive its ten-minute browser transaction while the person
+ * completes MFA. The authorization code must still be refused, but a browser
+ * should get a useful recovery path rather than the API error envelope.
+ *
+ * The page is deliberately static: the failed transaction is not trusted for
+ * a return path, and an automatic redirect could loop between AuthKit and an
+ * expired callback. `no-referrer` also keeps the callback's code and state out
+ * of the fresh sign-in request.
+ */
+function expiredSignInResponse(c: Context<{ Bindings: Env }>): Response {
+  const headers = new Headers({
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'Content-Type': 'text/html; charset=UTF-8',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Hermes-Error-Reason': 'invalid_state',
+  });
+  headers.append('Set-Cookie', clearedAuthTransactionCookie(c.env));
+  return new Response(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign-in expired · Hermes</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f3ee; color: #1d1d1b; }
+      main { width: min(100% - 2rem, 30rem); padding: 2.5rem; border: 1px solid #dedbd2; border-radius: 1rem; background: #fff; box-shadow: 0 1rem 3rem rgb(29 29 27 / 8%); }
+      h1 { margin: 0 0 0.75rem; font-size: clamp(1.75rem, 5vw, 2.25rem); line-height: 1.1; letter-spacing: -0.03em; }
+      p { margin: 0; color: #595852; font-size: 1rem; line-height: 1.6; }
+      a { display: inline-flex; margin-top: 1.75rem; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.7rem 1rem; border-radius: 0.7rem; background: #1d1d1b; color: #fff; font-weight: 650; text-decoration: none; }
+      a:focus-visible { outline: 3px solid #7c6df2; outline-offset: 3px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Your sign-in expired</h1>
+      <p>This sign-in attempt took too long or is no longer valid. Start a fresh sign-in to continue.</p>
+      <a href="/auth/login">Start a new sign-in</a>
+    </main>
+  </body>
+</html>`, { status: 400, headers });
+}
+
+/**
  * The development step-up.
  *
  * In `AUTH_MODE=fake` there is no AuthKit to send anyone to, and
@@ -142,9 +189,7 @@ export async function login(c: Context<{ Bindings: Env }>): Promise<Response> {
 /** GET /auth/callback */
 export async function callback(c: Context<{ Bindings: Env }>): Promise<Response> {
   const transaction = await readAuthTransaction(c, c.req.query('state'));
-  if (!transaction) {
-    throw new RouteError('the authentication transaction is missing or expired', 'invalid_state', 400);
-  }
+  if (!transaction) return expiredSignInResponse(c);
   const code = c.req.query('code');
   if (!code) throw new RouteError('the callback needs a code', 'no_code', 400);
   const port = workosPort(c.env);
