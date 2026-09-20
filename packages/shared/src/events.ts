@@ -382,7 +382,9 @@ export const EVENT_STREAM: Readonly<Record<StreamEventKind, 'session' | 'workspa
   'message.final': 'session',
   'request.created': 'workspace',
   'decision.recorded': 'workspace',
-  'entity.updated': 'workspace',
+  // Workspace-scoped for every entity a member may see; session-scoped when
+  // it is about a session, which only its owner's socket should hear about.
+  'entity.updated': 'either',
   'member.agent_joined': 'workspace',
   resync: 'either',
 };

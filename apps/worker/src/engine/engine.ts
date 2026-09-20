@@ -990,6 +990,14 @@ async function finish(
   await step.do(stepNames.finish, TOOL_STEP_CONFIG, async () => {
     const activeMs = await deps.db.addActiveMs(run.id, 0);
     await deps.db.setRunStatus(run.id, status, { error });
+    // A completed run names its session after what it produced. Written here,
+    // by the engine, so it does not depend on whether anybody's app pane was
+    // following the run at the time; a stopped or failed run keeps the
+    // provisional name, because it produced nothing to be named after.
+    const named = status === 'completed' ? await deps.db.nameSessionFromRun(run.id) : null;
+    // The rename goes out before the terminal status: a client that treats
+    // `completed` as the end of the session's stream must already have it.
+    if (named) await emitter.publishCommitted(named.events);
     await emitter.emit([
       {
         kind: 'run.status',

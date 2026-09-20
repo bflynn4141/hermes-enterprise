@@ -10,7 +10,8 @@
 // what makes a step that ran twice produce one row. The `ON CONFLICT` targets
 // name the partial indexes from migration 0002 explicitly, because an untargeted
 // `DO NOTHING` would also swallow a genuine primary-key collision.
-import { agentOperationForTool, type ApprovalView, type RequestKind } from '@hermes/shared';
+import { agentOperationForTool, sessionTitleFromRequest, type ApprovalView, type RequestKind } from '@hermes/shared';
+import { subjectOf } from '../domain/requests.js';
 import type { Client } from 'pg';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
@@ -481,6 +482,45 @@ export class PgAgentDb implements AgentDb {
         [runId, Math.max(0, Math.round(ms))],
       );
       return rows[0]?.active_ms ?? 0;
+    });
+  }
+
+  async nameSessionFromRun(runId: string): Promise<{ sessionId: string; title: string; events: readonly EmittedEvent[] } | null> {
+    return this.tx(async (q) => {
+      // The earliest request this run proposed is the object it was about.
+      const { rows } = await q<{ session_id: string; kind: string; label: string; payload: Record<string, unknown> | null }>(
+        `SELECT r.session_id, req.kind, req.label, req.payload
+           FROM runs r
+           JOIN requests req ON req.run_id = r.id AND req.workspace_id = r.workspace_id
+          WHERE r.id = $1 AND r.workspace_id = $2
+          ORDER BY req.created_at ASC
+          LIMIT 1`,
+        [runId, this.workspaceId],
+      );
+      const produced = rows[0];
+      if (!produced) return null;
+      const title = sessionTitleFromRequest(
+        subjectOf({ kind: produced.kind as RequestKind, label: produced.label, payload: produced.payload }),
+        produced.label,
+        produced.kind,
+      );
+      if (!title) return null;
+      // A person's own name is never replaced, and an unchanged name is not an
+      // update anybody needs to hear about.
+      const updated = await q<{ id: string }>(
+        `UPDATE sessions SET title = $3, title_source = 'run', updated_at = now()
+          WHERE workspace_id = $1 AND id = $2
+            AND title_source IN ('default', 'turn') AND title <> $3
+          RETURNING id`,
+        [this.workspaceId, produced.session_id, title.slice(0, 120)],
+      );
+      if (!updated.rows[0]) return null;
+      const event = await this.insertEvent(q, {
+        kind: 'entity.updated',
+        sessionId: produced.session_id,
+        payload: { entity_type: 'session', entity_id: produced.session_id, ref: null, version: null },
+      });
+      return { sessionId: produced.session_id, title: title.slice(0, 120), events: event ? [event] : [] };
     });
   }
 

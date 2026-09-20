@@ -60,7 +60,7 @@ const MAX_PAGE = 100;
  */
 export { VISIBLE };
 
-const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.mode, s.model_id, s.effort, s.runtime,
+const SESSION_COLUMNS = `s.id, s.owner_id, s.agent_id, s.title, s.title_source, s.mode, s.model_id, s.effort, s.runtime,
        s.pinned, s.archived, s.read_only, s.focus_ref, s.last_activity_at`;
 
 async function loadSession(
@@ -97,6 +97,7 @@ const toSession = (row: Record<string, unknown>, env: Env, workspaceId: string):
   id: row.id,
   agent_id: row.agent_id,
   title: row.title,
+  title_source: row.title_source ?? 'default',
   mode: row.mode,
   model_id: row.model_id,
   effort: row.effort ?? null,
@@ -232,7 +233,7 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
     const { rows } = await work.tx.query(
       `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
        VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'New session'), $5, $6, $7, $8)
-       RETURNING id, owner_id, agent_id, title, mode, model_id, effort, runtime, pinned, archived,
+       RETURNING id, owner_id, agent_id, title, title_source, mode, model_id, effort, runtime, pinned, archived,
                  read_only, focus_ref, last_activity_at`,
       [
         work.workspaceId,
@@ -307,7 +308,14 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
       values.push(value);
       sets.push(`${column} = $${values.length}`);
     };
-    if (typeof input.title === 'string') push('title', input.title.trim().slice(0, 120) || 'New session');
+    if (typeof input.title === 'string') {
+      // A title through this route is a person's. It sticks: neither the first
+      // turn nor a finished run may replace it, and a reset to the placeholder
+      // hands the name back to them.
+      const title = input.title.trim().slice(0, 120);
+      push('title', title || 'New session');
+      push('title_source', title ? 'manual' : 'default');
+    }
     if (typeof input.pinned === 'boolean') push('pinned', input.pinned);
     if (typeof input.archived === 'boolean') push('archived', input.archived);
     if (input.mode === 'ask' || input.mode === 'plan' || input.mode === 'work') push('mode', input.mode);
@@ -371,7 +379,7 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
 
     const { rows } = await work.tx.query(
       `UPDATE sessions SET ${sets.join(', ')} WHERE workspace_id = $1 AND id = $2
-       RETURNING id, owner_id, agent_id, title, mode, model_id, effort, runtime, pinned, archived,
+       RETURNING id, owner_id, agent_id, title, title_source, mode, model_id, effort, runtime, pinned, archived,
                  read_only, focus_ref, last_activity_at`,
       values,
     );

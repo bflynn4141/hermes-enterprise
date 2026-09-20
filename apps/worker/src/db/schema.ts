@@ -683,6 +683,7 @@ export const sessions = pgTable('sessions', {
   agentId: uuid('agent_id'),
   ownerId: uuid('owner_id').notNull(),
   title: text('title').notNull().default('New session'),
+  titleSource: text('title_source').notNull().default('default'),
   subtitle: text('subtitle'),
   mode: text('mode').notNull().default('work'),
   modelId: text('model_id').notNull(),
