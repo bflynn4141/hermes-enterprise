@@ -491,6 +491,74 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('boots an agentless reviewer into Inbox without activating an old session or inventing a chat target', async () => {
+    const queueItem = { id: mockUuid(7), text: 'Cancel this stale follow-up', status: 'queued' as const, position: 0 };
+    const baseActiveSnapshot = snapshotBody([], 'working');
+    const activeSnapshot = { ...baseActiveSnapshot, run: { ...baseActiveSnapshot.run!, queue: [queueItem] } };
+    const agentlessBootstrap = {
+      ...bootstrapBody,
+      viewer: { ...bootstrapBody.viewer, role: 'member' as const },
+      agent: null,
+    };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(agentlessBootstrap),
+      [`GET /w/${WS}/sessions/${SESSION}/snapshot`]: () => Response.json(activeSnapshot),
+      [`POST /w/${WS}/sessions/${SESSION}/runs/${RUN}/stop`]: () => Response.json({ run_id: RUN, status: 'stopped', attempt: 1 }),
+      [`DELETE /w/${WS}/sessions/${SESSION}/runs/${RUN}/queue/${queueItem.id}`]: () => Response.json({ items: [] }),
+    });
+
+    await adapter.start();
+
+    expect(state().agent).toEqual({ id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null });
+    expect(state().activeSessionId).toBeNull();
+    expect(state().sessions[SESSION]).toBeDefined();
+    expect(state().ui).toMatchObject({ app: { section: 'inbox', view: 'list' }, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(calls.some((call) => call.path.includes(`/sessions/${SESSION}/snapshot`))).toBe(false);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes('/hub/session/'))).toBe(false);
+    await adapter.activateSession(SESSION);
+    expect(state().activeSessionId).toBe(SESSION);
+    expect(calls.some((call) => call.path.includes(`/sessions/${SESSION}/snapshot`))).toBe(true);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes('/hub/session/'))).toBe(false);
+    await expect(adapter.createSession()).rejects.toThrow('No agent is available');
+    await expect(adapter.send(SESSION, 'Do not route this to a stale agent.')).rejects.toThrow('No agent is available');
+    await expect(adapter.guide(SESSION, 'Do not guide stale work.')).rejects.toThrow('No agent is available');
+    await expect(adapter.queue(SESSION, 'Do not queue stale work.')).rejects.toThrow('No agent is available');
+    await expect(adapter.editQueued(SESSION, queueItem.id, 'Do not edit stale work.')).rejects.toThrow('No agent is available');
+    await adapter.stop(SESSION);
+    expect(state().sessions[SESSION]?.run?.status).toBe('stopped');
+    await adapter.removeQueued(SESSION, queueItem.id);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith(`/runs/${RUN}/stop`))).toBe(true);
+    expect(calls.some((call) => call.method === 'DELETE' && call.path.endsWith(`/runs/${RUN}/queue/${queueItem.id}`))).toBe(true);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith('/sessions'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith('/turns'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && (call.path.endsWith('/guide') || call.path.endsWith('/queue') || call.path.endsWith('/retry')))).toBe(false);
+    adapter.dispose();
+  });
+
+  it('does not treat the bootstrap-selected agent as an exhaustive session ACL', async () => {
+    const secondAgent = mockUuid(5);
+    const secondSession = mockUuid(6);
+    const primaryAgentSession = { ...bootstrapBody.sessions[0], id: SESSION, agent_id: AGENT };
+    const secondAgentSession = { ...bootstrapBody.sessions[0], id: secondSession, agent_id: secondAgent };
+    const multiAgentBootstrap = { ...bootstrapBody, sessions: [secondAgentSession, primaryAgentSession] };
+    const { adapter, calls, state } = makeAdapter({
+      [`GET /w/${WS}/bootstrap`]: () => Response.json(multiAgentBootstrap),
+      [`GET /w/${WS}/sessions/${secondSession}/snapshot`]: () => Response.json({
+        ...snapshotBody(),
+        session: { ...snapshotBody().session, id: secondSession, agent_id: secondAgent },
+      }),
+    });
+
+    await adapter.start();
+
+    expect(state().activeSessionId).toBe(SESSION);
+    await adapter.activateSession(secondSession);
+    expect(state().activeSessionId).toBe(secondSession);
+    expect(calls.some((call) => call.path.includes(`/sessions/${secondSession}/snapshot`))).toBe(true);
+    expect(FakeSocket.instances.some((socket) => socket.url.includes(`/hub/session/${secondSession}`))).toBe(true);
+    adapter.dispose();
+  });
+
   it.each(['workspace', 'viewer', 'same identity'] as const)('scopes draft, pending-turn, and settings preservation across a %s change', async (boundary) => {
     const first = makeAdapter();
     await first.adapter.start();

@@ -5,7 +5,7 @@
 // `actionsFor(parseStreamEvent(...))`, so a schema change in the contract fails
 // here rather than at runtime.
 import { describe, expect, it } from 'vitest';
-import { CTX, CTX_DEST, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type Ref, type StreamEvent } from '@hermes/shared';
+import { CTX, CTX_DEST, INBOX, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type Ref, type StreamEvent } from '@hermes/shared';
 import { parseRef, serialiseRef } from './routes.js';
 import {
   DEFAULT_SESSION_TITLE,
@@ -74,6 +74,7 @@ function base(patch: Partial<AppState> = {}): AppState {
     ...state,
     workspace: { id: WS, name: 'Nous', role: 'admin', jurisdiction: 'default' },
     user: { id: mockUuid(100), name: 'Maya', email: 'maya@nous.example', role: 'admin' },
+    agent: { ...state.agent, id: AGENT },
     sessions: { [SESSION_A]: session(SESSION_A), [SESSION_B]: session(SESSION_B) },
     sessionOrder: [SESSION_A, SESSION_B],
     activeSessionId: SESSION_A,
@@ -128,6 +129,21 @@ describe('follow and pin', () => {
       },
     });
     expect(demoted.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('routes an agentless reviewer to Inbox without auto-selecting history', () => {
+    const withHistory = base({
+      agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null },
+      sessions: { [SESSION_A]: session(SESSION_A) },
+      activeSessionId: SESSION_A,
+    });
+    const booted = reduce(withHistory, { type: 'bootstrap/apply', patch: { ready: true } });
+    expect(booted.activeSessionId).toBeNull();
+    expect(booted.ui).toMatchObject({ app: INBOX, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(reduce(booted, { type: 'nav/app', object: OV, manual: true }).ui.app).toEqual(INBOX);
+    const selected = reduce(booted, { type: 'session/select', id: SESSION_A });
+    expect(selected.activeSessionId).toBe(SESSION_A);
+    expect(selected.ui).toMatchObject({ pane: 'chat', irisPanel: 'open' });
   });
 
   it('closes privileged views and drops cached Admin records as soon as a hub evicts the viewer', () => {

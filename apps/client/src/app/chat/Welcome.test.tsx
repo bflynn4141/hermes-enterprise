@@ -50,6 +50,23 @@ describe('Iris welcome', () => {
     expect(html).toContain('Start');
   });
 
+  it('keeps only cancellation controls on read-only history with active work', () => {
+    const current = session();
+    const html = render(<Transcript session={{
+      ...current,
+      run: {
+        id: mockUuid(3), session_id: current.id, agent_id: mockUuid(4), status: 'working', attempt: 1,
+        title: null, steps: [], started_at: '2026-09-17T19:00:00.000Z',
+        queue: [{ id: mockUuid(5), text: 'Stale follow-up', status: 'queued', position: 0 }],
+      },
+    }} find={null} readOnly />);
+
+    expect(html).toContain('Stop work');
+    expect(html).toContain('Remove queued: Stale follow-up');
+    expect(html).not.toContain('>Edit<');
+    expect(html).not.toContain('>Retry<');
+  });
+
   it('keeps carried-context information separate from the welcome state', () => {
     const html = render(<Transcript session={{ ...session(), carried: { from: 'Review', context: 'Pending evidence' } }} find={null} />);
     expect(html).toContain('Pending evidence');

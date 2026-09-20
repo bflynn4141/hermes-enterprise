@@ -38,7 +38,7 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
 
 test('a Member direct or legacy Admin link falls back before privileged effects run', async ({ page }) => {
   await recordMockRequests(page);
-  await page.goto('/?seat=member&runtimeCapacity=stepup#settings/Runtime%20capacity');
+  await page.goto('/?seat=member&workflowRole=partnerships&runtimeCapacity=stepup#settings/Runtime%20capacity');
   const app = page.getByRole('region', { name: 'Application' });
 
   await expect(app.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();

@@ -14,6 +14,7 @@
 // from the blocker card to the destination field pins the view instead of being
 // mistaken for "already the focus" (spec §4.6.1).
 import {
+  INBOX,
   sameRef,
   type Block,
   type Ref,
@@ -36,7 +37,8 @@ const LEGACY_ADMIN_SETTINGS_VIEWS = new Set([
  * This also migrates old Settings deep links for Admins while making the same
  * forged link a personal Settings fallback for Members.
  */
-export function authorisedRef(role: 'admin' | 'member', object: Ref): Ref {
+export function authorisedRef(role: 'admin' | 'member', object: Ref, agentId?: string | null): Ref {
+  if (agentId === null && object.section === 'agents') return INBOX;
   if (object.section === 'admin') {
     return role === 'admin' ? object : { section: 'settings', view: 'Notifications' };
   }
@@ -668,13 +670,16 @@ export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'bootstrap/apply': {
       const next = { ...state, ...action.patch };
-      const app = authorisedRef(next.user.role, next.ui.app);
-      return { ...next, ui: uiForRef(next.ui, app) };
+      const app = authorisedRef(next.user.role, next.ui.app, next.agent.id);
+      const ui = uiForRef(next.ui, app);
+      return next.agent.id === null
+        ? { ...next, activeSessionId: null, ui: { ...ui, irisPanel: 'hidden', pane: 'app', follow: false } }
+        : { ...next, ui };
     }
 
     // --- navigation / follow ---
     case 'nav/app': {
-      const object = authorisedRef(state.user.role, action.object);
+      const object = authorisedRef(state.user.role, action.object, state.agent.id);
       const target = activeSession(state)?.focus ?? null;
       const same = sameRef(target, object);
       return {
@@ -704,13 +709,13 @@ export function reduce(state: AppState, action: Action): AppState {
     }
     case 'follow/resume': {
       const target = activeSession(state)?.focus;
-      const object = authorisedRef(state.user.role, target ?? state.ui.app);
+      const object = authorisedRef(state.user.role, target ?? state.ui.app, state.agent.id);
       return { ...state, ui: { ...uiForRef(state.ui, object), follow: true } };
     }
     case 'iris/focus': {
       const next = withSession(state, action.sessionId, (session) => ({ ...session, focus: action.object }));
       if (state.ui.follow && action.sessionId === state.activeSessionId) {
-        return { ...next, ui: uiForRef(next.ui, authorisedRef(state.user.role, action.object)) };
+        return { ...next, ui: uiForRef(next.ui, authorisedRef(state.user.role, action.object, state.agent.id)) };
       }
       return next;
     }
@@ -916,12 +921,12 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'session/select': {
       const session = state.sessions[action.id];
       if (!session) return state;
-      const object = authorisedRef(state.user.role, session.focus ?? state.ui.app);
+      const object = authorisedRef(state.user.role, session.focus ?? state.ui.app, state.agent.id);
       return {
         ...state,
         activeSessionId: action.id,
         sessions: { ...state.sessions, [action.id]: { ...session, unread: false } },
-        ui: { ...uiForRef(state.ui, object), follow: true, pane: 'chat' },
+        ui: { ...uiForRef(state.ui, object), follow: true, pane: 'chat', ...(state.agent.id ? {} : { irisPanel: 'open' as const }) },
       };
     }
     case 'session/rename':

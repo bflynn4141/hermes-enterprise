@@ -36,7 +36,9 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
   const adapter = useAdapter();
   const nav = useNav();
   const dispatch = useDispatch();
-  const sections = SECTIONS.filter((section) => section.key !== 'admin' || state.user.role === 'admin');
+  const sections = SECTIONS.filter((section) =>
+    (section.key !== 'admin' || state.user.role === 'admin') &&
+    (section.key !== 'agents' || state.agent.id !== null));
   const [menu, setMenu] = useState(false);
   const accountBtn = useRef<HTMLElement>(null);
   const phoneAccountBtn = useRef<HTMLButtonElement>(null);
@@ -67,7 +69,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     const host = sidebarRef.current;
     if (!host || phone) return;
     const sessionHeading = [...host.querySelectorAll('span')].find((node) => node.textContent === 'Iris sessions');
-    if (sessionHeading) sessionHeading.textContent = `${state.agent.name || 'Iris'} sessions`;
+    if (sessionHeading) sessionHeading.textContent = state.agent.id ? `${state.agent.name || 'Iris'} sessions` : 'Session history';
     const rows = host.querySelectorAll<HTMLButtonElement>('button.sidebar-row[data-session-row], button.sidebar-row[title]:not([aria-label])');
     rows.forEach((row, index) => {
       const session = sessions[index];
@@ -113,7 +115,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     // `SidebarNav` renders its own <aside> with its own collapse control; this
     // wrapper is the grid cell. It clips during the shared width transition so
     // neither state can paint over the neighboring pane (decision C36).
-    <aside ref={sidebarRef} className="sidebar hermes-ui" aria-label="Workspace navigation">
+    <aside ref={sidebarRef} className={`sidebar hermes-ui${state.agent.id ? '' : ' is-agentless'}`} aria-label="Workspace navigation">
       {phone ? <div className="phone-navigation">
         <select aria-label="Workspace section" value={state.ui.app.section}
           onChange={(event) => {

@@ -88,6 +88,8 @@ const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toStr
 const moneyForMock = (minor: number, currency: string): string => `${currency} ${(minor / 100).toFixed(2)}`;
 
 interface MockOptions {
+  /** Reviewer membership with no currently accessible agent. */
+  agentless?: boolean;
   /** Opt-in settings fixtures; never part of the live bundle. */
   agentSettings?: 'ok' | 'fail' | 'conflict';
   pendingAgentApproval?: boolean;
@@ -1056,7 +1058,7 @@ export function createMockBackend(options: MockOptions = {}) {
         settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
       },
       viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-      agent: workflowRole === 'finance'
+      agent: options.agentless ? null : workflowRole === 'finance'
         ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
         : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
       capabilities: {

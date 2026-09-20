@@ -94,7 +94,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
 
   const agentView = app.section === 'agents';
   const requestView = app.section === 'inbox' && app.view === 'request';
-  const followControl = following ? (
+  const followControl = !state.agent.id ? null : following ? (
     <button type="button" className="follow-btn" aria-label={`Following ${agent}`} aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { follow: false } })} title={`The app follows ${agent}'s object changes · Click to pin this view`}>
       Following {agent}
     </button>
@@ -130,13 +130,13 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
             </button>
           </span>
         )}
-        {state.ui.irisPanel === 'open' ? (
+        {state.agent.id && (state.ui.irisPanel === 'open' ? (
           <IconButton name="expand" label={`Hide ${agent} ${TOGGLE_SHORTCUT}`} onClick={() => dispatch({ type: 'iris/panel', panel: 'rail' })} />
         ) : (
           <Button small onClick={() => dispatch({ type: 'iris/panel', panel: 'open' })}>
             <Icon name="open" size={16} /> Open {agent}
           </Button>
-        )}
+        ))}
       </header>
       {!agentView && !requestView && <div className="pane-subheader">
         <span className="truncate">{sub}</span>

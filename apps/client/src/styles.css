@@ -169,6 +169,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
    the library's 224→52 collapse animation can never paint over the pane beside
    it (decision C36). */
 .sidebar { display: flex; flex-direction: column; gap: 8px; height: 100%; padding: 0 8px; border-right: 1px solid var(--line); background: var(--app); min-width: 0; overflow: hidden; }
+.sidebar.is-agentless .workspace-sidebar-nav button[aria-label="New session"] { display: none; }
 .sidebar .brand { display: flex; align-items: center; gap: 12px; height: 64px; flex-shrink: 0; }
 .sidebar .brand img { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; }
 .sidebar .brand-name { font-size: 16px; line-height: 19.2px; }
