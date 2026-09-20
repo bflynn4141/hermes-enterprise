@@ -35,7 +35,14 @@ export interface ApprovalWork {
 
 export interface ApprovalProposerContext extends ApprovalWork {
   readonly agentId: string;
+  /** Authenticated actor. This remains the canonical revision/audit creator. */
   readonly userId?: string | null;
+  /**
+   * Frozen consenting maker when an authenticated Admin creates the review on
+   * someone else's behalf. This internal-only override is deliberately
+   * restricted to owner-shared Shared Intelligence proposals.
+   */
+  readonly requesterUserId?: string | null;
   readonly sessionId?: string | null;
   readonly runId?: string | null;
   readonly sourceTrigger?: {
@@ -571,7 +578,7 @@ async function requesterContext(
   );
   if (agent.rowCount !== 1) throw new RouteError('the proposing agent is not active in this workspace', 'invalid_requester_agent', 422);
 
-  let userId = context.userId ?? null;
+  let userId = context.requesterUserId ?? context.userId ?? null;
   if (context.sessionId) {
     const session = await context.tx.query<{ owner_id: string; agent_id: string | null }>(
       `SELECT owner_id, agent_id FROM sessions WHERE workspace_id = $1 AND id = $2`, [context.workspaceId, context.sessionId],
@@ -986,6 +993,21 @@ async function validatePartnerOutreachContact(
 
 export async function proposeApproval(context: ApprovalProposerContext, rawInput: unknown): Promise<ApprovalView> {
   const input = proposeApprovalInputSchema.parse(rawInput);
+  const actorUserId = context.userId ?? null;
+  const requesterUserId = context.requesterUserId ?? actorUserId;
+  const delegatedRequester = context.requesterUserId !== undefined && requesterUserId !== actorUserId;
+  if (delegatedRequester) {
+    const intendedSharedIntelligencePath = input.proposal.approval_type === 'shared_learning'
+      && input.proposal.details.skill_id.startsWith('shared-intelligence:');
+    const actor = actorUserId ? (await context.tx.query<{ role: string }>(
+      `SELECT role FROM members
+        WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+      [context.workspaceId, actorUserId],
+    )).rows[0] : null;
+    if (!intendedSharedIntelligencePath || actor?.role !== 'admin' || !requesterUserId) {
+      throw new RouteError('Only an authenticated Admin may create review for an owner-shared Shared Intelligence proposal', 'approval_requester_override_forbidden', 403);
+    }
+  }
   await validateJoinSource(context, input.proposal);
   if (context.sourceTrigger) {
     const validTeamCommitment = input.proposal.approval_type === 'team_commitment'
@@ -1001,7 +1023,10 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
   const { idempotency_key: _key, ...proposalMaterial } = input;
   const proposalIdempotencyHash = await sha256({
     requester_agent_id: context.agentId,
-    requester_user_id: context.userId ?? null,
+    requester_user_id: requesterUserId,
+    // Preserve every existing caller's hash exactly. Delegated creation binds
+    // both identities so replay cannot silently swap actor or maker.
+    ...(delegatedRequester ? { actor_user_id: actorUserId } : {}),
     source_session_id: context.sessionId ?? null,
     source_run_id: context.runId ?? null,
     source_trigger: context.sourceTrigger ?? null,
@@ -1016,7 +1041,7 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
     if (existing.rows[0].proposal_idempotency_hash !== proposalIdempotencyHash) {
       throw new RouteError('idempotency key was already used for a different approval proposal', 'idempotency_conflict', 409);
     }
-    return loadApprovalView(context.tx, existing.rows[0].request_id, context.userId ?? null);
+    return loadApprovalView(context.tx, existing.rows[0].request_id, actorUserId);
   }
 
   const requester = await requesterContext(context);
@@ -1086,12 +1111,12 @@ export async function proposeApproval(context: ApprovalProposerContext, rawInput
     `INSERT INTO approval_revisions
        (workspace_id, request_id, revision, authorization_hash, payload, status,
         created_by_type, created_by_user_id, created_by_agent_id)
-     VALUES ($1,$2,1,$3,$4::jsonb,'pending','agent',$5,$6)`,
-    [context.workspaceId, requestId, hash, JSON.stringify(payload), requester.userId, context.agentId],
+     VALUES ($1,$2,1,$3,$4::jsonb,'pending',$5,$6,$7)`,
+    [context.workspaceId, requestId, hash, JSON.stringify(payload), delegatedRequester ? 'user' : 'agent', actorUserId, context.agentId],
   );
-  await audit(context.tx, context.workspaceId, 'agent', requester.userId, 'approval.proposed', requestId, requester.sessionId);
+  await audit(context.tx, context.workspaceId, delegatedRequester ? 'user' : 'agent', actorUserId, 'approval.proposed', requestId, requester.sessionId);
   await publishRequestChanged(context, requestId, { label: input.label, runId: requester.runId, sessionId: requester.sessionId });
-  return loadApprovalView(context.tx, requestId, requester.userId);
+  return loadApprovalView(context.tx, requestId, actorUserId);
 }
 
 async function commandReplay(tx: Tx, workspaceId: string, requestId: string, operation: string, key: string, hash: string): Promise<boolean> {
