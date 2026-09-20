@@ -408,6 +408,21 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .list-row.compact .row-icon { width: 22px; height: 22px; }
 .list-row.tall { min-height: 110px; }
 .list-row .time { width: 55px; flex-shrink: 0; font-size: 11.2px; color: var(--muted); }
+
+/* Requests that need you (Overview). The list measures its own width, not the
+   viewport: the app pane is resized by hand, so a media query would lie. */
+.request-list { container-type: inline-size; }
+.request-list .request-action { max-width: 100%; }
+@container (max-width: 600px) {
+  .request-list .request-row { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-areas: "icon id" "icon main" "action action"; gap: 4px 12px; min-height: 0; padding: 14px; margin-bottom: 10px; border: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 10px; background: rgba(21,16,71,.35); }
+  .request-list .request-row .row-icon { grid-area: icon; }
+  .request-list .request-row .row-id { grid-area: id; width: auto; }
+  .request-list .request-row .row-id > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .request-list .request-row .row-main { grid-area: main; align-self: start; }
+  .request-list .request-row .row-main .t { color: var(--muted); }
+  .request-list .request-row .request-status { display: none; }
+  .request-list .request-row .request-action { grid-area: action; width: 100%; min-height: 42px; margin-top: 8px; white-space: normal; }
+}
 .tabs { display: flex; align-items: center; gap: 25px; border-bottom: 1px solid var(--line); flex-shrink: 0; position: relative; }
 .tabs.strong { border-bottom-color: var(--line-strong); gap: 28px; }
 .tab { display: flex; align-items: center; gap: 8px; height: 44px; font-size: 12px; line-height: 17.6px; color: var(--muted); border-bottom: 2px solid transparent; position: relative; transition: color 120ms ease-out; }

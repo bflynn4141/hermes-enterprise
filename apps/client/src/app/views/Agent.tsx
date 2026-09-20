@@ -80,7 +80,7 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
   const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
   const copy = requestRowCopy(request);
   return (
-    <div className="list-row">
+    <div className="list-row request-row">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
       <div className={`row-id${copy.compact ? ' approval-compact-copy' : ''}`}>
         <span className="t" title={copy.title}>{copy.title}</span>
@@ -88,9 +88,9 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
       </div>
       <div className="row-main">
         <span className="t">{type}</span>
-        <span className="s">{requestStatusLabel(request)}</span>
+        <span className="s request-status">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
+      <Button className="request-action" onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
     </div>
   );
 }
@@ -190,7 +190,7 @@ export function AgentOverview() {
             Open Inbox →
           </Button>
         </div>
-        <div className="col" role="list" aria-label="Requests that need you">
+        <div className="col request-list" role="list" aria-label="Requests that need you">
           <AnimatePresence initial={false}>
             {pending.map((request) => (
               <motion.div key={request.id} role="listitem" layout initial={false} exit={{ opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }} transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}>
