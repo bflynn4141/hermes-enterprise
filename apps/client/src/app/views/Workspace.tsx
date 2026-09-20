@@ -197,9 +197,11 @@ export function Members() {
       ? adapter.rest.resendInvitation(state.workspace.id, row.id)
       : adapter.rest.withdrawInvitation(state.workspace.id, row.id);
     void request
-      .then(() => {
+      .then((result) => {
         invitationsChanged();
-        showAck(action === 'resend' ? 'Invitation resent' : 'Invitation withdrawn');
+        showAck(action === 'resend'
+          ? invitationSuccessMessage(result as InvitationEntity)
+          : 'Invitation withdrawn');
       })
       .catch((error: unknown) => setNotice(action === 'resend'
         ? invitationFailureMessage(error)
@@ -389,7 +391,7 @@ export function Members() {
           </label>}
           <p className="meta">{setupOnly
             ? 'Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.'
-            : 'Capacity is reserved automatically, then the invitation email is queued for delivery.'}</p>
+            : 'Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.'}</p>
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

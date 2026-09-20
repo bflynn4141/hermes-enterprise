@@ -577,26 +577,50 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       );
       checkpoint = 'sync_and_expiry_jobs_prepared';
 
-      return { duplicate, alreadyMember: Boolean(alreadyMember), entity: invitationEntitySchema.parse({
-        id: row.id,
-        email,
-        role,
-        status: row.status,
-        invited_at: row.created_at.toISOString(),
-        ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
-        version: 0,
-      }) };
+      return {
+        duplicate,
+        alreadyMember: Boolean(alreadyMember),
+        entity: invitationEntitySchema.parse({
+          id: row.id,
+          email,
+          role,
+          status: row.status,
+          invited_at: row.created_at.toISOString(),
+          delivery_status: row.delivery_status,
+          delivery_reason: mapDeliveryReason(row.delivery_error),
+          ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
+          version: 0,
+        }),
+      };
     }));
 
+    // Post-commit WorkOS jobs may have moved queued → delivered/failed. Re-read
+    // so the response never claims email success the provider did not give.
+    const entity = await inWorkspace(c, async (work) => {
+      work.requireAdmin('viewing invitations');
+      const delivery = await invitationDeliverySnapshot(work, result.entity.id);
+      return invitationEntitySchema.parse({
+        ...result.entity,
+        delivery_status: delivery.delivery_status,
+        delivery_reason: delivery.delivery_reason,
+        delivery_trace_id: delivery.delivery_trace_id,
+      });
+    });
+
     checkpoint = 'committed';
+    const deliveryOutcome = entity.delivery_status === 'queued' || entity.delivery_status === 'sending'
+      || entity.delivery_status === 'delivered'
+      ? 'delivery_queued'
+      : entity.provisioning
+        ? 'setup_queued'
+        : 'invitation_recorded';
     logInvitationDiagnostic({
       action: 'create', checkpoint, correlationId, workspaceId,
-      invitationId: result.entity.id, ok: true,
-      reason: result.alreadyMember ? 'already_member' : result.duplicate ? 'duplicate'
-        : result.entity.provisioning ? 'setup_queued' : 'delivery_queued',
+      invitationId: entity.id, ok: true,
+      reason: result.alreadyMember ? 'already_member' : result.duplicate ? 'duplicate' : deliveryOutcome,
       status: result.duplicate ? 200 : 201,
     });
-    return c.json(result.entity, result.duplicate ? 200 : 201);
+    return c.json(entity, result.duplicate ? 200 : 201);
   } catch (error) {
     throw trackInvitationRequestFailure({
       action: 'create', checkpoint, correlationId, workspaceId,
@@ -671,10 +695,12 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       checkpoint = 'organization_binding_checked';
       await expireInvitationReservations(work.tx, work.workspaceId);
       await work.tx.query(`UPDATE invitations SET status = 'resent' WHERE id = $1`, [invitation.id]);
-      const created = await work.tx.query<{ id: string; created_at: Date }>(
+      const created = await work.tx.query<{
+        id: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+      }>(
         `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by, delivery_status)
          VALUES ($1, $2, $3, now() + interval '7 days', $4, $5)
-         RETURNING id, created_at`,
+         RETURNING id, created_at, delivery_status, delivery_error`,
         [
           work.workspaceId,
           invitation.email,
@@ -758,16 +784,36 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         role: invitation.role,
         status: 'pending',
         invited_at: row.created_at.toISOString(),
+        delivery_status: row.delivery_status,
+        delivery_reason: mapDeliveryReason(row.delivery_error),
         ...(provisioning ? { provisioning, role_template_key: invitation.role_template_key! } : {}),
         version: 0,
       });
     }));
+
+    const entity = await inWorkspace(c, async (work) => {
+      work.requireAdmin('viewing invitations');
+      const delivery = await invitationDeliverySnapshot(work, body.id);
+      return invitationEntitySchema.parse({
+        ...body,
+        delivery_status: delivery.delivery_status,
+        delivery_reason: delivery.delivery_reason,
+        delivery_trace_id: delivery.delivery_trace_id,
+      });
+    });
+
     checkpoint = 'committed';
+    const deliveryOutcome = entity.delivery_status === 'queued' || entity.delivery_status === 'sending'
+      || entity.delivery_status === 'delivered'
+      ? 'delivery_queued'
+      : entity.provisioning
+        ? 'setup_queued'
+        : 'invitation_recorded';
     logInvitationDiagnostic({
       action: 'resend', checkpoint, correlationId, workspaceId,
-      invitationId: body.id, ok: true, reason: body.provisioning ? 'setup_queued' : 'delivery_queued', status: 201,
+      invitationId: entity.id, ok: true, reason: deliveryOutcome, status: 201,
     });
-    return c.json(body, 201);
+    return c.json(entity, 201);
   } catch (error) {
     throw trackInvitationRequestFailure({
       action: 'resend', checkpoint, correlationId, workspaceId,
@@ -953,4 +999,65 @@ async function workosOrganizationId(work: TenantWork): Promise<string | null> {
     [work.workspaceId],
   );
   return rows[0]?.workos_organization_id ?? null;
+}
+
+const DELIVERY_REASON_ALLOWLIST = new Set([
+  'workos_invitation_delivery_not_configured',
+  'workos_invitation_payload_invalid',
+  'iris_capacity_reservation_missing',
+  'workos_invitation_delivery_rejected',
+  'workos_invitation_delivery_unavailable',
+  'workos_invitation_delivery_outcome_unknown',
+  'workos_invitation_local_commit_failed',
+]);
+
+function mapDeliveryReason(error: string | null): string | null {
+  if (!error) return null;
+  return DELIVERY_REASON_ALLOWLIST.has(error) ? error : 'invitation_delivery_failed';
+}
+
+/**
+ * Re-read delivery after post-commit WorkOS jobs so create/resend responses
+ * match what the Admin will see on the next list refresh — queued only when
+ * email was actually queued, failed when the provider rejected or was absent.
+ */
+async function invitationDeliverySnapshot(
+  work: TenantWork,
+  invitationId: string,
+): Promise<{
+  delivery_status: string;
+  delivery_reason: string | null;
+  delivery_trace_id: string | null;
+}> {
+  const { rows } = await work.tx.query<{
+    delivery_status: string;
+    delivery_error: string | null;
+    delivery_trace_id: string | null;
+  }>(
+    `SELECT i.delivery_status, i.delivery_error,
+            sync.correlation_id AS delivery_trace_id
+       FROM invitations i
+       LEFT JOIN LATERAL (
+         SELECT CASE
+                  WHEN payload->>'correlation_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+                  THEN payload->>'correlation_id'
+                  ELSE NULL
+                END AS correlation_id
+           FROM workos_sync
+          WHERE workspace_id=i.workspace_id AND resource_type='invitation' AND resource_id=i.id
+          ORDER BY created_at DESC
+          LIMIT 1
+       ) sync ON true
+      WHERE i.workspace_id = $1 AND i.id = $2`,
+    [work.workspaceId, invitationId],
+  );
+  const row = rows[0];
+  if (!row) {
+    return { delivery_status: 'not_required', delivery_reason: null, delivery_trace_id: null };
+  }
+  return {
+    delivery_status: row.delivery_status,
+    delivery_reason: mapDeliveryReason(row.delivery_error),
+    delivery_trace_id: row.delivery_trace_id,
+  };
 }

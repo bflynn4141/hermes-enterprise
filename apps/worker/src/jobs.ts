@@ -482,6 +482,14 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
       // and throw so the durable job keeps retrying instead of erasing the gap.
       if (invitationAction) {
         const reason = 'workos_invitation_delivery_not_configured';
+        if (payload.invitation_id) {
+          await withWorkspaceTransaction(env, job.workspace_id, (tx) => tx.query(
+            `UPDATE invitations SET delivery_status='failed', delivery_error=$3
+              WHERE workspace_id=$1 AND id=$2 AND status='pending'
+                AND delivery_status IN ('queued', 'sending', 'not_required')`,
+            [job.workspace_id, payload.invitation_id, reason],
+          ));
+        }
         await mark('failed', reason);
         invitationLog('provider_unavailable', false, reason);
         throw new InvitationDeliveryError(reason);

@@ -54,7 +54,7 @@ const DIAGNOSTIC_REASONS = new Set([
   'not_resendable', 'already_accepted', 'no_session', 'unknown_user', 'invalid_session',
   'upstream_unavailable', 'forbidden_origin', 'csrf_failed', 'not_a_member', 'no_workspace',
   'bad_workspace_id', 'invitation_failed', 'already_member', 'duplicate', 'delivery_queued',
-  'setup_queued',
+  'setup_queued', 'invitation_recorded',
   'workos_invitation_delivery_not_configured', 'workos_invitation_payload_invalid',
   'iris_capacity_reservation_missing', 'workos_invitation_delivery_rejected',
   'workos_invitation_delivery_unavailable', 'workos_invitation_delivery_outcome_unknown',

@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
-import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
+import { FakeWorkOS, FakeWorkOSError, seal, signAccessToken } from '../stubs/fake-workos.js';
 import { pollWorkOSEvents } from '../../src/auth/events-poller.js';
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../../src/auth/cookies.js';
 
@@ -428,6 +428,79 @@ describe('invitations', () => {
       c.query('SELECT id FROM invitations WHERE workspace_id = $1 AND email = $2', [fixture.workspaceId, email]),
     );
     expect(rows.rowCount).toBe(0);
+  });
+
+  it('records a local invitation without claiming WorkOS email delivery', async () => {
+    const fixture = await seedWorkspace();
+    const { env } = makeEnv();
+    const email = `local-only-${randomUUID().slice(0, 8)}@example.test`;
+
+    const response = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST',
+      body: { email },
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      email,
+      status: 'pending',
+      delivery_status: 'not_required',
+      delivery_reason: null,
+    });
+    const listed = await asUser(env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`);
+    const items = (await listed.json() as { items: Array<Record<string, unknown>> }).items;
+    expect(items.find((row) => row.email === email)).toMatchObject({
+      delivery_status: 'not_required',
+    });
+  });
+
+  it('returns delivered delivery_status after WorkOS accepts a queued invitation', async () => {
+    const fixture = await seedWorkspace();
+    const organizationId = `org_${randomUUID().slice(0, 12)}`;
+    await withClient('owner', (c) => c.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1, $2)
+       ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id = EXCLUDED.workos_organization_id`,
+      [fixture.workspaceId, organizationId],
+    ));
+    const email = `queued-${randomUUID().slice(0, 8)}@example.test`;
+
+    const response = await asWorkOSAdmin(fixture, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST',
+      body: { email },
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as { id: string; delivery_status: string };
+    expect(body.delivery_status).toBe('delivered');
+    expect(fake.calls.filter((call) => call.method === 'sendInvitation')).toHaveLength(1);
+    const listed = await asUser(makeEnv().env, fixture.adminId, `/w/${fixture.workspaceId}/invitations`);
+    const items = (await listed.json() as { items: Array<Record<string, unknown>> }).items;
+    expect(items.find((row) => row.id === body.id)).toMatchObject({
+      delivery_status: 'delivered',
+    });
+  });
+
+  it('returns failed delivery_status when WorkOS rejects the invitation email', async () => {
+    const fixture = await seedWorkspace();
+    const organizationId = `org_${randomUUID().slice(0, 12)}`;
+    await withClient('owner', (c) => c.query(
+      `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1, $2)
+       ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id = EXCLUDED.workos_organization_id`,
+      [fixture.workspaceId, organizationId],
+    ));
+    const email = `rejected-${randomUUID().slice(0, 8)}@example.test`;
+    fake.invitationFailure = new FakeWorkOSError('WorkOS rejected the invitation', 400);
+
+    const response = await asWorkOSAdmin(fixture, `/w/${fixture.workspaceId}/invitations`, {
+      method: 'POST',
+      body: { email },
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      delivery_status: 'failed',
+      delivery_reason: 'workos_invitation_delivery_rejected',
+    });
   });
 
   it('does not supersede a pending row when WorkOS cannot deliver its resend', async () => {
