@@ -22,6 +22,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("--no-dev", command)
         self.assertNotIn("pip", command)
         self.assertEqual(command[command.index("--project") + 1], "/source")
+        extras = [command[index + 1] for index, item in enumerate(command) if item == "--extra"]
+        self.assertEqual(extras, ["sms", "mcp"])
 
     def test_source_verification_requires_the_exact_revision_clean_tree_and_tracked_lock(self):
         with tempfile.TemporaryDirectory() as temporary:

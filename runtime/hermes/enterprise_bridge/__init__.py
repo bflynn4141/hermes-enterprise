@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 from .packages import packaged_skills
+from .runtime_policy import build_skill_prompt_sections, load_enterprise_skills
 
 TOOLSET = "enterprise_bridge"
 MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -274,19 +275,6 @@ class Bridge:
                            "parameters": tool["parameters"]})
         return result
 
-    def skills(self):
-        status, body = self.request("GET", self.base_url + "/skills", self.token)
-        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("skills"), list):
-            raise BridgeError("Enterprise skill discovery failed.")
-        result = []
-        for item in body["skills"]:
-            if (not isinstance(item, dict)
-                    or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", str(item.get("name", "")))
-                    or not isinstance(item.get("config", {}), dict)):
-                raise BridgeError("Enterprise skill discovery returned an invalid manifest.")
-            result.append(item)
-        return result
-
     def ensure_running(self, run_id):
         status, body = self.request("GET", self.native_url + "/v1/runs/" + run_id, self.native_token)
         if status != 200 or body.get("status") not in {"running", "waiting_for_approval"}:
@@ -534,20 +522,32 @@ def register(ctx):
         request_timeout=ctx.get_config("request_timeout_seconds", 5),
         pending_timeout=ctx.get_config("pending_timeout_seconds", 86400),
     )
-    # Install the veto before network discovery; a discovery failure exposes zero tools.
-    assigned_skills = {
-        name for name in ctx.get_config("allowed_skills", [])
-        if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
-    }
+    # The authenticated assignment is the only authority for which skills this
+    # profile may view and which skill text is pinned into every new session.
+    # Configured settings may restate it but never widen or replace it.
+    plugin_root = pathlib.Path(__file__).parent
+    try:
+        assignment = load_enterprise_skills(bridge.base_url, bridge.token, plugin_root=plugin_root)
+    except RuntimeError as error:
+        raise BridgeError(str(error)) from error
+    configured_skills = ctx.get_config("allowed_skills", [])
+    if configured_skills and list(configured_skills) != assignment["auto_load"]:
+        raise BridgeError("Configured allowed skills differ from the authenticated Enterprise assignment.")
+    assigned_skills = set(assignment["auto_load"])
+    assigned_program = assignment["config"].get("partner_program")
+    assigned_program = assigned_program if isinstance(assigned_program, dict) else {}
     partner_program = ctx.get_config("partner_program", {})
-    if not isinstance(partner_program, dict):
-        partner_program = {}
-    if not assigned_skills or (os.environ.get("HERMES_AGENTCASH_MCP_ENABLED") == "1" and not partner_program):
-        for manifest in bridge.skills():
-            assigned_skills.add(manifest["name"])
-            config = manifest.get("config", {})
-            if not partner_program and isinstance(config.get("partner_program"), dict):
-                partner_program = config["partner_program"]
+    if not isinstance(partner_program, dict) or not partner_program:
+        partner_program = assigned_program
+    elif partner_program != assigned_program:
+        raise BridgeError("Partner Program policy differs from the authenticated Enterprise assignment.")
+    # Hermes 0.21.3 has no skills.auto_load. The pinned plugin API freezes
+    # registered sections into each new session's system prompt before the
+    # first model call, so the verified SKILL.md text is pinned here. Only this
+    # plugin is enabled in a governed profile; the launcher and managed Cloud
+    # validator compare the live render with the same verified sections.
+    for section_id, text in build_skill_prompt_sections(assignment["manifests"], plugin_root):
+        ctx.register_system_prompt_section(section_id, text)
     agentcash_arguments = approved_agentcash_arguments(partner_program)
     allowed = {"skill_view"}
     configured_mcp_policy = ctx.get_config("mcp_policy", [])

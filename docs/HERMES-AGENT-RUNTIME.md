@@ -1,7 +1,7 @@
 # Official Hermes Agent runtime
 
 Hermes Enterprise now has an execution adapter for the official Nous runtime,
-pinned to `5d59366010640c1d6b8f170d8a4ee109db2bbdef` (package 0.21.3).
+pinned to `345cd2b057a452236de401d3534b8502a7465e8d` (package 0.21.3).
 The Worker remains the enterprise control plane and system of record.
 
 ## Identity and state
@@ -81,8 +81,10 @@ not create a native replay journal or hide model latency with artificial typing.
 
 The official runtime loads a narrow enterprise plugin. The plugin also registers
 reviewed, read-only enterprise skills. The Worker returns an agent-scoped
-non-secret skill manifest before startup; selected packages are loaded through
-Hermes's native `skills.auto_load` and configured through `skills.config`. It
+non-secret skill manifest before startup; the plugin verifies the assigned
+package bytes against it and pins that text into every new session's system
+prompt through Hermes's plugin prompt-section API (the pinned 0.21.3 release has
+no `skills.auto_load`). Non-secret values travel in `skills.config`. It
 gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
@@ -182,9 +184,9 @@ are disabled while enterprise ownership and retention integration is completed.
 The official runtime still persists its session transcript. Production erasure,
 backup and retention must cover that profile store as well as Postgres/R2 before
 opening this execution path to hosted customer data. Dedicated profiles remove
-the general bundled-skill catalog and can auto-load only reviewed plugin packages;
-the only native skill tool retained is `skill_view`, restricted by the plugin to
-the assigned package because official auto-load is gated on a skills tool. Skill
+the general bundled-skill catalog; the plugin pins only the reviewed, assigned
+package into each new session's prompt. The only native skill tool retained is
+`skill_view`, restricted by the plugin to the assigned package. Skill
 listing, creation and self-editing remain disabled. See
 [Enterprise-configured Hermes skills](./ENTERPRISE-SKILLS.md). Hermesmail remains
 a concept address, not a provisioned mailbox.

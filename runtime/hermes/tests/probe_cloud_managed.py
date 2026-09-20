@@ -33,7 +33,11 @@ sys.path.insert(0, str(ROOT))
 
 from enterprise_bridge import assess_control_secret
 from enterprise_bridge.packages import packaged_skills
-from enterprise_bridge.runtime_policy import EXPECTED_PLUGIN_SOURCES, plugin_tree_digest
+from enterprise_bridge.runtime_policy import (
+    EXPECTED_PLUGIN_SOURCES,
+    build_skill_prompt_sections,
+    plugin_tree_digest,
+)
 
 
 FINANCE = packaged_skills()["enterprise_bridge:partner-invoice-review"]
@@ -185,7 +189,6 @@ def config_for(port, worker_port, token, native_key, toolsets, *, role="finance"
         "memory": {"memory_enabled": False, "user_profile_enabled": False, "nudge_interval": 0},
         "skills": {
             "creation_nudge_interval": 0, "write_approval": True,
-            "auto_load": [skill["name"]],
             "config": skill_config,
         },
         "auxiliary": {
@@ -194,6 +197,21 @@ def config_for(port, worker_port, token, native_key, toolsets, *, role="finance"
         },
         "curator": {"enabled": False},
     }
+
+
+def assert_pinned_skill(model_call, package, *, absent):
+    """The system prompt carries exactly the assigned verified skill text and no other."""
+    manifest = {key: package[key] for key in ("name", "version", "artifact_digest")}
+    system_text = "\n".join(
+        str(message.get("content", "")) for message in model_call.get("messages", [])
+        if message.get("role") == "system"
+    )
+    for section_id, text in build_skill_prompt_sections([manifest]):
+        assert f"## Plugin Context: {section_id}" in system_text, section_id
+        assert text in system_text, "assigned skill section is missing from the system prompt"
+    other = {key: absent[key] for key in ("name", "version", "artifact_digest")}
+    for _section_id, text in build_skill_prompt_sections([other]):
+        assert text not in system_text, "an unassigned skill reached the system prompt"
 
 
 def main():
@@ -642,6 +660,7 @@ def main():
             "ready native submission never reached the local model fixture: "
             + (profile / "gateway.log").read_text()
         )
+        assert_pinned_skill(model_calls[-1], FINANCE, absent=PARTNER)
 
         plugin_path = profile / "home/plugins/enterprise_bridge/packages.py"
         with plugin_path.open("a") as file:
@@ -694,6 +713,7 @@ def main():
             "ready P1.7 submission never reached the local model fixture: "
             + (profile / "gateway.log").read_text()
         )
+        assert_pinned_skill(model_calls[-1], PARTNER, absent=FINANCE)
         stop_latest()
 
         print("PASS: ordinary pinned Hermes Cloud gateway installs the gate before fallible registration validation.")

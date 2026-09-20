@@ -155,6 +155,21 @@ class CloudManagedPolicyTests(unittest.TestCase):
                         assignment,
                     )
 
+    def test_managed_skill_config_keeps_native_auto_load_unused(self):
+        assignment = {"config": {"partner_program": {"no_outreach": True}}}
+        exact = {"creation_nudge_interval": 0, "write_approval": True, "config": assignment["config"]}
+        cloud_managed._validate_skill_config(exact, assignment)
+        cloud_managed._validate_skill_config({**exact, "auto_load": []}, assignment)
+        for drifted in (
+            {**exact, "auto_load": ["enterprise_bridge:partner-program-screening"]},
+            {**exact, "config": {}},
+            {**exact, "creation_nudge_interval": 10},
+            {**exact, "write_approval": False},
+            None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "skill configuration is not exact"):
+                cloud_managed._validate_skill_config(drifted, assignment)
+
     def test_binding_rejects_expired_or_role_drifted_preflight(self):
         with self.assertRaisesRegex(RuntimeError, "expired"):
             cloud_managed._validate_binding(self.binding(

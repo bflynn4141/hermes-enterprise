@@ -23,6 +23,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from enterprise_bridge.packages import packaged_skills
+from enterprise_bridge.runtime_policy import build_skill_prompt_sections
 
 PACKAGES = packaged_skills()
 LEGACY_PARTNER_PACKAGE = PACKAGES["enterprise_bridge:partner-program-screening"]
@@ -90,6 +91,28 @@ def tool_schema(name):
             "additionalProperties": False,
         },
     }
+
+
+def assert_pinned_skill(role_calls, package, *, absent):
+    """Every model call for the role carries exactly the assigned verified skill text."""
+    assert role_calls, "no model calls were recorded for the role"
+    manifest = {key: package[key] for key in ("name", "version", "artifact_digest")}
+    expected = build_skill_prompt_sections([manifest])
+    unexpected = [
+        text for other in absent
+        for _section_id, text in build_skill_prompt_sections([
+            {key: other[key] for key in ("name", "version", "artifact_digest")},
+        ])
+    ]
+    for call in role_calls:
+        system_text = "\n".join(
+            str(message.get("content", "")) for message in call["body"].get("messages", [])
+            if message.get("role") == "system"
+        )
+        for section_id, text in expected:
+            assert f"## Plugin Context: {section_id}" in system_text, section_id
+            assert text in system_text, "assigned skill section is missing from the system prompt"
+        assert not any(text in system_text for text in unexpected), "an unassigned skill reached the system prompt"
 
 
 def free_port():
@@ -381,10 +404,14 @@ def main():
                 "Partner Program Screening" in str(message.get("content", ""))
                 for call in model_calls if call["role"] == "partnerships"
                 for message in call["body"].get("messages", [])
-            ), "Managed Partner Program skill was not auto-loaded into model context"
+            ), "Managed Partner Program skill was not pinned into model context"
+            assert_pinned_skill(
+                [call for call in model_calls if call["role"] == "partnerships"],
+                PARTNER_PACKAGE, absent=(FINANCE_PACKAGE, LEGACY_PARTNER_PACKAGE),
+            )
             partner_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
             assert partner_readiness["agent_id"] == partner_agent_id, partner_readiness
-            assert partner_readiness["runtime_revision"] == "5d59366010640c1d6b8f170d8a4ee109db2bbdef"
+            assert partner_readiness["runtime_revision"] == "345cd2b057a452236de401d3534b8502a7465e8d"
             assert partner_readiness["skills"] == [{
                 "name": PARTNER_PACKAGE["name"], "version": PARTNER_PACKAGE["version"],
                 "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
@@ -454,7 +481,11 @@ def main():
                 "Partner Invoice Review" in str(message.get("content", ""))
                 for call in model_calls if call["role"] == "finance"
                 for message in call["body"].get("messages", [])
-            ), "Managed Finance skill was not auto-loaded into model context"
+            ), "Managed Finance skill was not pinned into model context"
+            assert_pinned_skill(
+                [call for call in model_calls if call["role"] == "finance"],
+                FINANCE_PACKAGE, absent=(PARTNER_PACKAGE, LEGACY_PARTNER_PACKAGE),
+            )
             finance_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
             assert finance_readiness["agent_id"] == finance_agent_id, finance_readiness
             assert finance_readiness["skills"] == [{
@@ -572,7 +603,7 @@ def main():
             ), misbound.stdout + misbound.stderr
 
             print("PASS: actual official gateway + AIAgent loop + plugin + local fixture model for opt-in Partnerships, Finance, and legacy Partnerships.")
-            print("Verified all three assigned skills auto-load with exact version/digest and tool inventory; governed tools execute with trusted run/call identity; Finance has no AgentCash and a model-requested Partnerships tool never reaches Enterprise.")
+            print("Verified all three assigned skills are pinned into every session with exact version/digest and tool inventory; governed tools execute with trusted run/call identity; Finance has no AgentCash and a model-requested Partnerships tool never reaches Enterprise.")
             print("Also verified the deployed legacy 1.7 registry identity against byte-compatible content, legacy startup/restart replay, arbitrary legacy/current digest rejection, profile-binding rejection, durable capabilities, current-profile restart replay, cron route/health policy, custom model proxy, SSE payload/single-consumer behavior, admission replay/conflict, session tool history, concurrency rejection, and stop while awaiting context.")
     finally:
         if process is not None and process.poll() is None:

@@ -11,6 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import enterprise_bridge as plugin
 from enterprise_bridge.dashboard.plugin_api import NativeControl
+from enterprise_bridge.runtime_policy import build_skill_prompt_sections
 from start import (
     assert_native_cron_empty,
     clean_environment,
@@ -25,6 +26,21 @@ RUN_ID = "run_" + "a" * 32
 PARTNER_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-program-screening"]
 MULTI_PARTY_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-program-screening-v1-8"]
 FINANCE_PACKAGE = plugin.packaged_skills()["enterprise_bridge:partner-invoice-review"]
+
+
+def assignment_for(package, config=None):
+    """An authenticated assignment shaped like load_enterprise_skills() output."""
+    return {
+        "auto_load": [package["name"]],
+        "config": dict(config or {}),
+        "manifests": [{
+            "name": package["name"], "version": package["version"],
+            "artifact_digest": package["artifact_digest"],
+        }],
+        "bindings": [],
+    }
+
+
 PEOPLE_PROGRAM = {
     "source": "agentcash_people",
     "max_spend_usd": 0.15,
@@ -35,6 +51,7 @@ PEOPLE_PROGRAM = {
         "person_locations": [],
     },
 }
+PARTNER_ASSIGNMENT = assignment_for(PARTNER_PACKAGE, {"partner_program": PEOPLE_PROGRAM})
 PEOPLE_ARGS = {
     "url": "https://stableenrich.dev/api/fullenrich/people-search",
     "method": "POST",
@@ -76,7 +93,7 @@ class BridgeTests(unittest.TestCase):
             wallet.write_text('{"private":"never-return-this"}')
             pathlib.Path(directory, "runtime-readiness.json").write_text(json.dumps({
                 "schema_version": 1,
-                "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+                "runtime_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
                 "plugin": {"name": "enterprise_bridge", "version": "1.7.0"},
                 "workspace_id": "workspace-1",
                 "agent_id": "agent-1",
@@ -256,20 +273,116 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
-        }), patch.object(plugin.Bridge, "tools", return_value=[]):
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=assignment_for(PARTNER_PACKAGE)):
             plugin.register(context)
         self.assertEqual(
             [skill["name"] for skill in context.skills],
             ["partner-program-screening", "partner-program-screening-v1-8", "partner-invoice-review"],
         )
         self.assertTrue(all(skill["path"].is_file() for skill in context.skills))
+        # Only the assigned package is pinned into new sessions, as verified text.
+        self.assertEqual([section_id for section_id, _ in context.sections],
+                         ["enterprise-skill.01", "enterprise-skill.02"])
+        pinned = "\n".join(text for _, text in context.sections)
+        self.assertIn("name: partner-program-screening\n", pinned)
+        self.assertNotIn("name: partner-program-screening-v1-8", pinned)
+        self.assertNotIn("name: partner-invoice-review", pinned)
         self.assertIsNone(context.hook("skill_view", {"name": "enterprise_bridge:partner-program-screening"}))
         self.assertEqual(context.hook("skill_view", {"name": "other"})["action"], "block")
         self.assertEqual(context.hook("skill_manage", {})["action"], "block")
+
+    def test_plugin_refuses_settings_that_disagree_with_the_authenticated_assignment(self):
+        class Context:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def get_config(self, name, default=""):
+                return self.settings.get(name, default)
+
+            def register_hook(self, _name, _callback):
+                return None
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+            def register_system_prompt_section(self, *_args, **_kwargs):
+                raise AssertionError("no section may be registered before the assignment is trusted")
+
+        base = {
+            "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+            "native_url": "http://127.0.0.1:8642",
+        }
+        widened = {**base, "allowed_skills": [PARTNER_PACKAGE["name"], FINANCE_PACKAGE["name"]]}
+        other_program = {**base, "partner_program": {**PEOPLE_PROGRAM, "max_spend_usd": 5}}
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT):
+            with self.assertRaisesRegex(plugin.BridgeError, "allowed skills differ"):
+                plugin.register(Context(widened))
+            with self.assertRaisesRegex(plugin.BridgeError, "Partner Program policy differs"):
+                plugin.register(Context(other_program))
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills",
+                             side_effect=RuntimeError("Enterprise skill manifest could not be loaded.")):
+            with self.assertRaisesRegex(plugin.BridgeError, "could not be loaded"):
+                plugin.register(Context(base))
+
+    def test_plugin_pins_only_the_assigned_skill_bytes(self):
+        class Context:
+            def __init__(self):
+                self.sections = []
+
+            def get_config(self, name, default=""):
+                return {
+                    "base_url": "https://enterprise.example/internal/runtime/w/w/agents/a",
+                    "native_url": "http://127.0.0.1:8642",
+                    "allowed_skills": [FINANCE_PACKAGE["name"]],
+                }.get(name, default)
+
+            def register_hook(self, _name, _callback):
+                return None
+
+            def register_skill(self, **_kwargs):
+                return object()
+
+            def register_tool(self, **_kwargs):
+                return object()
+
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.sections.append((section_id, text))
+                return object()
+
+        context = Context()
+        with patch.dict(plugin.os.environ, {
+            "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
+            "API_SERVER_KEY": "native-runtime-token",
+        }), patch.object(plugin.Bridge, "tools", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=assignment_for(FINANCE_PACKAGE)):
+            plugin.register(context)
+        self.assertEqual(
+            context.sections,
+            build_skill_prompt_sections(assignment_for(FINANCE_PACKAGE)["manifests"]),
+        )
+        self.assertTrue(all(len(text) <= 4000 for _, text in context.sections))
+        self.assertIn("Partner Invoice Review", context.sections[0][1])
+        self.assertNotIn("Partner Program Screening", "".join(text for _, text in context.sections))
 
     def test_warm_profile_discovers_its_managed_skill_and_agentcash_policy(self):
         class Context:
@@ -293,6 +406,10 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         manifest = {
             "name": "enterprise_bridge:partner-program-screening",
             "version": PARTNER_PACKAGE["version"],
@@ -305,7 +422,7 @@ class BridgeTests(unittest.TestCase):
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
             "HERMES_AGENTCASH_MCP_ENABLED": "1",
-        }), patch.object(plugin.Bridge, "skills", return_value=[manifest]), \
+        }), patch.object(plugin, "load_enterprise_skills", return_value=assignment_for(PARTNER_PACKAGE, manifest["config"])), \
                 patch.object(plugin.Bridge, "tools", return_value=[]), \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
                 patch.object(plugin.Bridge, "authorize_people_search"):
@@ -345,12 +462,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")), \
                 patch.object(plugin.Bridge, "authorize_people_search") as authorized:
             plugin.register(context)
@@ -394,12 +515,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin.Bridge, "import_people_search") as imported, \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_people")):
             plugin.register(context)
@@ -436,12 +561,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin.Bridge, "authorize_creator_search") as authorized, \
                 patch.object(plugin.Bridge, "import_creator_search") as imported, \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_creator")):
@@ -481,12 +610,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin.Bridge, "authorize_creator_search") as authorized, \
                 patch.object(plugin.Bridge, "import_creator_search") as imported, \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_x_creator")):
@@ -526,12 +659,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin.Bridge, "authorize_contact") as authorized, \
                 patch.object(plugin.Bridge, "import_contact") as imported, \
                 patch.object(plugin, "trusted_hook_identity", return_value=(RUN_ID, "call_contact")):
@@ -570,12 +707,16 @@ class BridgeTests(unittest.TestCase):
             def register_tool(self, **_kwargs):
                 return object()
 
+            def register_system_prompt_section(self, section_id, text, **_kwargs):
+                self.__dict__.setdefault("sections", []).append((section_id, text))
+                return object()
+
         context = Context()
         with patch.dict(plugin.os.environ, {
             "ENTERPRISE_RUNTIME_TOKEN": "enterprise-runtime-token",
             "API_SERVER_KEY": "native-runtime-token",
         }), patch.object(plugin.Bridge, "tools", return_value=[]), \
-                patch.object(plugin.Bridge, "skills", return_value=[]), \
+                patch.object(plugin, "load_enterprise_skills", return_value=PARTNER_ASSIGNMENT), \
                 patch.object(plugin.Bridge, "import_people_search") as imported:
             plugin.register(context)
             context.hooks["post_tool_call"](

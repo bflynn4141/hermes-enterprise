@@ -21,7 +21,9 @@ from .runtime_policy import (
     RUNTIME_REVISION,
     actual_plugin_attestation,
     actual_skill_attestation,
+    actual_skill_prompt_attestation,
     assert_native_cron_empty,
+    build_skill_prompt_sections,
     install_native_api_policy,
     install_native_model_policy,
     load_enterprise_skills,
@@ -36,14 +38,15 @@ from .runtime_policy import (
 FLAG = "HERMES_ENTERPRISE_CLOUD_MANAGED"
 EXPECTED_HERMES_VERSION = "0.21.3"
 SOURCE_DIGESTS = {
-    "agent.conversation_loop": "e8f8e140c43d0954a5d21c8a8edf2630e953b20b3e3a4e52db1405671cc25bb1",
-    "gateway.platforms.api_server": "800b15a537c24636509187ddfd850eadec94873f18dec633466604d525403fce",
-    "hermes_cli.plugins": "77853fdef1a8b9eac4904d21d78f0f746e324473c86806a5be2b148328fce094",
+    "agent.conversation_loop": "2086d4d084a7cba728a5862f2f27d172860908af967e2b83a43d22fe757548c2",
+    "gateway.platforms.api_server": "7ec405dc2a59789582ad9f61a189a41079e621f14642d3c9dc754e312616a868",
+    "hermes_cli.plugins": "1b5aae9a34e97c9922b5ab7e76c4bd3562a6ab715a983bf9c4dfe6031c457942",
+    "hermes_cli.plugins_dispatch": "6de218e8b72e9717a5bfba701e54595b21c9f89a6dd78a938c72140bf5ab0501",
     "hermes_cli.plugins_loader": "38280b9a7f83e6f4c0e03dbec91cd986c41b3f3a7eff05772c844e5d4b3c58ff",
-    "hermes_cli.runtime_provider": "97cd8da5116efe7323e6836d2683661602a985964bdb6f8f7f60f632e842ce30",
+    "hermes_cli.runtime_provider": "013831a166ff862fbc4284d43556f9bd124ecd8beaadce3b4adc9d9fc0032f17",
     "hermes_cli.tools_config": "039dc85e2494bd44b692ebdad022fdef40526f6048a3275efdeeb97939a16afd",
-    "model_tools": "432ab8bcf79bbac321e76385aaa15ad6056999cbf372917f0dbf0ab13e2679dc",
-    "cron.jobs": "0e444b6ce34f7dde94374e6826c07f69e4854a2eb160efad728838469a1d30ad",
+    "model_tools": "c99620c824ab59f341ac7d0e22cde016b0c469d0643e7a5a5a82e0d63176e4b5",
+    "cron.jobs": "bedc0a7bad306df456b6c84d44b26ebfad2320725d2175f6cf6512b9b5d7ef9a",
 }
 AGENTCASH_SERVER = {
     "command": "npx",
@@ -321,6 +324,16 @@ def _validate_role_config(config, settings, assignment):
     return partnership, ({"mcp__agentcash__fetch"} if partnership else set())
 
 
+def _validate_skill_config(skills_config, assignment):
+    """The plugin pins assigned skill text itself; native auto_load must stay unused."""
+    if (not isinstance(skills_config, dict)
+            or skills_config.get("auto_load")
+            or skills_config.get("config") != assignment["config"]
+            or skills_config.get("creation_nudge_interval") != 0
+            or skills_config.get("write_approval") is not True):
+        raise RuntimeError("Managed skill configuration is not exact")
+
+
 def _validate_config(identity, settings, assignment):
     from hermes_cli.config import get_config_path, load_config
     from toolsets import TOOLSETS
@@ -336,11 +349,7 @@ def _validate_config(identity, settings, assignment):
         raise RuntimeError("Configured allowed skills differ from the authenticated assignment")
     if settings.get("partner_program", {}) != assignment["config"].get("partner_program", {}):
         raise RuntimeError("Partner Program policy differs from the authenticated assignment")
-    if (config.get("skills", {}).get("auto_load") != assignment["auto_load"]
-            or config.get("skills", {}).get("config") != assignment["config"]
-            or config.get("skills", {}).get("creation_nudge_interval") != 0
-            or config.get("skills", {}).get("write_approval") is not True):
-        raise RuntimeError("Managed skill configuration is not exact")
+    _validate_skill_config(config.get("skills", {}), assignment)
     partnership, expected_mcp_names = _validate_role_config(config, settings, assignment)
     # platform_toolsets names the configured MCP server alias. Hermes resolves
     # that alias to the registry-owned mcp-agentcash toolset after discovery.
@@ -464,6 +473,8 @@ def _initializer(settings, state, enterprise_tool_names):
             "artifact_digest": plugin_source["artifact_digest"],
         }
         skills = actual_skill_attestation(manager, assignment["manifests"], pathlib.Path(__file__).parent)
+        prompt_sections = build_skill_prompt_sections(assignment["manifests"], pathlib.Path(__file__).parent)
+        actual_skill_prompt_attestation(manager, prompt_sections)
         _config, config_path, toolsets, disabled, expected_mcp, partnership = _validate_config(
             identity, settings, assignment,
         )
@@ -523,6 +534,7 @@ def _initializer(settings, state, enterprise_tool_names):
             )
             if {item["name"]: item["content_digest"] for item in current_skills} != expected_skill_digests:
                 raise RuntimeError("Managed enterprise skill changed after readiness")
+            actual_skill_prompt_attestation(manager, prompt_sections)
             if actual_plugin_attestation(manager) != {
                 "name": plugin["name"], "version": plugin["version"],
             }:

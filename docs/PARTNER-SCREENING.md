@@ -103,7 +103,7 @@ Source policy and quota references were checked on 2026-09-18:
    disposable and blocked signals do not.
 7. Onboarding calls the explicit handoff route after the provider is connected.
    Cloudflare Cron performs the same idempotent handoff automatically. The
-   agent's auto-loaded Partner Program skill guides the review. It can call
+   agent's pinned Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
    are read-only and restricted to its own candidates. Candidate detail exposes
    the exact active draft policy, reviewer audience and sender only when that
