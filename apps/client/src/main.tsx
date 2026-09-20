@@ -21,7 +21,8 @@ import { currentRoute, parseRef, serialiseRef, SHELL_PREFIX, type Route } from '
 import { activeSessionKey } from './model/constants.js';
 import { StoreProvider, useAdapter, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
-import { Onboarding, SignIn } from './app/onboarding/Onboarding.js';
+import { invitationRoleLabel, Onboarding, SignIn } from './app/onboarding/Onboarding.js';
+import type { PendingInvitation } from '@hermes/shared';
 import { SharedViewer } from './app/shared/SharedViewer.js';
 import { Avatar, Button, EmptyState, Skeleton } from './app/ui/primitives.js';
 
@@ -71,6 +72,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       settingsWrites: params.get('settingsWrites') === 'fail' ? 'fail' : 'ok',
       memberInvitations: params.get('memberSetup') === '1' ? 'setup_only' : 'legacy_delivery',
       pausedMemberSetup: params.get('pausedMemberSetup') === '1',
+      pendingInvitation: params.get('pendingInvitation') === '1',
       slack: params.get('slack') === 'unconfigured' ? 'unconfigured' : params.get('slack') === 'unavailable' ? 'unavailable' : params.get('slack') === 'connected' ? 'connected' : 'disconnected',
       email: params.get('email') === 'unconfigured' ? 'unconfigured' : params.get('email') === 'unavailable' ? 'unavailable' : params.get('email') === 'connected' ? 'connected' : 'disconnected',
       partnerWorkflow: params.get('partnerWorkflow') === '1',
@@ -282,6 +284,10 @@ function WorkspacePicker() {
       member_count: number;
     }[]
   >([]);
+  // Invitations addressed to the signed-in email, listed after the workspaces
+  // so nobody has to find the email to accept one. "Accept" goes through the
+  // existing join page, which is the one place that accepts.
+  const [invitations, setInvitations] = useState<PendingInvitation[]>([]);
 
   useEffect(() => {
     let live = true;
@@ -291,6 +297,7 @@ function WorkspacePicker() {
       .then((session) => {
         if (!live) return;
         setWorkspaces(session.workspaces);
+        setInvitations(session.invitations);
         setState('ready');
       })
       .catch((caught: unknown) => {
@@ -339,7 +346,7 @@ function WorkspacePicker() {
           <EmptyState
             icon="context"
             title="You are not in a workspace yet"
-            detail="Create one, or open the invitation somebody sent you."
+            detail={invitations.length > 0 ? 'Accept an invitation below, or create a workspace of your own.' : 'Create one, or open the invitation somebody sent you.'}
             action={<Button primary onClick={() => window.location.assign('/onboarding/create')}>Create a workspace</Button>}
           />
         ) : (
@@ -400,6 +407,31 @@ function WorkspacePicker() {
               </span>
             </button>
           </div>
+        )}
+        {invitations.length > 0 && (
+          <section className="workspace-invitations" aria-labelledby="workspace-invitations-heading">
+            <h2 id="workspace-invitations-heading">Pending invitations</h2>
+            <ul className="workspace-invitation-list">
+              {invitations.map((invitation) => (
+                <li className="workspace-invitation" key={invitation.token}>
+                  <span className="workspace-invitation-copy">
+                    <strong>{invitation.workspace.name}</strong>
+                    <span>
+                      {invitation.invited_by ? `${invitation.invited_by} invited you as ${invitationRoleLabel(invitation)}` : `Invited as ${invitationRoleLabel(invitation)}`}
+                      {' · '}open until {new Date(invitation.expires_at).toLocaleDateString()}
+                    </span>
+                  </span>
+                  <Button
+                    primary
+                    onClick={() => window.location.assign(`/onboarding/join?token=${encodeURIComponent(invitation.token)}`)}
+                    aria-label={`Accept the invitation to ${invitation.workspace.name}`}
+                  >
+                    Accept
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
       </main>
     </div>

@@ -40,6 +40,12 @@ export const LIMITS = {
    * which is the opposite of what a guessing limit is for.
    */
   acceptInvitation: { action: 'invitation.accept', limit: 10, windowSeconds: 3_600 },
+  /**
+   * Reading an invitation's workspace name before accepting takes the same
+   * opaque secret, so it is the same oracle; a separate, looser bucket keeps a
+   * few page refreshes from spending the ten accept attempts.
+   */
+  previewInvitation: { action: 'invitation.preview', limit: 60, windowSeconds: 3_600 },
 } as const satisfies Record<string, RateLimit>;
 
 /**

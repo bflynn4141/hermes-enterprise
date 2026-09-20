@@ -9,6 +9,7 @@
 // The presenter, the intro slides and the "one week later" interstitial are not
 // ported: they were the demo's narration, not the product.
 import { useEffect, useState } from 'react';
+import type { InvitationPreview } from '@hermes/shared';
 import { createRest } from '../../model/rest.js';
 import { createAuth } from '../../model/auth.js';
 import { Glass, Icon } from '../ui/icons.js';
@@ -244,6 +245,33 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
   const [error, setError] = useState<string | null>(null);
   const [me, setMe] = useState<{ email: string } | null>(null);
   const [checked, setChecked] = useState(false);
+  const [preview, setPreview] = useState<InvitationPreview | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  // What this link joins, from the token-scoped read. The same token that
+  // will be accepted, so an unknown or withdrawn one is refused here with the
+  // words the accept would have used, before anyone clicks.
+  useEffect(() => {
+    if (!token) return;
+    let live = true;
+    void rest
+      .previewInvitation(token)
+      .then((found) => {
+        if (live) setPreview(found);
+      })
+      .catch((caught: unknown) => {
+        if (!live) return;
+        const failure = caught as { status?: number; reason?: string };
+        if (failure.reason === 'invitation_email_mismatch') setRefusal(MISMATCH);
+        else if (failure.reason === 'invitation_unavailable') setRefusal(UNAVAILABLE);
+        else if (failure.reason === 'email_unverified') setRefusal(UNVERIFIED);
+        // Anything else (offline, a 500) leaves the page nameless but usable:
+        // the accept itself is the authority and will say what is wrong.
+      });
+    return () => {
+      live = false;
+    };
+  }, [rest, token]);
 
   // Who is signed in, if anyone. `GET /auth/session` with no `?ws` answers
   // that without naming a workspace (server decision F7); a 404 means signed
@@ -279,10 +307,12 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
         }
         setError(
           failure.reason === 'invitation_email_mismatch'
-            ? 'This invitation was sent to a different address. A forwarded link does not admit whoever opens it; ask for one addressed to you.'
+            ? MISMATCH
             : failure.reason === 'invitation_unavailable'
-              ? 'This invitation is not open. It may have been withdrawn, already accepted, or expired — ask for a new one.'
-              : 'Could not accept this invitation. Try again.',
+              ? UNAVAILABLE
+              : failure.reason === 'email_unverified'
+                ? UNVERIFIED
+                : 'Could not accept this invitation. Try again.',
         );
         setBusy(false);
       });
@@ -297,13 +327,25 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
         </div>
       </header>
       <div className="portal-body" style={{ alignItems: 'center', paddingTop: 100, width: 560, gap: 24 }}>
-        <h1 style={{ font: '500 35.2px/38.4px var(--font-display)' }}>Join a workspace</h1>
+        <h1 style={{ font: '500 35.2px/38.4px var(--font-display)', textAlign: 'center' }}>
+          {preview ? `Join ${preview.workspace.name}` : 'Join a workspace'}
+        </h1>
         {!checked ? (
           <Skeleton rows={2} label="Checking your session" />
         ) : !token ? (
           <EmptyState icon="context" title="This link is missing its invitation token" detail="Ask whoever invited you to send it again." />
+        ) : refusal ? (
+          <p className="meta" role="alert" style={{ textAlign: 'center' }}>
+            {refusal}
+          </p>
         ) : (
           <>
+            {preview && (
+              <p className="join-invitation-summary">
+                {preview.invited_by ? `${preview.invited_by} invited you` : 'You were invited'} to join as {invitationRoleLabel(preview)}.
+                {' '}The invitation is open until {new Date(preview.expires_at).toLocaleDateString()}.
+              </p>
+            )}
             <p className="meta" style={{ textAlign: 'center' }}>
               Accepting this invitation adds you to the workspace with the role it was sent with. A Member works with agents and reads every request; only an Admin records a decision.
             </p>
@@ -321,6 +363,17 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
       </div>
     </div>
   );
+}
+
+const MISMATCH = 'This invitation was sent to a different address. A forwarded link does not admit whoever opens it; ask for one addressed to you.';
+const UNAVAILABLE = 'This invitation is not open. It may have been withdrawn, already accepted, or expired — ask for a new one.';
+const UNVERIFIED = 'Verify your email address before accepting an invitation. An unverified address is not an identity, so it cannot be the one the invitation is matched on.';
+
+/** "a Finance member", "a Partnerships member", "an Admin", "a Member". */
+export function invitationRoleLabel(invitation: { role: 'admin' | 'member'; role_template_key: string | null }): string {
+  if (invitation.role_template_key === 'finance-agent') return 'a Finance member';
+  if (invitation.role_template_key === 'partnerships-agent') return 'a Partnerships member';
+  return invitation.role === 'admin' ? 'an Admin' : 'a Member';
 }
 
 export function SignIn({ returnTo }: { returnTo: string | null }) {
