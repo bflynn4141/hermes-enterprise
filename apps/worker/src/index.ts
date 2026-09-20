@@ -114,6 +114,7 @@ import {
   listRequestDocuments,
   listRequestEffects,
   listRequests,
+  patchRequestPresentation,
 } from './routes/requests.js';
 import { executeEffect, listEffects } from './routes/effects.js';
 import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
@@ -421,6 +422,7 @@ app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
+app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
 

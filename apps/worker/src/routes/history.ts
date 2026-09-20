@@ -35,6 +35,7 @@ import { isHistoryTab, loadHistory, renderHistoryRow } from '../domain/history.j
 import { requestAudiencePredicate } from '../domain/audience.js';
 import { deletePrefix } from '../storage/r2.js';
 import { documentPrefix } from '../documents/keys.js';
+import { REQUEST_ACTIVE_PRESENTATION_PREDICATE, REQUEST_REVIEWABLE_PREDICATE } from '../domain/requests.js';
 
 const historyPage = paginatedSchema(eventRowSchema);
 const HISTORY_LIMIT = 100;
@@ -101,9 +102,10 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
                WHERE effect_row.workspace_id = $1 AND effect_row.kind = 'access_grant'
                  AND effect_row.status IN ('pending', 'assigned')
                  AND ${requestAudiencePredicate('r.id', '$2')}) AS pending_grants,
-              (SELECT count(*)::int FROM requests r LEFT JOIN approval_requests ar ON ar.request_id = r.id
+              (SELECT count(*)::int FROM requests r
                 WHERE r.workspace_id = $1 AND r.status = 'pending'
-                  AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+                  AND ${REQUEST_REVIEWABLE_PREDICATE}
+                  AND ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
                   AND ${requestAudiencePredicate('r.id', '$2')}) AS inbox,
               (SELECT count(*)::int FROM v_created_documents document_view
                 JOIN requests r ON r.id = document_view.request_id

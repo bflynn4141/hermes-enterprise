@@ -46,6 +46,11 @@ export interface RequestRow {
   triage_completed_at?: Date | null;
   triage_rubric_version?: string | null;
   triage_model_id?: string | null;
+  provenance_kind?: 'operational' | 'sample' | 'test' | 'unknown';
+  provenance_source?: string;
+  provenance_recorded_at?: Date;
+  presentation_hidden_at?: Date | null;
+  presentation_hidden_reason?: string | null;
 }
 
 /** Every column the shaping needs, plus the latest note and the decision. */
@@ -64,10 +69,18 @@ export const REQUEST_SELECT = `
          ta.reason_codes AS triage_reason_codes,
          ta.completed_at AS triage_completed_at,
          ta.rubric_version AS triage_rubric_version,
-         ta.model_id AS triage_model_id
+         ta.model_id AS triage_model_id,
+         COALESCE(provenance.kind, 'unknown') AS provenance_kind,
+         COALESCE(provenance.source, 'not_recorded') AS provenance_source,
+         COALESCE(provenance.recorded_at, r.created_at) AS provenance_recorded_at,
+         presentation.hidden_at AS presentation_hidden_at,
+         presentation.hidden_reason AS presentation_hidden_reason
     FROM requests r
     LEFT JOIN decisions d ON d.request_id = r.id
     LEFT JOIN users u ON u.id = d.decided_by
+    LEFT JOIN request_provenance provenance ON provenance.request_id = r.id
+    LEFT JOIN request_presentations presentation
+      ON presentation.request_id = r.id AND presentation.user_id = app_user_id()
     LEFT JOIN LATERAL (
       SELECT status, priority_score, priority_band, confidence, reason_codes,
              completed_at, rubric_version, model_id
@@ -85,6 +98,38 @@ export const REQUEST_SELECT = `
  * drift.
  */
 export const REQUEST_AUDIENCE_PREDICATE = requestAudiencePredicate('r.id', '$2');
+
+/** Default Inbox visibility is personal presentation state, never workflow state. */
+export const REQUEST_ACTIVE_PRESENTATION_PREDICATE = `NOT EXISTS (
+  SELECT 1 FROM request_presentations request_presentation
+   WHERE request_presentation.workspace_id=r.workspace_id
+     AND request_presentation.request_id=r.id
+     AND request_presentation.user_id=$2
+     AND request_presentation.hidden_at IS NOT NULL
+)`;
+
+/** Pending approvals that have expired do not remain actionable Inbox work. */
+export const REQUEST_REVIEWABLE_PREDICATE = `(r.status <> 'pending' OR r.kind <> 'approval' OR EXISTS (
+  SELECT 1 FROM approval_requests reviewable_approval
+   WHERE reviewable_approval.request_id=r.id
+     AND reviewable_approval.status='pending'
+     AND reviewable_approval.expires_at > now()
+))`;
+
+export const financeWorkflowRequest = (row: Pick<RequestRow, 'kind' | 'payload'>): boolean =>
+  row.kind === 'invoice'
+  && !!row.payload
+  && typeof row.payload === 'object'
+  && !Array.isArray(row.payload)
+  && 'workflow_provenance' in row.payload;
+
+export function canDecideLegacyRequest(
+  row: Pick<RequestRow, 'kind' | 'payload'>,
+  role: string,
+  reviewerRoles: readonly string[],
+): boolean {
+  return role === 'admin' || (financeWorkflowRequest(row) && reviewerRoles.includes('finance'));
+}
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -212,6 +257,16 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     approval,
     decision_summary: decisionSummary(row, approval, canDecideLegacy),
     triage: triageOf(row, triageActive, approval),
+    provenance: {
+      kind: row.provenance_kind ?? 'unknown',
+      source: row.provenance_source ?? 'not_recorded',
+      recorded_at: (row.provenance_recorded_at ?? row.created_at).toISOString(),
+    },
+    presentation: {
+      hidden: row.presentation_hidden_at != null,
+      hidden_at: row.presentation_hidden_at?.toISOString() ?? null,
+      hidden_reason: row.presentation_hidden_reason ?? null,
+    },
   };
 }
 

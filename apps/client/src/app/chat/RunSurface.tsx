@@ -119,7 +119,7 @@ export function RunActivity({ session, progress = [], now = systemNow }: { sessi
     .map((item) => ({
       key: item.id,
       label: item.text,
-      amount: item.status === 'paused' ? 'Paused' : item.status === 'sent' ? 'Sent' : 'Queued',
+      amount: item.status === 'paused' ? 'Paused' : item.status === 'sent' ? 'Handed to Iris' : 'Queued',
       status: (item.status === 'sent' ? 'done' : item.status === 'paused' ? 'blocked' : 'sequence') as 'done' | 'blocked' | 'sequence',
       details: [{ label: 'Position', meta: String(item.position + 1) }],
     }));

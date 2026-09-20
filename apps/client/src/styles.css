@@ -521,7 +521,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .inbox-title-row { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; }
 .inbox-count { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 12px; background: var(--context); color: var(--muted); font-size: 10.4px; line-height: 19.2px; }
 .inbox-topbar .tabs { min-width: 0; }
-.inbox-tools { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; min-width: 0; }
+.inbox-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; padding-bottom: 10px; min-width: 0; }
 .approval-demo-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .inbox-tools .search { min-width: 120px; padding-block: 8px; }
 .inbox-sort { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(21,16,71,.52); flex-shrink: 0; }
@@ -543,7 +543,10 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .inbox-item-date { flex-shrink: 0; color: var(--muted); font-size: 10px; line-height: 14.4px; }
 .inbox-item-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body); font-size: 10.4px; line-height: 16px; }
 .inbox-item-signals { display: flex; gap: 5px; min-height: 18px; align-items: center; overflow: hidden; }
-.priority-chip, .reason-chip { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 9px; line-height: 13px; white-space: nowrap; }
+.priority-chip, .reason-chip, .provenance-chip { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 9px; line-height: 13px; white-space: nowrap; }
+.presentation-action { display: inline-flex; align-items: center; gap: 8px; }
+.provenance-operational { color: #C9C6FF; border-color: rgba(170,165,255,.35); }
+.provenance-sample, .provenance-test { color: #F2D49A; border-color: rgba(231,194,125,.35); background: rgba(112,81,28,.12); }
 .priority-chip { text-transform: capitalize; }
 .priority-urgent { color: #FFD1D7; border-color: rgba(255,122,142,.45); background: rgba(136,35,58,.2); }
 .priority-high { color: #F2D49A; border-color: rgba(231,194,125,.4); background: rgba(112,81,28,.15); }

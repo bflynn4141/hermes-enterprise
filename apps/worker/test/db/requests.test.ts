@@ -54,6 +54,14 @@ describe('GET /w/:ws/requests', () => {
       items: { kind: string; label: string; subject: string | null; title: string | null }[];
     };
     expect(all.items).toHaveLength(4);
+    const bootstrap = await (await asUser(e, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      counts: { inbox: number; pending_for_me: number; pending_for_others: number };
+    };
+    expect(bootstrap.counts).toMatchObject({
+      inbox: all.items.length,
+      pending_for_me: all.items.length,
+      pending_for_others: 0,
+    });
 
     const applications = (await (
       await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests?kind=application`)
@@ -72,6 +80,119 @@ describe('GET /w/:ws/requests', () => {
     };
     expect(search.items).toHaveLength(1);
     expect(search.items[0]?.label).toBe('Leah Martinez');
+  });
+
+  it('uses trusted provenance relations instead of guessing from request copy', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    const requestId = await seedRequest(fx, 'application', { label: 'Sample QA candidate' });
+
+    const unknown = requestEntitySchema.parse(await (
+      await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}`)
+    ).json());
+    expect(unknown.provenance).toMatchObject({ kind: 'unknown', source: 'not_recorded' });
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await client.query('SELECT set_config($1, $2, true)', ['app.workspace_id', fx.workspaceId]);
+      await client.query('SELECT set_config($1, $2, true)', ['app.user_id', fx.adminId]);
+      const runId = randomUUID();
+      await client.query(
+        `INSERT INTO onboarding_sample_runs
+           (id, workspace_id, agent_id, created_by, setup_attempt_id)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [runId, fx.workspaceId, fx.agentId, fx.adminId, randomUUID()],
+      );
+      await client.query(
+        `INSERT INTO onboarding_sample_applications
+           (workspace_id, run_id, sample_key, display_name, payload, request_id, received_at)
+         VALUES ($1,$2,'leah','Sample QA candidate','{}'::jsonb,$3,now())`,
+        [fx.workspaceId, runId, requestId],
+      );
+      await client.query('COMMIT');
+    });
+
+    const sample = requestEntitySchema.parse(await (
+      await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}`)
+    ).json());
+    expect(sample.provenance).toMatchObject({ kind: 'sample', source: 'onboarding_sample_run' });
+  });
+
+  it('keeps personal hiding reversible without concealing a required review from another reviewer', async () => {
+    const fx = await seedWorkspace();
+    const { env: e } = env();
+    const requestId = await seedRequest(fx, 'application');
+    const path = `/w/${fx.workspaceId}/requests/${requestId}/presentation`;
+
+    const adminHide = await asUser(e, fx.adminId, path, {
+      method: 'PATCH',
+      body: { hidden: true, reason: 'Trying to defer my required review.' },
+    });
+    expect(adminHide.status).toBe(409);
+    expect(await adminHide.json()).toMatchObject({ reason: 'required_review_cannot_be_hidden' });
+
+    const memberHide = await asUser(e, fx.memberId, path, {
+      method: 'PATCH',
+      body: { hidden: true, reason: 'Waiting for the workspace Admin.' },
+    });
+    expect(memberHide.status).toBe(200);
+    expect(requestEntitySchema.parse(await memberHide.json()).presentation).toMatchObject({
+      hidden: true,
+      hidden_reason: 'Waiting for the workspace Admin.',
+    });
+    const [memberPresentationRows, adminPresentationRows] = await Promise.all([
+      readTenant(fx.workspaceId, fx.memberId, async (client) => (
+        await client.query(`SELECT request_id FROM request_presentations WHERE request_id=$1`, [requestId])
+      ).rowCount),
+      readTenant(fx.workspaceId, fx.adminId, async (client) => (
+        await client.query(`SELECT request_id FROM request_presentations WHERE request_id=$1`, [requestId])
+      ).rowCount),
+    ]);
+    expect(memberPresentationRows).toBe(1);
+    expect(adminPresentationRows).toBe(0);
+
+    const memberActive = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    const memberHidden = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests?visibility=hidden`)
+    ).json());
+    const adminActive = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.adminId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    expect(memberActive.items.map((item) => item.id)).not.toContain(requestId);
+    expect(memberHidden.items.map((item) => item.id)).toContain(requestId);
+    expect(adminActive.items.find((item) => item.id === requestId)?.presentation.hidden).toBe(false);
+
+    const memberBootstrap = await (await asUser(e, fx.memberId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      counts: { inbox: number; pending_for_others: number };
+    };
+    const adminBootstrap = await (await asUser(e, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      counts: { inbox: number; pending_for_me: number };
+    };
+    expect(memberBootstrap.counts).toMatchObject({ inbox: 0, pending_for_others: 0 });
+    expect(adminBootstrap.counts).toMatchObject({ inbox: 1, pending_for_me: 1 });
+
+    const restored = await asUser(e, fx.memberId, path, { method: 'PATCH', body: { hidden: false } });
+    expect(restored.status).toBe(200);
+    expect(requestEntitySchema.parse(await restored.json()).presentation).toMatchObject({
+      hidden: false,
+      hidden_at: null,
+      hidden_reason: 'Waiting for the workspace Admin.',
+    });
+    const activeAgain = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e, fx.memberId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    expect(activeAgain.items.map((item) => item.id)).toContain(requestId);
+
+    const auditKinds = await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const { rows } = await client.query<{ kind: string }>(
+        `SELECT kind FROM events WHERE request_id=$1 AND kind IN ('request.hidden','request.restored') ORDER BY created_at`,
+        [requestId],
+      );
+      return rows.map((row) => row.kind);
+    });
+    expect(auditKinds).toEqual(['request.hidden', 'request.restored']);
   });
 
   it('queues a bounded triage batch without running model work in the read request', async () => {

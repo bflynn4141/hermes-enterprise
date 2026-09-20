@@ -137,6 +137,13 @@ function requestAction(request: RequestEntity): string {
   return 'Review request';
 }
 
+const PROVENANCE_LABELS: Record<RequestEntity['provenance']['kind'], string> = {
+  operational: 'Operational',
+  sample: 'Sample',
+  test: 'Test',
+  unknown: 'Origin not recorded',
+};
+
 function shortDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? '' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -162,7 +169,9 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
   const query = filters?.query ?? '';
   const kind = filters?.kind ?? 'all';
   const reviewer = filters?.reviewer ?? 'for_me';
-  const filtered = query.length > 0 || kind !== 'all' || reviewer !== 'for_me';
+  const provenance = filters?.provenance ?? 'all';
+  const visibility = filters?.visibility ?? 'active';
+  const filtered = query.length > 0 || kind !== 'all' || reviewer !== 'for_me' || provenance !== 'all' || visibility !== 'active';
   const selected = lists.requests.find((request) => request.id === selectedId) ?? null;
   const activeTab = selected
     ? selected.status === 'pending' ? 'needs-review' : 'resolved'
@@ -177,6 +186,8 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
       const visible = lists.requests
         .filter((request) => (activeTab === 'resolved' ? request.status !== 'pending' : request.status === 'pending'))
         .filter((request) => activeTab === 'resolved' || matchesReviewerFilter(request, reviewer))
+        .filter((request) => visibility === 'all' || request.presentation.hidden === (visibility === 'hidden'))
+        .filter((request) => provenance === 'all' || request.provenance.kind === provenance)
         .filter((request) => kind === 'all' || (kind === 'documents' ? request.kind === 'invoice' || request.kind === 'agreement' : request.kind === kind))
         .filter((request) => `${request.label} ${request.subject ?? ''}`.toLowerCase().includes(query.toLowerCase()));
       return visible.sort((a, b) => sort === 'recent'
@@ -186,7 +197,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
           || (b.triage?.score ?? -1) - (a.triage?.score ?? -1)
           || Date.parse(a.created_at) - Date.parse(b.created_at));
     },
-    [lists.requests, activeTab, kind, query, reviewer, sort],
+    [lists.requests, activeTab, kind, provenance, query, reviewer, sort, visibility],
   );
   const listLabel = activeTab === 'resolved' ? 'Resolved requests' : 'Requests needing review';
   const backRef: Ref = { section: 'inbox', view: 'list', filters };
@@ -235,6 +246,18 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <option value="task">Tasks</option>
               <option value="approval">Approvals</option>
             </select>
+            <select className="btn provenance-filter" aria-label="Request origin" value={provenance} onChange={(event) => setFilters({ provenance: event.target.value as NonNullable<Ref['filters']>['provenance'] })}>
+              <option value="all">All origins</option>
+              <option value="operational">Operational</option>
+              <option value="sample">Samples</option>
+              <option value="test">Tests</option>
+              <option value="unknown">Origin not recorded</option>
+            </select>
+            <select className="btn visibility-filter" aria-label="Inbox visibility" value={visibility} onChange={(event) => setFilters({ visibility: event.target.value as NonNullable<Ref['filters']>['visibility'] })}>
+              <option value="active">Active</option>
+              <option value="hidden">Hidden</option>
+              <option value="all">Active + hidden</option>
+            </select>
           </div>
         )}
       </div>
@@ -282,6 +305,8 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                       </span>
                       <span className="inbox-item-preview">{requestPreview(request)}</span>
                       <span className="inbox-item-signals">
+                        <span className={`provenance-chip provenance-${request.provenance.kind}`}>{PROVENANCE_LABELS[request.provenance.kind]}</span>
+                        {request.presentation.hidden && <span className="provenance-chip">Hidden from my Inbox</span>}
                         {request.triage?.status === 'complete' ? (
                           <span className={`priority-chip priority-${request.triage.band}`}>{request.triage.band}</span>
                         ) : (!request.triage || request.triage.status === 'pending') && activeTab === 'needs-review' && sort === 'priority' ? (
@@ -306,9 +331,9 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <EmptyState
                 icon={activeTab === 'resolved' ? 'trace' : 'admission'}
                 title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                detail={filtered ? 'Try a different search or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
+                detail={filtered ? 'Try a different search, reviewer, origin, visibility, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
                 action={filtered
-                  ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me' })}>Clear filters</Button>
+                  ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active' })}>Clear filters</Button>
                   : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
               />
             )}
@@ -327,7 +352,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                   <Icon name="arrow" size={16} className="back-arrow" /> Inbox
                 </Button>
                 <span className="grow" />
-                {selected && <span className="pill">{requestType(selected)}</span>}
+                {selected && <><span className={`pill provenance-${selected.provenance.kind}`}>{PROVENANCE_LABELS[selected.provenance.kind]}</span><span className="pill">{requestType(selected)}</span><RequestPresentationAction request={selected} /></>}
               </div>
               <RequestDetail id={selectedId} />
             </motion.div>
@@ -336,6 +361,69 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
       )}
     </div>
   );
+}
+
+function RequestPresentationAction({ request }: { request: RequestEntity }) {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const dispatch = useDispatch();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const required = request.status === 'pending' && request.kind !== 'task'
+    && request.decision_summary?.approval_requirement.pending_for_viewer === true;
+
+  const apply = async (hidden: boolean): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await adapter.rest.patchRequestPresentation(
+        state.workspace.id,
+        request.id,
+        { hidden, ...(hidden ? { reason } : {}) },
+      );
+      dispatch({ type: 'entity/upsert', kind: 'request', id: next.id, version: next.version, data: next });
+      const delta = hidden ? -1 : 1;
+      if (request.status === 'pending') {
+        dispatch({ type: 'counts/set', patch: {
+          inbox: Math.max(0, state.counts.inbox + delta),
+          ...(matchesReviewerFilter(request, 'for_me')
+            ? { pendingForMe: Math.max(0, (state.counts.pendingForMe ?? state.counts.inbox) + delta) }
+            : {}),
+          ...(matchesReviewerFilter(request, 'waiting')
+            ? { pendingForOthers: Math.max(0, (state.counts.pendingForOthers ?? 0) + delta) }
+            : {}),
+        } });
+      }
+      setOpen(false);
+      setReason('');
+    } catch (caught) {
+      const code = (caught as { reason?: string }).reason;
+      setError(code === 'required_review_cannot_be_hidden'
+        ? 'Decide or route this required review before hiding it.'
+        : code === 'hide_reason_required'
+          ? 'Add a short reason so this organization choice remains auditable.'
+          : 'Could not change this Inbox view. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (request.presentation.hidden) {
+    return <span className="presentation-action"><Button link disabled={busy} onClick={() => void apply(false)}>{busy ? 'Restoring…' : 'Restore'}</Button>{error && <span className="meta" role="alert">{error}</span>}</span>;
+  }
+  return <>
+    <Button link disabled={required || busy} onClick={() => setOpen(true)}>{required ? 'Required review' : 'Hide'}</Button>
+    <Dialog open={open} title="Hide from your Inbox?" onClose={() => !busy && setOpen(false)} actions={<>
+      <Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
+      <Button primary disabled={busy || reason.trim().length < 5} onClick={() => void apply(true)}>{busy ? 'Hiding…' : 'Hide from my Inbox'}</Button>
+    </>}>
+      <p>Only your Inbox view changes. The request, workflow, audit history and other reviewers stay unchanged.</p>
+      <label className="field"><span>Reason</span><textarea rows={3} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why are you organizing this for later?" /></label>
+      {error && <p className="meta" role="alert">{error}</p>}
+    </Dialog>
+  </>;
 }
 
 function RequestDetail({ id }: { id: string | null }) {
@@ -977,13 +1065,11 @@ export function DocumentView({
 /**
  * The receipt: what was decided, and what is still pending as an effect.
  *
- * The effects list is the most important honest surface in the product. There
- * is no executor in this repository — no SMTP client, no payment provider, no
- * signature provider — so pressing Execute records an attempt, writes
- * `unavailable`, and says in the server's own words that nothing was sent,
- * paid, granted or signed. The copy is the server's `reason` string rather than
- * ours, because that sentence is the thing being relied on and it should have
- * one author.
+ * Legacy ledger effects do not execute. Approved communications can use a
+ * separate governed outbox when configured, but pressing Execute here records
+ * an unavailable attempt and says in the server's own words what remains
+ * undone. The copy is the server's `reason` string because that sentence is
+ * relied on and should have one author.
  *
  * Execute needs the reviewer role the effect names, and step-up. A second press
  * finds the row already `unavailable` and is answered with it rather than
@@ -1092,7 +1178,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
         </div>
         {effects.some((effect) => effect.status === 'unavailable') && (
           <p className="meta" style={{ maxWidth: 760 }}>
-            Nothing was sent, paid, granted or signed. There is no integration behind these in the pilot, so the attempt is recorded against your name and the work is still yours to do.
+            Nothing was sent, paid, granted or signed by this legacy effect. Approved email delivery uses a separate governed outbox when configured; this record is not a delivery receipt. Payment, access and signature executors remain unavailable here.
           </p>
         )}
         {notice && <p className="meta" role="alert">{notice}</p>}

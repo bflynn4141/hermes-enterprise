@@ -21,6 +21,12 @@ import { runtimeLocation } from '../runtime/config.js';
 import { getSession } from '../auth.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { requestAudiencePredicate, streamEventAudiencePredicate } from '../domain/audience.js';
+import {
+  canDecideLegacyRequest,
+  REQUEST_ACTIVE_PRESENTATION_PREDICATE,
+  REQUEST_REVIEWABLE_PREDICATE,
+  type RequestRow,
+} from '../domain/requests.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -108,13 +114,8 @@ export async function loadBootstrap(
   // Counts are derived from current rows and the document view, never stored.
   // Audience filtering happens before aggregation so a private request does
   // not change another member's badges.
-  const counts = await tx.query<{ inbox: number; grants: number; documents: number; decisions: number }>(
-    `SELECT (SELECT count(*)::int FROM requests r
-              LEFT JOIN approval_requests ar ON ar.request_id = r.id
-             WHERE r.workspace_id = $1 AND r.status = 'pending'
-               AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
-               AND ${requestAudiencePredicate('r.id', '$2')}) AS inbox,
-            (SELECT count(*)::int FROM effects effect_row
+  const counts = await tx.query<{ grants: number; documents: number; decisions: number }>(
+    `SELECT (SELECT count(*)::int FROM effects effect_row
               JOIN requests r ON r.id = effect_row.request_id
              WHERE effect_row.workspace_id = $1 AND effect_row.kind = 'access_grant'
                AND effect_row.status IN ('pending', 'assigned')
@@ -155,30 +156,30 @@ export async function loadBootstrap(
     [userId, agent.id],
   );
 
-  const requests = await tx.query<{ id: string; kind: string; status: string; label: string }>(
-    `SELECT r.id, r.kind, r.status, r.label FROM requests r
-      LEFT JOIN approval_requests ar ON ar.request_id = r.id
+  const requests = await tx.query<Pick<RequestRow, 'id' | 'kind' | 'status' | 'label' | 'payload'>>(
+    `SELECT r.id, r.kind, r.status, r.label, r.payload FROM requests r
       WHERE r.workspace_id = $1 AND r.status = 'pending'
-        AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
+        AND ${REQUEST_REVIEWABLE_PREDICATE}
+        AND ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
         AND ${requestAudiencePredicate('r.id', '$2')}
-      ORDER BY r.created_at DESC LIMIT 100`,
+      ORDER BY r.created_at DESC`,
     [workspaceId, userId],
   );
 
-  const approvalIds = await tx.query<{ request_id: string }>(
-    `SELECT approval_row.request_id FROM approval_requests approval_row
-      JOIN requests r ON r.id = approval_row.request_id
-      WHERE approval_row.workspace_id = $1 AND approval_row.status = 'pending'
-        AND approval_row.expires_at > now()
-        AND ${requestAudiencePredicate('r.id', '$2')}`,
-    [workspaceId, userId],
-  );
   let pendingForMe = 0;
   let pendingForOthers = 0;
-  for (const approval of approvalIds.rows) {
-    const projection = await loadApprovalListProjection(tx, approval.request_id, userId);
-    if (projection.pending_for_viewer) pendingForMe += 1;
-    else if (projection.waiting_on_others) pendingForOthers += 1;
+  const viewerRole = viewer.rows[0]?.role ?? 'member';
+  const reviewerRoles = viewer.rows[0]?.reviewer_roles ?? [];
+  for (const request of requests.rows) {
+    if (request.kind === 'approval') {
+      const projection = await loadApprovalListProjection(tx, request.id, userId);
+      if (projection.pending_for_viewer) pendingForMe += 1;
+      else pendingForOthers += 1;
+    } else if (request.kind === 'task' || canDecideLegacyRequest(request, viewerRole, reviewerRoles)) {
+      pendingForMe += 1;
+    } else {
+      pendingForOthers += 1;
+    }
   }
 
   // A catalog row is offered only when this workspace holds a verified key for
@@ -235,7 +236,7 @@ export async function loadBootstrap(
     [workspaceId, userId],
   );
   const head = heads.rows[0] ?? { session_head: '0', workspace_head: '0' };
-  const count = counts.rows[0] ?? { inbox: 0, grants: 0, documents: 0, decisions: 0 };
+  const count = counts.rows[0] ?? { grants: 0, documents: 0, decisions: 0 };
 
   return bootstrapSchema.parse({
     workspace: {
@@ -273,7 +274,7 @@ export async function loadBootstrap(
     },
     heads: { session: head.session_head, workspace: head.workspace_head },
     counts: {
-      inbox: count.inbox,
+      inbox: requests.rows.length,
       pending_grants: count.grants,
       created_documents: count.documents,
       decisions: count.decisions,
@@ -286,7 +287,7 @@ export async function loadBootstrap(
       ...row,
       last_activity_at: row.last_activity_at === null ? null : row.last_activity_at.toISOString(),
     })),
-    requests: requests.rows,
+    requests: requests.rows.slice(0, 100).map(({ payload: _payload, ...request }) => request),
     catalog: catalog.rows,
   });
 }

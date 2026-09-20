@@ -2158,7 +2158,7 @@ function insightPages(usage: UsageReport): { key: string; prose: ReactNode; Card
 }
 
 /**
- * Email notifications.
+ * Notification preferences.
  *
  * The shape is the server's: `{ notifications: { approvals, blocked, digest } }`
  * on the way in and `settingsView.notifications` on the way back. It used to
@@ -2199,7 +2199,8 @@ function NotificationsTab() {
   };
   return (
     <>
-      <h2 className="section-title">Email notifications</h2>
+      <div className="row"><h2 className="section-title">Notification preferences</h2><span className="grow" /><span className="pill">Delivery not configured</span></div>
+      <p className="meta">These preferences are saved for a future delivery service. This deployment does not send approval, blocked-work or digest emails.</p>
       {([
         ['approvals', 'Approval requests'],
         ['blocked', 'Blocked work'],
@@ -2211,10 +2212,10 @@ function NotificationsTab() {
         </div>
       ))}
       <div className="app-footer inline">
-        <span className="meta">Email only · The Inbox stays on</span>
+        <span className="meta">Preferences only · The Inbox stays on · No notification email is sent</span>
         <span className="grow" />
         <Ack show={ack} style={{ right: 0, top: -12, position: 'relative' }}>
-          Saved
+          Preference saved
         </Ack>
       </div>
     </>

@@ -27,7 +27,16 @@ import {
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
-import { loadRequest, toRequestEntity, REQUEST_AUDIENCE_PREDICATE, REQUEST_SELECT, type RequestRow } from '../domain/requests.js';
+import {
+  canDecideLegacyRequest,
+  loadRequest,
+  toRequestEntity,
+  REQUEST_ACTIVE_PRESENTATION_PREDICATE,
+  REQUEST_AUDIENCE_PREDICATE,
+  REQUEST_REVIEWABLE_PREDICATE,
+  REQUEST_SELECT,
+  type RequestRow,
+} from '../domain/requests.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
 import { loadVersions, toDocumentEntity } from '../documents/service.js';
@@ -49,19 +58,12 @@ function statusFilter(raw: string | undefined): string[] {
     .filter((value): value is string => (REQUEST_STATUSES as readonly string[]).includes(value));
 }
 
-const financeWorkflowRequest = (row: RequestRow): boolean =>
-  row.kind === 'invoice'
-  && !!row.payload
-  && typeof row.payload === 'object'
-  && !Array.isArray(row.payload)
-  && 'workflow_provenance' in row.payload;
-
-async function financeReviewer(work: TenantWork): Promise<boolean> {
+async function reviewerRoles(work: TenantWork): Promise<string[]> {
   const { rows } = await work.tx.query<{ reviewer_roles: string[] }>(
     `SELECT reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
     [work.workspaceId, work.userId],
   );
-  return rows[0]?.reviewer_roles.includes('finance') ?? false;
+  return rows[0]?.reviewer_roles ?? [];
 }
 
 export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Response> {
@@ -71,11 +73,21 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
   const q = (c.req.query('q') ?? '').trim().slice(0, 120);
   const limit = Math.min(LIST_LIMIT, Math.max(1, Number(c.req.query('limit') ?? LIST_LIMIT) || LIST_LIMIT));
   const sort = c.req.query('sort') === 'recent' ? 'recent' : 'priority';
+  const provenanceRaw = c.req.query('provenance');
+  const provenance = ['operational', 'sample', 'test', 'unknown'].includes(provenanceRaw ?? '') ? provenanceRaw : null;
+  const visibilityRaw = c.req.query('visibility');
+  const visibility = visibilityRaw === 'hidden' || visibilityRaw === 'all' ? visibilityRaw : 'active';
   const triageActive = c.env.INBOX_TRIAGE_MODE === 'active';
 
   const rows = await inWorkspace(c, async (work) => {
     const values: unknown[] = [work.workspaceId, work.userId];
-    const where: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE];
+    const where: string[] = ['r.workspace_id=$1', REQUEST_AUDIENCE_PREDICATE, REQUEST_REVIEWABLE_PREDICATE];
+    if (visibility === 'active') where.push(REQUEST_ACTIVE_PRESENTATION_PREDICATE);
+    if (visibility === 'hidden') where.push('presentation.hidden_at IS NOT NULL');
+    if (provenance) {
+      values.push(provenance);
+      where.push(`COALESCE(provenance.kind, 'unknown') = $${values.length}`);
+    }
     if (statuses.length > 0) {
       values.push(statuses);
       where.push(`r.status = ANY ($${values.length}::text[])`);
@@ -122,14 +134,14 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
         if (jobId) jobs.push(jobId);
       }
     }
-    return { rows: result.rows, projections, role: work.role, financeReviewer: await financeReviewer(work) };
+    return { rows: result.rows, projections, role: work.role, reviewerRoles: await reviewerRoles(work) };
   });
 
   const items = rows.rows.map((row) => toRequestEntity(
     row,
     rows.projections.get(row.id) ?? null,
     triageActive,
-    rows.role === 'admin' || (rows.financeReviewer && financeWorkflowRequest(row)),
+    canDecideLegacyRequest(row, rows.role, rows.reviewerRoles),
   ));
   if (sort === 'priority' && triageActive) {
     const rank = { urgent: 0, high: 1, normal: 2, low: 3, assessing: 4 } as const;
@@ -158,14 +170,14 @@ export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Respons
   const result = await inWorkspace(c, async (work) => {
     const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, role: work.role, financeReviewer: await financeReviewer(work) };
+    return { row, approval, role: work.role, reviewerRoles: await reviewerRoles(work) };
   });
   if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
   return c.json(requestEntitySchema.parse(toRequestEntity(
     result.row,
     result.approval,
     c.env.INBOX_TRIAGE_MODE === 'active',
-    result.role === 'admin' || (result.financeReviewer && financeWorkflowRequest(result.row)),
+    canDecideLegacyRequest(result.row, result.role, result.reviewerRoles),
   )));
 }
 
@@ -195,8 +207,7 @@ export async function listRequestDocuments(c: Context<{ Bindings: Env }>): Promi
  * A review note is not a decision and is guarded like what it is: any member of
  * the workspace may leave one, on a request in any status. It is also never
  * sent anywhere — the demo's note block said "Review note · Not sent" and that
- * is still true, because there is nothing in this repository that could send
- * it.
+ * is still true because this route only writes the internal review thread.
  */
 export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: false });
@@ -216,7 +227,7 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
     );
     const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, role: work.role, financeReviewer: await financeReviewer(work) };
+    return { row, approval, role: work.role, reviewerRoles: await reviewerRoles(work) };
   });
 
   if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
@@ -224,6 +235,81 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
     row.row,
     row.approval,
     c.env.INBOX_TRIAGE_MODE === 'active',
-    row.role === 'admin' || (row.financeReviewer && financeWorkflowRequest(row.row)),
+    canDecideLegacyRequest(row.row, row.role, row.reviewerRoles),
   )), 201);
+}
+
+/**
+ * PATCH /w/:ws/requests/:id/presentation
+ *
+ * Personal Inbox organization only. A hidden row remains directly readable,
+ * auditable and actionable through its URL, and other reviewers' lists/counts
+ * are unchanged. The current required reviewer must decide or route the work
+ * before hiding it; presentation state is never a way to suppress an approval.
+ */
+export async function patchRequestPresentation(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
+  const requestId = pathUuid(c, 'id');
+  const input = await jsonBody<{ hidden?: unknown; reason?: unknown }>(c);
+  if (typeof input.hidden !== 'boolean') {
+    throw new RouteError('hidden must be true or false', 'bad_presentation', 422);
+  }
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (input.hidden && (reason.length < 5 || reason.length > 500)) {
+    throw new RouteError('a reason of 5 to 500 characters is required', 'hide_reason_required', 422);
+  }
+
+  const result = await inWorkspace(c, async (work) => {
+    const row = await loadRequest(work.tx, requestId, work.userId);
+    if (!row) throw new RouteError('no such request', 'unknown_request', 404);
+    const approval = row.kind === 'approval'
+      ? await loadApprovalListProjection(work.tx, requestId, work.userId)
+      : null;
+    const roles = await reviewerRoles(work);
+    const canDecide = canDecideLegacyRequest(row, work.role, roles);
+    const requiredForViewer = row.status === 'pending' && (
+      row.kind === 'approval' ? approval?.pending_for_viewer === true
+        : row.kind !== 'task' && canDecide
+    );
+    if (input.hidden && requiredForViewer) {
+      throw new RouteError(
+        'Decide or route this required review before hiding it.',
+        'required_review_cannot_be_hidden',
+        409,
+      );
+    }
+
+    const current = await work.tx.query<{ hidden_at: Date | null }>(
+      `SELECT hidden_at FROM request_presentations WHERE request_id=$1 AND user_id=$2`,
+      [requestId, work.userId],
+    );
+    const wasHidden = current.rows[0]?.hidden_at !== null && current.rows[0]?.hidden_at !== undefined;
+    if (input.hidden !== wasHidden) {
+      await work.tx.query(
+        `INSERT INTO request_presentations
+           (workspace_id, request_id, user_id, hidden_at, hidden_reason, restored_at)
+         VALUES ($1,$2,$3,CASE WHEN $4::boolean THEN now() ELSE NULL END,
+                 CASE WHEN $4::boolean THEN $5 ELSE NULL END,
+                 CASE WHEN $4::boolean THEN NULL ELSE now() END)
+         ON CONFLICT (request_id,user_id) DO UPDATE SET
+           hidden_at=EXCLUDED.hidden_at,
+           hidden_reason=CASE WHEN $4::boolean THEN EXCLUDED.hidden_reason ELSE request_presentations.hidden_reason END,
+           restored_at=EXCLUDED.restored_at,
+           updated_at=now()`,
+        [work.workspaceId, requestId, work.userId, input.hidden, reason || null],
+      );
+      await work.tx.query(
+        `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, request_id)
+         VALUES ($1,'user',$2,$3,$4)`,
+        [work.workspaceId, work.userId, input.hidden ? 'request.hidden' : 'request.restored', requestId],
+      );
+    }
+
+    const updated = await loadRequest(work.tx, requestId, work.userId);
+    if (!updated) throw new RouteError('no such request', 'unknown_request', 404);
+    return toRequestEntity(updated, approval, c.env.INBOX_TRIAGE_MODE === 'active', canDecide);
+  });
+
+  return c.json(requestEntitySchema.parse(result));
 }

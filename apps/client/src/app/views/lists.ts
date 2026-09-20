@@ -54,7 +54,9 @@ export function useWorkspaceLists(): Loaded {
   useEffect(() => {
     if (!workspaceId) return;
     const rest = adapter.rest;
-    adapter.ensureList(LIST_KEYS.requests, async () => page('request', (await rest.listRequests(workspaceId)).items));
+    // Load both personal presentation states once; Inbox filters them locally
+    // so a hide/restore response can move a row without a second network list.
+    adapter.ensureList(LIST_KEYS.requests, async () => page('request', (await rest.listRequests(workspaceId, '?visibility=all')).items));
     adapter.ensureList(LIST_KEYS.documents, async () => page('document', (await rest.listDocuments(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.members, async () => page('member', (await rest.listMembers(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.invitations, async () => page('invitation', (await rest.listInvitations(workspaceId)).items));

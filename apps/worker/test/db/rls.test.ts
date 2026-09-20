@@ -41,7 +41,11 @@ describe('row-level security', () => {
         expect(policies, `${table} has more than one policy`).toEqual(['tenant_isolation']);
       }
       for (const row of rows) {
-        const expected = row.tablename === 'workspaces' ? '(id = app_workspace_id())' : '(workspace_id = app_workspace_id())';
+        const expected = row.tablename === 'workspaces'
+          ? '(id = app_workspace_id())'
+          : row.tablename === 'request_presentations'
+            ? '((workspace_id = app_workspace_id()) AND (user_id = app_user_id()))'
+            : '(workspace_id = app_workspace_id())';
         expect(row.qual, `${row.tablename} policy differs`).toBe(expected);
       }
     });
