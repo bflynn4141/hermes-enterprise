@@ -32,6 +32,7 @@ test.describe('Hermes runtime capacity setup', () => {
     expect(stepUpRequests()).toBe(1);
     await expect(page).toHaveURL(/runtimeCapacity=stepup/);
 
+    await app.getByLabel('Profile role').selectOption('finance-agent');
     await app.getByLabel('Permanent Agent UUID').first().fill(ENTERPRISE_AGENT_ID);
     await app.getByRole('button', { name: 'Prepare credential' }).click();
 
@@ -44,7 +45,8 @@ test.describe('Hermes runtime capacity setup', () => {
     await expect(app.getByText('d'.repeat(64))).toHaveCount(0);
 
     await app.getByLabel('Cloud agent ID', { exact: true }).fill('cmu5pw0yq0006gm0a7e2njary');
-    await app.getByLabel('Instance name').fill('Partnerships pool 1');
+    await expect(app.locator('.runtime-grant-state strong').filter({ hasText: /^Finance$/ })).toBeVisible();
+    await app.getByLabel('Instance name').fill('Finance pool 1');
     await app.getByLabel('Connector HTTPS URL').fill('https://not-ready.example.test/plugin');
     await app.getByLabel('Connector control secret').fill(CONTROL_SECRET);
     await app.getByRole('button', { name: 'Verify and add' }).click();
@@ -53,7 +55,7 @@ test.describe('Hermes runtime capacity setup', () => {
 
     await app.getByLabel('Connector HTTPS URL').fill('https://ready.example.test/plugin');
     await app.getByRole('button', { name: 'Verify and add' }).click();
-    await expect(app.getByText('Partnerships pool 1 passed live readiness checks')).toBeVisible();
+    await expect(app.getByText('Finance pool 1 passed live readiness checks')).toBeVisible();
     await expect(app.getByLabel('Connector control secret')).toHaveValue('');
     await expect(app.getByText('Verified and available')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-desktop.png'), fullPage: true });

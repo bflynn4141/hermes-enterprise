@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const runtimeCapacityRoleSchema = z.enum(['partnerships-agent', 'finance-agent']);
+export const runtimeCapacityRoleVersionSchema = z.literal('1.0.0');
+
 export const runtimeDiscoveryGrantStatusSchema = z.enum([
   'prepared',
   'linked',
@@ -11,7 +14,11 @@ export const runtimeDiscoveryGrantStatusSchema = z.enum([
 export const runtimeDiscoveryGrantSchema = z.object({
   id: z.uuid(),
   preflight_agent_id: z.uuid(),
+  role_template_key: runtimeCapacityRoleSchema,
+  role_template_version: runtimeCapacityRoleVersionSchema,
   role: z.string().min(1),
+  skill_key: z.enum(['partner-program-screening', 'partner-invoice-review']),
+  skill_version: z.enum(['1.7.0', '1.0.1']),
   assignment_revision: z.number().int().nonnegative().nullable(),
   grant_revision: z.number().int().positive(),
   linked_capacity_id: z.uuid().nullable(),
@@ -28,6 +35,8 @@ export const runtimeDiscoveryGrantPageSchema = z.object({
 export const runtimeDiscoveryGrantCreatedSchema = z.object({
   id: z.uuid(),
   preflight_agent_id: z.uuid(),
+  role_template_key: runtimeCapacityRoleSchema,
+  role_template_version: runtimeCapacityRoleVersionSchema,
   bearer: z.string().regex(/^[a-f0-9]{64}$/),
   status: z.literal('prepared'),
   expires_at: z.iso.datetime(),
@@ -36,6 +45,7 @@ export const runtimeDiscoveryGrantCreatedSchema = z.object({
 
 export const runtimeDiscoveryGrantInputSchema = z.object({
   preflight_agent_id: z.uuid(),
+  role_template_key: runtimeCapacityRoleSchema,
 }).strict();
 
 export const runtimeDiscoveryGrantRevokedSchema = z.object({
@@ -55,6 +65,8 @@ export const hermesCapacitySchema = z.object({
   native_cron_disabled: z.boolean(),
   verified_at: z.iso.datetime(),
   discovery_grant_id: z.uuid(),
+  role_template_key: runtimeCapacityRoleSchema,
+  role_template_version: runtimeCapacityRoleVersionSchema,
 }).strict();
 
 export const hermesCapacityInputSchema = z.object({
@@ -71,6 +83,8 @@ export const hermesCapacityInputSchema = z.object({
 
 export type RuntimeDiscoveryGrant = z.infer<typeof runtimeDiscoveryGrantSchema>;
 export type RuntimeDiscoveryGrantCreated = z.infer<typeof runtimeDiscoveryGrantCreatedSchema>;
+export type RuntimeDiscoveryGrantInput = z.input<typeof runtimeDiscoveryGrantInputSchema>;
+export type RuntimeCapacityRole = z.infer<typeof runtimeCapacityRoleSchema>;
 export type HermesCapacity = z.infer<typeof hermesCapacitySchema>;
 export type HermesCapacityInput = z.input<typeof hermesCapacityInputSchema>;
 
