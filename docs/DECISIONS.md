@@ -5802,4 +5802,6 @@ Personal Settings remains available to everyone for their own notifications, per
 
 Navigation explains authority; server routes independently enforce it. Protect administrative reads and writes while preserving the member-readable settings information required by ordinary application behavior. Do not return privileged metadata solely because the UI hides it. Keep member notification writes scoped to the authenticated user. Regression checks cover direct navigation and direct API access as well as visible controls.
 
+An active approval reviewer may not yet have an agent assigned. Bootstrap must still return their authorized workspace and Inbox state with a null agent, never substitute another member’s private agent. Agent-dependent controls stay unavailable until an accessible agent exists.
+
 Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
