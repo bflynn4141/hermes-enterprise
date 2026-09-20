@@ -51,7 +51,10 @@ import {
   attachmentUploadSchema,
   librarySourceSchema,
   sharedIntelligenceProposalSchema,
+  sharedIntelligenceAdminWorkspaceSchema,
+  sharedIntelligenceGoalSchema,
   sharedIntelligenceSubmitResultSchema,
+  sharedIntelligenceTriageDecisionResultSchema,
   sharedIntelligenceWorkspaceSchema,
   approvalViewSchema,
   directUploadResultSchema,
@@ -86,6 +89,8 @@ import {
   type PartnerInvoiceCorrectionResult,
   type PartnerHandoffResult,
   type CreateSharedIntelligenceProposal,
+  type CreateSharedIntelligenceGoal,
+  type SharedIntelligenceTriageDecision,
 } from '@hermes/shared';
 import {
   authSessionSchema,
@@ -496,10 +501,18 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/shared-intelligence`, sharedIntelligenceWorkspaceSchema),
     createSharedIntelligenceProposal: (workspaceId: string, body: CreateSharedIntelligenceProposal) =>
       request('POST', `${ws(workspaceId)}/shared-intelligence/proposals`, sharedIntelligenceProposalSchema, body),
+    queueSharedIntelligenceProposal: (workspaceId: string, proposalId: string, goalId: string) =>
+      request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/triage`, sharedIntelligenceProposalSchema, { goal_id: goalId }),
     submitSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
       request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/submit`, sharedIntelligenceSubmitResultSchema, {}),
     revokeSharedIntelligenceProposal: (workspaceId: string, proposalId: string) =>
       request('POST', `${ws(workspaceId)}/shared-intelligence/proposals/${proposalId}/revoke`, sharedIntelligenceProposalSchema, {}),
+    sharedIntelligenceAdmin: (workspaceId: string) =>
+      request('GET', `${ws(workspaceId)}/admin/shared-intelligence`, sharedIntelligenceAdminWorkspaceSchema),
+    createSharedIntelligenceGoal: (workspaceId: string, body: CreateSharedIntelligenceGoal) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/goals`, sharedIntelligenceGoalSchema, body),
+    decideSharedIntelligenceTriage: (workspaceId: string, proposalId: string, body: SharedIntelligenceTriageDecision) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/proposals/${proposalId}/decision`, sharedIntelligenceTriageDecisionResultSchema, body),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`

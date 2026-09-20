@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSharedIntelligenceProposalSchema,
+  sharedIntelligenceTriageAssessmentSchema,
   sharedIntelligenceProposalSchema,
   sharedIntelligenceWorkspaceSchema,
 } from '../src/shared-intelligence.js';
@@ -49,5 +50,21 @@ describe('Shared Intelligence wire contracts', () => {
     };
     expect(sharedIntelligenceProposalSchema.parse(proposal).evidence[0]?.source_message_role).toBe('user');
     expect(sharedIntelligenceWorkspaceSchema.safeParse({ teams: proposal.audiences, eligible_runs: [], discoveries: [], proposals: [proposal], data_boundary: 'Owner-visible completed runs only.' }).success).toBe(true);
+  });
+
+  it('accepts only bounded typed Jev triage signals and code-owned reasons', () => {
+    const assessment = sharedIntelligenceTriageAssessmentSchema.parse({
+      status: 'complete', priority_score: 82, recommendation: 'include', confidence: .8,
+      axes: {
+        relevance: { score: 3, confidence: .8 }, impact: { score: 2.5, confidence: .8 }, novelty: { score: 2, confidence: .8 },
+        corroboration: { score: 2.5, confidence: .8 }, urgency: { score: 2, confidence: .8 }, uncertainty: { score: .5, confidence: .8 }, sensitivity: { score: .25, confidence: .8 },
+      },
+      reason_codes: ['goal_aligned', 'corroborated'], evidence_count: 2, rubric_version: '2',
+      model_id: 'jev-1.13.0', model_version: 'jev-1.13.0-test', state_sha256: 'd'.repeat(64),
+      latency_ms: 20, failure_class: null, warnings: ['Human decision required.'],
+    });
+    expect(assessment.recommendation).toBe('include');
+    expect(assessment.reason_codes).toEqual(['goal_aligned', 'corroborated']);
+    expect(sharedIntelligenceTriageAssessmentSchema.safeParse({ ...assessment, priority_score: 101 }).success).toBe(false);
   });
 });

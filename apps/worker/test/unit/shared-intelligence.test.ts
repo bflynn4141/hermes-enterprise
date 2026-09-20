@@ -4,6 +4,7 @@ import {
   evaluateSharedIntelligence,
   sanitizeExportText,
   scoreSharedIntelligenceAssessment,
+  scoreSharedIntelligenceTriage,
   SHARED_INTELLIGENCE_MODEL_ID,
   SHARED_INTELLIGENCE_RUBRIC_VERSION,
   validateSharedIntelligenceCandidateText,
@@ -187,5 +188,42 @@ describe('Shared Intelligence evaluation boundary', () => {
     expect(result).toMatchObject({ status: 'failed', route: 'unavailable', failure_class: 'model_response_invalid' });
     expect(result.composite_score).toBeNull();
     expect(result.axes).toBeNull();
+  });
+});
+
+describe('Shared Intelligence Admin triage', () => {
+  const triageAnswers = (overrides: Partial<Record<'relevance' | 'impact' | 'novelty' | 'corroboration' | 'urgency' | 'uncertainty' | 'sensitivity', number>> = {}) => ({
+    model: 'jev-1.13.0-test',
+    answers: Object.fromEntries(Object.entries({
+      relevance: 3, impact: 3, novelty: 2.5, corroboration: 2.8, urgency: 2,
+      uncertainty: .5, sensitivity: .25, ...overrides,
+    }).map(([key, score]) => [key, { score, confidence: .85 }])),
+  });
+
+  it('derives priority, recommendation, and stable reason codes in application code', () => {
+    const result = scoreSharedIntelligenceTriage(triageAnswers(), {
+      evidenceCount: 2, stateSha256: 'f'.repeat(64), latencyMs: 20,
+    });
+    expect(result.status).toBe('complete');
+    expect(result.recommendation).toBe('include');
+    expect(result.priority_score).toBeGreaterThanOrEqual(72);
+    expect(result.reason_codes).toEqual(expect.arrayContaining(['goal_aligned', 'high_impact', 'corroborated']));
+    expect(result).not.toHaveProperty('reasoning');
+  });
+
+  it('keeps single-source and uncertain candidates in close human judgment', () => {
+    const result = scoreSharedIntelligenceTriage(triageAnswers({ uncertainty: 2.4, corroboration: .7 }), {
+      evidenceCount: 1, stateSha256: 'f'.repeat(64), latencyMs: 20,
+    });
+    expect(result.recommendation).toBe('review');
+    expect(result.reason_codes).toEqual(expect.arrayContaining(['single_source', 'high_uncertainty']));
+  });
+
+  it('deprioritizes a candidate that does not fit the selected stored goal', () => {
+    const result = scoreSharedIntelligenceTriage(triageAnswers({ relevance: .4, impact: 1, novelty: 1 }), {
+      evidenceCount: 3, stateSha256: 'f'.repeat(64), latencyMs: 20,
+    });
+    expect(result.recommendation).toBe('exclude');
+    expect(result.reason_codes).toContain('low_goal_fit');
   });
 });

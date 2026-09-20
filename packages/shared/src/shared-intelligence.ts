@@ -72,6 +72,60 @@ export const sharedIntelligenceAssessmentSchema = z.object({
 }).strict();
 export type SharedIntelligenceAssessment = z.infer<typeof sharedIntelligenceAssessmentSchema>;
 
+export const sharedIntelligenceTriageStatusSchema = z.enum(['private', 'queued', 'included', 'excluded']);
+export type SharedIntelligenceTriageStatus = z.infer<typeof sharedIntelligenceTriageStatusSchema>;
+
+export const sharedIntelligenceGoalSchema = z.object({
+  id: uuidSchema,
+  scope: z.enum(['workspace', 'team']),
+  team_id: uuidSchema.nullable(),
+  team_name: shortText.nullable(),
+  title: shortText,
+  detail: z.string().trim().min(1).max(1_000),
+  active: z.boolean(),
+  created_at: dateTimeSchema,
+}).strict();
+export type SharedIntelligenceGoal = z.infer<typeof sharedIntelligenceGoalSchema>;
+
+export const sharedIntelligenceTriageReasonSchema = z.enum([
+  'goal_aligned',
+  'high_impact',
+  'novel_signal',
+  'corroborated',
+  'urgent',
+  'high_uncertainty',
+  'sensitivity_review',
+  'single_source',
+  'low_goal_fit',
+  'low_confidence',
+]);
+
+export const sharedIntelligenceTriageAssessmentSchema = z.object({
+  status: z.enum(['complete', 'unavailable', 'failed']),
+  priority_score: z.number().min(0).max(100).nullable(),
+  recommendation: z.enum(['include', 'review', 'exclude', 'unavailable']),
+  confidence: z.number().min(0).max(1).nullable(),
+  axes: z.object({
+    relevance: sharedIntelligenceAxisSchema,
+    impact: sharedIntelligenceAxisSchema,
+    novelty: sharedIntelligenceAxisSchema,
+    corroboration: sharedIntelligenceAxisSchema,
+    urgency: sharedIntelligenceAxisSchema,
+    uncertainty: sharedIntelligenceAxisSchema,
+    sensitivity: sharedIntelligenceAxisSchema,
+  }).strict().nullable(),
+  reason_codes: z.array(sharedIntelligenceTriageReasonSchema).max(10),
+  evidence_count: z.number().int().min(0).max(5),
+  rubric_version: z.string().max(32),
+  model_id: z.string().max(100),
+  model_version: z.string().max(100).nullable(),
+  state_sha256: sha256Schema,
+  latency_ms: z.number().int().min(0).nullable(),
+  failure_class: z.string().max(100).nullable(),
+  warnings: z.array(z.string().max(300)).max(10),
+}).strict();
+export type SharedIntelligenceTriageAssessment = z.infer<typeof sharedIntelligenceTriageAssessmentSchema>;
+
 export const sharedIntelligenceEvidenceSchema = z.object({
   id: uuidSchema,
   run_id: uuidSchema.nullable(),
@@ -109,6 +163,11 @@ export const sharedIntelligenceProposalSchema = z.object({
   created_at: dateTimeSchema,
   published_at: dateTimeSchema.nullable(),
   revoked_at: dateTimeSchema.nullable(),
+  triage_status: sharedIntelligenceTriageStatusSchema.optional().default('private'),
+  triage_goal_id: uuidSchema.nullable().optional().default(null),
+  triage_assessment: sharedIntelligenceTriageAssessmentSchema.nullable().optional().default(null),
+  triage_submitted_at: dateTimeSchema.nullable().optional().default(null),
+  triage_decided_at: dateTimeSchema.nullable().optional().default(null),
 }).strict();
 export type SharedIntelligenceProposal = z.infer<typeof sharedIntelligenceProposalSchema>;
 
@@ -128,6 +187,7 @@ export type CreateSharedIntelligenceProposal = z.infer<typeof createSharedIntell
 
 export const sharedIntelligenceWorkspaceSchema = z.object({
   teams: z.array(sharedIntelligenceTeamSchema).max(2),
+  goals: z.array(sharedIntelligenceGoalSchema).max(100).optional().default([]),
   eligible_runs: z.array(sharedIntelligenceRunSchema).max(50),
   discoveries: z.array(sharedIntelligenceDiscoverySchema).max(20),
   proposals: z.array(sharedIntelligenceProposalSchema).max(100),
@@ -138,4 +198,44 @@ export type SharedIntelligenceWorkspace = z.infer<typeof sharedIntelligenceWorks
 export const sharedIntelligenceSubmitResultSchema = z.object({
   proposal: sharedIntelligenceProposalSchema,
   approval_request_id: uuidSchema,
+}).strict();
+
+export const createSharedIntelligenceGoalSchema = z.object({
+  scope: z.enum(['workspace', 'team']),
+  team_id: uuidSchema.nullable().optional().default(null),
+  title: shortText,
+  detail: z.string().trim().min(1).max(1_000),
+}).strict().superRefine((value, context) => {
+  if (value.scope === 'workspace' && value.team_id !== null) context.addIssue({ code: 'custom', path: ['team_id'], message: 'workspace goals cannot select a team' });
+  if (value.scope === 'team' && value.team_id === null) context.addIssue({ code: 'custom', path: ['team_id'], message: 'team goals require a team' });
+});
+export type CreateSharedIntelligenceGoal = z.infer<typeof createSharedIntelligenceGoalSchema>;
+
+export const queueSharedIntelligenceProposalSchema = z.object({ goal_id: uuidSchema }).strict();
+
+export const sharedIntelligenceAdminCandidateSchema = z.object({
+  proposal: sharedIntelligenceProposalSchema,
+  goal: sharedIntelligenceGoalSchema,
+  submitted_by: z.object({ id: uuidSchema, name: shortText }).strict(),
+  decision_note: z.string().max(1_000).nullable(),
+}).strict();
+export type SharedIntelligenceAdminCandidate = z.infer<typeof sharedIntelligenceAdminCandidateSchema>;
+
+export const sharedIntelligenceAdminWorkspaceSchema = z.object({
+  teams: z.array(sharedIntelligenceTeamSchema).max(20),
+  goals: z.array(sharedIntelligenceGoalSchema).max(100),
+  candidates: z.array(sharedIntelligenceAdminCandidateSchema).max(200),
+  data_boundary: z.string().max(1_000),
+}).strict();
+export type SharedIntelligenceAdminWorkspace = z.infer<typeof sharedIntelligenceAdminWorkspaceSchema>;
+
+export const sharedIntelligenceTriageDecisionSchema = z.object({
+  decision: z.enum(['include', 'exclude', 'reopen']),
+  note: z.string().trim().max(1_000).optional().default(''),
+}).strict();
+export type SharedIntelligenceTriageDecision = z.infer<typeof sharedIntelligenceTriageDecisionSchema>;
+
+export const sharedIntelligenceTriageDecisionResultSchema = z.object({
+  candidate: sharedIntelligenceAdminCandidateSchema,
+  approval_request_id: uuidSchema.nullable(),
 }).strict();

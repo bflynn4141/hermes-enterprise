@@ -37,6 +37,7 @@ export function SharedIntelligence() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState<string | null>('load');
   const [notice, setNotice] = useState<string | null>(null);
+  const [goalByProposal, setGoalByProposal] = useState<Record<string, string>>({});
 
   const load = async (): Promise<void> => {
     setBusy('load');
@@ -86,7 +87,7 @@ export function SharedIntelligence() {
       setWorkspace((current) => current ? { ...current, proposals: [proposal, ...current.proposals] } : current);
       setDraft(null);
       setNotice(proposal.assessment.status === 'complete'
-        ? 'Private draft scored and saved. Check the evidence before requesting review.'
+        ? 'Private draft scored and saved. Check the evidence before sharing it with Admin.'
         : 'Private draft saved, but scoring is unavailable. It cannot be published until it has a fresh assessment.');
     } catch (error) {
       setNotice(errorCopy(error));
@@ -95,13 +96,17 @@ export function SharedIntelligence() {
     }
   };
 
-  const submit = async (proposal: SharedIntelligenceProposal): Promise<void> => {
-    setBusy(`submit:${proposal.id}`);
+  const queueForAdmin = async (proposal: SharedIntelligenceProposal): Promise<void> => {
+    const goalId = goalByProposal[proposal.id] ?? workspace?.goals[0]?.id;
+    if (!goalId) return;
+    setBusy(`triage:${proposal.id}`);
     setNotice(null);
     try {
-      const result = await adapter.rest.submitSharedIntelligenceProposal(state.workspace.id, proposal.id);
-      setWorkspace((current) => current ? { ...current, proposals: current.proposals.map((item) => item.id === result.proposal.id ? result.proposal : item) } : current);
-      nav(REQ(result.approval_request_id));
+      const updated = await adapter.rest.queueSharedIntelligenceProposal(state.workspace.id, proposal.id, goalId);
+      setWorkspace((current) => current ? { ...current, proposals: current.proposals.map((item) => item.id === updated.id ? updated : item) } : current);
+      setNotice(updated.triage_assessment?.status === 'complete'
+        ? 'Shared with Admin using only the exact approved excerpts. Jev priority is frozen against the selected goal.'
+        : 'Shared with Admin, but Jev prioritization is unavailable. The candidate is visible and honestly unranked.');
     } catch (error) {
       setNotice(errorCopy(error));
     } finally {
@@ -218,11 +223,18 @@ export function SharedIntelligence() {
                   <strong>{proposal.assessment.composite_score === null ? '—' : Math.round(proposal.assessment.composite_score)}</strong>
                   <span>rubric score<br />{proposal.assessment.evidence_count} verified excerpt{proposal.assessment.evidence_count === 1 ? '' : 's'}</span>
                 </div>
+                <details className="shared-intelligence-evidence-preview"><summary>Review the exact excerpts shared with Admin</summary>{proposal.evidence.map((evidence) => <blockquote key={evidence.id}><small>{evidence.session_title}</small><p>{evidence.approved_excerpt}</p></blockquote>)}</details>
                 {proposal.assessment.warnings.map((warning) => <p className="meta" key={warning}>{warning}</p>)}
               </div>
               <div className="shared-intelligence-proposal-actions">
                 {proposal.status === 'pending_review' && proposal.approval_request_id && <Button small onClick={() => nav(REQ(proposal.approval_request_id!))}>Open review</Button>}
-                {['ready_for_review', 'needs_review'].includes(proposal.status) && proposal.assessment.status === 'complete' && <Button small primary disabled={busy === `submit:${proposal.id}`} onClick={() => void submit(proposal)}>{busy === `submit:${proposal.id}` ? 'Submitting…' : 'Request review'}</Button>}
+                {['ready_for_review', 'needs_review'].includes(proposal.status) && proposal.triage_status === 'private' && workspace.goals.length > 0 && <>
+                  <label className="shared-intelligence-goal-select"><span>Admin goal</span><select value={goalByProposal[proposal.id] ?? workspace.goals[0]?.id ?? ''} onChange={(event) => setGoalByProposal((current) => ({ ...current, [proposal.id]: event.target.value }))}>{workspace.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}</select></label>
+                  <Button small primary disabled={busy === `triage:${proposal.id}`} onClick={() => void queueForAdmin(proposal)}>{busy === `triage:${proposal.id}` ? 'Sharing…' : 'Share with Admin'}</Button>
+                </>}
+                {['ready_for_review', 'needs_review'].includes(proposal.status) && proposal.triage_status === 'private' && workspace.goals.length === 0 && <span className="meta">An Admin must add a goal before this candidate can enter triage.</span>}
+                {proposal.triage_status === 'queued' && <span className="meta">Waiting for Admin triage</span>}
+                {proposal.triage_status === 'excluded' && <span className="meta">Excluded from the active queue · reversible by an Admin</span>}
                 {!['pending_review', 'revoked'].includes(proposal.status) && <Button small quiet disabled={busy === `revoke:${proposal.id}`} onClick={() => void revoke(proposal)}>Withdraw</Button>}
               </div>
             </article>
