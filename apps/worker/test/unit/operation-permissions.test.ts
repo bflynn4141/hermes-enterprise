@@ -33,6 +33,21 @@ describe('supported operation consent',()=>{
     expect(step.waits).toHaveLength(2);
     expect(step.waits[0]?.name).not.toBe(step.waits[1]?.name);
     if(decision==='approved') expect(db.instructions[0]?.body).toBe('Exact consent text');
+    // Replay after a durable decision: the same observed-pending steps and
+    // waits must replay, even though the live database is already decided.
+    const replay=new FakeStep(step);
+    // Exercise replay from this tool-turn boundary rather than the fake DB's
+    // normal next-turn recovery (which would skip the completed tool turn).
+    Object.assign(db,{resumeTurn:async()=>0});
+    replay.waitForEvent=async <T>(name:string,options:{type:string;timeout:string})=>{
+      replay.waits.push({name,options});
+      return {payload:{run_id:'ignored',key:'replayed-wake'} as T};
+    };
+    const replayed=await runHarness([{events:[stop('end_turn')]}],{db,step:replay});
+    expect(replayed.error).toBeNull();
+    expect(replay.waits.map(wait=>wait.name)).toEqual(step.waits.map(wait=>wait.name));
+    expect(db.instructions).toHaveLength(decision==='approved'?1:0);
+    expect((await db.loadRun())?.status).toBe('completed');
   });
   it('offers only registered tools and no effects or authorization commands',()=>{
     for(const operation of AGENT_OPERATION_CATALOG) for(const name of operation.tool_names) expect(TOOLS.some(t=>t.name===name)).toBe(true);

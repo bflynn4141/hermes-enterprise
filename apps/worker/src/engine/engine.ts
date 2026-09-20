@@ -849,8 +849,9 @@ async function waitForAnswer(
       key: outcome.waitingKey,
     });
   }
-  await db.setRunStatus(run.id, 'waiting', { waitingFor: outcome.waitingKey, waitingLabel: outcome.waitingLabel });
-  await emitter.emit([
+  const park = async () => {
+    await db.setRunStatus(run.id, 'waiting', { waitingFor: outcome.waitingKey, waitingLabel: outcome.waitingLabel });
+    await emitter.emit([
     {
       kind: 'run.status',
       payload: {
@@ -861,7 +862,13 @@ async function waitForAnswer(
         waiting_label: outcome.waitingLabel,
       },
     },
-  ]);
+    ]);
+    return { ok: true };
+  };
+  // Replaying a completed answer must not put the run back into waiting while
+  // its already-checkpointed answer/finish steps skip their writes.
+  if (operationApprovalId) await step.do(`operation-approval-park-${outcome.toolCallId}`, TOOL_STEP_CONFIG, park);
+  else await park();
 
   // Ids only in the payload: Workflow instance state is retained 30 days and
   // the erasure inventory asserts it carries no free text. The answer itself
@@ -872,9 +879,15 @@ async function waitForAnswer(
     const deadline = await step.do(`operation-approval-deadline-${outcome.toolCallId}`, TOOL_STEP_CONFIG,
       async () => deps.now().getTime() + 30 * 24 * 60 * 60 * 1000);
     for (let wake = 0; ; wake += 1) {
-      const persisted = await db.loadOperationApproval?.(operationApprovalId, run.id);
-      if (persisted && persisted.status !== 'pending') break;
-      const remaining = deadline - deps.now().getTime();
+      // Journal each observation so replay traverses the same prior wait
+      // steps even if the database has since changed to approved/denied.
+      const observed = await step.do(`operation-approval-observe-${outcome.toolCallId}-${wake}`, TOOL_STEP_CONFIG,
+        async () => ({
+          status: (await db.loadOperationApproval?.(operationApprovalId, run.id))?.status ?? 'pending',
+          remainingMs: deadline - deps.now().getTime(),
+        }));
+      if (observed.status !== 'pending') break;
+      const remaining = observed.remainingMs;
       if (remaining <= 0) throw new Error('operation_approval_wait_expired');
       await step.waitForEvent<{ run_id: string; key: string }>(`operation-approval-${outcome.toolCallId}-${wake}`, {
         type: CONTEXT_ANSWERED_EVENT,
