@@ -169,6 +169,9 @@ export function Members() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
+  const setupRoles = state.capabilities.memberRoleTemplates;
+  const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -347,24 +350,27 @@ export function Members() {
               }}>Cancel</Button>
               <Button
                 primary
-                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email)}
+                disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email) || (setupOnly && !selectedJobRole)}
                 onClick={() => {
                   setPending('invite');
                   setInviteError(null);
+                  const request = setupOnly && selectedJobRole
+                    ? { email, role: 'member' as const, role_template_key: selectedJobRole }
+                    : { email, role: 'member' as const };
                   void adapter.rest
-                    .invite(state.workspace.id, { email, role: 'member', role_template_key: jobRole })
+                    .invite(state.workspace.id, request)
                     .then((created) => {
                       invitationsChanged();
                       setEmail('');
                       setInvite(false);
                       setTab('invites');
-                      showAck(created.status === 'accepted' ? 'Already a member' : 'Agent setup started');
+                      showAck(created.status === 'accepted' ? 'Already a member' : setupOnly ? 'Agent setup started' : 'Invitation queued');
                     })
                     .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
                     .finally(() => setPending(null));
                 }}
               >
-                {pending === 'invite' ? 'Inviting…' : 'Invite'}
+                {pending === 'invite' ? setupOnly ? 'Starting…' : 'Sending…' : setupOnly ? 'Start setup' : 'Send invitation'}
               </Button>
             </>
           }
@@ -373,14 +379,15 @@ export function Members() {
             <span className="sr-only">Work email</span>
             <input type="email" placeholder="name@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
-          <label className="field">
+          {setupOnly && <label className="field">
             <span>Job role</span>
-            <select value={jobRole} onChange={(event) => setJobRole(event.target.value as MemberRoleTemplate)}>
-              <option value="partnerships-agent">Partnerships</option>
-              <option value="finance-agent">Finance</option>
+            <select value={selectedJobRole ?? ''} onChange={(event) => setJobRole(event.target.value as MemberRoleTemplate)}>
+              {setupRoles.map((role) => <option key={role} value={role}>{role === 'finance-agent' ? 'Finance' : 'Partnerships'}</option>)}
             </select>
-          </label>
-          <p className="meta">Hermes prepares verified capacity in the background. Invitation delivery is a separate step and is not queued here.</p>
+          </label>}
+          <p className="meta">{setupOnly
+            ? 'Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.'
+            : 'Capacity is reserved automatically, then the invitation email is queued for delivery.'}</p>
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

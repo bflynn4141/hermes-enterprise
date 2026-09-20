@@ -1007,7 +1007,13 @@ describe('the adapter', () => {
     });
     await adapter.start();
     expect(state().ui.app).toEqual({ section: 'agents', view: 'setup', step: 'identity' });
-    expect(state().capabilities).toEqual({ emailIngress: false, turnAttachments: false, automatedTriggers: false });
+    expect(state().capabilities).toEqual({
+      emailIngress: false,
+      turnAttachments: false,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    });
     adapter.dispose();
   });
 
@@ -1294,7 +1300,13 @@ describe('the adapter', () => {
       [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Promise.reject(new Error('offline')),
     });
     await adapter.start();
-    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: { emailIngress: false, turnAttachments: true, automatedTriggers: false } } });
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: {
+      emailIngress: false,
+      turnAttachments: true,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    } } });
     const source = { id: mockUuid(60), label: 'Program.md', kind: 'source' as const, sha256: 'a'.repeat(64), icon: 'context' };
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: source });
     await expect(adapter.send(SESSION, 'Use the source')).rejects.toThrow('offline');
@@ -1308,7 +1320,13 @@ describe('the adapter', () => {
       [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
     });
     await adapter.start();
-    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: { emailIngress: false, turnAttachments: true, automatedTriggers: false } } });
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: {
+      emailIngress: false,
+      turnAttachments: true,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    } } });
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
       id: mockUuid(61), label: 'Partner Program Guide', kind: 'source', source_kind: 'library_source',
       sha256: 'b'.repeat(64), icon: 'context',

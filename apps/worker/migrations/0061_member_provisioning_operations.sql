@@ -56,6 +56,13 @@ DROP TRIGGER IF EXISTS member_provisioning_operations_updated_at ON member_provi
 CREATE TRIGGER member_provisioning_operations_updated_at BEFORE UPDATE ON member_provisioning_operations
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Disabling setup pauses its durable jobs without finishing them or retrying
+-- forever. `job_ready` is the cross-tenant pointer the Cron already owns, so a
+-- narrow reason on that pointer lets a later enabled deploy re-arm exactly
+-- these jobs without scanning tenant-owned operation or job rows.
+ALTER TABLE job_ready ADD COLUMN IF NOT EXISTS pause_reason text
+  CHECK (pause_reason IS NULL OR pause_reason='member_provisioning_disabled');
+
 ALTER TABLE member_provisioning_operations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE member_provisioning_operations FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON member_provisioning_operations;

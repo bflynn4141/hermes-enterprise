@@ -4,6 +4,7 @@ import type { Env } from '../../src/env.js';
 const mocks = vi.hoisted(() => ({
   enqueueJob: vi.fn(),
   withWorkspaceTransaction: vi.fn(),
+  hasCurrentReservedCapacityForInvitation: vi.fn(),
   reserveCapacityForInvitation: vi.fn(),
   releaseInvitationCapacity: vi.fn(),
   withCapacityGrantQuarantine: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('../../src/jobs.js', () => ({
 }));
 
 vi.mock('../../src/hermes-cloud/capacity.js', () => ({
+  hasCurrentReservedCapacityForInvitation: mocks.hasCurrentReservedCapacityForInvitation,
   reserveCapacityForInvitation: mocks.reserveCapacityForInvitation,
   releaseInvitationCapacity: mocks.releaseInvitationCapacity,
   withCapacityGrantQuarantine: mocks.withCapacityGrantQuarantine,
@@ -115,11 +117,35 @@ function transaction(initial: Row | null = null) {
       }
       row.invitation_id = String(params[2]);
       row.requested_by = String(params[3]);
+      if (row.preparation === 'ready' && params[4] === false) {
+        row.preparation = 'queued';
+        row.issue = 'readiness_failed';
+      }
       row.revision += 1;
       return { rows: [{ ...row }], rowCount: 1 };
     }
+    if (sql.includes("SET preparation='queued', issue=NULL") && sql.includes("preparation='awaiting_connection'")) {
+      if (!row || row.preparation !== 'awaiting_connection' || row.cancellation !== 'none') return { rows: [], rowCount: 0 };
+      row.preparation = 'queued';
+      row.issue = null;
+      row.revision += 1;
+      return { rows: [{ ...row }], rowCount: 1 };
+    }
+    if (sql.includes('SELECT invitation_id FROM member_provisioning_operations')) {
+      return { rows: row ? [{ invitation_id: row.invitation_id }] : [], rowCount: row ? 1 : 0 };
+    }
+    if (sql.includes('FROM invitations') && sql.includes('FOR UPDATE')) {
+      return { rows: row ? [{
+        status: row.invitation_status,
+        delivery_status: row.delivery_status,
+        delivery_error: row.delivery_error,
+      }] : [], rowCount: row ? 1 : 0 };
+    }
     if (sql.includes('FROM member_provisioning_operations op')) {
       return { rows: row ? [{ ...row, cloud_status: connectionStatus }] : [], rowCount: row ? 1 : 0 };
+    }
+    if (sql.includes('FROM members') && sql.includes('FOR UPDATE')) {
+      return { rows: row ? [{ authorized: row.requester_authorized }] : [], rowCount: row ? 1 : 0 };
     }
     if (sql.includes("SET cancellation='complete'")) {
       if (row && row.revision === params[2]) {
@@ -184,6 +210,7 @@ beforeEach(() => {
     return `job-${keys.size}`;
   });
   mocks.withCapacityGrantQuarantine.mockImplementation(async (_env, operation) => operation());
+  mocks.hasCurrentReservedCapacityForInvitation.mockResolvedValue(false);
   mocks.reserveCapacityForInvitation.mockResolvedValue(null);
   mocks.releaseInvitationCapacity.mockResolvedValue(undefined);
 });
@@ -191,12 +218,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('member provisioning persistence and projection', () => {
-  it('does not wake dormant operations while the release flag is off', async () => {
+  it('durably queues a Cloud wake while the release flag is off so the job can pause', async () => {
     const db = transaction(baseRow({ preparation: 'awaiting_connection' }));
 
-    expect(await wakeMemberProvisioningForCloudConnection({} as Env, db.tx as never, workspaceId)).toEqual([]);
-    expect(db.tx.query).not.toHaveBeenCalled();
-    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(await wakeMemberProvisioningForCloudConnection({} as Env, db.tx as never, workspaceId)).toEqual(['job-1']);
+    expect(db.row()).toMatchObject({ preparation: 'queued', issue: null, revision: 1 });
+    expect(mocks.enqueueJob).toHaveBeenCalledWith(db.tx, workspaceId, 'member_provision',
+      `member-provision:${operationId}:1`, { operation_id: operationId, revision: 1 });
   });
 
   it('creates one idempotent operation and one revision-bound job', async () => {
@@ -288,7 +316,7 @@ describe('member provisioning reservation and recovery boundaries', () => {
     expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
     expect(mocks.releaseInvitationCapacity).not.toHaveBeenCalled();
     expect(db.row()).toMatchObject({ revision: 2, preparation: 'queued' });
-    expect(db.tx.query).toHaveBeenCalledTimes(1);
+    expect(db.tx.query).toHaveBeenCalledTimes(3);
   });
 
   it('completes cancellation only after releasing its reservation', async () => {
@@ -308,13 +336,24 @@ describe('member provisioning reservation and recovery boundaries', () => {
     const db = transaction(baseRow({ preparation: 'ready', revision: 3 }));
 
     const result = await rebindMemberProvisioningOperation(
-      db.tx as never, workspaceId, invitationId, successorInvitationId, requestedBy,
+      db.tx as never, workspaceId, invitationId, successorInvitationId, requestedBy, true,
     );
 
     expect(result?.operation).toMatchObject({ id: operationId, revision: 4, preparation: 'ready', delivery: 'not_queued' });
     expect(db.row()).toMatchObject({ id: operationId, invitation_id: successorInvitationId, revision: 4, preparation: 'ready' });
     expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
     expect(result?.jobId).toBe('job-1');
+  });
+
+  it('demotes ready on rebind when the exact reservation did not transfer', async () => {
+    const db = transaction(baseRow({ preparation: 'ready', revision: 3 }));
+
+    const result = await rebindMemberProvisioningOperation(
+      db.tx as never, workspaceId, invitationId, successorInvitationId, requestedBy, false,
+    );
+
+    expect(result?.operation).toMatchObject({ revision: 4, preparation: 'queued', issue: 'readiness_failed' });
+    expect(db.row()).toMatchObject({ invitation_id: successorInvitationId, preparation: 'queued', issue: 'readiness_failed' });
   });
 
   it('revision-binds cancellation requests and refuses accepted invitations', async () => {
@@ -343,7 +382,7 @@ describe('member provisioning reservation and recovery boundaries', () => {
     const queued = transaction(baseRow());
     mocks.withWorkspaceTransaction.mockImplementationOnce(async (_env, _workspace, operation) => operation(queued.tx));
 
-    await runMemberProvisioningJob(disabled, job());
+    expect(await runMemberProvisioningJob(disabled, job())).toBe('paused');
 
     expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
     expect(queued.row()).toMatchObject({ preparation: 'queued', revision: 0 });

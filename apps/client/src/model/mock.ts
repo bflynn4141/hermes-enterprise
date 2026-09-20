@@ -124,6 +124,8 @@ interface MockOptions {
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** Server-advertised invitation contract; default mirrors flag-off deployments. */
+  memberInvitations?: 'legacy_delivery' | 'setup_only';
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
@@ -172,6 +174,7 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
 
 export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
+  const setupOnly = options.memberInvitations === 'setup_only';
   const workflowRole = options.workflowRole ?? (seat === 'member' ? 'finance' : 'admin');
   const empty = options.data === 'empty';
   const approvalScenario = options.scenario === 'approvals' && !empty;
@@ -1034,7 +1037,14 @@ export function createMockBackend(options: MockOptions = {}) {
       agent: workflowRole === 'finance'
         ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
         : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
-      capabilities: { email_ingress: false, turn_attachments: Boolean(options.agentSettings), automated_triggers: false },
+      capabilities: {
+        email_ingress: false,
+        turn_attachments: Boolean(options.agentSettings),
+        automated_triggers: false,
+        member_invitations: setupOnly
+          ? { mode: 'setup_only' as const, role_templates: ['partnerships-agent' as const, 'finance-agent' as const] }
+          : { mode: 'legacy_delivery' as const, role_templates: [] },
+      },
       heads: { session: head.toString(), workspace: head.toString() },
       counts: {
         inbox: activeRequests.filter((r) => r.status === 'pending').length,
@@ -1414,6 +1424,9 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/invitations') && method === 'GET') return page(invitations);
     if (p('/invitations') && method === 'POST') {
+      if (!setupOnly && body.role_template_key !== undefined) {
+        return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
+      }
       if (options.memberWrites === 'fail') {
         return json({
           error: 'No verified Iris profile is available',
@@ -1424,11 +1437,15 @@ export function createMockBackend(options: MockOptions = {}) {
       const row: InvitationEntity = {
         id: mockUuid(220 + invitations.length), email: String(body.email ?? ''),
         role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0),
-        role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent',
-        provisioning: {
-          id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
-          preparation: 'queued', delivery: 'not_queued', membership: 'not_joined', cancellation: 'none', issue: null,
-        },
+        delivery_status: setupOnly ? 'not_required' : 'queued',
+        ...(setupOnly ? {
+          role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' as const : 'partnerships-agent' as const,
+          provisioning: {
+            id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
+            preparation: 'queued' as const, delivery: 'not_queued' as const,
+            membership: 'not_joined' as const, cancellation: 'none' as const, issue: null,
+          },
+        } : {}),
         version: 1,
       };
       invitations.push(row);

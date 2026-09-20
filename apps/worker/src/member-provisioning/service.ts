@@ -1,8 +1,13 @@
 import { memberProvisioningOperationSchema, type MemberProvisioningOperation, type MemberRoleTemplate } from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
-import { enqueueJob, type Job, withWorkspaceTransaction } from '../jobs.js';
-import { releaseInvitationCapacity, reserveCapacityForInvitation, withCapacityGrantQuarantine } from '../hermes-cloud/capacity.js';
+import { enqueueJob, type Job, type JobDisposition, withWorkspaceTransaction } from '../jobs.js';
+import {
+  hasCurrentReservedCapacityForInvitation,
+  releaseInvitationCapacity,
+  reserveCapacityForInvitation,
+  withCapacityGrantQuarantine,
+} from '../hermes-cloud/capacity.js';
 import { RouteError } from '../routes/tenant.js';
 
 interface OperationRow {
@@ -66,7 +71,6 @@ export async function createMemberProvisioningOperation(tx: Tx, input: {
 
 /** Called after a verified Cloud organization connection commits. */
 export async function wakeMemberProvisioningForCloudConnection(env: Env, tx: Tx, workspaceId: string): Promise<string[]> {
-  if (!memberProvisioningEnabled(env)) return [];
   const { rows } = await tx.query<OperationRow>(
     `UPDATE member_provisioning_operations
         SET preparation='queued', issue=NULL, revision=revision+1
@@ -93,12 +97,16 @@ export async function requestMemberProvisioningCancellation(tx: Tx, workspaceId:
 
 export async function rebindMemberProvisioningOperation(tx: Tx, workspaceId: string,
   previousInvitationId: string, nextInvitationId: string, requestedBy: string,
+  reservationTransferred: boolean,
 ): Promise<{ operation: MemberProvisioningOperation; jobId: string | null } | null> {
   const { rows } = await tx.query<OperationRow>(
     `UPDATE member_provisioning_operations
-        SET invitation_id=$3, requested_by=$4, revision=revision+1
+        SET invitation_id=$3, requested_by=$4,
+            preparation=CASE WHEN preparation='ready' AND NOT $5 THEN 'queued' ELSE preparation END,
+            issue=CASE WHEN preparation='ready' AND NOT $5 THEN 'readiness_failed' ELSE issue END,
+            revision=revision+1
       WHERE workspace_id=$1 AND invitation_id=$2 AND cancellation='none'
-      RETURNING *`, [workspaceId, previousInvitationId, nextInvitationId, requestedBy]);
+      RETURNING *`, [workspaceId, previousInvitationId, nextInvitationId, requestedBy, reservationTransferred]);
   const row = rows[0];
   if (!row) return null;
   row.invitation_status = 'pending'; row.delivery_status = 'not_required'; row.delivery_error = null;
@@ -110,26 +118,48 @@ export async function rebindMemberProvisioningOperation(tx: Tx, workspaceId: str
  * pre-existing verified Partnerships profile. It never calls Cloud lifecycle
  * tools, creates paid capacity, configures a profile, or sends an invitation.
  */
-export async function runMemberProvisioningJob(env: Env, job: Job): Promise<void> {
+export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobDisposition> {
   const payload = (job.payload ?? {}) as { operation_id?: string; revision?: number };
   if (!payload.operation_id || !Number.isInteger(payload.revision) || (payload.revision ?? -1) < 0) return;
-  await withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
-    const { rows } = await tx.query<OperationRow>(
-      `SELECT op.*, i.status AS invitation_status, i.delivery_status, i.delivery_error, cc.status AS cloud_status,
-              EXISTS (
-                SELECT 1 FROM members m
-                 WHERE m.workspace_id=op.workspace_id
-                   AND m.user_id=op.requested_by
-                   AND m.status='active' AND m.role='admin'
-              ) AS requester_authorized
-         FROM member_provisioning_operations op
-         JOIN invitations i ON i.workspace_id=op.workspace_id AND i.id=op.invitation_id
-         LEFT JOIN cloud_connections cc ON cc.workspace_id=op.workspace_id
-        WHERE op.workspace_id=$1 AND op.id=$2 FOR UPDATE OF op`,
+  return withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+    const reference = await tx.query<{ invitation_id: string }>(
+      `SELECT invitation_id FROM member_provisioning_operations
+        WHERE workspace_id=$1 AND id=$2`,
       [job.workspace_id, payload.operation_id],
+    );
+    const invitationId = reference.rows[0]?.invitation_id;
+    if (!invitationId) return;
+    // Invitation state transitions take this lock first. Re-reading the
+    // operation afterward makes a concurrent resend wholly before or after
+    // this execution; a stale invitation id cannot be acted on.
+    const invitation = await tx.query<{
+      status: string; delivery_status: string; delivery_error: string | null;
+    }>(
+      `SELECT status, delivery_status, delivery_error FROM invitations
+        WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
+      [job.workspace_id, invitationId],
+    );
+    const lockedInvitation = invitation.rows[0];
+    if (!lockedInvitation) return;
+    const { rows } = await tx.query<OperationRow>(
+      `SELECT op.*, cc.status AS cloud_status
+         FROM member_provisioning_operations op
+         LEFT JOIN cloud_connections cc ON cc.workspace_id=op.workspace_id
+        WHERE op.workspace_id=$1 AND op.id=$2 AND op.invitation_id=$3
+        FOR UPDATE OF op`,
+      [job.workspace_id, payload.operation_id, invitationId],
     );
     const row = rows[0];
     if (!row || row.revision !== payload.revision) return;
+    row.invitation_status = lockedInvitation.status;
+    row.delivery_status = lockedInvitation.delivery_status;
+    row.delivery_error = lockedInvitation.delivery_error;
+    const requester = row.requested_by ? await tx.query<{ authorized: boolean }>(
+      `SELECT (status='active' AND role='admin') AS authorized FROM members
+        WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE`,
+      [job.workspace_id, row.requested_by],
+    ) : null;
+    row.requester_authorized = requester?.rows[0]?.authorized ?? false;
 
     if (row.cancellation === 'requested' || ['withdrawn', 'expired', 'resent'].includes(row.invitation_status ?? '')) {
       await releaseInvitationCapacity(tx, job.workspace_id, row.invitation_id);
@@ -141,12 +171,12 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<void
       );
       return;
     }
-    if (row.invitation_status === 'accepted' || row.preparation === 'ready') return;
+    if (row.invitation_status === 'accepted') return;
 
     // The release flag is checked again by the claimed job. Turning the feature
     // off stops forward progress immediately, while the cancellation branch
     // above remains available to release an existing local reservation.
-    if (!memberProvisioningEnabled(env)) return;
+    if (!memberProvisioningEnabled(env)) return 'paused';
 
     // Authorization is not inherited from enqueue time. A removed or demoted
     // Admin cannot leave a delayed job that continues reserving workspace
@@ -161,6 +191,12 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<void
       );
       return;
     }
+
+    // `ready` is a projection of a current exact reservation, not a terminal
+    // bit. Only return while this invitation still owns verified capacity.
+    if (row.preparation === 'ready'
+        && row.role_template_key === 'partnerships-agent'
+        && await hasCurrentReservedCapacityForInvitation(env, tx, job.workspace_id, row.invitation_id)) return;
 
     // Existing capacity is safe to use because reserveCapacityForInvitation
     // revalidates the exact reviewed discovery grant under the row lock.
@@ -197,5 +233,6 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<void
         WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
       [job.workspace_id, row.id, row.revision],
     );
+    return;
   }));
 }

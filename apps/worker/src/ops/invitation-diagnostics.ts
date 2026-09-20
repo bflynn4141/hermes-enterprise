@@ -20,6 +20,7 @@ interface InvitationDiagnostic {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DIAGNOSTIC_CHECKPOINTS = new Set([
   'request_received',
+  'setup_mode_rejected',
   'admin_and_rate_admitted',
   'organization_binding_checked',
   'invitation_stored',
@@ -46,10 +47,12 @@ const DIAGNOSTIC_CHECKPOINTS = new Set([
 ]);
 const DIAGNOSTIC_REASONS = new Set([
   'bad_body', 'bad_id', 'bad_email', 'admin_required', 'rate_limited', 'not_configured',
+  'bad_role_template', 'member_setup_unavailable', 'invitation_mode_conflict', 'invitation_role_conflict',
   'iris_capacity_unavailable', 'invite_failed', 'resend_failed', 'unknown_invitation',
   'not_resendable', 'already_accepted', 'no_session', 'unknown_user', 'invalid_session',
   'upstream_unavailable', 'forbidden_origin', 'csrf_failed', 'not_a_member', 'no_workspace',
   'bad_workspace_id', 'invitation_failed', 'already_member', 'duplicate', 'delivery_queued',
+  'setup_queued',
   'workos_invitation_delivery_not_configured', 'workos_invitation_payload_invalid',
   'iris_capacity_reservation_missing', 'workos_invitation_delivery_rejected',
   'workos_invitation_delivery_unavailable', 'workos_invitation_delivery_outcome_unknown',
@@ -86,6 +89,7 @@ const ROUTE_REASONS = new Set([
   'bad_body',
   'bad_id',
   'bad_email',
+  'bad_role_template',
   'admin_required',
   'rate_limited',
   'not_configured',
@@ -95,12 +99,16 @@ const ROUTE_REASONS = new Set([
   'unknown_invitation',
   'not_resendable',
   'already_accepted',
+  'member_setup_unavailable',
+  'invitation_mode_conflict',
+  'invitation_role_conflict',
 ]);
 
 const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   bad_body: 'The invitation request was not valid JSON.',
   bad_id: 'That invitation reference is not valid.',
   bad_email: 'Enter a valid email address.',
+  bad_role_template: 'Choose a supported job role.',
   admin_required: 'Only a workspace Admin can invite members.',
   rate_limited: 'Too many invitation attempts were made. Wait a moment and try again.',
   not_configured: 'This workspace is not connected to WorkOS invitation delivery.',
@@ -110,6 +118,9 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   unknown_invitation: 'That invitation no longer exists.',
   not_resendable: 'That invitation cannot be resent in its current state.',
   already_accepted: 'That invitation has already been accepted.',
+  member_setup_unavailable: 'Background member setup is not available in this deployment.',
+  invitation_mode_conflict: 'This address already has an invitation in a different delivery flow.',
+  invitation_role_conflict: 'This address already has setup in progress for a different job role.',
   no_session: 'Your session has ended. Sign in and try again.',
   unknown_user: 'Your account could not be verified. Sign in and try again.',
   invalid_session: 'Your session could not be verified. Sign in and try again.',

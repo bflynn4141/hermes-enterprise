@@ -14,7 +14,12 @@
 // jobs that tell WorkOS and the hubs. One path, so the two ways in cannot drift
 // apart — and a test drives the WorkOS path and the route and compares the rows.
 import type { Context } from 'hono';
-import { invitationEntitySchema, memberEntitySchema, paginatedSchema } from '@hermes/shared';
+import {
+  invitationEntitySchema,
+  memberEntitySchema,
+  paginatedSchema,
+  type MemberProvisioningOperation,
+} from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
@@ -278,6 +283,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
     await expireInvitationReservations(work.tx, work.workspaceId);
     const { rows } = await work.tx.query(
       `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status,
+              i.workos_invitation_id,
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
               op.revision AS operation_revision, op.preparation,
               op.cancellation, op.issue, op.role_template_key,
@@ -317,8 +323,11 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
         id: row.id,
         email: row.email,
         role: row.role,
-        status:
-          row.status === 'pending' && (row.expires_at as Date).getTime() < Date.now() ? 'expired' : row.status,
+        status: row.status === 'pending'
+          && (row.expires_at as Date).getTime() < Date.now()
+          && !(row.operation_id && row.cancellation !== 'complete' && row.workos_invitation_id === null)
+          ? 'expired'
+          : row.status,
         invited_at: (row.created_at as Date).toISOString(),
         ...(work.role === 'admin' ? {
           delivery_status: row.delivery_status,
@@ -368,6 +377,18 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
     if (input.role_template_key !== undefined && input.role_template_key !== 'partnerships-agent' && input.role_template_key !== 'finance-agent') {
       throw new RouteError('choose a supported job role', 'bad_role_template', 422);
     }
+    const preparing = memberProvisioningEnabled(c.env);
+    // `role_template_key` opts into the setup-only contract. Reject it before
+    // tenant admission or rate limiting when that contract is disabled, so a
+    // rolling or stale client cannot silently fall through to legacy delivery.
+    if (!preparing && input.role_template_key !== undefined) {
+      checkpoint = 'setup_mode_rejected';
+      throw new RouteError(
+        'Background member setup is not available in this deployment.',
+        'member_setup_unavailable',
+        409,
+      );
+    }
     const roleTemplateKey: MemberRoleTemplate = input.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent';
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       throw new RouteError('an invitation needs an email address', 'bad_email', 422);
@@ -385,19 +406,20 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       );
       const alreadyMember = existing.rows[0];
 
-      const preparing = memberProvisioningEnabled(c.env);
       const organizationId = preparing ? null : await workosOrganizationId(work);
       if (!preparing && !alreadyMember && c.env.AUTH_MODE === 'workos' && !organizationId) {
         throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
       }
       checkpoint = 'organization_binding_checked';
 
-      const { rows } = await work.tx.query<{ id: string; status: string; created_at: Date }>(
+      const { rows } = await work.tx.query<{
+        id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+      }>(
         `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by,
                                   status, accepted_by, delivery_status)
          VALUES ($1, $2, $3, now() + interval '7 days', $4, $5, $6, $7)
          ON CONFLICT (workspace_id, email) WHERE status = 'pending' DO NOTHING
-         RETURNING id, status, created_at`,
+         RETURNING id, status, created_at, delivery_status, delivery_error`,
         [
           work.workspaceId,
           email,
@@ -411,8 +433,10 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       let row = rows[0];
       let duplicate = false;
       if (!row) {
-        const prior = await work.tx.query<{ id: string; status: string; created_at: Date }>(
-          `SELECT id, status, created_at FROM invitations
+        const prior = await work.tx.query<{
+          id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+        }>(
+          `SELECT id, status, created_at, delivery_status, delivery_error FROM invitations
             WHERE workspace_id=$1 AND email=$2 AND status='pending' FOR UPDATE`,
           [work.workspaceId, email],
         );
@@ -423,14 +447,52 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       trackedInvitationId = row.id;
       checkpoint = duplicate ? 'duplicate_resolved' : 'invitation_stored';
 
-      let provisioning = null;
+      const operation = duplicate ? await work.tx.query<{
+        id: string; workspace_id: string; revision: number;
+        preparation: MemberProvisioningOperation['preparation'];
+        cancellation: MemberProvisioningOperation['cancellation'];
+        issue: MemberProvisioningOperation['issue'];
+        role_template_key: MemberRoleTemplate;
+      }>(
+        `SELECT id, workspace_id, revision, preparation, cancellation, issue, role_template_key
+           FROM member_provisioning_operations
+          WHERE workspace_id=$1 AND invitation_id=$2 FOR UPDATE`,
+        [work.workspaceId, row.id],
+      ) : null;
+      const existingOperation = operation?.rows[0] ?? null;
+      if (duplicate && !alreadyMember && preparing !== Boolean(existingOperation)) {
+        throw new RouteError(
+          preparing
+            ? 'This address already has a legacy invitation in progress.'
+            : 'This address already has background member setup in progress.',
+          'invitation_mode_conflict',
+          409,
+        );
+      }
+      if (existingOperation && existingOperation.role_template_key !== roleTemplateKey) {
+        throw new RouteError(
+          'This address already has setup in progress for a different job role.',
+          'invitation_role_conflict',
+          409,
+        );
+      }
+
+      let provisioning = existingOperation ? projectMemberProvisioning({
+        ...existingOperation,
+        invitation_id: row.id,
+        invitation_status: row.status,
+        delivery_status: row.delivery_status,
+        delivery_error: row.delivery_error,
+      }) : null;
       if (!alreadyMember && preparing) {
-        const created = await createMemberProvisioningOperation(work.tx, {
-          workspaceId: work.workspaceId, invitationId: row.id, requestedBy: work.userId, roleTemplateKey,
-        });
-        provisioning = created.operation;
-        if (created.jobId) work.jobs.push(created.jobId);
-        checkpoint = 'member_setup_queued';
+        if (!duplicate) {
+          const created = await createMemberProvisioningOperation(work.tx, {
+            workspaceId: work.workspaceId, invitationId: row.id, requestedBy: work.userId, roleTemplateKey,
+          });
+          provisioning = created.operation;
+          if (created.jobId) work.jobs.push(created.jobId);
+          checkpoint = 'member_setup_queued';
+        }
       } else if (!alreadyMember && c.env.AGENT_RUNTIME === 'hermes') {
         const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
         if (!reservation) {
@@ -484,7 +546,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         role,
         status: row.status,
         invited_at: row.created_at.toISOString(),
-        ...(provisioning ? { provisioning, role_template_key: roleTemplateKey } : {}),
+        ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
         version: 0,
       }) };
     }));
@@ -534,11 +596,13 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         workos_invitation_id: string | null;
         role_template_key: MemberRoleTemplate | null;
       }>(
-        `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id, op.role_template_key
+        `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id,
+                op.role_template_key
            FROM invitations i
            LEFT JOIN member_provisioning_operations op
              ON op.workspace_id=i.workspace_id AND op.invitation_id=i.id
-          WHERE i.workspace_id = $1 AND i.id = $2`,
+          WHERE i.workspace_id = $1 AND i.id = $2
+          FOR UPDATE OF i`,
         [work.workspaceId, invitationId],
       );
       const invitation = rows[0];
@@ -548,9 +612,16 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       }
       checkpoint = 'invitation_locked';
 
-      const preparing = memberProvisioningEnabled(c.env);
-      const organizationId = preparing ? null : await workosOrganizationId(work);
-      if (!preparing && c.env.AUTH_MODE === 'workos' && !organizationId) {
+      const setupBacked = invitation.role_template_key !== null;
+      if (setupBacked && !memberProvisioningEnabled(c.env)) {
+        throw new RouteError(
+          'Background member setup is paused in this deployment. The existing setup was not changed.',
+          'member_setup_unavailable',
+          409,
+        );
+      }
+      const organizationId = setupBacked ? null : await workosOrganizationId(work);
+      if (!setupBacked && c.env.AUTH_MODE === 'workos' && !organizationId) {
         throw new RouteError('this workspace is not linked to a WorkOS organization', 'not_configured', 503);
       }
       checkpoint = 'organization_binding_checked';
@@ -564,7 +635,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
           invitation.email,
           invitation.role,
           work.userId,
-          preparing ? 'not_required' : c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
+          setupBacked ? 'not_required' : c.env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
         ],
       );
       const row = created.rows[0];
@@ -573,7 +644,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       await work.tx.query(`UPDATE invitations SET superseded_by = $2 WHERE id = $1`, [invitation.id, row.id]);
       checkpoint = 'successor_stored';
 
-      if (!preparing && c.env.AGENT_RUNTIME === 'hermes') {
+      if (!setupBacked && c.env.AGENT_RUNTIME === 'hermes') {
         const transferred = await transferInvitationCapacity(c.env, work.tx, work.workspaceId, invitation.id, row.id);
         if (!transferred) {
           const reservation = await reserveCapacityForInvitation(c.env, work.tx, work.workspaceId, row.id);
@@ -586,24 +657,22 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         checkpoint = 'capacity_transferred_or_reserved';
       }
       let provisioning = null;
-      if (preparing) {
-        const transferredOperation = await rebindMemberProvisioningOperation(
-          work.tx, work.workspaceId, invitation.id, row.id, work.userId,
+      if (setupBacked) {
+        const capacityTransferred = await transferInvitationCapacity(
+          c.env, work.tx, work.workspaceId, invitation.id, row.id,
         );
-        if (transferredOperation) {
-          provisioning = transferredOperation.operation;
-          if (transferredOperation.jobId) work.jobs.push(transferredOperation.jobId);
-          await transferInvitationCapacity(c.env, work.tx, work.workspaceId, invitation.id, row.id);
-        } else {
-          const createdOperation = await createMemberProvisioningOperation(work.tx, {
-            workspaceId: work.workspaceId, invitationId: row.id, requestedBy: work.userId,
-            roleTemplateKey: invitation.role_template_key ?? 'partnerships-agent',
-          });
-          provisioning = createdOperation.operation;
-          if (createdOperation.jobId) work.jobs.push(createdOperation.jobId);
-        }
+        const transferredOperation = await rebindMemberProvisioningOperation(
+          work.tx, work.workspaceId, invitation.id, row.id, work.userId, capacityTransferred,
+        );
+        if (!transferredOperation) throw new RouteError(
+          'This setup can no longer be resent. Start a new invitation after reviewing its state.',
+          'not_resendable',
+          409,
+        );
+        provisioning = transferredOperation.operation;
+        if (transferredOperation.jobId) work.jobs.push(transferredOperation.jobId);
       }
-      if (!preparing && c.env.AUTH_MODE === 'workos' && organizationId) {
+      if (!setupBacked && c.env.AUTH_MODE === 'workos' && organizationId) {
         const key = `workos:invitation:${row.id}:send`;
         await work.tx.query(
           `INSERT INTO workos_sync (workspace_id, resource_type, resource_id, direction, payload)
@@ -619,7 +688,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         });
         if (jobId) work.jobs.push(jobId);
       }
-      if (!preparing) {
+      if (!setupBacked) {
         const expiryJob = await enqueueJob(
           work.tx, work.workspaceId, 'hermes_invitation_expire', `invitation-expire:${row.id}`, { invitation_id: row.id },
         );
@@ -636,7 +705,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         role: invitation.role,
         status: 'pending',
         invited_at: row.created_at.toISOString(),
-        ...(provisioning ? { provisioning, role_template_key: invitation.role_template_key ?? 'partnerships-agent' as const } : {}),
+        ...(provisioning ? { provisioning, role_template_key: invitation.role_template_key! } : {}),
         version: 0,
       });
     }));
@@ -663,7 +732,8 @@ export async function withdrawInvitation(c: Context<{ Bindings: Env }>): Promise
   await inWorkspace(c, async (work) => {
     work.requireAdmin('withdrawing an invitation');
     const { rows } = await work.tx.query<{ id: string; status: string; workos_invitation_id: string | null }>(
-      `SELECT id, status, workos_invitation_id FROM invitations WHERE workspace_id = $1 AND id = $2`,
+      `SELECT id, status, workos_invitation_id FROM invitations
+        WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
       [work.workspaceId, invitationId],
     );
     const invitation = rows[0];

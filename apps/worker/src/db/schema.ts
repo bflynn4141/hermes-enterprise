@@ -2160,6 +2160,7 @@ export const jobReady = pgTable('job_ready', {
   jobId: uuid('job_id').primaryKey(),
   workspaceId: uuid('workspace_id').notNull(),
   nextAt: now('next_at'),
+  pauseReason: text('pause_reason'),
 });
 
 /**

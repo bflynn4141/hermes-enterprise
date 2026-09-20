@@ -197,6 +197,24 @@ export async function reserveCapacityForInvitation(
   return { id, remaining };
 }
 
+/** Revalidate the exact reservation behind a persisted `ready` operation. */
+export async function hasCurrentReservedCapacityForInvitation(
+  env: Env,
+  tx: Tx,
+  workspaceId: string,
+  invitationId: string,
+): Promise<boolean> {
+  const { rows } = await tx.query<{ id: string; discovery_grant_id: string | null }>(
+    `SELECT id, discovery_grant_id FROM hermes_cloud_capacity
+      WHERE workspace_id=$1 AND reserved_invitation_id=$2 AND state='reserved'
+      FOR UPDATE`,
+    [workspaceId, invitationId],
+  );
+  const capacity = rows[0];
+  return Boolean(capacity?.discovery_grant_id
+    && await linkedGrantIsCurrent(env, tx, workspaceId, capacity.id, capacity.discovery_grant_id));
+}
+
 async function linkedGrantIsCurrent(
   env: Env,
   tx: Tx,

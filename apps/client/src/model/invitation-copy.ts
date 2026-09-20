@@ -12,6 +12,12 @@ export function invitationFailureMessage(error: unknown): string {
   }
   const message = error.reason === 'iris_capacity_unavailable'
     ? 'No verified Iris profile is available. Add ready capacity, then try again.'
+    : error.reason === 'member_setup_unavailable'
+      ? 'Background member setup is paused right now. The existing setup was not changed.'
+    : error.reason === 'invitation_mode_conflict'
+      ? 'This address already has an invitation in a different delivery flow. Use the existing invitation card.'
+    : error.reason === 'invitation_role_conflict'
+      ? 'This address already has setup in progress for a different job role.'
     : error.reason === 'not_configured'
       ? 'This workspace is not connected to WorkOS invitation delivery.'
       : error.reason === 'rate_limited'
