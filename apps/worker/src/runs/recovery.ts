@@ -23,6 +23,8 @@ import { resolvePartnerSkillAssignment } from '../enterprise-skills/service.js';
 
 export const MAX_AUTOMATIC_ATTEMPTS = 3;
 const TRANSIENT_REASONS = new Set(['hermes_provider_unavailable', 'hermes_provider_rate_limited']);
+const isPartnerScreeningRun = (run: Pick<RecoveryRun, 'client_turn_id'>): boolean =>
+  run.client_turn_id.startsWith('partner-screening:');
 export function automaticRetryAt(run: {attempt:number;error:{reason?:string;retryable?:boolean}|null;ended_at:Date|null;recovery_cancelled:boolean;recovery_not_before?:Date|null}): Date | null {
   if (run.recovery_cancelled || run.attempt >= MAX_AUTOMATIC_ATTEMPTS || !run.ended_at || !run.error?.retryable || !TRANSIENT_REASONS.has(run.error.reason ?? '')) return null;
   const seconds = run.attempt === 1 ? 60 : 300;
@@ -150,7 +152,24 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
   }
   if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status)) throw new RouteError('This task is already running.', 'run_active',409);
   if (!['error','stopped'].includes(run.status)) throw new RouteError('This task has already finished.', 'run_completed',409);
-  if (automatic && (run.recovery_cancelled || run.stop_requested || !automaticRetryAt(run))) return run;
+  const automaticDue = automaticRetryAt(run);
+  if (automatic) {
+    if (run.recovery_cancelled || run.stop_requested || !automaticDue) return run;
+    if (automaticDue.getTime() > Date.now()) {
+      const wait = new Error('run_recovery_not_due') as Error & { retryAfterSeconds?: number };
+      wait.retryAfterSeconds = Math.max(1, Math.ceil((automaticDue.getTime() - Date.now()) / 1000));
+      throw wait;
+    }
+  }
+  const providerDeadline = run.recovery_not_before?.getTime() ?? 0;
+  const boundedBackoff = automaticRetryAt({ ...run, recovery_cancelled: false })?.getTime() ?? 0;
+  if (!automatic && Math.max(providerDeadline, boundedBackoff) > Date.now()) {
+    throw new RouteError(
+      'The provider recovery cooldown is still active. Hermes will retry automatically after the safe backoff.',
+      'provider_retry_backoff_active',
+      429,
+    );
+  }
   if (isEnginePaused(env)) throw new RouteError('The engine is paused for a deployment.', 'engine_paused',409);
   const safety = await inspectRecoverySafety(work.tx,work.workspaceId,run.id);
   if (safety.blockedReason) throw new RouteError(safety.message ?? 'Review the previous task before retrying.',safety.blockedReason,409);
@@ -236,10 +255,15 @@ export async function runRecoveryJob(env:Env,job:Job):Promise<void> {
   try {
     await withWorkspaceTransaction(env,job.workspace_id,async tx=>{
       const work={tx,workspaceId:job.workspace_id,userId:payload.owner_id,jobs};
-      const policy = await wakePolicy(work,env,payload.agent_id);
-      if (policy) throw new RouteError(policy,'automation_disabled',409);
       const run=await loadRecoveryRun(work,payload.agent_id,payload.run_id);
       if (!run || run.attempt!==payload.expected_attempt || run.status!=='error' || run.recovery_cancelled) return;
+      // Partner screening is proactive work and keeps its explicit automation
+      // policy. A response continuation was already authorized by the user's
+      // chat turn, so recovering it must not depend on partner automation.
+      if (isPartnerScreeningRun(run)) {
+        const policy = await wakePolicy(work,env,payload.agent_id);
+        if (policy) throw new RouteError(policy,'automation_disabled',409);
+      }
       await retryTask(work,env,payload.agent_id,run.id,payload.expected_attempt,true);
     });
   } catch(error) {
@@ -251,7 +275,7 @@ export async function runRecoveryJob(env:Env,job:Job):Promise<void> {
 
 /** A bounded Cron scan repairs failed handoffs even if a terminal callback was lost. */
 export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
-  if(!automatedTriggersEnabled(env)) return {queued:0};
+  const includePartnerScreening = automatedTriggersEnabled(env);
   const client=await connect(env,'app');
   let workspaces:string[];
   try {workspaces=(await client.query<{workspace_id:string}>('SELECT workspace_id FROM workspace_directory ORDER BY workspace_id')).rows.map(r=>r.workspace_id);} finally {await client.end();}
@@ -260,19 +284,28 @@ export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
     const {rows}=await tx.query<RecoveryRun>(`SELECT r.*,s.owner_id,s.model_id AS session_model_id,s.effort AS session_effort
       FROM runs r JOIN sessions s ON s.id=r.session_id
       JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=s.owner_id AND m.status='active'
-      WHERE r.workspace_id=$1 AND r.status='error' AND r.client_turn_id LIKE 'partner-screening:%'
+      WHERE r.workspace_id=$1 AND r.status='error'
        AND r.created_at>now()-interval '24 hours' AND r.attempt<3 AND NOT r.stop_requested
        AND NOT r.recovery_cancelled AND r.recovery_next_at IS NULL AND (r.recovery_blocked_reason IS NULL OR r.recovery_blocked_reason='payment_result_pending')
        AND NOT s.archived AND NOT s.read_only
-       AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id AND newer.agent_id=r.agent_id
-          AND newer.client_turn_id LIKE 'partner-screening:%' AND newer.created_at>r.created_at)
-      ORDER BY r.created_at DESC LIMIT 20 FOR UPDATE OF r SKIP LOCKED`,[workspaceId]);
+       AND (
+         (r.client_turn_id LIKE 'partner-screening:%' AND $2::boolean
+          AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id AND newer.agent_id=r.agent_id
+            AND newer.client_turn_id LIKE 'partner-screening:%' AND newer.created_at>r.created_at))
+         OR
+         (r.client_turn_id NOT LIKE 'partner-screening:%'
+          AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id
+            AND newer.session_id=r.session_id AND newer.created_at>r.created_at))
+       )
+      ORDER BY r.created_at DESC LIMIT 20 FOR UPDATE OF r SKIP LOCKED`,[workspaceId,includePartnerScreening]);
     for(const run of rows) {
-      try {
-        if (await wakePolicy({tx,workspaceId,userId:run.owner_id,jobs:[]},env,run.agent_id)) continue;
-      } catch (error) {
-        if (error instanceof RouteError && error.reason === 'agent_not_bound') continue;
-        throw error;
+      if (isPartnerScreeningRun(run)) {
+        try {
+          if (await wakePolicy({tx,workspaceId,userId:run.owner_id,jobs:[]},env,run.agent_id)) continue;
+        } catch (error) {
+          if (error instanceof RouteError && error.reason === 'agent_not_bound') continue;
+          throw error;
+        }
       }
       const due=automaticRetryAt(run); if(!due) continue;
       const safety=await inspectRecoverySafety(tx,workspaceId,run.id);

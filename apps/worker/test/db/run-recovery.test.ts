@@ -37,7 +37,15 @@ function environment() {
   return { env, created };
 }
 
-async function fixture(options: { scheduled?: boolean; attempt?: number; cancelled?: boolean; paymentPending?: boolean } = {}) {
+async function fixture(options: {
+  scheduled?: boolean;
+  directory?: boolean;
+  attempt?: number;
+  cancelled?: boolean;
+  paymentPending?: boolean;
+  rateLimited?: boolean;
+  retryNotBefore?: Date;
+} = {}) {
   const fx = await seedWorkspace();
   const runId = randomUUID();
   const screeningId = randomUUID();
@@ -48,7 +56,7 @@ async function fixture(options: { scheduled?: boolean; attempt?: number; cancell
     await client.query(`INSERT INTO agent_owners(workspace_id,agent_id,member_id)
       SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`, [fx.workspaceId, fx.agentId, fx.adminId]);
     await client.query('UPDATE sessions SET model_id=$2,effort=$3 WHERE id=$1', [fx.sessionId, DEFAULT_MODEL_ID, 'high']);
-    if (options.scheduled) await client.query(
+    if (options.scheduled || options.directory) await client.query(
       'INSERT INTO workspace_directory(workspace_id,workos_organization_id) VALUES($1,$2)',
       [fx.workspaceId, `recovery-${fx.workspaceId}`],
     );
@@ -67,11 +75,13 @@ async function fixture(options: { scheduled?: boolean; attempt?: number; cancell
     await client.query(
       `INSERT INTO runs
          (id,workspace_id,session_id,agent_id,status,model_id,effort,client_turn_id,mode,attempt,
-          trace_id,error,ended_at,recovery_cancelled)
-       VALUES ($1,$2,$3,$4,'error',$5,'high',$6,'work',$7,$8,$9::jsonb,now()-interval '10 minutes',$10)`,
+          trace_id,error,ended_at,recovery_cancelled,recovery_not_before)
+       VALUES ($1,$2,$3,$4,'error',$5,'high',$6,'work',$7,$8,$9::jsonb,now()-interval '10 minutes',$10,$11)`,
       [runId, fx.workspaceId, fx.sessionId, fx.agentId, OLD_MODEL,
         options.scheduled || options.paymentPending ? `partner-screening:${screeningId}` : randomUUID(),
-        options.attempt ?? 1, traceId, JSON.stringify(oldError), options.cancelled ?? false],
+        options.attempt ?? 1, traceId, JSON.stringify(options.rateLimited
+          ? { ...oldError, reason: 'hermes_provider_rate_limited', message: 'The selected model is rate limited. Wait a moment, then retry.' }
+          : oldError), options.cancelled ?? false, options.retryNotBefore ?? null],
     );
     await client.query('COMMIT');
   });
@@ -180,6 +190,64 @@ describe('durable run recovery admission', () => {
     await runRecoveryJob(env, cancelledJob!);
     expect((await work(lateCancel, (context) => loadRecoveryRun(context, lateCancel.agentId, lateCancel.runId)))?.attempt).toBe(1);
     expect(created).toHaveLength(1);
+  });
+
+  it('waits out provider cooldown and automatically continues an ordinary post-tool 429 without replaying the read', async () => {
+    const retryNotBefore = new Date(Date.now() + 10 * 60_000);
+    const fx = await fixture({ directory: true, rateLimited: true, retryNotBefore });
+    await work(fx, async (context) => {
+      await context.tx.query(
+        `INSERT INTO run_steps (workspace_id,run_id,turn,step_id,label,state,tool_call_id)
+         VALUES ($1,$2,0,'hermes-tool-1','list_partner_candidates','done','approved-read')`,
+        [fx.workspaceId, fx.runId],
+      );
+      await context.tx.query(
+        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+         VALUES ($1,$2,0,0,'assistant',$3::jsonb),($1,$2,0,1,'tool',$4::jsonb)`,
+        [fx.workspaceId, fx.runId,
+          JSON.stringify({ role: 'assistant', content: '', tool_calls: [{ id: 'approved-read', name: 'list_partner_candidates', arguments: '{"limit":1,"minimum_priority":100}' }] }),
+          JSON.stringify({ role: 'tool', tool_call_id: 'approved-read', content: '{"candidates":[]}' })],
+      );
+    });
+    const { env, created } = environment();
+    env.AUTOMATED_TRIGGERS_ENABLED = '0';
+
+    await expect(work(fx, (context) => retryTask(context, env, fx.agentId, fx.runId, 1)))
+      .rejects.toMatchObject({ reason: 'provider_retry_backoff_active', status: 429 });
+    expect(await scheduleRunRecovery(env)).toMatchObject({ queued: 1 });
+    const job = await recoveryJob(fx);
+    expect(job).toBeDefined();
+    await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const row = (await client.query(
+        `SELECT r.recovery_next_at,j.next_at FROM runs r JOIN jobs j ON j.workspace_id=r.workspace_id
+          AND j.kind='run_recovery' AND j.payload->>'run_id'=r.id::text WHERE r.id=$1`,
+        [fx.runId],
+      )).rows[0];
+      expect(row.recovery_next_at.getTime()).toBeGreaterThanOrEqual(retryNotBefore.getTime());
+      expect(row.next_at.getTime()).toBeGreaterThanOrEqual(retryNotBefore.getTime());
+    });
+
+    await expect(runRecoveryJob(env, job!)).rejects.toThrow('run_recovery_not_due');
+    expect(created).toHaveLength(0);
+
+    // The queue runner honors next_at; calling the handler directly here
+    // isolates admission after the scheduled deadline without waiting ten minutes.
+    await work(fx, (context) => context.tx.query(
+      `UPDATE runs SET recovery_not_before=now()-interval '1 second',
+         recovery_next_at=now()-interval '1 second' WHERE id=$1`, [fx.runId]));
+    await runRecoveryJob(env, job!);
+    expect(created).toHaveLength(1);
+    await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const run = (await client.query(
+        'SELECT attempt,status,model_id,recovery_input,recovery_history FROM runs WHERE id=$1', [fx.runId],
+      )).rows[0];
+      expect(run).toMatchObject({ attempt: 2, status: 'working', model_id: DEFAULT_MODEL_ID });
+      expect(run.recovery_input).toContain('completed tool results already stored in this session');
+      expect(run.recovery_input).toContain('Do not repeat completed tool calls');
+      expect(run.recovery_history).toEqual([expect.objectContaining({ trigger: 'automatic', reason: 'hermes_provider_rate_limited' })]);
+      expect((await client.query('SELECT count(*)::int AS count FROM run_steps WHERE run_id=$1', [fx.runId])).rows[0].count).toBe(1);
+      expect((await client.query('SELECT count(*)::int AS count FROM run_turns WHERE run_id=$1', [fx.runId])).rows[0].count).toBe(2);
+    });
   });
 
   it('deduplicates Run now within the authorized cadence bucket and never bypasses an unresolved cycle', async () => {
