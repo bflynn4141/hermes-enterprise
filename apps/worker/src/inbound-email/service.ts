@@ -119,13 +119,12 @@ export async function recordInboundEvents(
   for (const message of thread.messages) {
     const bounceAddress = hardBounceRecipient(message);
     if (bounceAddress) {
-      const linked = await work.tx.query<{ id: string; candidate_id: string | null; agent_id: string | null }>(
-        `SELECT o.id,o.candidate_id,pe.agent_id
+      const linked = await work.tx.query<{ id: string }>(
+        `SELECT o.id
            FROM outbound_email_outbox o
-           LEFT JOIN partner_engagements pe ON pe.workspace_id=o.workspace_id AND pe.candidate_id=o.candidate_id
-          WHERE o.workspace_id=$1 AND o.recipient_address=$2 AND o.state='sent'
+          WHERE o.workspace_id=$1 AND o.recipient_address=$2 AND o.provider_thread_id=$3 AND o.state='sent'
           ORDER BY o.sent_at DESC NULLS LAST LIMIT 1`,
-        [work.workspaceId, bounceAddress],
+        [work.workspaceId, bounceAddress, thread.provider_thread_id],
       );
       const outbox = linked.rows[0];
       if (!outbox) continue;
@@ -135,23 +134,15 @@ export async function recordInboundEvents(
          VALUES ($1,$2,$3,'bounce',$4,$5,$6::jsonb)
          ON CONFLICT DO NOTHING RETURNING id`,
         [work.workspaceId, snapshotId, message.provider_message_id, bounceAddress, outbox.id,
-          JSON.stringify({ status: '5.x', detection: 'delivery_status_headers' })],
+          JSON.stringify({
+            status: '5.x',
+            detection: 'unverified_delivery_status_text',
+            authenticated_delivery: false,
+            action_taken: 'none',
+          })],
       );
       if (!inserted.rows[0]) continue;
       counts.bounces += 1;
-      await work.tx.query(
-        `INSERT INTO contact_suppressions (workspace_id,address,reason,source_message_id,created_by)
-         VALUES ($1,$2,'bounce',$3,$4) ON CONFLICT (workspace_id,address) DO NOTHING`,
-        [work.workspaceId, bounceAddress, message.provider_message_id, work.userId],
-      );
-      if (outbox.candidate_id) {
-        await work.tx.query(
-          `UPDATE partner_engagements SET stage='suppressed'
-            WHERE workspace_id=$1 AND candidate_id=$2 AND stage NOT IN ('replied','suppressed')`,
-          [work.workspaceId, outbox.candidate_id],
-        );
-      }
-      await cancelFutureOutreach(work, bounceAddress, outbox.candidate_id, 'recipient_hard_bounced');
       continue;
     }
 
@@ -236,7 +227,7 @@ export async function importSelectedGmailThread(
   const digest = await sha256Hex(normalized);
   const markdown = renderThreadMarkdown(thread);
   const markdownDigest = await sha256Hex(markdown);
-  const slug = `gmail-thread-${(await sha256Hex(`${account.id}:${thread.provider_thread_id}`)).slice(0, 32)}`;
+  const slug = `gmail-thread-${(await sha256Hex(`${account.id}:${thread.provider_thread_id}:${team.id}`)).slice(0, 32)}`;
   const title = ((input.title ?? thread.subject) || 'Gmail thread').slice(0, 200);
 
   // Serialize all versions of this provider thread. Without this lock, two
@@ -244,16 +235,24 @@ export async function importSelectedGmailThread(
   // race the exact-snapshot idempotency check.
   await work.tx.query(
     `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
-    [`gmail-evidence:${work.workspaceId}:${account.id}:${thread.provider_thread_id}`],
+    [`gmail-evidence:${work.workspaceId}:${account.id}:${thread.provider_thread_id}:${team.id}`],
   );
 
   const existing = await work.tx.query<SnapshotRow>(
     `SELECT s.id,s.library_source_id,s.library_version_id,v.version,s.title,s.message_count,
             s.normalized_sha256,s.imported_at
        FROM mailbox_thread_snapshots s
-       JOIN library_source_versions v ON v.workspace_id=s.workspace_id AND v.id=s.library_version_id
-      WHERE s.workspace_id=$1 AND s.account_id=$2 AND s.provider_thread_id=$3 AND s.normalized_sha256=$4`,
-    [work.workspaceId, account.id, thread.provider_thread_id, digest],
+       JOIN library_source_versions v
+         ON v.workspace_id=s.workspace_id
+        AND v.source_id=s.library_source_id
+        AND v.id=s.library_version_id
+       JOIN library_source_team_grants source_grant
+         ON source_grant.workspace_id=s.workspace_id
+        AND source_grant.source_id=s.library_source_id
+        AND source_grant.team_id=s.team_id
+      WHERE s.workspace_id=$1 AND s.account_id=$2 AND s.provider_thread_id=$3
+        AND s.normalized_sha256=$4 AND s.team_id=$5`,
+    [work.workspaceId, account.id, thread.provider_thread_id, digest, team.id],
   );
   if (existing.rows[0]) {
     const snapshot = existing.rows[0];

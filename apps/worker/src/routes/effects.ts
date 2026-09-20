@@ -26,6 +26,7 @@
 // "somebody walked past an unlocked laptop" should not be able to.
 import type { Context } from 'hono';
 import {
+  approvalPayloadSchema,
   effectEntitySchema,
   externalEffectEvidenceInputSchema,
   externalEffectEvidenceReceiptSchema,
@@ -95,6 +96,10 @@ export async function recordExternalEffectEvidence(c: Context<{ Bindings: Env }>
   const effectId = pathUuid(c, 'id');
   const parsed = externalEffectEvidenceInputSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw new RouteError('Evidence receipt details are invalid', 'invalid_input', 422);
+  const occurredAt = new Date(parsed.data.occurred_at);
+  if (occurredAt.getTime() > Date.now()) {
+    throw new RouteError('Evidence cannot be recorded with a future occurrence time', 'future_evidence_time', 422);
+  }
 
   const result = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
@@ -107,28 +112,88 @@ export async function recordExternalEffectEvidence(c: Context<{ Bindings: Env }>
     if (!(await holdsRole(work.tx, work.workspaceId, work.userId, effect.required_role))) {
       throw new RouteError(`recording this needs the ${effect.required_role} role`, 'role_required', 403);
     }
-    const snapshot = await work.tx.query<{ id: string; normalized_sha256: string }>(
-      `SELECT s.id,s.normalized_sha256
+    const approval = (await work.tx.query<{
+      requester_agent_id: string;
+      authorization_revision: number;
+      authorization_hash: string;
+      payload: unknown;
+    }>(
+      `SELECT ar.requester_agent_id,ar.authorization_revision,ar.authorization_hash,revision.payload
+         FROM approval_requests ar
+         JOIN approval_revisions revision
+           ON revision.workspace_id=ar.workspace_id
+          AND revision.request_id=ar.request_id
+          AND revision.revision=ar.authorization_revision
+          AND revision.authorization_hash=ar.authorization_hash
+         JOIN decisions decision
+           ON decision.workspace_id=ar.workspace_id
+          AND decision.request_id=ar.request_id
+          AND decision.id=$3
+          AND decision.decision='approve'
+        WHERE ar.workspace_id=$1 AND ar.request_id=$2
+          AND ar.status='approved' AND revision.status='approved'
+          AND EXISTS (
+            SELECT 1 FROM request_audiences audience
+             WHERE audience.workspace_id=ar.workspace_id
+               AND audience.request_id=ar.request_id
+               AND audience.user_id=$4
+          )
+        FOR SHARE OF ar,revision,decision`,
+      [work.workspaceId, effect.request_id, effect.decision_id, work.userId],
+    )).rows[0];
+    if (!approval) {
+      throw new RouteError('The effect has no approved revision available to this reviewer', 'approval_binding_required', 409);
+    }
+    const approvalPayload = approvalPayloadSchema.safeParse(approval.payload);
+    if (!approvalPayload.success
+        || approvalPayload.data.authorization.revision !== approval.authorization_revision
+        || approvalPayload.data.authorization.hash !== approval.authorization_hash
+        || approvalPayload.data.context.requester.agent_id !== approval.requester_agent_id
+        || !approvalPayload.data.evidence.some((item) => item.id === parsed.data.snapshot_id
+          && (item.kind === 'artifact' || item.kind === 'source'))) {
+      throw new RouteError('The snapshot is not cited by the approved effect revision', 'evidence_binding_required', 409);
+    }
+    const snapshot = await work.tx.query<{
+      id: string;
+      library_source_id: string;
+      library_version_id: string;
+      normalized_sha256: string;
+    }>(
+      `SELECT s.id,s.library_source_id,s.library_version_id,s.normalized_sha256
          FROM mailbox_thread_snapshots s
-         JOIN enterprise_team_agents eta
-           ON eta.workspace_id=s.workspace_id AND eta.team_id=s.team_id
-         JOIN members m
-           ON m.workspace_id=eta.workspace_id AND m.user_id=eta.principal_user_id
-        WHERE s.workspace_id=$1 AND s.id=$2 AND eta.principal_user_id=$3 AND m.status='active'`,
-      [work.workspaceId, parsed.data.snapshot_id, work.userId],
+         JOIN library_source_versions source_version
+           ON source_version.workspace_id=s.workspace_id
+          AND source_version.source_id=s.library_source_id
+          AND source_version.id=s.library_version_id
+         JOIN library_source_team_grants source_grant
+           ON source_grant.workspace_id=s.workspace_id
+          AND source_grant.source_id=s.library_source_id
+          AND source_grant.team_id=s.team_id
+        WHERE s.workspace_id=$1 AND s.id=$2
+          AND EXISTS (
+            SELECT 1 FROM enterprise_team_agents team_agent
+             WHERE team_agent.workspace_id=s.workspace_id
+               AND team_agent.team_id=s.team_id
+               AND team_agent.agent_id=$3
+          )`,
+      [work.workspaceId, parsed.data.snapshot_id, approval.requester_agent_id],
     );
     const evidence = snapshot.rows[0];
     if (!evidence) throw new RouteError('No accessible mailbox evidence snapshot', 'evidence_not_found', 404);
     const inserted = await work.tx.query<EvidenceReceiptRow>(
       `INSERT INTO external_effect_evidence_receipts
-         (workspace_id,effect_id,snapshot_id,snapshot_sha256,claimed_outcome,verification,
-          occurred_at,note,recorded_by)
-       VALUES ($1,$2,$3,$4,'completed_outside_hermes','evidence_recorded_not_provider_verified',$5,$6,$7)
-       ON CONFLICT (workspace_id,effect_id,snapshot_id) DO NOTHING
-       RETURNING id,effect_id,$8::text AS effect_kind,snapshot_id,snapshot_sha256,
+         (workspace_id,effect_id,request_id,decision_id,authorization_revision,authorization_hash,
+          snapshot_id,library_source_id,library_version_id,snapshot_sha256,
+          claimed_outcome,verification,occurred_at,note,recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+         'completed_outside_hermes','evidence_recorded_not_provider_verified',$11,$12,$13)
+       ON CONFLICT (workspace_id,effect_id,snapshot_id,authorization_revision,authorization_hash) DO NOTHING
+       RETURNING id,effect_id,$14::text AS effect_kind,snapshot_id,snapshot_sha256,
          claimed_outcome,verification,occurred_at,note,recorded_by,recorded_at`,
-      [work.workspaceId, effectId, evidence.id, evidence.normalized_sha256,
-        new Date(parsed.data.occurred_at), parsed.data.note, work.userId, effect.kind],
+      [work.workspaceId, effectId, effect.request_id, effect.decision_id,
+        approval.authorization_revision, approval.authorization_hash,
+        evidence.id, evidence.library_source_id, evidence.library_version_id, evidence.normalized_sha256,
+        occurredAt, parsed.data.note, work.userId, effect.kind],
     );
     let receipt = inserted.rows[0];
     if (!receipt) {
@@ -137,8 +202,10 @@ export async function recordExternalEffectEvidence(c: Context<{ Bindings: Env }>
                 r.claimed_outcome,r.verification,r.occurred_at,r.note,r.recorded_by,r.recorded_at
            FROM external_effect_evidence_receipts r
            JOIN effects e ON e.workspace_id=r.workspace_id AND e.id=r.effect_id
-          WHERE r.workspace_id=$1 AND r.effect_id=$2 AND r.snapshot_id=$3`,
-        [work.workspaceId, effectId, evidence.id],
+          WHERE r.workspace_id=$1 AND r.effect_id=$2 AND r.snapshot_id=$3
+            AND r.authorization_revision=$4 AND r.authorization_hash=$5`,
+        [work.workspaceId, effectId, evidence.id,
+          approval.authorization_revision, approval.authorization_hash],
       );
       receipt = existing.rows[0];
     }

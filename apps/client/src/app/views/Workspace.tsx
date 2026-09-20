@@ -558,7 +558,7 @@ function LibraryConnections() {
       {result && (
         <Ack show>
           {result.created ? 'Thread imported as immutable Library evidence.' : 'That exact thread snapshot was already imported.'}
-          {' '}Detected {result.events.replies} repl{result.events.replies === 1 ? 'y' : 'ies'}, {result.events.bounces} bounce{result.events.bounces === 1 ? '' : 's'}, and {result.events.unsubscribes} unsubscribe request{result.events.unsubscribes === 1 ? '' : 's'}. Sent 0 messages.
+          {' '}Detected {result.events.replies} repl{result.events.replies === 1 ? 'y' : 'ies'}, recorded {result.events.bounces} unverified bounce-like notice{result.events.bounces === 1 ? '' : 's'}, and detected {result.events.unsubscribes} unsubscribe request{result.events.unsubscribes === 1 ? '' : 's'}. Sent 0 messages.
         </Ack>
       )}
       <Panel
@@ -599,7 +599,7 @@ function LibraryConnections() {
               {busy === 'import' ? 'Importing…' : 'Import evidence'}
             </Button>
           </div>
-          <p className="meta">This is an operator proof, not a finished end-user thread picker. Import can record replies, hard bounces, and explicit unsubscribe requests from this snapshot. It can only stop future outreach; it cannot send email.</p>
+          <p className="meta">This is an operator proof, not a finished end-user thread picker. Exact-thread replies and explicit unsubscribe requests can stop future outreach. DSN-looking bounce text is recorded only as unverified evidence and never suppresses a contact automatically. Import cannot send email.</p>
         </Panel>
       )}
       <Panel

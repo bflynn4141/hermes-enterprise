@@ -404,7 +404,10 @@ export const librarySourceVersions = pgTable(
     createdBy: uuid('created_by'),
     createdAt: now('created_at'),
   },
-  (t) => [unique('library_source_versions_number_key').on(t.sourceId, t.version)],
+  (t) => [
+    unique('library_source_versions_number_key').on(t.sourceId, t.version),
+    unique('library_source_versions_workspace_source_id_key').on(t.workspaceId, t.sourceId, t.id),
+  ],
 );
 
 export const librarySourceTeamGrants = pgTable(
@@ -1516,7 +1519,23 @@ export const mailboxThreadSnapshots = pgTable(
     importedBy: uuid('imported_by'),
     importedAt: now('imported_at'),
   },
-  (t) => [unique('mailbox_thread_snapshots_library_version_key').on(t.libraryVersionId)],
+  (t) => [
+    unique('mailbox_thread_snapshots_library_version_key').on(t.libraryVersionId),
+    unique('mailbox_thread_snapshots_exact_key').on(
+      t.workspaceId,
+      t.accountId,
+      t.teamId,
+      t.providerThreadId,
+      t.normalizedSha256,
+    ),
+    unique('mailbox_thread_snapshots_evidence_binding_key').on(
+      t.workspaceId,
+      t.id,
+      t.librarySourceId,
+      t.libraryVersionId,
+      t.normalizedSha256,
+    ),
+  ],
 );
 
 export const inboundEmailEvents = pgTable('inbound_email_events', {
@@ -1535,7 +1554,13 @@ export const externalEffectEvidenceReceipts = pgTable('external_effect_evidence_
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
   effectId: uuid('effect_id').notNull(),
+  requestId: uuid('request_id').notNull(),
+  decisionId: uuid('decision_id').notNull(),
+  authorizationRevision: integer('authorization_revision').notNull(),
+  authorizationHash: text('authorization_hash').notNull(),
   snapshotId: uuid('snapshot_id').notNull(),
+  librarySourceId: uuid('library_source_id').notNull(),
+  libraryVersionId: uuid('library_version_id').notNull(),
   snapshotSha256: text('snapshot_sha256').notNull(),
   claimedOutcome: text('claimed_outcome').notNull(),
   verification: text('verification').notNull(),

@@ -1,6 +1,7 @@
 import { approvalEvidenceViewSchema, approvalPayloadSchema, type ApprovalEvidenceView } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
 import { RouteError } from '../routes/tenant.js';
+import { requestAudiencePredicate } from './audience.js';
 
 const unavailable = (): never => {
   throw new RouteError('This approval has no available stored evidence with that id.', 'approval_evidence_unavailable', 404);
@@ -103,11 +104,17 @@ export async function getApprovalEvidence(
     payload: unknown; requester_agent_id: string; source_run_id: string | null;
     authorization_revision: number; authorization_hash: string;
   }>(
-    `SELECT r.payload, ar.requester_agent_id, ar.source_run_id, ar.authorization_revision, ar.authorization_hash
+    `SELECT revision.payload, ar.requester_agent_id, ar.source_run_id,
+            ar.authorization_revision, ar.authorization_hash
        FROM approval_requests ar
-       JOIN requests r ON r.id=ar.request_id AND r.workspace_id=ar.workspace_id
+       JOIN approval_revisions revision
+         ON revision.workspace_id=ar.workspace_id
+        AND revision.request_id=ar.request_id
+        AND revision.revision=ar.authorization_revision
+        AND revision.authorization_hash=ar.authorization_hash
       WHERE ar.workspace_id=$1 AND ar.request_id=$2
-      FOR SHARE OF ar, r`, [workspaceId, requestId],
+        AND ${requestAudiencePredicate('ar.request_id', '$3')}
+      FOR SHARE OF ar, revision`, [workspaceId, requestId, actorUserId],
   )).rows[0];
   if (!approval) return unavailable();
   const parsed = approvalPayloadSchema.safeParse(approval.payload);
@@ -115,6 +122,10 @@ export async function getApprovalEvidence(
   const payload = parsed.data;
   const cited = payload.evidence.find((item) => item.id === evidenceId && ['artifact', 'source'].includes(item.kind));
   if (!cited) return unavailable();
+  if (payload.context.requester.agent_id !== approval.requester_agent_id
+      || payload.authorization.hash !== approval.authorization_hash
+      || payload.authorization.revision !== approval.authorization_revision
+      || payload.context.source.run_id !== approval.source_run_id) return unavailable();
   const base = { id: evidenceId, label: cited.label, note: cited.note ?? null };
 
   const mailbox = (await tx.query<{
@@ -124,17 +135,22 @@ export async function getApprovalEvidence(
     `SELECT snapshot.title,snapshot.message_count,snapshot.normalized_sha256,
             snapshot.normalized_thread,snapshot.imported_at
        FROM mailbox_thread_snapshots snapshot
-       JOIN enterprise_team_agents team_agent
-         ON team_agent.workspace_id=snapshot.workspace_id AND team_agent.team_id=snapshot.team_id
-       JOIN members member
-         ON member.workspace_id=team_agent.workspace_id AND member.user_id=team_agent.principal_user_id
+       JOIN library_source_versions source_version
+         ON source_version.workspace_id=snapshot.workspace_id
+        AND source_version.source_id=snapshot.library_source_id
+        AND source_version.id=snapshot.library_version_id
        JOIN library_source_team_grants source_grant
          ON source_grant.workspace_id=snapshot.workspace_id
         AND source_grant.source_id=snapshot.library_source_id
         AND source_grant.team_id=snapshot.team_id
       WHERE snapshot.workspace_id=$1 AND snapshot.id=$2
-        AND team_agent.agent_id=$3 AND team_agent.principal_user_id=$4 AND member.status='active'`,
-    [workspaceId, evidenceId, approval.requester_agent_id, actorUserId],
+        AND EXISTS (
+          SELECT 1 FROM enterprise_team_agents team_agent
+           WHERE team_agent.workspace_id=snapshot.workspace_id
+             AND team_agent.team_id=snapshot.team_id
+             AND team_agent.agent_id=$3
+        )`,
+    [workspaceId, evidenceId, approval.requester_agent_id],
   )).rows[0];
   if (mailbox) {
     const thread = object(mailbox.normalized_thread);

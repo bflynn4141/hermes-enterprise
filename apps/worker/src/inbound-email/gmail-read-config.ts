@@ -18,6 +18,9 @@ export function gmailEvidenceConfig(env: Env): GmailEvidenceConfig | null {
   const stateSecret = env.GMAIL_EVIDENCE_STATE_SECRET?.trim();
   const redirectUri = env.GMAIL_EVIDENCE_REDIRECT_URI?.trim();
   if (!clientId || !clientSecret || !stateSecret || stateSecret.length < 32 || !redirectUri) return null;
+  // Separate variables are not enough: reusing the outbound OAuth client can
+  // cause Google to coalesce consent and makes the operational boundary false.
+  if (env.GMAIL_CLIENT_ID?.trim() === clientId) return null;
   let parsed: URL;
   try { parsed = new URL(redirectUri); } catch { return null; }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);

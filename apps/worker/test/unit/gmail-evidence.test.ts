@@ -48,6 +48,15 @@ describe('selected Gmail evidence boundary', () => {
     } as Env)).toBeNull();
     expect(gmailEvidenceConfig({
       GMAIL_EVIDENCE_ENABLED: '1',
+      GMAIL_CLIENT_ID: config.clientId,
+      GMAIL_EVIDENCE_CLIENT_ID: config.clientId,
+      GMAIL_EVIDENCE_CLIENT_SECRET: config.clientSecret,
+      GMAIL_EVIDENCE_STATE_SECRET: config.stateSecret,
+      GMAIL_EVIDENCE_REDIRECT_URI: config.redirectUri,
+    } as Env)).toBeNull();
+    expect(gmailEvidenceConfig({
+      GMAIL_EVIDENCE_ENABLED: '1',
+      GMAIL_CLIENT_ID: 'outbound-client',
       GMAIL_EVIDENCE_CLIENT_ID: config.clientId,
       GMAIL_EVIDENCE_CLIENT_SECRET: config.clientSecret,
       GMAIL_EVIDENCE_STATE_SECRET: config.stateSecret,

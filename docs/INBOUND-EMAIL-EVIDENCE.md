@@ -23,8 +23,8 @@ Primary selection references:
 - Hermes exposes no mailbox list or search route. An Admin pastes one provider thread ID for each import.
 - The imported snapshot is immutable, versioned in the Library, and granted only to the selected agent’s explicit Enterprise team.
 - Imported text is labeled as untrusted external evidence. It is never interpreted as runtime instructions.
-- An inbound reply can mark a partner engagement replied and cancel later queued outreach. A strong explicit unsubscribe or standards-shaped hard bounce can also add a contact suppression. These paths enqueue zero sends.
-- A person can attach the snapshot to an access-grant or signature effect as a claim that it completed elsewhere. The receipt says `evidence_recorded_not_provider_verified`, sets `provider_execution_by_hermes=false`, and does not change the effect’s execution status.
+- An inbound reply tied to the exact provider thread can mark a partner engagement replied and cancel later queued outreach. A strong explicit unsubscribe reply can also add a contact suppression. DSN-looking text is not authenticated delivery evidence: Hermes records it as unverified evidence only and does not suppress, change engagement state, or cancel outreach from it. These paths enqueue zero sends.
+- A named approval-audience reviewer can attach only a snapshot cited by the effect's exact approved request revision. The immutable receipt binds the effect, decision, request, authorization revision/hash, snapshot, Library source/version, and snapshot digest. It rejects future occurrence times, says `evidence_recorded_not_provider_verified`, sets `provider_execution_by_hermes=false`, and does not change the effect’s execution status.
 - External evidence receipts are unavailable for payment and email-send effects.
 
 ## Deployment setup
@@ -64,7 +64,7 @@ Nous Hermes Agent’s Google Workspace skill combines Gmail, Calendar, and Drive
 2. Start consent from Library → Connections and verify the Google page shows only Gmail read-only access.
 3. Import one known thread ID and verify it appears as a new immutable Library source version for the expected team.
 4. Reimport unchanged content and verify the existing snapshot is returned.
-5. Import a test reply/unsubscribe and verify later queued outreach is cancelled, a suppression is recorded where applicable, and no `outbound_email_send` job is created.
+5. Import a test reply/unsubscribe and verify later queued outreach is cancelled, a suppression is recorded where applicable, and no `outbound_email_send` job is created. Separately import spoofable DSN-looking text and verify it remains unverified evidence without suppression or cancellation.
 6. Record external access/signature evidence and verify the effect remains pending/unavailable rather than executed.
 
 No live mailbox was connected while implementing this feature. Enabling it requires the deployment configuration and a user’s explicit Google consent.
