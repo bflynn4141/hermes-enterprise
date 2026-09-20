@@ -5805,3 +5805,8 @@ Navigation explains authority; server routes independently enforce it. Protect a
 An active approval reviewer may not yet have an agent assigned. Bootstrap must still return their authorized workspace and Inbox state with a null agent, never substitute another member’s private agent. Agent-dependent controls stay unavailable until an accessible agent exists.
 
 Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
+
+
+### C87 navigation refinement — Admin View and User View
+
+September 20: Brian prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.

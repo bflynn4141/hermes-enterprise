@@ -990,15 +990,34 @@ function SavedDocument({ id }: { id: string }) {
 // Settings
 // ---------------------------------------------------------------------------
 
+function SettingsViewHeader({ mode }: { mode: 'admin' | 'user' }) {
+  const nav = useNav();
+  const admin = useIsAdmin();
+  return (
+    <div className="settings-view-header">
+      <h1 className="display-32">{mode === 'admin' ? 'Admin' : 'Settings'}</h1>
+      {admin ? (
+        <select
+          className="settings-view-switch"
+          aria-label="Settings view"
+          value={mode}
+          onChange={(event) => nav(event.target.value === 'admin' ? ADMIN('Organization') : SETTINGS('Notifications'))}
+        >
+          <option value="admin">Admin View</option>
+          <option value="user">User View</option>
+        </select>
+      ) : <span className="settings-view-label">User View</span>}
+    </div>
+  );
+}
+
 export function Settings({ view }: { view: string }) {
   const nav = useNav();
   const selected = SETTINGS_TABS.includes(view as (typeof SETTINGS_TABS)[number]) ? view : 'Notifications';
   return (
     <div className="scroll">
       <div className="app-body settings-page" style={{ minHeight: '100%' }}>
-        <div className="row" style={{ height: 42 }}>
-          <h1 className="display-32">Settings</h1>
-        </div>
+        <SettingsViewHeader mode="user" />
         <Tabs tabs={SETTINGS_TABS.map((tab) => ({ id: tab, label: tab }))} value={selected} onChange={(next) => nav(SETTINGS(next))} label="Settings sections" />
         {selected === 'Notifications' && <NotificationsTab />}
         {selected === 'Slack account' && <SlackTab personal />}
@@ -1016,30 +1035,11 @@ export function AdminSettings({ view }: { view: string }) {
   return (
     <div className="scroll">
       <div className="app-body admin-settings-page">
-        <div className="row" style={{ height: 42 }}><h1 className="display-32">Admin</h1></div>
+        <SettingsViewHeader mode="admin" />
+        <div className="settings-section-tabs">
+          <Tabs tabs={ADMIN_SETTINGS_GROUPS.flatMap<{ id: string; label: string }>((group) => group.items)} value={selected} onChange={(next) => nav(ADMIN(next))} label="Admin sections" />
+        </div>
         <div className="admin-settings-layout">
-          <nav className="admin-settings-nav" aria-label="Admin sections">
-            {ADMIN_SETTINGS_GROUPS.map((group) => (
-              <div className="admin-settings-group" key={group.label}>
-                <h2>{group.label}</h2>
-                {group.items.map((item) => (
-                  <button type="button" key={item.id} aria-current={selected === item.id ? 'page' : undefined} onClick={() => nav(ADMIN(item.id))}>
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            ))}
-          </nav>
-          <label className="admin-settings-mobile-select">
-            <span>Admin section</span>
-            <select value={selected} onChange={(event) => nav(ADMIN(event.target.value))}>
-              {ADMIN_SETTINGS_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-                </optgroup>
-              ))}
-            </select>
-          </label>
           <section className="admin-settings-content" aria-label={`${ADMIN_SETTINGS_LABELS[selected] ?? 'Admin'} admin settings`}>
             <div className="admin-settings-view">
               {selected === 'Organization' && <OrganizationTab />}
