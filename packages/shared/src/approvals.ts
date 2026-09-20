@@ -158,6 +158,18 @@ export const sharedLearningDetailsSchema = z
     source_evidence_ids: z.array(identifier).min(1).max(100),
     reuse_audience: z.array(shortText).min(1).max(50),
     excluded_private_data: z.array(shortText).min(1).max(50),
+    priority_goal: z.object({
+      id: identifier,
+      title: shortText,
+      detail: z.string().trim().min(1).max(1_000),
+      scope: z.enum(['workspace', 'team']),
+      team_name: shortText.nullable(),
+      revision: z.number().int().min(1),
+      content_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    }).strict().optional(),
+    triage_state_sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    triage_admin_user_id: identifier.optional(),
+    comparison_version_sha256s: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(100).optional(),
   })
   .strict();
 

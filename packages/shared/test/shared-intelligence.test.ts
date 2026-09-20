@@ -59,9 +59,15 @@ describe('Shared Intelligence wire contracts', () => {
         relevance: { score: 3, confidence: .8 }, impact: { score: 2.5, confidence: .8 }, novelty: { score: 2, confidence: .8 },
         corroboration: { score: 2.5, confidence: .8 }, urgency: { score: 2, confidence: .8 }, uncertainty: { score: .5, confidence: .8 }, sensitivity: { score: .25, confidence: .8 },
       },
-      reason_codes: ['goal_aligned', 'corroborated'], evidence_count: 2, rubric_version: '2',
+      reason_codes: ['goal_aligned', 'corroborated'],
+      goal_snapshot: {
+        id: '00000000-0000-4000-8000-000000000009', scope: 'workspace', team_id: null, team_name: null,
+        title: 'Reduce review rework', detail: 'Make repeated reviews faster.', revision: 1,
+        content_sha256: 'e'.repeat(64), active: true, created_at: '2026-09-19T12:00:00.000Z',
+      },
+      comparison_snapshot: [], evidence_count: 2, rubric_version: '2',
       model_id: 'jev-1.13.0', model_version: 'jev-1.13.0-test', state_sha256: 'd'.repeat(64),
-      latency_ms: 20, failure_class: null, warnings: ['Human decision required.'],
+      latency_ms: 20, failure_class: null, assessed_at: '2026-09-19T12:01:00.000Z', warnings: ['Human decision required.'],
     });
     expect(assessment.recommendation).toBe('include');
     expect(assessment.reason_codes).toEqual(['goal_aligned', 'corroborated']);

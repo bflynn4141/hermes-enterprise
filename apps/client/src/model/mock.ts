@@ -529,22 +529,22 @@ export function createMockBackend(options: MockOptions = {}) {
     state_sha256: 'c'.repeat(64), latency_ms: 184, failure_class: null,
     warnings: ['A completed runtime is not proof that the business outcome succeeded.', 'The 70-point, 0.55-confidence, two-run routing thresholds are provisional review aids, not validated quality gates.'],
   };
+  let sharedIntelligenceGoals: SharedIntelligenceGoal[] = empty ? [] : [{
+    id: mockUuid(625), scope: 'workspace' as const, team_id: null, team_name: null,
+    title: 'Reduce partner review rework this quarter', detail: 'Make repeat partner reviews faster without weakening evidence or approval controls.',
+    revision: 1, content_sha256: 'a'.repeat(64), active: true, created_at: iso(-40),
+  }];
   const sharedIntelligenceTriageAssessment: SharedIntelligenceTriageAssessment = {
     status: 'complete' as const, priority_score: 86, recommendation: 'include' as const, confidence: .84,
     axes: {
       relevance: { score: 3, confidence: .9 }, impact: { score: 2.8, confidence: .86 }, novelty: { score: 2.2, confidence: .8 },
       corroboration: { score: 2.7, confidence: .88 }, urgency: { score: 2, confidence: .78 }, uncertainty: { score: .6, confidence: .8 }, sensitivity: { score: .3, confidence: .86 },
     },
-    reason_codes: ['goal_aligned', 'high_impact', 'corroborated'],
+    reason_codes: ['goal_aligned', 'high_impact', 'corroborated'], goal_snapshot: sharedIntelligenceGoals[0]!, comparison_snapshot: [],
     evidence_count: 2, rubric_version: '2', model_id: 'jev-1.13.0', model_version: 'jev-1.13.0-20260901',
-    state_sha256: 'e'.repeat(64), latency_ms: 166, failure_class: null,
+    state_sha256: 'e'.repeat(64), latency_ms: 166, failure_class: null, assessed_at: iso(-4),
     warnings: ['Jev ranks human attention; it does not decide publication or prove that a business outcome succeeded.'],
   };
-  let sharedIntelligenceGoals: SharedIntelligenceGoal[] = empty ? [] : [{
-    id: mockUuid(625), scope: 'workspace' as const, team_id: null, team_name: null,
-    title: 'Reduce partner review rework this quarter', detail: 'Make repeat partner reviews faster without weakening evidence or approval controls.',
-    active: true, created_at: iso(-40),
-  }];
   const sharedEvidence = (index: number) => ({
     id: mockUuid(900 + index), run_id: mockUuid(910 + index), session_id: index === 0 ? SESSION_A : SESSION_B,
     source_message_id: mockUuid(920 + index), source_message_role: 'iris' as const,
@@ -1558,6 +1558,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (intelligenceMatch && method === 'POST') {
       const proposal = sharedIntelligenceProposals.find((item) => item.id === intelligenceMatch[1]);
       if (!proposal) return fail(404, 'not_found');
+      if (intelligenceMatch[2] === 'submit' && proposal.triage_status !== 'included') return fail(409, 'shared_intelligence_admin_triage_required');
       const updated: SharedIntelligenceProposal = intelligenceMatch[2] === 'submit'
         ? { ...proposal, status: 'pending_review', approval_request_id: APPROVAL_DEMO_REQUEST_IDS.shared_learning }
         : intelligenceMatch[2] === 'triage'
@@ -1571,15 +1572,15 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({
         teams: sharedIntelligence().teams, goals: sharedIntelligenceGoals,
         candidates: sharedIntelligenceProposals.filter((proposal) => proposal.triage_status !== 'private').map((proposal) => ({
-          proposal, goal: sharedIntelligenceGoals.find((goal) => goal.id === proposal.triage_goal_id) ?? sharedIntelligenceGoals[0],
-          submitted_by: { id: USER, name: 'Brian' }, decision_note: null,
+          proposal, goal: proposal.triage_assessment?.goal_snapshot ?? sharedIntelligenceGoals[0],
+          submitted_by: { id: USER, name: 'Brian' }, library_comparisons: [], assessment_stale: false, stale_reason: null, decision_note: null,
         })),
         data_boundary: 'Only owner-shared candidates and approved excerpts appear here. Raw provider turns, hidden reasoning, tool arguments/results, credentials, and other members\' private sessions remain excluded.',
       });
     }
     if (p('/admin/shared-intelligence/goals') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'admin_required');
-      const goal = { id: mockUuid(626 + sharedIntelligenceGoals.length), scope: body.scope === 'team' ? 'team' as const : 'workspace' as const, team_id: body.team_id ? String(body.team_id) : null, team_name: body.team_id ? 'Partnerships' : null, title: String(body.title), detail: String(body.detail), active: true, created_at: iso() };
+      const goal = { id: mockUuid(626 + sharedIntelligenceGoals.length), scope: body.scope === 'team' ? 'team' as const : 'workspace' as const, team_id: body.team_id ? String(body.team_id) : null, team_name: body.team_id ? 'Partnerships' : null, title: String(body.title), detail: String(body.detail), revision: 1, content_sha256: 'b'.repeat(64), active: true, created_at: iso() };
       sharedIntelligenceGoals = [goal, ...sharedIntelligenceGoals];
       return json(goal, 201);
     }
@@ -1594,7 +1595,18 @@ export function createMockBackend(options: MockOptions = {}) {
           ? { ...proposal, triage_status: 'excluded', triage_decided_at: iso() }
           : { ...proposal, triage_status: 'queued', triage_decided_at: null };
       sharedIntelligenceProposals = sharedIntelligenceProposals.map((item) => item.id === updated.id ? updated : item);
-      return json({ candidate: { proposal: updated, goal: sharedIntelligenceGoals.find((goal) => goal.id === updated.triage_goal_id) ?? sharedIntelligenceGoals[0], submitted_by: { id: USER, name: 'Brian' }, decision_note: body.note || null }, approval_request_id: body.decision === 'include' ? APPROVAL_DEMO_REQUEST_IDS.shared_learning : null });
+      return json({ candidate: { proposal: updated, goal: updated.triage_assessment?.goal_snapshot ?? sharedIntelligenceGoals[0], submitted_by: { id: USER, name: 'Brian' }, library_comparisons: [], assessment_stale: false, stale_reason: null, decision_note: body.note || null }, approval_request_id: body.decision === 'include' ? APPROVAL_DEMO_REQUEST_IDS.shared_learning : null });
+    }
+    const triageReassessMatch = match(new RegExp(`^/w/${WS}/admin/shared-intelligence/proposals/([^/]+)/reassess$`));
+    if (triageReassessMatch && method === 'POST') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const proposal = sharedIntelligenceProposals.find((item) => item.id === triageReassessMatch[1]);
+      const goal = sharedIntelligenceGoals.find((item) => item.id === body.goal_id);
+      if (!proposal || !goal) return fail(404, 'not_found');
+      const assessment = { ...sharedIntelligenceTriageAssessment, goal_snapshot: goal, assessed_at: iso() };
+      const updated = { ...proposal, triage_goal_id: goal.id, triage_assessment: assessment, triage_submitted_at: iso() };
+      sharedIntelligenceProposals = sharedIntelligenceProposals.map((item) => item.id === updated.id ? updated : item);
+      return json({ proposal: updated, goal, submitted_by: { id: USER, name: 'Brian' }, library_comparisons: [], assessment_stale: false, stale_reason: null, decision_note: null });
     }
     const sourceMatch = match(new RegExp(`^/w/${WS}/files/([^/]+)$`));
     if (sourceMatch && method === 'DELETE') { const index = storedSources.findIndex((row) => row.id === sourceMatch[1]); if (index >= 0) storedSources.splice(index, 1); return new Response(null, { status: 204 }); }

@@ -82,6 +82,8 @@ export const sharedIntelligenceGoalSchema = z.object({
   team_name: shortText.nullable(),
   title: shortText,
   detail: z.string().trim().min(1).max(1_000),
+  revision: z.number().int().min(1),
+  content_sha256: sha256Schema,
   active: z.boolean(),
   created_at: dateTimeSchema,
 }).strict();
@@ -115,6 +117,13 @@ export const sharedIntelligenceTriageAssessmentSchema = z.object({
     sensitivity: sharedIntelligenceAxisSchema,
   }).strict().nullable(),
   reason_codes: z.array(sharedIntelligenceTriageReasonSchema).max(10),
+  goal_snapshot: sharedIntelligenceGoalSchema,
+  comparison_snapshot: z.array(z.object({
+    source_id: uuidSchema,
+    version_id: uuidSchema,
+    version_sha256: sha256Schema,
+    presentation_sha256: sha256Schema,
+  }).strict()).max(100),
   evidence_count: z.number().int().min(0).max(5),
   rubric_version: z.string().max(32),
   model_id: z.string().max(100),
@@ -122,6 +131,7 @@ export const sharedIntelligenceTriageAssessmentSchema = z.object({
   state_sha256: sha256Schema,
   latency_ms: z.number().int().min(0).nullable(),
   failure_class: z.string().max(100).nullable(),
+  assessed_at: dateTimeSchema,
   warnings: z.array(z.string().max(300)).max(10),
 }).strict();
 export type SharedIntelligenceTriageAssessment = z.infer<typeof sharedIntelligenceTriageAssessmentSchema>;
@@ -217,6 +227,16 @@ export const sharedIntelligenceAdminCandidateSchema = z.object({
   proposal: sharedIntelligenceProposalSchema,
   goal: sharedIntelligenceGoalSchema,
   submitted_by: z.object({ id: uuidSchema, name: shortText }).strict(),
+  library_comparisons: z.array(z.object({
+    source_id: uuidSchema,
+    version_id: uuidSchema,
+    version_sha256: sha256Schema,
+    title: shortText.nullable(),
+    summary: z.string().max(500).nullable(),
+    access: z.enum(['available', 'withdrawn']),
+  }).strict()).max(100),
+  assessment_stale: z.boolean(),
+  stale_reason: z.enum(['goal_inactive', 'goal_changed', 'audience_changed', 'library_changed']).nullable(),
   decision_note: z.string().max(1_000).nullable(),
 }).strict();
 export type SharedIntelligenceAdminCandidate = z.infer<typeof sharedIntelligenceAdminCandidateSchema>;

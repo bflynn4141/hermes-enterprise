@@ -96,6 +96,7 @@ import {
   getSharedIntelligenceAdmin,
   getSharedIntelligence,
   queueSharedIntelligence,
+  reassessSharedIntelligenceAdminTriage,
   revokeSharedIntelligence,
   submitSharedIntelligence,
 } from './routes/shared-intelligence.js';
@@ -419,6 +420,7 @@ app.post('/w/:ws/shared-intelligence/proposals/:proposalId/revoke', revokeShared
 app.get('/w/:ws/admin/shared-intelligence', getSharedIntelligenceAdmin);
 app.post('/w/:ws/admin/shared-intelligence/goals', createSharedIntelligenceAdminGoal);
 app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/decision', decideSharedIntelligenceAdminTriage);
+app.post('/w/:ws/admin/shared-intelligence/proposals/:proposalId/reassess', reassessSharedIntelligenceAdminTriage);
 app.post('/w/:ws/files', createFile);
 app.put('/w/:ws/files/:id/upload', uploadFile);
 app.post('/w/:ws/files/:id/complete', completeFile);

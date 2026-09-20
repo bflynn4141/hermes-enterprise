@@ -322,13 +322,22 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .admin-intelligence-detail-head p { margin: 5px 0 0; color: var(--muted); }
 .admin-intelligence-actions { display: flex; gap: 8px; margin: 19px 0; }
 .admin-intelligence-consequence { margin: -10px 0 18px; color: var(--muted); font-size: 11.2px; line-height: 1.5; }
+.admin-intelligence-stale { margin: 16px 0 0; padding: 10px 12px; border: 1px solid rgba(231,194,125,.32); border-radius: 8px; background: rgba(231,194,125,.06); color: #E7C27D; }
+.admin-intelligence-reassess { display: flex; align-items: end; gap: 8px; margin: 0 0 14px; }
+.admin-intelligence-reassess label { display: flex; flex: 1; flex-direction: column; gap: 5px; color: var(--muted); font-size: 11.2px; }
+.admin-intelligence-reassess select { min-height: 36px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: rgba(5,3,42,.7); color: var(--body); }
 .admin-intelligence-decision { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; padding: 14px; border: 1px solid rgba(231,194,125,.28); border-radius: 10px; background: rgba(231,194,125,.045); }
 .admin-intelligence-decision > div { display: flex; justify-content: flex-end; gap: 8px; }
 .admin-intelligence-card { margin-top: 13px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background-color: var(--context); background-image: var(--panel); }
 .admin-intelligence-card h3 { margin: 0 0 8px; color: var(--body); font-size: 12.8px; font-weight: 500; }
 .admin-intelligence-card > p { margin: 0 0 8px; line-height: 1.55; }
+.admin-intelligence-card > strong { display: block; margin-bottom: 5px; color: var(--body); font-weight: 500; }
 .admin-intelligence-card blockquote { margin: 10px 0 0; padding: 10px 12px; border-left: 2px solid #7770C8; background: rgba(5,3,42,.5); }
 .admin-intelligence-card blockquote p { margin: 5px 0 0; color: var(--body); line-height: 1.5; }
+.admin-intelligence-comparison { padding: 10px 0; border-top: 1px solid var(--line); }
+.admin-intelligence-comparison:first-of-type { border-top: 0; }
+.admin-intelligence-comparison strong { color: var(--body); font-weight: 500; }
+.admin-intelligence-comparison p { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
 .admin-intelligence-disclosure { margin-top: 14px; color: var(--muted); }
 .admin-intelligence-disclosure summary { color: #B3AFFB; cursor: pointer; }
 .admin-intelligence-disclosure > p { line-height: 1.55; }

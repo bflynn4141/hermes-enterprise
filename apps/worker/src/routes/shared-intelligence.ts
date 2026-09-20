@@ -14,6 +14,7 @@ import {
   listSharedIntelligence,
   prepareSharedIntelligenceProposal,
   queueSharedIntelligenceProposal,
+  reassessSharedIntelligenceTriage,
   revokeSharedIntelligenceProposal,
   saveSharedIntelligenceProposal,
   submitSharedIntelligenceProposal,
@@ -76,5 +77,15 @@ export async function decideSharedIntelligenceAdminTriage(c: Context<{ Bindings:
   return c.json(await inWorkspace(c, (work) => {
     work.requireAdmin('deciding Shared Intelligence triage');
     return decideSharedIntelligenceTriage(work, proposalId, parsed.data);
+  }));
+}
+
+export async function reassessSharedIntelligenceAdminTriage(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const proposalId = pathUuid(c, 'proposalId');
+  const parsed = queueSharedIntelligenceProposalSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) return c.json({ error: parsed.error.message, reason: 'bad_body' }, 400);
+  return c.json(await inWorkspace(c, (work) => {
+    work.requireAdmin('reassessing Shared Intelligence triage');
+    return reassessSharedIntelligenceTriage(c.env, work, proposalId, parsed.data.goal_id);
   }));
 }

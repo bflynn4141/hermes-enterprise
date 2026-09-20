@@ -4,7 +4,10 @@ import type { ApprovalView, SharedIntelligenceProposal } from '@hermes/shared';
 import { withTenantTransaction } from '../../src/db/client.js';
 import type { TenantWork } from '../../src/routes/tenant.js';
 import {
+  createSharedIntelligenceGoal,
+  decideSharedIntelligenceTriage,
   prepareSharedIntelligenceProposal,
+  queueSharedIntelligenceProposal,
   revokeSharedIntelligenceProposal,
   saveSharedIntelligenceProposal,
   scoreSharedIntelligenceAssessment,
@@ -113,11 +116,21 @@ async function createAndSubmit(
   options: Parameters<typeof createDraft>[1] = {},
 ): Promise<{ proposal: SharedIntelligenceProposal; requestId: string }> {
   const proposal = await createDraft(fx, options);
-  const userId = options.userId ?? fx.adminId;
-  return withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId }, async (tx) => {
-    const work = { tx, workspaceId: fx.workspaceId, userId, jobs: [] } as unknown as TenantWork;
-    const submitted = await submitSharedIntelligenceProposal(work, proposal.id);
-    return { proposal: submitted.proposal, requestId: submitted.approval_request_id };
+  const ownerUserId = options.userId ?? fx.adminId;
+  const goal = await withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: ownerUserId }, async (tx) => {
+    const work = { tx, workspaceId: fx.workspaceId, userId: ownerUserId, jobs: [] } as unknown as TenantWork;
+    const created = await createSharedIntelligenceGoal(work, {
+      scope: 'workspace', team_id: null, title: 'Reduce repeated partner review rework',
+      detail: 'Make repeated reviews faster without weakening evidence controls.',
+    });
+    await queueSharedIntelligenceProposal(env, work, proposal.id, created.id);
+    return created;
+  });
+  return withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+    const work = { tx, workspaceId: fx.workspaceId, userId: fx.adminId, jobs: [] } as unknown as TenantWork;
+    const included = await decideSharedIntelligenceTriage(work, proposal.id, { decision: 'include', note: 'Send for independent review.' });
+    expect(included.candidate.goal.id).toBe(goal.id);
+    return { proposal: included.candidate.proposal, requestId: included.approval_request_id! };
   });
 }
 
@@ -207,6 +220,192 @@ describe('Shared Intelligence publication boundary', () => {
     });
   });
 
+  it('blocks direct publication bypass and supports a two-human owner/Admin review', async () => {
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query('UPDATE sessions SET owner_id=$3 WHERE workspace_id=$1 AND id=$2', [fx.workspaceId, fx.sessionId, fx.memberId]);
+      await client.query(
+        `UPDATE enterprise_team_agents SET principal_user_id=$4
+          WHERE workspace_id=$1 AND team_id=$2 AND agent_id=$3`,
+        [fx.workspaceId, fx.teamId, fx.agentId, fx.memberId],
+      );
+      await client.query('COMMIT');
+    });
+    const draft = await createDraft(fx, { userId: fx.memberId });
+    const bypass = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${draft.id}/submit`, {
+      method: 'POST', body: {},
+    });
+    expect({ status: bypass.status, body: await bypass.json() }).toMatchObject({
+      status: 409, body: { reason: 'shared_intelligence_admin_triage_required' },
+    });
+
+    const goalResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Make partner review reproducible',
+        detail: 'Reduce repeated checks while preserving human approval.',
+      },
+    });
+    const goal = await goalResponse.json() as { id: string };
+    expect((await asUser(env, fx.memberId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${draft.id}/triage`, {
+      method: 'POST', body: { goal_id: goal.id },
+    })).status).toBe(200);
+    const include = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/decision`, {
+      method: 'POST', body: { decision: 'include', note: 'Admin triage completed.' },
+    });
+    expect(include.status).toBe(200);
+    const included = await include.json() as { approval_request_id: string };
+    const review = await approvalFor(fx, included.approval_request_id, fx.adminId);
+    expect(review.payload.approval_type).toBe('shared_learning');
+    if (review.payload.approval_type !== 'shared_learning') throw new Error('expected shared learning approval');
+    expect(review.payload.context.requester.user_id).toBe(fx.memberId);
+    expect(review.identities.reviewers.map((reviewer) => reviewer.user_id)).toContain(fx.adminId);
+    expect(review.payload.details.priority_goal).toMatchObject({ id: goal.id, title: 'Make partner review reproducible', revision: 1 });
+    const approved = await approve(fx, review, fx.adminId);
+    expect(approved.status).toBe(201);
+  });
+
+  it('marks an inactive goal stale, blocks inclusion, and preserves the snapshot until reassessment', async () => {
+    const firstGoalResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Prioritize evidence handoffs',
+        detail: 'Reduce repeated partner evidence review while retaining exact provenance.',
+      },
+    });
+    const firstGoal = await firstGoalResponse.json() as { id: string; title: string };
+    const draft = await createDraft(fx);
+    expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${draft.id}/triage`, {
+      method: 'POST', body: { goal_id: firstGoal.id },
+    })).status).toBe(200);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query('UPDATE shared_intelligence_goals SET active=false WHERE workspace_id=$1 AND id=$2', [fx.workspaceId, firstGoal.id]);
+      await client.query('COMMIT');
+    });
+
+    const staleView = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    const staleCandidate = ((await staleView.json()) as { candidates: Array<Record<string, any>> }).candidates[0]!;
+    expect(staleCandidate).toMatchObject({
+      goal: { id: firstGoal.id, title: firstGoal.title }, assessment_stale: true, stale_reason: 'goal_inactive',
+    });
+    const blocked = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/decision`, {
+      method: 'POST', body: { decision: 'include', note: 'This should be rejected as stale.' },
+    });
+    expect({ status: blocked.status, body: await blocked.json() }).toMatchObject({
+      status: 409, body: { reason: 'shared_intelligence_goal_inactive' },
+    });
+
+    const replacementResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Prioritize reproducible evidence handoffs',
+        detail: 'Reduce repeated review and retain an exact evidence chain for every shared lesson.',
+      },
+    });
+    const replacement = await replacementResponse.json() as { id: string };
+    const reassessed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/reassess`, {
+      method: 'POST', body: { goal_id: replacement.id },
+    });
+    expect({ status: reassessed.status, body: await reassessed.json() }).toMatchObject({
+      status: 200, body: { goal: { id: replacement.id }, assessment_stale: false, stale_reason: null },
+    });
+  });
+
+  it('rechecks the owner-agent-team audience before exporting a candidate to Jev', async () => {
+    const goalResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Prioritize reusable partner checks',
+        detail: 'Select evidence-backed improvements that remain authorized for their audience.',
+      },
+    });
+    const goal = await goalResponse.json() as { id: string };
+    const draft = await createDraft(fx);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query('DELETE FROM enterprise_team_agents WHERE workspace_id=$1 AND team_id=$2 AND agent_id=$3', [fx.workspaceId, fx.teamId, fx.agentId]);
+      await client.query('COMMIT');
+    });
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${draft.id}/triage`, {
+      method: 'POST', body: { goal_id: goal.id },
+    });
+    expect({ status: response.status, body: await response.json() }).toMatchObject({
+      status: 409, body: { reason: 'shared_intelligence_audience_changed' },
+    });
+    const adminView = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    expect(((await adminView.json()) as { candidates: unknown[] }).candidates).toEqual([]);
+  });
+
+  it('shows authorized Library comparisons, then retains hashes but withdraws readable comparison content', async () => {
+    const published = await createAndSubmit(fx);
+    expect((await approve(fx, await approvalFor(fx, published.requestId))).status).toBe(201);
+
+    const candidate = await createDraft(fx, {
+      lesson: 'Compare proposed partner guidance with current shared sources before asking for publication.',
+      rationale: 'A later review showed that explicit comparison prevents duplicate guidance.',
+    });
+    const goalResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Avoid duplicate partner guidance',
+        detail: 'Prefer additions that materially extend the current reviewed Library.',
+      },
+    });
+    const goal = await goalResponse.json() as { id: string };
+    expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${candidate.id}/triage`, {
+      method: 'POST', body: { goal_id: goal.id },
+    })).status).toBe(200);
+    const before = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    const available = ((await before.json()) as { candidates: Array<Record<string, any>> }).candidates.find((item) => item.proposal.id === candidate.id)!;
+    expect(available.library_comparisons).toEqual([
+      expect.objectContaining({ access: 'available', title: 'Record evidence provenance before escalation' }),
+    ]);
+
+    await withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+      const work = { tx, workspaceId: fx.workspaceId, userId: fx.adminId, jobs: [] } as unknown as TenantWork;
+      await revokeSharedIntelligenceProposal(work, published.proposal.id);
+    });
+    const after = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    const withdrawn = ((await after.json()) as { candidates: Array<Record<string, any>> }).candidates.find((item) => item.proposal.id === candidate.id)!;
+    expect(withdrawn).toMatchObject({ assessment_stale: true, stale_reason: 'library_changed' });
+    expect(withdrawn.library_comparisons).toEqual([
+      expect.objectContaining({ access: 'withdrawn', title: null, summary: null }),
+    ]);
+    expect(withdrawn.library_comparisons[0].version_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('removes a declined candidate from Admin and redacts excerpts when its source run is deleted', async () => {
+    const submitted = await createAndSubmit(fx);
+    const pending = await approvalFor(fx, submitted.requestId);
+    const declined = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/requests/${pending.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: {
+        decision: 'decline', note: 'Do not publish this candidate.', idempotency_key: `shared-intelligence-decline:${randomUUID()}`,
+        expected_authorization_revision: pending.payload.authorization.revision,
+        expected_authorization_hash: pending.payload.authorization.hash,
+      },
+    });
+    expect(declined.status).toBe(201);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query('DELETE FROM runs WHERE workspace_id=$1 AND id=$2', [fx.workspaceId, fx.runIds[0]]);
+      await client.query('COMMIT');
+    });
+    const adminView = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    expect(((await adminView.json()) as { candidates: unknown[] }).candidates).toEqual([]);
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      const proposal = (await client.query<{ status: string; triage_status: string }>(
+        'SELECT status,triage_status FROM shared_intelligence_proposals WHERE workspace_id=$1 AND id=$2',
+        [fx.workspaceId, submitted.proposal.id],
+      )).rows[0];
+      const evidence = (await client.query<{ approved_excerpt: string; excerpt_sha256: string; revoked_at: Date | null }>(
+        'SELECT approved_excerpt,excerpt_sha256,revoked_at FROM shared_intelligence_evidence WHERE workspace_id=$1 AND proposal_id=$2 AND source_message_id=$3',
+        [fx.workspaceId, submitted.proposal.id, fx.messageIds[0]],
+      )).rows[0];
+      expect(proposal).toEqual({ status: 'declined', triage_status: 'private' });
+      expect(evidence).toMatchObject({ approved_excerpt: '[withdrawn by source owner]' });
+      expect(evidence?.excerpt_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(evidence?.revoked_at).toBeInstanceOf(Date);
+      await client.query('ROLLBACK');
+    });
+  });
+
   it('publishes one immutable team-scoped Library version after an independent review, then revokes access without deleting audit facts', async () => {
     const submitted = await createAndSubmit(fx);
     const pending = await approvalFor(fx, submitted.requestId);
@@ -234,10 +433,11 @@ describe('Shared Intelligence publication boundary', () => {
       await client.query('ROLLBACK');
     });
 
-    await withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+    const revoked = await withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
       const work = { tx, workspaceId: fx.workspaceId, userId: fx.adminId, jobs: [] } as unknown as TenantWork;
-      await revokeSharedIntelligenceProposal(work, submitted.proposal.id);
+      return revokeSharedIntelligenceProposal(work, submitted.proposal.id);
     });
+    expect(revoked.evidence.every((item) => item.approved_excerpt === '[withdrawn by source owner]')).toBe(true);
     const afterRevoke = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/library-sources?agent_id=${fx.agentId}`);
     expect(((await afterRevoke.json()) as { items: unknown[] }).items).toEqual([]);
     await withClient('owner', async (client) => {

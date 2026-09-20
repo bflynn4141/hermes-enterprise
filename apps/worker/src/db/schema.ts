@@ -467,6 +467,8 @@ export const sharedIntelligenceGoals = pgTable(
     teamId: uuid('team_id'),
     title: text('title').notNull(),
     detail: text('detail').notNull(),
+    revision: integer('revision').notNull().default(1),
+    contentSha256: text('content_sha256').notNull(),
     active: boolean('active').notNull().default(true),
     createdByUserId: uuid('created_by_user_id').notNull(),
     createdAt: now('created_at'),

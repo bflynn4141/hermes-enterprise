@@ -55,6 +55,7 @@ export function AdminSharedIntelligence() {
   const [approvalId, setApprovalId] = useState<string | null>(null);
   const [decision, setDecision] = useState<'exclude' | null>(null);
   const [decisionNote, setDecisionNote] = useState('');
+  const [assessmentGoalId, setAssessmentGoalId] = useState('');
   const [addingGoal, setAddingGoal] = useState(false);
   const [goalDraft, setGoalDraft] = useState({ scope: 'workspace' as 'workspace' | 'team', team_id: '', title: '', detail: '' });
 
@@ -91,6 +92,13 @@ export function AdminSharedIntelligence() {
   }, [candidates, selectedId]);
 
   const selected = candidates.find((candidate) => candidate.proposal.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selected) return;
+    const goals = workspace?.goals ?? [];
+    const activeGoal = goals.find((goal) => goal.id === selected.goal.id)?.id ?? goals[0]?.id ?? '';
+    setAssessmentGoalId(activeGoal);
+  }, [selected?.proposal.id, workspace?.goals]);
 
   const act = async (input: SharedIntelligenceTriageDecision): Promise<void> => {
     if (!selected) return;
@@ -133,6 +141,23 @@ export function AdminSharedIntelligence() {
       setAddingGoal(false);
       setGoalDraft({ scope: 'workspace', team_id: '', title: '', detail: '' });
       setNotice('Goal saved. New candidate assessments can now be frozen against it.');
+    } catch (error) {
+      setNotice(errorCopy(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reassess = async (): Promise<void> => {
+    if (!selected || !assessmentGoalId) return;
+    setBusy(`reassess:${selected.proposal.id}`);
+    setNotice(null);
+    try {
+      const candidate = await adapter.rest.reassessSharedIntelligenceTriage(state.workspace.id, selected.proposal.id, assessmentGoalId);
+      setWorkspace((current) => current ? { ...current, candidates: current.candidates.map((item) => item.proposal.id === candidate.proposal.id ? candidate : item) } : current);
+      setNotice(candidate.proposal.triage_assessment?.status === 'complete'
+        ? 'Jev priority refreshed against the selected goal and current authorized Library comparisons.'
+        : 'The candidate was refreshed, but Jev is unavailable. It remains honestly unranked.');
     } catch (error) {
       setNotice(errorCopy(error));
     } finally {
@@ -191,12 +216,17 @@ export function AdminSharedIntelligence() {
           <section className="admin-intelligence-detail" aria-label="Candidate detail">
             {!selected ? <EmptyState icon="skill" title="Select a candidate" /> : <motion.div key={selected.proposal.id} initial={reduceMotion ? false : { opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}>
               <div className="admin-intelligence-detail-head"><span className="admin-intelligence-score large">{score(selected)}</span><div><h2>{selected.proposal.title}</h2><p>{recommendation(selected)}{selected.proposal.triage_assessment?.confidence !== null && selected.proposal.triage_assessment?.confidence !== undefined ? ` · ${Math.round(selected.proposal.triage_assessment.confidence * 100)}% assessment confidence` : ''} · rubric {selected.proposal.triage_assessment?.rubric_version ?? 'unavailable'}</p></div></div>
-              {selected.proposal.triage_status === 'queued' && <div className="admin-intelligence-actions"><Button primary disabled={!!busy} onClick={() => void act({ decision: 'include', note: '' })}>Send for review</Button><Button disabled={!!busy} onClick={() => setDecision('exclude')}>Exclude…</Button></div>}
+              {selected.assessment_stale && <div className="admin-intelligence-stale" role="status">This priority is stale ({selected.stale_reason?.replaceAll('_', ' ')}). Reassess before sending it for review.</div>}
+              {selected.proposal.triage_status === 'queued' && <div className="admin-intelligence-actions"><Button primary disabled={!!busy || selected.assessment_stale} onClick={() => void act({ decision: 'include', note: '' })}>Send for review</Button><Button disabled={!!busy} onClick={() => setDecision('exclude')}>Exclude…</Button></div>}
               {selected.proposal.triage_status === 'excluded' && <div className="admin-intelligence-actions"><Button primary disabled={!!busy} onClick={() => void act({ decision: 'reopen', note: 'Reopened for Admin triage.' })}>Reopen candidate</Button></div>}
               <p className="admin-intelligence-consequence">Sending for review freezes this candidate for an independent human decision. It does not publish it or make it usable by an agent.</p>
+              {selected.proposal.triage_status === 'queued' && <div className="admin-intelligence-reassess"><label><span>Assessment goal</span><select value={assessmentGoalId} onChange={(event) => setAssessmentGoalId(event.target.value)}>{workspace.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}</select></label><Button disabled={!assessmentGoalId || !!busy} onClick={() => void reassess()}>{busy === `reassess:${selected.proposal.id}` ? 'Assessing…' : 'Reassess'}</Button></div>}
               {decision === 'exclude' && <div className="admin-intelligence-decision"><label><span>Why exclude this candidate?</span><textarea autoFocus required maxLength={1000} rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></label><div><Button onClick={() => setDecision(null)}>Cancel</Button><Button primary disabled={!decisionNote.trim() || !!busy} onClick={() => void act({ decision: 'exclude', note: decisionNote })}>Record exclusion</Button></div></div>}
-              <div className="admin-intelligence-card"><h3>Owner rationale</h3><p>{selected.proposal.rationale}</p><small>Submitted by {selected.submitted_by.name} against “{selected.goal.title}”.</small></div>
+              <div className="admin-intelligence-card"><h3>Goal used for this assessment</h3><strong>{selected.goal.title}</strong><p>{selected.goal.detail}</p><small>{selected.goal.team_name ?? 'Organization'} · revision {selected.goal.revision} · {selected.goal.content_sha256.slice(0, 12)}…</small></div>
+              <div className="admin-intelligence-card"><h3>Owner rationale</h3><p>{selected.proposal.rationale}</p><small>Submitted by {selected.submitted_by.name} · assessed {selected.proposal.triage_assessment ? new Date(selected.proposal.triage_assessment.assessed_at).toLocaleString() : 'unavailable'}</small></div>
               <div className="admin-intelligence-card"><h3>Approved evidence</h3>{selected.proposal.evidence.map((evidence) => <blockquote key={evidence.id}><small>{evidence.session_title} · {new Date(evidence.run_ended_at).toLocaleDateString()} · {evidence.source_message_role === 'user' ? 'human assertion' : 'agent response'}</small><p>{evidence.approved_excerpt}</p></blockquote>)}</div>
+              <div className="admin-intelligence-card"><h3>Library comparisons used for novelty</h3>{selected.library_comparisons.length === 0 ? <p className="meta">No authorized Library source was available for this audience.</p> : selected.library_comparisons.map((comparison) => <div className="admin-intelligence-comparison" key={comparison.version_id}>{comparison.access === 'available' ? <><strong>{comparison.title}</strong><p>{comparison.summary}</p></> : <p>Readable source access was withdrawn. Only immutable version hash {comparison.version_sha256.slice(0, 12)}… remains in the assessment record.</p>}</div>)}</div>
+              {selected.decision_note && <div className="admin-intelligence-card"><h3>Latest Admin decision note</h3><p>{selected.decision_note}</p></div>}
               <details className="admin-intelligence-disclosure"><summary>See Jev signals and model record</summary>{selected.proposal.triage_assessment?.axes ? <div className="admin-intelligence-signals">{Object.entries(selected.proposal.triage_assessment.axes).map(([axis, value]) => <span key={axis}><i>{AXIS_LABELS[axis as keyof typeof AXIS_LABELS]}</i><b>{value.score.toFixed(1)} / 3</b></span>)}</div> : <p>Jev assessment unavailable. This candidate is deliberately unranked.</p>}</details>
               <details className="admin-intelligence-disclosure"><summary>What is shared with Admin and Jev</summary><p>{workspace.data_boundary}</p></details>
             </motion.div>}

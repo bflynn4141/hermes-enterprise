@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS shared_intelligence_goals (
   team_id            uuid,
   title              text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
   detail             text NOT NULL CHECK (length(detail) BETWEEN 1 AND 1000),
+  revision           integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+  content_sha256     text NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
   active             boolean NOT NULL DEFAULT true,
   created_by_user_id uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
   created_at         timestamptz NOT NULL DEFAULT now(),
@@ -80,10 +82,17 @@ BEGIN
      AND grants.source_id=proposal.library_source_id;
 
   UPDATE shared_intelligence_proposals proposal
-     SET status='revoked', revoked_at=COALESCE(proposal.revoked_at,now()),
-         triage_status='private', triage_goal_id=NULL, triage_assessment=NULL,
+     SET triage_status='private', triage_goal_id=NULL, triage_assessment=NULL,
          triage_submitted_at=NULL, triage_decided_at=NULL,
          triage_decided_by_user_id=NULL, triage_decision_note=NULL
+    FROM shared_intelligence_evidence evidence
+   WHERE evidence.workspace_id=OLD.workspace_id
+     AND evidence.source_run_id=OLD.id
+     AND proposal.workspace_id=evidence.workspace_id
+     AND proposal.id=evidence.proposal_id;
+
+  UPDATE shared_intelligence_proposals proposal
+     SET status='revoked', revoked_at=COALESCE(proposal.revoked_at,now())
     FROM shared_intelligence_evidence evidence
    WHERE evidence.workspace_id=OLD.workspace_id
      AND evidence.source_run_id=OLD.id
@@ -92,7 +101,8 @@ BEGIN
      AND proposal.status NOT IN ('revoked','declined');
 
   UPDATE shared_intelligence_evidence
-     SET revoked_at=COALESCE(revoked_at,now())
+     SET approved_excerpt='[withdrawn by source owner]',
+         revoked_at=COALESCE(revoked_at,now())
    WHERE workspace_id=OLD.workspace_id AND source_run_id=OLD.id;
   RETURN OLD;
 END
@@ -103,7 +113,7 @@ CREATE TABLE IF NOT EXISTS shared_intelligence_triage_decisions (
   workspace_id            uuid NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
   proposal_id             uuid NOT NULL REFERENCES shared_intelligence_proposals (id) ON DELETE CASCADE,
   actor_user_id           uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
-  decision                text NOT NULL CHECK (decision IN ('include','exclude','reopen')),
+  decision                text NOT NULL CHECK (decision IN ('include','exclude','reopen','reassess')),
   previous_status         text NOT NULL CHECK (previous_status IN ('queued','included','excluded')),
   resulting_status        text NOT NULL CHECK (resulting_status IN ('queued','included','excluded')),
   note                    text NOT NULL DEFAULT '' CHECK (length(note) <= 1000),

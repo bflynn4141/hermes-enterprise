@@ -52,6 +52,7 @@ import {
   librarySourceSchema,
   sharedIntelligenceProposalSchema,
   sharedIntelligenceAdminWorkspaceSchema,
+  sharedIntelligenceAdminCandidateSchema,
   sharedIntelligenceGoalSchema,
   sharedIntelligenceSubmitResultSchema,
   sharedIntelligenceTriageDecisionResultSchema,
@@ -513,6 +514,8 @@ export function createRest(options: RestOptions) {
       request('POST', `${ws(workspaceId)}/admin/shared-intelligence/goals`, sharedIntelligenceGoalSchema, body),
     decideSharedIntelligenceTriage: (workspaceId: string, proposalId: string, body: SharedIntelligenceTriageDecision) =>
       request('POST', `${ws(workspaceId)}/admin/shared-intelligence/proposals/${proposalId}/decision`, sharedIntelligenceTriageDecisionResultSchema, body),
+    reassessSharedIntelligenceTriage: (workspaceId: string, proposalId: string, goalId: string) =>
+      request('POST', `${ws(workspaceId)}/admin/shared-intelligence/proposals/${proposalId}/reassess`, sharedIntelligenceAdminCandidateSchema, { goal_id: goalId }),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`
