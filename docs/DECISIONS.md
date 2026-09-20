@@ -5253,10 +5253,23 @@ quota and unresolved effects never become an unbounded retry loop. The UI uses
 server-confirmed state and existing button feedback; its countdown is motionless
 and does not repeatedly announce itself to screen readers.
 
+**Hardened September 20, 2026.** Recovery rechecks for any newer session run
+under the same agent admission lock immediately before it advances the failed
+attempt; even a newer completed turn makes the queued recovery stale. The failed
+attempt's model and effort are pinned rather than reread from mutable session
+settings. A retry receives only the intersection of its prior snapshotted tools
+and skills with current grants, so revocation wins and later grants cannot widen
+authority. Post-tool ordinary-chat continuation is a server-owned response-only
+mode: its native request contains no tools or skills, the model proxy strips
+runtime-supplied tool definitions, Enterprise tool dispatch rejects fresh calls,
+and direct paid-call leases are refused before reservation. Automatic recovery
+requires a managed token-digest runtime; legacy HMAC profiles remain manual-only.
+
 Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
 `low`, `high`, `max`, with provider default `high`. Automation follows the
-workspace policy, and retries use the task's current selected model. The
-separate Jev typed classifier and production automation policy are unchanged.
+workspace policy, and retries preserve the failed attempt's exact model and
+effort. The separate Jev typed classifier and production automation policy are
+unchanged.
 
 **Default rollout held.** The requested all-workspace V4.1 Flash/low migration
 is prepared separately. A September 18 staging preflight of exact
@@ -5268,9 +5281,12 @@ acceptance pass. Recovery can ship independently while configured defaults and
 historical records remain intact.
 
 **Evidence.** Focused PostgreSQL tests cover ownership, duplicate requests,
-reviewed-cycle recovery, current-model snapshots, paid receipts, cadence keys and
-cancellation. Runtime adapter tests assert saved evidence instructions reach the
-native submission. Browser tests cover Overview/trace actions, no-output failure,
+reviewed-cycle recovery, pinned-model snapshots, paid receipts, cadence keys,
+cancellation, newer completed-turn races, prior-authority snapshots and
+response-only paid-lease refusal. Runtime adapter and bridge tests assert saved
+instructions reach native submission with bounded authority, the provider sees
+no tool definitions, and fresh Enterprise calls are rejected before writes.
+Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { automaticRetryAt, MAX_AUTOMATIC_ATTEMPTS } from '../../src/runs/recovery.js';
+import { automaticRecoveryAuthBlocked, automaticRetryAt, MAX_AUTOMATIC_ATTEMPTS } from '../../src/runs/recovery.js';
 
 const endedAt = new Date('2026-09-18T17:00:00.000Z');
 const outage = {
@@ -8,6 +8,12 @@ const outage = {
 };
 
 describe('bounded automatic retry timing', () => {
+  it('allows automatic recovery only on an exact token-digest runtime identity', () => {
+    expect(automaticRecoveryAuthBlocked(true, 'legacy_hmac')).toBe(true);
+    expect(automaticRecoveryAuthBlocked(true, 'token_digest')).toBe(false);
+    expect(automaticRecoveryAuthBlocked(false, 'legacy_hmac')).toBe(false);
+  });
+
   it('waits one minute after the first outage and five after the second', () => {
     expect(automaticRetryAt(outage)?.toISOString()).toBe('2026-09-18T17:01:00.000Z');
     expect(automaticRetryAt({ ...outage, attempt: 2 })?.toISOString()).toBe('2026-09-18T17:05:00.000Z');

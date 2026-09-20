@@ -18,11 +18,14 @@ const block = (blockedReason: string, message: string): RecoverySafety => ({
   blockedReason, message, resumeInput: null,
 });
 
-const READ_ONLY_CONTINUATION = [
+export const RESPONSE_ONLY_RECOVERY_INPUT = [
   'Continue the interrupted task using the completed tool results already stored in this session.',
   'Do not repeat completed tool calls or ask for the same approval again.',
   'Finish only the remaining response. If a required result is missing, explain the gap instead of repeating a tool call.',
 ].join(' ');
+
+export const isResponseOnlyRecoveryInput = (input: string | null | undefined): boolean =>
+  input === RESPONSE_ONLY_RECOVERY_INPUT;
 
 /**
  * Inspect before incrementing attempt or changing a native runtime mapping.
@@ -141,7 +144,7 @@ export async function inspectRecoverySafety(
     return {
       blockedReason: null,
       message: null,
-      resumeInput: screening || calls.rows.length === 0 ? null : READ_ONLY_CONTINUATION,
+      resumeInput: screening || calls.rows.length === 0 ? null : RESPONSE_ONLY_RECOVERY_INPUT,
     };
   }
 

@@ -61,6 +61,22 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
       'SELECT recovery_input FROM runs WHERE id=$1 AND attempt=$2', [runId, attempt]);
     return rows[0]?.recovery_input ?? null;
   }
+  async recoveryAuthority(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=($2::integer-1) AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
+  async runtimeRequest(runId: string, attempt: number): Promise<Record<string, unknown> | null> {
+    const { rows } = await this.runtimeQuery<{ runtime_request: Record<string, unknown> }>(
+      `SELECT runtime_request FROM runs WHERE id=$1 AND attempt=$2
+        AND runtime_request_attempt=$2 AND runtime_request IS NOT NULL`,
+      [runId, attempt],
+    );
+    return rows[0]?.runtime_request ?? null;
+  }
   async recordProviderRetryAfter(runId: string, attempt: number, delay: ProviderRetryAfter): Promise<void> {
     // A delayed provider response from the old attempt cannot postpone its
     // successor. Concurrent failures keep the longest valid provider deadline.

@@ -112,17 +112,17 @@ async function recoveryJob(fx: Fixture & { runId: string }): Promise<Job | undef
 }
 
 describe('durable run recovery admission', () => {
-  it('admits one new attempt on the current session model and preserves the old attempt provenance', async () => {
+  it('pins the failed attempt model and effort while preserving its provenance', async () => {
     const fx = await fixture();
     const { env } = environment();
     const retried = await work(fx, (context) => retryTask(context, env, fx.agentId, fx.runId, 1));
-    expect(retried).toMatchObject({ id: fx.runId, attempt: 2, status: 'working', model_id: DEFAULT_MODEL_ID, effort: 'high' });
+    expect(retried).toMatchObject({ id: fx.runId, attempt: 2, status: 'working', model_id: OLD_MODEL, effort: 'high' });
     const duplicate = await work(fx, (context) => retryTask(context, env, fx.agentId, fx.runId, 1));
     expect(duplicate).toMatchObject({ id: fx.runId, attempt: 2 });
     await readTenant(fx.workspaceId, fx.adminId, async (client) => {
       const current = (await client.query('SELECT model_id,attempt,recovery_history FROM runs WHERE id=$1', [fx.runId])).rows[0];
       expect(current.recovery_history).toEqual([expect.objectContaining({ attempt: 1, model_id: OLD_MODEL,
-        trace_id: fx.traceId, reason: 'hermes_provider_unavailable', next_model_id: DEFAULT_MODEL_ID, trigger: 'manual' })]);
+        trace_id: fx.traceId, reason: 'hermes_provider_unavailable', next_model_id: OLD_MODEL, trigger: 'manual' })]);
       expect((await client.query("SELECT count(*)::int AS count FROM jobs WHERE workspace_id=$1 AND kind='run_launch'", [fx.workspaceId])).rows[0].count).toBe(1);
       expect((await client.query("SELECT count(*)::int AS count FROM events WHERE workspace_id=$1 AND kind='run.retried'", [fx.workspaceId])).rows[0].count).toBe(1);
     });
@@ -192,6 +192,35 @@ describe('durable run recovery admission', () => {
     expect(created).toHaveLength(1);
   });
 
+  it('marks a queued recovery stale when any newer session run completed during cooldown', async () => {
+    const fx = await fixture({ directory: true, rateLimited: true });
+    const { env, created } = environment();
+    expect(await scheduleRunRecovery(env)).toMatchObject({ queued: 1 });
+    const job = await recoveryJob(fx);
+    expect(job).toBeDefined();
+    await work(fx, async (context) => {
+      await context.tx.query(
+        `INSERT INTO runs
+           (id,workspace_id,session_id,agent_id,status,model_id,effort,client_turn_id,mode,attempt,
+            trace_id,ended_at,created_at)
+         VALUES ($1,$2,$3,$4,'completed',$5,'high',$6,'work',1,$7,now(),now())`,
+        [randomUUID(),fx.workspaceId,fx.sessionId,fx.agentId,DEFAULT_MODEL_ID,randomUUID(),randomUUID()],
+      );
+    });
+    await runRecoveryJob(env, job!);
+    expect(created).toHaveLength(0);
+    await readTenant(fx.workspaceId, fx.adminId, async (client) => {
+      const run = (await client.query(
+        'SELECT attempt,status,recovery_cancelled,recovery_next_at,recovery_blocked_reason FROM runs WHERE id=$1',
+        [fx.runId],
+      )).rows[0];
+      expect(run).toEqual({
+        attempt: 1, status: 'error', recovery_cancelled: true,
+        recovery_next_at: null, recovery_blocked_reason: 'newer_session_run',
+      });
+    });
+  });
+
   it('waits out provider cooldown and automatically continues an ordinary post-tool 429 without replaying the read', async () => {
     const retryNotBefore = new Date(Date.now() + 10 * 60_000);
     const fx = await fixture({ directory: true, rateLimited: true, retryNotBefore });
@@ -241,7 +270,7 @@ describe('durable run recovery admission', () => {
       const run = (await client.query(
         'SELECT attempt,status,model_id,recovery_input,recovery_history FROM runs WHERE id=$1', [fx.runId],
       )).rows[0];
-      expect(run).toMatchObject({ attempt: 2, status: 'working', model_id: DEFAULT_MODEL_ID });
+      expect(run).toMatchObject({ attempt: 2, status: 'working', model_id: OLD_MODEL });
       expect(run.recovery_input).toContain('completed tool results already stored in this session');
       expect(run.recovery_input).toContain('Do not repeat completed tool calls');
       expect(run.recovery_history).toEqual([expect.objectContaining({ trigger: 'automatic', reason: 'hermes_provider_rate_limited' })]);
@@ -346,7 +375,7 @@ describe('agent recovery HTTP controls', () => {
     const base = `/w/${fx.workspaceId}/agents/${fx.agentId}`;
     const state = await asUser(env, fx.adminId, `${base}/recovery`);
     expect(state.status).toBe(200);
-    expect(await state.json()).toMatchObject({ state: 'retryable', run_id: fx.runId, attempt: 1, can_retry: true, model_id: DEFAULT_MODEL_ID });
+    expect(await state.json()).toMatchObject({ state: 'retryable', run_id: fx.runId, attempt: 1, can_retry: true, model_id: OLD_MODEL });
     expect((await asUser(env, fx.memberId, `${base}/recovery`)).status).toBe(404);
     expect((await asUser(env, fx.adminId, `${base}/recovery?run_id=bad`)).status).toBe(400);
     expect((await asUser(env, fx.adminId, `${base}/wake`, { method: 'POST', body: { action: 'retry' } })).status).toBe(422);

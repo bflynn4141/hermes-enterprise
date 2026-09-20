@@ -11,6 +11,7 @@ import {
 import type { RuntimeCallRecord } from '../../src/runtime/store.js';
 import type { Env } from '../../src/env.js';
 import { FakeAgentDb } from './engine/fake-db.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 
 const workspaceId = FakeAgentDb.WORKSPACE_ID;
 const agentId = '33333333-3333-4333-8333-333333333333';
@@ -178,6 +179,16 @@ describe('enterprise runtime tool boundary', () => {
     await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('decide'))).rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
     store.capabilities = [];
     await expect(dispatchRuntimeCall(store, workspaceId, agentId, call())).rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
+  });
+  it('refuses every fresh enterprise tool call during a response-only recovery', async () => {
+    const store = db({ attempt: 2, recoveryInput: RESPONSE_ONLY_RECOVERY_INPUT });
+    store.capabilities = ['list_requests', 'propose_approval'];
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('list_requests')))
+      .rejects.toMatchObject({ reason: 'runtime_tool_forbidden', status: 403 });
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('propose_approval', {})))
+      .rejects.toMatchObject({ reason: 'runtime_tool_forbidden', status: 403 });
+    expect(store.turns).toHaveLength(1);
+    expect(store.events).toHaveLength(0);
   });
   it('replays identical results without another proposal or event and rejects argument changes', async () => {
     const store = db();
@@ -374,6 +385,28 @@ describe('workspace model credential proxy', () => {
     expect(store.recordModelCall).toHaveBeenCalledWith(expect.objectContaining({
       usage: { input_tokens: 1000, output_tokens: 3, cached_input_tokens: 900, reasoning_tokens: 0 },
     }));
+  });
+  it('strips tool definitions and tool choice at the model proxy during response-only recovery', async () => {
+    const base = makeModelDb();
+    const store = {
+      ...base,
+      activeProfileRun: async () => db({
+        modelId: selected, attempt: 2, recoveryInput: RESPONSE_ONLY_RECOVERY_INPUT,
+      }).loadRun(),
+    };
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+      choices: [], usage: { prompt_tokens: 4, completion_tokens: 2 },
+    }));
+    const response = await proxyRuntimeModel(env, store, workspaceId, agentId, {
+      model: 'nousresearch/hermes-4', messages: [],
+      tools: [{ type: 'function', function: { name: 'propose_instruction', parameters: { type: 'object' } } }],
+      tool_choice: 'required', parallel_tool_calls: true,
+    }, fetcher);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      model: 'nousresearch/hermes-4', messages: [],
+    });
+    await response.text();
   });
   it('refuses provider redirects without forwarding their body or secret to another origin', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('workspace-provider-secret', { status: 307, headers: { Location: 'https://attacker.example' } }));

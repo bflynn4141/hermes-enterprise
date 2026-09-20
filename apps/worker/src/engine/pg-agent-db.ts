@@ -153,10 +153,11 @@ export class PgAgentDb implements AgentDb {
         mode: string;
         agent_id: string | null;
         client_turn_id: string;
+        recovery_input: string | null;
       }>(
         `SELECT r.id, r.workspace_id, r.session_id, r.status, r.stop_requested, r.attempt,
                 r.engine_version, r.max_turns, r.model_id, r.effort, r.trace_id, r.active_ms,
-                r.waiting_for, r.client_turn_id, coalesce(r.mode, s.mode) AS mode,
+                r.waiting_for, r.client_turn_id, r.recovery_input, coalesce(r.mode, s.mode) AS mode,
                 COALESCE(r.agent_id, s.agent_id) AS agent_id
            FROM runs r JOIN sessions s ON s.id = r.session_id
           WHERE r.id = $1`,
@@ -181,6 +182,7 @@ export class PgAgentDb implements AgentDb {
         mode: row.mode,
         agentId: row.agent_id,
         clientTurnId: row.client_turn_id,
+        recoveryInput: row.recovery_input,
       };
     });
   }

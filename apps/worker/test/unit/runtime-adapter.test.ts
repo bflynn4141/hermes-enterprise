@@ -10,6 +10,7 @@ import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
 import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
 import { ENTERPRISE_BRIDGE_VERSION, HERMES_NATIVE_REVISION } from '../../src/runtime/readiness.js';
+import { RESPONSE_ONLY_RECOVERY_INPUT } from '../../src/runs/recovery-safety.js';
 import { FakeAgentDb } from './engine/fake-db.js';
 import { FakeStep } from './engine/fake-step.js';
 
@@ -28,8 +29,11 @@ class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   submissionSessionId: string | null = null;
   acceptBinding = true;
   resumeInput: string | null = null;
+  priorAuthority: Record<string, unknown> | null = null;
   runtimeTransactions = 0;
   recoveryInput() { return Promise.resolve(this.resumeInput); }
+  recoveryAuthority() { return Promise.resolve(this.priorAuthority); }
+  runtimeRequest(_runId: string, attempt: number) { return Promise.resolve(this.snapshots.get(attempt) ?? null); }
 
   async withRuntimeTransaction<T>(work: () => Promise<T>): Promise<T> {
     this.runtimeTransactions += 1;
@@ -209,12 +213,34 @@ describe('official Hermes enterprise projection', () => {
 
   it('submits saved recovery instructions instead of replaying original discovery input', async () => {
     const db = new FakeRuntimeDb({ attempt: 2 });
-    db.resumeInput = 'Resume stored screening evidence. Do not repeat the paid search.';
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
     const { client } = await execute(db);
     expect(client.submissions).toHaveLength(1);
     expect(client.submissions[0]?.body.input).toBe(db.resumeInput);
     expect(client.submissions[0]?.key).toContain('-a2');
     expect(db.snapshots.get(2)?.input).toBe(db.resumeInput);
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual([]);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
+  });
+
+  it('intersects a retry with the failed attempt authority so later grants cannot expand it', async () => {
+    class RestrictedRuntimeDb extends FakeRuntimeDb {
+      override loadToolNames() { return Promise.resolve(['list_requests', 'propose_instruction']); }
+    }
+    const db = new RestrictedRuntimeDb({ attempt: 2 });
+    db.resumeInput = 'Resume the bounded stored-evidence assessment.';
+    db.priorAuthority = { _enterprise_tool_names: ['list_requests', 'get_request'], _enterprise_skills: [] };
+    const newlyGrantedSkill = {
+      name: 'new-skill', skill_key: 'new-skill', runtime_name: 'new-skill', version: '1',
+      artifact_digest: `sha256:${'a'.repeat(64)}`, state: 'active', assignment_revision: 2,
+      grant_revision: null, binding_source: 'enterprise_assignment', binding_state: null,
+      grant_expires_at: null, capability_grants: ['read'], auto_load: true, config: {},
+    } as RuntimeSkillManifest;
+    const { client } = await execute(db, new FakeHermesClient(), new FakeStep(), undefined, {
+      skillSnapshot: [newlyGrantedSkill],
+    });
+    expect(client.submissions[0]?.body._enterprise_tool_names).toEqual(['list_requests']);
+    expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
   });
 
   it('starts fresh streaming without a second remote readiness round trip', async () => {

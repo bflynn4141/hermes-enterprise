@@ -180,6 +180,8 @@ export interface EngineRunRow {
   readonly mode: string;
   readonly agentId: string | null;
   readonly clientTurnId: string;
+  /** Exact server-owned retry instruction, never accepted from the runtime. */
+  readonly recoveryInput?: string | null;
 }
 
 export interface HistoryTurn {
