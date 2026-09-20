@@ -127,6 +127,16 @@ verify their exact readiness, then enable admission for that workspace. Do not
 rewrite existing 1.7 assignments, globally pause schedules or invalidate legacy
 runs.
 
+A Finance employee can also be invited directly into the Finance job role. With
+`HERMES_MEMBER_PROVISIONING_ENABLED=1`, the invitation dialog offers Finance
+only while the workspace holds a verified, unreserved Finance instance
+(`Settings → Runtime capacity`, role Finance). `POST /w/:ws/invitations` with
+`role_template_key: 'finance-agent'` answers 409 `member_setup_role_unavailable`
+otherwise, so no setup operation is created that is known to fail. The setup
+job reserves that exact instance for the invitation, acceptance promotes it to
+the member's agent, and a resend keeps the reservation it already holds. The
+role is advertised per workspace in `bootstrap.capabilities.member_invitations`.
+
 Invitation onboarding may create the compatibility Iris profile, so a new
 Finance member must not begin default discovery before role setup. The safe
 sequence is: accept the invite with the compatibility assignment's schedule
@@ -145,6 +155,16 @@ PGDATABASE=hermes_test pnpm --filter @hermes/worker exec vitest run --project db
   test/db/partner-workflow.test.ts test/db/partner-workflow-v2.test.ts
 pnpm --filter @hermes/worker typecheck
 pnpm db:migrations:verify
+```
+
+The local two-employee rehearsal runs against the real Worker and an owned
+Postgres container: an Admin invites a second employee from the Members screen,
+the employee accepts through the join screen, the Admin binds both employees
+and agents in Library, and admission is refused in words because no pinned
+runtime attests over HTTPS.
+
+```sh
+pnpm e2e:live -- live-partner-finance.spec.ts
 ```
 
 Fixtures prove server authority and database behavior. Native profile probes and
