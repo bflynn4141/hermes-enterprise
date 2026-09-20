@@ -197,6 +197,7 @@ export const agents = pgTable('agents', {
   name: text('name').notNull(),
   responsibility: text('responsibility'),
   instructionsActive: text('instructions_active'),
+  contextScope: text('context_scope').notNull().default('private'),
   status: text('status').notNull().default('draft'),
   setupStep: text('setup_step'),
   startedAt: ts('started_at'),
@@ -317,6 +318,21 @@ export const agentCapabilities = pgTable('agent_capabilities', {
   createdAt: now('created_at'),
 });
 
+export const agentOperationPolicies = pgTable('agent_operation_policies', {
+  agentId: uuid('agent_id').primaryKey(), workspaceId: uuid('workspace_id').notNull(),
+  revision: integer('revision').notNull().default(0), operations: jsonb('operations').notNull().default({}), updatedAt: now('updated_at'),
+});
+export const agentOperationApprovals = pgTable('agent_operation_approvals', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  runId: uuid('run_id').notNull(), toolCallId: text('tool_call_id').notNull(), operationId: text('operation_id').notNull(),
+  toolName: text('tool_name').notNull(), arguments: jsonb('arguments').notNull(), policyRevision: integer('policy_revision').notNull(),
+  status: text('status').notNull().default('pending'), decidedBy: uuid('decided_by'), decidedAt: ts('decided_at'), createdAt: now('created_at'),
+});
+export const agentOperationPolicyRevisions = pgTable('agent_operation_policy_revisions', {
+  workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(), revision: integer('revision').notNull(),
+  operationId: text('operation_id').notNull(), requireHumanApproval: boolean('require_human_approval').notNull(),
+  changedBy: uuid('changed_by').notNull(), createdAt: now('created_at'),
+}, table => [primaryKey({columns:[table.agentId,table.revision]})]);
 export const agentFiles = pgTable('agent_files', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -337,6 +353,11 @@ export const agentFiles = pgTable('agent_files', {
   updatedAt: now('updated_at'),
 });
 
+export const agentContextNotes = pgTable('agent_context_notes', {
+  id: uuid('id').primaryKey().defaultRandom(), workspaceId: uuid('workspace_id').notNull(), agentId: uuid('agent_id').notNull(),
+  title: text('title').notNull(), text: text('text').notNull(), revision: integer('revision').notNull().default(1),
+  authorId: uuid('author_id'), createdAt: now('created_at'), updatedAt: now('updated_at'),
+});
 export const agentContextFields = pgTable(
   'agent_context_fields',
   {
@@ -603,6 +624,7 @@ export const runs = pgTable(
     runtimeSessionId: text('runtime_session_id'),
     runtimeAttempt: integer('runtime_attempt'),
     runtimeRequest: jsonb('runtime_request'),
+    contextSnapshot: jsonb('context_snapshot'),
     runtimeRequestAttempt: integer('runtime_request_attempt'),
     runtimeStartedAt: ts('runtime_started_at'),
     runtimeWaitStartedAt: ts('runtime_wait_started_at'),
@@ -613,6 +635,7 @@ export const runs = pgTable(
     activeMs: integer('active_ms').notNull().default(0),
     interrupted: boolean('interrupted').notNull().default(false),
     instructionVersionId: uuid('instruction_version_id'),
+    instructionSnapshot: text('instruction_snapshot'),
     skillVersionIds: uuid('skill_version_ids').array().notNull().default([]),
     maxTurns: integer('max_turns').notNull().default(12),
     modelId: text('model_id').notNull(),
@@ -1953,7 +1976,11 @@ export const ALL_TABLES = {
   hermes_cloud_capacity: hermesCloudCapacity,
   runtime_discovery_grants: runtimeDiscoveryGrants,
   agent_capabilities: agentCapabilities,
+  agent_operation_policies: agentOperationPolicies,
+  agent_operation_approvals: agentOperationApprovals,
+  agent_operation_policy_revisions: agentOperationPolicyRevisions,
   agent_files: agentFiles,
+  agent_context_notes: agentContextNotes,
   agent_context_fields: agentContextFields,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,

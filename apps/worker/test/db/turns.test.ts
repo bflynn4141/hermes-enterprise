@@ -117,7 +117,7 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     expect(await response.json()).toMatchObject({ reason: 'client_turn_id_required' });
   });
 
-  it('rejects nonempty attachments before persisting a message or admitting a run', async () => {
+  it('rejects unbound attachments before persisting a message or admitting a run', async () => {
     const workspace = await seedWorkspace();
     const { env, created } = envWithWorkflow();
     const clientTurnId = `turn-attachment-${randomUUID()}`;
@@ -131,7 +131,7 @@ describe('POST /w/:ws/sessions/:id/turns', () => {
     });
 
     expect(response.status).toBe(422);
-    expect(await response.json()).toMatchObject({ reason: 'attachments_unsupported' });
+    expect(await response.json()).toMatchObject({ reason: 'invalid_context_sources' });
     expect(created).toEqual([]);
     const count = await asTenant(workspace.workspaceId, workspace.adminId, async (c) =>
       c.query<{ count: string }>('SELECT count(*)::text AS count FROM runs WHERE client_turn_id = $1', [clientTurnId]));

@@ -94,7 +94,7 @@ export interface StreamAccumulator {
 
 export interface DraftState {
   text: string;
-  attachments: { id: string; label: string; icon?: string }[];
+  attachments: { id: string; label: string; icon?: string; kind?: 'source'; sha256?: string }[];
 }
 
 /**
@@ -485,7 +485,7 @@ export type Action =
   | { type: 'session/draft'; id: string; text: string }
   | { type: 'session/draft-clear'; id: string }
   | { type: 'session/drafts-restore'; drafts: Record<string, DraftState> }
-  | { type: 'session/attach'; id: string; attachment: { id: string; label: string; icon?: string } }
+  | { type: 'session/attach'; id: string; attachment: DraftState['attachments'][number] }
   | { type: 'session/detach'; id: string; attachmentId: string }
   | { type: 'session/set'; id: string; patch: Partial<SessionState> }
   | { type: 'session/scroll'; id: string; scrollTop: number }
@@ -993,7 +993,7 @@ export function reduce(state: AppState, action: Action): AppState {
           lastActivity: duplicate ? s.lastActivity : Date.now(),
           unread: duplicate || action.sessionId === state.activeSessionId ? s.unread : true,
           oldestSeq: duplicate ? s.oldestSeq : s.oldestSeq ?? action.message.seq,
-          messages: duplicate ? s.messages : [...s.messages, action.message],
+          messages: duplicate ? s.messages : [...s.messages, { ...action.message, ...(confirmsPending && pending?.message.attachments && !action.message.attachments ? { attachments: pending.message.attachments } : {}) }],
         };
       });
       return duplicate ? next : countUnread(state, next, action.sessionId, action.message.role);

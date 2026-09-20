@@ -164,7 +164,7 @@ describe('F2 · the two routes with no tenant in their path', () => {
     };
     expect(body.workspace.name).toBe('A brand new workspace');
     expect(body.agent).toMatchObject({ name: 'Beacon', email: null });
-    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: false, automated_triggers: false });
+    expect(body.capabilities).toEqual({ email_ingress: false, turn_attachments: true, automated_triggers: false });
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]?.title).toBe('Set up Beacon');
 

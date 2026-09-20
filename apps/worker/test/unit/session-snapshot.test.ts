@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message, StreamEvent } from '@hermes/shared';
-import { reconstructSessionStream } from '../../src/domain/session-snapshot.js';
+import { reconstructSessionStream, projectSessionMessage } from '../../src/domain/session-snapshot.js';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const messageId = '00000000-0000-4000-8000-000000000002';
@@ -13,6 +13,13 @@ function event(kind: string, seq: number, payload: Record<string, unknown>): Str
 const reset = event('message.reset', 1, {});
 const first = event('message.delta', 2, { seq: 0, delta: 'saved ' });
 const second = event('message.delta', 3, { seq: 1, delta: 'prefix' });
+
+it('source metadata belongs only to the original user message, not assistant or guidance rows', () => {
+  const row = {id: messageId,session_id:id,seq:0,role:'user',kind:null,text:'Question',blocks:[],status:'complete',run_id:id,context_sources:[{id,name:'Rubric',sha256:'a'.repeat(64)}]};
+  expect(projectSessionMessage(row).attachments?.[0]).toMatchObject({id,label:'Rubric',sha256:'a'.repeat(64)});
+  expect(projectSessionMessage({...row,role:'iris'}).attachments).toBeUndefined();
+  expect(projectSessionMessage({...row,kind:'guidance'}).attachments).toBeUndefined();
+});
 
 describe('durable selected-session stream reconstruction', () => {
   it('recovers the whole checkpoint prefix independent of delivery order or duplicates', () => {

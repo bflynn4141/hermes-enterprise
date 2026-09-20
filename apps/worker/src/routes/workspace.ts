@@ -267,7 +267,8 @@ export async function loadBootstrap(
     },
     capabilities: {
       email_ingress: false,
-      turn_attachments: false,
+      // Only explicitly selected, hash-bound agent sources are accepted.
+      turn_attachments: true,
       automated_triggers: automatedTriggers,
     },
     heads: { session: head.session_head, workspace: head.workspace_head },

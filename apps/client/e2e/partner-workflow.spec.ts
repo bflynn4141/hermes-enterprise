@@ -53,8 +53,8 @@ test('Partnerships corrects a mismatch from stored source and keeps the original
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/?partnerWorkflow=1&workflowRole=partnerships&seat=admin');
-  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  // Exercise the same responsive navigation that a phone user sees.
+  await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('library');
   const pane = app(page);
   await expect(pane.getByText('Partnerships view', { exact: true })).toBeVisible();
   const mismatch = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-013' });

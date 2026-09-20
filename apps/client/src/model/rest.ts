@@ -13,6 +13,8 @@
 //     the copy keys off — a string comparison on a message is not a contract.
 import {
   bootstrapSchema,
+  contextNoteSchema,
+  agentPermissionsSchema,
   approvalEvidenceViewSchema,
   type ApprovalEvidenceView,
   agentRecoveryViewSchema,
@@ -62,6 +64,7 @@ import {
   type RunView,
   type WorkspaceCreateInput,
   type EnterpriseSkillAssignmentUpdate,
+  type SaveAgentInstruction,
   type PartnerWorkflowViewV2,
   type PartnerWorkflowSetup,
   type PartnerWorkflowAdmissionInput,
@@ -302,7 +305,7 @@ export function createRest(options: RestOptions) {
     sessionSnapshot: (workspaceId: string, sessionId: string) =>
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
     sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, body) as Promise<RunView>,
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: body.attachments.map((source) => ({ id: source.id, sha256: source.sha256, kind: source.kind === 'source' ? 'agent_file' : source.kind })) }) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
@@ -378,28 +381,26 @@ export function createRest(options: RestOptions) {
     getTrace: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/traces/${id}`, traceEntitySchema),
     listContextFields: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/context-fields`, paginatedSchema(contextFieldSchema)), emptyPage()),
+    listContextNotes: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/context-notes`, paginatedSchema(contextNoteSchema)),
+    createContextNote: (workspaceId: string, agentId: string, body: { title: string; text: string }) => request('POST', `${ws(workspaceId)}/agents/${agentId}/context-notes`, contextNoteSchema, body),
+    updateContextNote: (workspaceId: string, agentId: string, id: string, body: { title: string; text: string; expected_revision: number }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, contextNoteSchema, body),
+    deleteContextNote: (workspaceId: string, agentId: string, id: string, expectedRevision: number) => send('DELETE', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, { expected_revision: expectedRevision }),
+    agentPermissions: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema),
+    setAgentPermission: (workspaceId: string, agentId: string, body: { revision: number; operation_id: string; require_human_approval: boolean }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema, body),
+    decideOperationApproval: (workspaceId: string, agentId: string, id: string, decision: 'approved' | 'denied') => request('POST', `${ws(workspaceId)}/agents/${agentId}/permissions/approvals/${id}`, agentPermissionsSchema, { decision }),
     setContextField: (workspaceId: string, field: string, body: { value: string; scope: 'reply' | 'future' }) =>
       request('PATCH', `${ws(workspaceId)}/context-fields/${field}`, contextFieldSchema, body),
-    listInstructions: (workspaceId: string) =>
-      optional(() => request('GET', `${ws(workspaceId)}/instructions`, paginatedSchema(instructionVersionSchema)), emptyPage()),
-    /**
-     * Accept and discard, and no `propose`.
-     *
-     * `POST /w/:ws/instructions` does not exist on the server — the routing
-     * table has `:id/accept`, `:id/save`, `:id/discard` and the DELETE, and
-     * nothing that creates a version. A proposal is written by a run, through
-     * the engine, which is the design: an instruction the agent proposes is a
-     * thing a person reviews. The client used to offer "Propose a change" and
-     * it could only ever have 404ed, so the button is gone (decision C26) and
-     * the finding is in the README's table.
-     */
-    acceptInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/accept`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
-    discardInstruction: (workspaceId: string, id: string) =>
-      request('POST', `${ws(workspaceId)}/instructions/${id}/discard`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    listInstructions: (workspaceId: string, agentId?: string | null) =>
+      request('GET', `${ws(workspaceId)}/instructions${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(instructionVersionSchema)),
+    saveInstruction: (workspaceId: string, agentId: string, body: SaveAgentInstruction) =>
+      request('POST', `${ws(workspaceId)}/instructions?agent_id=${encodeURIComponent(agentId)}`, instructionVersionSchema, body, { requestedFrom: 'skills' }),
+    acceptInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/accept${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
+    discardInstruction: (workspaceId: string, id: string, agentId?: string | null) =>
+      request('POST', `${ws(workspaceId)}/instructions/${id}/discard${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, instructionVersionSchema, {}, { requestedFrom: 'skills' }),
     listSkills: (workspaceId: string, agentId?: string | null) =>
       optional(() => request('GET', `${ws(workspaceId)}/skills${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(skillVersionSchema)), emptyPage()),
-    adoptSkill: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt`, skillVersionSchema, {}),
+    adoptSkill: (workspaceId: string, id: string, agentId?: string | null) => request('POST', `${ws(workspaceId)}/skills/${id}/adopt${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, skillVersionSchema, {}),
     listSkillAssignments: (workspaceId: string, agentId: string) =>
       request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
     updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
@@ -474,7 +475,7 @@ export function createRest(options: RestOptions) {
     deleteUpload: (workspaceId: string, kind: 'attachment' | 'agent_file', id: string) =>
       send('DELETE', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`),
     /** The agent's Context sources, with their extraction status. */
-    listAgentFiles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/files`, paginatedSchema(attachmentDetailSchema)),
+    listAgentFiles: (workspaceId: string, agentId?: string | null) => request('GET', `${ws(workspaceId)}/files${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(attachmentDetailSchema)),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`

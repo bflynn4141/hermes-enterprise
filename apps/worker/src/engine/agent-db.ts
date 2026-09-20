@@ -112,6 +112,8 @@ export interface AppendTurnInput {
  * whose header says why it will not be added, with a type test that fails.
  */
 export interface AgentWrites {
+  /** Server-owned tool consent. This cannot approve or decide anything. */
+  operationConsent(input: { runId: string; agentId: string; toolCallId: string; toolName: string; arguments: Record<string, unknown> }): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null>;
   /**
    * Writes a `requests` row in `pending`. Nothing else may move it out.
    *
@@ -233,6 +235,7 @@ export interface RunErrorInput {
  * Everything the engine may do. A tool receives only the `AgentWrites` half.
  */
 export interface AgentDb extends AgentWrites {
+  loadOperationApproval?(id: string, runId: string): Promise<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string } | null>;
   loadRun(runId: string): Promise<EngineRunRow | null>;
   /**
    * The turn a new attempt starts at: the first turn whose assistant message is
@@ -254,6 +257,7 @@ export interface AgentDb extends AgentWrites {
   /** The per-run tool allowlist: `agent_capabilities.tool_names`, filtered by mode. */
   loadToolNames(agentId: string | null): Promise<string[]>;
   loadSystemPrompt(runId: string): Promise<string>;
+  loadContextSnapshot?(runId: string): Promise<unknown>;
   /**
    * The agent's context fields, each carrying who wrote it.
    *

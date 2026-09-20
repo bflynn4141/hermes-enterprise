@@ -6,6 +6,7 @@ import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
 import { persistApprovalContinuation } from '../../src/runtime/continuation-intent.js';
 import { RuntimeDb } from '../../src/runtime/store.js';
+import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
 import { asUser, makeEnv, readTenant } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
@@ -37,7 +38,7 @@ function proposal(fx: Fixture): ApprovalProposal {
   };
 }
 
-async function installFixture(): Promise<{ fx: Fixture; memberMemberId: string; sourceRunId: string }> {
+async function installFixture(instructions?: string): Promise<{ fx: Fixture; memberMemberId: string; sourceRunId: string }> {
   const fx = await seedWorkspace();
   const sourceRunId = randomUUID();
   let memberMemberId = '';
@@ -67,6 +68,13 @@ async function installFixture(): Promise<{ fx: Fixture; memberMemberId: string; 
         reviewers: [{ kind: 'member', member_id: memberMemberId }], quorum: 1,
       }])],
     );
+    if (instructions) {
+      await client.query(
+        `INSERT INTO instruction_versions(workspace_id,agent_id,body,status,proposed_by,saved_at)
+         VALUES($1,$2,$3,'saved',$4,now())`,
+        [fx.workspaceId, fx.agentId, instructions, fx.adminId],
+      );
+    }
     await client.query(
       `INSERT INTO runs
          (id, workspace_id, session_id, agent_id, status, model_id, client_turn_id, trace_id, mode)
@@ -79,8 +87,9 @@ async function installFixture(): Promise<{ fx: Fixture; memberMemberId: string; 
 }
 
 describe('approved continuation runtime', () => {
-  it('admits one linked run, reserves every model call, and projects completion', async () => {
-    const { fx, sourceRunId } = await installFixture();
+  it('admits one linked run with original instructions after a pending-approval edit, reserves every model call, and projects completion', async () => {
+    const originalInstructions = 'A: cite evidence for the reviewed partner shortlist.';
+    const { fx, sourceRunId } = await installFixture(originalInstructions);
     const toolCallId = 'approval-tool-call';
     const base = makeEnv();
     const created: Array<{ id: string; params: unknown }> = [];
@@ -121,6 +130,15 @@ describe('approved continuation runtime', () => {
         return view;
       },
     );
+
+    const sourceVersion = await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ instruction_version_id: string }>('SELECT instruction_version_id FROM runs WHERE id=$1', [sourceRunId])).rows[0]!.instruction_version_id);
+    // This edit is for fresh work, not a change to the already reviewed run.
+    const edit = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/instructions?agent_id=${fx.agentId}`, {
+      method: 'POST', headers: { 'x-requested-from': 'skills' },
+      body: { text: 'B: use the newly changed standing instructions.', expected_current_id: sourceVersion },
+    });
+    expect(edit.status).toBe(201);
 
     // The original run can finish normally after proposing. Admission waits
     // for that profile to become free rather than running two native stacks.
@@ -165,6 +183,14 @@ describe('approved continuation runtime', () => {
     });
     expect(admitted.done_at).not.toBeNull();
     expect(created[0]?.id).toBe(`${admitted.run_id}-a1`);
+
+    const runtime = new PgAgentDb(env, fx.workspaceId, 'approval-instruction-snapshot');
+    try {
+      expect(await runtime.loadSystemPrompt(sourceRunId)).toBe(originalInstructions);
+      expect(await runtime.loadSystemPrompt(admitted.run_id)).toBe(originalInstructions);
+    } finally { await runtime.close(); }
+    expect(await readTenant(fx.workspaceId, fx.adminId, async (client) =>
+      (await client.query<{ instruction_version_id: string }>('SELECT instruction_version_id FROM runs WHERE id=$1', [admitted.run_id])).rows[0]!.instruction_version_id)).toBe(sourceVersion);
 
     const store = new RuntimeDb(env, fx.workspaceId, 'approval-runtime-db-test');
     try {

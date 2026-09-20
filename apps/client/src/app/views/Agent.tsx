@@ -18,7 +18,7 @@ import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, ap
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
 import { AgentRecovery, RECOVERY_STATUS, RecoveryControlView, useAgentRecovery } from './AgentRecovery.js';
 
-function AgentHead({ full }: { full?: boolean }) {
+export function AgentHead({ full }: { full?: boolean }) {
   const state = useAppState();
   return (
     <div className="agent-head">
@@ -32,10 +32,13 @@ function AgentHead({ full }: { full?: boolean }) {
   );
 }
 
-function AgentTabsRow({ value }: { value: string }) {
+export function AgentTabsRow({ value }: { value: string }) {
   const nav = useNav();
-  const refs: Record<string, Ref> = { overview: OV, context: CTX, skills: SKILLS_VIEW, traces: TRACES };
-  return <Tabs strong tabs={AGENT_TABS} value={value} onChange={(id) => nav(refs[id] ?? OV)} label="Agent views" />;
+  const refs: Record<string, Ref> = { overview: OV, context: CTX, skills: SKILLS_VIEW, permissions: { section: 'agents', view: 'permissions' }, traces: TRACES };
+  return <div className="agent-tabs-navigation">
+    <div className="agent-tabs-desktop"><Tabs strong tabs={AGENT_TABS} value={value} onChange={(id) => nav(refs[id] ?? OV)} label="Agent views" /></div>
+    <label className="agent-tabs-mobile"><span className="sr-only">Agent view</span><select value={value} onChange={(event) => nav(refs[event.target.value] ?? OV)}>{AGENT_TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}</select></label>
+  </div>;
 }
 
 interface RequestRowCopy {

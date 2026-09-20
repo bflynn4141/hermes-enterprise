@@ -432,7 +432,10 @@ export async function listMessages(c: Context<{ Bindings: Env }>): Promise<Respo
     await loadSession(work, sessionId);
 
     const { rows } = await work.tx.query(
-      `SELECT id, session_id, seq, role, kind, text, blocks, status, run_id, worked_ms, created_at
+      `SELECT id, session_id, seq, role, kind, text, blocks, status, run_id, worked_ms, created_at,
+              (SELECT jsonb_agg(jsonb_build_object('id',source->>'id','name',source->>'name','sha256',source->>'sha256'))
+                 FROM runs bound, jsonb_array_elements(bound.context_snapshot->'sources') source
+                WHERE bound.id=messages.run_id AND bound.workspace_id=messages.workspace_id) AS context_sources
          FROM messages
         WHERE workspace_id = $1 AND session_id = $2
           AND ($3::int IS NULL OR seq < $3::int)

@@ -15,8 +15,8 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -88,6 +88,9 @@ const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toStr
 const moneyForMock = (minor: number, currency: string): string => `${currency} ${(minor / 100).toFixed(2)}`;
 
 interface MockOptions {
+  /** Opt-in settings fixtures; never part of the live bundle. */
+  agentSettings?: 'ok' | 'fail' | 'conflict';
+  pendingAgentApproval?: boolean;
   /** Isolated recovery fixtures; no live agent or provider work occurs. */
   recovery?: 'working' | 'retryable' | 'retry_scheduled' | 'blocked' | 'stopped' | 'idle';
   /** Terminal Hermes traces for the activity-card regression, never live data. */
@@ -488,11 +491,16 @@ export function createMockBackend(options: MockOptions = {}) {
         { id: mockUuid(62), name: 'Program overview.pdf', subtitle: 'Team Drive · Read only', extraction: 'extracting' as const, extraction_error: null, body: null, version: 1 },
       ];
 
+  const storedSources: AttachmentDetail[] = agentFiles.map((file) => ({ id: file.id, name: file.name, kind: 'agent_file', size: 160, mime: file.name.endsWith('.pdf') ? 'application/pdf' : 'text/markdown', sha256: 'a'.repeat(64), status: 'ready', extraction_status: file.extraction === 'ready' ? 'ready' : 'pending', extraction_error: null, text_length: file.body?.length ?? null, token_estimate: 30, created_at: iso(), url: null, url_expires_at: null }));
+  const confirmedNotes: ContextNote[] = [];
+  const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [] };
+  if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
+
   const contextFields: { id: string; field: string; label: string; value: string | null; scope: 'reply' | 'future' | null; version: number }[] = [
     { id: 'destination', field: 'destination', label: 'Feedback destination', value: null, scope: null, version: 1 },
   ];
 
-  const instructions = empty
+  const instructions: InstructionVersion[] = empty
     ? [{ id: mockUuid(70), state: 'current' as const, text: 'Screen applications against the partner criteria and show the evidence you used.', before: null, provenance: null, created_at: iso(-9000), version: 1 }]
     : [
         { id: mockUuid(70), state: 'current' as const, text: 'Screen applications against the partner criteria and show the evidence you used.', before: null, provenance: null, created_at: iso(-9000), version: 1 },
@@ -957,7 +965,7 @@ export function createMockBackend(options: MockOptions = {}) {
     agent: workflowRole === 'finance'
       ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
       : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
-    capabilities: { email_ingress: false, turn_attachments: false, automated_triggers: false },
+    capabilities: { email_ingress: false, turn_attachments: Boolean(options.agentSettings), automated_triggers: false },
     heads: { session: head.toString(), workspace: head.toString() },
     counts: {
       inbox: requests.filter((r) => r.status === 'pending').length,
@@ -1358,7 +1366,34 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = traces.find((t) => t.id === traceMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/files')) return page(agentFiles);
+    const contextNoteMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/context-notes(?:/([^/]+))?$`));
+    if (contextNoteMatch) {
+      if (method === 'GET') return page(confirmedNotes);
+      if (seat !== 'admin') return fail(403, 'not_admin');
+      if (options.agentSettings === 'fail') return fail(503, 'fixture_write_failed');
+      const old = confirmedNotes.find((note) => note.id === contextNoteMatch[1]);
+      if (method !== 'POST' && (!old || old.revision !== body.expected_revision)) return fail(409, 'stale_revision');
+      if (method === 'DELETE') { confirmedNotes.splice(confirmedNotes.indexOf(old!), 1); return new Response(null, { status: 204 }); }
+      const note: ContextNote = { id: old?.id ?? mockUuid(810 + confirmedNotes.length), agent_id: AGENT, title: String(body.title), text: String(body.text), revision: (old?.revision ?? 0) + 1, author_id: USER, author_name: 'Brian', created_at: old?.created_at ?? iso(), updated_at: iso(), origin: 'human', scope: 'future' };
+      if (old) confirmedNotes.splice(confirmedNotes.indexOf(old), 1, note); else confirmedNotes.push(note);
+      return json(note);
+    }
+    const permissionsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/permissions(?:/approvals/([^/]+))?$`));
+    if (permissionsMatch) {
+      if (method === 'GET') return json(agentPermissions);
+      if (seat !== 'admin') return fail(403, 'not_admin');
+      if (options.agentSettings === 'fail') return fail(503, 'fixture_write_failed');
+      if (method === 'PATCH') {
+        if (options.agentSettings === 'conflict' || body.revision !== agentPermissions.revision) return fail(409, 'stale_revision');
+        const operation = agentPermissions.operations.find((row) => row.id === body.operation_id);
+        if (!operation) return fail(400, 'unknown_operation');
+        operation.require_human_approval = body.require_human_approval === true; agentPermissions.revision++;
+      } else agentPermissions.pending_approvals = agentPermissions.pending_approvals.filter((row) => row.id !== permissionsMatch[1]);
+      return json(agentPermissions);
+    }
+    if (p('/files') && method === 'GET') return page(storedSources);
+    const sourceMatch = match(new RegExp(`^/w/${WS}/files/([^/]+)$`));
+    if (sourceMatch && method === 'DELETE') { const index = storedSources.findIndex((row) => row.id === sourceMatch[1]); if (index >= 0) storedSources.splice(index, 1); return new Response(null, { status: 204 }); }
     if (p('/context-fields')) return page(contextFields);
     const contextMatch = match(new RegExp(`^/w/${WS}/context-fields/([^/]+)$`));
     if (contextMatch && method === 'PATCH') {
@@ -1368,7 +1403,18 @@ export function createMockBackend(options: MockOptions = {}) {
       field.version += 1;
       return json(field);
     }
-    if (p('/instructions')) return page(instructions);
+    if (p('/instructions')) {
+      if (method === 'POST') {
+        if (seat !== 'admin') return fail(403, 'not_admin');
+        if (options.agentSettings === 'fail') return fail(503, 'fixture_write_failed');
+        const current = instructions.find((row) => row.state === 'current');
+        if (options.agentSettings === 'conflict' || body.expected_current_id !== (current?.id ?? null)) return fail(409, 'stale_revision');
+        if (current) current.state = 'saved';
+        const saved: InstructionVersion = { id: mockUuid(820 + instructions.length), state: 'current', text: String(body.text), before: current?.text ?? null, provenance: 'written by Brian', created_at: iso(), version: 1 };
+        instructions.unshift(saved); return json(saved, 201);
+      }
+      return page(instructions);
+    }
     if (p('/skills')) return page(skills);
     if (p('/partner-workflow/configure') && method === 'POST') {
       if (seat !== 'admin') return fail(403, 'forbidden_partner_workflow_action');
@@ -1679,6 +1725,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (path.endsWith('/complete') && method === 'POST') {
       const id = path.split('/')[4] ?? mockUuid(800);
       const upload = declaredUploads.get(id) ?? { name: 'Invoice.pdf', size: 1, mime: 'application/pdf' };
+      if (path.includes('/files/')) storedSources.push({ id, ...upload, mime: 'text/plain', sha256: 'a'.repeat(64), status: 'ready', kind: 'agent_file', extraction_status: 'ready', extraction_error: null, text_length: 100, token_estimate: 25, created_at: iso(), url: null, url_expires_at: null });
       return json({ id, ...upload, sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
     }
 

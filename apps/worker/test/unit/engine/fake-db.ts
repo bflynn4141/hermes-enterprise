@@ -45,6 +45,7 @@ export interface FakeRequestRow {
 }
 
 export class FakeAgentDb implements AgentDb {
+  async operationConsent(): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null> { return null; }
   readonly events: EmittedEvent[] = [];
   readonly requests: FakeRequestRow[] = [];
   readonly partnerCandidates: Record<string, unknown>[] = [];

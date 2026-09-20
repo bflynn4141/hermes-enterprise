@@ -18,7 +18,7 @@
 import type { Context } from 'hono';
 import { attachmentDetailSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { inWorkspace } from './tenant.js';
+import { inWorkspace, RouteError } from './tenant.js';
 import {
   completeAttachmentRoute,
   createAttachmentRoute,
@@ -27,19 +27,25 @@ import {
   getAttachmentRoute,
 } from './attachments.js';
 import { toAttachment, type FileRow } from '../attachments/service.js';
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 
 export const createFile = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
   await requireAdminForFiles(c);
   return createAttachmentRoute(c, 'agent_file');
 };
-export const completeFile = (c: Context<{ Bindings: Env }>): Promise<Response> =>
-  completeAttachmentRoute(c, 'agent_file');
+export const completeFile = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
+  await requireAdminForFiles(c);
+  return completeAttachmentRoute(c, 'agent_file');
+};
 export const getFile = (c: Context<{ Bindings: Env }>): Promise<Response> => getAttachmentRoute(c, 'agent_file');
 export const deleteFile = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
   await requireAdminForFiles(c);
   return deleteAttachmentRoute(c, 'agent_file');
 };
-export const uploadFile = (c: Context<{ Bindings: Env }>): Promise<Response> => directUploadRoute(c, 'agent_file');
+export const uploadFile = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
+  await requireAdminForFiles(c);
+  return directUploadRoute(c, 'agent_file');
+};
 
 /**
  * The Admin check, in its own transaction ahead of the work.
@@ -57,14 +63,17 @@ async function requireAdminForFiles(c: Context<{ Bindings: Env }>): Promise<void
 /** GET /w/:ws/files — the Context pane's list. */
 export async function listFiles(c: Context<{ Bindings: Env }>): Promise<Response> {
   const rows = await inWorkspace(c, async (work) => {
+    const selected=c.req.query('agent_id');
+    if(!selected||!/^[0-9a-f-]{36}$/i.test(selected))throw new RouteError('Select an agent','bad_id',400);
+    await requireAgentContextAccess(work, selected);
     const { rows } = await work.tx.query<FileRow>(
       `SELECT id, name, storage_key, size_bytes, mime, sha256,
               extraction_status, extraction_error, text_length, token_estimate, created_at
          FROM agent_files
-        WHERE workspace_id = $1
+        WHERE workspace_id = $1 AND agent_id=$2
         ORDER BY created_at DESC
         LIMIT 200`,
-      [work.workspaceId],
+      [work.workspaceId, selected??null],
     );
     return rows;
   });

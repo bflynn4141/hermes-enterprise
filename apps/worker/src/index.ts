@@ -10,6 +10,7 @@
 // uploads routes and the `extract` consumer; M4 filled in the decision route,
 // the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
+import { getAgentPermissions, patchAgentPermissions, decideAgentOperation } from './routes/agent-permissions.js';
 import { withSentry } from '@sentry/cloudflare';
 import type { Env } from './env.js';
 import { AuthError } from './auth.js';
@@ -33,8 +34,10 @@ import {
   listInstructions,
   listSkills,
   patchContextField,
+  saveInstruction,
 } from './routes/agent-config.js';
 import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
+import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
 import { KeyCryptoError } from './keys/envelope.js';
@@ -458,6 +461,9 @@ app.delete('/w/:ws/admin/runtime-discovery-grants/:grantId', revokeRuntimeDiscov
 app.get('/w/:ws/traces', listTraces);
 app.get('/w/:ws/traces/:runId', getTrace);
 app.get('/w/:ws/skills', listSkills);
+app.get('/w/:ws/agents/:agent/permissions', getAgentPermissions);
+app.patch('/w/:ws/agents/:agent/permissions', patchAgentPermissions);
+app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOperation);
 app.post('/w/:ws/skills', adoptSkill);
 app.post('/w/:ws/skills/:id/adopt', adoptSkill);
 app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);
@@ -472,11 +478,16 @@ app.get('/w/:ws/partner-workflow/handoffs/:handoffId/result', getPartnerHandoffR
 app.post('/w/:ws/partner-workflow/handoffs/:handoffId/corrections', correctPartnerInvoice);
 app.post('/w/:ws/partner-workflow/admission', setPartnerWorkflowAdmission);
 app.get('/w/:ws/instructions', listInstructions);
+app.post('/w/:ws/instructions', saveInstruction);
 app.post('/w/:ws/instructions/:id/accept', acceptInstruction);
 app.post('/w/:ws/instructions/:id/save', acceptInstruction);
 app.post('/w/:ws/instructions/:id/discard', discardInstruction);
 app.delete('/w/:ws/instructions/:id', discardInstruction);
 app.get('/w/:ws/context-fields', listContextFields);
+app.get('/w/:ws/agents/:agentId/context-notes', listContextNotes);
+app.post('/w/:ws/agents/:agentId/context-notes', writeContextNote);
+app.patch('/w/:ws/agents/:agentId/context-notes/:noteId', writeContextNote);
+app.delete('/w/:ws/agents/:agentId/context-notes/:noteId', deleteContextNote);
 app.patch('/w/:ws/context-fields/:field', patchContextField);
 
 // The two socket upgrades. Authorisation happens here; the hub only holds the
