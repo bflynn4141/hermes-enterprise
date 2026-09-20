@@ -20,7 +20,11 @@ const BEARER = 'a'.repeat(64);
 const grant = {
   id: GRANT,
   preflight_agent_id: AGENT,
-  role: 'Partnerships P1.7',
+  role_template_key: 'finance-agent' as const,
+  role_template_version: '1.0.0' as const,
+  skill_key: 'partner-invoice-review' as const,
+  skill_version: '1.0.1' as const,
+  role: 'Finance',
   assignment_revision: null,
   grant_revision: 1,
   linked_capacity_id: null,
@@ -36,6 +40,8 @@ describe('runtime capacity contracts', () => {
     expect(runtimeDiscoveryGrantCreatedSchema.parse({
       id: GRANT,
       preflight_agent_id: AGENT,
+      role_template_key: 'finance-agent',
+      role_template_version: '1.0.0',
       bearer: BEARER,
       status: 'prepared',
       expires_at: EXPIRES,
@@ -44,6 +50,8 @@ describe('runtime capacity contracts', () => {
     expect(() => runtimeDiscoveryGrantCreatedSchema.parse({
       id: GRANT,
       preflight_agent_id: AGENT,
+      role_template_key: 'finance-agent',
+      role_template_version: '1.0.0',
       bearer: 'visible-but-not-a-runtime-bearer',
       status: 'prepared',
       expires_at: EXPIRES,
@@ -96,6 +104,8 @@ describe('runtime capacity contracts', () => {
       if (path.endsWith('/runtime-discovery-grants')) return Response.json({
         id: GRANT,
         preflight_agent_id: AGENT,
+        role_template_key: 'finance-agent',
+        role_template_version: '1.0.0',
         bearer: BEARER,
         status: 'prepared',
         expires_at: EXPIRES,
@@ -113,12 +123,17 @@ describe('runtime capacity contracts', () => {
         native_cron_disabled: true,
         verified_at: CREATED,
         discovery_grant_id: GRANT,
+        role_template_key: 'finance-agent',
+        role_template_version: '1.0.0',
       }, { status: 201 });
     }) as typeof fetch;
     const rest = createRest({ auth: createAuth('fake'), fetchImpl });
 
     await rest.runtimeDiscoveryGrants(WORKSPACE);
-    await rest.createRuntimeDiscoveryGrant(WORKSPACE, AGENT);
+    await rest.createRuntimeDiscoveryGrant(WORKSPACE, {
+      preflight_agent_id: AGENT,
+      role_template_key: 'finance-agent',
+    });
     await rest.revokeRuntimeDiscoveryGrant(WORKSPACE, GRANT);
     await rest.registerHermesCapacity(WORKSPACE, {
       cloud_agent_id: 'cloud-agent-1',
@@ -139,7 +154,10 @@ describe('runtime capacity contracts', () => {
     for (const call of calls.slice(1)) {
       expect(new Headers(call.init.headers).has('X-CSRF-Token')).toBe(true);
     }
-    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ preflight_agent_id: AGENT });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      preflight_agent_id: AGENT,
+      role_template_key: 'finance-agent',
+    });
     expect(JSON.parse(String(calls[3]?.init.body))).toEqual({
       cloud_agent_id: 'cloud-agent-1',
       instance_name: 'Partnerships pool 1',
@@ -160,7 +178,10 @@ describe('runtime capacity contracts', () => {
       }) as typeof fetch,
       sleep: async () => undefined,
     });
-    await expect(rest.createRuntimeDiscoveryGrant(WORKSPACE, AGENT)).rejects.toMatchObject({ status: 503 });
+    await expect(rest.createRuntimeDiscoveryGrant(WORKSPACE, {
+      preflight_agent_id: AGENT,
+      role_template_key: 'finance-agent',
+    })).rejects.toMatchObject({ status: 503 });
     expect(calls).toBe(1);
   });
 });

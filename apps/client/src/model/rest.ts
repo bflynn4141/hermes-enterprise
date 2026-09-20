@@ -138,6 +138,7 @@ import {
   runtimeDiscoveryGrantPageSchema,
   runtimeDiscoveryGrantRevokedSchema,
   type HermesCapacityInput,
+  type RuntimeDiscoveryGrantInput,
 } from './runtime-capacity.js';
 
 export class RestError extends Error {
@@ -387,8 +388,8 @@ export function createRest(options: RestOptions) {
     listInvitations: (workspaceId: string) => request('GET', `${ws(workspaceId)}/invitations`, paginatedSchema(invitationEntitySchema)),
     runtimeDiscoveryGrants: (workspaceId: string) =>
       request('GET', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantPageSchema),
-    createRuntimeDiscoveryGrant: (workspaceId: string, preflightAgentId: string) =>
-      request('POST', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantCreatedSchema, { preflight_agent_id: preflightAgentId }),
+    createRuntimeDiscoveryGrant: (workspaceId: string, body: RuntimeDiscoveryGrantInput) =>
+      request('POST', `${ws(workspaceId)}/admin/runtime-discovery-grants`, runtimeDiscoveryGrantCreatedSchema, body),
     revokeRuntimeDiscoveryGrant: (workspaceId: string, grantId: string) =>
       request('DELETE', `${ws(workspaceId)}/admin/runtime-discovery-grants/${encodeURIComponent(grantId)}`, runtimeDiscoveryGrantRevokedSchema),
     registerHermesCapacity: (workspaceId: string, body: HermesCapacityInput) =>

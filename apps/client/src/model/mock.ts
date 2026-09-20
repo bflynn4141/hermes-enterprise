@@ -1871,12 +1871,16 @@ export function createMockBackend(options: MockOptions = {}) {
       if (method === 'GET') return json({ grants: runtimeDiscoveryGrants }, 200, { 'cache-control': 'no-store' });
       if (method === 'POST') {
         const agentId = String(body.preflight_agent_id ?? '');
+        const roleTemplateKey = body.role_template_key === 'finance-agent' ? 'finance-agent' as const : 'partnerships-agent' as const;
+        const finance = roleTemplateKey === 'finance-agent';
         if (runtimeDiscoveryGrants.some((grant) => grant.preflight_agent_id === agentId && grant.status === 'prepared')) {
           return fail(409, 'discovery_grant_exists', 'An active credential exists.');
         }
         const created = {
           id: mockUuid(940 + runtimeDiscoveryGrants.length),
           preflight_agent_id: agentId,
+          role_template_key: roleTemplateKey,
+          role_template_version: '1.0.0' as const,
           bearer: 'd'.repeat(64),
           status: 'prepared' as const,
           expires_at: iso(24 * 60),
@@ -1885,7 +1889,11 @@ export function createMockBackend(options: MockOptions = {}) {
         runtimeDiscoveryGrants.unshift({
           id: created.id,
           preflight_agent_id: created.preflight_agent_id,
-          role: 'Partnerships P1.7',
+          role_template_key: created.role_template_key,
+          role_template_version: created.role_template_version,
+          role: finance ? 'Finance' : 'Partnerships P1.7',
+          skill_key: finance ? 'partner-invoice-review' : 'partner-program-screening',
+          skill_version: finance ? '1.0.1' : '1.7.0',
           assignment_revision: null,
           grant_revision: 1,
           linked_capacity_id: null,
@@ -1928,11 +1936,13 @@ export function createMockBackend(options: MockOptions = {}) {
         preflight_agent_id: row.preflight_agent_id,
         state: 'available',
         plugin_version: '1.0.0-fixture',
-        agentcash_enabled: true,
-        agentcash_wallet_present: true,
+        agentcash_enabled: row.role_template_key === 'partnerships-agent',
+        agentcash_wallet_present: row.role_template_key === 'partnerships-agent',
         native_cron_disabled: true,
         verified_at: iso(0),
         discovery_grant_id: row.id,
+        role_template_key: row.role_template_key,
+        role_template_version: row.role_template_version,
       }, 201, { 'cache-control': 'no-store' });
     }
     if (p('/provider-keys') && method === 'GET') {

@@ -7,11 +7,22 @@ import {
   runtimeDiscoveryGrantInputSchema,
   runtimeGrantStatusLabel,
   type HermesCapacity,
+  type RuntimeCapacityRole,
   type RuntimeDiscoveryGrant,
   type RuntimeDiscoveryGrantCreated,
 } from '../../model/runtime-capacity.js';
 
 type BusyAction = 'prepare' | 'register' | `revoke:${string}` | null;
+
+function roleProfile(role: RuntimeCapacityRole): {
+  label: string;
+  skillKey: 'partner-program-screening' | 'partner-invoice-review';
+  skillVersion: '1.7.0' | '1.0.1';
+} {
+  return role === 'finance-agent'
+    ? { label: 'Finance', skillKey: 'partner-invoice-review', skillVersion: '1.0.1' }
+    : { label: 'Partnerships P1.7', skillKey: 'partner-program-screening', skillVersion: '1.7.0' };
+}
 
 function displayDate(value: string | null): string {
   if (!value) return 'No expiry while linked';
@@ -35,8 +46,8 @@ export function runtimeCapacityErrorMessage(error: unknown, action: 'load' | 'pr
     bad_discovery_grant: 'Enter the permanent Enterprise Agent UUID from the reviewed setup.',
     discovery_profile_assigned: 'That Agent UUID already belongs to a runtime. Use a new permanent identity.',
     discovery_grant_exists: 'That profile already has an active discovery credential. Revoke it before rotating.',
-    discovery_profile_mismatch: 'That Agent UUID does not have the reviewed Partnerships profile.',
-    discovery_profile_changed: 'The reviewed Partnerships profile changed. Revoke this credential and prepare another.',
+    discovery_profile_mismatch: 'That Agent UUID does not have the reviewed role profile.',
+    discovery_profile_changed: 'The reviewed role profile changed. Revoke this credential and prepare another.',
     discovery_grant_unavailable: 'That discovery credential is no longer available. Prepare another.',
     discovery_grant_reserved: 'Withdraw the invitation using this profile before revoking its credential.',
     discovery_grant_consumed: 'This runtime is already assigned. Rotate its credential from the runtime.',
@@ -74,6 +85,7 @@ export function RuntimeCapacityTab() {
   const workspaceId = state.workspace.id;
   const [grants, setGrants] = useState<RuntimeDiscoveryGrant[] | null>(null);
   const [preflightAgentId, setPreflightAgentId] = useState('');
+  const [roleTemplateKey, setRoleTemplateKey] = useState<RuntimeCapacityRole>('partnerships-agent');
   const [createdCredential, setCreatedCredential] = useState<RuntimeDiscoveryGrantCreated | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -127,14 +139,18 @@ export function RuntimeCapacityTab() {
     event.preventDefault();
     setNotice(null);
     setError(null);
-    const input = runtimeDiscoveryGrantInputSchema.safeParse({ preflight_agent_id: preflightAgentId });
+    const input = runtimeDiscoveryGrantInputSchema.safeParse({
+      preflight_agent_id: preflightAgentId,
+      role_template_key: roleTemplateKey,
+    });
     if (!input.success) {
       setError('Enter a valid permanent Agent UUID.');
       return;
     }
     setBusy('prepare');
     try {
-      const created = await adapter.rest.createRuntimeDiscoveryGrant(workspaceId, input.data.preflight_agent_id);
+      const created = await adapter.rest.createRuntimeDiscoveryGrant(workspaceId, input.data);
+      const profile = roleProfile(created.role_template_key);
       setCreatedCredential(created);
       setCopied(false);
       setCopyFailed(false);
@@ -143,7 +159,11 @@ export function RuntimeCapacityTab() {
       setGrants((current) => [{
         id: created.id,
         preflight_agent_id: created.preflight_agent_id,
-        role: 'Partnerships P1.7',
+        role_template_key: created.role_template_key,
+        role_template_version: created.role_template_version,
+        role: profile.label,
+        skill_key: profile.skillKey,
+        skill_version: profile.skillVersion,
         assignment_revision: null,
         grant_revision: 1,
         linked_capacity_id: null,
@@ -267,6 +287,18 @@ export function RuntimeCapacityTab() {
           </div>
         </header>
         <form className="runtime-capacity-form" autoComplete="off" onSubmit={(event) => void prepare(event)}>
+          <label className="runtime-capacity-field runtime-capacity-wide">
+            <span>Profile role</span>
+            <select
+              value={roleTemplateKey}
+              onChange={(event) => setRoleTemplateKey(event.target.value as RuntimeCapacityRole)}
+              disabled={busy !== null}
+            >
+              <option value="partnerships-agent">Partnerships P1.7</option>
+              <option value="finance-agent">Finance</option>
+            </select>
+            <small>The credential is bound to this exact reviewed role profile.</small>
+          </label>
           <label className="runtime-capacity-field runtime-capacity-wide">
             <span>Permanent Agent UUID</span>
             <input
