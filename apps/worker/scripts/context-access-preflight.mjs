@@ -60,9 +60,18 @@ export async function checkContextAccess(client, workspace) {
       WHERE a.workspace_id=$1 ORDER BY a.id`, [workspace])).rows;
     const unassigned = Number((await client.query('SELECT count(*) AS count FROM agent_files WHERE workspace_id=$1 AND agent_id IS NULL', [workspace])).rows[0].count);
     const counts = { empty: 0, bound: 0, explicitly_shared: 0, inactive_owner: 0, inactive_principal: 0, conflicting_bindings: 0, incompatible_session_owner: 0, unbound_in_use: 0, unassigned_files: unassigned };
-    for (const row of rows) counts[disposition(row)]++;
+    const affected_agents = [];
+    for (const row of rows) {
+      const reason = disposition(row);
+      counts[reason]++;
+      if (!['empty','bound','explicitly_shared'].includes(reason)) {
+        // Only the database's UUID identity and fixed disposition are emitted.
+        if (!UUID.test(row.id)) throw new Error('invalid agent identity');
+        affected_agents.push({ agent_id: row.id, disposition: reason });
+      }
+    }
     const ok = ['inactive_owner','inactive_principal','conflicting_bindings','incompatible_session_owner','unbound_in_use','unassigned_files'].every(key => counts[key] === 0);
-    return { ok, counts };
+    return { ok, counts, affected_agents };
   } finally {
     await client.query('ROLLBACK');
   }
@@ -77,7 +86,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     client = new pg.Client({ connectionString: process.env.DATABASE_URL_OWNER, connectionTimeoutMillis: 10000 });
     await client.connect();
     const result = await checkContextAccess(client, workspace);
-    console.log(JSON.stringify(result)); // Fixed disposition names/counts only.
+    console.log(JSON.stringify(result)); // Fixed counts/dispositions and agent UUIDs only.
     if (!result.ok) process.exitCode = 1;
   } catch {
     // Driver errors may include database hosts, usernames or SQL; never print them.

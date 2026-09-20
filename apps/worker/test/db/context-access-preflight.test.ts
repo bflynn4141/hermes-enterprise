@@ -76,7 +76,10 @@ it('runs read-only on real 0050 and current schemas, scoped to exactly one works
     expect(seen.some(sql=>sql.includes('FROM agent_context_notes n'))).toBe(false);
     await expect(checkContextAccess(owner,randomUUID())).rejects.toThrow('workspace missing');
     await mutate('DELETE FROM agent_owners WHERE agent_id=$1',[agent]);
-    expect(await checkContextAccess(owner,ws)).toMatchObject({ok:false,counts:{unbound_in_use:1,empty:1}});
+    const blocked=await checkContextAccess(owner,ws);
+    expect(blocked).toMatchObject({ok:false,counts:{unbound_in_use:1,empty:1},affected_agents:[{agent_id:agent,disposition:'unbound_in_use'}]});
+    expect(JSON.stringify(blocked)).not.toContain(user);
+    expect(JSON.stringify(blocked)).not.toContain('Private');
     await mutate('UPDATE agent_files SET agent_id=NULL WHERE id=$1',[file]);
     expect(await checkContextAccess(owner,ws)).toMatchObject({ok:false,counts:{unassigned_files:1}});
     await mutate('UPDATE agent_files SET agent_id=$2 WHERE id=$1',[file,agent]);
