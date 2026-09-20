@@ -313,21 +313,12 @@ test('N6 · the first turn names the session, and a finished run renames it to i
   const context = await asUser(browser, fixture.adminEmail);
   const page = await context.newPage();
 
-  // The two titles are recorded from the PATCHes themselves rather than polled
-  // from `GET /sessions`. They have to be: the whole sequence — first turn,
-  // run, refinement — finishes in about eight seconds, so a poll that asks
-  // "does the server say 'Screen the applicant'?" is racing the rename that
-  // replaces it, and would pass or fail depending on the machine.
-  const titles: string[] = [];
-  page.on('response', async (response) => {
-    const request = response.request();
-    if (request.method() !== 'PATCH' || !/\/sessions\/[0-9a-f-]+$/.test(new URL(response.url()).pathname)) return;
-    try {
-      titles.push((await response.json()).title as string);
-    } catch {
-      /* a body that is not JSON is not a title */
-    }
-  });
+  // Both names are the server's now: the turn route writes the first one and
+  // the engine writes the second when the run completes, whether or not the
+  // app pane was following the run. The row is polled through the real GET
+  // rather than inferred from PATCHes the client no longer sends.
+  const row = async (id: string): Promise<{ title: string; title_source: string }> =>
+    (await page.request.get(`/w/${fixture.workspaceId}/sessions/${id}`)).json() as Promise<{ title: string; title_source: string }>;
 
   await page.setViewportSize({ width: 1840, height: 1000 });
   await openShell(page, fixture.workspaceId);
@@ -338,18 +329,25 @@ test('N6 · the first turn names the session, and a finished run renames it to i
   await box.fill('Screen the applicant and say what is missing');
   await page.keyboard.press('Enter');
 
-  // Six words, immediately — not after the run, and not after a round trip.
   await expect(sidebar(page).getByRole('button', { name: /Screen the applicant and say what/ })).toBeVisible({ timeout: 10_000 });
   await expect(sidebar(page).locator('[data-row]').filter({ hasText: 'Untitled session' })).toHaveCount(0);
-  await expect.poll(() => titles[0] ?? '', { timeout: 20_000, intervals: [250] }).toBe('Screen the applicant and say what');
+  // The row is named by the turn route, so it is polled for rather than read
+  // once: the sidebar's optimistic name lands before the POST does.
+  const listed = async (): Promise<{ id: string; title: string } | null> => {
+    const page_ = (await page.request.get(`/w/${fixture.workspaceId}/sessions`).then((r) => r.json())) as { items: { id: string; title: string }[] };
+    return page_.items.find((item) => item.title.startsWith('Screen the applicant')) ?? null;
+  };
+  await expect.poll(async () => (await listed())?.title ?? '', { timeout: 20_000, intervals: [250] }).toBe('Screen the applicant and say what');
+  const id = (await listed())!.id;
+  await expect.poll(async () => (await row(id)).title_source, { timeout: 20_000, intervals: [250] }).toBe('turn');
 
-  // And once the run has produced a request, the object names the session —
-  // "Ada Ling · application" rather than the question that started it.
-  await expect.poll(() => titles[titles.length - 1] ?? '', { timeout: 60_000, intervals: [500] }).toMatch(/^\S.* · \w+$/);
-  const final = titles[titles.length - 1]!;
+  // The finished run renames it after the request it proposed, and the
+  // sidebar picks the new name up without a reload.
+  await expect.poll(async () => (await row(id)).title, { timeout: 60_000, intervals: [500] }).toMatch(/^\S.* · \w+$/);
+  const final = (await row(id)).title;
+  expect((await row(id)).title_source).toBe('run');
+  await expect(sidebar(page).getByRole('button', { name: new RegExp(final.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeVisible({ timeout: 20_000 });
 
-  // It is the server's row now, so it survives a reload rather than living in
-  // this tab, and it is not re-derived as something the client may overwrite.
   await page.reload();
   await expect(sidebar(page).getByRole('button', { name: new RegExp(final.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeVisible({ timeout: 20_000 });
   await context.close();

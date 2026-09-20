@@ -3784,6 +3784,30 @@ than one the client guesses.
 
 ---
 
+### C34, continued (September 20, 2026): the name is the server's
+
+The two automatic names used to be written from the client: the first six
+words of the first turn, and, when a run completed, the object it produced.
+The second needed the session's focus to point at the request, and focus is
+only written while the app is following Iris. A workspace that opens in the
+activation flow pins the pane, so the first session a new customer ran kept
+its provisional name forever. On a reload, provenance was also lost: any
+non-placeholder title read as a person's, so a refresh between the first turn
+and the run's end silently disabled the rename.
+
+Both names are now written by the server, and `sessions.title_source`
+records who wrote them: `default`, `turn` (the turn route), `run` (the engine
+in `finish`, from the earliest request the run proposed), or `manual` (a title
+through `PATCH /sessions/:id`, or a row inserted with a real title). Only
+`default` and `turn` may be replaced by a run; `manual` sticks, which is the
+same rule as before but kept where it survives reloads and second devices.
+The engine tells the session's socket with `entity.updated {entity_type:
+'session'}`, which the agent role may now publish about a session one of its
+runs belongs to (migration 0065 widens the 0013 guard by the same shape). The
+client shows the first-turn name optimistically and persists nothing for it;
+on the event it re-reads the row, and the reducer's manual-wins merge is
+unchanged. The `Follow Iris` state no longer has any part in naming.
+
 ## C35. The session row's status rides in its label, because the library has no slot
 
 **Decided.** `SidebarNav` renders a recent's `label` and nothing else: `prompt`

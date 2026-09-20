@@ -119,6 +119,15 @@ describe('selected-session snapshot HTTP boundary', () => {
     expect(retry.stream).toBeNull();
   });
 
+  it('carries the title\'s provenance, so a reload cannot mistake a turn-named session for a person\'s', async () => {
+    // The seeded session was inserted with a real title and no provenance,
+    // which the insert trigger records as a person's (migration 0065).
+    const fx = await fixture();
+    const snapshot = await get(fx);
+    expect(snapshot.session.title).toBe('Partner applications');
+    expect(snapshot.session.title_source).toBe('manual');
+  });
+
   it('preserves session-owner hydration after agent reassignment without granting the agent owner or another tenant access', async () => {
     const fx = await fixture();
     const other = await fixture();

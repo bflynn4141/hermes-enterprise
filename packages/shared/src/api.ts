@@ -132,6 +132,7 @@ export const bootstrapSchema = z
           id: uuidSchema,
           agent_id: uuidSchema,
           title: z.string(),
+          title_source: z.enum(['default', 'turn', 'run', 'manual']).optional(),
           mode: sessionModeSchema,
           model_id: z.string(),
           effort: z.string().nullable(),
