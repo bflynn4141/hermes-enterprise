@@ -20,6 +20,7 @@ import { authorizeAgentCashContact, authorizeAgentCashCreatorSearch, authorizeAg
 import { bootstrap, events } from './routes/workspace.js';
 import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './routes/keys.js';
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
+import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
 import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
@@ -340,6 +341,9 @@ app.delete('/w/:ws/integrations/slack', disconnectSlack);
 app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
 app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
+app.get('/w/:ws/cloud/connection', getCloudConnection);
+app.post('/w/:ws/cloud/connection/start', startCloudConnection);
+app.get('/w/:ws/cloud/connection/callback', completeCloudConnection);
 app.post('/w/:ws/provider-connections/nous/:id/poll', pollNousOAuth);
 
 // Sessions, and everything hanging off one.

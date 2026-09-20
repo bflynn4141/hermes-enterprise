@@ -30,3 +30,4 @@ export * from './agent-context.js';
 export * from './agent-instructions.js';
 export * from './agent-permissions.js';
 export * from './member-provisioning.js';
+export * from './cloud-connection.js';

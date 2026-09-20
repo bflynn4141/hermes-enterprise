@@ -4,8 +4,9 @@ The first implementation slice is the read-only protocol boundary in
 `apps/worker/src/hermes-cloud/management.ts`. It discovers Nous OAuth endpoints,
 constructs an S256 authorization URL, refreshes an existing management grant,
 and initializes MCP to retrieve the `agents` and `agent` tool schemas. It never
-calls either tool or creates an instance. It is not yet connected to routes,
-credential storage, invitation jobs, or UI.
+calls either tool or creates an instance. The admin connection is wired to
+encrypted storage and Organization Settings; invitation jobs and paid
+provisioning are not enabled.
 
 The independent shared operation contract in `packages/shared/src/member-provisioning.ts`
 defines validated preparation/delivery/cancellation states, concise UI presentation,
@@ -37,13 +38,39 @@ Output schemas are external data. They must be reviewed before creating a typed
 adapter; they cannot authorize a lifecycle call. No automatic create retry is
 safe until the actual provider idempotency/reconciliation contract is known.
 
+## Admin connection
+
+Migration `0056_cloud_management.sql` adds isolated management connection and
+authorization-attempt tables. The agent role has no access to either table.
+Active envelopes participate in KEK rotation. No inference credentials are reused.
+
+`GET /w/:ws/cloud/connection` returns safe status only. Admin-only
+`POST /w/:ws/cloud/connection/start` requires CSRF, allowed Origin and recent
+authentication; registers a public PKCE client and returns the official Nous
+authorization URL. The callback binds one-use state to workspace, admin and
+authenticated session. It stores the refreshable grant encrypted, verifies the
+organization through the authenticated account endpoint and reads MCP tool
+schemas only. An unverifiable/mismatched replacement cannot overwrite an
+existing organization-bound connection. Provider details never reach the UI.
+
+The release owner must configure `HERMES_CLOUD_MANAGEMENT_ENABLED=1` and an
+HTTPS origin in `HERMES_ENTERPRISE_PUBLIC_URL` that is also in `ALLOWED_ORIGINS`.
+This enables connection only, not provisioning or spending. No flags were
+changed by this implementation. Dynamic registration/account responses are
+contract-tested fixtures until the first hosted authorization succeeds.
+
+Settings intentionally reports `automatic_setup_ready=false` even after a
+verified connection. Connected proves organization attribution and tool
+discovery at authorization time, not billing linkage, ongoing health or native
+role readiness. A first-time unverifiable connection remains explicitly
+unverified and can be reconnected. Users do not enter tokens or instance IDs.
+
 ## Remaining integration
 
-1. Register/connect a deployment OAuth client through an approved admin flow.
-2. Store management credentials separately, envelope-encrypted and workspace
-   scoped. Bind state and PKCE to the initiating admin and callback. Verify the
-   selected Portal organization server-side. Refresh with a connection lock and
-   atomically store token rotation; disconnect/revocation must stop new work.
+1. Release the connection slice and complete the already-authorized admin
+   management connection; inspect actual schemas and organization billing.
+2. Integrate background health/refresh under a connection lock and atomically
+   store token rotation; add disconnect/revocation before enabling new work.
 3. Retrieve the actual Cloud schemas and verify a supported governed plugin and
    profile bootstrap. Instance creation and Enterprise readiness are distinct.
 4. Add durable invite/provisioning operations and transactional outbox jobs,

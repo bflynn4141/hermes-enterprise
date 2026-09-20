@@ -123,6 +123,40 @@ export interface CloudManagementCredential {
   expiresAt: string;
 }
 
+/** Register only a public PKCE client. No lifecycle or billing operation. */
+export async function registerCloudClient(metadata: CloudOAuthMetadata, redirectUri: string, fetcher: typeof fetch = fetch): Promise<string> {
+  // Reuse the authorization boundary's redirect validation before transmitting it.
+  await makeCloudAuthorizationUrl(metadata, { clientId: 'validate', redirectUri, state: 's'.repeat(43), verifier: 'v'.repeat(43) });
+  if (!metadata.registrationEndpoint) return invalid();
+  const client = await json(await request(fetcher, officialUrl(metadata.registrationEndpoint), {
+    method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_name: 'Hermes Enterprise', redirect_uris: [redirectUri],
+      token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], scope: CLOUD_SCOPE }),
+  }));
+  if (client.token_endpoint_auth_method !== 'none' || !Array.isArray(client.redirect_uris) ||
+      client.redirect_uris.length !== 1 || client.redirect_uris[0] !== redirectUri || client.client_secret !== undefined) return invalid();
+  return string(client.client_id, 255);
+}
+
+export async function exchangeCloudCode(metadata: CloudOAuthMetadata,
+  input: { clientId: string; redirectUri: string; code: string; verifier: string },
+  fetcher: typeof fetch = fetch, now = Date.now()): Promise<CloudManagementCredential> {
+  await makeCloudAuthorizationUrl(metadata, { ...input, state: 's'.repeat(43) });
+  const response = await request(fetcher, officialUrl(metadata.tokenEndpoint), {
+    method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', client_id: string(input.clientId, 255),
+      redirect_uri: input.redirectUri, code: string(input.code, 16384), code_verifier: input.verifier, resource: CLOUD_RESOURCE }),
+  });
+  if (response.status === 400) throw new CloudManagementError('cloud_reconnect_required');
+  const token = await json(response);
+  const scope = token.scope === undefined ? CLOUD_SCOPE : string(token.scope);
+  if (!scope.split(/\s+/).includes(CLOUD_SCOPE)) throw new CloudManagementError('cloud_scope_invalid');
+  if (typeof token.expires_in !== 'number' || !Number.isInteger(token.expires_in) || token.expires_in < 1 || token.expires_in > 86400 ||
+      typeof token.token_type !== 'string' || token.token_type.toLowerCase() !== 'bearer') return invalid();
+  return { accessToken: string(token.access_token, 16384), refreshToken: string(token.refresh_token, 16384),
+    scope, expiresAt: new Date(now + token.expires_in * 1000).toISOString() };
+}
+
 /** Call under the connection's refresh lock; persist rotated tokens atomically. */
 export async function refreshCloudCredential(
   metadata: CloudOAuthMetadata,
@@ -189,6 +223,19 @@ async function rpcResponse(response: Response, id: string): Promise<ObjectValue>
 }
 
 export interface CloudToolContract { name: string; inputSchema: ObjectValue; outputSchema?: ObjectValue }
+
+/** Authenticated account attribution only; never decode unsigned token claims. */
+export async function inspectCloudOrganization(accessToken: string, fetcher: typeof fetch = fetch): Promise<{ id: string; name: string } | null> {
+  const response = await request(fetcher, `${CLOUD_ORIGIN}/api/oauth/account`, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${string(accessToken, 16384)}` },
+  });
+  if (!response.ok) return null;
+  const account = await json(response);
+  if (!account.organisation) return null;
+  const organization = object(account.organisation);
+  if (!organization.id || !organization.name) return null;
+  return { id: string(organization.id, 255), name: string(organization.name, 200) };
+}
 
 /** Tool discovery only. No model, tools/call, instance creation, or billing action. */
 export async function inspectCloudTools(

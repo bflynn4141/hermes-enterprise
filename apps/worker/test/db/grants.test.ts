@@ -99,6 +99,8 @@ const AGENT_EXPECTED: Record<string, Privilege[]> = {
 
 /** The revocations the approval invariant rests on, named one by one. */
 const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
+  { table: 'cloud_connections', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'cloud_connection_attempts', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },

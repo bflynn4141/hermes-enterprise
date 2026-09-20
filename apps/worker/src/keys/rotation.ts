@@ -33,12 +33,15 @@ import { currentKekVersion, type KekEnv } from './envelope.js';
 import { logError, logEvent } from './redact.js';
 import { rewrapProviderKey } from './store.js';
 import { rewrapSlackInstallation } from '../integrations/slack/store.js';
+import { rewrapCloudCredential, type CloudCredentialKind } from '../hermes-cloud/rotation.js';
+
+type CredentialKind = 'provider_key' | 'slack_installation' | CloudCredentialKind;
 
 export interface RotationTarget {
   readonly workspaceId: string;
   readonly keyId: string;
   readonly kekVersion: number;
-  readonly credentialKind?: 'provider_key' | 'slack_installation';
+  readonly credentialKind?: CredentialKind;
 }
 
 export interface RotationDeps {
@@ -56,7 +59,7 @@ export interface RotationReport {
   readonly examined: number;
   readonly rewrapped: number;
   readonly skipped: number;
-  readonly rewrappedByKind: Readonly<Record<'provider_key' | 'slack_installation', number>>;
+  readonly rewrappedByKind: Readonly<Record<CredentialKind, number>>;
   readonly failed: readonly { readonly keyId: string; readonly reason: string }[];
 }
 
@@ -71,6 +74,14 @@ export const LIST_TARGETS_SQL = `
   SELECT workspace_id, id AS key_id, kek_version, 'slack_installation' AS credential_kind
     FROM slack_installations
    WHERE (status <> 'revoked' OR remote_revocation_pending) AND kek_version <> $1
+  UNION ALL
+  SELECT workspace_id, id AS key_id, kek_version, 'cloud_connection' AS credential_kind
+    FROM cloud_connections
+   WHERE status IN ('verification_required','connected','reconnect_required') AND kek_version <> $1
+  UNION ALL
+  SELECT workspace_id, id AS key_id, kek_version, 'cloud_connection_attempt' AS credential_kind
+    FROM cloud_connection_attempts
+   WHERE status='pending' AND expires_at>now() AND kek_version <> $1
    ORDER BY workspace_id, credential_kind, key_id`;
 
 /**
@@ -93,13 +104,15 @@ export async function runKekRotation(
   const targets = await deps.listTargets(toVersion);
   let rewrapped = 0;
   let skipped = 0;
-  const rewrappedByKind = { provider_key: 0, slack_installation: 0 };
+  const rewrappedByKind = { provider_key: 0, slack_installation: 0, cloud_connection: 0, cloud_connection_attempt: 0 };
   const failed: { keyId: string; reason: string }[] = [];
 
   for (const target of targets) {
     try {
       const changed = await deps.withWorkspace(target.workspaceId, (tx) =>
-        target.credentialKind === 'slack_installation'
+        target.credentialKind === 'cloud_connection' || target.credentialKind === 'cloud_connection_attempt'
+          ? rewrapCloudCredential(tx, env, target.workspaceId, target.keyId, toVersion, target.credentialKind)
+          : target.credentialKind === 'slack_installation'
           ? rewrapSlackInstallation(tx, env, target.workspaceId, target.keyId, toVersion)
           : rewrapProviderKey(tx, env, target.workspaceId, target.keyId, toVersion),
       );
@@ -123,7 +136,7 @@ export async function runKekRotation(
 
 /** The per-workspace enumeration. Runs inside that workspace's transaction. */
 export async function listRotationTargets(tx: Tx, toVersion: number): Promise<RotationTarget[]> {
-  const { rows } = await tx.query<{ workspace_id: string; key_id: string; kek_version: number; credential_kind: 'provider_key' | 'slack_installation' }>(
+  const { rows } = await tx.query<{ workspace_id: string; key_id: string; kek_version: number; credential_kind: CredentialKind }>(
     LIST_TARGETS_SQL,
     [toVersion],
   );

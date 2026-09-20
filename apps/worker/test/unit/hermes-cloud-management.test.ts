@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CLOUD_ORIGIN, CLOUD_RESOURCE, CLOUD_SCOPE, discoverCloudOAuth, inspectCloudTools,
-  makeCloudAuthorizationUrl, refreshCloudCredential } from '../../src/hermes-cloud/management.js';
+  makeCloudAuthorizationUrl, refreshCloudCredential, registerCloudClient, exchangeCloudCode, inspectCloudOrganization } from '../../src/hermes-cloud/management.js';
 
 const metadata = { authorizationEndpoint: `${CLOUD_ORIGIN}/oauth/authorize`, tokenEndpoint: `${CLOUD_ORIGIN}/api/oauth/token`,
   registrationEndpoint: `${CLOUD_ORIGIN}/api/oauth/register`, clientCredentialsAdvertised: true };
@@ -15,6 +15,41 @@ function fake(handler: (url: string, init?: RequestInit) => Response | Promise<R
 }
 
 describe('Cloud management discovery and grants', () => {
+  it('registers only the exact HTTPS public PKCE callback', async () => {
+    const redirectUri = 'https://enterprise.example/w/workspace/cloud/callback';
+    expect(await registerCloudClient(metadata, redirectUri, fake((url, init) => {
+      expect(url).toBe(metadata.registrationEndpoint);
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ redirect_uris: [redirectUri], token_endpoint_auth_method: 'none', scope: CLOUD_SCOPE });
+      return Response.json({ ...body, client_id: 'registered-client' });
+    }))).toBe('registered-client');
+    await expect(registerCloudClient(metadata, 'http://enterprise.example/callback', fake(() => { throw new Error('must not fetch'); })))
+      .rejects.toMatchObject({ reason: 'cloud_contract_invalid' });
+    await expect(registerCloudClient(metadata, redirectUri, fake(() => Response.json({ client_id: 'client', token_endpoint_auth_method: 'none', redirect_uris: ['https://attacker.invalid'] }))))
+      .rejects.toMatchObject({ reason: 'cloud_contract_invalid' });
+  });
+  it('exchanges the code only in a PKCE token request with a refreshable management grant', async () => {
+    const input = { clientId: 'client', redirectUri: 'https://enterprise.example/callback', code: 'code-secret', verifier: 'v'.repeat(43) };
+    const result = await exchangeCloudCode(metadata, input, fake((url, init) => {
+      expect(url).toBe(metadata.tokenEndpoint);
+      expect(new URLSearchParams(String(init?.body)).get('code_verifier')).toBe(input.verifier);
+      expect(String(init?.body)).toContain('resource=');
+      return Response.json({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 600 });
+    }), 0);
+    expect(result.expiresAt).toBe('1970-01-01T00:10:00.000Z');
+    for (const changed of [{ scope: 'inference:invoke' }, { refresh_token: undefined }, { token_type: 'Other' }, { expires_in: 0 }]) {
+      await expect(exchangeCloudCode(metadata, input, fake(() => Response.json({ access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 600, ...changed })))).rejects.toThrow();
+    }
+  });
+  it('attributes only an authenticated organization and bounds provider responses', async () => {
+    expect(await inspectCloudOrganization('test-token', fake((url, init) => {
+      expect(url).toBe(`${CLOUD_ORIGIN}/api/oauth/account`);
+      expect(init?.redirect).toBe('manual');
+      return Response.json({ organisation: { id: 'org-id', name: 'Acme' }, secret: 'not projected' });
+    }))).toEqual({ id: 'org-id', name: 'Acme' });
+    expect(await inspectCloudOrganization('test-token', fake(() => new Response('', { status: 403 })))).toBeNull();
+    await expect(inspectCloudOrganization('test-token', fake(() => Response.json({ padding: 'a'.repeat(300000) })))).rejects.toThrow('cloud_contract_invalid');
+  });
   it('discovers the official management scope without inferring service access', async () => {
     const result = await discoverCloudOAuth(fake((url, init) => {
       expect(init?.redirect).toBe('manual');
