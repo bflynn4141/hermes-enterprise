@@ -223,6 +223,16 @@ export const requestEntitySchema = z
     approval: approvalListProjectionSchema.nullable().optional(),
     decision_summary: requestDecisionSummarySchema.optional(),
     triage: requestTriageSchema.optional(),
+    provenance: z.object({
+      kind: z.enum(['operational', 'sample', 'test', 'unknown']),
+      source: z.string().max(80),
+      recorded_at: z.iso.datetime({ offset: true }),
+    }).strict().default({ kind: 'unknown', source: 'not_recorded', recorded_at: '1970-01-01T00:00:00.000Z' }),
+    presentation: z.object({
+      hidden: z.boolean(),
+      hidden_at: z.iso.datetime({ offset: true }).nullable(),
+      hidden_reason: z.string().max(500).nullable(),
+    }).strict().default({ hidden: false, hidden_at: null, hidden_reason: null }),
   })
   .strict();
 export type RequestEntity = z.infer<typeof requestEntitySchema>;

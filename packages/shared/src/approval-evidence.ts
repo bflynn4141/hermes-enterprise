@@ -4,7 +4,7 @@ import { uuidSchema } from './events.js';
 /** A read-only projection of one stored record cited by the current approval. */
 export const approvalEvidenceViewSchema = z.object({
   id: uuidSchema,
-  kind: z.enum(['partner_source', 'contact_verification']),
+  kind: z.enum(['partner_source', 'contact_verification', 'mailbox_thread']),
   label: z.string().min(1).max(200),
   note: z.string().max(2000).nullable(),
   source_url: z.url().max(2000).nullable(),

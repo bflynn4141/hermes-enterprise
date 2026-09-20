@@ -22,6 +22,12 @@ import { addKey, catalog, deleteKey, listKeys, rotateKey, verifyKey } from './ro
 import { pollNousOAuth, startNousOAuth } from './routes/provider-oauth.js';
 import { getCloudConnection, startCloudConnection, completeCloudConnection } from './routes/cloud-connection.js';
 import { getOutboundEmailConnection, gmailOAuthCallback, startGmailOAuth } from './routes/outbound-email.js';
+import {
+  getInboundEmailConnection,
+  gmailEvidenceOAuthCallback,
+  importGmailEvidenceThread,
+  startGmailEvidenceOAuth,
+} from './routes/inbound-email.js';
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -114,6 +120,7 @@ import {
   listRequestDocuments,
   listRequestEffects,
   listRequests,
+  patchRequestPresentation,
 } from './routes/requests.js';
 import { executeEffect, listEffects } from './routes/effects.js';
 import { eraseApplicant, historyCounts, listHistory } from './routes/history.js';
@@ -313,6 +320,7 @@ app.post('/invitations/:token/accept', acceptInvitation);
 // are verified against the raw request bytes before JSON parsing.
 app.get('/integrations/slack/oauth/callback', slackOAuthCallback);
 app.get('/integrations/gmail/oauth/callback', gmailOAuthCallback);
+app.get('/integrations/gmail-evidence/oauth/callback', gmailEvidenceOAuthCallback);
 app.post('/integrations/slack/events', slackEvents);
 // Redeeming a share link. Unauthenticated by design — the token *is* the
 // authorisation — and the only route in the system that answers without a
@@ -347,6 +355,9 @@ app.post('/w/:ws/integrations/slack/link-code', createSlackLinkCode);
 app.delete('/w/:ws/integrations/slack', disconnectSlack);
 app.get('/w/:ws/integrations/email', getOutboundEmailConnection);
 app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
+app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
+app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
+app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
 app.get('/w/:ws/cloud/connection', getCloudConnection);
 app.post('/w/:ws/cloud/connection/start', startCloudConnection);
@@ -421,6 +432,7 @@ app.post('/w/:ws/requests/:id/approval/decisions', createApprovalDecision);
 app.post('/w/:ws/requests/:id/approval/revisions', createApprovalRevision);
 app.post('/w/:ws/requests/:id/approval/route', createApprovalRoute);
 app.post('/w/:ws/requests/:id/notes', createRequestNote);
+app.patch('/w/:ws/requests/:id/presentation', patchRequestPresentation);
 app.get('/w/:ws/requests/:id/effects', listRequestEffects);
 app.get('/w/:ws/requests/:id/documents', listRequestDocuments);
 

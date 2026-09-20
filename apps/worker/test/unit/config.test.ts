@@ -132,6 +132,17 @@ describe('wrangler.jsonc', () => {
     }
   });
 
+  it('enables the Cloud connection only in staging, never paid provisioning', () => {
+    expect((config.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('0');
+    expect((envs.staging!.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('1');
+    expect((envs.production!.vars as Record<string, string>).HERMES_CLOUD_MANAGEMENT_ENABLED).toBe('0');
+    for (const scope of Object.values(envs)) {
+      const vars = scope.vars as Record<string, string> & { ALLOWED_ORIGINS: string; HERMES_ENTERPRISE_PUBLIC_URL: string };
+      expect(vars.ALLOWED_ORIGINS.split(',')).toContain(new URL(vars.HERMES_ENTERPRISE_PUBLIC_URL).origin);
+      expect(vars).not.toHaveProperty('HERMES_CLOUD_AUTOPROVISION_ENABLED');
+    }
+  });
+
   it('pins the reviewed managed connector only for the staging rehearsal', () => {
     const staging = envs.staging!.vars as Record<string, string>;
     const production = envs.production!.vars as Record<string, string>;

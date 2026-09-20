@@ -71,12 +71,14 @@
     "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
     "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
     "GMAIL_OUTREACH_ENABLED": "0",
+    "GMAIL_EVIDENCE_ENABLED": "0",
     "INBOX_TRIAGE_MODE": "off",
     "INBOX_TRIAGE_RUBRIC_VERSION": "1",
     "RAINDROP_OBSERVABILITY_MODE": "off",
     // Bounded live onboarding search. Iris makes one paid AgentCash People
     // Search call, capped at $0.15, and the Worker strips contact data.
     "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
+    "HERMES_CLOUD_MANAGEMENT_ENABLED": "0",
     "HERMES_ENTERPRISE_PUBLIC_URL": "https://localhost.invalid",
     "R2_BUCKET": "hermes-uploads"
   },
@@ -216,12 +218,16 @@
         // Email execution stays off until a dedicated mailbox is connected and accepted.
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
+        "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "active",
         "INBOX_TRIAGE_RUBRIC_VERSION": "1",
         // Sends metadata-only terminal run events when RAINDROP_WRITE_KEY exists.
         "RAINDROP_OBSERVABILITY_MODE": "active",
         "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
         "HERMES_POOL_LOW_CAPACITY_THRESHOLD": "1",
+        // Connection and read-only schema verification only. Paid provisioning
+        // remains unreachable without the separate durable dispatch claim.
+        "HERMES_CLOUD_MANAGEMENT_ENABLED": "1",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.
@@ -318,6 +324,7 @@
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "0",
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
+        "GMAIL_EVIDENCE_ENABLED": "0",
         "INBOX_TRIAGE_MODE": "off",
         "INBOX_TRIAGE_RUBRIC_VERSION": "1",
         "RAINDROP_OBSERVABILITY_MODE": "off",
@@ -325,6 +332,7 @@
         // acceptance. Background automation remains disabled above.
         "PARTNER_SCREENING_DEFAULT_CONFIG_JSON": "{\"source\":\"agentcash_people\",\"source_purpose\":\"person_partner_research\",\"organization_only\":false,\"no_outreach\":true,\"role_label\":\"Potential ecosystem lead\",\"search_queries\":[],\"intake_urls\":[],\"keywords\":[\"artificial intelligence\",\"developer relations\"],\"people_search\":{\"current_position_seniority_level\":[\"Founder\",\"Head\",\"Director\"],\"person_skills\":[\"Artificial Intelligence (AI)\",\"Developer Relations\"],\"current_position_titles\":[],\"person_locations\":[]},\"ranking_weights\":{\"relevance\":40,\"activity\":25,\"adoption\":20,\"openness\":15},\"minimum_priority\":40,\"lookback_days\":365,\"max_candidates\":5,\"max_api_requests\":1,\"minimum_rate_remaining\":0,\"max_spend_usd\":0.15}",
         "HERMES_POOL_LOW_CAPACITY_THRESHOLD": "1",
+        "HERMES_CLOUD_MANAGEMENT_ENABLED": "0",
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://app.hermes.brianflynn.dev",
         "R2_BUCKET": "hermes-uploads-production"
       },

@@ -165,6 +165,8 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
     decision_id: null,
     decided_at: null,
     decided_by_name: null,
+    provenance: { kind: 'sample', source: 'browser_fixture', recorded_at: iso(-5) },
+    presentation: { hidden: false, hidden_at: null, hidden_reason: null },
   };
 }
 
@@ -756,6 +758,8 @@ export function createMockBackend(options: MockOptions = {}) {
 
   let slackConnected = options.slack === 'connected';
   let emailConnected = options.email === 'connected';
+  let emailEvidenceConnected = options.email === 'connected';
+  let importedEmailEvidence = 0;
 
   const dataPrivacy = {
     keys: providerKeys.map((key) => ({
@@ -1009,31 +1013,34 @@ export function createMockBackend(options: MockOptions = {}) {
     for (const listener of listeners) listener(event);
   }
 
-  const bootstrap = () => ({
-    workspace: {
-      id: WS,
-      name: workspaceName,
-      jurisdiction: 'default',
-      settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
-    },
-    viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-    agent: workflowRole === 'finance'
-      ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
-      : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
-    capabilities: { email_ingress: false, turn_attachments: Boolean(options.agentSettings), automated_triggers: false },
-    heads: { session: head.toString(), workspace: head.toString() },
-    counts: {
-      inbox: requests.filter((r) => r.status === 'pending').length,
-      pending_grants: 0,
-      created_documents: documents.length,
-      decisions: requests.filter((r) => r.status !== 'pending').length,
-      pending_for_me: requests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
-      pending_for_others: requests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
-    },
-    sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
-    requests: requests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
-    catalog,
-  });
+  const bootstrap = () => {
+    const activeRequests = requests.filter((row) => !row.presentation.hidden);
+    return {
+      workspace: {
+        id: WS,
+        name: workspaceName,
+        jurisdiction: 'default',
+        settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
+      },
+      viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
+      agent: workflowRole === 'finance'
+        ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
+        : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+      capabilities: { email_ingress: false, turn_attachments: Boolean(options.agentSettings), automated_triggers: false },
+      heads: { session: head.toString(), workspace: head.toString() },
+      counts: {
+        inbox: activeRequests.filter((r) => r.status === 'pending').length,
+        pending_grants: 0,
+        created_documents: documents.length,
+        decisions: requests.filter((r) => r.status !== 'pending').length,
+        pending_for_me: activeRequests.filter((row) => row.kind !== 'approval' ? row.status === 'pending' : requestForViewer(row).approval?.pending_for_viewer).length,
+        pending_for_others: activeRequests.filter((row) => row.kind === 'approval' && requestForViewer(row).approval?.waiting_on_others).length,
+      },
+      sessions: sessions.map((s) => ({ id: s.id, agent_id: s.agent_id, title: s.title, mode: s.mode, model_id: s.model_id, effort: s.effort, pinned: s.pinned, archived: s.archived, focus_ref: s.focus_ref, status: s.status, last_activity_at: s.last_activity_at })),
+      requests: activeRequests.map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label })),
+      catalog,
+    };
+  };
 
   /** Run one contract scenario on the session socket, paced for a human. */
   function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
@@ -1294,6 +1301,21 @@ export function createMockBackend(options: MockOptions = {}) {
         syncApprovalRow();
         return json(approvalForViewer(approval));
       }
+      if (rest === '/presentation' && method === 'PATCH') {
+        if (!row) return fail(404, 'not_found');
+        const hidden = body.hidden;
+        if (typeof hidden !== 'boolean') return fail(422, 'bad_presentation', 'hidden must be true or false');
+        const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+        if (hidden && reason.length < 5) return fail(422, 'hide_reason_required', 'A reason is required');
+        const projected = requestForViewer(row);
+        if (hidden && row.status === 'pending' && row.kind !== 'task' && projected.decision_summary?.approval_requirement.pending_for_viewer) {
+          return fail(409, 'required_review_cannot_be_hidden', 'Decide or route this required review before hiding it');
+        }
+        row.presentation = hidden
+          ? { hidden: true, hidden_at: iso(1), hidden_reason: reason.slice(0, 500) }
+          : { hidden: false, hidden_at: null, hidden_reason: row.presentation.hidden_reason };
+        return json(requestForViewer(row));
+      }
       if (rest === '/decisions' && method === 'POST') {
         if (!row) return fail(404, 'not_found');
         const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
@@ -1354,7 +1376,11 @@ export function createMockBackend(options: MockOptions = {}) {
       if (!rest) return row ? json(requestForViewer(row)) : fail(404, 'not_found');
     }
 
-    if (p('/requests')) return page(requests.map(requestForViewer));
+    if (p('/requests')) {
+      const visibility = url.searchParams.get('visibility') ?? 'active';
+      const visible = requests.filter((row) => visibility === 'all' || row.presentation.hidden === (visibility === 'hidden'));
+      return page(visible.map(requestForViewer));
+    }
     if (p('/documents')) return page(documents);
     const documentMatch = match(new RegExp(`^/w/${WS}/documents/([^/]+)$`));
     if (documentMatch) {
@@ -1666,6 +1692,43 @@ export function createMockBackend(options: MockOptions = {}) {
         can_manage: seat === 'admin',
         reconnect_required: false,
         behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
+      });
+    }
+    if (path.startsWith(`/w/${WS}/integrations/email/evidence`)) {
+      if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
+        emailEvidenceConnected = true;
+        return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=evidence-fixture', expires_at: iso(600) }, 201);
+      }
+      if (method === 'POST' && path.endsWith('/threads')) {
+        importedEmailEvidence += 1;
+        return json({
+          kind: 'mailbox_thread_snapshot',
+          snapshot_id: mockUuid(970 + importedEmailEvidence),
+          source_id: mockUuid(980 + importedEmailEvidence),
+          version_id: mockUuid(990 + importedEmailEvidence),
+          version: importedEmailEvidence,
+          team_id: mockUuid(960),
+          team_name: 'Partnerships',
+          title: 'Re: Partner conversation',
+          provider_thread_id: String(body.thread_id ?? 'fixture-thread'),
+          message_count: 3,
+          sha256: 'a'.repeat(64),
+          imported_at: iso(0),
+          created: true,
+          events: { replies: 1, bounces: 0, unsubscribes: 1, sends_enqueued: 0 },
+        }, 201);
+      }
+      return json({
+        configured: true,
+        status: emailEvidenceConnected ? 'connected' : 'disconnected',
+        address: emailEvidenceConnected ? 'iris-evidence@example.com' : null,
+        connected_at: emailEvidenceConnected ? iso(0) : null,
+        latest_import_at: importedEmailEvidence ? iso(0) : null,
+        imported_threads: importedEmailEvidence,
+        can_manage: seat === 'admin',
+        authorization: 'separate_read_only',
+        scope: 'gmail.readonly',
+        selection: 'one_thread_per_import',
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email`)) {

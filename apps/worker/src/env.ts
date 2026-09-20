@@ -104,6 +104,14 @@ export interface Env {
   GMAIL_REDIRECT_URI?: string;
   /** Test-only HTTP injection; production uses Google endpoints directly. */
   GMAIL_FETCHER?: Fetcher;
+  /** Dedicated exact-scope OAuth client for explicitly selected Gmail evidence. */
+  GMAIL_EVIDENCE_ENABLED?: string;
+  GMAIL_EVIDENCE_CLIENT_ID?: string;
+  GMAIL_EVIDENCE_CLIENT_SECRET?: string;
+  GMAIL_EVIDENCE_STATE_SECRET?: string;
+  GMAIL_EVIDENCE_REDIRECT_URI?: string;
+  /** Test-only injection; never falls back to the outbound sender binding. */
+  GMAIL_EVIDENCE_FETCHER?: Fetcher;
   /** Jev Inbox ranking rollout: off, shadow (store only), or active (serve ranking). */
   INBOX_TRIAGE_MODE?: 'off' | 'shadow' | 'active';
   /** Versioned scoring rubric, persisted beside each append-only assessment. */

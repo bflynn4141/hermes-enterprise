@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ApprovalProposal, ApprovalView } from '@hermes/shared';
+import { paginatedSchema, requestEntitySchema, type ApprovalProposal, type ApprovalView } from '@hermes/shared';
 import { withTenantTransaction } from '../../src/db/client.js';
 import { proposeApproval } from '../../src/domain/approvals.js';
 import { PgAgentDb } from '../../src/engine/pg-agent-db.js';
@@ -169,6 +169,61 @@ const decision = (view: ApprovalView, idempotencyKey: string, choice: 'approve' 
 describe('enterprise approval policy and voting', () => {
   let fx: ApprovalFixture;
   beforeEach(async () => { fx = await seedApprovalFixture(); });
+
+  it('resurfaces a hidden sequential approval when the next step becomes the viewer\'s turn', async () => {
+    const e = env();
+    const proposed = await propose(
+      fx,
+      teamCommitment(fx),
+      `proposal:${randomUUID()}`,
+      'team-sequential',
+    );
+    const presentationPath = `/w/${fx.workspaceId}/requests/${proposed.request_id}/presentation`;
+
+    const hidden = await asUser(e.env, fx.secondReviewerUserId, presentationPath, {
+      method: 'PATCH', headers: INBOX_HEADERS,
+      body: { hidden: true, reason: 'Waiting for the receiving owner first.' },
+    });
+    expect(hidden.status).toBe(200);
+    expect(requestEntitySchema.parse(await hidden.json()).presentation.hidden).toBe(true);
+
+    const firstVote = await asUser(
+      e.env,
+      fx.memberId,
+      `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`,
+      { method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`) },
+    );
+    expect(firstVote.status).toBe(201);
+    expect((await firstVote.json() as ApprovalView).status).toBe('pending');
+
+    const active = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/requests`)
+    ).json());
+    expect(active.items.find((item) => item.id === proposed.request_id)).toMatchObject({
+      presentation: { hidden: false, hidden_at: null },
+      approval: { pending_for_viewer: true },
+    });
+    const hiddenList = paginatedSchema(requestEntitySchema).parse(await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/requests?visibility=hidden`)
+    ).json());
+    expect(hiddenList.items.map((item) => item.id)).not.toContain(proposed.request_id);
+
+    const bootstrap = await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/bootstrap`)
+    ).json() as { counts: { inbox: number; pending_for_me: number } };
+    expect(bootstrap.counts).toMatchObject({ inbox: 1, pending_for_me: 1 });
+    const historyCounts = await (
+      await asUser(e.env, fx.secondReviewerUserId, `/w/${fx.workspaceId}/history/counts`)
+    ).json() as { inbox: number };
+    expect(historyCounts.inbox).toBe(1);
+    const storedHiddenAt = await readTenant(fx.workspaceId, fx.secondReviewerUserId, async (client) => (
+      await client.query<{ hidden_at: Date | null }>(
+        `SELECT hidden_at FROM request_presentations WHERE request_id=$1 AND user_id=$2`,
+        [proposed.request_id, fx.secondReviewerUserId],
+      )
+    ).rows[0]?.hidden_at);
+    expect(storedHiddenAt).toBeInstanceOf(Date);
+  });
 
   it('stores outreach as a draft-only review with no delivery effect', async () => {
     await installOutreachDraftPolicy(fx);

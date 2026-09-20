@@ -33,6 +33,10 @@ import {
   slackOAuthStartSchema,
   outboundEmailConnectionSchema,
   outboundEmailOAuthStartSchema,
+  inboundEmailConnectionSchema,
+  inboundEmailOAuthStartSchema,
+  inboundEmailThreadImportSchema,
+  type InboundEmailThreadImportInput,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
   cloudConnectionResponseSchema,
@@ -364,6 +368,8 @@ export function createRest(options: RestOptions) {
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
     addRequestNote: (workspaceId: string, id: string, body: { body: string }) =>
       request('POST', `${ws(workspaceId)}/requests/${id}/notes`, requestEntitySchema, body),
+    patchRequestPresentation: (workspaceId: string, id: string, body: { hidden: boolean; reason?: string }) =>
+      request('PATCH', `${ws(workspaceId)}/requests/${id}/presentation`, requestEntitySchema, body),
     listRequests: (workspaceId: string, query = '') =>
       optional(() => request('GET', `${ws(workspaceId)}/requests${query}`, paginatedSchema(requestEntitySchema)), emptyPage()),
     listEffects: (workspaceId: string, requestId: string) =>
@@ -527,6 +533,10 @@ export function createRest(options: RestOptions) {
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
+    inboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email/evidence`, inboundEmailConnectionSchema),
+    startGmailEvidenceOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/evidence/gmail/oauth/start`, inboundEmailOAuthStartSchema, {}),
+    importGmailEvidenceThread: (workspaceId: string, body: InboundEmailThreadImportInput) =>
+      request('POST', `${ws(workspaceId)}/integrations/email/evidence/threads`, inboundEmailThreadImportSchema, body),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
     cloudConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/cloud/connection`, cloudConnectionResponseSchema),
     startCloudConnection: (workspaceId: string) => request('POST', `${ws(workspaceId)}/cloud/connection/start`, cloudConnectionStartSchema, {}),

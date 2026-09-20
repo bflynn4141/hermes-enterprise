@@ -404,7 +404,10 @@ export const librarySourceVersions = pgTable(
     createdBy: uuid('created_by'),
     createdAt: now('created_at'),
   },
-  (t) => [unique('library_source_versions_number_key').on(t.sourceId, t.version)],
+  (t) => [
+    unique('library_source_versions_number_key').on(t.sourceId, t.version),
+    unique('library_source_versions_workspace_source_id_key').on(t.workspaceId, t.sourceId, t.id),
+  ],
 );
 
 export const librarySourceTeamGrants = pgTable(
@@ -936,6 +939,29 @@ export const requests = pgTable('requests', {
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
+
+export const requestProvenance = pgTable('request_provenance', {
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').primaryKey(),
+  kind: text('kind').notNull().default('unknown'),
+  source: text('source').notNull().default('not_recorded'),
+  recordedAt: now('recorded_at'),
+});
+
+export const requestPresentations = pgTable(
+  'request_presentations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    hiddenAt: ts('hidden_at'),
+    hiddenReason: text('hidden_reason'),
+    restoredAt: ts('restored_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
 
 export const requestTriageAssessments = pgTable(
   'request_triage_assessments',
@@ -1519,6 +1545,89 @@ export const gmailOauthStates = pgTable('gmail_oauth_states', {
   expiresAt: ts('expires_at').notNull(),
   consumedAt: ts('consumed_at'),
   createdAt: now('created_at'),
+});
+
+export const gmailEvidenceAccounts = pgTable(
+  'gmail_evidence_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    provider: text('provider').notNull().default('gmail'),
+    address: text('address').notNull(),
+    status: text('status').notNull().default('connected'),
+    ciphertext: bytea('ciphertext').notNull(),
+    iv: bytea('iv').notNull(),
+    wrappedDek: bytea('wrapped_dek').notNull(),
+    wrapIv: bytea('wrap_iv').notNull(),
+    kekVersion: integer('kek_version').notNull(),
+    scope: text('scope').notNull(),
+    tokenExpiresAt: ts('token_expires_at').notNull(),
+    connectedBy: uuid('connected_by'),
+    lastError: text('last_error'),
+    connectedAt: now('connected_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('gmail_evidence_accounts_workspace_address_key').on(t.workspaceId, t.address)],
+);
+
+export const gmailEvidenceOauthStates = pgTable('gmail_evidence_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const mailboxThreadSnapshots = pgTable(
+  'mailbox_thread_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    librarySourceId: uuid('library_source_id').notNull(),
+    libraryVersionId: uuid('library_version_id').notNull(),
+    provider: text('provider').notNull(),
+    providerThreadId: text('provider_thread_id').notNull(),
+    title: text('title').notNull(),
+    messageCount: integer('message_count').notNull(),
+    normalizedSha256: text('normalized_sha256').notNull(),
+    normalizedThread: jsonb('normalized_thread').notNull(),
+    importedBy: uuid('imported_by'),
+    importedAt: now('imported_at'),
+  },
+  (t) => [
+    unique('mailbox_thread_snapshots_library_version_key').on(t.libraryVersionId),
+    unique('mailbox_thread_snapshots_exact_key').on(
+      t.workspaceId,
+      t.accountId,
+      t.teamId,
+      t.providerThreadId,
+      t.normalizedSha256,
+    ),
+    unique('mailbox_thread_snapshots_evidence_binding_key').on(
+      t.workspaceId,
+      t.id,
+      t.librarySourceId,
+      t.libraryVersionId,
+      t.normalizedSha256,
+    ),
+  ],
+);
+
+export const inboundEmailEvents = pgTable('inbound_email_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  snapshotId: uuid('snapshot_id').notNull(),
+  providerMessageId: text('provider_message_id').notNull(),
+  kind: text('kind').notNull(),
+  contactAddress: text('contact_address').notNull(),
+  linkedOutboxId: uuid('linked_outbox_id'),
+  evidence: jsonb('evidence').notNull(),
+  recordedAt: now('recorded_at'),
 });
 
 export const approvalResources = pgTable('approval_resources', {
@@ -2132,6 +2241,8 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  request_provenance: requestProvenance,
+  request_presentations: requestPresentations,
   request_triage_assessments: requestTriageAssessments,
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,
@@ -2156,6 +2267,10 @@ export const ALL_TABLES = {
   outbound_email_outbox: outboundEmailOutbox,
   contact_suppressions: contactSuppressions,
   gmail_oauth_states: gmailOauthStates,
+  gmail_evidence_accounts: gmailEvidenceAccounts,
+  gmail_evidence_oauth_states: gmailEvidenceOauthStates,
+  mailbox_thread_snapshots: mailboxThreadSnapshots,
+  inbound_email_events: inboundEmailEvents,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

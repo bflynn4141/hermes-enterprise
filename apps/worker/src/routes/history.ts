@@ -35,6 +35,7 @@ import { isHistoryTab, loadHistory, renderHistoryRow } from '../domain/history.j
 import { requestAudiencePredicate } from '../domain/audience.js';
 import { deletePrefix } from '../storage/r2.js';
 import { documentPrefix } from '../documents/keys.js';
+import { loadVisiblePendingRequests } from '../domain/requests.js';
 
 const historyPage = paginatedSchema(eventRowSchema);
 const HISTORY_LIMIT = 100;
@@ -70,7 +71,6 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
       approved: number;
       declined: number;
       pending_grants: number;
-      inbox: number;
       documents: number;
     }>(
       `SELECT (SELECT count(*)::int FROM decisions decision_row
@@ -101,17 +101,27 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
                WHERE effect_row.workspace_id = $1 AND effect_row.kind = 'access_grant'
                  AND effect_row.status IN ('pending', 'assigned')
                  AND ${requestAudiencePredicate('r.id', '$2')}) AS pending_grants,
-              (SELECT count(*)::int FROM requests r LEFT JOIN approval_requests ar ON ar.request_id = r.id
-                WHERE r.workspace_id = $1 AND r.status = 'pending'
-                  AND (r.kind <> 'approval' OR (ar.status = 'pending' AND ar.expires_at > now()))
-                  AND ${requestAudiencePredicate('r.id', '$2')}) AS inbox,
               (SELECT count(*)::int FROM v_created_documents document_view
                 JOIN requests r ON r.id = document_view.request_id
                WHERE document_view.workspace_id = $1
                  AND ${requestAudiencePredicate('r.id', '$2')}) AS documents`,
       [work.workspaceId, work.userId],
     );
-    return rows[0] ?? { decisions: 0, approved: 0, declined: 0, pending_grants: 0, inbox: 0, documents: 0 };
+    const authority = await work.tx.query<{ reviewer_roles: string[] }>(
+      `SELECT reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
+      [work.workspaceId, work.userId],
+    );
+    const inbox = await loadVisiblePendingRequests(
+      work.tx,
+      work.workspaceId,
+      work.userId,
+      work.role,
+      authority.rows[0]?.reviewer_roles ?? [],
+    );
+    return {
+      ...(rows[0] ?? { decisions: 0, approved: 0, declined: 0, pending_grants: 0, documents: 0 }),
+      inbox: inbox.rows.length,
+    };
   });
   return c.json(counts);
 }

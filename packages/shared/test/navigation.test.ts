@@ -8,7 +8,7 @@ describe('prompt navigation contract', () => {
 
   it('resets omitted Inbox filters rather than inheriting an old search', () => {
     expect(viewFocusRef({ view: 'inbox' })).toEqual({
-      ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', query: '', sort: 'priority' },
+      ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active', query: '', sort: 'priority' },
     });
   });
 
