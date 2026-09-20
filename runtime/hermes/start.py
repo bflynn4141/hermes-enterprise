@@ -11,7 +11,9 @@ import secrets
 import shlex
 import shutil
 import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 
 from install import ROOT, REVISION, verify_source
@@ -32,6 +34,67 @@ MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
 AGENTCASH_TOOLS = ("fetch",)
+CONTRACT = json.loads((ROOT / "contract.json").read_text())
+if CONTRACT.get("source_revision") != REVISION:
+    raise RuntimeError("runtime/hermes/contract.json must match the pinned official source revision.")
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("Enterprise skill manifest redirects are not allowed.")
+
+
+def load_enterprise_cache_config(base_url, model, token, opener=None):
+    """Declare cache support for exact Claude models served by the governed proxy.
+
+    The Worker hostname hides the upstream Nous/OpenRouter identity from Hermes'
+    automatic cache policy. Its allowed-model manifest also covers per-run model
+    overrides when the profile's default is not Claude. Discovery is optional and
+    happens only at startup; an outage must not prevent a healthy profile running.
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
+        raise RuntimeError("Enterprise model manifest needs HTTPS or loopback HTTP.")
+    proxy_url = base_url.rstrip("/") + "/model/v1"
+    request = urllib.request.Request(proxy_url + "/models", method="GET", headers={
+        "Authorization": "Bearer " + token,
+        "Accept": "application/json",
+        "User-Agent": "Hermes-Enterprise-Bridge/1.0",
+    })
+    transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+    try:
+        with transport.open(request, timeout=5) as response:
+            raw = response.read(262145)
+            if getattr(response, "status", 200) != 200 or len(raw) > 262144:
+                raise ValueError("Model manifest rejected")
+        payload = json.loads(raw)
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if (not isinstance(rows, list) or len(rows) > 1024
+                or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) for row in rows)):
+            raise ValueError("Invalid model manifest")
+        models = {row["id"] for row in rows}
+    except (OSError, ValueError, RuntimeError, urllib.error.URLError):
+        # No upstream response text or credentials in diagnostics. Only the
+        # configured default can be safely inferred when discovery is unavailable.
+        print("Enterprise prompt cache manifest unavailable; using configured model only.", file=sys.stderr)
+        models = {model}
+    cache_models = {
+        model_id: {"prompt_caching": True}
+        for model_id in sorted(models)
+        if re.fullmatch(r"(?:anthropic/)?claude-[a-z0-9][a-z0-9._-]{0,111}", model_id)
+    }
+    return {
+        "providers": {"enterprise": {
+            "api": proxy_url, "key_env": "ENTERPRISE_RUNTIME_TOKEN",
+            "transport": "chat_completions", "discover_models": False,
+            "models": cache_models,
+        }},
+        # Keep Hermes' default five-minute tier; the one-hour tier has a higher
+        # cache-write price and needs measured reuse before opting into it.
+        "prompt_caching": {"cache_ttl": "5m"},
+    }
 def validate_profile_path(profile, platform=sys.platform, pid=None):
     # Match gateway.shutdown_watchdog.get_loop_tick_socket_path. execve keeps
     # this process's PID when it becomes the foreground official gateway.
@@ -192,6 +255,7 @@ def child(metadata_path):
     # them to registry-owned mcp-<name> toolsets after discovery.
     mcp_toolsets = mcp_platform_selectors(mcp_servers)
     platform_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
+    cache_config = load_enterprise_cache_config(base, metadata["model"], os.environ["ENTERPRISE_RUNTIME_TOKEN"])
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),
         "model": {"provider": "custom", "default": metadata["model"],
@@ -218,6 +282,7 @@ def child(metadata_path):
         "skills": {"creation_nudge_interval": 0, "write_approval": True,
                    "config": enterprise_skills["config"]},
         "auxiliary": {"background_review": {"enabled": False}, "title_generation": {"enabled": False}},
+        **cache_config,
     }
     private_write(profile / "home/config.yaml", json.dumps(config, indent=2) + "\n")
     os.environ["API_SERVER_PORT"] = str(metadata["port"])
@@ -328,6 +393,9 @@ def main():
     token = args.token_file.read_text().strip() if args.token_file else supplied.get("ENTERPRISE_RUNTIME_TOKEN", "")
     if len(token) < 16 or any(ch.isspace() for ch in token):
         parser.error("token-file must contain only a provisioned runtime bearer token")
+    release_ring = supplied.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if release_ring not in CONTRACT["supported_release_rings"]:
+        parser.error("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable")
     try:
         mcp_servers, mcp_policy, mcp_environment = load_mcp_servers(
             supplied.get("ENTERPRISE_MCP_SERVERS_JSON", ""), supplied,
@@ -383,6 +451,8 @@ def main():
         "HERMES_ENTERPRISE_NATIVE_URL": "http://127.0.0.1:" + str(args.port),
         "HERMES_AGENTCASH_MCP_ENABLED": "1" if "agentcash" in mcp_servers else "0",
         "HERMES_NATIVE_CRON_ENABLED": "1" if supplied.get("HERMES_NATIVE_CRON_ENABLED") == "1" else "0",
+        "HERMES_ENTERPRISE_SOURCE_REVISION": CONTRACT["source_revision"],
+        "HERMES_ENTERPRISE_RELEASE_RING": release_ring,
     }
     if supplied.get("HERMES_ENTERPRISE_CONTROL_SECRET"):
         runtime_environment["HERMES_ENTERPRISE_CONTROL_SECRET"] = supplied["HERMES_ENTERPRISE_CONTROL_SECRET"]

@@ -66,13 +66,14 @@ acceptance result without conflating a local fixture with a real provider run.
 
 ## Separately staged runtime changes
 
-[PR #44](https://github.com/bflynn4141/hermes-enterprise/pull/44) retains the
-previously prepared strict native source/ring/error contract and Claude prompt
-cache configuration. Those are intentionally **not** enabled by this compatible
-Worker release. They require authenticated Hermes Cloud management, verification
-of the actual native source, a matching connector update, and governed profile
-configuration before enforcement can be deployed. Do not set a source revision
-merely to satisfy a health check.
+This branch enables the previously prepared strict native source/ring/error
+contract and Claude prompt-cache configuration on top of the compatible Worker
+latency release. Capabilities must advertise the pinned source revision and
+release ring; terminal failures use the versioned machine-readable envelope;
+the local launcher declares Claude prompt caching for exact allowed wire
+models. Cloud-managed profiles still need matching connector attestation and
+governed profile configuration before enforcement can be observed there. Do
+not set a source revision merely to satisfy a health check.
 
 The current staging Cloud process does not use the local launcher, so changing
 launcher configuration or deploying a Worker alone cannot enable Claude caching

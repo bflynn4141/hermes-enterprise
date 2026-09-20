@@ -68,6 +68,75 @@ SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
     "X-Accel-Buffering": "no",
 }
+CONTRACT_VERSION = 1
+TERMINAL_ERROR_SCHEMA_VERSION = 1
+SOURCE_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+TERMINAL_ERROR_CODES = {
+    "provider_auth": ("auth", False, "provider", "The selected model connection needs attention."),
+    "provider_quota": ("quota", False, "provider", "The selected model account has no available quota."),
+    "provider_rate_limited": ("rate_limit", True, "provider", "The selected model is rate limited."),
+    "request_rejected": ("rejected", False, "request", "The selected model rejected this request."),
+    "provider_unavailable": ("unavailable", True, "provider", "The model provider is temporarily unavailable."),
+    "runtime_interrupted": ("interrupted", True, "runtime", "Hermes restarted before this run settled."),
+    "runtime_unknown": ("unknown", True, "runtime", "Hermes could not finish this run."),
+}
+
+
+def runtime_contract():
+    if os.environ.get("HERMES_ENTERPRISE_SOURCE_REVISION", "").strip() != SOURCE_REVISION:
+        raise RuntimeError("enterprise connector source revision is not attested")
+    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if ring not in {"canary", "stable"}:
+        raise RuntimeError("enterprise connector release ring is invalid")
+    return {
+        "schema_version": CONTRACT_VERSION,
+        "source_revision": SOURCE_REVISION,
+        "release_ring": ring,
+        "terminal_errors": {"supported": True, "schema_version": TERMINAL_ERROR_SCHEMA_VERSION},
+    }
+
+
+def _terminal_error(error: Any = None, status: str = "failed"):
+    signal = str(error or "").lower()[:2000]
+    if status == "interrupted" or re.search(r"gateway restarted|runtime_run_inactive|run (?:was )?interrupted", signal):
+        code = "runtime_interrupted"
+    elif re.search(r"\b(?:http\s*)?401\b|unauthori[sz]ed|authentication failed|invalid (?:api )?key|token.*expired", signal):
+        code = "provider_auth"
+    elif re.search(r"\b(?:http\s*)?402\b|insufficient (?:credits?|balance|funds)|quota (?:exceeded|exhausted)|billing (?:limit|disabled|required)", signal):
+        code = "provider_quota"
+    elif re.search(r"\b(?:http\s*)?429\b|rate[ -]?limit(?:ed|ing)?|too many requests", signal):
+        code = "provider_rate_limited"
+    elif re.search(r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b|bad request|invalid request|context (?:length|window)|maximum context|unsupported model", signal):
+        code = "request_rejected"
+    elif re.search(r"\b(?:http\s*)?(?:500|502|503|504)\b|temporar(?:y|ily) unavailable|service unavailable|overloaded|timeout|connection (?:reset|closed|failed|error)", signal):
+        code = "provider_unavailable"
+    else:
+        code = "runtime_unknown"
+    category, retryable, source, _ = TERMINAL_ERROR_CODES[code]
+    return {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code, "category": category,
+            "retryable": retryable, "source": source}
+
+
+def govern_terminal_payload(payload: Any):
+    if not isinstance(payload, dict):
+        return payload
+    status = payload.get("status")
+    if status not in {"failed", "interrupted"} and payload.get("event") not in {"run.failed", "error"}:
+        return payload
+    existing = payload.get("terminal_error")
+    detail = existing if isinstance(existing, dict) and existing.get("code") in TERMINAL_ERROR_CODES else None
+    if detail is None:
+        detail = _terminal_error(payload.get("error"), status if isinstance(status, str) else "failed")
+    code = detail["code"]
+    if code in TERMINAL_ERROR_CODES:
+        category, retryable, source, message = TERMINAL_ERROR_CODES[code]
+        detail = {"schema_version": TERMINAL_ERROR_SCHEMA_VERSION, "code": code,
+                  "category": category, "retryable": retryable, "source": source}
+        message = TERMINAL_ERROR_CODES[detail["code"]][3]
+    else:
+        message = TERMINAL_ERROR_CODES["runtime_unknown"][3]
+        detail = _terminal_error(None, "failed")
+    return {**payload, "error": message, "terminal_error": detail}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -273,7 +342,14 @@ class NativeControl:
                 "native_cron_disabled": attestation["native_cron_disabled"],
             }
         if operation == "capabilities":
-            return self._request("GET", "/v1/capabilities")
+            status, body = self._request("GET", "/v1/capabilities")
+            if status == 200 and isinstance(body, dict):
+                expected = runtime_contract()
+                existing = body.get("enterprise_contract")
+                if existing is not None and existing != expected:
+                    return 502, {"error": "native Enterprise contract does not match connector"}
+                body = {**body, "enterprise_contract": expected}
+            return status, body
         if operation == "submit":
             key = payload.get("idempotency_key")
             body = payload.get("body")
@@ -284,7 +360,8 @@ class NativeControl:
             return self._request("POST", "/v1/runs", body, {"Idempotency-Key": key})
         if operation == "status":
             run_id = self.require_run_id(payload.get("run_id"))
-            return self._request("GET", "/v1/runs/" + run_id)
+            status, body = self._request("GET", "/v1/runs/" + run_id)
+            return status, govern_terminal_payload(body)
         if operation == "stop":
             run_id = self.require_run_id(payload.get("run_id"))
             return self._request("POST", "/v1/runs/" + run_id + "/stop", {})
@@ -326,6 +403,27 @@ def _sse_boundary(buffer: bytes) -> tuple[int, int] | None:
     return lf, 2
 
 
+def _project_sse_frame(frame: bytes) -> bytes:
+    projected = []
+    for line in frame.splitlines():
+        if line.startswith(b"data:"):
+            data = line[5:]
+            if data.startswith(b" "):
+                data = data[1:]
+            if data == b"[DONE]":
+                projected.append(b"data: [DONE]")
+                continue
+            try:
+                payload = json.loads(data)
+                line = b"data: " + json.dumps(
+                    govern_terminal_payload(payload), separators=(",", ":"),
+                ).encode()
+            except (ValueError, UnicodeDecodeError):
+                line = b": enterprise malformed data"
+        projected.append(line)
+    return b"\n".join(projected) + b"\n\n"
+
+
 async def _stream_native(response):
     """Relay native SSE one complete frame at a time without blocking ASGI."""
     try:
@@ -349,14 +447,16 @@ async def _stream_native(response):
             boundary = _sse_boundary(buffered)
             while boundary is not None:
                 index, length = boundary
-                end = index + length
-                yield buffered[:end]
-                buffered = buffered[end:]
+                # Project payload lines only; `_project_sse_frame` re-terminates
+                # the frame. Including the original blank line would double it.
+                yield _project_sse_frame(buffered[:index])
+                buffered = buffered[index + length:]
                 boundary = _sse_boundary(buffered)
         if buffered:
             # Match the native parser's tolerance for a final SSE frame without
-            # a trailing blank line. The Worker still validates the JSON body.
-            yield buffered
+            # a trailing blank line. Project that last frame through the same
+            # terminal-error boundary before releasing it.
+            yield _project_sse_frame(buffered)
     finally:
         response.close()
 
