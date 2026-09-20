@@ -203,3 +203,27 @@ describe('the per-run tool allowlist', () => {
     expect(String(toolTurn?.providerMessage.content)).toContain('not available in this session');
   });
 });
+
+describe('a completed run names its session', () => {
+  it('renames the session after the request it proposed, and says so', async () => {
+    const { db, error } = await runHarness(proposeThenFinish);
+    expect(error).toBeNull();
+    expect(db.sessionTitle).toEqual({ title: 'Ada Ling · application', source: 'run' });
+  });
+
+  it('never replaces a name a person chose', async () => {
+    const { FakeAgentDb } = await import('./engine/fake-db.js');
+    const db = new FakeAgentDb();
+    db.sessionTitle = { title: 'Ada, second look', source: 'manual' };
+    await runHarness(proposeThenFinish, { db });
+    expect(db.sessionTitle).toEqual({ title: 'Ada, second look', source: 'manual' });
+  });
+
+  it('leaves the provisional name on a run that proposed nothing', async () => {
+    const { db, error } = await runHarness([
+      { events: [textDelta('Nothing to propose.'), usage(), stop('end_turn')] },
+    ]);
+    expect(error).toBeNull();
+    expect(db.sessionTitle.source).toBe('default');
+  });
+});
