@@ -4,7 +4,7 @@
 //
 // | | dev stack | test stack |
 // |---|---|---|
-// | database | `hermes` | `hermes_test` |
+// | database | `hermes` | unique `hermes_test_*` in an owned container |
 // | Worker | :8787, `pnpm --filter @hermes/worker dev` | :8788, started and stopped by this script |
 // | variables | `apps/worker/.dev.vars` | `apps/worker/.dev.vars.test`, generated here |
 // | model | whatever `.dev.vars` says, possibly a real provider | always `MODEL_SCRIPTED=1` |
@@ -22,9 +22,9 @@
 //
 // Seven steps, in order, each one waited for rather than slept through:
 //
-//   1. Docker Postgres up and answering (`pnpm db:up`).
-//   2. `hermes_test` created if absent, then roles and migrations *in it*.
-//   3. The development workspace seeded into `hermes_test`.
+//   1. A labelled per-invocation Postgres container starts on a dynamic port.
+//   2. Its unique `hermes_test_*` database receives roles and migrations.
+//   3. The development workspace is seeded only into that owned database.
 //   4. The client built with `AUTH_MODE=fake` into `dist/`, which is what the
 //      Worker's Static Assets binding serves. This is the real bundle, not the
 //      mock one: the live suite is about what the server does.
@@ -32,7 +32,7 @@
 //      values the suite cannot be allowed to inherit forced to their test
 //      values, and asserted before anything is started.
 //   6. `wrangler dev --local --env-file .dev.vars.test` on `E2E_BASE_URL`'s
-//      port (8787 by default), waited for by polling `/health`, then probed
+//      port (8788 by default), waited for by polling `/health`, then probed
 //      with one scripted turn.
 //   7. Playwright with `E2E_BASE_URL` pointing at it.
 //
@@ -59,7 +59,7 @@
 // key in the repository and a second place to keep in sync. It is gitignored
 // by the existing `.dev.vars` rules extended with `.dev.vars.*`.
 import { spawn, spawnSync } from 'node:child_process';
-import { DEV_DATABASE, TEST_DATABASE, ensureTestDatabase, hyperdriveStrings, psql } from '../../../scripts/test-db.mjs';
+import { DEV_DATABASE, ensureTestDatabase, hyperdriveStrings, psql } from '../../../scripts/test-db.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -86,6 +86,16 @@ if (PORT === '8787') {
   process.exit(1);
 }
 
+// The owned container remains alive until this process exits, after Wrangler
+// and Playwright have both stopped. The test-db module verifies ownership on
+// every psql use and removes only this exact container during exit cleanup.
+const database = ensureTestDatabase();
+if (database === DEV_DATABASE) {
+  process.stderr.write(`\nrefusing to run: the test database resolved to the developer database ${DEV_DATABASE}.\n`);
+  process.exit(1);
+}
+process.stdout.write(`test stack: owned database ${database} on :${PORT} (the dev stack's ${DEV_DATABASE} on :8787 is not touched)\n`);
+
 /**
  * The values the suite forces, whatever `.dev.vars` says.
  *
@@ -106,7 +116,7 @@ const FORCED = {
   NOUS_PORTAL_FIXTURE: '1',
   // The two that make the test Worker a different stack rather than a second
   // front door onto the developer's rows.
-  ...hyperdriveStrings(TEST_DATABASE),
+  ...hyperdriveStrings(database),
 };
 
 const run = (command, args, cwd, env = {}) => {
@@ -155,13 +165,6 @@ async function waitForHealth(deadlineMs) {
   }
 }
 
-// --- 1..3 the test database --------------------------------------------------
-const database = ensureTestDatabase();
-if (database !== TEST_DATABASE || database === DEV_DATABASE) {
-  die(`refusing to run: the test database resolved to "${database}", expected "${TEST_DATABASE}".`);
-}
-process.stdout.write(`test stack: ${TEST_DATABASE} on :${PORT} (the dev stack's ${DEV_DATABASE} on :8787 is not touched)\n`);
-
 // --- 3b stale runs from a Worker that was killed mid-run ---------------------
 //
 // `wrangler dev` going away in the middle of a run leaves the row `working`
@@ -173,7 +176,7 @@ process.stdout.write(`test stack: ${TEST_DATABASE} on :${PORT} (the dev stack's 
 // prepared, and only when they are older than five minutes so a run belonging
 // to a Worker somebody is watching is never touched.
 const swept = psql(
-  TEST_DATABASE,
+  database,
   `UPDATE runs SET status = 'stopped' WHERE status = 'working' AND started_at < now() - interval '5 minutes' RETURNING id;`,
 );
 const sweptCount = swept.out.split('\n').filter(Boolean).length;
@@ -251,12 +254,12 @@ for (const [key, value] of Object.entries(FORCED)) {
 // rather than trusted to the loop above: no connection string may name the dev
 // database.
 for (const [key, value] of Object.entries(written)) {
-  if (key.startsWith('CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING') && !value.endsWith(`/${TEST_DATABASE}`)) {
-    die(`refusing to run: ${key} points at "${value.replace(/:[^:@/]*@/, ':***@')}", not at ${TEST_DATABASE}.`);
+  if (key.startsWith('CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING') && !value.endsWith(`/${database}`)) {
+    die(`refusing to run: ${key} does not point at this invocation's owned test database ${database}.`);
   }
 }
 process.stdout.write(
-  `test worker variables: AUTH_MODE=fake MODEL_SCRIPTED=1 NOUS_PORTAL_FIXTURE=1 database=${TEST_DATABASE}\n`,
+  `test worker variables: AUTH_MODE=fake MODEL_SCRIPTED=1 NOUS_PORTAL_FIXTURE=1 database=${database}\n`,
 );
 
 // --- 6 the Worker ------------------------------------------------------------

@@ -63,23 +63,22 @@ pnpm test          # shared/client/worker units, workerd tests, database tests
 pnpm test:browser:mock  # credential-free client browser flows; not the live Worker
 ```
 
-### Two databases, one container
+### Two isolated database stacks
 
-| | database | who writes to it |
-|---|---|---|
-| dev | `hermes` | you, through `pnpm --filter @hermes/worker dev` on :8787 |
-| test | `hermes_test` | `pnpm e2e:live`, `pnpm db:test`, the worker vitest projects |
+| | database | container | who writes to it |
+|---|---|---|---|
+| dev | `hermes` | durable `hermes-postgres` | you, through `pnpm --filter @hermes/worker dev` on :8787 |
+| test | unique `hermes_test_*` | disposable and owned per invocation | `pnpm e2e:live`, `pnpm db:test`, the worker Vitest projects |
 
-They share the Docker container and nothing else (decision C43). The suites used
-to run against `hermes`, which meant a live end-to-end session filled the Inbox
-you were reading with scripted requests, put fifty test sessions in your session
-list, and reset the workspace's default model to the seed's. The separation is
-one variable — `apps/worker/scripts/db-config.mjs` builds every connection
-string from `PGDATABASE` — and `scripts/test-db.mjs` is the one place that
-creates, migrates and seeds the test database.
+They share nothing. The suites used to run against `hermes`, which meant a live
+end-to-end session filled the Inbox you were reading with scripted requests,
+put fifty test sessions in your session list, and reset the workspace's default
+model to the seed's. `scripts/test-db.mjs` now creates a labelled container on
+a Docker-assigned loopback port, migrates and seeds its unique database, and
+removes only that verified container when the invocation ends.
 
 ```sh
-pnpm db:test:up    # create/migrate/seed hermes_test. Idempotent, not destructive
+pnpm db:test:up    # keep one owned disposable target alive until Ctrl-C
 ```
 
 ### Starting the dev database over
