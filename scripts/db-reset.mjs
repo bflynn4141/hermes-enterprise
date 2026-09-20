@@ -1,13 +1,12 @@
 // `pnpm db:reset` — the **dev** database, back to the seed.
 //
-// Three things it is careful about, and the third is new (decision C43):
+// Three things it is careful about:
 //
 //   * it is destructive by design, so it refuses to run with
 //     `NODE_ENV=production` or with a `DATABASE_URL` that is not local;
-//   * it recreates `hermes` rather than tearing the volume down. `db:down` is
-//     `docker compose down -v`, which takes every database on the container
-//     with it — including `hermes_test`, which a suite may be using, and which
-//     this command has no business touching;
+//   * it recreates `hermes` rather than tearing the durable development volume
+//     down. Automated tests use separately owned disposable containers and are
+//     never a reason to alter this one;
 //   * it **keeps the seed workspace's provider keys**. They are the one thing
 //     in the dev database that cannot be regenerated: a verified OpenRouter key
 //     is somebody's real credential, wrapped, and losing it means going back to
@@ -15,8 +14,8 @@
 //     drop and copied back after the seed, which works because the seed's
 //     workspace id is a constant.
 //
-// `hermes_test` is never touched. `pnpm db:test:up` is its equivalent, and it
-// is idempotent rather than destructive because nothing in it is anybody's.
+// Automated test databases are never touched. `pnpm db:test:up` creates one
+// uniquely named, owned disposable target and removes it on Ctrl-C.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
