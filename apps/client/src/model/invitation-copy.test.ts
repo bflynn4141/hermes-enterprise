@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InvitationEntity } from '@hermes/shared';
 import { createAuth } from './auth.js';
-import { invitationDeliveryMessage, invitationFailureMessage } from './invitation-copy.js';
+import { invitationDeliveryMessage, invitationFailureMessage, invitationSuccessMessage } from './invitation-copy.js';
 import { createRest, RestError } from './rest.js';
 
 const WORKSPACE = '11111111-1111-4111-8111-111111111111';
@@ -16,6 +16,25 @@ const INVITATION: InvitationEntity = {
 };
 
 describe('invitation diagnostics copy', () => {
+  it('acknowledges the state returned by the server instead of a cached rollout mode', () => {
+    expect(invitationSuccessMessage({ ...INVITATION, status: 'accepted' })).toBe('Already a member');
+    expect(invitationSuccessMessage({ ...INVITATION, delivery_status: 'queued' })).toBe('Invitation queued');
+    expect(invitationSuccessMessage({
+      ...INVITATION,
+      delivery_status: 'not_required',
+      provisioning: {
+        id: '44444444-4444-4444-8444-444444444444',
+        workspace_id: WORKSPACE,
+        preparation: 'queued',
+        delivery: 'not_queued',
+        membership: 'not_joined',
+        cancellation: 'none',
+        issue: null,
+        revision: 1,
+      },
+    })).toBe('Agent setup started');
+  });
+
   it.each([
     ['iris_capacity_unavailable', 'No verified Iris profile is available'],
     ['not_configured', 'not connected to WorkOS invitation delivery'],

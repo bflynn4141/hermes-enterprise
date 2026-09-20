@@ -40,6 +40,13 @@ export function invitationFailureMessage(error: unknown): string {
   return withReference(message, error);
 }
 
+/** Acknowledge the state the server actually persisted, not a cached rollout mode. */
+export function invitationSuccessMessage(invitation: InvitationEntity): string {
+  if (invitation.status === 'accepted') return 'Already a member';
+  if (invitation.provisioning) return 'Agent setup started';
+  return 'Invitation queued';
+}
+
 export function invitationDeliveryMessage(invitation: InvitationEntity): string | null {
   if (!invitation.delivery_status || invitation.delivery_status === 'not_required') return null;
   if (invitation.delivery_status === 'queued') return 'Email delivery queued';

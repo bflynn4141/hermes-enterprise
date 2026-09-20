@@ -24,7 +24,7 @@ import { useWorkspaceLists } from './lists.js';
 import { DocumentView } from './Inbox.js';
 import { ProviderConnect, type ProviderConnectStatus } from '../providers/ProviderConnect.js';
 import { PartnerWorkflow } from './PartnerWorkflow.js';
-import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
+import { invitationDeliveryMessage, invitationFailureMessage, invitationSuccessMessage } from '../../model/invitation-copy.js';
 import { RuntimeCapacityTab } from './RuntimeCapacity.js';
 import { SharedIntelligence } from './SharedIntelligence.js';
 import { CloudConnection } from './CloudConnection.js';
@@ -364,7 +364,7 @@ export function Members() {
                       setEmail('');
                       setInvite(false);
                       setTab('invites');
-                      showAck(created.status === 'accepted' ? 'Already a member' : setupOnly ? 'Agent setup started' : 'Invitation queued');
+                      showAck(invitationSuccessMessage(created));
                     })
                     .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
                     .finally(() => setPending(null));
