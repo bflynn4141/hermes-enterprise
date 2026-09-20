@@ -20,9 +20,7 @@ async function openRuntimeCapacity(page: Page): Promise<ReturnType<Page['getByRo
   await page.goto(START);
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
   const app = page.getByRole('region', { name: 'Application' });
-  const narrow = app.getByRole('combobox', { name: 'Admin section' });
-  if (await narrow.isVisible()) await narrow.selectOption('Runtime capacity');
-  else await app.getByRole('button', { name: 'Agent capacity', exact: true }).click();
+  await app.getByRole('tab', { name: 'Agent capacity', exact: true }).click();
   await expect(app.getByRole('heading', { name: 'Hermes capacity' })).toBeVisible();
   return app;
 }
@@ -82,6 +80,6 @@ test.describe('Hermes runtime capacity setup', () => {
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-narrow.png'), fullPage: true });
     const contentOverflow = await app.locator('.runtime-capacity').evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(contentOverflow).toBeLessThanOrEqual(1);
-    await expect(app.getByRole('combobox', { name: 'Admin section' })).toBeVisible();
+    await expect(app.getByRole('tablist', { name: 'Admin sections' })).toBeVisible();
   });
 });

@@ -5,9 +5,7 @@ const FRESH_WORKSPACE = '/?data=empty&key=none';
 async function selectModelProviders(page: import('@playwright/test').Page) {
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-  const narrow = app.getByRole('combobox', { name: 'Admin section' });
-  if (await narrow.isVisible()) await narrow.selectOption('Provider keys');
-  else await app.getByRole('button', { name: 'Model providers', exact: true }).click();
+  await app.getByRole('tab', { name: 'Model providers', exact: true }).click();
   return app;
 }
 

@@ -10,9 +10,7 @@ async function openSlack(page: import('@playwright/test').Page, url = '/', membe
   } else {
     await page.getByRole('button', { name: 'Admin', exact: true }).click();
     await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-    const section = app.getByRole('combobox', { name: 'Admin section' });
-    if (await section.isVisible()) await section.selectOption('Slack');
-    else await app.getByRole('button', { name: 'Slack', exact: true }).click();
+    await app.getByRole('tab', { name: 'Slack', exact: true }).click();
     await expect(app.getByRole('heading', { name: 'Slack', exact: true })).toBeVisible();
   }
   return app;
