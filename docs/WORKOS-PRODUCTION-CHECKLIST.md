@@ -199,6 +199,28 @@ SSO test IdP: invitation accept via emailed link, multi-org picker under
 forced choice, enterprise SSO IdP challenge, access-token refresh
 rotation, step-up / MFA, and workspace creation with WorkOS org mirror.
 
+### Staging re-verify — September 20, 2026 (HTTP, same day)
+
+Re-checked from a clean agent environment against the live staging host
+(no browser session cookies). Results match the earlier September 20
+evidence for the items that do not require a disposable inbox or IdP:
+
+- **1. Readiness:** `GET /health` → `200` / `status: ok`; `auth:config`
+  configured, `workos:jwks` reachable, `hermes:runs` ready.
+- **2. Login entry / state cookie:** `GET /auth/login` → `302` to WorkOS
+  `user_management/authorize` with staging `client_id` suffix `…E90T` and
+  `redirect_uri=https://staging.hermes.brianflynn.dev/auth/callback`.
+  `hermes_auth_transaction` Set-Cookie: `HttpOnly; Secure; SameSite=Lax;
+  Max-Age=600; Path=/auth/callback`.
+- **Invalid callback:** `GET /auth/callback?code=fake&state=wrong` → `400`
+  “Your sign-in expired” with link to `/auth/login`.
+- **8. Logout endpoint:** `GET /auth/logout` → `302` `/` and clears
+  `hermes_session` (`HttpOnly; SameSite=Strict; Secure; Max-Age=0`),
+  `hermes_csrf`, and `hermes_auth_transaction`.
+
+Private-browser items above remain blocked on a disposable inbox and an
+SSO test IdP; they were not attempted in this re-verify.
+
 ## What automated tests prove—and do not prove
 
 `FakeWorkOS` signs genuine RS256 JWTs and publishes an in-memory JWKS. Database
@@ -209,7 +231,10 @@ control uses `/auth/logout`, and the production build scans for fake-auth UI
 markers.
 
 The original code sweep had no WorkOS dashboard access, so its automated proof
-remains deliberately bounded. A later staging check verified the real hosted
-AuthKit page and WorkOS invitation delivery as recorded above. MFA, a real SSO
-IdP, callback/session behavior, refresh rotation, membership reconciliation,
-and WorkOS logout remain external acceptance work.
+remains deliberately bounded. Staging HTTP checks (September 15 invitation
+delivery branding, September 20 readiness / login transaction / invalid
+callback / logout cookie clear, plus an authenticated shell pass with an
+existing sealed session) are recorded above. Invitation accept, multi-org
+forced choice, enterprise SSO, refresh rotation, step-up / MFA, and
+workspace creation with WorkOS org mirror remain private-browser acceptance
+work.
