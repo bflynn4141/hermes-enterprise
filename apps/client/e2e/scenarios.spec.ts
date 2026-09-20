@@ -226,9 +226,21 @@ test.describe('P2 · triage', () => {
     await expect(needsYou.getByText('Leah Martinez')).toBeVisible();
     await expect(needsYou.getByText('Owen Reilly')).toBeVisible();
 
-    // Following: nothing the agent said moved the pane off Overview.
-    await expect(appPane.getByText('Iris / Overview')).toBeVisible();
-    await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
+    // Following: nothing the agent said moved the pane off Overview. The
+    // Agents surface has one header, so content begins directly below it and
+    // the follow control stays with the surviving breadcrumb.
+    const appHeader = appPane.locator('.pane-header');
+    await expect(appHeader.getByText('Agents', { exact: true })).toBeVisible();
+    await expect(appHeader.getByText('Iris', { exact: true })).toBeVisible();
+    await expect(appHeader.getByRole('button', { name: 'Following Iris', exact: true })).toBeVisible();
+    await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
+    await expect(appPane.getByText('Iris / Overview', { exact: true })).toHaveCount(0);
+    const headerLayout = await appPane.evaluate((pane) => {
+      const header = pane.querySelector<HTMLElement>('.pane-header')!;
+      const content = pane.querySelector<HTMLElement>('.object-view')!;
+      return { headerBottom: header.getBoundingClientRect().bottom, contentTop: content.getBoundingClientRect().top };
+    });
+    expect(Math.abs(headerLayout.contentTop - headerLayout.headerBottom)).toBeLessThanOrEqual(1);
 
     // The Inbox badge agrees with the list.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('4');
@@ -241,8 +253,20 @@ test.describe('P2 · triage', () => {
     const sections = appPane.getByRole('combobox', { name: 'Agent view' });
     if (await sections.isVisible()) await sections.selectOption('skills');
     else await appPane.getByRole('tab', { name: 'Skills' }).click();
-    await expect(appPane.getByText('View pinned')).toBeVisible();
-    await appPane.getByRole('button', { name: /^Follow / }).click();
+    const appHeader = appPane.locator('.pane-header');
+    await expect(appHeader.getByText('View pinned')).toBeVisible();
+    await expect(appPane.locator('.pane-subheader')).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const showApp = page.locator('.pane-iris').getByRole('button', { name: 'App', exact: true });
+    if (await showApp.isVisible()) await showApp.click();
+    await expect(appPane).toHaveAttribute('data-active', 'true');
+    await expect(appHeader.getByText('View pinned')).toBeHidden();
+    await expect(appHeader.getByRole('button', { name: 'Follow Iris', exact: true })).toBeVisible();
+    const headerWidth = await appHeader.evaluate((header) => ({ client: header.clientWidth, scroll: header.scrollWidth }));
+    expect(headerWidth.scroll).toBeLessThanOrEqual(headerWidth.client);
+
+    await appHeader.getByRole('button', { name: /^Follow / }).click();
     await expect(appPane.getByRole('button', { name: /Following/ })).toBeVisible();
   });
 });

@@ -86,6 +86,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  const agentView = app.section === 'agents';
   const requestView = app.section === 'inbox' && app.view === 'request';
   const followControl = following ? (
     <button type="button" className="follow-btn" aria-label={`Following ${agent}`} aria-pressed onClick={() => dispatch({ type: 'ui/set', patch: { follow: false } })} title={`The app follows ${agent}'s object changes · Click to pin this view`}>
@@ -93,7 +94,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     </button>
   ) : (
     <>
-      <span className="follow-btn" title="Manual navigation pinned this view">View pinned</span>
+      <span className="follow-btn follow-status" title="Manual navigation pinned this view">View pinned</span>
       <button type="button" className="follow-btn ghost" aria-label={`Follow ${agent}`} onClick={() => dispatch({ type: 'follow/resume' })} title={session?.focus ? `Return to the object ${agent} is working on` : `Resume following ${agent}`}>
         Follow {agent}
       </button>
@@ -112,7 +113,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
           <span className="current truncate">{crumb}</span>
         </span>
         <span className="grow" />
-        {requestView && followControl}
+        {(agentView || requestView) && followControl}
         {narrow && (
           <span className="pane-switch" role="group" aria-label="Pane">
             <button type="button" aria-pressed={false} onClick={() => dispatch({ type: 'ui/set', patch: { pane: 'chat' } })}>
@@ -131,7 +132,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
           </Button>
         )}
       </header>
-      {!requestView && <div className="pane-subheader">
+      {!agentView && !requestView && <div className="pane-subheader">
         <span className="truncate">{sub}</span>
         <span className="grow" />
         {followControl}

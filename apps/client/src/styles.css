@@ -1666,6 +1666,10 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .shell.is-phone .pane-header .text-btn,
 .shell.is-phone .pane-header .icon-btn,
 .phone-navigation .icon-btn { min-width: 44px; min-height: 44px; justify-content: center; }
+.shell.is-phone .pane-header .follow-btn { min-height: 44px; }
+/* The pinned badge is passive. Keep the action in the single phone header and
+   let the active agent tab continue to communicate the pinned destination. */
+.shell.is-phone .pane-header .follow-status { display: none; }
 .shell.is-phone .pane-switch { flex-shrink: 0; }
 .shell.is-phone .pane-switch button { min-width: 44px; min-height: 44px; padding-inline: 8px; }
 
