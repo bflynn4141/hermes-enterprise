@@ -9,6 +9,7 @@ operation allowlist, never an arbitrary loopback proxy.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import pathlib
@@ -55,6 +56,7 @@ CONNECTOR_VERSION = "1.7.0"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 READINESS_MAX_BYTES = 64 * 1024
 RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
+MANAGED_PROFILE_MARKER_FILENAME = "enterprise-cloud-managed.json"
 RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{1,180}\Z")
 VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,255}\Z")
 SKILL_NAME = re.compile(r"[A-Za-z0-9_-]+:[A-Za-z0-9_-]+\Z")
@@ -95,13 +97,27 @@ def load_runtime_attestation(home: pathlib.Path | None = None) -> dict[str, Any]
     if (document.get("schema_version") != 1
             or not isinstance(document.get("runtime_revision"), str)
             or not re.fullmatch(r"[0-9a-f]{40}", document["runtime_revision"])
-            or plugin != {"name": "enterprise_bridge", "version": CONNECTOR_VERSION}
+            or not isinstance(plugin, dict)
+            or plugin.get("name") != "enterprise_bridge"
+            or plugin.get("version") != CONNECTOR_VERSION
             or not all(isinstance(document.get(key), str) and document[key]
                        for key in ("workspace_id", "agent_id", "enterprise_url"))
             or not isinstance(skills, list) or len(skills) > 16
             or not isinstance(tools, list) or len(tools) > 128
             or not isinstance(document.get("agentcash_enabled"), bool)
             or not isinstance(document.get("native_cron_disabled"), bool)):
+        raise RuntimeError("native readiness attestation is invalid")
+    if document.get("managed_cloud") is True:
+        if (not isinstance(document.get("boot_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", document["boot_id"])
+                or set(plugin) != {"name", "version", "revision", "artifact_digest"}
+                or not isinstance(plugin.get("revision"), str)
+                or not re.fullmatch(r"[0-9a-f]{40}", plugin["revision"])
+                or not isinstance(plugin.get("artifact_digest"), str)
+                or not SHA256.fullmatch(plugin["artifact_digest"])):
+            raise RuntimeError("native readiness attestation is invalid")
+    elif ("boot_id" in document or document.get("managed_cloud") not in {None, False}
+            or set(plugin) != {"name", "version"}):
         raise RuntimeError("native readiness attestation is invalid")
     seen_skills = set()
     for skill in skills:
@@ -120,6 +136,25 @@ def load_runtime_attestation(home: pathlib.Path | None = None) -> dict[str, Any]
             or any(not isinstance(tool, str) or not TOOL_NAME.fullmatch(tool) for tool in tools)):
         raise RuntimeError("native readiness attestation is invalid")
     return document
+
+
+def managed_profile_requires_live_readiness(home: pathlib.Path | None = None) -> bool:
+    """Remember managed enrollment even when a later restart loses its flag.
+
+    Older managed profiles may predate the marker, so a managed readiness file
+    is also sticky evidence. Invalid marker objects fail closed.
+    """
+    root = home or pathlib.Path(os.environ.get("HERMES_HOME", ""))
+    marker = root / MANAGED_PROFILE_MARKER_FILENAME
+    try:
+        if marker.is_symlink() or marker.exists():
+            return True
+    except OSError:
+        return True
+    try:
+        return load_runtime_attestation(root).get("managed_cloud") is True
+    except RuntimeError:
+        return False
 
 
 class NativeControl:
@@ -165,6 +200,50 @@ class NativeControl:
                 return 502, {"error": "native response was not JSON"}
             return response.code, parsed
 
+    def _managed_readiness_is_live(self, attestation: dict[str, Any]) -> bool:
+        """Bind the dashboard's file to the currently serving gateway process."""
+        home = pathlib.Path(os.environ.get("HERMES_HOME", ""))
+        path = home / RUNTIME_READINESS_FILENAME
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            request = urllib.request.Request(
+                self.base_url + "/health",
+                method="GET",
+                headers={
+                    "Authorization": "Bearer " + self.api_key,
+                    "Accept": "application/json",
+                    "Connection": "close",
+                },
+            )
+            with self.opener.open(request, timeout=5) as response:
+                response.read(MAX_BODY_BYTES + 1)
+                return (
+                    response.code == 200
+                    and response.headers.get("X-Hermes-Enterprise-Boot") == attestation.get("boot_id")
+                    and response.headers.get("X-Hermes-Enterprise-Readiness-SHA256") == digest
+                )
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+            return False
+
+    def _managed_spend_is_live(self) -> bool:
+        if not managed_profile_requires_live_readiness():
+            return True
+        try:
+            attestation = load_runtime_attestation()
+        except RuntimeError:
+            return False
+        return (
+            attestation.get("managed_cloud") is True
+            and self._managed_readiness_is_live(attestation)
+        )
+
+    @staticmethod
+    def _readiness_unavailable():
+        return 503, {
+            "error": "native readiness attestation is not live",
+            "code": "native_readiness_unavailable",
+        }
+
     def dispatch(self, payload: dict[str, Any]):
         operation = payload.get("operation")
         if operation == "readiness":
@@ -175,6 +254,8 @@ class NativeControl:
                     "error": "native readiness attestation is unavailable",
                     "code": "native_readiness_unavailable",
                 }
+            if attestation.get("managed_cloud") is True and not self._managed_readiness_is_live(attestation):
+                return self._readiness_unavailable()
             agentcash_home = os.environ.get("AGENTCASH_HOME", "").strip()
             wallet_path = pathlib.Path(agentcash_home) / ".agentcash" / "wallet.json" if agentcash_home else None
             return 200, {
@@ -198,6 +279,8 @@ class NativeControl:
             body = payload.get("body")
             if not isinstance(key, str) or not VISIBLE_ASCII.fullmatch(key) or not isinstance(body, dict):
                 return 400, {"error": "invalid submit envelope"}
+            if not self._managed_spend_is_live():
+                return self._readiness_unavailable()
             return self._request("POST", "/v1/runs", body, {"Idempotency-Key": key})
         if operation == "status":
             run_id = self.require_run_id(payload.get("run_id"))
@@ -210,6 +293,8 @@ class NativeControl:
             text = payload.get("input")
             if not isinstance(text, str) or not text.strip() or len(text) > 32768:
                 return 400, {"error": "invalid steer input"}
+            if not self._managed_spend_is_live():
+                return self._readiness_unavailable()
             return self._request("POST", "/v1/runs/" + run_id + "/steer", {"input": text})
         return 400, {"error": "unsupported enterprise control operation"}
 

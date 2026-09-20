@@ -10,6 +10,12 @@ import start
 
 
 class ManagedAgentConfigTests(unittest.TestCase):
+    def test_mcp_platform_selectors_use_server_aliases(self):
+        self.assertEqual(
+            start.mcp_platform_selectors({"zeta": {}, "agentcash": {}}),
+            ["agentcash", "zeta"],
+        )
+
     def test_provider_retries_return_to_enterprise_recovery_instead_of_sleeping_in_process(self):
         config = start.managed_agent_config({
             "enterprise_bridge": {},

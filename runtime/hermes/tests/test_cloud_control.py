@@ -82,6 +82,40 @@ class CloudControlTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertEqual(body["code"], "native_readiness_unavailable")
 
+    def test_managed_readiness_requires_the_matching_live_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, cloud.RUNTIME_READINESS_FILENAME).write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+                "plugin": {
+                    "name": "enterprise_bridge", "version": "1.7.0",
+                    "revision": "c" * 40, "artifact_digest": "sha256:" + "d" * 64,
+                },
+                "workspace_id": "workspace",
+                "agent_id": "agent",
+                "enterprise_url": "https://enterprise.example",
+                "skills": [{
+                    "name": "enterprise_bridge:partner-invoice-review",
+                    "version": "1.0.1",
+                    "artifact_digest": "sha256:" + "a" * 64,
+                    "content_digest": "sha256:" + "a" * 64,
+                }],
+                "tools": ["get_partner_handoff_result", "skill_view"],
+                "agentcash_enabled": False,
+                "native_cron_disabled": True,
+                "managed_cloud": True,
+                "boot_id": "b" * 32,
+            }))
+            control = self.control()
+            with patch.dict(cloud.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(control, "_managed_readiness_is_live", return_value=False):
+                status, body = control.dispatch({"operation": "readiness"})
+                self.assertEqual(status, 503)
+                self.assertEqual(body["code"], "native_readiness_unavailable")
+            with patch.dict(cloud.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(control, "_managed_readiness_is_live", return_value=True):
+                self.assertEqual(control.dispatch({"operation": "readiness"})[0], 200)
+
     def test_post_events_envelope_opens_the_native_stream(self):
         class Request:
             headers = {}
@@ -112,6 +146,41 @@ class CloudControlTests(unittest.TestCase):
         request.assert_called_once_with(
             "POST", "/v1/runs", {"input": "Review."}, {"Idempotency-Key": "enterprise-turn-1"},
         )
+
+    def test_marked_managed_profile_blocks_spend_without_live_boot_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, cloud.MANAGED_PROFILE_MARKER_FILENAME).write_text(json.dumps({
+                "schema_version": 1, "managed_cloud": True,
+            }))
+            control = self.control()
+            with patch.dict(cloud.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(control, "_request") as request:
+                status, body = control.dispatch({
+                    "operation": "submit",
+                    "idempotency_key": "enterprise-turn-1",
+                    "body": {"input": "Review."},
+                })
+        self.assertEqual(status, 503)
+        self.assertEqual(body["code"], "native_readiness_unavailable")
+        request.assert_not_called()
+
+    def test_marked_managed_profile_allows_spend_only_with_live_boot_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pathlib.Path(directory, cloud.MANAGED_PROFILE_MARKER_FILENAME).write_text("managed\n")
+            control = self.control()
+            with patch.dict(cloud.os.environ, {"HERMES_HOME": directory}), \
+                    patch.object(cloud, "load_runtime_attestation", return_value={
+                        "managed_cloud": True, "boot_id": "b" * 32,
+                    }), \
+                    patch.object(control, "_managed_readiness_is_live", return_value=True), \
+                    patch.object(control, "_request", return_value=(202, {"run_id": RUN_ID})) as request:
+                status, _body = control.dispatch({
+                    "operation": "submit",
+                    "idempotency_key": "enterprise-turn-1",
+                    "body": {"input": "Review."},
+                })
+        self.assertEqual(status, 202)
+        request.assert_called_once()
 
     def test_run_operations_validate_the_native_identifier(self):
         control = self.control()
