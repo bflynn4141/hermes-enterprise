@@ -5264,6 +5264,10 @@ mode: its native request contains no tools or skills, the model proxy strips
 runtime-supplied tool definitions, Enterprise tool dispatch rejects fresh calls,
 and direct paid-call leases are refused before reservation. Automatic recovery
 requires a managed token-digest runtime; legacy HMAC profiles remain manual-only.
+The current fixed/free-route Iris binding is legacy HMAC, so this change does
+not claim automatic continuation there: users retain explicit manual Retry until
+that profile is migrated to a managed token-digest identity. Dynamically managed
+token-digest profiles receive the bounded automatic path described above.
 
 Catalog capabilities honor per-model reasoning efforts; DeepSeek V4.1 offers
 `low`, `high`, `max`, with provider default `high`. Automation follows the
