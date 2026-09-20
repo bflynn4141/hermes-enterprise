@@ -10,7 +10,7 @@
 //     clearing it would sign every open tab out over a blip;
 //   * a terminal one is a 401 and the session is over.
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { seedWorkspace, withClient, type Fixture } from './helpers.js';
 import { asUser, call, clearFakeWorkOS, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
 import { FakeWorkOS, FakeWorkOSError, seal, signAccessToken } from '../stubs/fake-workos.js';
@@ -41,6 +41,23 @@ async function beginLogin(
   expect(state).toBeTruthy();
   expect(setCookie).toContain(AUTH_TRANSACTION_COOKIE);
   return { state: state!, cookie: setCookie!.split(';', 1)[0]! };
+}
+
+async function expectExpiredSignIn(response: Response): Promise<void> {
+  expect(response.status).toBe(400);
+  expect(response.headers.get('content-type')).toContain('text/html');
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
+  expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(response.headers.get('x-hermes-error-reason')).toBe('invalid_state');
+  expect(response.headers.get('set-cookie')).toContain(`${AUTH_TRANSACTION_COOKIE}=;`);
+  const body = await response.text();
+  expect(body).toContain('Your sign-in expired');
+  expect(body).toContain('href="/auth/login"');
+  expect(body).not.toContain('http-equiv="refresh"');
+  expect(body).not.toContain('return_to=');
+  expect(body).not.toContain('state=');
+  expect(body).not.toContain('code=unused');
 }
 
 /** A workspace that WorkOS knows about: the directory row is the link. */
@@ -172,10 +189,13 @@ describe('GET /auth/callback', () => {
     expect(invitation?.status).toBe('accepted');
   });
 
-  it('rejects a missing or mismatched state before exchanging the code', async () => {
+  it('offers a fresh sign-in for missing or tampered state without exchanging the code', async () => {
     const { env } = workosEnv();
     const transaction = await beginLogin(env, '/inbox');
 
+    const missingState = await call(env, '/auth/callback?code=unused', {
+      headers: { cookie: transaction.cookie },
+    });
     const missingCookie = await call(
       env,
       `/auth/callback?code=unused&state=${encodeURIComponent(transaction.state)}`,
@@ -191,12 +211,31 @@ describe('GET /auth/callback', () => {
       { headers: { cookie: `${name}=${tamperedValue}` } },
     );
 
-    expect(missingCookie.status).toBe(400);
-    expect(await missingCookie.json()).toMatchObject({ reason: 'invalid_state' });
-    expect(wrongState.status).toBe(400);
-    expect(await wrongState.json()).toMatchObject({ reason: 'invalid_state' });
-    expect(tampered.status).toBe(400);
-    expect(await tampered.json()).toMatchObject({ reason: 'invalid_state' });
+    await expectExpiredSignIn(missingState);
+    await expectExpiredSignIn(missingCookie);
+    await expectExpiredSignIn(wrongState);
+    await expectExpiredSignIn(tampered);
+    expect(fake.calls.filter((entry) => entry.method === 'authenticateWithCode')).toHaveLength(0);
+  });
+
+  it('offers a fresh sign-in when MFA outlives the signed transaction', async () => {
+    const { env } = workosEnv();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-19T12:00:00Z'));
+      const transaction = await beginLogin(env, '/inbox');
+      vi.setSystemTime(new Date('2026-09-19T12:10:01Z'));
+
+      const response = await call(
+        env,
+        `/auth/callback?code=unused&state=${encodeURIComponent(transaction.state)}`,
+        { headers: { cookie: transaction.cookie } },
+      );
+
+      await expectExpiredSignIn(response);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(fake.calls.filter((entry) => entry.method === 'authenticateWithCode')).toHaveLength(0);
   });
 
