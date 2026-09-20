@@ -105,14 +105,19 @@ Source policy and quota references were checked on 2026-09-18:
    Cloudflare Cron performs the same idempotent handoff automatically. The
    agent's auto-loaded Partner Program skill guides the review. It can call
    `list_partner_candidates` and `get_partner_candidate`; both
-   are read-only and restricted to its own candidates.
+   are read-only and restricted to its own candidates. Candidate detail exposes
+   the exact active draft policy, reviewer audience and sender only when that
+   server-owned context is ready; Iris must not infer any of those values.
 8. Before handing work to Iris, the Worker installs an agent-specific
    communication policy reviewed by the responsible member. Iris may call
    `propose_approval` only under the deployment's draft or approved-send mode,
-   with the verified sender, and
-   contact fields that exactly match stored evidence. The recipient address is
-   null unless the professional email passed verification. Discovered prospects
-   are never represented as applicants.
+   with the verified sender and at least one source artifact linked to the
+   selected candidate. Contact enrichment is optional for draft-only review:
+   when no stored enrichment exists, the recipient address is null and the
+   phone/social lists are empty. When enrichment exists, every contact field
+   and the cited enrichment id must exactly match stored evidence. Approved-send
+   mode still requires a verified professional email. Discovered prospects are
+   never represented as applicants.
 9. An approved send becomes an exact outbox row bound to the request,
    authorization revision and hash, and recipient index. A connected Gmail
    account must match the approved sender address. Suppressions are checked

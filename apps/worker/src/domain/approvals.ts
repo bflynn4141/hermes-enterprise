@@ -897,15 +897,15 @@ async function validatePartnerOutreachContact(
     throw new RouteError('partner outreach must name the stored candidate', 'invalid_partner_outreach_contact', 422);
   }
   const result = await tx.query<{
-    enrichment_id: string; display_name: string; contact_data: {
+    enrichment_id: string | null; display_name: string; contact_data: {
       phones?: { number: string; type?: string | null }[];
       social_profiles?: { network: string; url: string }[];
-    }; preferred_email: string | null; draft_eligible: boolean;
+    } | null; preferred_email: string | null; draft_eligible: boolean | null;
   }>(
     `SELECT e.id AS enrichment_id, c.display_name, e.contact_data,
             e.preferred_email, e.draft_eligible
        FROM partner_candidates c
-       JOIN LATERAL (
+       LEFT JOIN LATERAL (
          SELECT id, contact_data, preferred_email, draft_eligible
            FROM partner_contact_enrichments
           WHERE workspace_id=c.workspace_id AND agent_id=c.agent_id AND candidate_id=c.id
@@ -916,15 +916,36 @@ async function validatePartnerOutreachContact(
   );
   const stored = result.rows[0];
   const expectedAddress = stored?.draft_eligible ? stored.preferred_email : null;
-  const expectedPhones = stored?.contact_data.phones ?? [];
-  const expectedProfiles = stored?.contact_data.social_profiles ?? [];
+  const expectedPhones = stored?.contact_data?.phones ?? [];
+  const expectedProfiles = stored?.contact_data?.social_profiles ?? [];
+  const citedSourceIds = proposal.evidence.flatMap((item) =>
+    ['source', 'artifact'].includes(item.kind)
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(item.id)
+      ? [item.id]
+      : [],
+  );
+  const linkedSource = stored && citedSourceIds.length > 0
+    ? await tx.query(
+        `SELECT 1
+           FROM partner_screening_run_candidates rc
+           JOIN partner_source_artifacts a
+             ON a.workspace_id=rc.workspace_id AND a.run_id=rc.run_id
+            AND a.id=ANY(rc.artifact_ids)
+          WHERE rc.workspace_id=$1 AND rc.candidate_id=$2
+            AND a.id=ANY($3::uuid[])
+          LIMIT 1`,
+        [workspaceId, recipient.candidate_id, citedSourceIds],
+      )
+    : null;
+  const contactEvidenceMatches = !stored?.enrichment_id
+    || proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact');
   if (!stored || recipient.name !== stored.display_name || recipient.address !== expectedAddress
       || canonicalJson(recipient.phone_numbers ?? []) !== canonicalJson(expectedPhones)
       || canonicalJson(recipient.social_profiles ?? []) !== canonicalJson(expectedProfiles)
-      || !proposal.evidence.some((item) => item.id === stored.enrichment_id && item.kind === 'artifact')) {
+      || linkedSource?.rowCount !== 1 || !contactEvidenceMatches) {
     throw new RouteError('partner outreach contact fields must match stored verified evidence', 'invalid_partner_outreach_contact', 422);
   }
-  if (sendPolicy && !recipient.address) {
+  if (sendPolicy && (!stored.enrichment_id || !stored.draft_eligible || !recipient.address)) {
     throw new RouteError('approved partner email requires a verified professional address', 'invalid_partner_outreach_contact', 422);
   }
   await idempotencyLock(tx, workspaceId, `partner-engagement:${agentId}:${recipient.candidate_id}`);
