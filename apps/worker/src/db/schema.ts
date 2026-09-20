@@ -419,6 +419,63 @@ export const librarySourceTeamGrants = pgTable(
   (t) => [primaryKey({ columns: [t.workspaceId, t.sourceId, t.teamId] })],
 );
 
+export const sharedIntelligenceProposals = pgTable(
+  'shared_intelligence_proposals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    createdByUserId: uuid('created_by_user_id').notNull(),
+    requesterAgentId: uuid('requester_agent_id').notNull(),
+    title: text('title').notNull(),
+    goal: text('goal').notNull(),
+    lesson: text('lesson').notNull(),
+    rationale: text('rationale').notNull(),
+    targetTeamIds: uuid('target_team_ids').array().notNull(),
+    targetTeamLabels: text('target_team_labels').array().notNull(),
+    dedupeSha256: text('dedupe_sha256').notNull(),
+    assessment: jsonb('assessment').notNull(),
+    status: text('status').notNull(),
+    approvalRequestId: uuid('approval_request_id'),
+    approvalRevision: integer('approval_revision'),
+    approvalHash: text('approval_hash'),
+    librarySourceId: uuid('library_source_id'),
+    libraryVersionId: uuid('library_version_id'),
+    createdAt: now('created_at'),
+    publishedAt: ts('published_at'),
+    revokedAt: ts('revoked_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [index('shared_intelligence_creator_idx').on(t.workspaceId, t.createdByUserId, t.createdAt)],
+);
+
+export const sharedIntelligenceEvidence = pgTable(
+  'shared_intelligence_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    proposalId: uuid('proposal_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    sourceSessionId: uuid('source_session_id'),
+    sourceMessageId: uuid('source_message_id').notNull(),
+    sourceMessageRole: text('source_message_role').notNull(),
+    sessionTitle: text('session_title').notNull(),
+    runEndedAt: ts('run_ended_at').notNull(),
+    sourceSha256: text('source_sha256').notNull(),
+    approvedExcerpt: text('approved_excerpt').notNull(),
+    excerptSha256: text('excerpt_sha256').notNull(),
+    provenance: text('provenance').notNull(),
+    toolNames: text('tool_names').array().notNull().default([]),
+    stepLabels: text('step_labels').array().notNull().default([]),
+    outcome: text('outcome').notNull(),
+    revokedAt: ts('revoked_at'),
+    createdAt: now('created_at'),
+  },
+  (t) => [
+    unique('shared_intelligence_evidence_source_key').on(t.proposalId, t.sourceSha256),
+    unique('shared_intelligence_evidence_run_key').on(t.proposalId, t.sourceRunId),
+  ],
+);
+
 export const instructionVersions = pgTable('instruction_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -2028,6 +2085,8 @@ export const ALL_TABLES = {
   library_sources: librarySources,
   library_source_versions: librarySourceVersions,
   library_source_team_grants: librarySourceTeamGrants,
+  shared_intelligence_proposals: sharedIntelligenceProposals,
+  shared_intelligence_evidence: sharedIntelligenceEvidence,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,
   agent_skills: agentSkills,

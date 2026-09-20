@@ -524,6 +524,14 @@ function effectFor(proposal: ApprovalProposal, bindings: readonly ApprovalResour
   if (proposal.approval_type === 'communication' && proposal.details.channel === 'email') {
     return { kind, status: 'waiting', reason: 'Approval queues this exact revision for the configured sender; it waits safely if that mailbox is not connected.' };
   }
+  if (proposal.approval_type === 'shared_learning') {
+    const publication = bindings.find((binding) => binding.kind === 'skill' && binding.id === proposal.details.skill_id);
+    const changed = bindings.find((binding) => !binding.immutable);
+    if (publication?.executor_available && !changed) {
+      return { kind, status: 'waiting', reason: 'Approval publishes this exact reviewed version to the selected Library audiences.' };
+    }
+    return { kind, status: 'unavailable', reason: changed?.reason ?? NO_EXECUTOR };
+  }
   const unbound = bindings.find((binding) => !binding.immutable);
   return { kind, status: 'unavailable', reason: unbound?.reason ?? NO_EXECUTOR };
 }
@@ -1114,6 +1122,19 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     );
     if (materialized) return;
   }
+  if (payload.approval_type === 'shared_learning'
+      && payload.details.skill_id.startsWith('shared-intelligence:')) {
+    const materialized = await (await import('../shared-intelligence/service.js')).materializeSharedIntelligencePublication(
+      work,
+      {
+        requestId: row.request_id,
+        authorizationRevision: row.authorization_revision,
+        authorizationHash: row.authorization_hash,
+        payload,
+      },
+    );
+    if (materialized) return;
+  }
   const queuedEmail = await queueApprovedEmail(work.tx, {
     workspaceId: row.workspace_id,
     requestId: row.request_id,
@@ -1205,8 +1226,10 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
   const payload = approvalPayloadSchema.parse(row.payload);
   const partnerEngagementChange = payload.approval_type === 'record_change'
     && payload.details.system_id === 'enterprise-partner-records';
-  if (partnerEngagementChange && input.decision === 'request_changes') {
-    throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  const sharedIntelligenceChange = payload.approval_type === 'shared_learning'
+    && payload.details.skill_id.startsWith('shared-intelligence:');
+  if ((partnerEngagementChange || sharedIntelligenceChange) && input.decision === 'request_changes') {
+    throw new RouteError('Submit changed content as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
   }
   const members = await activeMembers(context.tx, context.workspaceId);
   const reviewer = members.find((member) => member.user_id === context.userId);
@@ -1250,6 +1273,13 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
         [context.workspaceId, requestId, row.authorization_revision, row.authorization_hash],
       );
     }
+    if (sharedIntelligenceChange) {
+      await context.tx.query(
+        `UPDATE shared_intelligence_proposals SET status='declined'
+          WHERE workspace_id=$1 AND approval_request_id=$2 AND approval_revision=$3 AND approval_hash=$4`,
+        [context.workspaceId, requestId, row.authorization_revision, row.authorization_hash],
+      );
+    }
   } else {
     const refreshedVotes = await votesFor(context.tx, row);
     const refreshed = progress(row, payload, members, refreshedVotes, assignments);
@@ -1272,6 +1302,10 @@ export async function reviseApproval(context: ApprovalHumanContext, requestId: s
   if (oldPayload.approval_type === 'record_change'
       && oldPayload.details.system_id === 'enterprise-partner-records') {
     throw new RouteError('Submit changed engagement terms as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
+  }
+  if (oldPayload.approval_type === 'shared_learning'
+      && oldPayload.details.skill_id.startsWith('shared-intelligence:')) {
+    throw new RouteError('Submit changed content as a fresh exact-source proposal.', 'approval_revision_forbidden', 409);
   }
   if (oldPayload.approval_type !== input.proposal.approval_type) throw new RouteError('a revision cannot change approval type', 'approval_type_changed', 422);
   const members = await activeMembers(context.tx, context.workspaceId);
