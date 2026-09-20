@@ -218,7 +218,7 @@ async function seedBoundEffect(
     );
     await c.query(
       `INSERT INTO request_audiences (workspace_id,request_id,user_id,purpose)
-       VALUES ($1,$2,$3,'external_effect_reviewer')`,
+       VALUES ($1,$2,$3,'reviewer')`,
       [fx.workspaceId, view.request_id, fx.adminId],
     );
     const decision = await c.query<{ id: string }>(
@@ -323,8 +323,20 @@ describe('inbound email and external evidence database boundaries', () => {
     const local = await seedSnapshot(fx);
     const foreignFx = await seedWorkspace();
     const foreign = await seedSnapshot(foreignFx);
+    const foreignUnboundVersionId = randomUUID();
     const otherSourceId = randomUUID();
     const otherVersionId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, foreignFx.workspaceId, foreignFx.adminId);
+      await c.query(
+        `INSERT INTO library_source_versions
+           (id,workspace_id,source_id,version,version_label,sha256,content_markdown,created_by)
+         VALUES ($1,$2,$3,2,'Foreign v2',$4,'# Foreign unbound version',$5)`,
+        [foreignUnboundVersionId, foreignFx.workspaceId, foreign.sourceId, 'f'.repeat(64), foreignFx.adminId],
+      );
+      await c.query('COMMIT');
+    });
     await withClient('owner', async (c) => {
       await c.query('BEGIN');
       await setTenant(c, fx.workspaceId, fx.adminId);
@@ -364,7 +376,7 @@ describe('inbound email and external evidence database boundaries', () => {
            (workspace_id,account_id,team_id,library_source_id,library_version_id,provider,
             provider_thread_id,title,message_count,normalized_sha256,normalized_thread,imported_by)
          VALUES ($1,$2,$3,$4,$5,'gmail','foreign-version','Foreign version',1,$6,'{}'::jsonb,$7)`,
-        [fx.workspaceId, local.accountId, local.teamId, foreign.sourceId, foreign.versionId,
+        [fx.workspaceId, local.accountId, local.teamId, foreign.sourceId, foreignUnboundVersionId,
           'd'.repeat(64), fx.adminId],
       )).rejects.toMatchObject({ code: '23503' });
       await c.query('ROLLBACK');
@@ -422,8 +434,8 @@ describe('inbound email and external evidence database boundaries', () => {
       }
       await c.query('COMMIT');
     });
-    const teamAResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/library/sources?agent_id=${fx.agentId}`);
-    const teamBResponse = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/library/sources?agent_id=${agentB}`);
+    const teamAResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/library-sources?agent_id=${fx.agentId}`);
+    const teamBResponse = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/library-sources?agent_id=${agentB}`);
     expect(teamAResponse.status).toBe(200);
     expect(teamBResponse.status).toBe(200);
     const teamABody = await teamAResponse.json() as { items: Array<{ id: string; version: number; content_markdown: string }> };
@@ -520,7 +532,7 @@ describe('inbound email and external evidence database boundaries', () => {
       await c.query(`DELETE FROM request_audiences WHERE workspace_id=$1 AND request_id=$2`, [fx.workspaceId, view.request_id]);
       await c.query(
         `INSERT INTO request_audiences (workspace_id,request_id,user_id,purpose)
-         VALUES ($1,$2,$3,'approval_reviewer')`,
+         VALUES ($1,$2,$3,'reviewer')`,
         [fx.workspaceId, view.request_id, fx.memberId],
       );
       await c.query('COMMIT');
