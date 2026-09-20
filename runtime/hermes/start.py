@@ -37,6 +37,140 @@ AGENTCASH_TOOLS = ("fetch",)
 CONTRACT = json.loads((ROOT / "contract.json").read_text())
 if CONTRACT.get("source_revision") != REVISION:
     raise RuntimeError("runtime/hermes/contract.json must match the pinned official source revision.")
+TERMINAL_ERROR_CODES = {
+    "provider_auth": ("auth", False, "provider"),
+    "provider_quota": ("quota", False, "provider"),
+    "provider_rate_limited": ("rate_limit", True, "provider"),
+    "request_rejected": ("rejected", False, "request"),
+    "provider_unavailable": ("unavailable", True, "provider"),
+    "runtime_interrupted": ("interrupted", True, "runtime"),
+    "runtime_unknown": ("unknown", True, "runtime"),
+}
+TERMINAL_ERROR_MESSAGES = {
+    "provider_auth": "The selected model connection needs attention.",
+    "provider_quota": "The selected model account has no available quota.",
+    "provider_rate_limited": "The selected model is rate limited.",
+    "request_rejected": "The selected model rejected this request.",
+    "provider_unavailable": "The model provider is temporarily unavailable.",
+    "runtime_interrupted": "Hermes restarted before this run settled.",
+    "runtime_unknown": "Hermes could not finish this run.",
+}
+ENTERPRISE_TERMINAL_PREFIX = "enterprise-terminal:"
+NATIVE_FAILURE_REASON_CODES = {
+    "auth": "provider_auth",
+    "auth_permanent": "provider_auth",
+    "billing": "provider_quota",
+    "rate_limit": "provider_rate_limited",
+    "upstream_rate_limit": "provider_rate_limited",
+    "overloaded": "provider_unavailable",
+    "server_error": "provider_unavailable",
+    "timeout": "provider_unavailable",
+    "ssl_cert_verification": "provider_unavailable",
+    "context_overflow": "request_rejected",
+    "payload_too_large": "request_rejected",
+    "image_too_large": "request_rejected",
+    "image_corrupt": "request_rejected",
+    "model_not_found": "request_rejected",
+    "provider_policy_blocked": "request_rejected",
+    "content_policy_blocked": "request_rejected",
+    "format_error": "request_rejected",
+    "invalid_encrypted_content": "request_rejected",
+    "multimodal_tool_content_unsupported": "request_rejected",
+    "reasoning_mandatory": "request_rejected",
+    "thinking_signature": "request_rejected",
+    "long_context_tier": "request_rejected",
+    "oauth_long_context_beta_forbidden": "request_rejected",
+    "llama_cpp_grammar_pattern": "request_rejected",
+    "unknown": "runtime_unknown",
+}
+
+
+def _matches(value, patterns):
+    return any(re.search(pattern, value) for pattern in patterns)
+
+
+def terminal_error(error=None, status="failed"):
+    """Project provider-controlled text into the versioned safe wire contract."""
+    signal = str(error or "").lower()[:2000]
+    sentinel = re.fullmatch(re.escape(ENTERPRISE_TERMINAL_PREFIX) + r"([a-z_]+)", signal)
+    if sentinel and sentinel.group(1) in TERMINAL_ERROR_CODES:
+        code = sentinel.group(1)
+    elif status == "interrupted" or _matches(signal, (
+            r"gateway restarted", r"runtime_run_inactive", r"run (?:was )?interrupted")):
+        code = "runtime_interrupted"
+    elif _matches(signal, (
+            r"provider authentication failed", r"\b(?:http\s*)?401\b", r"\bunauthori[sz]ed\b",
+            r"\binvalid (?:api )?key\b", r"\bapi key (?:is )?(?:invalid|expired|missing)\b",
+            r"\boauth\b.*\bexpired\b", r"\b(?:access |auth )?token\b.*\bexpired\b",
+            r"\bcredentials?\b.*\b(?:invalid|expired|missing)\b")):
+        code = "provider_auth"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?402\b", r"\binsufficient (?:credits?|balance|funds)\b",
+            r"\b(?:credits?|balance) exhausted\b", r"\bquota (?:exceeded|exhausted)\b",
+            r"\bbilling (?:limit|disabled|required)\b")):
+        code = "provider_quota"
+    elif _matches(signal, (r"\b(?:http\s*)?429\b", r"\brate[ -]?limit(?:ed|ing)?\b", r"\btoo many requests\b")):
+        code = "provider_rate_limited"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?(?:400|404|405|413|415|422)\b", r"\bbad request\b",
+            r"\binvalid request\b", r"\bcontext (?:length|window)\b", r"\bmaximum context\b",
+            r"\bmodel (?:not found|is not supported|unsupported)\b", r"\bunsupported model\b")):
+        code = "request_rejected"
+    elif _matches(signal, (
+            r"\b(?:http\s*)?(?:500|502|503|504)\b", r"\binternal server error\b",
+            r"\btemporar(?:y|ily) unavailable\b", r"\bservice unavailable\b", r"\boverloaded\b",
+            r"\btime(?:d)? out\b", r"\btimeout\b", r"\bconnection (?:reset|closed|failed|error)\b",
+            r"\bnetwork (?:error|failure)\b")):
+        code = "provider_unavailable"
+    else:
+        code = "runtime_unknown"
+    category, retryable, source = TERMINAL_ERROR_CODES[code]
+    return {
+        "schema_version": CONTRACT["terminal_error_schema_version"],
+        "code": code,
+        "category": category,
+        "retryable": retryable,
+        "source": source,
+    }
+
+
+def governed_terminal_fields(status, fields):
+    """Replace native error prose before status persistence or SSE emission."""
+    if status not in {"failed", "interrupted"}:
+        return dict(fields)
+    existing = fields.get("terminal_error")
+    existing_code = existing.get("code") if isinstance(existing, dict) else None
+    if existing_code in TERMINAL_ERROR_CODES:
+        category, retryable, source = TERMINAL_ERROR_CODES[existing_code]
+        projected = {
+            "schema_version": CONTRACT["terminal_error_schema_version"],
+            "code": existing_code,
+            "category": category,
+            "retryable": retryable,
+            "source": source,
+        }
+    else:
+        projected = terminal_error(fields.get("error"), status)
+    return {
+        **fields,
+        "error": TERMINAL_ERROR_MESSAGES[projected["code"]],
+        "terminal_error": projected,
+    }
+
+
+def runtime_contract():
+    ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
+    if ring not in CONTRACT["supported_release_rings"]:
+        raise RuntimeError("HERMES_ENTERPRISE_RELEASE_RING must be canary or stable.")
+    return {
+        "schema_version": CONTRACT["contract_version"],
+        "source_revision": CONTRACT["source_revision"],
+        "release_ring": ring,
+        "terminal_errors": {
+            "supported": True,
+            "schema_version": CONTRACT["terminal_error_schema_version"],
+        },
+    }
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

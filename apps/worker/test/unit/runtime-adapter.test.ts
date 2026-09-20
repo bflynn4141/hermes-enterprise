@@ -1006,11 +1006,19 @@ describe('official Hermes enterprise projection', () => {
     class ConcurrentSubmitClient extends FakeHermesClient {
       override capabilities() {
         this.capabilityReads += 1;
+        const caps = {
+          durableIdempotency: true as const,
+          retentionSeconds: 86_400,
+          contractVersion: 1 as const,
+          terminalErrorSchemaVersion: 1 as const,
+          sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+          releaseRing: 'stable' as const,
+        };
         if (this.capabilityReads !== 1) {
-          return Promise.resolve({ durableIdempotency: true as const, retentionSeconds: 86_400 });
+          return Promise.resolve(caps);
         }
-        return new Promise<{ durableIdempotency: true; retentionSeconds: number }>((resolve) => {
-          releaseReadiness = () => resolve({ durableIdempotency: true, retentionSeconds: 86_400 });
+        return new Promise<typeof caps>((resolve) => {
+          releaseReadiness = () => resolve(caps);
         });
       }
     }
