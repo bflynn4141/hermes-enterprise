@@ -99,7 +99,7 @@ export interface Adapter {
   /** Answer the question an `ask_for_context` step parked the run on. */
   answerContext(sessionId: string, key: string, value: string): Promise<void>;
   /** Declare, put the bytes, complete. Returns the ready row. */
-  upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string }): Promise<Attachment>;
+  upload(file: File, opts?: { kind?: 'attachment' | 'agent_file'; sessionId?: string; agentId?: string }): Promise<Attachment>;
   decide(requestId: string, decision: 'approve' | 'decline', note?: string, reviewed?: Pick<RequestEntity, 'id' | 'kind' | 'version' | 'payload'>): Promise<DecisionResult | 'reauth_required'>;
   applyCommand(sessionId: string, command: BlockCommand): void;
   activateSession(sessionId: string): Promise<void>;
@@ -785,7 +785,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
     turnIds.set(sessionId, turnId);
     const attachments = state().capabilities.turnAttachments
-      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: 'file' as const, status: 'ready' as const }))
+      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: a.kind ?? 'file' as const, status: 'ready' as const, ...(a.sha256 ? { sha256: a.sha256 } : {}) }))
       : [];
     // Live finals lack a session sequence and use MAX_SAFE_INTEGER as an
     // ordering sentinel. Never propagate that sentinel into another turn.
@@ -884,6 +884,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
       }
       if (projected) dispatch({ type: 'turn/rejected', sessionId: id, clientTurnId: turnId });
       dispatch({ type: 'session/draft', id, text: trimmed });
+      // A rejected turn must not silently become a source-free retry.
+      for (const source of attachments) {
+        if (source.kind === 'source' && source.sha256) dispatch({ type: 'session/attach', id, attachment: { id: source.id, label: source.label, kind: 'source', sha256: source.sha256, icon: 'context' } });
+      }
       // And the name goes back, unless a person has renamed it in between: a
       // manual rename wins permanently (decision C34), and that is still true
       // when the thing being undone is the client's own guess.
@@ -1170,12 +1174,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * is the server telling the client which, so the client never parses a URL to
    * find out.
    */
-  async function upload(file: File, opts: { kind?: 'attachment' | 'agent_file'; sessionId?: string } = {}): Promise<Attachment> {
+  async function upload(file: File, opts: { kind?: 'attachment' | 'agent_file'; sessionId?: string; agentId?: string } = {}): Promise<Attachment> {
     const kind = opts.kind ?? 'attachment';
     const declared = await rest.declareUpload(workspaceId, kind, {
       name: file.name,
       size: file.size,
       mime: file.type || 'text/plain',
+      ...(opts.agentId && kind === 'agent_file' ? { agent_id: opts.agentId } : {}),
       ...(opts.sessionId && kind === 'attachment' ? { session_id: opts.sessionId } : {}),
     });
     dispatch({ type: 'entity/upsert', kind: 'attachment', id: declared.attachment.id, version: 1, data: declared.attachment });

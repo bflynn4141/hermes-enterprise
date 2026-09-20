@@ -113,7 +113,8 @@ export function Shell() {
     previous.current = panel;
   }, [panel]);
 
-  const columns = narrow
+  const phone = width <= 600;
+  const columns = phone ? 'minmax(0, 1fr)' : narrow
     ? `${navWidth}px minmax(0, 1fr)`
     : panel === 'open'
       ? `${navWidth}px ${irisWidth}px minmax(0, 1fr)`
@@ -126,7 +127,7 @@ export function Shell() {
       <ConnectionBanner />
       <div
         ref={gridRef}
-        className={`shell ${narrow ? 'is-narrow' : ''} ${compact ? 'is-compact' : ''}`}
+        className={`shell ${phone ? 'is-phone' : ''} ${narrow ? 'is-narrow' : ''} ${compact ? 'is-compact' : ''}`}
         data-iris={panel}
         style={{
           gridTemplateColumns: columns,
@@ -135,7 +136,7 @@ export function Shell() {
           transition: dragging ? 'none' : 'grid-template-columns var(--dur-layout) var(--ease-out)',
         }}
       >
-        <Sidebar />
+        <Sidebar phone={phone} />
         {panel === 'open' && <ChatPane narrow={narrow} active={!narrow || pane === 'chat'} firstRun={firstRun?.conversation} />}
         {railShown && <IrisRail shortcut={TOGGLE_SHORTCUT} />}
         <AppPane narrow={narrow} active={!narrow || pane === 'app'} paneRef={appRef} firstRun={firstRun?.agreement} />

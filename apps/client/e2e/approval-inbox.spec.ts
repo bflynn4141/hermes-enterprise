@@ -108,8 +108,8 @@ test.describe('enterprise approval inbox', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${APPROVALS}&communicationDraft=1`);
-    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-    await page.getByRole('button', { name: /^Inbox/ }).click();
+    // Phone layouts use the workspace selector instead of a collapsible rail.
+    await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('inbox');
     const app = page.getByRole('region', { name: 'Application' });
     await openRequest(app, /Review the partner pilot outreach draft/);
     await app.getByRole('button', { name: 'More approval actions' }).click();

@@ -1,0 +1,22 @@
+.iris-skills-settings { gap: 24px; }
+.iris-skills-heading, .iris-skills-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.iris-skills-heading > div, .iris-skills-row > div { min-width: 0; flex: 1; }
+.iris-skills-heading .meta, .iris-skills-row .meta { margin: 5px 0 0; }
+.iris-skills-instructions { border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(115deg, #211c52, #110c2e); padding: 24px; }
+.iris-skills-copy { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.iris-skills-row { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.iris-skills-row h3 { font-size: 17px; font-weight: 500; margin: 0; }
+.iris-skills-editor { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; animation: iris-skills-reveal 180ms ease-out; }
+.iris-skills-editor textarea { width: 100%; resize: vertical; min-height: 160px; color: var(--body); background: var(--app); border: 1px solid var(--line); border-radius: 9px; padding: 12px; font: inherit; line-height: 1.5; }
+.iris-skills-editor pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.iris-skills-actions { display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
+.iris-skills-settings button { min-height: 44px; }
+.iris-skills-settings details { margin-top: 12px; }
+.iris-skills-settings summary { cursor: pointer; min-height: 44px; align-content: center; }
+.iris-skills-error { border-left: 3px solid var(--muted); padding-left: 16px; }
+@keyframes iris-skills-reveal { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .iris-skills-editor { animation: none; } }
+@media (max-width: 520px) {
+  .iris-skills-heading, .iris-skills-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .iris-skills-instructions { padding: 18px; }
+}

@@ -15,6 +15,7 @@
 // `SessionHub.requestStop`; if that call is lost the engine still reads the flag
 // from the row at the next step boundary.
 import type { Context } from 'hono';
+import { captureContext } from '../context-snapshot.js';
 import { ACTIVE_RUN_STATUSES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
@@ -294,13 +295,6 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
   const sessionId = pathUuid(c, 'id');
   const input = await jsonBody<{ client_turn_id?: string; text?: string; attachments?: unknown; expected_settings?: unknown }>(c);
   const expectedSettings = parseExpectedSettings(input.expected_settings);
-  if (input.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length > 0)) {
-    throw new RouteError(
-      'Attachments are not supported for agent turns yet. Remove them and try again.',
-      'attachments_unsupported',
-      422,
-    );
-  }
   // Development only, and gated twice: `MODEL_SCRIPTED=1` is itself refused
   // outside `ENVIRONMENT=development`, so a deployed environment cannot be
   // asked for a scripted failure by header. See decision F6.
@@ -458,6 +452,8 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     }
     const run = inserted;
     if (!run) throw new RouteError('the run was not created', 'create_failed', 409);
+    const contextSnapshot = await captureContext(work, c.env, session.agent_id, input.attachments);
+    await work.tx.query('UPDATE runs SET context_snapshot=$2::jsonb WHERE id=$1', [runId, JSON.stringify(contextSnapshot)]);
 
     // The user message, engine turn and draft cleanup are one statement. This
     // keeps their all-or-nothing transaction while removing three Hyperdrive

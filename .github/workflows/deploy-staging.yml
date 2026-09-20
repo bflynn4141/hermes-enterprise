@@ -72,6 +72,12 @@ jobs:
       # schema is compatible with the code currently running, so the window
       # between the two is not a broken window. It is also why a code rollback
       # never needs a reverse migration.
+      - name: Check existing context access (read only)
+        run: pnpm --filter @hermes/worker exec node scripts/context-access-preflight.mjs
+        env:
+          DATABASE_URL_OWNER: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          CONTEXT_PREFLIGHT_WORKSPACE_ID: ${{ vars.CONTEXT_PREFLIGHT_WORKSPACE_ID }}
+
       - name: Apply migrations
         run: pnpm --filter @hermes/worker exec node scripts/migrate.mjs
         env:

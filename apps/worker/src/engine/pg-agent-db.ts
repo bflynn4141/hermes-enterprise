@@ -10,7 +10,7 @@
 // what makes a step that ran twice produce one row. The `ON CONFLICT` targets
 // name the partial indexes from migration 0002 explicitly, because an untargeted
 // `DO NOTHING` would also swallow a genuine primary-key collision.
-import type { ApprovalView, RequestKind } from '@hermes/shared';
+import { agentOperationForTool, type ApprovalView, type RequestKind } from '@hermes/shared';
 import type { Client } from 'pg';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
@@ -327,7 +327,7 @@ export class PgAgentDb implements AgentDb {
   async loadSystemPrompt(runId: string): Promise<string> {
     return this.tx(async (q) => {
       const { rows } = await q<{ body: string | null }>(
-        `SELECT COALESCE(iv.body, a.instructions_active) AS body
+        `SELECT COALESCE(r.instruction_snapshot, iv.body, a.instructions_active) AS body
            FROM runs r
            JOIN sessions s ON s.id = r.session_id
            JOIN agents a ON a.id = COALESCE(r.agent_id, s.agent_id)
@@ -354,6 +354,10 @@ export class PgAgentDb implements AgentDb {
       );
       return rows;
     });
+  }
+
+  async loadContextSnapshot(runId: string): Promise<unknown> {
+    return this.tx(async q => (await q<{ context_snapshot: unknown }>('SELECT context_snapshot FROM runs WHERE id=$1', [runId])).rows[0]?.context_snapshot ?? null);
   }
 
   async resolveCredential(provider: string): Promise<Credential> {
@@ -562,6 +566,35 @@ export class PgAgentDb implements AgentDb {
   // -------------------------------------------------------------------------
   // AgentWrites
   // -------------------------------------------------------------------------
+
+  async operationConsent(input: { runId: string; agentId: string; toolCallId: string; toolName: string; arguments: Record<string, unknown> }): Promise<{ id: string; status: 'pending' | 'approved' | 'denied' } | null> {
+    const operation = agentOperationForTool(input.toolName);
+    if (!operation) return null;
+    return this.tx(async (q) => {
+      // An already parked call stays bound even if someone switches its policy Off.
+      const find = () => q<{ id: string; status: 'pending' | 'approved' | 'denied'; matches: boolean }>(
+        `SELECT id,status,(tool_name=$3 AND arguments=$4::jsonb AND agent_id=$5) AS matches FROM agent_operation_approvals WHERE run_id=$1 AND tool_call_id=$2`,
+        [input.runId,input.toolCallId,input.toolName,JSON.stringify(input.arguments),input.agentId]);
+      const existing = (await find()).rows[0];
+      if (existing) {
+        if (!existing.matches) throw new Error('operation_approval_call_conflict');
+        return existing;
+      }
+      const policy = (await q<{ revision: number; required: boolean }>(`SELECT revision, operations->$2='true'::jsonb AS required FROM agent_operation_policies WHERE agent_id=$1`, [input.agentId,operation.id])).rows[0];
+      if (!policy?.required) return null;
+      await q(`INSERT INTO agent_operation_approvals(workspace_id,agent_id,run_id,tool_call_id,operation_id,tool_name,arguments,policy_revision)
+        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8) ON CONFLICT(run_id,tool_call_id) DO NOTHING`,
+        [this.workspaceId,input.agentId,input.runId,input.toolCallId,operation.id,input.toolName,JSON.stringify(input.arguments),policy.revision]);
+      const created = (await find()).rows[0];
+      if (!created?.matches) throw new Error('operation_approval_call_conflict');
+      return created;
+    });
+  }
+
+  async loadOperationApproval(id: string, runId: string): Promise<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string } | null> {
+    return this.tx(async (q) => (await q<{ toolName: string; toolCallId: string; arguments: Record<string, unknown>; status: string }>(
+      `SELECT tool_name AS "toolName",tool_call_id AS "toolCallId",arguments,status FROM agent_operation_approvals WHERE id=$1 AND run_id=$2`,[id,runId])).rows[0] ?? null);
+  }
 
   async proposeApproval(
     input: ProposeApprovalFromAgentInput,

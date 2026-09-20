@@ -840,7 +840,8 @@ async function waitForAnswer(
   // `agent_context_fields`, and a parked run that wrote no row there left the
   // one screen built for this state with nothing to show (client finding 14).
   // Existing answers are untouched — see `ensureContextField`.
-  if (outcome.waitingKey && run.agentId) {
+  const operationApprovalId = outcome.waitingKey?.startsWith('operation_approval:') ? outcome.waitingKey.slice('operation_approval:'.length) : null;
+  if (outcome.waitingKey && run.agentId && !operationApprovalId) {
     await db.ensureContextField({
       runId: run.id,
       toolCallId: outcome.toolCallId,
@@ -848,8 +849,9 @@ async function waitForAnswer(
       key: outcome.waitingKey,
     });
   }
-  await db.setRunStatus(run.id, 'waiting', { waitingFor: outcome.waitingKey, waitingLabel: outcome.waitingLabel });
-  await emitter.emit([
+  const park = async () => {
+    await db.setRunStatus(run.id, 'waiting', { waitingFor: outcome.waitingKey, waitingLabel: outcome.waitingLabel });
+    await emitter.emit([
     {
       kind: 'run.status',
       payload: {
@@ -860,17 +862,60 @@ async function waitForAnswer(
         waiting_label: outcome.waitingLabel,
       },
     },
-  ]);
+    ]);
+    return { ok: true };
+  };
+  // Replaying a completed answer must not put the run back into waiting while
+  // its already-checkpointed answer/finish steps skip their writes.
+  if (operationApprovalId) await step.do(`operation-approval-park-${outcome.toolCallId}`, TOOL_STEP_CONFIG, park);
+  else await park();
 
   // Ids only in the payload: Workflow instance state is retained 30 days and
   // the erasure inventory asserts it carries no free text. The answer itself
   // is read back from Postgres.
-  await step.waitForEvent<{ run_id: string; key: string }>(CONTEXT_ANSWERED_EVENT, {
-    type: CONTEXT_ANSWERED_EVENT,
-    timeout: CONTEXT_WAIT_TIMEOUT,
-  });
+  if (operationApprovalId) {
+    // Workflow events can be buffered from an earlier question. They are a
+    // wake-up hint, never authority; keep waiting under one durable deadline.
+    const deadline = await step.do(`operation-approval-deadline-${outcome.toolCallId}`, TOOL_STEP_CONFIG,
+      async () => deps.now().getTime() + 30 * 24 * 60 * 60 * 1000);
+    for (let wake = 0; ; wake += 1) {
+      // Journal each observation so replay traverses the same prior wait
+      // steps even if the database has since changed to approved/denied.
+      const observed = await step.do(`operation-approval-observe-${outcome.toolCallId}-${wake}`, TOOL_STEP_CONFIG,
+        async () => ({
+          status: (await db.loadOperationApproval?.(operationApprovalId, run.id))?.status ?? 'pending',
+          remainingMs: deadline - deps.now().getTime(),
+        }));
+      if (observed.status !== 'pending') break;
+      const remaining = observed.remainingMs;
+      if (remaining <= 0) throw new Error('operation_approval_wait_expired');
+      await step.waitForEvent<{ run_id: string; key: string }>(`operation-approval-${outcome.toolCallId}-${wake}`, {
+        type: CONTEXT_ANSWERED_EVENT,
+        timeout: `${Math.max(1, Math.ceil(remaining / 1000))} seconds`,
+      });
+    }
+  } else {
+    await step.waitForEvent<{ run_id: string; key: string }>(CONTEXT_ANSWERED_EVENT, {
+      type: CONTEXT_ANSWERED_EVENT,
+      timeout: CONTEXT_WAIT_TIMEOUT,
+    });
+  }
 
   await step.do(stepNames.answer(turn, outcome.toolCallId), TOOL_STEP_CONFIG, async () => {
+    if (operationApprovalId) {
+      const approval = await db.loadOperationApproval?.(operationApprovalId, run.id);
+      if (!approval || approval.status === 'pending') throw new Error('operation_approval_not_decided');
+      if (await db.stopRequested(run.id)) throw new Error('operation_approval_run_stopped');
+      const tool = allowedTools(run.mode, await db.loadToolNames(run.agentId)).find(entry => entry.name === approval.toolName);
+      const result = approval.status === 'denied'
+        ? { ok: false as const, error: 'The human declined this operation.' }
+        : tool ? await executeTool(tool, approval.arguments, { writes: db, reads: db, run, toolCallId: approval.toolCallId, now: deps.now, mode: run.mode, fetchUrl: deps.fetchUrl })
+        : { ok: false as const, error: 'The operation is no longer available.' };
+      await db.appendTurn({ runId: run.id, turn: turn + 1, seq: ANSWER_SEQ, role: 'tool', toolCallId: `${outcome.toolCallId}-answer`, providerMessage: { role: 'tool', tool_call_id: outcome.toolCallId, content: toolResultEnvelope(approval.toolName, TOOL_SOURCE[approval.toolName] ?? 'engine', result.ok ? result.data : { error: result.error }, deps.now()) } });
+      if (result.ok && result.published) await emitter.publishCommitted(result.published);
+      await db.setRunStatus(run.id, 'working', { waitingFor: null, waitingLabel: null });
+      return { ok: true };
+    }
     const value = await db.readContextField(run.agentId, outcome.waitingKey ?? '');
     await db.appendTurn({
       runId: run.id,

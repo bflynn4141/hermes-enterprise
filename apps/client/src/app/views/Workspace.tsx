@@ -564,7 +564,7 @@ function valueWith(config: Record<string, unknown>, path: string, value: unknown
   return next;
 }
 
-function SkillAssignmentEditor({
+export function SkillAssignmentEditor({
   assignment,
   onCancel,
   onSave,
@@ -583,17 +583,20 @@ function SkillAssignmentEditor({
       className="skill-config-panel"
       onSubmit={(event) => {
         event.preventDefault();
+        if (saving) return;
         setSaving(true);
         setError(null);
-        void onSave({ revision: assignment.revision, state, config, schedule }).catch(() => {
+        void onSave({ revision: assignment.revision, state, config, schedule }).catch((caught: unknown) => {
           setSaving(false);
-          setError('Check the configuration and try again.');
+          setError((caught as { reason?: string }).reason === 'stale_revision'
+            ? 'This skill changed in another window. Your draft is kept. Reload the current configuration before saving again.'
+            : 'Could not save. Your draft is kept. Check the configuration and try again.');
         });
       }}
     >
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <div className="t">How Iris performs this skill</div>
+          <div className="t">How {assignment.agent_name ?? 'this agent'} performs this skill</div>
           <div className="s">Configuration is versioned. Outreach remains a draft until a person approves it.</div>
         </div>
         <label className="skill-config-compact-field">
@@ -648,9 +651,9 @@ function SkillAssignmentEditor({
           <span>Run proactive discovery on this schedule</span>
         </label>
       </div>
-      {error && <div className="danger-note">{error}</div>}
+      {error && <div className="danger-note" role="alert">{error}</div>}
       <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-        <Button quiet onClick={onCancel}>Cancel</Button>
+        <Button quiet disabled={saving} onClick={onCancel}>Cancel</Button>
         <Button primary type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save revision'}</Button>
       </div>
     </form>

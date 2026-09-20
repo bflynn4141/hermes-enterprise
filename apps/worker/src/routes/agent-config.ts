@@ -26,7 +26,7 @@
 // person answering it from the composer are answering the same question. See
 // decision F8.
 import type { Context } from 'hono';
-import { contextFieldSchema, instructionVersionSchema, paginatedSchema, skillVersionSchema } from '@hermes/shared';
+import { contextFieldSchema, instructionVersionSchema, paginatedSchema, skillVersionSchema, saveAgentInstructionSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
@@ -128,7 +128,8 @@ export async function adoptSkill(c: Context<{ Bindings: Env }>): Promise<Respons
   }
 
   const entity = await inWorkspace(c, async (work) => {
-    const agent = await agentId(work);
+    work.requireAdmin('adopting a skill');
+    const agent = await selectedAgentId(c, work);
     const exists = await work.tx.query<{ id: string }>(
       `SELECT id FROM skill_versions WHERE workspace_id = $1 AND id = $2`,
       [work.workspaceId, id],
@@ -193,7 +194,7 @@ const toInstruction = (row: InstructionRow, currentId: string | null): unknown =
 const INSTRUCTION_SELECT = `
   SELECT iv.id, iv.body, iv.status, iv.created_at, iv.run_id, u.name AS proposed_by_name,
          (SELECT prev.body FROM instruction_versions prev
-           WHERE prev.workspace_id = iv.workspace_id AND prev.status = 'saved'
+           WHERE prev.workspace_id = iv.workspace_id AND prev.agent_id = iv.agent_id AND prev.status = 'saved'
              AND prev.saved_at IS NOT NULL AND prev.created_at < iv.created_at
            ORDER BY prev.saved_at DESC LIMIT 1) AS previous
     FROM instruction_versions iv
@@ -201,26 +202,54 @@ const INSTRUCTION_SELECT = `
    WHERE iv.workspace_id = $1`;
 
 /** The newest saved row: what the agent is actually running under. */
-async function currentInstructionId(work: TenantWork): Promise<string | null> {
+async function currentInstructionId(work: TenantWork, agent: string): Promise<string | null> {
   const { rows } = await work.tx.query<{ id: string }>(
     `SELECT id FROM instruction_versions
-      WHERE workspace_id = $1 AND status = 'saved'
-      ORDER BY saved_at DESC NULLS LAST, created_at DESC LIMIT 1`,
-    [work.workspaceId],
+      WHERE workspace_id = $1 AND agent_id = $2 AND status = 'saved'
+      ORDER BY saved_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1`,
+    [work.workspaceId, agent],
   );
   return rows[0]?.id ?? null;
 }
 
 export async function listInstructions(c: Context<{ Bindings: Env }>): Promise<Response> {
   const items = await inWorkspace(c, async (work) => {
-    const current = await currentInstructionId(work);
+    const agent = await selectedAgentId(c, work);
+    const current = await currentInstructionId(work, agent);
     const { rows } = await work.tx.query<InstructionRow>(
-      `${INSTRUCTION_SELECT} ORDER BY iv.created_at DESC LIMIT $2`,
-      [work.workspaceId, LIST_LIMIT],
+      `${INSTRUCTION_SELECT} AND iv.agent_id = $2 ORDER BY iv.created_at DESC LIMIT $3`,
+      [work.workspaceId, agent, LIST_LIMIT],
     );
     return rows.map((row) => toInstruction(row, current));
   });
   return c.json(instructionPage.parse({ items, cursor: null, total: items.length }));
+}
+
+/** A direct human edit is a new saved version, never an in-place rewrite. */
+export async function saveInstruction(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireRequestedFrom(c, SKILLS_SURFACE);
+  requireCsrf(c);
+  const parsed = saveAgentInstructionSchema.safeParse(await jsonBody<unknown>(c));
+  if (!parsed.success) throw new RouteError('instructions are invalid', 'bad_body', 400);
+  const entity = await inWorkspace(c, async (work) => {
+    work.requireAdmin('saving agent instructions');
+    const agent = await selectedAgentId(c, work);
+    await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [work.workspaceId, agent]);
+    const current = await currentInstructionId(work, agent);
+    if (current !== parsed.data.expected_current_id) throw new RouteError('instructions changed; review the current version before saving', 'stale_revision', 409);
+    const inserted = await work.tx.query<{ id: string }>(
+      `INSERT INTO instruction_versions (workspace_id,agent_id,body,status,proposed_by,saved_at)
+       VALUES ($1,$2,$3,'saved',$4,now()) RETURNING id`,
+      [work.workspaceId, agent, parsed.data.text, work.userId],
+    );
+    const id = inserted.rows[0]!.id;
+    await work.tx.query(`UPDATE agents SET instructions_active=$3 WHERE workspace_id=$1 AND id=$2`, [work.workspaceId, agent, parsed.data.text]);
+    await work.tx.query(`INSERT INTO events (workspace_id,actor_type,actor_user_id,kind,agent_id) VALUES ($1,'user',$2,'instruction.saved',$3)`, [work.workspaceId, work.userId, agent]);
+    const { rows } = await work.tx.query<InstructionRow>(`${INSTRUCTION_SELECT} AND iv.id=$2`, [work.workspaceId, id]);
+    return toInstruction(rows[0]!, id);
+  });
+  return c.json(entity, 201);
 }
 
 /** `accept` and `discard` are one transaction with two verbs. */
@@ -244,9 +273,11 @@ async function decideInstruction(
 
   const entity = await inWorkspace(c, async (work) => {
     work.requireAdmin(verdict === 'saved' ? 'saving agent instructions' : 'discarding a proposal');
+    const agent = await selectedAgentId(c, work);
+    await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [work.workspaceId, agent]);
     const existing = await work.tx.query<{ status: string }>(
-      `SELECT status FROM instruction_versions WHERE workspace_id = $1 AND id = $2`,
-      [work.workspaceId, id],
+      `SELECT status FROM instruction_versions WHERE workspace_id = $1 AND id = $2 AND agent_id = $3`,
+      [work.workspaceId, id, agent],
     );
     const status = existing.rows[0]?.status;
     if (!status) throw new RouteError('no such instruction version', 'not_found', 404);
@@ -270,6 +301,7 @@ async function decideInstruction(
     // row itself saying `discarded`, which is the record, and inventing a kind
     // here would mean a migration for an event nothing reads.
     if (verdict === 'saved') {
+      await work.tx.query(`UPDATE agents SET instructions_active=(SELECT body FROM instruction_versions WHERE id=$3 AND workspace_id=$1 AND agent_id=$2) WHERE workspace_id=$1 AND id=$2`, [work.workspaceId, agent, id]);
       await work.tx.query(
         `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind)
          VALUES ($1, 'user', $2, 'instruction.saved')`,
@@ -277,7 +309,7 @@ async function decideInstruction(
       );
     }
 
-    const current = await currentInstructionId(work);
+    const current = await currentInstructionId(work, agent);
     const { rows } = await work.tx.query<InstructionRow>(`${INSTRUCTION_SELECT} AND iv.id = $2`, [
       work.workspaceId,
       id,

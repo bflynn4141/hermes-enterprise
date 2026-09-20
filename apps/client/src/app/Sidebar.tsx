@@ -30,13 +30,14 @@ const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'settings', label: 'Settings', icon: 'settings', ref: SETTINGS() },
 ];
 
-export function Sidebar() {
+export function Sidebar({ phone = false }: { phone?: boolean }) {
   const state = useAppState();
   const adapter = useAdapter();
   const nav = useNav();
   const dispatch = useDispatch();
   const [menu, setMenu] = useState(false);
   const accountBtn = useRef<HTMLElement>(null);
+  const phoneAccountBtn = useRef<HTMLButtonElement>(null);
   const accountMarker = useRef<HTMLSpanElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const go = (ref: Ref): void => {
@@ -62,7 +63,7 @@ export function Sidebar() {
   // CSS can render the compact dot without putting "Ready" back in the title.
   useLayoutEffect(() => {
     const host = sidebarRef.current;
-    if (!host) return;
+    if (!host || phone) return;
     const sessionHeading = [...host.querySelectorAll('span')].find((node) => node.textContent === 'Iris sessions');
     if (sessionHeading) sessionHeading.textContent = `${state.agent.name || 'Iris'} sessions`;
     const rows = host.querySelectorAll<HTMLButtonElement>('button.sidebar-row[data-session-row], button.sidebar-row[title]:not([aria-label])');
@@ -75,14 +76,14 @@ export function Sidebar() {
       row.dataset.sessionStatus = status.toLowerCase() || 'empty';
       row.setAttribute('aria-label', status ? `${title}, ${status}` : title);
     });
-  }, [sessions, state.agent.name]);
+  }, [sessions, state.agent.name, phone]);
 
   // SidebarNav owns its disclosure state, but the shell owns the grid column
   // around it. Mirror the component's public data attribute so collapsing the
   // 52 px rail also releases the other 188 px to the workspace.
   useEffect(() => {
     const host = sidebarRef.current;
-    if (!host) return;
+    if (!host || phone) return;
     const sync = (): void => {
       const collapsed = host.querySelector('[data-sidebar-collapsed="true"]') !== null;
       if (collapsed !== state.ui.navCollapsed) dispatch({ type: 'ui/set', patch: { navCollapsed: collapsed } });
@@ -91,27 +92,42 @@ export function Sidebar() {
     const observer = new MutationObserver(sync);
     observer.observe(host, { attributes: true, subtree: true, attributeFilter: ['data-sidebar-collapsed'] });
     return () => observer.disconnect();
-  }, [dispatch, state.ui.navCollapsed]);
+  }, [dispatch, state.ui.navCollapsed, phone]);
 
   // SidebarNav owns the visible footer button, while this client owns the
   // account menu. Use a marker inside the public footerIcon slot to recover
   // that exact button as the popover anchor instead of rendering a second,
   // hidden account button after a full-height sidebar.
   useEffect(() => {
-    const button = accountMarker.current?.closest<HTMLButtonElement>('button') ?? null;
+    const button = phone ? phoneAccountBtn.current : accountMarker.current?.closest<HTMLButtonElement>('button') ?? null;
     accountBtn.current = button;
     if (!button) return;
     button.setAttribute('aria-label', 'Your account');
     button.setAttribute('aria-haspopup', 'dialog');
     button.setAttribute('aria-expanded', String(menu));
-  }, [menu]);
+  }, [menu, phone]);
 
   return (
     // `SidebarNav` renders its own <aside> with its own collapse control; this
     // wrapper is the grid cell. It clips during the shared width transition so
     // neither state can paint over the neighboring pane (decision C36).
     <aside ref={sidebarRef} className="sidebar hermes-ui" aria-label="Workspace navigation">
-      <SidebarNav
+      {phone ? <div className="phone-navigation">
+        <select aria-label="Workspace section" value={state.ui.app.section}
+          onChange={(event) => {
+            const section = SECTIONS.find((item) => item.key === event.target.value);
+            if (section) {
+              go(section.ref);
+              dispatch({ type: 'ui/set', patch: { pane: 'app' } });
+            }
+          }}>
+          {SECTIONS.map((section) => <option key={section.key} value={section.key}>{section.label}</option>)}
+        </select>
+        <button ref={phoneAccountBtn} type="button" className="icon-btn" aria-label="Your account"
+          aria-haspopup="dialog" aria-expanded={menu} onClick={() => setMenu((open) => !open)}>
+          <Avatar person={{ name: state.user.name || 'You' }} size={20} />
+        </button>
+      </div> : <SidebarNav
         className="workspace-sidebar-nav"
         fill
         workspace={{ key: state.workspace.id || 'workspace', name: state.workspace.name || 'Workspace', monogram: (state.workspace.name || 'W').slice(0, 1).toUpperCase() }}
@@ -157,8 +173,8 @@ export function Sidebar() {
           accountBtn.current = accountMarker.current?.closest<HTMLButtonElement>('button') ?? null;
           setMenu((open) => !open);
         }}
-      />
-      <Popover open={menu} onClose={() => setMenu(false)} anchorRef={accountBtn} align="left" above width={280} label="Your account" portal className="menu account-menu">
+      />}
+      <Popover open={menu} onClose={() => setMenu(false)} anchorRef={accountBtn} align={phone ? 'right' : 'left'} above={!phone} width={280} label="Your account" portal className="menu account-menu">
         <div className="row account-head">
           <Avatar person={{ name: state.user.name }} size={36} />
           <div className="col" style={{ gap: 2, minWidth: 0 }}>
