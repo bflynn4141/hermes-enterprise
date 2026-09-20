@@ -32,3 +32,4 @@ export * from './agent-permissions.js';
 export * from './member-provisioning.js';
 export * from './cloud-connection.js';
 export * from './library-sources.js';
+export * from './shared-intelligence.js';

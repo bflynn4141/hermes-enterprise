@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceProposal, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -500,6 +500,53 @@ export function createMockBackend(options: MockOptions = {}) {
     content_markdown: '# Partner Program Guide\n\nDraft shared reference for Partnerships and Finance.\n\n## From prospect to invoice\n\nUse approved terms and identify missing evidence.',
     audiences: ['Finance', 'Partnerships'], created_at: iso(-5), updated_at: iso(-5), kind: 'library_source',
   }];
+  const sharedIntelligenceAssessment = {
+    status: 'complete' as const,
+    composite_score: 83,
+    route: 'standard_review' as const,
+    axes: {
+      usefulness: { score: 3, confidence: .91 }, novelty: { score: 2, confidence: .84 },
+      corroboration: { score: 3, confidence: .88 }, urgency: { score: 2, confidence: .8 }, uncertainty: { score: .5, confidence: .86 },
+    },
+    evidence_count: 2, rubric_version: '1', model_id: 'jev-1.13.0', model_version: 'jev-1.13.0-20260901',
+    state_sha256: 'c'.repeat(64), latency_ms: 184, failure_class: null,
+    warnings: ['A completed runtime is not proof that the business outcome succeeded.', 'The 70-point, 0.55-confidence, two-run routing thresholds are provisional review aids, not validated quality gates.'],
+  };
+  const sharedEvidence = (index: number) => ({
+    id: mockUuid(900 + index), run_id: mockUuid(910 + index), session_id: index === 0 ? SESSION_A : SESSION_B,
+    source_message_id: mockUuid(920 + index), source_message_role: 'iris' as const,
+    session_title: index === 0 ? 'Partner application review' : 'Partner evidence follow-up', run_ended_at: iso(-20 + index),
+    source_sha256: String(index + 1).repeat(64).slice(0, 64), approved_excerpt: index === 0
+      ? 'Separate an applicant claim from independently verified evidence before escalating the review.'
+      : 'The second review was faster after the evidence source and review date were recorded explicitly.',
+    excerpt_sha256: String(index + 3).repeat(64).slice(0, 64), provenance: 'verified_quote' as const,
+    tool_names: ['partner_record_read'], step_labels: ['Checked source record'], outcome: 'runtime_completed' as const, revoked_at: null,
+  });
+  let sharedIntelligenceProposals: SharedIntelligenceProposal[] = empty ? [] : [{
+    id: mockUuid(930), title: 'Record evidence provenance before escalation', goal: 'Make partner reviews reproducible across Partnerships',
+    lesson: 'Separate claims from independently verified evidence, and record the source version and review date before escalating a mismatch.',
+    rationale: 'Two completed reviews showed that explicit provenance reduced repeat checking without changing approval authority.',
+    agent_id: AGENT, agent_name: 'Iris', audiences: [{ id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' }],
+    evidence: [sharedEvidence(0), sharedEvidence(1)], assessment: sharedIntelligenceAssessment, status: 'ready_for_review',
+    approval_request_id: null, library_source_id: null, library_version_id: null, created_at: iso(-5), published_at: null, revoked_at: null,
+  }];
+  const sharedIntelligence = (): SharedIntelligenceWorkspace => ({
+    teams: empty ? [] : [{ id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' }],
+    eligible_runs: empty ? [] : [
+      { id: mockUuid(910), agent_id: AGENT, agent_name: 'Iris', session_id: SESSION_A, session_title: 'Partner application review', ended_at: iso(-20), model_id: 'deepseek-flash', active_ms: 42_000, tool_names: ['partner_record_read'], step_labels: ['Checked source record'], output_preview: sharedEvidence(0).approved_excerpt },
+      { id: mockUuid(911), agent_id: AGENT, agent_name: 'Iris', session_id: SESSION_B, session_title: 'Partner evidence follow-up', ended_at: iso(-19), model_id: 'deepseek-flash', active_ms: 31_000, tool_names: ['partner_record_read'], step_labels: ['Checked source record'], output_preview: sharedEvidence(1).approved_excerpt },
+    ],
+    discoveries: empty ? [] : [{
+      id: 'f'.repeat(64), suggested_title: 'Review a repeatable evidence-provenance pattern', suggested_goal: 'Make partner reviews reproducible across Partnerships',
+      suggested_lesson: 'Separate a claim from independently verified evidence before escalating the review.',
+      suggested_rationale: 'A local scan found two owner-visible completed runs with the same observable review step. Confirm whether the quoted outcome is reusable.',
+      source_run_ids: [mockUuid(910), mockUuid(911)],
+      approved_excerpts: [{ run_id: mockUuid(910), approved_excerpt: sharedEvidence(0).approved_excerpt, provenance: 'verified_quote' }, { run_id: mockUuid(911), approved_excerpt: sharedEvidence(1).approved_excerpt, provenance: 'verified_quote' }],
+      evidence_strength: 'unassessed', warnings: ['Unassessed possible pattern only. Edit and verify it before asking for scored review.', 'Frequency is not corroboration or priority. Runtime completion does not establish business success.'],
+    }],
+    proposals: sharedIntelligenceProposals,
+    data_boundary: 'Only completed runs you own are shown. A proposal uses verified excerpts from final user-visible messages; private traces, tool arguments/results, hidden reasoning, credentials, and other members\' work stay out.',
+  });
   const confirmedNotes: ContextNote[] = [];
   const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [] };
   if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
@@ -1401,6 +1448,30 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (p('/files') && method === 'GET') return page(storedSources);
     if (p('/library-sources') && method === 'GET') return page(librarySources);
+    if (p('/shared-intelligence') && method === 'GET') return json(sharedIntelligence());
+    if (p('/shared-intelligence/proposals') && method === 'POST') {
+      const evidenceInput = Array.isArray(body.evidence) ? body.evidence as Array<{ run_id?: unknown; approved_excerpt?: unknown }> : [];
+      const proposal: SharedIntelligenceProposal = {
+        id: mockUuid(940 + sharedIntelligenceProposals.length), title: String(body.title ?? ''), goal: String(body.goal ?? ''),
+        lesson: String(body.lesson ?? ''), rationale: String(body.rationale ?? ''), agent_id: String(body.agent_id ?? AGENT), agent_name: 'Iris',
+        audiences: sharedIntelligence().teams.filter((team) => Array.isArray(body.team_ids) && body.team_ids.includes(team.id)),
+        evidence: evidenceInput.map((item, index) => ({ ...sharedEvidence(index), run_id: String(item.run_id), approved_excerpt: String(item.approved_excerpt) })),
+        assessment: { ...sharedIntelligenceAssessment, evidence_count: evidenceInput.length }, status: evidenceInput.length >= 2 ? 'ready_for_review' : 'needs_review',
+        approval_request_id: null, library_source_id: null, library_version_id: null, created_at: iso(), published_at: null, revoked_at: null,
+      };
+      sharedIntelligenceProposals = [proposal, ...sharedIntelligenceProposals];
+      return json(proposal, 201);
+    }
+    const intelligenceMatch = match(new RegExp(`^/w/${WS}/shared-intelligence/proposals/([^/]+)/(submit|revoke)$`));
+    if (intelligenceMatch && method === 'POST') {
+      const proposal = sharedIntelligenceProposals.find((item) => item.id === intelligenceMatch[1]);
+      if (!proposal) return fail(404, 'not_found');
+      const updated: SharedIntelligenceProposal = intelligenceMatch[2] === 'submit'
+        ? { ...proposal, status: 'pending_review', approval_request_id: APPROVAL_DEMO_REQUEST_IDS.shared_learning }
+        : { ...proposal, status: 'revoked', revoked_at: iso() };
+      sharedIntelligenceProposals = sharedIntelligenceProposals.map((item) => item.id === updated.id ? updated : item);
+      return json(intelligenceMatch[2] === 'submit' ? { proposal: updated, approval_request_id: APPROVAL_DEMO_REQUEST_IDS.shared_learning } : updated);
+    }
     const sourceMatch = match(new RegExp(`^/w/${WS}/files/([^/]+)$`));
     if (sourceMatch && method === 'DELETE') { const index = storedSources.findIndex((row) => row.id === sourceMatch[1]); if (index >= 0) storedSources.splice(index, 1); return new Response(null, { status: 204 }); }
     if (p('/context-fields')) return page(contextFields);

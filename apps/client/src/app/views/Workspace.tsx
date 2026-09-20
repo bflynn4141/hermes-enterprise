@@ -26,6 +26,7 @@ import { ProviderConnect, type ProviderConnectStatus } from '../providers/Provid
 import { PartnerWorkflow } from './PartnerWorkflow.js';
 import { invitationDeliveryMessage, invitationFailureMessage } from '../../model/invitation-copy.js';
 import { RuntimeCapacityTab } from './RuntimeCapacity.js';
+import { SharedIntelligence } from './SharedIntelligence.js';
 import { CloudConnection } from './CloudConnection.js';
 import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../model/cloud-connection.js';
 import { Markdown } from '../chat/Markdown.js';
@@ -466,9 +467,9 @@ export function Library({ view, id }: { view: string; id: string | null }) {
         <Tabs tabs={LIBRARY_TABS} value={view} onChange={(next) => nav(LIB(next))} label="Library sections" />
         {view === 'skills' && <LibrarySkills />}
         {view === 'documents' && <LibraryDocuments />}
-        {/* The two that stay. M6 owns both, and neither has a route yet. */}
+        {/* Connections remains independently owned; Shared Intelligence is a reviewed Library workflow. */}
         {view === 'connections' && <EmptyState icon="context" title={EMPTY.libraryUnavailable} detail="Connections are managed outside the pilot." />}
-        {view === 'intelligence' && <EmptyState icon="skill" title={EMPTY.libraryUnavailable} detail="Shared Intelligence proposals are reviewed by a human; the pilot does not publish them." />}
+        {view === 'intelligence' && <SharedIntelligence />}
       </div>
     </div>
   );
