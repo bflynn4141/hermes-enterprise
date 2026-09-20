@@ -74,6 +74,13 @@ export function freshWorkspace(name = `Live ${new Date().toISOString().slice(11,
       (${q(workspaceId)}, ${q(memberId)}, 'member', ARRAY[]::text[]);
     INSERT INTO agents (id, workspace_id, name, responsibility, status)
       VALUES (${q(agentId)}, ${q(workspaceId)}, 'Iris', 'Partnerships', 'started');
+    -- The Admin owns the agent, the way \`POST /workspaces\` and the dev seed
+    -- arrange it. Since the private-agent boundaries (0054, PR92) an agent
+    -- with no owner row is private to nobody: no session can be opened on it
+    -- and every scenario that sends a turn fails with \`unknown_agent\`.
+    INSERT INTO agent_owners (workspace_id, agent_id, member_id)
+      SELECT workspace_id, ${q(agentId)}, id FROM members
+       WHERE workspace_id = ${q(workspaceId)} AND user_id = ${q(adminId)};
     COMMIT;
   `);
 
