@@ -298,7 +298,44 @@ describe('durable member provisioning', () => {
     });
 
     const enabled = makeEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' }).env;
-    await drainJobs(enabled, 200);
+    // `job_ready` is global and a Cron pass is intentionally bounded. Model a
+    // busy database explicitly: re-enabling makes this job due, but it need not
+    // be one of the first 200 older pointers claimed by the same pass.
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(
+        `WITH backlog AS (
+           INSERT INTO jobs(id,workspace_id,kind,key,payload,next_at)
+           SELECT gen_random_uuid(),$1,'member_provision',$2 || n::text,'{}'::jsonb,now()-interval '1 minute'
+             FROM generate_series(1,201) n
+           RETURNING id,workspace_id,next_at
+         )
+         INSERT INTO job_ready(job_id,workspace_id,next_at)
+         SELECT id,workspace_id,next_at FROM backlog`,
+        [fx.workspaceId, `pause-resume-backlog:${jobId}:`],
+      );
+      await c.query('COMMIT');
+    });
+    const targetDone = async (): Promise<boolean> => withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      const { rows } = await c.query<{ done: boolean }>(
+        `SELECT done_at IS NOT NULL AS done FROM jobs WHERE id=$1`, [jobId],
+      );
+      await c.query('COMMIT');
+      return rows[0]?.done ?? false;
+    });
+    expect((await drainJobs(enabled, 200)).claimed).toBe(200);
+    expect(await targetDone()).toBe(false);
+
+    // Cron promises bounded eventual progress, not that one workspace's job is
+    // always inside the first global page. Drain until this exact job finishes,
+    // as production does on subsequent minute ticks.
+    let resumed = false;
+    for (let attempt = 0; attempt < 20 && !resumed; attempt += 1) {
+      await drainJobs(enabled, 200);
+      resumed = await targetDone();
+    }
+    expect(resumed).toBe(true);
     await withClient('app', async c => {
       await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
       expect((await c.query(`SELECT done_at IS NOT NULL AS done FROM jobs WHERE id=$1`, [jobId])).rows)
