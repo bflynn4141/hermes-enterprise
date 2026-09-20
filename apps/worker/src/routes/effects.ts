@@ -138,7 +138,7 @@ export async function recordExternalEffectEvidence(c: Context<{ Bindings: Env }>
                AND audience.request_id=ar.request_id
                AND audience.user_id=$4
           )
-        FOR SHARE OF ar,revision,decision`,
+        FOR SHARE OF ar,revision`,
       [work.workspaceId, effect.request_id, effect.decision_id, work.userId],
     )).rows[0];
     if (!approval) {
