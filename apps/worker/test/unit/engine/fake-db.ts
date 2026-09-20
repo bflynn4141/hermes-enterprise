@@ -29,7 +29,7 @@ import type {
   SetContextFieldInput,
   StepProgress,
 } from '../../../src/engine/agent-db.js';
-import type { ApprovalView } from '@hermes/shared';
+import { sessionTitleFromRequest, type ApprovalView } from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../../../src/model/types.js';
 import { KeyStoreError } from '../../../src/keys/store.js';
 
@@ -208,6 +208,17 @@ export class FakeAgentDb implements AgentDb {
     this.run = { ...this.run, status, waitingFor: detail.waitingFor ?? this.run.waitingFor };
     this.statusChanges.push({ status, error: detail.error ?? null });
     return Promise.resolve();
+  }
+  /** The session's name as the engine left it, with who wrote it. */
+  sessionTitle: { title: string; source: 'default' | 'turn' | 'run' | 'manual' } = { title: 'New session', source: 'default' };
+  nameSessionFromRun(runId: string): Promise<{ sessionId: string; title: string; events: readonly EmittedEvent[] } | null> {
+    const produced = this.requests.find((r) => r.runId === runId);
+    if (!produced || this.sessionTitle.source === 'manual') return Promise.resolve(null);
+    const payload = produced.payload as { applicant?: { name?: string } } | null;
+    const title = sessionTitleFromRequest(payload?.applicant?.name ?? null, produced.label, produced.kind);
+    if (!title || title === this.sessionTitle.title) return Promise.resolve(null);
+    this.sessionTitle = { title, source: 'run' };
+    return Promise.resolve({ sessionId: this.run.sessionId, title, events: [] });
   }
   addActiveMs(_runId: string, ms: number): Promise<number> {
     this.run = { ...this.run, activeMs: this.run.activeMs + Math.max(0, ms) };
