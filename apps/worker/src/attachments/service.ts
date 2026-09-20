@@ -17,6 +17,7 @@
 // Deleting on refusal matters. An object we declined to account for is an
 // object the daily sweep would eventually remove, and "eventually" is not the
 // answer for a file we just decided was lying about what it is.
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_PRESIGN_SECONDS,
@@ -81,7 +82,7 @@ export function toAttachment(row: FileRow): {
 
 const SELECT_ATTACHMENT = `id, name, storage_key, size_bytes, mime, sha256, status,
          extraction_status, extraction_error, text_length, token_estimate, created_at`;
-const SELECT_AGENT_FILE = `id, name, storage_key, size_bytes, mime, sha256,
+const SELECT_AGENT_FILE = `id, agent_id, name, storage_key, size_bytes, mime, sha256,
          extraction_status, extraction_error, text_length, token_estimate, created_at`;
 
 export async function loadRow(work: TenantWork, kind: AttachmentKind, id: string): Promise<FileRow> {
@@ -98,6 +99,11 @@ export async function loadRow(work: TenantWork, kind: AttachmentKind, id: string
         );
   const row = rows[0];
   if (!row) throw new RouteError('no such file', 'unknown_attachment', 404);
+  if (kind === 'agent_file') {
+    const agentId = (row as FileRow & { agent_id: string | null }).agent_id;
+    if (!agentId) throw new RouteError('Source is not assigned to an agent', 'unknown_attachment', 404);
+    await requireAgentContextAccess(work, agentId);
+  }
   return row;
 }
 
@@ -152,9 +158,9 @@ export async function declareUpload(
   }
 
   const id = crypto.randomUUID();
-  if (kind === 'agent_file' && declaration.agent_id) {
-    const found=await work.tx.query('SELECT id FROM agents WHERE workspace_id=$1 AND id=$2',[work.workspaceId,declaration.agent_id]);
-    if(!found.rows[0])throw new RouteError('No such agent','not_found',404);
+  if (kind === 'agent_file') {
+    if (!declaration.agent_id) throw new RouteError('Select an agent', 'bad_id', 400);
+    await requireAgentContextAccess(work, declaration.agent_id);
   }
   const storageKey = uploadKey(work.workspaceId, id);
 

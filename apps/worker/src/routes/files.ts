@@ -27,6 +27,7 @@ import {
   getAttachmentRoute,
 } from './attachments.js';
 import { toAttachment, type FileRow } from '../attachments/service.js';
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 
 export const createFile = async (c: Context<{ Bindings: Env }>): Promise<Response> => {
   await requireAdminForFiles(c);
@@ -63,12 +64,13 @@ async function requireAdminForFiles(c: Context<{ Bindings: Env }>): Promise<void
 export async function listFiles(c: Context<{ Bindings: Env }>): Promise<Response> {
   const rows = await inWorkspace(c, async (work) => {
     const selected=c.req.query('agent_id');
-    if(selected&&!/^[0-9a-f-]{36}$/i.test(selected))throw new RouteError('Invalid agent id','bad_id',400);
+    if(!selected||!/^[0-9a-f-]{36}$/i.test(selected))throw new RouteError('Select an agent','bad_id',400);
+    await requireAgentContextAccess(work, selected);
     const { rows } = await work.tx.query<FileRow>(
       `SELECT id, name, storage_key, size_bytes, mime, sha256,
               extraction_status, extraction_error, text_length, token_estimate, created_at
          FROM agent_files
-        WHERE workspace_id = $1 AND ($2::uuid IS NULL OR agent_id=$2)
+        WHERE workspace_id = $1 AND agent_id=$2
         ORDER BY created_at DESC
         LIMIT 200`,
       [work.workspaceId, selected??null],

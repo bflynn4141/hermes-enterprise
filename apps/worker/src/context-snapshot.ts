@@ -4,6 +4,7 @@ import { MAX_CONTEXT_SOURCE_CHARS, selectedSourcesSchema } from '@hermes/shared'
 import type { Env } from './env.js';
 import { RouteError, type TenantWork } from './routes/tenant.js';
 import { textKey } from './storage/keys.js';
+import { requireAgentContextAccess } from './domain/agent-context-access.js';
 export async function captureContext(
   work: TenantWork,
   env: Env,
@@ -12,6 +13,13 @@ export async function captureContext(
 ): Promise<unknown> {
   const parsed = selectedSourcesSchema.safeParse(selection ?? []);
   if (!parsed.success) throw new RouteError('Select up to five ready context sources', 'invalid_context_sources', 422);
+  // Do not break legacy chat with no context to disclose. As soon as notes or
+  // selected sources exist, the actor must pass the content boundary.
+  if (parsed.data.length === 0) {
+    const notes = agentId ? await work.tx.query('SELECT 1 FROM agent_context_notes WHERE workspace_id=$1 AND agent_id=$2 LIMIT 1', [work.workspaceId, agentId]) : null;
+    if (!notes?.rows[0]) return { notes: [], sources: [] };
+  }
+  if (agentId) await requireAgentContextAccess(work, agentId);
   const notes = agentId
     ? (
         await work.tx.query(

@@ -56,7 +56,7 @@ it('binds only selected ready sources by hash and rejects changed, missing and o
       [source, fx.workspaceId, fx.agentId, key, hash],
     );
     await bucket.put(`${key}.txt`, 'Checked fact: blue.');
-    const work = { tx: db, workspaceId: fx.workspaceId } as unknown as TenantWork;
+    const work = { tx: db, workspaceId: fx.workspaceId, userId: fx.adminId } as unknown as TenantWork;
     expect(await captureContext(work, env, fx.agentId, [])).toMatchObject({ sources: [] });
     expect(
       await captureContext(work, env, fx.agentId, [{ id: source, kind: 'agent_file', sha256: hash }]),
@@ -66,7 +66,7 @@ it('binds only selected ready sources by hash and rejects changed, missing and o
     ).rejects.toMatchObject({ reason: 'context_source_changed' });
     await expect(
       captureContext(work, env, randomUUID(), [{ id: source, kind: 'agent_file', sha256: hash }]),
-    ).rejects.toMatchObject({ reason: 'context_source_missing' });
+    ).rejects.toMatchObject({ reason: 'not_found' });
     await db.query("UPDATE agent_files SET extraction_status='failed' WHERE id=$1", [source]);
     await expect(
       captureContext(work, env, fx.agentId, [{ id: source, kind: 'agent_file', sha256: hash }]),

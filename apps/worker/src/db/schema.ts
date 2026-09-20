@@ -197,6 +197,7 @@ export const agents = pgTable('agents', {
   name: text('name').notNull(),
   responsibility: text('responsibility'),
   instructionsActive: text('instructions_active'),
+  contextScope: text('context_scope').notNull().default('private'),
   status: text('status').notNull().default('draft'),
   setupStep: text('setup_step'),
   startedAt: ts('started_at'),
