@@ -17,6 +17,22 @@ import { FakeStep } from './engine/fake-step.js';
 const NATIVE_ID = 'run_native-123';
 const MODEL = 'openrouter:anthropic/claude-sonnet-4';
 const PROFILE = 'enterprise-agent-1';
+const nativeCapabilities = {
+  object: 'hermes.api_server.capabilities', platform: 'hermes-agent',
+  auth: { type: 'bearer', required: true },
+  runtime: { mode: 'server_agent', tool_execution: 'server', split_runtime: false },
+  features: {
+    run_submission: true, run_status: true, run_events_sse: true, run_stop: true, run_steer: true,
+    runs_idempotency: { supported: true, durable: true, retention_seconds: 86_400 },
+  },
+  endpoints: {
+    runs: { method: 'POST', path: '/v1/runs' },
+    run_status: { method: 'GET', path: '/v1/runs/{run_id}' },
+    run_events: { method: 'GET', path: '/v1/runs/{run_id}/events' },
+    run_steer: { method: 'POST', path: '/v1/runs/{run_id}/steer' },
+    run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
+  },
+};
 
 class FakeRuntimeDb extends FakeAgentDb implements RuntimePersistence {
   nativeBinding: { runtimeRunId: string | null; runtimeAttempt: number | null } | null = null;
@@ -151,9 +167,9 @@ class FakeHermesClient extends HermesClient {
   }
 }
 
-async function execute(
+async function execute<TClient extends HermesClient = FakeHermesClient>(
   db = new FakeRuntimeDb(),
-  client = new FakeHermesClient(),
+  client: TClient = new FakeHermesClient() as unknown as TClient,
   step = new FakeStep(),
   forward?: RuntimeDeps['forward'],
   timing: {
@@ -223,7 +239,35 @@ describe('official Hermes enterprise projection', () => {
     expect(client.submissions[0]?.body._enterprise_skills).toEqual([]);
   });
 
-  it('intersects a retry with the failed attempt authority so later grants cannot expand it', async () => {
+  it('keeps response-only authority empty through the real Hermes transport contract', async () => {
+    const db = new FakeRuntimeDb({ attempt: 2 });
+    db.resumeInput = RESPONSE_ONLY_RECOVERY_INPUT;
+    const nativeBodies: Record<string, unknown>[] = [];
+    const send = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/v1/capabilities')) return Response.json(nativeCapabilities);
+      if (url.endsWith('/v1/runs') && init?.method === 'POST') {
+        nativeBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return Response.json({ run_id: NATIVE_ID, status: 'started' }, { status: 202 });
+      }
+      if (url.endsWith(`/v1/runs/${NATIVE_ID}/events`)) {
+        return new Response(`data: ${JSON.stringify({ event: 'run.completed', run_id: NATIVE_ID, output: 'Finished from stored results.' })}\n\n`, {
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`Unexpected native request: ${url}`);
+    });
+    await execute(db,new HermesClient('https://runtime.invalid','runtime-secret',send));
+    expect(db.snapshots.get(2)).toMatchObject({
+      input: RESPONSE_ONLY_RECOVERY_INPUT,_enterprise_tool_names: [],_enterprise_skills: [],
+    });
+    expect(nativeBodies).toHaveLength(1);
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_tool_names');
+    expect(nativeBodies[0]).not.toHaveProperty('_enterprise_skills');
+    expect(nativeBodies[0]?.input).toBe(RESPONSE_ONLY_RECOVERY_INPUT);
+  });
+
+  it('records the prior/current authority intersection for audit without treating it as native enforcement', async () => {
     class RestrictedRuntimeDb extends FakeRuntimeDb {
       override loadToolNames() { return Promise.resolve(['list_requests', 'propose_instruction']); }
     }

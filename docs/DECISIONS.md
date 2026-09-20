@@ -5245,10 +5245,13 @@ Workflow starts. Prior model/effort, trace, failure and trigger remain in the
 recovery history. Paid authorization rechecks the active native attempt under the
 same task-row lock so a late callback cannot reserve work after recovery advances.
 
-For automated screening, only recognized provider outages and rate limits retry
-automatically, up to three total attempts with one- and five-minute delays.
-Sanitized provider Retry-After deadlines can extend those waits; excessive waits
-pause recovery. Cancellation, human review, stopped tasks, unavailable credentials,
+Only an ordinary-chat failure that has completed read-only tools and can be
+reduced to the server-enforced response-only contract retries automatically, up
+to three total attempts with one- and five-minute delays. Pre-tool failures and
+partner-screening recovery remain explicit manual Retry because the native Runs
+contract does not accept an exact per-attempt tool/skill inventory. Sanitized
+provider Retry-After deadlines can extend eligible waits; excessive waits pause
+recovery. Cancellation, human review, stopped tasks, unavailable credentials,
 quota and unresolved effects never become an unbounded retry loop. The UI uses
 server-confirmed state and existing button feedback; its countdown is motionless
 and does not repeatedly announce itself to screen readers.
@@ -5257,13 +5260,15 @@ and does not repeatedly announce itself to screen readers.
 under the same agent admission lock immediately before it advances the failed
 attempt; even a newer completed turn makes the queued recovery stale. The failed
 attempt's model and effort are pinned rather than reread from mutable session
-settings. A retry receives only the intersection of its prior snapshotted tools
-and skills with current grants, so revocation wins and later grants cannot widen
-authority. Post-tool ordinary-chat continuation is a server-owned response-only
-mode: its native request contains no tools or skills, the model proxy strips
-runtime-supplied tool definitions, Enterprise tool dispatch rejects fresh calls,
-and direct paid-call leases are refused before reservation. Automatic recovery
-requires a managed token-digest runtime; legacy HMAC profiles remain manual-only.
+settings. The Worker persists the intersection of prior tool/skill snapshots and
+current grants for audit, but does not treat those private fields as enforcement:
+the public native Runs API deliberately strips them. Post-tool ordinary-chat
+continuation is therefore a server-owned response-only mode: its native request
+contains no tools or skills, the model proxy strips runtime-supplied tool
+definitions, Enterprise tool dispatch rejects fresh calls, and direct paid-call
+leases are refused before reservation. Automatic recovery
+requires both that response-only contract and a managed token-digest runtime;
+legacy HMAC profiles remain manual-only.
 The current fixed/free-route Iris binding is legacy HMAC, so this change does
 not claim automatic continuation there: users retain explicit manual Retry until
 that profile is migrated to a managed token-digest identity. Dynamically managed
@@ -5288,8 +5293,9 @@ historical records remain intact.
 reviewed-cycle recovery, pinned-model snapshots, paid receipts, cadence keys,
 cancellation, newer completed-turn races, prior-authority snapshots and
 response-only paid-lease refusal. Runtime adapter and bridge tests assert saved
-instructions reach native submission with bounded authority, the provider sees
-no tool definitions, and fresh Enterprise calls are rejected before writes.
+instructions cross the real native transport without relying on stripped private
+fields, the provider sees no tool definitions, and fresh Enterprise calls are
+rejected before writes.
 Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
 and live-provider acceptance are recorded in the Tech Lead delivery note.

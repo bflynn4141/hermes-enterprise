@@ -111,6 +111,23 @@ async function recoveryJob(fx: Fixture & { runId: string }): Promise<Job | undef
   ).rows[0]);
 }
 
+async function recordReadOnlyResult(fx: Fixture & { runId: string }): Promise<void> {
+  await work(fx, async (context) => {
+    await context.tx.query(
+      `INSERT INTO run_steps (workspace_id,run_id,turn,step_id,label,state,tool_call_id)
+       VALUES ($1,$2,0,'hermes-tool-1','list_partner_candidates','done','approved-read')`,
+      [fx.workspaceId,fx.runId],
+    );
+    await context.tx.query(
+      `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
+       VALUES ($1,$2,0,0,'assistant',$3::jsonb),($1,$2,0,1,'tool',$4::jsonb)`,
+      [fx.workspaceId,fx.runId,
+        JSON.stringify({ role: 'assistant', content: '', tool_calls: [{ id: 'approved-read', name: 'list_partner_candidates', arguments: '{"limit":1,"minimum_priority":100}' }] }),
+        JSON.stringify({ role: 'tool', tool_call_id: 'approved-read', content: '{"candidates":[]}' })],
+    );
+  });
+}
+
 describe('durable run recovery admission', () => {
   it('pins the failed attempt model and effort while preserving its provenance', async () => {
     const fx = await fixture();
@@ -156,7 +173,8 @@ describe('durable run recovery admission', () => {
   });
 
   it('schedules a durable retry once, caps automatic attempts at three, and respects cancellation', async () => {
-    const eligible = await fixture({ scheduled: true, attempt: 2 });
+    const eligible = await fixture({ directory: true, rateLimited: true, attempt: 2 });
+    await recordReadOnlyResult(eligible);
     const capped = await fixture({ scheduled: true, attempt: 3 });
     const cancelled = await fixture({ scheduled: true, cancelled: true });
     const { env, created } = environment();
@@ -180,7 +198,8 @@ describe('durable run recovery admission', () => {
 
     // A human can cancel after the durable job was enqueued; a stale worker
     // must re-read that decision rather than treating the old job as authority.
-    const lateCancel = await fixture({ scheduled: true });
+    const lateCancel = await fixture({ directory: true,rateLimited: true });
+    await recordReadOnlyResult(lateCancel);
     await scheduleRunRecovery(env);
     const cancelledJob = await recoveryJob(lateCancel);
     expect(cancelledJob).toBeDefined();
@@ -192,8 +211,40 @@ describe('durable run recovery admission', () => {
     expect(created).toHaveLength(1);
   });
 
+  it('fails closed instead of automatically replaying a task without a response-only contract', async () => {
+    const direct = await fixture({ directory: true, rateLimited: true });
+    const { env, created } = environment();
+    await expect(work(direct,(context) => retryTask(context,env,direct.agentId,direct.runId,1,true)))
+      .rejects.toMatchObject({ reason: 'automatic_recovery_requires_response_only',status: 409 });
+    const fx = await fixture({ directory: true, rateLimited: true });
+    const partner = await fixture({ scheduled: true,rateLimited: true });
+    await scheduleRunRecovery(env);
+    expect(await recoveryJob(fx)).toBeUndefined();
+    expect(await recoveryJob(partner)).toBeUndefined();
+    expect(created).toHaveLength(0);
+    await readTenant(fx.workspaceId,fx.adminId,async client => {
+      expect((await client.query(
+        'SELECT attempt,recovery_cancelled,recovery_next_at,recovery_blocked_reason FROM runs WHERE id=$1',
+        [fx.runId],
+      )).rows[0]).toEqual({
+        attempt: 1,recovery_cancelled: true,recovery_next_at: null,
+        recovery_blocked_reason: 'automatic_recovery_requires_response_only',
+      });
+    });
+    await readTenant(partner.workspaceId,partner.adminId,async client => {
+      expect((await client.query(
+        'SELECT attempt,recovery_cancelled,recovery_blocked_reason FROM runs WHERE id=$1',
+        [partner.runId],
+      )).rows[0]).toEqual({
+        attempt: 1,recovery_cancelled: true,
+        recovery_blocked_reason: 'automatic_recovery_requires_response_only',
+      });
+    });
+  });
+
   it('marks a queued recovery stale when any newer session run completed during cooldown', async () => {
     const fx = await fixture({ directory: true, rateLimited: true });
+    await recordReadOnlyResult(fx);
     const { env, created } = environment();
     expect(await scheduleRunRecovery(env)).toMatchObject({ queued: 1 });
     const job = await recoveryJob(fx);
@@ -224,20 +275,7 @@ describe('durable run recovery admission', () => {
   it('waits out provider cooldown and automatically continues an ordinary post-tool 429 without replaying the read', async () => {
     const retryNotBefore = new Date(Date.now() + 10 * 60_000);
     const fx = await fixture({ directory: true, rateLimited: true, retryNotBefore });
-    await work(fx, async (context) => {
-      await context.tx.query(
-        `INSERT INTO run_steps (workspace_id,run_id,turn,step_id,label,state,tool_call_id)
-         VALUES ($1,$2,0,'hermes-tool-1','list_partner_candidates','done','approved-read')`,
-        [fx.workspaceId, fx.runId],
-      );
-      await context.tx.query(
-        `INSERT INTO run_turns (workspace_id,run_id,turn,seq,role,provider_message)
-         VALUES ($1,$2,0,0,'assistant',$3::jsonb),($1,$2,0,1,'tool',$4::jsonb)`,
-        [fx.workspaceId, fx.runId,
-          JSON.stringify({ role: 'assistant', content: '', tool_calls: [{ id: 'approved-read', name: 'list_partner_candidates', arguments: '{"limit":1,"minimum_priority":100}' }] }),
-          JSON.stringify({ role: 'tool', tool_call_id: 'approved-read', content: '{"candidates":[]}' })],
-      );
-    });
+    await recordReadOnlyResult(fx);
     const { env, created } = environment();
     env.AUTOMATED_TRIGGERS_ENABLED = '0';
 
@@ -334,7 +372,8 @@ describe('durable run recovery admission', () => {
 
   it('skips stale ownership during the recovery scan and still queues another workspace', async () => {
     const reassigned = await fixture({ scheduled: true });
-    const eligible = await fixture({ scheduled: true });
+    const eligible = await fixture({ directory: true,rateLimited: true });
+    await recordReadOnlyResult(eligible);
     const { env } = environment();
     await work(reassigned, async (context) => {
       await context.tx.query(`UPDATE agent_owners SET member_id=(
@@ -409,7 +448,8 @@ describe('agent recovery HTTP controls', () => {
   });
 
   it('cancels the scheduled retry through the control and rejects an old attempt', async () => {
-    const fx = await fixture({ scheduled: true });
+    const fx = await fixture({ directory: true,rateLimited: true });
+    await recordReadOnlyResult(fx);
     const { env } = environment();
     await scheduleRunRecovery(env);
     const path = `/w/${fx.workspaceId}/agents/${fx.agentId}/wake`;

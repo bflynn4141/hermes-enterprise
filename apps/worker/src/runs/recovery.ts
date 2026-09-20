@@ -199,6 +199,13 @@ export async function retryTask(work:RecoveryWork,env:Env,agentId:string,runId:s
   if (isEnginePaused(env)) throw new RouteError('The engine is paused for a deployment.', 'engine_paused',409);
   const safety = await inspectRecoverySafety(work.tx,work.workspaceId,run.id);
   if (safety.blockedReason) throw new RouteError(safety.message ?? 'Review the previous task before retrying.',safety.blockedReason,409);
+  if (automatic && !isResponseOnlyRecoveryInput(safety.resumeInput)) {
+    throw new RouteError(
+      'Automatic recovery is limited to finishing a response from stored read-only results. Retry this task manually.',
+      'automatic_recovery_requires_response_only',
+      409,
+    );
+  }
   if (env.MODEL_SCRIPTED !== '1' && env.AGENT_RUNTIME === 'hermes'
       && !isResponseOnlyRecoveryInput(safety.resumeInput)) {
     const authority = await work.tx.query(
@@ -361,6 +368,14 @@ export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
       const due=automaticRetryAt(run); if(!due) continue;
       const safety=await inspectRecoverySafety(tx,workspaceId,run.id);
       if(safety.blockedReason) {await tx.query('UPDATE runs SET recovery_blocked_reason=$2 WHERE id=$1',[run.id,safety.blockedReason]);continue;}
+      if(!isResponseOnlyRecoveryInput(safety.resumeInput)) {
+        await tx.query(
+          `UPDATE runs SET recovery_next_at=NULL,recovery_cancelled=true,
+             recovery_blocked_reason='automatic_recovery_requires_response_only' WHERE id=$1`,
+          [run.id],
+        );
+        continue;
+      }
       const id=await enqueueJob(tx,workspaceId,'run_recovery',`run-recovery:${run.id}:${run.attempt}`,{run_id:run.id,agent_id:run.agent_id,owner_id:run.owner_id,expected_attempt:run.attempt});
       if(!id) continue;
       await tx.query('UPDATE jobs SET next_at=$2 WHERE id=$1',[id,due]);

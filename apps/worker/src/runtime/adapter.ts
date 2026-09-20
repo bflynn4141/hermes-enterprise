@@ -111,7 +111,7 @@ const requestSkills = (request: Record<string, unknown> | null | undefined): Run
     ? request._enterprise_skills.filter((skill): skill is RuntimeSkillManifest => Boolean(skill) && typeof skill === 'object' && !Array.isArray(skill))
     : [];
 
-export function recoveryAuthorityIntersection(
+export function recoveryAuthorityAuditIntersection(
   run: Pick<EngineRunRow, 'attempt' | 'recoveryInput'>,
   currentTools: readonly string[],
   currentSkills: readonly RuntimeSkillManifest[],
@@ -125,8 +125,9 @@ export function recoveryAuthorityIntersection(
   return {
     toolNames: currentTools.filter((name) => priorTools.has(name)),
     // Exact manifests include assignment/config/grant revisions and capability
-    // grants. Any mutation narrows the retry to no such skill rather than
-    // silently widening the failed attempt's authority.
+    // grants, making the persisted comparison useful for audit. The native
+    // transport strips these private fields, so automatic safety is enforced
+    // separately by the response-only server boundaries.
     skills: currentSkills.filter((skill) => priorSkills.has(canonicalAuthority(skill))),
   };
 }
@@ -225,7 +226,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         const recoveryInput = await db.recoveryInput?.(run.id, run.attempt);
         const currentToolNames = allowedTools(run.mode, await db.loadToolNames(run.agentId)).map((tool) => tool.name);
         const priorAuthority = run.attempt > 1 ? await db.recoveryAuthority?.(run.id, run.attempt) ?? null : null;
-        const authority = recoveryAuthorityIntersection(
+        const authority = recoveryAuthorityAuditIntersection(
           { attempt: run.attempt, recoveryInput },
           currentToolNames,
           deps.skillSnapshot ?? [],
