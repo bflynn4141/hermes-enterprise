@@ -48,6 +48,135 @@ bridge from the runtime to the Worker. Keep these three credentials distinct.
 The Cloud profile still needs the same governed plugin settings and toolset
 policy described below; exposing the connector alone does not constrain tools.
 
+### Managed Cloud startup
+
+An ordinary Hermes Cloud gateway can apply the same policy without replacing
+its supervisor command. This repository is private, so provision a temporary
+repository-scoped, read-only GitHub deploy key through a supported private-file
+mechanism. Confirm the key is mode `0600` and provision a separately verified
+`known_hosts` file. The Cloud dashboard runs with `HOME=/opt/data`; create these
+task-owned files with its supported Files page:
+
+```text
+/opt/data/.ssh/config
+/opt/data/.ssh/hermes-enterprise-deploy
+/opt/data/.ssh/github-known-hosts
+```
+
+The task-owned OpenSSH config must contain only this strict host binding:
+
+```sshconfig
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile /opt/data/.ssh/hermes-enterprise-deploy
+  IdentitiesOnly yes
+  IdentityAgent none
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile /opt/data/.ssh/github-known-hosts
+```
+
+Hermes Cloud's supported Files upload writes private files with mode `0600`;
+verify each uploaded path before use. Hermes 0.21.3 runs Git noninteractively
+and preserves normal OpenSSH `~/.ssh/config` resolution. Do not put a deploy key
+or broad GitHub token in the clone URL or managed runtime environment. Install
+this exact plugin subdirectory at the reviewed 40-character commit through the
+Hermes Console:
+
+```text
+plugins install git@github.com:bflynn4141/hermes-enterprise.git#runtime/hermes/enterprise_bridge --ref <full-commit-sha> --enable
+```
+
+After the pinned install succeeds, remove only these task-owned SSH files
+through the supported Files page and revoke the deploy key. The installed
+plugin does not need repository access to run. The source validator accepts
+only this canonical SSH source or the canonical HTTPS form for an already
+supported credential-helper installation of the same repository and
+subdirectory.
+
+The Cloud Files page alone is not an installation boundary: uploading files to
+`/opt/data/plugins` does not prove a commit pin, enable the plugin, or restart
+the gateway. Use the supported plugin command and confirm the installed version
+before setting `HERMES_ENTERPRISE_CLOUD_MANAGED=1` and restarting the ordinary
+`hermes gateway run --external-supervisor` process.
+
+Persist the same 64-lowercase-hex `ENTERPRISE_RUNTIME_TOKEN`, native
+`API_SERVER_KEY` and control secret in the Cloud platform's environment across
+the restart. The Hermes config must refer to the first two as
+`${ENTERPRISE_RUNTIME_TOKEN}` and `${API_SERVER_KEY}`; do not copy either value
+into readiness or documentation.
+
+Also persist `HERMES_ENTERPRISE_PLUGIN_REVISION` as the full 40-character
+installer revision and `HERMES_ENTERPRISE_PLUGIN_SHA256` as the deterministic
+digest of the exact reviewed plugin tree. The revision must match the
+`enterprise_bridge` record in
+`$HERMES_HOME/plugins/.install-metadata.json`; that record must name the pinned
+SSH or HTTPS source above exactly and have `pinned: true`. After final review,
+compute the expected tree digest from the checkout at that exact commit:
+
+```sh
+PYTHONPATH=runtime/hermes python3 -c \
+  'from enterprise_bridge.runtime_policy import plugin_tree_digest; print(plugin_tree_digest("runtime/hermes/enterprise_bridge"))'
+```
+
+Record both immutable values in the Worker binding and the supervised profile;
+the Cloud console does not need to execute the digest command. The pinned
+installer copies that exact repository subdirectory, and native startup
+rehashes its installed copy against the reviewed value. Ordinary managed
+startup stays closed when either value is absent or differs. Managed readiness
+reports them as `plugin.revision` and `plugin.artifact_digest`, and every later
+admission rehashes the installed tree. The digest covers framed relative paths
+and file bytes, ignores only Python bytecode caches, and rejects symlinks; the
+install metadata lives outside the tree, so there is no self-hash cycle.
+
+The managed flag is opt-in, so installing the additive bundle does not change
+an existing Iris 1.7 gateway. In managed mode the plugin installs a persistent
+API route gate before control authentication or Worker discovery. Only inert
+capabilities plus governed run create/status/events/approval/steer/stop routes
+remain. Create, approval and steer stay HTTP 503 until this exact process
+validates its current source, identity, Worker assignment, plugin, skill bytes,
+config, provider resolver, empty cron store and resolved tool inventory. Status,
+events and stop remain available for an already-running run. The actual
+conversation-loop provider boundary repeats the current proof before every
+request, retry and later model iteration, including an authenticated refresh of
+the binding; tool calls repeat it before dispatch. Drift after an HTTP 202
+acceptance still removes readiness and latches the process closed before the
+model request. Worker model and tool routes recheck the same bearer and current
+run authority on every outbound call.
+
+The first managed start writes a persistent profile marker. Removing the
+managed flag on a later restart does not reopen connector submit or steer: a
+marked profile must still present live readiness bound to the current native
+boot and digest. Profiles that have never opted into managed mode retain the
+existing connector behavior.
+
+This gate begins inside the plugin's `register()` entrypoint. Hermes 0.21.3
+discovers enabled plugins synchronously before it connects the API adapter, so
+validation failures after registration begins leave the class-level gate in
+place. A disabled plugin or an import failure before `register()` runs cannot
+install that patch. In that state the connector is absent and the native API
+must remain loopback-only and unreachable from the Enterprise control plane;
+the profile is not eligible for readiness or promotion.
+
+Managed startup needs the normal identity and credentials from
+`credentials.env.example`, `HERMES_ENTERPRISE_MODEL`, and the exact governed
+config below. It calls only the ordinary agent-scoped Worker `/skills` and
+`/tools` discovery endpoints; it does not call its own native API to become
+ready. A new unclaimed Cloud profile therefore needs a short-lived, exact
+workspace/agent-scoped discovery grant for those two GET endpoints. That grant
+must not authorize model, tool, run, capacity-claim or mutation routes. Reuse
+the same random `ENTERPRISE_RUNTIME_TOKEN` when the binding is promoted instead
+of swapping a Cloud secret during activation.
+
+Do not reconstruct or replace a shared static runtime-agent map from an old
+bootstrap bundle. Install the connector while the pool is unclaimed, confirm
+the inert native capabilities endpoint, create the scoped discovery grant, then
+apply the role config and managed flag and restart. Promotion remains disabled
+until the connector's `readiness` operation returns a live document whose
+`boot_id` and readiness SHA-256 match the current gateway health headers. A
+leftover JSON file or a healthy Cloud badge cannot establish readiness.
+
 The env file has the fields shown in `credentials.env.example`. Provision `ENTERPRISE_RUNTIME_TOKEN` through the enterprise service's per-agent credential mechanism. `API_SERVER_KEY` is the random bearer secret the enterprise adapter uses to call this native runtime. Keep the file mode `0600`. There are **no workspace provider credentials** in this file. `--env-file` parses literal key/value data and never sources shell commands. CLI workspace, agent and URL flags override the corresponding file fields. Alternatively use `--token-file` with `--workspace-id`, `--agent-id` and `--enterprise-url`; the launcher then generates a native API key.
 
 The default dedicated profile is `~/.he-runtime/<agent-uuid>/`, separate from the user's personal `~/.hermes`. It contains its own `home`, `os-home`, working directory, session database, run reservations, API key, and a copy of the plugin. `--state-root` selects another data directory; keep the path short enough for macOS Unix sockets. The launcher checks the actual `<profile>/home/state/gateway.loop-tick.<pid>.sock` suffix with its current PID (preserved by `execve`) and counts UTF-8 bytes against the macOS limit. No personal environment, bot token, provider key, proxy setting, `HERMES_HOME`, session identity or Python user path is inherited. The launcher takes an exclusive per-agent file lock and refuses to repurpose an existing profile for a different workspace/agent/enterprise URL.
@@ -56,7 +185,7 @@ When relocating an existing profile, first stop its gateway and verify the proce
 
 Startup does a real authenticated `/tools` discovery and native tool/provider resolution before binding the API. By default it also refuses a profile whose native cron store is nonempty. `--verify-only` runs this preflight without starting the gateway. The enterprise service must already be reachable.
 
-Startup requires every assigned skill manifest's version and immutable `artifact_digest` to match a reviewed package, then independently checks the installed `SKILL.md` `content_digest`. New artifacts use the same SHA-256 for both fields. The original Partnerships 1.7 tuple is the sole compatibility exception because deployed migration 0047 registered a historical artifact identity before native byte attestation; its exact content hash is still checked and reported. After plugin discovery the launcher verifies the live plugin registry, resolved tool definitions and provider, then writes a non-secret `home/runtime-readiness.json`. The authenticated Cloud connector returns this checked runtime revision, plugin identity, assigned skill identities, installed content digests and exact tool names. A database assignment or reachable process alone is not Ready. See [MULTI_PARTY_RUNBOOK.md](MULTI_PARTY_RUNBOOK.md) for the two-profile rollout and acceptance sequence.
+Startup requires every assigned skill manifest's version and immutable `artifact_digest` to match a reviewed package, then independently checks the installed `SKILL.md` `content_digest`. New artifacts use the same SHA-256 for both fields. The original Partnerships 1.7 tuple is the sole compatibility exception because deployed migration 0047 registered a historical artifact identity before native byte attestation; its exact content hash is still checked and reported. After plugin discovery the launcher verifies the live plugin registry, its pinned revision and installed-tree digest, resolved tool definitions and provider, then writes a non-secret `home/runtime-readiness.json`. The authenticated Cloud connector returns this checked runtime revision, four-field plugin identity, assigned skill identities, installed content digests and exact tool names. A database assignment or reachable process alone is not Ready. See [MULTI_PARTY_RUNBOOK.md](MULTI_PARTY_RUNBOOK.md) for the two-profile rollout and acceptance sequence.
 
 ## Supported configuration and scope
 
@@ -80,7 +209,7 @@ gateway:
     max_concurrent_runs: 1
 ```
 
-The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, both built-in memory stores, memory/skill nudges, background review and title generation. MCP is empty by default. `ENTERPRISE_MCP_SERVERS_JSON` may add explicitly named stdio servers, but every one needs a bounded `tools.include` list and env values may only reference scoped variables from the credentials file. `HERMES_AGENTCASH_MCP_ENABLED=1` is the demo shortcut documented in that file. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise or configured MCP tools. Startup fails closed unless the resolved static tool definitions contain only enterprise tools plus that viewer. Native `agent.max_iterations` is 12 and `agent.api_max_retries` is 1: the Worker persists provider retry deadlines and owns visible, durable recovery instead of letting one native process sleep for a provider's full `Retry-After`. The enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
+The launcher disables every native built-in toolset except a dedicated read-only `skill_view`, both built-in memory stores, memory/skill nudges, the autonomous skill curator, background review and title generation. MCP is empty by default. `ENTERPRISE_MCP_SERVERS_JSON` may add explicitly named stdio servers, but every one needs a bounded `tools.include` list and env values may only reference scoped variables from the credentials file. `HERMES_AGENTCASH_MCP_ENABLED=1` is the demo shortcut documented in that file. Only this plugin is enabled. The managed profile removes the bundled skill catalog; `skill_view` is restricted to the exact assigned enterprise package and exists because official `skills.auto_load` is gated on a skills tool. A plugin pre-tool hook vetoes every other name outside its discovered enterprise or configured MCP tools. Startup fails closed unless the resolved static tool definitions contain only enterprise tools plus that viewer. It rejects provider fallback chains, alternate provider maps and API `model_routes`; the resolved custom provider, model, base URL, API mode and secret value are rechecked at each model request. Native `agent.max_iterations` is 12 and `agent.api_max_retries` is 1: the Worker persists provider retry deadlines and owns visible, durable recovery instead of letting one native process sleep for a provider's full `Retry-After`. The enterprise bridge remains responsible for its existing cost, turn, capability and approval policies. API requests should specify `provider: "custom"` plus the raw catalog model ID. Generic `OPENAI_API_KEY` does not authenticate an arbitrary custom URL on this pinned Hermes version; the config's explicit env-reference key does.
 
 `API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. By default the launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds, and health returns 503 if the cron store later becomes nonempty. `HERMES_NATIVE_CRON_ENABLED=1` retains those authenticated routes, while `cron.allow_agent_scheduling` remains false; Cloudflare stays the owner of business triggers. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
 
@@ -165,9 +294,24 @@ python3 -m unittest discover -s runtime/hermes/tests -v
 python3 runtime/hermes/tests/probe_native.py \
   --source /absolute/path/to/pinned/hermes-agent \
   --python runtime/hermes/.state/venv/bin/python
+PYTHONPATH=/absolute/path/to/pinned/hermes-agent \
+  /absolute/path/to/pinned/venv/bin/python \
+  runtime/hermes/tests/probe_cloud_managed.py \
+  --source /absolute/path/to/pinned/hermes-agent \
+  --python /absolute/path/to/pinned/venv/bin/python
 ```
 
 The native probe launches the actual official HTTP gateway and AIAgent with a **local fixture model and fixture enterprise server**, under disposable isolated homes. It starts dedicated opt-in Partnerships and Finance profiles, verifies each exact skill version/digest and tool inventory, exercises the real `publish_partner_invoice_review` and `get_partner_handoff_result` bridge calls, proves Finance has no AgentCash dependency, and proves a Finance attempt to call the Partnerships tool never reaches Enterprise. It also starts and restarts an existing Partnerships profile with the original byte-identical 1.7 package and discovery tool, checks the durable capability contract, admission replay/conflict, native cron route removal and health failure, native SSE payload/single-consumer behavior, stored tool history across turns, concurrency rejection and stop while waiting. It makes no paid provider calls and does not establish real model quality or production reachability. The unit tests cover spoofed argument identity, pending retry identity, stop, uncertain transport, redirect rejection, schema validation and environment isolation.
+
+The Cloud-managed probe starts the ordinary supervised gateway command. It
+proves the route gate survives a caught validation failure after plugin
+registration begins, inert capabilities remain observable while unready, stale
+readiness is removed, and fallback/model-route escape configuration is
+rejected. It also proves drift after HTTP 202 is stopped at the real provider
+boundary, a managed profile restarted without its flag remains closed, and
+one-byte plugin drift fails both startup and an already-ready latch. Its Worker
+and model are fixtures; the probe does not establish hosted installation,
+current provider availability or production quality.
 
 ## Official source anchors
 

@@ -11,74 +11,25 @@ import secrets
 import shlex
 import shutil
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 
 from install import ROOT, REVISION, verify_source
-from enterprise_bridge.packages import PLUGIN_NAME, PLUGIN_VERSION, packaged_skills, sha256_file
+from enterprise_bridge.runtime_policy import (
+    actual_plugin_attestation,
+    actual_skill_attestation,
+    assert_native_cron_empty,
+    install_native_api_policy,
+    load_enterprise_skills,
+    native_cron_route,
+    private_write,
+    write_runtime_attestation as _write_runtime_attestation,
+)
 
-NATIVE_HEALTH_PATHS = frozenset({"/health", "/health/detailed", "/v1/health", "/v1/capabilities"})
 MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 MCP_SECRET_DENYLIST = frozenset({"ENTERPRISE_RUNTIME_TOKEN", "API_SERVER_KEY"})
 AGENTCASH_TOOLS = ("fetch",)
-RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
-
-
-def native_cron_route(path):
-    return (
-        path == "/api/jobs"
-        or path.startswith("/api/jobs/")
-        or path == "/api/cron/fire"
-        or path.startswith("/api/cron/")
-    )
-
-
-def assert_native_cron_empty(load_jobs=None):
-    if load_jobs is None:
-        from cron.jobs import load_jobs
-    jobs = load_jobs()
-    if jobs:
-        raise RuntimeError("Enterprise Hermes profiles must not contain native cron jobs.")
-
-
-def install_native_api_policy():
-    """Remove native cron routes and make native health assert an empty cron store."""
-    from aiohttp import web
-    from gateway.platforms.api_server import APIServerAdapter
-
-    original = APIServerAdapter._http_route_table
-    if getattr(original, "_enterprise_policy", False):
-        return
-
-    def governed_routes(adapter):
-        routes = []
-        for method, path, handler in original(adapter):
-            if native_cron_route(path):
-                continue
-            if path in NATIVE_HEALTH_PATHS:
-                async def guarded(request, _handler=handler):
-                    response = await _handler(request)
-                    if response.status >= 400:
-                        return response
-                    try:
-                        assert_native_cron_empty()
-                    except Exception:
-                        return web.json_response({
-                            "error": "Enterprise native cron policy failed.",
-                            "code": "native_cron_not_empty",
-                        }, status=503)
-                    return response
-                handler = guarded
-            routes.append((method, path, handler))
-        return routes
-
-    governed_routes._enterprise_policy = True
-    APIServerAdapter._http_route_table = governed_routes
-
-
 def validate_profile_path(profile, platform=sys.platform, pid=None):
     # Match gateway.shutdown_watchdog.get_loop_tick_socket_path. execve keeps
     # this process's PID when it becomes the foreground official gateway.
@@ -87,164 +38,15 @@ def validate_profile_path(profile, platform=sys.platform, pid=None):
         raise ValueError("state-root is too long for the native macOS watchdog socket; use a shorter dedicated root")
 
 
-def private_write(path, text):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as file:
-        file.write(text)
-    temporary.chmod(0o600)
-    temporary.replace(path)
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise RuntimeError("Enterprise skill manifest redirects are not allowed.")
-
-
-_SECRET_CONFIG_KEYS = {
-    "access_key", "api_key", "credential", "credentials", "password",
-    "private_key", "secret", "token",
-}
-
-
-def _validate_skill_config(value, *, depth=0, path="skills.config"):
-    """Bound non-secret config before it reaches config.yaml/model context."""
-    if depth > 6:
-        raise RuntimeError(f"{path} is too deeply nested.")
-    if value is None or isinstance(value, (bool, int, float)):
-        return
-    if isinstance(value, str):
-        if len(value) > 4096:
-            raise RuntimeError(f"{path} is too long.")
-        return
-    if isinstance(value, list):
-        if len(value) > 50:
-            raise RuntimeError(f"{path} has too many values.")
-        for index, item in enumerate(value):
-            _validate_skill_config(item, depth=depth + 1, path=f"{path}[{index}]")
-        return
-    if isinstance(value, dict):
-        if len(value) > 50:
-            raise RuntimeError(f"{path} has too many fields.")
-        for key, item in value.items():
-            if not isinstance(key, str) or not key or len(key) > 80:
-                raise RuntimeError(f"{path} contains an invalid key.")
-            if key.lower() in _SECRET_CONFIG_KEYS:
-                raise RuntimeError(f"{path}.{key} may not contain credentials.")
-            _validate_skill_config(item, depth=depth + 1, path=f"{path}.{key}")
-        return
-    raise RuntimeError(f"{path} contains an unsupported value.")
-
-
-def load_enterprise_skills(base_url, token, opener=None, packages=None):
-    """Fetch the agent-scoped, non-secret skill manifest from the Worker."""
-    parsed = urllib.parse.urlsplit(base_url)
-    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})):
-        raise RuntimeError("Enterprise skill manifest needs HTTPS or loopback HTTP.")
-    request = urllib.request.Request(
-        base_url.rstrip("/") + "/skills", method="GET",
-        headers={
-            "Authorization": "Bearer " + token,
-            "Accept": "application/json",
-            "User-Agent": "Hermes-Enterprise-Bridge/1.0",
-        },
-    )
-    transport = opener or urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
-    try:
-        response = transport.open(request, timeout=5)
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
-        raise RuntimeError("Enterprise skill manifest could not be loaded.") from error
-    with response:
-        raw = response.read(65537)
-        if getattr(response, "status", 200) != 200 or len(raw) > 65536:
-            raise RuntimeError("Enterprise skill manifest was rejected.")
-    try:
-        payload = json.loads(raw)
-    except (ValueError, UnicodeDecodeError) as error:
-        raise RuntimeError("Enterprise skill manifest returned invalid JSON.") from error
-    skills = payload.get("skills") if isinstance(payload, dict) else None
-    if not isinstance(skills, list) or len(skills) > 16:
-        raise RuntimeError("Enterprise skill manifest has an invalid skill list.")
-    available = packages or packaged_skills(ROOT / "enterprise_bridge")
-    auto_load, merged_config, manifests = [], {}, []
-    for skill in skills:
-        if not isinstance(skill, dict):
-            raise RuntimeError("Enterprise skill manifest contains an invalid skill.")
-        name, version, digest, config = (skill.get("name"), skill.get("version"),
-                                         skill.get("artifact_digest"), skill.get("config"))
-        if (not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+", name)
-                or not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
-                or not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
-                or not isinstance(config, dict) or skill.get("auto_load") is not True):
-            raise RuntimeError("Enterprise skill manifest contains invalid metadata.")
-        package = available.get(name)
-        if (package is None or package["version"] != version
-                or package["artifact_digest"] != digest):
-            raise RuntimeError("Enterprise skill manifest does not match the reviewed native package.")
-        if name in auto_load:
-            raise RuntimeError("Enterprise skill manifest contains a duplicate package.")
-        _validate_skill_config(config)
-        for key, value in config.items():
-            if key in merged_config and merged_config[key] != value:
-                raise RuntimeError("Enterprise skill configuration conflicts across packages.")
-            merged_config[key] = value
-        auto_load.append(name)
-        manifests.append({"name": name, "version": version, "artifact_digest": digest})
-    return {"auto_load": auto_load, "config": merged_config, "manifests": manifests}
-
-
-def actual_skill_attestation(manager, manifests):
-    """Verify assigned skill metadata and bytes through the live plugin registry."""
-    metadata = {item.get("name"): item for item in manager.list_plugin_skill_metadata()}
-    packages = packaged_skills(ROOT / "enterprise_bridge")
-    actual = []
-    for manifest in manifests:
-        name = manifest["name"]
-        package = packages.get(name)
-        path = manager.find_plugin_skill(name)
-        details = metadata.get(name)
-        frontmatter = details.get("frontmatter") if isinstance(details, dict) else None
-        if (package is None or package["version"] != manifest["version"]
-                or package["artifact_digest"] != manifest["artifact_digest"]
-                or path is None or not pathlib.Path(path).is_file() or pathlib.Path(path).is_symlink()
-                or not isinstance(frontmatter, dict)
-                or frontmatter.get("version") != manifest["version"]
-                or frontmatter.get("artifact_digest") != manifest["artifact_digest"]
-                or frontmatter.get("content_digest") != package["content_digest"]
-                or sha256_file(pathlib.Path(path)) != package["content_digest"]):
-            raise RuntimeError("Governed skill preflight found a stale or misbound package: " + name)
-        actual.append({**manifest, "content_digest": package["content_digest"]})
-    return actual
-
-
-def actual_plugin_attestation(manager):
-    """Read the enabled plugin identity from Hermes's live plugin manager."""
-    matches = [item for item in manager.list_plugins() if item.get("name") == PLUGIN_NAME]
-    if (len(matches) != 1 or matches[0].get("version") != PLUGIN_VERSION
-            or matches[0].get("enabled") is not True or matches[0].get("error") is not None):
-        raise RuntimeError("Governed plugin preflight found a stale or unavailable Enterprise bridge.")
-    return {"name": matches[0]["name"], "version": matches[0]["version"]}
-
-
 def write_runtime_attestation(profile, metadata, plugin, skills, tool_names):
-    """Persist only the checked, non-secret native inventory used by readiness."""
-    attestation = {
-        "schema_version": 1,
-        "runtime_revision": REVISION,
-        "plugin": plugin,
-        "workspace_id": metadata["workspace_id"],
-        "agent_id": metadata["agent_id"],
-        "enterprise_url": metadata["enterprise_url"],
-        "skills": skills,
-        "tools": sorted(tool_names),
-        "agentcash_enabled": "agentcash" in (metadata.get("mcp_servers") or {}),
-        "native_cron_disabled": not bool(metadata.get("native_cron_enabled")),
-    }
-    private_write(profile / "home" / RUNTIME_READINESS_FILENAME,
-                  json.dumps(attestation, indent=2, sort_keys=True) + "\n")
-    return attestation
+    """Backwards-compatible launcher wrapper around the shared policy writer."""
+    return _write_runtime_attestation(
+        profile / "home",
+        {**metadata, "agentcash_enabled": "agentcash" in (metadata.get("mcp_servers") or {})},
+        plugin,
+        skills,
+        tool_names,
+    )
 
 
 def reset_managed_skill_home(profile):
@@ -277,7 +79,9 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
         document["agentcash"] = {
             "command": "npx", "args": ["--yes", "agentcash@0.17.1"],
             "env": {"HOME": "${AGENTCASH_HOME}"},
-            "tools": {"include": list(AGENTCASH_TOOLS)},
+            "tools": {
+                "include": list(AGENTCASH_TOOLS), "resources": False, "prompts": False,
+            },
             "policy": {"allowed_hosts": ["stableenrich.dev", "fetcher.sh"], "max_amount_usd": 0.15},
         }
 
@@ -318,6 +122,11 @@ def load_mcp_servers(raw, supplied, agentcash_enabled=False):
             raise RuntimeError(f"MCP server {name} has an invalid host or spend policy.")
         servers[name] = {"command": command, "args": args, "env": configured_env,
                          "tools": {"include": include}}
+        for family in ("resources", "prompts"):
+            if family in tools:
+                if not isinstance(tools[family], bool):
+                    raise RuntimeError(f"MCP server {name} has an invalid tools.{family} switch.")
+                servers[name]["tools"][family] = tools[family]
         policies.append({"server": name, "tools": include, "allowed_hosts": hosts,
                          "max_amount_usd": float(maximum)})
     return servers, policies, passthrough
@@ -350,6 +159,11 @@ def managed_agent_config(toolset_names):
     }
 
 
+def mcp_platform_selectors(mcp_servers):
+    """Return the native platform selectors for configured MCP server aliases."""
+    return sorted(mcp_servers)
+
+
 def child(metadata_path):
     metadata = json.loads(pathlib.Path(metadata_path).read_text())
     source, profile = pathlib.Path(metadata["source"]), pathlib.Path(metadata_path).parent
@@ -371,7 +185,9 @@ def child(metadata_path):
     base = metadata["enterprise_url"] + "/internal/runtime/w/" + metadata["workspace_id"] + "/agents/" + metadata["agent_id"]
     enterprise_skills = load_enterprise_skills(base, os.environ["ENTERPRISE_RUNTIME_TOKEN"])
     mcp_servers = metadata.get("mcp_servers") or {}
-    mcp_toolsets = ["mcp-" + name for name in sorted(mcp_servers)]
+    # Hermes platform selection names configured MCP server aliases and maps
+    # them to registry-owned mcp-<name> toolsets after discovery.
+    mcp_toolsets = mcp_platform_selectors(mcp_servers)
     platform_toolsets = ["enterprise_bridge", "enterprise_skill_reader", *mcp_toolsets]
     config = {
         "_config_version": DEFAULT_CONFIG.get("_config_version", 12),

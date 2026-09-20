@@ -1,0 +1,42 @@
+{
+  "object": "hermes.enterprise_bridge.readiness",
+  "version": "1.7.0",
+  "runtime_revision": "5d59366010640c1d6b8f170d8a4ee109db2bbdef",
+  "plugin": {
+    "name": "enterprise_bridge",
+    "version": "1.7.0",
+    "revision": "d0806ecb2b8ac55b9ea52b02bbaed896fe0a2549",
+    "artifact_digest": "sha256:e665ecfd3d5ae6e68c38a71f83a8821fd1a8093bef9489194901beaa9dd87adf"
+  },
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "agent_id": "22222222-2222-4222-8222-222222222222",
+  "enterprise_url": "https://enterprise.example",
+  "skills": [
+    {
+      "name": "enterprise_bridge:partner-program-screening",
+      "version": "1.7.0",
+      "artifact_digest": "sha256:9f124ce44aa318b13e9f8ccfd92072d8b3ba6a22030eaad31cfafbfda3a1e2a9",
+      "content_digest": "sha256:cd26e70aa49de223f28216ea579d33c610305d3184a6c592c7841fa12aca6ddf"
+    }
+  ],
+  "tools": [
+    "ask_for_context",
+    "get_approval_status",
+    "get_document_text",
+    "get_partner_candidate",
+    "get_request",
+    "list_partner_candidates",
+    "list_requests",
+    "mcp__agentcash__fetch",
+    "propose_approval",
+    "propose_instruction",
+    "propose_request",
+    "save_review_note",
+    "set_context_field",
+    "set_focus",
+    "skill_view"
+  ],
+  "agentcash_enabled": true,
+  "agentcash_wallet_present": true,
+  "native_cron_disabled": true
+}

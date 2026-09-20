@@ -739,6 +739,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(servers["agentcash"]["tools"]["include"], [
             "fetch",
         ])
+        self.assertIs(servers["agentcash"]["tools"]["resources"], False)
+        self.assertIs(servers["agentcash"]["tools"]["prompts"], False)
         self.assertEqual(environment, {"AGENTCASH_HOME": "/srv/hermes-agentcash"})
         self.assertEqual(policies[0]["max_amount_usd"], 0.15)
         with self.assertRaisesRegex(RuntimeError, "dedicated directory"):
