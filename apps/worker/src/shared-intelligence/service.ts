@@ -134,8 +134,8 @@ export function validateSharedIntelligenceCandidateText(value: string, max: numb
 
 /** The user-visible excerpt is a bounded, redacted rendering; the exact source message is pinned separately by hash. */
 function redactedExcerptAppears(messages: string[], excerpt: string): boolean {
-  const needle = sanitizeExportText(excerpt, 1_000).toLowerCase();
-  return needle.length >= 12 && messages.some((message) => sanitizeExportText(message, 200_000).toLowerCase().includes(needle));
+  const needle = sanitizeExportText(excerpt, 1_000);
+  return needle.length >= 12 && messages.some((message) => sanitizeExportText(message, 200_000).includes(needle));
 }
 
 function answerAxis(answer: unknown): { score: number; confidence: number } {
@@ -374,7 +374,7 @@ export async function prepareSharedIntelligenceProposal(
     const toolNames = stringArray(row.tool_names, 40, 64);
     const stepLabels = stringArray(row.step_labels, 50, 160);
     const excerptSha256 = await sha256(excerpt);
-    const message = messages.find((item) => sanitizeExportText(item.text, 200_000).toLowerCase().includes(excerpt.toLowerCase()))!;
+    const message = messages.find((item) => sanitizeExportText(item.text, 200_000).includes(excerpt))!;
     const sourceMessageRole = message.role === 'user' ? 'user' : 'iris';
     const messageSha256 = await sha256(message.text);
     const sourceSha256 = await sha256({ run_id: row.run_id, ended_at: new Date(row.ended_at).toISOString(), message_id: message.id, message_role: sourceMessageRole, message_sha256: messageSha256, excerpt_sha256: excerptSha256, tool_names: toolNames, step_labels: stepLabels, outcome: 'runtime_completed' });

@@ -197,6 +197,35 @@ describe('Shared Intelligence publication boundary', () => {
     expect(published).toBe(0);
   });
 
+  it('rejects an initially case-altered excerpt while accepting the exact sanitized rendering', async () => {
+    await expect(withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+      const work = { tx, workspaceId: fx.workspaceId, userId: fx.adminId, jobs: [] } as unknown as TenantWork;
+      return prepareSharedIntelligenceProposal(work, {
+        agent_id: fx.agentId,
+        title: 'Record evidence provenance before escalation',
+        goal: 'Make partner reviews reproducible',
+        lesson: 'Separate claims from evidence before escalation.',
+        rationale: 'A completed review exposed a reproducibility gap.',
+        team_ids: [fx.teamId],
+        evidence: [{ run_id: fx.runIds[0], approved_excerpt: FIRST_SOURCE_MESSAGE.toLowerCase() }],
+      });
+    })).rejects.toMatchObject({ reason: 'shared_intelligence_excerpt_unverified', status: 422 });
+
+    const prepared = await withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId: fx.adminId }, async (tx) => {
+      const work = { tx, workspaceId: fx.workspaceId, userId: fx.adminId, jobs: [] } as unknown as TenantWork;
+      return prepareSharedIntelligenceProposal(work, {
+        agent_id: fx.agentId,
+        title: 'Record evidence provenance before escalation',
+        goal: 'Make partner reviews reproducible',
+        lesson: 'Separate claims from evidence before escalation.',
+        rationale: 'A completed review exposed a reproducibility gap.',
+        team_ids: [fx.teamId],
+        evidence: [{ run_id: fx.runIds[0], approved_excerpt: FIRST_SOURCE_MESSAGE }],
+      });
+    });
+    expect(prepared.evidence[0]?.approvedExcerpt).toBe(FIRST_SOURCE_MESSAGE);
+  });
+
   it.each([
     ['case', FIRST_SOURCE_MESSAGE.toLowerCase()],
     ['whitespace', FIRST_SOURCE_MESSAGE.replace('partner claim', 'partner  claim')],
