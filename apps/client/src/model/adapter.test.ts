@@ -1452,6 +1452,29 @@ describe('the adapter', () => {
     adapter.dispose();
   });
 
+  it('remaps an uploaded agent_file source chip on sendTurn the same way as a stored one', async () => {
+    const { adapter, calls, store } = makeAdapter({
+      [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
+    });
+    await adapter.start();
+    store.dispatch({ type: 'bootstrap/apply', patch: { capabilities: {
+      emailIngress: false,
+      turnAttachments: true,
+      automatedTriggers: false,
+      memberInvitationMode: 'legacy_delivery',
+      memberRoleTemplates: [],
+    } } });
+    store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
+      id: mockUuid(70), label: 'composer-upload.txt', kind: 'source', source_kind: 'agent_file',
+      sha256: 'd'.repeat(64), icon: 'context',
+    } });
+    await adapter.send(SESSION, 'Read the uploaded source');
+    expect(calls.find((call) => call.path.endsWith('/turns'))?.body).toMatchObject({
+      attachments: [{ id: mockUuid(70), sha256: 'd'.repeat(64), kind: 'agent_file' }],
+    });
+    adapter.dispose();
+  });
+
   it('omits unbound file chips from turn admission so Iris never appears to have read them', async () => {
     const { adapter, calls, store } = makeAdapter({
       [`POST /w/${WS}/sessions/${SESSION}/turns`]: () => Response.json({ run_id: RUN, status: 'working', attempt: 1 }),
