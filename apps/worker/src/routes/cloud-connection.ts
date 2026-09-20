@@ -159,5 +159,5 @@ export async function completeCloudConnection(c: C): Promise<Response> {
       await work.tx.query(`UPDATE cloud_connection_attempts SET status='failed' WHERE id=$1 AND status='consumed'`, [prepared.id]);
     });
   }
-  return c.redirect(`/workspace/${prepared.workspaceId}?cloud=${outcome}#settings/Organization`, 303);
+  return c.redirect(`/workspace/${prepared.workspaceId}?cloud=${outcome}#admin/Organization`, 303);
 }

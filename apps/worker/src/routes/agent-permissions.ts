@@ -6,6 +6,7 @@ import { requireCsrf, requireOrigin } from '../auth.js';
 import { PgAgentDb } from '../engine/pg-agent-db.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { requireAgentConfigAccess } from '../domain/agent-config-access.js';
 
 async function agent(c: Context<{ Bindings: Env }>, work: TenantWork): Promise<string> {
   const id = pathUuid(c, 'agent');
@@ -27,7 +28,11 @@ async function view(c: Context<{ Bindings: Env }>, work: TenantWork, agentId: st
     pending_approvals:pending.rows.map(row=>({...row,created_at:row.created_at.toISOString()}))});
 }
 export async function getAgentPermissions(c: Context<{ Bindings: Env }>): Promise<Response> {
-  return c.json(await inWorkspace(c,async work=>view(c,work,await agent(c,work))));
+  return c.json(await inWorkspace(c,async work=>{
+    const id=await agent(c,work);
+    await requireAgentConfigAccess(work,id);
+    return view(c,work,id);
+  }));
 }
 export async function patchAgentPermissions(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c,{required:true}); requireCsrf(c);
@@ -37,6 +42,7 @@ export async function patchAgentPermissions(c: Context<{ Bindings: Env }>): Prom
   return c.json(await inWorkspace(c,async work=>{
     work.requireAdmin('Changing operation approval');
     const id=await agent(c,work);
+    await requireAgentConfigAccess(work,id);
     const supported=(await view(c,work,id)).operations.some(op=>op.id===input.operation_id);
     if(!supported) throw new RouteError('This agent cannot perform that operation.','operation_unavailable',409);
     await work.tx.query(`INSERT INTO agent_operation_policies(workspace_id,agent_id) VALUES($1,$2) ON CONFLICT(agent_id) DO NOTHING`,[work.workspaceId,id]);
@@ -55,6 +61,7 @@ export async function decideAgentOperation(c: Context<{ Bindings: Env }>): Promi
   const outcome=await inWorkspace(c,async work=>{
     work.requireAdmin('Approving an agent operation');
     const id=await agent(c,work);
+    await requireAgentConfigAccess(work,id);
     const row=(await work.tx.query<{id:string;run_id:string;status:string;tool_name:string;workflow_instance_id:string|null;run_status:string}>(
       `SELECT a.id,a.run_id,a.status,a.tool_name,r.workflow_instance_id,r.status AS run_status FROM agent_operation_approvals a JOIN runs r ON r.id=a.run_id WHERE a.id=$1 AND a.agent_id=$2 FOR UPDATE OF a`,[approvalId,id])).rows[0];
     if(!row) throw new RouteError('No such approval.','not_found',404);
@@ -72,5 +79,9 @@ export async function decideAgentOperation(c: Context<{ Bindings: Env }>): Promi
     try { await (await c.env.RUN_ATTEMPT.get(outcome.workflow_instance_id)).sendEvent({type:CONTEXT_ANSWERED_EVENT,payload:{run_id:outcome.run_id,key:`operation_approval:${approvalId}`}}); }
     catch { /* The decision stays durable and the human may retry delivery. */ }
   }
-  return c.json(await inWorkspace(c,async work=>view(c,work,await agent(c,work))));
+  return c.json(await inWorkspace(c,async work=>{
+    const id=await agent(c,work);
+    await requireAgentConfigAccess(work,id);
+    return view(c,work,id);
+  }));
 }
