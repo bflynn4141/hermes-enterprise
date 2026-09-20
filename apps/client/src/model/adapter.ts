@@ -785,7 +785,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
     turnIds.set(sessionId, turnId);
     const attachments = state().capabilities.turnAttachments
-      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: a.kind ?? 'file' as const, status: 'ready' as const, ...(a.sha256 ? { sha256: a.sha256 } : {}) }))
+      ? opts.attachments ?? session.draft.attachments.map((a) => ({ id: a.id, label: a.label, kind: a.kind ?? 'file' as const, status: 'ready' as const, ...(a.sha256 ? { sha256: a.sha256 } : {}), ...(a.source_kind ? { source_kind: a.source_kind } : {}) }))
       : [];
     // Live finals lack a session sequence and use MAX_SAFE_INTEGER as an
     // ordering sentinel. Never propagate that sentinel into another turn.
@@ -886,7 +886,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
       dispatch({ type: 'session/draft', id, text: trimmed });
       // A rejected turn must not silently become a source-free retry.
       for (const source of attachments) {
-        if (source.kind === 'source' && source.sha256) dispatch({ type: 'session/attach', id, attachment: { id: source.id, label: source.label, kind: 'source', sha256: source.sha256, icon: 'context' } });
+        if (source.kind === 'source' && source.sha256) dispatch({ type: 'session/attach', id, attachment: { id: source.id, label: source.label, kind: 'source', sha256: source.sha256, ...(source.source_kind ? { source_kind: source.source_kind } : {}), icon: 'context' } });
       }
       // And the name goes back, unless a person has renamed it in between: a
       // manual rename wins permanently (decision C34), and that is still true

@@ -45,6 +45,7 @@ import {
   attachmentSchema,
   attachmentDetailSchema,
   attachmentUploadSchema,
+  librarySourceSchema,
   approvalViewSchema,
   directUploadResultSchema,
   enterpriseSkillAssignmentPageSchema,
@@ -307,7 +308,7 @@ export function createRest(options: RestOptions) {
     sessionSnapshot: (workspaceId: string, sessionId: string) =>
       request('GET', `${ws(workspaceId)}/sessions/${sessionId}/snapshot`, sessionSnapshotSchema),
     sendTurn: (workspaceId: string, sessionId: string, body: { text: string; client_turn_id: string; attachments: AttachmentRef[]; mode: string; model_id: string; effort: string | null; expected_settings?: SessionSettings }) =>
-      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: body.attachments.map((source) => ({ id: source.id, sha256: source.sha256, kind: source.kind === 'source' ? 'agent_file' : source.kind })) }) as Promise<RunView>,
+      request('POST', `${ws(workspaceId)}/sessions/${sessionId}/turns`, runViewSchema, { ...body, attachments: body.attachments.map((source) => ({ id: source.id, sha256: source.sha256, kind: source.kind === 'source' ? source.source_kind ?? 'agent_file' : source.kind })) }) as Promise<RunView>,
     stop: (workspaceId: string, sessionId: string, runId: string) =>
       request('POST', `${ws(workspaceId)}/sessions/${sessionId}/runs/${runId}/stop`, runViewSchema, {}) as Promise<RunView>,
     retry: (workspaceId: string, sessionId: string, runId: string, expectedAttempt: number, expectedSettings?: SessionSettings) =>
@@ -478,6 +479,9 @@ export function createRest(options: RestOptions) {
       send('DELETE', `${ws(workspaceId)}/${kind === 'attachment' ? 'attachments' : 'files'}/${id}`),
     /** The agent's Context sources, with their extraction status. */
     listAgentFiles: (workspaceId: string, agentId?: string | null) => request('GET', `${ws(workspaceId)}/files${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(attachmentDetailSchema)),
+    /** Team-granted, versioned references in Library. */
+    listLibrarySources: (workspaceId: string, agentId?: string | null) =>
+      request('GET', `${ws(workspaceId)}/library-sources${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`, paginatedSchema(librarySourceSchema)),
     /**
      * The bytes. In a deployed environment `upload.url` is a presigned R2 PUT
      * and this goes straight to R2 with no cookie; in `wrangler dev --local`

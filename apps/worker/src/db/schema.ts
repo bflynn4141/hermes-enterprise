@@ -376,6 +376,49 @@ export const agentContextFields = pgTable(
   (t) => [unique('agent_context_fields_key').on(t.agentId, t.key)],
 );
 
+export const librarySources = pgTable(
+  'library_sources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    slug: text('slug').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('library_sources_workspace_slug_key').on(t.workspaceId, t.slug)],
+);
+
+export const librarySourceVersions = pgTable(
+  'library_source_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    sourceId: uuid('source_id').notNull(),
+    version: integer('version').notNull(),
+    versionLabel: text('version_label').notNull(),
+    sha256: text('sha256').notNull(),
+    contentMarkdown: text('content_markdown').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: now('created_at'),
+  },
+  (t) => [unique('library_source_versions_number_key').on(t.sourceId, t.version)],
+);
+
+export const librarySourceTeamGrants = pgTable(
+  'library_source_team_grants',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    sourceId: uuid('source_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    grantedBy: uuid('granted_by'),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.sourceId, t.teamId] })],
+);
+
 export const instructionVersions = pgTable('instruction_versions', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -2003,6 +2046,9 @@ export const ALL_TABLES = {
   agent_files: agentFiles,
   agent_context_notes: agentContextNotes,
   agent_context_fields: agentContextFields,
+  library_sources: librarySources,
+  library_source_versions: librarySourceVersions,
+  library_source_team_grants: librarySourceTeamGrants,
   instruction_versions: instructionVersions,
   skill_versions: skillVersions,
   agent_skills: agentSkills,

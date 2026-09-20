@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -492,6 +492,14 @@ export function createMockBackend(options: MockOptions = {}) {
       ];
 
   const storedSources: AttachmentDetail[] = agentFiles.map((file) => ({ id: file.id, name: file.name, kind: 'agent_file', size: 160, mime: file.name.endsWith('.pdf') ? 'application/pdf' : 'text/markdown', sha256: 'a'.repeat(64), status: 'ready', extraction_status: file.extraction === 'ready' ? 'ready' : 'pending', extraction_error: null, text_length: file.body?.length ?? null, token_estimate: 30, created_at: iso(), url: null, url_expires_at: null }));
+  const librarySources: LibrarySource[] = empty ? [] : [{
+    id: mockUuid(63), version_id: mockUuid(64), slug: 'partner-program-guide',
+    title: 'Partner Program Guide',
+    summary: 'Shared operating guide for partner research, engagement authorization, invoice intake, and Finance review.',
+    version: 1, version_label: '0.1 draft', sha256: 'b'.repeat(64),
+    content_markdown: '# Partner Program Guide\n\nDraft shared reference for Partnerships and Finance.\n\n## From prospect to invoice\n\nUse approved terms and identify missing evidence.',
+    audiences: ['Finance', 'Partnerships'], created_at: iso(-5), updated_at: iso(-5), kind: 'library_source',
+  }];
   const confirmedNotes: ContextNote[] = [];
   const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [] };
   if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
@@ -1392,6 +1400,7 @@ export function createMockBackend(options: MockOptions = {}) {
       return json(agentPermissions);
     }
     if (p('/files') && method === 'GET') return page(storedSources);
+    if (p('/library-sources') && method === 'GET') return page(librarySources);
     const sourceMatch = match(new RegExp(`^/w/${WS}/files/([^/]+)$`));
     if (sourceMatch && method === 'DELETE') { const index = storedSources.findIndex((row) => row.id === sourceMatch[1]); if (index >= 0) storedSources.splice(index, 1); return new Response(null, { status: 204 }); }
     if (p('/context-fields')) return page(contextFields);
