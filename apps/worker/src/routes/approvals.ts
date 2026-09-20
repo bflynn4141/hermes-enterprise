@@ -37,7 +37,8 @@ export async function getApprovalRoute(c: Context<{ Bindings: Env }>): Promise<R
 export async function getApprovalEvidenceRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
   const evidenceId = pathUuid(c, 'evidenceId');
-  const evidence = await inWorkspace(c, (work) => getApprovalEvidence(work.tx, work.workspaceId, requestId, evidenceId));
+  const evidence = await inWorkspace(c, (work) =>
+    getApprovalEvidence(work.tx, work.workspaceId, requestId, evidenceId, work.userId));
   return c.json(approvalEvidenceViewSchema.parse(evidence));
 }
 

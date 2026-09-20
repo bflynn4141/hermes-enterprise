@@ -709,6 +709,8 @@ export function createMockBackend(options: MockOptions = {}) {
 
   let slackConnected = options.slack === 'connected';
   let emailConnected = options.email === 'connected';
+  let emailEvidenceConnected = options.email === 'connected';
+  let importedEmailEvidence = 0;
 
   const dataPrivacy = {
     keys: providerKeys.map((key) => ({
@@ -1591,6 +1593,43 @@ export function createMockBackend(options: MockOptions = {}) {
         can_manage: seat === 'admin',
         reconnect_required: false,
         behavior: { direct_messages: 'same_session', channel_messages: 'mention_required', channel_replies: 'threaded', approvals: 'hermes_inbox' },
+      });
+    }
+    if (path.startsWith(`/w/${WS}/integrations/email/evidence`)) {
+      if (method === 'POST' && path.endsWith('/gmail/oauth/start')) {
+        emailEvidenceConnected = true;
+        return json({ authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=evidence-fixture', expires_at: iso(600) }, 201);
+      }
+      if (method === 'POST' && path.endsWith('/threads')) {
+        importedEmailEvidence += 1;
+        return json({
+          kind: 'mailbox_thread_snapshot',
+          snapshot_id: mockUuid(970 + importedEmailEvidence),
+          source_id: mockUuid(980 + importedEmailEvidence),
+          version_id: mockUuid(990 + importedEmailEvidence),
+          version: importedEmailEvidence,
+          team_id: mockUuid(960),
+          team_name: 'Partnerships',
+          title: 'Re: Partner conversation',
+          provider_thread_id: String(body.thread_id ?? 'fixture-thread'),
+          message_count: 3,
+          sha256: 'a'.repeat(64),
+          imported_at: iso(0),
+          created: true,
+          events: { replies: 1, bounces: 0, unsubscribes: 1, sends_enqueued: 0 },
+        }, 201);
+      }
+      return json({
+        configured: true,
+        status: emailEvidenceConnected ? 'connected' : 'disconnected',
+        address: emailEvidenceConnected ? 'iris-evidence@example.com' : null,
+        connected_at: emailEvidenceConnected ? iso(0) : null,
+        latest_import_at: importedEmailEvidence ? iso(0) : null,
+        imported_threads: importedEmailEvidence,
+        can_manage: seat === 'admin',
+        authorization: 'separate_read_only',
+        scope: 'gmail.readonly',
+        selection: 'one_thread_per_import',
       });
     }
     if (path.startsWith(`/w/${WS}/integrations/email`)) {

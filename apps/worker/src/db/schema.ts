@@ -1464,6 +1464,87 @@ export const gmailOauthStates = pgTable('gmail_oauth_states', {
   createdAt: now('created_at'),
 });
 
+export const gmailEvidenceAccounts = pgTable(
+  'gmail_evidence_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    provider: text('provider').notNull().default('gmail'),
+    address: text('address').notNull(),
+    status: text('status').notNull().default('connected'),
+    ciphertext: bytea('ciphertext').notNull(),
+    iv: bytea('iv').notNull(),
+    wrappedDek: bytea('wrapped_dek').notNull(),
+    wrapIv: bytea('wrap_iv').notNull(),
+    kekVersion: integer('kek_version').notNull(),
+    scope: text('scope').notNull(),
+    tokenExpiresAt: ts('token_expires_at').notNull(),
+    connectedBy: uuid('connected_by'),
+    lastError: text('last_error'),
+    connectedAt: now('connected_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('gmail_evidence_accounts_workspace_address_key').on(t.workspaceId, t.address)],
+);
+
+export const gmailEvidenceOauthStates = pgTable('gmail_evidence_oauth_states', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  requestedBy: uuid('requested_by').notNull(),
+  stateDigest: text('state_digest').notNull(),
+  redirectUri: text('redirect_uri').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  consumedAt: ts('consumed_at'),
+  createdAt: now('created_at'),
+});
+
+export const mailboxThreadSnapshots = pgTable(
+  'mailbox_thread_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    teamId: uuid('team_id').notNull(),
+    librarySourceId: uuid('library_source_id').notNull(),
+    libraryVersionId: uuid('library_version_id').notNull(),
+    provider: text('provider').notNull(),
+    providerThreadId: text('provider_thread_id').notNull(),
+    title: text('title').notNull(),
+    messageCount: integer('message_count').notNull(),
+    normalizedSha256: text('normalized_sha256').notNull(),
+    normalizedThread: jsonb('normalized_thread').notNull(),
+    importedBy: uuid('imported_by'),
+    importedAt: now('imported_at'),
+  },
+  (t) => [unique('mailbox_thread_snapshots_library_version_key').on(t.libraryVersionId)],
+);
+
+export const inboundEmailEvents = pgTable('inbound_email_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  snapshotId: uuid('snapshot_id').notNull(),
+  providerMessageId: text('provider_message_id').notNull(),
+  kind: text('kind').notNull(),
+  contactAddress: text('contact_address').notNull(),
+  linkedOutboxId: uuid('linked_outbox_id'),
+  evidence: jsonb('evidence').notNull(),
+  recordedAt: now('recorded_at'),
+});
+
+export const externalEffectEvidenceReceipts = pgTable('external_effect_evidence_receipts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull(),
+  effectId: uuid('effect_id').notNull(),
+  snapshotId: uuid('snapshot_id').notNull(),
+  snapshotSha256: text('snapshot_sha256').notNull(),
+  claimedOutcome: text('claimed_outcome').notNull(),
+  verification: text('verification').notNull(),
+  occurredAt: ts('occurred_at').notNull(),
+  note: text('note').notNull(),
+  recordedBy: uuid('recorded_by').notNull(),
+  recordedAt: now('recorded_at'),
+});
+
 export const approvalResources = pgTable('approval_resources', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -2076,6 +2157,11 @@ export const ALL_TABLES = {
   outbound_email_outbox: outboundEmailOutbox,
   contact_suppressions: contactSuppressions,
   gmail_oauth_states: gmailOauthStates,
+  gmail_evidence_accounts: gmailEvidenceAccounts,
+  gmail_evidence_oauth_states: gmailEvidenceOauthStates,
+  mailbox_thread_snapshots: mailboxThreadSnapshots,
+  inbound_email_events: inboundEmailEvents,
+  external_effect_evidence_receipts: externalEffectEvidenceReceipts,
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,

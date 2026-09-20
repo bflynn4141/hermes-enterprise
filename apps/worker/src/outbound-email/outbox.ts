@@ -39,6 +39,16 @@ export async function queueApprovedEmail(
 
   for (const [recipientIndex, recipient] of input.payload.details.recipients.entries()) {
     if (!recipient.address) throw new Error('approved_email_recipient_missing');
+    if (recipient.candidate_id) {
+      const stopped = await tx.query<{ stage: string }>(
+        `SELECT stage FROM partner_engagements
+          WHERE workspace_id=$1 AND candidate_id=$2 AND stage IN ('replied','suppressed')
+          LIMIT 1`,
+        [input.workspaceId, recipient.candidate_id],
+      );
+      if (stopped.rows[0]?.stage === 'replied') throw new Error('approved_email_recipient_replied');
+      if (stopped.rows[0]?.stage === 'suppressed') throw new Error('approved_email_recipient_suppressed');
+    }
     const suppressed = await tx.query(
       `SELECT 1 FROM contact_suppressions WHERE workspace_id=$1 AND address=$2 LIMIT 1`,
       [input.workspaceId, recipient.address.trim().toLowerCase()],

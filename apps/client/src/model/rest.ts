@@ -33,6 +33,12 @@ import {
   slackOAuthStartSchema,
   outboundEmailConnectionSchema,
   outboundEmailOAuthStartSchema,
+  inboundEmailConnectionSchema,
+  inboundEmailOAuthStartSchema,
+  inboundEmailThreadImportSchema,
+  type InboundEmailThreadImportInput,
+  externalEffectEvidenceReceiptSchema,
+  type ExternalEffectEvidenceInput,
   providerOAuthStartSchema,
   providerOAuthPollSchema,
   runViewSchema,
@@ -353,6 +359,8 @@ export function createRest(options: RestOptions) {
     routeApproval: (workspaceId: string, requestId: string, body: RouteApprovalInput) =>
       request('POST', `${ws(workspaceId)}/requests/${requestId}/approval/route`, approvalViewSchema, body, { requestedFrom: 'inbox' }) as Promise<ApprovalView>,
     executeEffect: (workspaceId: string, effectId: string) => request('POST', `${ws(workspaceId)}/effects/${effectId}/execute`, effectEntitySchema, {}),
+    recordExternalEffectEvidence: (workspaceId: string, effectId: string, body: ExternalEffectEvidenceInput) =>
+      request('POST', `${ws(workspaceId)}/effects/${effectId}/external-evidence`, externalEffectEvidenceReceiptSchema, body),
 
     // --- entities ---
     getRequest: (workspaceId: string, id: string) => request('GET', `${ws(workspaceId)}/requests/${id}`, requestEntitySchema),
@@ -513,6 +521,10 @@ export function createRest(options: RestOptions) {
     disconnectSlack: (workspaceId: string) => request('DELETE', `${ws(workspaceId)}/integrations/slack`, slackDisconnectSchema),
     outboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email`, outboundEmailConnectionSchema),
     startGmailOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/gmail/oauth/start`, outboundEmailOAuthStartSchema, {}),
+    inboundEmailConnection: (workspaceId: string) => request('GET', `${ws(workspaceId)}/integrations/email/evidence`, inboundEmailConnectionSchema),
+    startGmailEvidenceOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/integrations/email/evidence/gmail/oauth/start`, inboundEmailOAuthStartSchema, {}),
+    importGmailEvidenceThread: (workspaceId: string, body: InboundEmailThreadImportInput) =>
+      request('POST', `${ws(workspaceId)}/integrations/email/evidence/threads`, inboundEmailThreadImportSchema, body),
     startNousOAuth: (workspaceId: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/start`, providerOAuthStartSchema, {}),
     pollNousOAuth: (workspaceId: string, id: string) => request('POST', `${ws(workspaceId)}/provider-connections/nous/${id}/poll`, providerOAuthPollSchema, {}),
     /** The model menu. Any member may read it; only the key rows need step-up. */

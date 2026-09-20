@@ -2,6 +2,8 @@
 //
 //   GET  /w/:ws/effects?status=      what a decision implied and nobody has done
 //   POST /w/:ws/effects/:id/execute  answers `unavailable`, every time
+//   POST /w/:ws/effects/:id/external-evidence records a manual access/signature
+//                                             claim without executing anything
 //
 // The execute route is the most important honest surface in the product, so it
 // is worth being explicit about what it is:
@@ -23,7 +25,13 @@
 // and step-up — because it writes an audit row against a person's name, and
 // "somebody walked past an unlocked laptop" should not be able to.
 import type { Context } from 'hono';
-import { effectEntitySchema, paginatedSchema, EFFECT_STATUSES } from '@hermes/shared';
+import {
+  effectEntitySchema,
+  externalEffectEvidenceInputSchema,
+  externalEffectEvidenceReceiptSchema,
+  paginatedSchema,
+  EFFECT_STATUSES,
+} from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, pathUuid, RouteError } from './tenant.js';
@@ -49,7 +57,7 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
 }
 
 /** Does this member hold the role the effect needs? */
-async function holdsRole(
+export async function holdsRole(
   tx: { query: (text: string, values?: readonly unknown[]) => Promise<{ rowCount: number | null }> },
   workspaceId: string,
   userId: string,
@@ -62,6 +70,87 @@ async function holdsRole(
     [workspaceId, userId, requiredRole],
   );
   return rowCount === 1;
+}
+
+interface EvidenceReceiptRow {
+  id: string;
+  effect_id: string;
+  effect_kind: 'access_grant' | 'signature';
+  snapshot_id: string;
+  snapshot_sha256: string;
+  claimed_outcome: 'completed_outside_hermes';
+  verification: 'evidence_recorded_not_provider_verified';
+  occurred_at: Date | string;
+  note: string;
+  recorded_by: string;
+  recorded_at: Date | string;
+}
+
+/** Record a person's external-completion claim without changing the effect.
+ * This route never calls a provider and is categorically unavailable for email
+ * and payment effects. */
+export async function recordExternalEffectEvidence(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: false });
+  requireCsrf(c);
+  const effectId = pathUuid(c, 'id');
+  const parsed = externalEffectEvidenceInputSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) throw new RouteError('Evidence receipt details are invalid', 'invalid_input', 422);
+
+  const result = await inWorkspace(c, async (work) => {
+    requireStepUp(work.session);
+    const effect = await loadEffect(work.tx, effectId, work.userId);
+    if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
+    if (effect.kind !== 'access_grant' && effect.kind !== 'signature') {
+      throw new RouteError('External evidence is only accepted for access and signature effects', 'unsupported_effect_evidence', 409);
+    }
+    if (effect.status === 'cancelled') throw new RouteError('this effect was cancelled by a later version', 'effect_cancelled', 409);
+    if (!(await holdsRole(work.tx, work.workspaceId, work.userId, effect.required_role))) {
+      throw new RouteError(`recording this needs the ${effect.required_role} role`, 'role_required', 403);
+    }
+    const snapshot = await work.tx.query<{ id: string; normalized_sha256: string }>(
+      `SELECT s.id,s.normalized_sha256
+         FROM mailbox_thread_snapshots s
+         JOIN enterprise_team_agents eta
+           ON eta.workspace_id=s.workspace_id AND eta.team_id=s.team_id
+         JOIN members m
+           ON m.workspace_id=eta.workspace_id AND m.user_id=eta.principal_user_id
+        WHERE s.workspace_id=$1 AND s.id=$2 AND eta.principal_user_id=$3 AND m.status='active'`,
+      [work.workspaceId, parsed.data.snapshot_id, work.userId],
+    );
+    const evidence = snapshot.rows[0];
+    if (!evidence) throw new RouteError('No accessible mailbox evidence snapshot', 'evidence_not_found', 404);
+    const inserted = await work.tx.query<EvidenceReceiptRow>(
+      `INSERT INTO external_effect_evidence_receipts
+         (workspace_id,effect_id,snapshot_id,snapshot_sha256,claimed_outcome,verification,
+          occurred_at,note,recorded_by)
+       VALUES ($1,$2,$3,$4,'completed_outside_hermes','evidence_recorded_not_provider_verified',$5,$6,$7)
+       ON CONFLICT (workspace_id,effect_id,snapshot_id) DO NOTHING
+       RETURNING id,effect_id,$8::text AS effect_kind,snapshot_id,snapshot_sha256,
+         claimed_outcome,verification,occurred_at,note,recorded_by,recorded_at`,
+      [work.workspaceId, effectId, evidence.id, evidence.normalized_sha256,
+        new Date(parsed.data.occurred_at), parsed.data.note, work.userId, effect.kind],
+    );
+    let receipt = inserted.rows[0];
+    if (!receipt) {
+      const existing = await work.tx.query<EvidenceReceiptRow>(
+        `SELECT r.id,r.effect_id,e.kind AS effect_kind,r.snapshot_id,r.snapshot_sha256,
+                r.claimed_outcome,r.verification,r.occurred_at,r.note,r.recorded_by,r.recorded_at
+           FROM external_effect_evidence_receipts r
+           JOIN effects e ON e.workspace_id=r.workspace_id AND e.id=r.effect_id
+          WHERE r.workspace_id=$1 AND r.effect_id=$2 AND r.snapshot_id=$3`,
+        [work.workspaceId, effectId, evidence.id],
+      );
+      receipt = existing.rows[0];
+    }
+    if (!receipt) throw new Error('external_effect_evidence_receipt_not_stored');
+    return externalEffectEvidenceReceiptSchema.parse({
+      ...receipt,
+      provider_execution_by_hermes: false,
+      occurred_at: new Date(receipt.occurred_at).toISOString(),
+      recorded_at: new Date(receipt.recorded_at).toISOString(),
+    });
+  });
+  return c.json(result, 201);
 }
 
 export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Response> {
