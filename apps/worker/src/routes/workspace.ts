@@ -37,7 +37,7 @@ interface WorkspaceRow {
   default_runtime: string;
   daily_token_cap: string | null;
   max_concurrent_runs: number;
-  flags: Record<string, boolean>;
+  flags: Record<string, unknown>;
   timezone: string;
 }
 
@@ -79,6 +79,8 @@ export async function loadBootstrap(
     `SELECT role, reviewer_roles FROM members WHERE workspace_id = $1 AND user_id = $2`,
     [workspaceId, userId],
   );
+  const viewerRole = viewer.rows[0]?.role ?? 'member';
+  const reviewerRoles = viewer.rows[0]?.reviewer_roles ?? [];
 
   const agents = await tx.query<AgentRow>(
     `SELECT a.id, a.name, a.responsibility, a.setup_step,
@@ -89,6 +91,22 @@ export async function loadBootstrap(
        FROM agents a
        LEFT JOIN agent_provisioning p ON p.workspace_id=a.workspace_id AND p.agent_id=a.id
       WHERE a.workspace_id = $1
+        AND EXISTS (
+          SELECT 1 FROM members viewer_member
+           WHERE viewer_member.workspace_id=$1 AND viewer_member.user_id=$2
+             AND viewer_member.status='active'
+        )
+        AND (a.context_scope='workspace'
+          OR EXISTS (SELECT 1 FROM agent_owners ao WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id)
+          OR EXISTS (SELECT 1 FROM enterprise_team_agents ta WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id))
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_owners ao JOIN members owner_member
+            ON owner_member.workspace_id=ao.workspace_id AND owner_member.id=ao.member_id
+           WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
+             AND (owner_member.user_id<>$2 OR owner_member.status<>'active'))
+        AND NOT EXISTS (
+          SELECT 1 FROM enterprise_team_agents ta
+           WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id AND ta.principal_user_id<>$2)
       ORDER BY
         CASE
           WHEN EXISTS (
@@ -106,8 +124,7 @@ export async function loadBootstrap(
       LIMIT 1`,
     [workspaceId, userId],
   );
-  const agent = agents.rows[0];
-  if (!agent) throw new Error('workspace has no agent');
+  const agent = agents.rows[0] ?? null;
 
   // Counts are derived from current rows and the document view, never stored.
   // Audience filtering happens before aggregation so a private request does
@@ -151,11 +168,9 @@ export async function loadBootstrap(
       WHERE s.owner_id = $1 AND NOT s.archived
       ORDER BY s.pinned DESC, s.last_activity_at DESC
       LIMIT 50`,
-    [userId, agent.id],
+    [userId, agent?.id ?? null],
   );
 
-  const viewerRole = viewer.rows[0]?.role ?? 'member';
-  const reviewerRoles = viewer.rows[0]?.reviewer_roles ?? [];
   const requests = await loadVisiblePendingRequests(tx, workspaceId, userId, viewerRole, reviewerRoles);
 
   // A catalog row is offered only when this workspace holds a verified key for
@@ -213,6 +228,12 @@ export async function loadBootstrap(
   );
   const head = heads.rows[0] ?? { session_head: '0', workspace_head: '0' };
   const count = counts.rows[0] ?? { grants: 0, documents: 0, decisions: 0 };
+  // Bootstrap hydrates runtime-facing boolean feature flags. Other settings
+  // stored in the same JSON column, such as the fetch URL allowlist, belong to
+  // the Admin settings endpoint and are not part of this client contract.
+  const featureFlags = Object.fromEntries(
+    Object.entries(ws.flags).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+  );
 
   return bootstrapSchema.parse({
     workspace: {
@@ -226,7 +247,7 @@ export async function loadBootstrap(
         daily_token_cap: ws.daily_token_cap === null ? null : Number(ws.daily_token_cap),
         max_concurrent_runs: ws.max_concurrent_runs,
         timezone: ws.timezone,
-        flags: ws.flags,
+        flags: viewerRole === 'admin' ? featureFlags : {},
       },
     },
     viewer: {
@@ -234,14 +255,14 @@ export async function loadBootstrap(
       role: viewer.rows[0]?.role ?? 'member',
       reviewer_roles: viewer.rows[0]?.reviewer_roles ?? [],
     },
-    agent: {
+    agent: agent ? {
       id: agent.id,
       name: agent.name,
       email: null,
       responsibility: agent.responsibility,
       setup_step: agent.setup_step,
       provisioning_status: agent.provisioning_status,
-    },
+    } : null,
     capabilities: {
       email_ingress: false,
       // Only explicitly selected, hash-bound agent sources are accepted.

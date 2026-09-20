@@ -41,6 +41,7 @@ export function useWorkspaceLists(): Loaded {
   const adapter = useAdapter();
   const workspaceId = state.workspace.id;
   const agentId = state.agent.id;
+  const admin = state.user.role === 'admin';
 
   // Which lists the cache currently holds. It is part of the effect's
   // dependencies so that a list dropped by `list/invalidate` — a decision
@@ -59,19 +60,21 @@ export function useWorkspaceLists(): Loaded {
     adapter.ensureList(LIST_KEYS.requests, async () => page('request', (await rest.listRequests(workspaceId, '?visibility=all')).items));
     adapter.ensureList(LIST_KEYS.documents, async () => page('document', (await rest.listDocuments(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.members, async () => page('member', (await rest.listMembers(workspaceId)).items));
-    adapter.ensureList(LIST_KEYS.invitations, async () => page('invitation', (await rest.listInvitations(workspaceId)).items));
+    if (admin) adapter.ensureList(LIST_KEYS.invitations, async () => page('invitation', (await rest.listInvitations(workspaceId)).items));
     adapter.ensureList(LIST_KEYS.history, async () => page('event', (await rest.listEvents(workspaceId)).items));
     if (agentId) {
       adapter.ensureList(LIST_KEYS.traces, async () =>
         page('trace', (await rest.listTraces(workspaceId, `?agent_id=${encodeURIComponent(agentId)}`)).items),
       );
     }
-    adapter.ensureList(LIST_KEYS.agentFiles, async () => page('agent_file', (await rest.listAgentFiles(workspaceId)).items));
-    adapter.ensureList(LIST_KEYS.contextFields, async () => page('context_field', (await rest.listContextFields(workspaceId)).items));
-    adapter.ensureList(LIST_KEYS.instructions, async () => page('instruction_version', (await rest.listInstructions(workspaceId)).items));
-    adapter.ensureList(LIST_KEYS.skills, async () => page('skill_version', (await rest.listSkills(workspaceId, agentId)).items));
-    adapter.ensureList(LIST_KEYS.providerKeys, async () => page('provider_key', (await rest.providerKeys(workspaceId)).keys));
-  }, [adapter, workspaceId, agentId, loadedKeys]);
+    if (agentId) {
+      adapter.ensureList(LIST_KEYS.agentFiles, async () => page('agent_file', (await rest.listAgentFiles(workspaceId, agentId)).items));
+      adapter.ensureList(LIST_KEYS.contextFields, async () => page('context_field', (await rest.listContextFields(workspaceId)).items));
+      adapter.ensureList(LIST_KEYS.instructions, async () => page('instruction_version', (await rest.listInstructions(workspaceId, agentId)).items));
+      adapter.ensureList(LIST_KEYS.skills, async () => page('skill_version', (await rest.listSkills(workspaceId, agentId)).items));
+    }
+    if (admin) adapter.ensureList(LIST_KEYS.providerKeys, async () => page('provider_key', (await rest.providerKeys(workspaceId)).keys));
+  }, [adapter, workspaceId, agentId, admin, loadedKeys]);
 
   const ready = (state_: AppState, key: string): boolean => state_.entities.lists[key]?.state === 'ready';
 

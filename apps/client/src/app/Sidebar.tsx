@@ -25,7 +25,7 @@ const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'agents', label: 'Agents', icon: 'iris', ref: OV },
   { key: 'inbox', label: 'Inbox', icon: 'inbox', ref: INBOX },
   { key: 'members', label: 'Members', icon: 'people', ref: MEMBERS },
-  { key: 'admin', label: 'Admin', icon: 'shield', ref: ADMIN() },
+  { key: 'admin', label: 'Admin', icon: 'shield', ref: ADMIN('Organization') },
   { key: 'history', label: 'History', icon: 'trace', ref: HISTORY() },
   { key: 'library', label: 'Library', icon: 'context', ref: LIB('skills') },
   { key: 'settings', label: 'Settings', icon: 'settings', ref: SETTINGS() },
@@ -36,7 +36,9 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
   const adapter = useAdapter();
   const nav = useNav();
   const dispatch = useDispatch();
-  const sections = SECTIONS.filter((section) => section.key !== 'admin' || state.user.role === 'admin');
+  const sections = SECTIONS.filter((section) =>
+    (section.key !== 'admin' || state.user.role === 'admin') &&
+    (section.key !== 'agents' || state.agent.id !== null));
   const [menu, setMenu] = useState(false);
   const accountBtn = useRef<HTMLElement>(null);
   const phoneAccountBtn = useRef<HTMLButtonElement>(null);
@@ -67,7 +69,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     const host = sidebarRef.current;
     if (!host || phone) return;
     const sessionHeading = [...host.querySelectorAll('span')].find((node) => node.textContent === 'Iris sessions');
-    if (sessionHeading) sessionHeading.textContent = `${state.agent.name || 'Iris'} sessions`;
+    if (sessionHeading) sessionHeading.textContent = state.agent.id ? `${state.agent.name || 'Iris'} sessions` : 'Session history';
     const rows = host.querySelectorAll<HTMLButtonElement>('button.sidebar-row[data-session-row], button.sidebar-row[title]:not([aria-label])');
     rows.forEach((row, index) => {
       const session = sessions[index];
@@ -113,7 +115,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     // `SidebarNav` renders its own <aside> with its own collapse control; this
     // wrapper is the grid cell. It clips during the shared width transition so
     // neither state can paint over the neighboring pane (decision C36).
-    <aside ref={sidebarRef} className="sidebar hermes-ui" aria-label="Workspace navigation">
+    <aside ref={sidebarRef} className={`sidebar hermes-ui${state.agent.id ? '' : ' is-agentless'}`} aria-label="Workspace navigation">
       {phone ? <div className="phone-navigation">
         <select aria-label="Workspace section" value={state.ui.app.section}
           onChange={(event) => {
@@ -168,7 +170,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
         }}
         onWorkspaceAction={(action) => {
           if (action === 'Switch workspace') window.location.assign('/');
-          if (action === 'Workspace settings') go(SETTINGS('Organization'));
+          if (action === 'Workspace settings') go(state.user.role === 'admin' ? ADMIN('Organization') : SETTINGS('Notifications'));
           if (action === 'Invite team members') go(MEMBERS);
         }}
         onFooterClick={() => {
@@ -190,9 +192,9 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
         <MenuItem small icon="mail" onClick={() => go(SETTINGS('Notifications'))}>
           Notification settings
         </MenuItem>
-        <MenuItem small icon="key" onClick={() => go(SETTINGS('Provider keys'))}>
-          Provider keys
-        </MenuItem>
+        {state.user.role === 'admin' && <MenuItem small icon="key" onClick={() => go(ADMIN('Provider keys'))}>
+          Model providers
+        </MenuItem>}
         <MenuItem small icon="shield" onClick={() => go(SETTINGS('Data and privacy'))}>
           Data and privacy
         </MenuItem>

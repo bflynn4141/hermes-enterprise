@@ -108,6 +108,43 @@ describe('GET/PATCH /w/:ws/settings', () => {
     expect(events.rows).toHaveLength(0);
   });
 
+  it('keeps member defaults, caps and notifications while withholding Admin configuration state', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    await asTenant(local, async (c) => {
+      await c.query(
+        `UPDATE workspace_settings
+            SET flags=$2::jsonb,daily_token_cap=1200,max_concurrent_runs=2
+          WHERE workspace_id=$1`,
+        [local.workspaceId, JSON.stringify({ feature_preview: true, fetch_url_allowlist: ['private.example'] })],
+      );
+      await c.query(
+        `UPDATE workspaces SET deletion_requested_at=now(),deletion_scheduled_at=now()+interval '7 days'
+          WHERE id=$1`,
+        [local.workspaceId],
+      );
+    });
+
+    const member = await asUser(env, local.memberId, `/w/${local.workspaceId}/settings`);
+    expect(member.status).toBe(200);
+    expect(await member.json()).toMatchObject({
+      role: 'member',
+      defaults: { model_id: 'nous:anthropic/claude-sonnet-5' },
+      caps: { daily_token_cap: 1200, max_concurrent_runs: 2 },
+      flags: {},
+      fetch_url_allowlist: [],
+      notifications: { approvals: true, blocked: true, digest: false },
+      deletion: { requested_at: null, scheduled_at: null },
+    });
+
+    const admin = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings`);
+    expect(await admin.json()).toMatchObject({
+      flags: { feature_preview: true, fetch_url_allowlist: ['private.example'] },
+      fetch_url_allowlist: ['private.example'],
+      deletion: { requested_at: expect.any(String), scheduled_at: expect.any(String) },
+    });
+  });
+
   it('normalises the fetch_url allowlist and refuses something that is not a hostname', async () => {
     const local = await seedWorkspace();
     const { env } = makeEnv();
@@ -219,6 +256,60 @@ describe('Settings > Data and privacy', () => {
     // No attestation yet, so neither may carry real applicant data.
     expect(deepseek?.attested).toBe(false);
     expect(anthropic?.real_data_allowed).toBe(false);
+  });
+
+  it('gives a Member processor policy without credential inventory metadata', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    const keyId = randomUUID();
+    await asTenant(local, (c) => c.query(
+      `INSERT INTO workspace_provider_keys
+         (id,workspace_id,provider,label,ciphertext,iv,wrapped_dek,wrap_iv,kek_version,
+          fingerprint,last4,status,verified_at,attestation)
+       VALUES ($1,$2,'anthropic','Finance production key','\\x00','\\x00','\\x00','\\x00',1,
+          $3,'s3cr','verified',now(),$4::jsonb)`,
+      [keyId, local.workspaceId, randomUUID(), JSON.stringify({ kind: 'zdr', reference: 'private-contract' })],
+    ));
+
+    const member = await asUser(env, local.memberId, `/w/${local.workspaceId}/settings/data-privacy`);
+    expect(member.status).toBe(200);
+    const body = await member.json() as { keys: Array<Record<string, unknown>> };
+    expect(body.keys).toEqual([expect.objectContaining({
+      provider: 'anthropic', label: 'anthropic', last4: '', status: 'configured',
+      verified_at: null, attestation: null, attested: true, real_data_allowed: true,
+    })]);
+    expect(body.keys[0]?.key_id).not.toBe(keyId);
+    expect(JSON.stringify(body)).not.toContain('Finance production key');
+    expect(JSON.stringify(body)).not.toContain('s3cr');
+    expect(JSON.stringify(body)).not.toContain('private-contract');
+
+    const admin = await asUser(env, local.adminId, `/w/${local.workspaceId}/settings/data-privacy`);
+    expect(await admin.json()).toMatchObject({ keys: [expect.objectContaining({
+      key_id: keyId, label: 'Finance production key', last4: 's3cr', status: 'verified',
+      attestation: expect.objectContaining({ reference: 'private-contract' }),
+    })] });
+  });
+
+  it('does not treat synthetic-only or no-attestation policy as permission for real data', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    await asTenant(local, async (c) => {
+      for (const [provider, kind] of [['anthropic', 'synthetic_only'], ['openrouter', 'none']] as const) {
+        await c.query(
+          `INSERT INTO workspace_provider_keys
+             (workspace_id,provider,label,ciphertext,iv,wrapped_dek,wrap_iv,kek_version,
+              fingerprint,last4,status,attestation)
+           VALUES($1,$2,$3,'\\x00','\\x00','\\x00','\\x00',1,$4,'abcd','verified',$5::jsonb)`,
+          [local.workspaceId, provider, `${provider} key`, randomUUID(), JSON.stringify({ kind })],
+        );
+      }
+    });
+    for (const userId of [local.adminId, local.memberId]) {
+      const response = await asUser(env, userId, `/w/${local.workspaceId}/settings/data-privacy`);
+      const body = await response.json() as { keys: Array<{ provider: string; real_data_allowed: boolean }> };
+      expect(body.keys.find((row) => row.provider === 'anthropic')?.real_data_allowed).toBe(false);
+      expect(body.keys.find((row) => row.provider === 'openrouter')?.real_data_allowed).toBe(false);
+    }
   });
 });
 

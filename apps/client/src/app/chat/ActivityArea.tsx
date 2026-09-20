@@ -14,7 +14,7 @@ import { Glass, Icon } from '../ui/icons.js';
 import { Button } from '../ui/primitives.js';
 import type { SessionState } from '../../model/store.js';
 
-export function ActivityArea({ session }: { session: SessionState }) {
+export function ActivityArea({ session, cancellationOnly = false }: { session: SessionState; cancellationOnly?: boolean }) {
   const dispatch = useDispatch();
   const adapter = useAdapter();
   const state = useAppState();
@@ -36,7 +36,7 @@ export function ActivityArea({ session }: { session: SessionState }) {
       {queue.map((item) => (
         <div className="queue-row" key={item.id}>
           <Glass name="invoice" size={24} className="q-icon" />
-          {editing === item.id ? (
+          {!cancellationOnly && editing === item.id ? (
             <input
               className="grow"
               aria-label="Edit queued follow-up"
@@ -55,15 +55,17 @@ export function ActivityArea({ session }: { session: SessionState }) {
               <span className="meta">{item.status === 'paused' ? 'Queue paused · Not started' : 'After this · Queued'}</span>
             </div>
           )}
-          <Button
-            link
-            onClick={() => {
-              setEditing(item.id);
-              setText(item.text);
-            }}
-          >
-            Edit
-          </Button>
+          {!cancellationOnly && (
+            <Button
+              link
+              onClick={() => {
+                setEditing(item.id);
+                setText(item.text);
+              }}
+            >
+              Edit
+            </Button>
+          )}
           <button
             type="button"
             className="icon-btn"

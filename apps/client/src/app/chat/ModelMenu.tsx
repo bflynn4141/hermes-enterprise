@@ -30,7 +30,7 @@
 // Keyboard: ArrowUp/ArrowDown move through the options (roving `tabindex`),
 // Home/End jump, Enter picks, typing goes to the search box wherever focus is.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SETTINGS, vendorPrefix, type CatalogEntry } from '@hermes/shared';
+import { ADMIN, vendorPrefix, type CatalogEntry } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useNav } from '../store-context.js';
 import { Icon } from '../ui/icons.js';
 import { MenuItem, Popover } from '../ui/primitives.js';
@@ -313,16 +313,16 @@ export function ModelMenu({ session, open, onClose, anchorRef }: ModelMenuProps)
       )}
 
       <div className="divider" />
-      <MenuItem
+      {state.user.role === 'admin' ? <MenuItem
         small
         onClick={() => {
           onClose();
-          nav(SETTINGS('Provider keys'));
+          nav(ADMIN('Provider keys'));
         }}
         right={<Icon name="arrow" size={16} />}
       >
-        Add or sync a provider key
-      </MenuItem>
+        Add or sync a model provider
+      </MenuItem> : <p className="p-meta" style={{ padding: '0 12px' }}>A workspace Admin manages model providers.</p>}
     </Popover>
   );
 }

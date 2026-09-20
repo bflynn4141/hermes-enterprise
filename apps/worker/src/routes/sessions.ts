@@ -31,6 +31,7 @@ import { requireAllowedProvider } from '../model/allowed.js';
 import { loadSessionSnapshot, projectSessionMessage } from '../domain/session-snapshot.js';
 import { parseExpectedSettings, requireExpectedSettings, validateSessionEffort } from '../domain/session-settings.js';
 import { VISIBLE } from '../domain/session-visibility.js';
+import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
 
 const MAX_PAGE = 100;
@@ -165,17 +166,64 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
     };
     const mode = input.mode === 'ask' || input.mode === 'plan' ? input.mode : 'work';
 
-    // A session belongs to an agent for its whole life. The optional input is
-    // for the multi-agent shape; omitting it keeps the current one-agent
-    // workspace flow working while still persisting the resolved identity.
-    const agentRows = await work.tx.query<{ id: string }>(
-      `SELECT id FROM agents
-        WHERE workspace_id = $1 AND ($2::uuid IS NULL OR id = $2)
-        ORDER BY created_at LIMIT 1`,
-      [work.workspaceId, requestedAgent?.success ? requestedAgent.data : null],
-    );
-    const agentId = agentRows.rows[0]?.id;
-    if (!agentId) throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+    // A session belongs to an agent for its whole life. An omitted id resolves
+    // only among agents whose private context the caller can access; it must
+    // never fall back to the workspace's first unrelated private agent.
+    let agentId: string | null = requestedAgent?.success ? requestedAgent.data : null;
+    if (agentId) {
+      try {
+        await requireAgentContextAccess(work, agentId);
+      } catch (error) {
+        if (error instanceof RouteError && error.status === 404) {
+          throw new RouteError('no such agent in this workspace', 'unknown_agent', 422);
+        }
+        throw error;
+      }
+    } else {
+      const candidates = await work.tx.query<{ id: string }>(
+        `SELECT a.id FROM agents a
+          WHERE a.workspace_id=$1
+            AND EXISTS (
+              SELECT 1 FROM members viewer_member
+               WHERE viewer_member.workspace_id=$1 AND viewer_member.user_id=$2
+                 AND viewer_member.status='active'
+            )
+            AND (a.context_scope='workspace'
+              OR EXISTS (SELECT 1 FROM agent_owners ao WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id)
+              OR EXISTS (SELECT 1 FROM enterprise_team_agents ta WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id))
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_owners ao JOIN members owner_member
+                ON owner_member.workspace_id=ao.workspace_id AND owner_member.id=ao.member_id
+               WHERE ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
+                 AND (owner_member.user_id<>$2 OR owner_member.status<>'active'))
+            AND NOT EXISTS (
+              SELECT 1 FROM enterprise_team_agents ta
+               WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id AND ta.principal_user_id<>$2)
+          ORDER BY
+            CASE
+              WHEN EXISTS (
+                SELECT 1 FROM agent_owners ao JOIN members m
+                  ON m.workspace_id=ao.workspace_id AND m.id=ao.member_id
+                 WHERE ao.workspace_id=$1 AND ao.agent_id=a.id
+                   AND m.user_id=$2 AND m.status='active'
+              ) THEN 0
+              WHEN EXISTS (
+                SELECT 1 FROM enterprise_team_agents ta
+                 WHERE ta.workspace_id=$1 AND ta.agent_id=a.id AND ta.principal_user_id=$2
+              ) THEN 1
+              WHEN a.context_scope='workspace' THEN 2
+              ELSE 3
+            END,
+            a.created_at
+          LIMIT 1`,
+        [work.workspaceId, work.userId],
+      );
+      agentId = candidates.rows[0]?.id ?? null;
+      if (!agentId) throw new RouteError('no accessible agent in this workspace', 'unknown_agent', 422);
+      // Keep one canonical final check at the write boundary so predicate drift
+      // can fail closed rather than creating a session on private context.
+      await requireAgentContextAccess(work, agentId);
+    }
 
     const resolvedRuntime = c.env.AGENT_RUNTIME === 'hermes'
       ? await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, agentId)

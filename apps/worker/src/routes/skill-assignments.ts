@@ -8,16 +8,12 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { listEnterpriseSkillAssignments, updateEnterpriseSkillAssignment } from '../enterprise-skills/service.js';
 import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
-
-async function requireAgent(workspaceId: string, agentId: string, tx: Parameters<typeof listEnterpriseSkillAssignments>[1]): Promise<void> {
-  const { rows } = await tx.query(`SELECT 1 FROM agents WHERE workspace_id=$1 AND id=$2`, [workspaceId, agentId]);
-  if (!rows[0]) throw new RouteError('no such agent', 'not_found', 404);
-}
+import { requireAgentConfigAccess } from '../domain/agent-config-access.js';
 
 export async function listSkillAssignments(c: Context<{ Bindings: Env }>): Promise<Response> {
   const agentId = pathUuid(c, 'agentId');
   const items = await inWorkspace(c, async (work) => {
-    await requireAgent(work.workspaceId, agentId, work.tx);
+    await requireAgentConfigAccess(work, agentId);
     return listEnterpriseSkillAssignments(
       c.env, work.tx, work.workspaceId, agentId, work.role === 'admin' ? work.userId : null,
     );
@@ -29,7 +25,7 @@ export async function getSkillAssignment(c: Context<{ Bindings: Env }>): Promise
   const agentId = pathUuid(c, 'agentId');
   const assignmentId = pathUuid(c, 'id');
   const entity = await inWorkspace(c, async (work) => {
-    await requireAgent(work.workspaceId, agentId, work.tx);
+    await requireAgentConfigAccess(work, agentId);
     const items = await listEnterpriseSkillAssignments(
       c.env, work.tx, work.workspaceId, agentId, work.role === 'admin' ? work.userId : null,
     );
@@ -49,7 +45,7 @@ export async function patchSkillAssignment(c: Context<{ Bindings: Env }>): Promi
   if (!parsed.success) throw new RouteError('skill assignment configuration is invalid', 'bad_body', 400);
   const entity = await inWorkspace(c, async (work) => {
     work.requireAdmin('configuring an enterprise skill');
-    await requireAgent(work.workspaceId, agentId, work.tx);
+    await requireAgentConfigAccess(work, agentId);
     // Ensure legacy deployments have a concrete row before applying the patch.
     await listEnterpriseSkillAssignments(c.env, work.tx, work.workspaceId, agentId, work.userId);
     try {

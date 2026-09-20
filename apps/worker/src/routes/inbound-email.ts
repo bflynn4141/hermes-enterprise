@@ -35,16 +35,17 @@ export async function getInboundEmailConnection(c: Context<{ Bindings: Env }>): 
       [work.workspaceId],
     );
     const summary = imports.rows[0];
+    const admin = work.role === 'admin';
     return inboundEmailConnectionSchema.parse({
       configured,
       status: !configured ? 'unavailable'
         : account?.status === 'connected' ? 'connected'
           : account?.status === 'error' ? 'error' : 'disconnected',
-      address: account?.address ?? null,
-      connected_at: account?.status === 'connected' ? new Date(account.connected_at).toISOString() : null,
-      latest_import_at: summary?.latest ? new Date(summary.latest).toISOString() : null,
-      imported_threads: summary?.count ?? 0,
-      can_manage: work.role === 'admin',
+      address: admin ? account?.address ?? null : null,
+      connected_at: admin && account?.status === 'connected' ? new Date(account.connected_at).toISOString() : null,
+      latest_import_at: admin && summary?.latest ? new Date(summary.latest).toISOString() : null,
+      imported_threads: admin ? summary?.count ?? 0 : 0,
+      can_manage: admin,
       authorization: 'separate_read_only',
       scope: 'gmail.readonly',
       selection: 'one_thread_per_import',

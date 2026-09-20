@@ -233,8 +233,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
     persistDrafts();
   }
 
+  let evictionRefresh: Promise<void> | null = null;
   function evicted(): void {
-    dispatch({ type: 'ui/set', patch: { banner: 'evicted' } });
+    // Close privileged surfaces and caches immediately. The authoritative
+    // bootstrap then distinguishes a role change from full workspace removal.
+    dispatch({ type: 'auth/evicted' });
+    if (evictionRefresh || disposed) return;
+    evictionRefresh = resync().finally(() => { evictionRefresh = null; });
   }
 
   const wsBase =
@@ -355,7 +360,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
         // Anything that happens during this GET remains in durable replay.
         await reconcileSessionSnapshotOnce(sessionId);
         if (disposed || generation !== activationGeneration || state().activeSessionId !== sessionId) return;
-        attachSessionHub(sessionId, generation);
+        // A session may remain owner-visible after its agent leaves the
+        // viewer's scope. Hydrate that transcript as history, without turning
+        // it into a live socket target.
+        if (state().agent.id) attachSessionHub(sessionId, generation);
       } catch (error) {
         if (generation !== activationGeneration || disposed) return;
         dispatch({ type: 'session/set', id: sessionId, patch: { hydrationError: 'Could not load this conversation. Select it again to retry.' } });
@@ -583,18 +591,23 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * the list the Provider keys tab renders as "Admin decision required" rather
    * than a failed bootstrap.
    */
-  async function loadExtra(): Promise<BootstrapExtra> {
+  async function loadExtra(viewerRole: 'admin' | 'member'): Promise<BootstrapExtra> {
     const [session, members, invitations, keys] = await Promise.all([
       rest.authSession(workspaceId).catch(() => null),
       rest.listMembers(workspaceId).catch(() => null),
-      rest.listInvitations(workspaceId).catch(() => null),
+      viewerRole === 'admin' ? rest.listInvitations(workspaceId).catch(() => null) : Promise.resolve(null),
       // Current Workers expose masked connection health to an Admin's ordinary
       // session. Preserve the older `reauth_required` response as a distinct
       // locked state during rolling deploys; it must never look like no key.
-      rest.providerKeys(workspaceId).then(
-        (page) => ({ keys: page.keys, locked: false }),
-        (error: unknown) => ({ keys: [], locked: error instanceof RestError && error.reauthRequired }),
-      ),
+      viewerRole === 'admin'
+        ? rest.providerKeys(workspaceId).then(
+            (page) => ({ keys: page.keys, locked: false }),
+            (error: unknown) => ({ keys: [], locked: error instanceof RestError && error.reauthRequired }),
+          )
+        // Members are intentionally not allowed to read masked key rows. That
+        // makes availability unknown, not absent; the run route remains the
+        // authority on whether a model can execute.
+        : Promise.resolve({ keys: [], locked: true }),
     ]);
     return {
       user: session?.user ?? null,
@@ -609,7 +622,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
 
   async function start(): Promise<void> {
     const boot = await rest.bootstrap(workspaceId);
-    const extra = await loadExtra();
+    const extra = await loadExtra(boot.viewer.role);
     ticket = extra.hubTicket;
 
     // The shell reuses its store across workspaces and sign-ins. Only a
@@ -632,6 +645,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
     // discard the draft or settings which their eventual POST reconciles.
     const localIds = Object.keys(existing).filter((id) => id.startsWith('local-'));
     for (const id of localIds) sessions[id] = existing[id]!;
+    const previousActive = state().activeSessionId;
+    const activeSessionId = boot.agent
+      ? previousActive && sameIdentity && sessions[previousActive]?.agentId === boot.agent.id
+        ? previousActive
+        : boot.sessions.find((row) => row.agent_id === boot.agent!.id)?.id ?? null
+      : null;
+    const selectedBootstrapSession = activeSessionId
+      ? boot.sessions.find((row) => row.id === activeSessionId) ?? null
+      : null;
 
     dispatch({
       type: 'bootstrap/apply',
@@ -643,14 +665,14 @@ export function createAdapter(options: AdapterOptions): Adapter {
           email: extra.user?.email ?? '',
           role: boot.viewer.role,
         },
-        agent: {
+        agent: boot.agent ? {
           id: boot.agent.id,
           name: boot.agent.name,
           email: boot.agent.email,
           summary: boot.agent.responsibility ?? '',
           setupStep: boot.agent.setup_step,
           provisioningStatus: boot.agent.provisioning_status ?? null,
-        },
+        } : { id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null },
         capabilities: {
           emailIngress: boot.capabilities.email_ingress,
           turnAttachments: boot.capabilities.turn_attachments,
@@ -663,7 +685,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         },
         sessions,
         sessionOrder: [...localIds, ...boot.sessions.map((row) => row.id)],
-        activeSessionId: sameIdentity && state().activeSessionId && sessions[state().activeSessionId!] ? state().activeSessionId : boot.sessions[0]?.id ?? null,
+        activeSessionId,
         counts: {
           inbox: boot.counts.inbox,
           pendingForMe: boot.counts.pending_for_me ?? boot.counts.inbox,
@@ -674,8 +696,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
         },
         settings: { ...boot.workspace.settings },
         cursors: { workspace: BigInt(boot.heads.workspace), session: {} },
-        ...(!state().ready && boot.sessions[0]?.focus_ref
-          ? { ui: { ...state().ui, app: boot.sessions[0].focus_ref, follow: true } }
+        ...(!state().ready && selectedBootstrapSession?.focus_ref
+          ? { ui: { ...state().ui, app: selectedBootstrapSession.focus_ref, follow: true } }
           : {}),
         ready: true,
       },
@@ -785,6 +807,8 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const session = state().sessions[sessionId];
     const trimmed = text.trim();
     if (!session || !trimmed) return;
+    const activeAgentId = state().agent.id;
+    if (!activeAgentId) throw new Error('No agent is available for a new turn.');
     // One client_turn_id per composer draft, reused across retries of the POST
     // and discarded on a 2xx, so a duplicate POST returns the existing run.
     const turnId = turnIds.get(sessionId) ?? newClientTurnId();
@@ -926,6 +950,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   const settingsMutations = new Map<string, SettingsMutation>();
 
   function updateSessionSettings(sessionId: string, settings: SessionSettings): Promise<void> {
+    if (!state().agent.id) return Promise.reject(new Error('No agent is available for session changes.'));
     const id = createdIds.get(sessionId) ?? sessionId;
     const session = state().sessions[id];
     if (!session) return Promise.reject(new Error('This session is no longer available.'));
@@ -1034,6 +1059,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function createSession(opts: { title?: string; mode?: string; runtime?: 'cloud' | 'local'; reuse?: boolean } = {}): Promise<string> {
+    if (!state().agent.id) throw new Error('No agent is available for a new session.');
     // "New session" clicked three times used to be three blank sessions, all
     // titled "New session", all identical in the sidebar (decision C34). A
     // blank one is already a new session, so it is opened rather than joined by
@@ -1099,10 +1125,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
   async function stop(sessionId: string): Promise<void> {
     const runId = currentRunId(sessionId);
     if (!runId) return;
-    await rest.stop(workspaceId, sessionId, runId);
+    const accepted = await rest.stop(workspaceId, sessionId, runId);
+    // A revoked-agent history view deliberately has no live session hub. Apply
+    // the authoritative control response so its safety action still lands in
+    // the UI instead of waiting for an event this client will never attach to.
+    dispatch({ type: 'run/status', sessionId, runId: accepted.run_id, status: accepted.status, patch: { attempt: accepted.attempt } });
   }
 
   function retry(sessionId: string, runId: string): Promise<void> {
+    if (!state().agent.id) return Promise.reject(new Error('No agent is available for run controls.'));
     const key = `${sessionId}:${runId}`;
     const existing = retryRequests.get(key);
     if (existing) return existing;
@@ -1129,6 +1160,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function guide(sessionId: string, text: string): Promise<void> {
+    if (!state().agent.id) throw new Error('No agent is available for run controls.');
     const runId = currentRunId(sessionId);
     if (!runId) return;
     // Optimistic only as far as the copy goes: "Guidance queued" is what the
@@ -1143,6 +1175,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function enqueue(sessionId: string, text: string): Promise<void> {
+    if (!state().agent.id) throw new Error('No agent is available for run controls.');
     const runId = currentRunId(sessionId);
     if (!runId) return;
     const page = await rest.enqueue(workspaceId, sessionId, runId, text);
@@ -1150,6 +1183,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function editQueued(sessionId: string, itemId: string, text: string): Promise<void> {
+    if (!state().agent.id) throw new Error('No agent is available for run controls.');
     const runId = currentRunId(sessionId);
     if (!runId) return;
     const page = await rest.editQueued(workspaceId, sessionId, runId, itemId, text);
@@ -1164,6 +1198,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   }
 
   async function answerContext(sessionId: string, key: string, value: string): Promise<void> {
+    if (!state().agent.id) throw new Error('No agent is available for run controls.');
     const runId = currentRunId(sessionId);
     if (!runId) return;
     await rest.answerContext(workspaceId, sessionId, runId, key, value);

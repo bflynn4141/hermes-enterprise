@@ -88,6 +88,8 @@ const hashForMock = (index: number): `sha256:${string}` => `sha256:${index.toStr
 const moneyForMock = (minor: number, currency: string): string => `${currency} ${(minor / 100).toFixed(2)}`;
 
 interface MockOptions {
+  /** Reviewer membership with no currently accessible agent. */
+  agentless?: boolean;
   /** Opt-in settings fixtures; never part of the live bundle. */
   agentSettings?: 'ok' | 'fail' | 'conflict';
   pendingAgentApproval?: boolean;
@@ -1056,7 +1058,7 @@ export function createMockBackend(options: MockOptions = {}) {
         settings: { default_model_id: DEFAULT_MODEL_ID, default_effort: DEFAULT_EFFORT, default_runtime: 'cloud', daily_token_cap: 500_000, max_concurrent_runs: 3, timezone: 'UTC', flags: approvalScenario ? { approval_demo: true } : {} },
       },
       viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
-      agent: workflowRole === 'finance'
+      agent: options.agentless ? null : workflowRole === 'finance'
         ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
         : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
       capabilities: {
@@ -1099,11 +1101,16 @@ export function createMockBackend(options: MockOptions = {}) {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://mock.local');
     const path = url.pathname;
     const method = (init?.method ?? 'GET').toUpperCase();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('hermes:mock-request', { detail: { path: url.pathname + url.search, method } }));
+    }
     const body: Record<string, unknown> = typeof init?.body === 'string'
       ? (JSON.parse(init.body) as Record<string, unknown>)
       : {};
     const p = (suffix: string) => path === `/w/${WS}${suffix}`;
     const match = (pattern: RegExp) => pattern.exec(path);
+
+    if (seat !== 'admin' && path.startsWith(`/w/${WS}/admin/`)) return fail(403, 'admin_required');
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 
@@ -1427,7 +1434,7 @@ export function createMockBackend(options: MockOptions = {}) {
       const row = documents.find((d) => d.id === documentMatch[1]);
       return row ? json(row) : fail(404, 'not_found');
     }
-    if (p('/members') && method === 'GET') return page(members);
+    if (p('/members') && method === 'GET') return page(seat === 'admin' ? members : members.map((member) => ({ ...member, email: '' })));
     const memberMatch = match(new RegExp(`^/w/${WS}/members/([^/]+)$`));
     if (memberMatch) {
       if (options.memberWrites === 'fail') return fail(503, 'fixture_write_failed', 'Member write fixture failed');
@@ -1444,7 +1451,7 @@ export function createMockBackend(options: MockOptions = {}) {
         return new Response(null, { status: 204 });
       }
     }
-    if (p('/invitations') && method === 'GET') return page(invitations);
+    if (p('/invitations') && method === 'GET') return seat === 'admin' ? page(invitations) : fail(403, 'admin_required');
     if (p('/invitations') && method === 'POST') {
       if (!setupOnly && body.role_template_key !== undefined) {
         return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
@@ -1781,9 +1788,11 @@ export function createMockBackend(options: MockOptions = {}) {
     }
     if (path.startsWith(`/w/${WS}/integrations/slack`)) {
       if (method === 'POST' && path.endsWith('/oauth/start')) {
+        if (seat !== 'admin') return fail(403, 'admin_required');
         return json({ authorize_url: 'https://slack.com/oauth/v2/authorize?client_id=fixture', expires_at: iso(600) }, 201);
       }
       if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required');
         slackConnected = false;
         return json({ status: 'disconnected', remote_revocation: 'not_applicable' });
       }
@@ -1797,7 +1806,7 @@ export function createMockBackend(options: MockOptions = {}) {
         team_name: slackConnected ? 'Fixture workspace' : null,
         enterprise_name: null,
         connected_at: slackConnected ? iso(0) : null,
-        granted_scopes: slackConnected ? ['app_mentions:read', 'chat:write', 'im:history'] : [],
+        granted_scopes: slackConnected && seat === 'admin' ? ['app_mentions:read', 'chat:write', 'im:history'] : [],
         agent: { id: AGENT, name: 'Iris' },
         can_manage: seat === 'admin',
         reconnect_required: false,
@@ -1831,10 +1840,10 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({
         configured: true,
         status: emailEvidenceConnected ? 'connected' : 'disconnected',
-        address: emailEvidenceConnected ? 'iris-evidence@example.com' : null,
+        address: emailEvidenceConnected && seat === 'admin' ? 'iris-evidence@example.com' : null,
         connected_at: emailEvidenceConnected ? iso(0) : null,
-        latest_import_at: importedEmailEvidence ? iso(0) : null,
-        imported_threads: importedEmailEvidence,
+        latest_import_at: seat === 'admin' && importedEmailEvidence ? iso(0) : null,
+        imported_threads: seat === 'admin' ? importedEmailEvidence : 0,
         can_manage: seat === 'admin',
         authorization: 'separate_read_only',
         scope: 'gmail.readonly',
@@ -1849,9 +1858,9 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({
         configured: true,
         status: emailConnected ? 'connected' : 'disconnected',
-        address: emailConnected ? 'iris-partners@example.com' : null,
+        address: emailConnected && seat === 'admin' ? 'iris-partners@example.com' : null,
         connected_at: emailConnected ? iso(0) : null,
-        pending_messages: emailConnected ? 2 : 0,
+        pending_messages: emailConnected && seat === 'admin' ? 2 : 0,
         can_manage: seat === 'admin',
         mode: 'draft_only',
         discovery_enabled: true,
@@ -1946,6 +1955,7 @@ export function createMockBackend(options: MockOptions = {}) {
       }, 201, { 'cache-control': 'no-store' });
     }
     if (p('/provider-keys') && method === 'GET') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
       if (options.providerKeysLocked) return fail(401, 'reauth_required', 'This action needs a recent sign-in.');
       return json({ keys: providerKeys });
     }
@@ -1996,12 +2006,15 @@ export function createMockBackend(options: MockOptions = {}) {
       return json({ id, ...upload, sha256: (23).toString(16).padStart(64, '0'), status: 'ready' });
     }
 
-    if (p('/usage')) return json(usage);
+    if (p('/usage')) return seat === 'admin' ? json(usage) : fail(403, 'admin_required');
     // Data and privacy, in the shape `GET /w/:ws/settings/data-privacy`
     // answers. The warnings and the erasure copy are the server's strings,
     // copied verbatim rather than paraphrased: this fixture exists so that a
     // client which stopped rendering them fails here.
-    if (p('/settings/data-privacy')) return json(dataPrivacy);
+    if (p('/settings/data-privacy')) return json(seat === 'admin' ? dataPrivacy : {
+      ...dataPrivacy,
+      keys: dataPrivacy.keys.map((key) => ({ ...key, label: 'Configured provider', last4: '', status: 'configured', verified_at: null, attestation: null, attested: false })),
+    });
     if (p('/settings/undelete')) return json({ cancelled: true });
     if (p('/settings')) {
       if (method === 'PATCH') {

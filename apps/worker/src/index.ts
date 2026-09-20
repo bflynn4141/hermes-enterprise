@@ -467,9 +467,9 @@ app.get('/w/:ws/documents/:id/versions', listDocumentVersions);
 app.post('/w/:ws/documents/:id/versions', createDocumentVersion);
 app.get('/w/:ws/documents/:id/render', getDocumentRender);
 
-// Usage and settings. Usage is readable by any member — they can already see
-// every run that produced the numbers — and the caps that govern it are
-// Admin-only to change. `DELETE /w/:ws` revokes access now and schedules the
+// Organization usage is Admin-only. Settings preserve member run defaults
+// and personal notifications while restricting workspace changes to Admins.
+// `DELETE /w/:ws` revokes access now and schedules the
 // destruction for seven days from now (src/workflows-long/workspace-deletion.ts).
 app.get('/w/:ws/usage', getUsage);
 app.get('/w/:ws/settings', getSettings);

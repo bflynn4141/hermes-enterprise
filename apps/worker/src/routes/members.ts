@@ -256,12 +256,12 @@ export async function listMembers(c: Context<{ Bindings: Env }>): Promise<Respon
     return paginatedSchema(memberEntitySchema).parse({
       items: rows.map((row) => ({
         id: row.id,
-        user_id: row.user_id,
-        name: row.name ?? row.email,
-        email: row.email,
+        user_id: work.role === 'admin' || row.user_id === work.userId ? row.user_id : null,
+        name: row.name ?? (work.role === 'admin' ? row.email : 'Member'),
+        email: work.role === 'admin' ? row.email : '',
         role: row.role,
         status: row.status,
-        reviewer_roles: row.reviewer_roles,
+        reviewer_roles: work.role === 'admin' ? row.reviewer_roles : [],
         joined_at: (row.joined_at as Date).toISOString(),
         version: 0,
       })),
@@ -282,6 +282,7 @@ export async function listMembers(c: Context<{ Bindings: Env }>): Promise<Respon
  */
 export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Response> {
   const body = await inWorkspace(c, async (work) => {
+    work.requireAdmin('viewing invitations');
     await expireInvitationReservations(work.tx, work.workspaceId);
     const { rows } = await work.tx.query(
       `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status,

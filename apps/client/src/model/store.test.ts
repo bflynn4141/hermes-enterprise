@@ -5,7 +5,7 @@
 // `actionsFor(parseStreamEvent(...))`, so a schema change in the contract fails
 // here rather than at runtime.
 import { describe, expect, it } from 'vitest';
-import { CTX, CTX_DEST, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type Ref, type StreamEvent } from '@hermes/shared';
+import { CTX, CTX_DEST, INBOX, OV, parseStreamEvent, sameRef, SCHEMA_VERSION, mockUuid, mockRunStream, type Ref, type StreamEvent } from '@hermes/shared';
 import { parseRef, serialiseRef } from './routes.js';
 import {
   DEFAULT_SESSION_TITLE,
@@ -74,6 +74,7 @@ function base(patch: Partial<AppState> = {}): AppState {
     ...state,
     workspace: { id: WS, name: 'Nous', role: 'admin', jurisdiction: 'default' },
     user: { id: mockUuid(100), name: 'Maya', email: 'maya@nous.example', role: 'admin' },
+    agent: { ...state.agent, id: AGENT },
     sessions: { [SESSION_A]: session(SESSION_A), [SESSION_B]: session(SESSION_B) },
     sessionOrder: [SESSION_A, SESSION_B],
     activeSessionId: SESSION_A,
@@ -104,6 +105,86 @@ function event(kind: string, payload: unknown, id: bigint, sessionId: string | n
 // ---------------------------------------------------------------------------
 
 describe('follow and pin', () => {
+  it('moves legacy Admin settings links for Admins and refuses them for Members before mount', () => {
+    const admin = reduce(base(), { type: 'nav/app', object: { section: 'settings', view: 'Runtime capacity' }, manual: true });
+    expect(admin.ui.app).toEqual({ section: 'admin', view: 'Runtime capacity' });
+
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+    });
+    const direct = reduce(member, { type: 'nav/app', object: { section: 'admin', view: 'Runtime capacity' }, manual: true });
+    expect(direct.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    const legacy = reduce(member, { type: 'nav/app', object: { section: 'settings', view: 'Provider keys' }, manual: true });
+    expect(legacy.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('unmounts an open Admin page when bootstrap demotes the viewer', () => {
+    const open = reduce(base(), { type: 'nav/app', object: { section: 'admin', view: 'Usage' }, manual: true });
+    const demoted = reduce(open, {
+      type: 'bootstrap/apply',
+      patch: {
+        workspace: { ...open.workspace, role: 'member' },
+        user: { ...open.user, role: 'member' },
+      },
+    });
+    expect(demoted.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('routes an agentless reviewer to Inbox without auto-selecting history', () => {
+    const withHistory = base({
+      agent: { id: null, name: 'Iris', email: null, summary: '', setupStep: null, provisioningStatus: null },
+      sessions: { [SESSION_A]: session(SESSION_A) },
+      activeSessionId: SESSION_A,
+    });
+    const booted = reduce(withHistory, { type: 'bootstrap/apply', patch: { ready: true } });
+    expect(booted.activeSessionId).toBeNull();
+    expect(booted.ui).toMatchObject({ app: INBOX, irisPanel: 'hidden', pane: 'app', follow: false });
+    expect(reduce(booted, { type: 'nav/app', object: OV, manual: true }).ui.app).toEqual(INBOX);
+    const selected = reduce(booted, { type: 'session/select', id: SESSION_A });
+    expect(selected.activeSessionId).toBe(SESSION_A);
+    expect(selected.ui).toMatchObject({ pane: 'chat', irisPanel: 'open' });
+  });
+
+  it('closes privileged views and drops cached Admin records as soon as a hub evicts the viewer', () => {
+    let open = reduce(base({ settings: { default_model_id: 'model', flags: { secret: true } } }), {
+      type: 'nav/app', object: { section: 'admin', view: 'Provider keys' }, manual: true,
+    });
+    open = reduce(open, { type: 'entity/upsert', kind: 'provider_key', id: 'key-1', version: 1, data: { label: 'Private key' } });
+    open = reduce(open, { type: 'list/set', key: 'invitations', ids: ['invite-1'], total: 1 });
+
+    const evicted = reduce(open, { type: 'auth/evicted' });
+    expect(evicted.user.role).toBe('member');
+    expect(evicted.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+    expect(evicted.entities.provider_key).toEqual({});
+    expect(evicted.entities.lists).toEqual({});
+    expect(evicted.settings).toEqual({ default_model_id: 'model' });
+  });
+
+  it('stores an Admin focus for history but never follows it into a Member view', () => {
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+    });
+    const object: Ref = { section: 'admin', view: 'Provider keys' };
+    const next = reduce(member, { type: 'iris/focus', sessionId: SESSION_A, object });
+    expect(next.sessions[SESSION_A]!.focus).toEqual(object);
+    expect(next.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
+  it('does not restore an Admin focus when a Member selects an older session', () => {
+    const member = base({
+      workspace: { id: WS, name: 'Nous', role: 'member', jurisdiction: 'default' },
+      user: { id: mockUuid(101), name: 'Alex', email: 'alex@nous.example', role: 'member' },
+      sessions: {
+        [SESSION_A]: session(SESSION_A),
+        [SESSION_B]: session(SESSION_B, { focus: { section: 'admin', view: 'Usage' } }),
+      },
+    });
+    const selected = reduce(member, { type: 'session/select', id: SESSION_B });
+    expect(selected.ui.app).toEqual({ section: 'settings', view: 'Notifications' });
+  });
+
   it('manual navigation pins the view', () => {
     const state = apply(base(), [{ type: 'nav/app', object: CTX, manual: true }]);
     expect(state.ui.follow).toBe(false);

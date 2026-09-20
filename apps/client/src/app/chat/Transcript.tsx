@@ -120,12 +120,12 @@ function useFind(ref: React.RefObject<HTMLDivElement | null>, find: FindSpec | n
   }, [find?.query, find?.index, ...deps]);
 }
 
-export function Transcript({ session, find }: { session: SessionState; find: FindSpec | null }) {
+export function Transcript({ session, find, readOnly = false }: { session: SessionState; find: FindSpec | null; readOnly?: boolean }) {
   const state = useAppState();
   const dispatch = useDispatch();
   const adapter = useAdapter();
   const reduce = useReducedMotion() ?? false;
-  const agent = agentName(state);
+  const agent = readOnly ? 'Session history' : agentName(state);
   const messages = session.pendingTurn ? [...session.messages, session.pendingTurn.message] : session.messages;
   const ref = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -314,7 +314,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 
   const lastIris = [...messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
-  const showChips = !session.run || session.run.status === 'completed';
+  const showChips = !readOnly && (!session.run || session.run.status === 'completed');
   const showWelcome = messages.length === 0 && !session.stream && !session.carried;
   const fill = (text: string): void => {
     dispatch({ type: 'session/draft', id: session.id, text });
@@ -324,7 +324,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
   return (
     <div className="transcript-wrap">
       <div className="scroll" ref={ref} onScroll={onScroll} aria-live="polite" aria-relevant="additions">
-        <div className={`transcript${showWelcome ? ' transcript-empty' : ''}`} role="log" aria-label={`Conversation with ${agent}`} ref={contentRef}>
+        <div className={`transcript${showWelcome ? ' transcript-empty' : ''}`} role="log" aria-label={readOnly ? 'Historical session messages' : `Conversation with ${agent}`} ref={contentRef}>
           {session.hasEarlier && messages.length > 0 && (
             <div className="row" style={{ justifyContent: 'center', padding: '8px 0' }}>
               <Button small onClick={() => void adapter.loadEarlier(session.id)}>
@@ -335,8 +335,8 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 
           {showWelcome && (
             <div className="chat-welcome">
-              <IrisMark size={48} className="mark" />
-              <p>{EMPTY.chatReady(agent)}</p>
+              {readOnly ? <Glass name="loop" size={48} className="mark" /> : <IrisMark size={48} className="mark" />}
+              <p>{readOnly ? 'No messages were stored for this session.' : EMPTY.chatReady(agent)}</p>
             </div>
           )}
 
@@ -369,7 +369,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
 
           {/* One activity surface owns every internal provider turn. Model
               progress and tool work never become duplicate answer bubbles. */}
-          <RunActivity session={session} progress={currentRunMessages.progress} />
+          <RunActivity session={session} progress={currentRunMessages.progress} readOnly={readOnly} />
 
           {/* A run has one answer, even when tools required several provider
               turns to produce it. */}
@@ -381,7 +381,7 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
           {/* The queue's own Edit and Remove. TaskRows renders the rows; it has
               no affordance for changing one, and a queued follow-up a person
               cannot correct is a queued follow-up they will not use. */}
-          <ActivityArea session={session} />
+          <ActivityArea session={session} cancellationOnly={readOnly} />
 
           {showChips && followUps.length > 0 && (
             <div className="suggestions" aria-label="Suggested prompts">
@@ -399,6 +399,15 @@ export function Transcript({ session, find }: { session: SessionState; find: Fin
             it is geometry, and `role="log"` above would otherwise announce it. */}
         <div className="transcript-spacer" ref={spacerRef} aria-hidden="true" />
       </div>
+      {readOnly && session.run && (session.run.status === 'working' || session.run.status === 'waiting') && (
+        <div className="status-bar session-history-controls" role="status">
+          <span>{session.run.status === 'working' ? 'Historical run is still working' : 'Historical run is waiting'}</span>
+          <span className="grow" />
+          <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
+            Stop work
+          </Button>
+        </div>
+      )}
       {/* Outside the scroll region, as the demo had it: a chip inside it would
           scroll away from the reader who needs it. */}
       {away && (

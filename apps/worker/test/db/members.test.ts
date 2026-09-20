@@ -7,7 +7,7 @@
 // someone removed in the WorkOS dashboard keeps a working socket.
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { seedWorkspace, withClient, type Fixture } from './helpers.js';
+import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { asUser, call, clearFakeWorkOS, makeEnv, readTenant, useFakeWorkOS, workosEnv } from './harness.js';
 import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
 import { pollWorkOSEvents } from '../../src/auth/events-poller.js';
@@ -192,6 +192,56 @@ describe('DELETE /w/:ws/members/:id', () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ reason: 'admin_required' });
+  });
+});
+
+describe('member and invitation read boundaries', () => {
+  it('keeps a minimal colleague directory for Members and full identity metadata for Admins', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    await withClient('owner', (c) => c.query('UPDATE users SET name=NULL WHERE id=$1', [local.memberId]));
+
+    const response = await asUser(env, local.memberId, `/w/${local.workspaceId}/members`);
+    expect(response.status).toBe(200);
+    const memberPage = await response.json() as { items: Array<Record<string, unknown>> };
+    expect(memberPage.items).toHaveLength(2);
+    expect(memberPage.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Maya Chen', email: '', user_id: null, role: 'admin', reviewer_roles: [] }),
+      expect.objectContaining({ name: 'Member', email: '', user_id: local.memberId, role: 'member', reviewer_roles: [] }),
+    ]));
+    expect(JSON.stringify(memberPage)).not.toContain('@example.test');
+
+    const adminPage = await asUser(env, local.adminId, `/w/${local.workspaceId}/members`);
+    const adminBody = await adminPage.json() as { items: Array<Record<string, unknown>> };
+    expect(adminBody.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ email: expect.stringContaining('@example.test'), user_id: local.memberId }),
+    ]));
+  });
+
+  it('reserves invitation email and provisioning state for Admins', async () => {
+    const local = await seedWorkspace();
+    const { env } = makeEnv();
+    const invitationId = randomUUID();
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, local.workspaceId, local.adminId);
+      await c.query(
+        `INSERT INTO invitations(id,workspace_id,email,role,expires_at,invited_by)
+         VALUES($1,$2,'private-invite@example.test','member',now()-interval '1 hour',$3)`,
+        [invitationId, local.workspaceId, local.adminId],
+      );
+      await c.query('COMMIT');
+    });
+    const refused = await asUser(env, local.memberId, `/w/${local.workspaceId}/invitations`);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ reason: 'admin_required' });
+    expect(await readTenant(local.workspaceId, local.adminId, async (c) =>
+      (await c.query<{ status: string }>('SELECT status FROM invitations WHERE id=$1', [invitationId])).rows[0]?.status,
+    )).toBe('pending');
+    expect((await asUser(env, local.adminId, `/w/${local.workspaceId}/invitations`)).status).toBe(200);
+    expect(await readTenant(local.workspaceId, local.adminId, async (c) =>
+      (await c.query<{ status: string }>('SELECT status FROM invitations WHERE id=$1', [invitationId])).rows[0]?.status,
+    )).toBe('expired');
   });
 });
 

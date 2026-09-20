@@ -16,7 +16,17 @@ const save = (fx: Fixture, text: string, expected: string | null = null, agent =
 
 async function addAgent(fx: Fixture): Promise<string> {
   const id = randomUUID();
-  await withClient('owner', async (db) => { await db.query('BEGIN'); await setTenant(db, fx.workspaceId, fx.adminId); await db.query(`INSERT INTO agents(id,workspace_id,name,status) VALUES($1,$2,'Other agent','started')`, [id, fx.workspaceId]); await db.query('COMMIT'); });
+  await withClient('owner', async (db) => {
+    await db.query('BEGIN');
+    await setTenant(db, fx.workspaceId, fx.adminId);
+    await db.query(`INSERT INTO agents(id,workspace_id,name,status) VALUES($1,$2,'Other agent','started')`, [id, fx.workspaceId]);
+    await db.query(
+      `INSERT INTO agent_owners(workspace_id,agent_id,member_id)
+       SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`,
+      [fx.workspaceId, id, fx.adminId],
+    );
+    await db.query('COMMIT');
+  });
   return id;
 }
 
@@ -81,6 +91,6 @@ describe('selected-agent standing instructions', () => {
     const other = await addAgent(fx);
     const saved = await save(fx, 'Other prompt.', null, other);
     const version = await saved.json() as { id: string };
-    await withClient('owner', async (db) => { await db.query('BEGIN'); await setTenant(db, fx.workspaceId, fx.adminId); await expect(db.query(`INSERT INTO runs(workspace_id,session_id,agent_id,status,model_id,instruction_version_id) VALUES($1,$2,$3,'completed','deepseek-flash',$4)`, [fx.workspaceId, fx.sessionId, fx.agentId, version.id])).rejects.toMatchObject({ code: '23514' }); await db.query('ROLLBACK'); });
+    await withClient('owner', async (db) => { await db.query('BEGIN'); await setTenant(db, fx.workspaceId, fx.adminId); await expect(db.query(`INSERT INTO runs(workspace_id,session_id,agent_id,status,model_id,instruction_version_id,client_turn_id) VALUES($1,$2,$3,'completed','deepseek-flash',$4,$5)`, [fx.workspaceId, fx.sessionId, fx.agentId, version.id, `cross-agent:${randomUUID()}`])).rejects.toMatchObject({ code: '23514' }); await db.query('ROLLBACK'); });
   });
 });

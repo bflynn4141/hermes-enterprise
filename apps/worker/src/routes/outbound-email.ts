@@ -21,13 +21,14 @@ export async function getOutboundEmailConnection(c: Context<{ Bindings: Env }>):
         WHERE workspace_id=$1 AND state IN ('pending_connection','queued','sending','ambiguous')`,
       [work.workspaceId],
     );
+    const admin = work.role === 'admin';
     return outboundEmailConnectionSchema.parse({
       configured,
       status: !configured ? 'unavailable' : account?.status === 'connected' ? 'connected' : account?.status === 'error' ? 'error' : 'disconnected',
-      address: account?.address ?? null,
-      connected_at: account?.status === 'connected' ? account.updated_at.toISOString() : null,
-      pending_messages: pending.rows[0]?.count ?? 0,
-      can_manage: work.role === 'admin',
+      address: admin ? account?.address ?? null : null,
+      connected_at: admin && account?.status === 'connected' ? account.updated_at.toISOString() : null,
+      pending_messages: admin ? pending.rows[0]?.count ?? 0 : 0,
+      can_manage: admin,
       mode: c.env.PARTNER_OUTREACH_EMAIL_MODE === 'send_after_approval' ? 'send_after_approval' : 'draft_only',
       discovery_enabled: automatedTriggersEnabled(c.env),
       discovery_interval_minutes: automationIntervalMinutes(c.env),
@@ -66,7 +67,7 @@ export async function startGmailOAuth(c: Context<{ Bindings: Env }>): Promise<Re
 }
 
 function callbackLocation(workspaceId: string, result: 'connected' | 'failed'): string {
-  return `/workspace/${encodeURIComponent(workspaceId)}?gmail=${result}#settings/Email`;
+  return `/workspace/${encodeURIComponent(workspaceId)}?gmail=${result}#admin/Email`;
 }
 
 export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise<Response> {
