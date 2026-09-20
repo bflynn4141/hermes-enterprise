@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS member_provisioning_operations (
                            'cloud_not_connected','cloud_reconnect_required','billing_unverified',
                            'insufficient_credits','cloud_contract_unverified','bootstrap_unsupported',
                            'readiness_failed','creation_outcome_unknown','delivery_outcome_unknown',
-                           'delivery_rejected','temporary_failure')),
+                           'delivery_rejected','authorization_revoked','temporary_failure')),
   cloud_agent_id         text,
   requested_at           timestamptz NOT NULL DEFAULT now(),
   completed_at           timestamptz,

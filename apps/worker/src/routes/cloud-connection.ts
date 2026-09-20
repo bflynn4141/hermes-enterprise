@@ -147,7 +147,7 @@ export async function completeCloudConnection(c: C): Promise<Response> {
         await work.tx.query(`UPDATE cloud_connections SET status='connected', organization_id=$3, organization_name=$4,updated_at=now()
           WHERE workspace_id=$1 AND id=$2 AND (organization_id IS NULL OR organization_id=$3)`,
         [work.workspaceId, prepared.id, account.id, account.name]);
-        work.jobs.push(...await wakeMemberProvisioningForCloudConnection(work.tx, work.workspaceId));
+        work.jobs.push(...await wakeMemberProvisioningForCloudConnection(c.env, work.tx, work.workspaceId));
       }
       await work.tx.query(`UPDATE cloud_connection_attempts SET status='complete' WHERE id=$1`, [prepared.id]);
     });

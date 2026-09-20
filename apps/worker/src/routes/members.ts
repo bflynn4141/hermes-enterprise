@@ -588,7 +588,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       let provisioning = null;
       if (preparing) {
         const transferredOperation = await rebindMemberProvisioningOperation(
-          work.tx, work.workspaceId, invitation.id, row.id,
+          work.tx, work.workspaceId, invitation.id, row.id, work.userId,
         );
         if (transferredOperation) {
           provisioning = transferredOperation.operation;

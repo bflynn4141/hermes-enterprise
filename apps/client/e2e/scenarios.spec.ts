@@ -199,7 +199,7 @@ test.describe('members write feedback', () => {
     await expect(app.getByText('Agent setup started')).toBeVisible();
     const created = app.getByRole('listitem').filter({ hasText: 'new.member@example.com' });
     await expect(created.getByText('Setting up agent').first()).toBeVisible();
-    await expect(created.getByText('We’ll send the invitation when their agent is ready.')).toBeVisible();
+    await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
   });
 
   test('invitation cards fit desktop and phone layouts', async ({ page }, testInfo) => {

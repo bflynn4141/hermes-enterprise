@@ -15,7 +15,7 @@ export const memberProvisioningIssueSchema = z.enum([
   'cloud_not_connected', 'cloud_reconnect_required', 'billing_unverified',
   'insufficient_credits', 'cloud_contract_unverified', 'bootstrap_unsupported',
   'readiness_failed', 'creation_outcome_unknown', 'delivery_outcome_unknown',
-  'delivery_rejected', 'temporary_failure',
+  'delivery_rejected', 'authorization_revoked', 'temporary_failure',
 ]);
 export const memberRoleTemplateSchema = z.enum(['partnerships-agent', 'finance-agent']);
 export type MemberRoleTemplate = z.infer<typeof memberRoleTemplateSchema>;
@@ -70,6 +70,9 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   if (value.issue === 'billing_unverified' || value.issue === 'insufficient_credits') {
     return result('Check billing', 'An admin needs to check the organization’s Cloud billing.', 'attention', 'review_billing');
   }
+  if (value.issue === 'authorization_revoked') {
+    return result('Setup paused', 'An active Admin needs to start this setup again.', 'attention', 'contact_admin');
+  }
   if (value.delivery === 'failed' && value.issue === 'delivery_rejected') {
     return result('Invite not sent', 'Check the email address before resending.', 'attention', 'resend');
   }
@@ -79,7 +82,10 @@ export function memberProvisioningPresentation(operation: MemberProvisioningOper
   if (value.delivery === 'queued' || value.delivery === 'sending') {
     return result('Sending invite', 'Their agent is ready. Sending the invitation.', 'neutral');
   }
-  return result('Setting up agent', 'We’ll send the invitation when their agent is ready.', 'neutral');
+  if (value.preparation === 'ready') {
+    return result('Agent ready', 'Setup is verified. Invitation delivery has not been queued.', 'positive');
+  }
+  return result('Setting up agent', 'Hermes is preparing verified capacity in the background.', 'neutral');
 }
 
 export type MemberProvisioningNextStep =

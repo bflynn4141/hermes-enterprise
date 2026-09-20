@@ -30,6 +30,9 @@ describe('Member provisioning public state and recovery', () => {
   it('requires confirmed readiness to queue and deliver', () => {
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready' })).toBe('queue_email');
     expect(nextMemberProvisioningStep({ ...base, preparation: 'ready', delivery: 'queued' })).toBe('deliver_email');
+    expect(memberProvisioningPresentation({ ...base, preparation: 'ready' })).toMatchObject({
+      label: 'Agent ready', detail: 'Setup is verified. Invitation delivery has not been queued.',
+    });
   });
   it('never presents a delayed cancellation as complete', () => {
     const operation = { ...base, preparation: 'creating' as const, cancellation: 'requested' as const };
@@ -47,6 +50,9 @@ describe('Member provisioning public state and recovery', () => {
     }
     expect(memberProvisioningPresentation({ ...base, issue: 'insufficient_credits' }).action).toBe('review_billing');
     expect(memberProvisioningPresentation({ ...base, issue: 'bootstrap_unsupported' }).label).toBe('Needs attention');
+    expect(memberProvisioningPresentation({ ...base, issue: 'authorization_revoked' })).toMatchObject({
+      label: 'Setup paused', action: 'contact_admin',
+    });
   });
   it('rejects provider data and secrets from the public contract', () => {
     expect(memberProvisioningOperationSchema.safeParse({ ...base, access_token: 'secret' }).success).toBe(false);

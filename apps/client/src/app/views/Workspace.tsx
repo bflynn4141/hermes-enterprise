@@ -209,7 +209,7 @@ export function Members() {
           <h1 className="display-32">Members</h1>
           <span className="grow" />
           <span className="meta">
-            {counts.joined} joined · {counts.invited} invited
+            {counts.joined} joined · {counts.invited} pending
           </span>
           {admin && <Button onClick={() => {
             setNotice(null);
@@ -279,7 +279,10 @@ export function Members() {
                     <Avatar person={{ name: row.email }} size={40} />
                     <div className="row-main">
                       <span className="member-card-title truncate">{row.email}</span>
-                      <span className="member-card-email">Invited {new Date(row.invited_at).toLocaleDateString()}</span>
+                      <span className="member-card-email">
+                        {row.provisioning && row.provisioning.delivery === 'not_queued' ? 'Setup requested' : 'Invited'}{' '}
+                        {new Date(row.invited_at).toLocaleDateString()}
+                      </span>
                     </div>
                   </div>
                   <div className="member-card-facts">
@@ -377,7 +380,7 @@ export function Members() {
               <option value="finance-agent">Finance</option>
             </select>
           </label>
-          <p className="meta">Hermes prepares the right agent in the background. The invitation waits until setup is verified.</p>
+          <p className="meta">Hermes prepares verified capacity in the background. Invitation delivery is a separate step and is not queued here.</p>
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

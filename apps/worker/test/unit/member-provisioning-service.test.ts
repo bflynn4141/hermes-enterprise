@@ -32,6 +32,7 @@ import {
   rebindMemberProvisioningOperation,
   requestMemberProvisioningCancellation,
   runMemberProvisioningJob,
+  wakeMemberProvisioningForCloudConnection,
 } from '../../src/member-provisioning/service.js';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
@@ -39,13 +40,13 @@ const operationId = '22222222-2222-4222-8222-222222222222';
 const invitationId = '33333333-3333-4333-8333-333333333333';
 const successorInvitationId = '44444444-4444-4444-8444-444444444444';
 const requestedBy = '55555555-5555-4555-8555-555555555555';
-const env = {} as Env;
+const env = { HERMES_MEMBER_PROVISIONING_ENABLED: '1' } as Env;
 
 type Preparation = 'awaiting_connection' | 'queued' | 'creating' | 'configuring' | 'verifying' | 'ready' | 'reconciliation_required' | 'failed';
 type Cancellation = 'none' | 'requested' | 'complete';
 type Issue = 'cloud_not_connected' | 'cloud_reconnect_required' | 'billing_unverified' | 'insufficient_credits'
   | 'cloud_contract_unverified' | 'bootstrap_unsupported' | 'readiness_failed' | 'creation_outcome_unknown'
-  | 'delivery_outcome_unknown' | 'delivery_rejected' | 'temporary_failure' | null;
+  | 'delivery_outcome_unknown' | 'delivery_rejected' | 'authorization_revoked' | 'temporary_failure' | null;
 
 interface Row {
   id: string;
@@ -61,6 +62,7 @@ interface Row {
   delivery_status: string;
   delivery_error: string | null;
   cloud_status: string | null;
+  requester_authorized: boolean;
 }
 
 function baseRow(overrides: Partial<Row> = {}): Row {
@@ -78,6 +80,7 @@ function baseRow(overrides: Partial<Row> = {}): Row {
     delivery_status: 'not_required',
     delivery_error: null,
     cloud_status: 'connected',
+    requester_authorized: true,
     ...overrides,
   };
 }
@@ -111,6 +114,7 @@ function transaction(initial: Row | null = null) {
         return { rows: [], rowCount: 0 };
       }
       row.invitation_id = String(params[2]);
+      row.requested_by = String(params[3]);
       row.revision += 1;
       return { rows: [{ ...row }], rowCount: 1 };
     }
@@ -146,7 +150,7 @@ function transaction(initial: Row | null = null) {
     if (sql.includes("SET preparation='failed'")) {
       if (row && row.revision === params[2]) {
         row.preparation = 'failed';
-        row.issue = 'cloud_contract_unverified';
+        row.issue = sql.includes("issue='authorization_revoked'") ? 'authorization_revoked' : 'cloud_contract_unverified';
         row.revision += 1;
         return { rows: [], rowCount: 1 };
       }
@@ -187,6 +191,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('member provisioning persistence and projection', () => {
+  it('does not wake dormant operations while the release flag is off', async () => {
+    const db = transaction(baseRow({ preparation: 'awaiting_connection' }));
+
+    expect(await wakeMemberProvisioningForCloudConnection({} as Env, db.tx as never, workspaceId)).toEqual([]);
+    expect(db.tx.query).not.toHaveBeenCalled();
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('creates one idempotent operation and one revision-bound job', async () => {
     const db = transaction();
     db.setConnectionStatus('connected');
@@ -296,7 +308,7 @@ describe('member provisioning reservation and recovery boundaries', () => {
     const db = transaction(baseRow({ preparation: 'ready', revision: 3 }));
 
     const result = await rebindMemberProvisioningOperation(
-      db.tx as never, workspaceId, invitationId, successorInvitationId,
+      db.tx as never, workspaceId, invitationId, successorInvitationId, requestedBy,
     );
 
     expect(result?.operation).toMatchObject({ id: operationId, revision: 4, preparation: 'ready', delivery: 'not_queued' });
@@ -324,5 +336,46 @@ describe('member provisioning reservation and recovery boundaries', () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
     expect(db.tx.query.mock.calls.map(([sql]) => sql).join('\n')).not.toContain('workos_sync');
+  });
+
+  it('checks the release flag at execution time without blocking cancellation cleanup', async () => {
+    const disabled = {} as Env;
+    const queued = transaction(baseRow());
+    mocks.withWorkspaceTransaction.mockImplementationOnce(async (_env, _workspace, operation) => operation(queued.tx));
+
+    await runMemberProvisioningJob(disabled, job());
+
+    expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
+    expect(queued.row()).toMatchObject({ preparation: 'queued', revision: 0 });
+
+    const cancelling = transaction(baseRow({ cancellation: 'requested', revision: 4 }));
+    mocks.withWorkspaceTransaction.mockImplementationOnce(async (_env, _workspace, operation) => operation(cancelling.tx));
+
+    await runMemberProvisioningJob(disabled, job(4));
+
+    expect(mocks.releaseInvitationCapacity).toHaveBeenCalledWith(cancelling.tx, workspaceId, invitationId);
+    expect(cancelling.row()).toMatchObject({ cancellation: 'complete', revision: 5 });
+  });
+
+  it('rechecks requesting Admin authority before reserving capacity', async () => {
+    const db = transaction(baseRow({ requester_authorized: false }));
+    mocks.withWorkspaceTransaction.mockImplementation(async (_env, _workspace, operation) => operation(db.tx));
+
+    await runMemberProvisioningJob(env, job());
+
+    expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
+    expect(mocks.releaseInvitationCapacity).toHaveBeenCalledWith(db.tx, workspaceId, invitationId);
+    expect(db.row()).toMatchObject({ preparation: 'failed', issue: 'authorization_revoked', revision: 1 });
+  });
+
+  it.each(['withdrawn', 'expired', 'resent'])('rechecks terminal invitation state %s before reservation', async invitationStatus => {
+    const db = transaction(baseRow({ invitation_status: invitationStatus, revision: 2 }));
+    mocks.withWorkspaceTransaction.mockImplementation(async (_env, _workspace, operation) => operation(db.tx));
+
+    await runMemberProvisioningJob(env, job(2));
+
+    expect(mocks.reserveCapacityForInvitation).not.toHaveBeenCalled();
+    expect(mocks.releaseInvitationCapacity).toHaveBeenCalledWith(db.tx, workspaceId, invitationId);
+    expect(db.row()).toMatchObject({ cancellation: 'complete', revision: 3 });
   });
 });
