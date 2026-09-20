@@ -32,11 +32,20 @@ const repoRoot = new URL('../../..', import.meta.url).pathname;
  */
 export const DATABASE = process.env.PGDATABASE ?? 'hermes_test';
 
+/**
+ * `pnpm e2e:live` owns a labelled per-invocation container and exports its id
+ * as `HERMES_TEST_DB_CONTAINER_ID` (scripts/test-db.mjs). The owned database
+ * lives only there, so fixtures must exec into that container; the compose
+ * `postgres` service is the developer's durable `hermes-postgres` and is used
+ * only when a run is aimed at it deliberately without an owned container.
+ */
+const OWNED_CONTAINER = process.env.HERMES_TEST_DB_CONTAINER_ID ?? '';
+
 export function psql(sql) {
-  return execFileSync('docker', ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql], {
-    encoding: 'utf8',
-    cwd: repoRoot,
-  }).trim();
+  const args = OWNED_CONTAINER
+    ? ['exec', OWNED_CONTAINER, 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql]
+    : ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', DATABASE, '-t', '-A', '-c', sql];
+  return execFileSync('docker', args, { encoding: 'utf8', cwd: repoRoot }).trim();
 }
 
 const q = (value) => `'${String(value).replace(/'/g, "''")}'`;

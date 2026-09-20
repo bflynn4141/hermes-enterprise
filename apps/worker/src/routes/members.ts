@@ -411,17 +411,6 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       );
     }
     const roleTemplateKey: MemberRoleTemplate = input.role_template_key === 'finance-agent' ? 'finance-agent' : 'partnerships-agent';
-    // Advertising and admission share the same executable boundary. Keep the
-    // Finance schema value readable for persisted history, but never create a
-    // known-doomed operation until compatible capacity execution exists.
-    if (preparing && !memberSetupRoleExecutable(roleTemplateKey)) {
-      checkpoint = 'setup_role_rejected';
-      throw new RouteError(
-        'Finance agent setup is not available yet. Choose an available job role.',
-        'member_setup_role_unavailable',
-        409,
-      );
-    }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       throw new RouteError('an invitation needs an email address', 'bad_email', 422);
     }
@@ -430,6 +419,18 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       work.requireAdmin('inviting someone');
       await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.invite);
       checkpoint = 'admin_and_rate_admitted';
+      // Advertising and admission share the same executable boundary. Keep the
+      // Finance schema value readable for persisted history, but never create a
+      // known-doomed operation: Finance is admitted only while this workspace
+      // holds verified Finance capacity for the setup job to reserve.
+      if (preparing && !await memberSetupRoleExecutable(work.tx, work.workspaceId, roleTemplateKey)) {
+        checkpoint = 'setup_role_rejected';
+        throw new RouteError(
+          'Finance agent setup is not available yet: add verified Finance capacity first, or choose an available job role.',
+          'member_setup_role_unavailable',
+          409,
+        );
+      }
 
       const existing = await work.tx.query<{ user_id: string }>(
         `SELECT m.user_id FROM members m JOIN users u ON u.id = m.user_id
@@ -656,7 +657,9 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
           409,
         );
       }
-      if (setupBacked && !memberSetupRoleExecutable(invitation.role_template_key!)) {
+      if (setupBacked && !await memberSetupRoleExecutable(
+        work.tx, work.workspaceId, invitation.role_template_key!, invitation.id,
+      )) {
         throw new RouteError(
           'Finance agent setup is not available yet. The existing setup was not changed.',
           'member_setup_role_unavailable',

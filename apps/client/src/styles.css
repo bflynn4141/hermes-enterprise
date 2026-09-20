@@ -1600,8 +1600,8 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .partner-connector { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 18px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 9px; background: rgba(13, 9, 52, .44); }
 .partner-connector span { color: var(--muted); }
 .partner-connector small { grid-column: 2; color: var(--muted); }
-.partner-actions { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
-.partner-actions > div { flex: 1 1 0; min-width: 0; }
+.partner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 4px; }
+.partner-actions > div { flex: 1 1 280px; min-width: 0; }
 .partner-actions h3, .partner-work-list > header h3 { font-size: 13.6px; line-height: 20px; }
 .partner-actions p { margin-top: 3px; color: var(--muted); }
 .partner-workflow-form { display: flex; flex-direction: column; gap: 16px; padding: 20px; border: 1px solid rgba(155, 154, 224, .52); border-radius: 10px; background: linear-gradient(145deg, rgba(37, 29, 101, .88), rgba(16, 9, 54, .96)); }

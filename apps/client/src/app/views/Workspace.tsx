@@ -388,6 +388,9 @@ export function Members() {
           <p className="meta">{setupOnly
             ? 'Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.'
             : 'Capacity is reserved automatically, then the invitation email is queued for delivery.'}</p>
+          {setupOnly && !setupRoles.includes('finance-agent') && <p className="meta">
+            Finance appears here once a verified Finance instance is added under Settings → Runtime capacity.
+          </p>}
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog

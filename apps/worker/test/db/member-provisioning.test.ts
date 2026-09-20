@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asUser, makeEnv } from './harness.js';
 import { client, seedWorkspace, setTenant, withClient } from './helpers.js';
 import { drainJobs, runJobsAfterCommit } from '../../src/jobs.js';
+import { FINANCE_CAPACITY_ROLE } from '../../src/runtime/discovery-grants.js';
+import { hermesEnv, seedCapacity } from './capacity-fixture.js';
 
 async function seedQueuedProvisioningJob(
   fx: Awaited<ReturnType<typeof seedWorkspace>>,
@@ -229,6 +231,67 @@ describe('durable member provisioning', () => {
         .toHaveLength(0);
       await c.query('COMMIT');
     });
+  });
+
+  it('offers and prepares a Finance setup only while the workspace holds verified Finance capacity', async () => {
+    const fx = await seedWorkspace();
+    const env = hermesEnv({ HERMES_MEMBER_PROVISIONING_ENABLED: '1' });
+    const network = vi.fn(() => { throw new Error('Finance setup must not reach a provider before acceptance'); });
+    vi.stubGlobal('fetch', network);
+    const path = `/w/${fx.workspaceId}/invitations`;
+
+    // Nothing verified yet: the role is neither advertised nor admitted.
+    const before = await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).json() as {
+      capabilities: { member_invitations: { mode: string; role_templates: string[] } };
+    };
+    expect(before.capabilities.member_invitations).toEqual({ mode: 'setup_only', role_templates: ['partnerships-agent'] });
+    const refused = await asUser(env, fx.adminId, path, { method: 'POST', body: {
+      email: 'finance-early@example.test', role: 'member', role_template_key: 'finance-agent',
+    } });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ reason: 'member_setup_role_unavailable' });
+
+    // One verified Finance instance, exactly as the capacity route stores it.
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const after = await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).json() as typeof before;
+    expect(after.capabilities.member_invitations.role_templates).toEqual(['partnerships-agent', 'finance-agent']);
+
+    const email = 'finance-ready@example.test';
+    const created = await asUser(env, fx.adminId, path, { method: 'POST', body: {
+      email, role: 'member', role_template_key: 'finance-agent',
+    } });
+    const createdBody = await created.text();
+    expect(created.status, createdBody).toBe(201);
+    const invitation = JSON.parse(createdBody) as { id: string; role_template_key?: string; provisioning?: { cancellation: string } };
+    // No Cloud connection in this fixture, so the operation starts as
+    // awaiting_connection; the setup job still reserves verified capacity.
+    expect(invitation).toMatchObject({ role_template_key: 'finance-agent', provisioning: { cancellation: 'none' } });
+
+    // The setup job reserves that instance for this invitation and reports ready.
+    await drainJobs(env, 50);
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(
+        `SELECT role_template_key, preparation FROM member_provisioning_operations WHERE invitation_id=$1`, [invitation.id],
+      )).rows).toEqual([{ role_template_key: 'finance-agent', preparation: 'ready' }]);
+      expect((await c.query(
+        `SELECT state, reserved_invitation_id FROM hermes_cloud_capacity WHERE id=$1`, [capacityId],
+      )).rows).toEqual([{ state: 'reserved', reserved_invitation_id: invitation.id }]);
+      await c.query('COMMIT');
+    });
+
+    // Capacity is now spoken for: the role disappears for a second invitation,
+    // while a resend of the existing Finance setup keeps what it reserved.
+    const spent = await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/bootstrap`)).json() as typeof before;
+    expect(spent.capabilities.member_invitations.role_templates).toEqual(['partnerships-agent']);
+    const second = await asUser(env, fx.adminId, path, { method: 'POST', body: {
+      email: 'finance-second@example.test', role: 'member', role_template_key: 'finance-agent',
+    } });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ reason: 'member_setup_role_unavailable' });
+    const resend = await asUser(env, fx.adminId, `${path}/${invitation.id}/resend`, { method: 'POST', body: {} });
+    expect(resend.status, await resend.text()).toBe(201);
+    expect(network).not.toHaveBeenCalled();
   });
 
   it('keeps historical Finance setup readable and cancellable but refuses to restart it', async () => {
