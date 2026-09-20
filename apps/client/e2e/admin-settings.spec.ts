@@ -145,6 +145,31 @@ test('Model provider details and actions remain readable in the standard desktop
   await page.screenshot({ path: testInfo.outputPath('admin-settings-1280.png'), fullPage: true });
 });
 
+test('notification preferences ack only after a successful save', async ({ page }) => {
+  await page.goto('/#settings/Notifications');
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByText('Delivery not configured', { exact: true })).toBeVisible();
+  await expect(app.getByText(/does not send approval, blocked-work or digest emails/)).toBeVisible();
+  const toggle = app.getByRole('switch', { name: 'Approval requests' });
+  const before = await toggle.isChecked();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', String(!before));
+  await expect(app.getByRole('status').filter({ hasText: 'Preference saved' })).toBeVisible();
+  await expect(app.getByRole('alert')).toHaveCount(0);
+});
+
+test('a failed notification preference save never shows Preference saved', async ({ page }) => {
+  await page.goto('/?settingsWrites=fail#settings/Notifications');
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByText('Delivery not configured', { exact: true })).toBeVisible();
+  const toggle = app.getByRole('switch', { name: 'Approval requests' });
+  const before = await toggle.isChecked();
+  await toggle.click();
+  await expect(app.getByRole('alert')).toContainText('Could not save that');
+  await expect(toggle).toHaveAttribute('aria-checked', String(before));
+  await expect(app.getByRole('status').filter({ hasText: 'Preference saved' })).toHaveCount(0);
+});
+
 test('run limits save explicitly and distinguish zero from no limit', async ({ page }) => {
   await recordMockRequests(page);
   await page.goto('/#admin/Agents');

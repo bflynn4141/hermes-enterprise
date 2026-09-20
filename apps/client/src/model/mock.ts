@@ -126,6 +126,8 @@ interface MockOptions {
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** Browser regression fixture for rejected workspace settings writes. */
+  settingsWrites?: 'ok' | 'fail';
   /** Server-advertised invitation contract; default mirrors flag-off deployments. */
   memberInvitations?: 'legacy_delivery' | 'setup_only';
   /** Existing unfinished setup shown while the deployment is flag-off. */
@@ -2020,6 +2022,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/settings/undelete')) return json({ cancelled: true });
     if (p('/settings')) {
       if (method === 'PATCH') {
+        if (options.settingsWrites === 'fail') return fail(503, 'fixture_write_failed', 'Settings write fixture failed');
         const caps = body as { daily_token_cap?: unknown; max_concurrent_runs?: unknown; notifications?: Record<string, unknown> };
         if ('daily_token_cap' in caps) settingsView.caps.daily_token_cap = caps.daily_token_cap === null ? null : Number(caps.daily_token_cap);
         if ('max_concurrent_runs' in caps) settingsView.caps.max_concurrent_runs = Number(caps.max_concurrent_runs);
