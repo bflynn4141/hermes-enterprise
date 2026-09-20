@@ -14,11 +14,10 @@
 // same day is warned once; that is the right trade against warning on every
 // single turn for the rest of the afternoon.
 //
-// What the job does *not* do is send email. This build sends nothing
-// (CONVENTIONS, invariant 5): it writes the `events` row and publishes an
-// `entity.updated` so the Settings screen and the banner can render from the
-// same numbers the cap is enforced from. The notification preference is read
-// and recorded so the row says who would have been told.
+// What the job does *not* do is deliver a notification email. It writes the
+// `events` row and publishes an `entity.updated` so Settings and the banner can
+// render from the same numbers the cap is enforced from. The notification
+// preference is recorded as future delivery intent, not as a delivery receipt.
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, withWorkspaceTransaction, publishEvents, type Job } from '../jobs.js';
@@ -71,7 +70,8 @@ export async function maybeQueueCapWarning(
 }
 
 export interface CapWarningResult {
-  readonly sent: boolean;
+  readonly recorded: boolean;
+  readonly delivered: false;
   readonly recipients: number;
   readonly fraction: number | null;
 }
@@ -89,7 +89,7 @@ export async function runCapWarningJob(env: Env, job: Job): Promise<CapWarningRe
     const caps = await checkCaps(tx, job.workspace_id);
     if (!caps.warn || caps.dailyTokenCap === null) {
       logEvent({ at: 'job.cap_warning', workspace_id: job.workspace_id, note: 'no longer over the threshold' });
-      return { sent: false, recipients: 0, fraction: null };
+      return { recorded: false, delivered: false, recipients: 0, fraction: null };
     }
 
     // Who would be told. `user_notification_settings.blocked` is the "tell me
@@ -134,6 +134,6 @@ export async function runCapWarningJob(env: Env, job: Job): Promise<CapWarningRe
       // acts (CONVENTIONS, invariant 5).
       delivery: 'recorded_only',
     });
-    return { sent: true, recipients: recipients.rows.length, fraction };
+    return { recorded: true, delivered: false, recipients: recipients.rows.length, fraction };
   });
 }

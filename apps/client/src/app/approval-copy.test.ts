@@ -7,6 +7,8 @@ function legacyRequest(canDecide: boolean, kind: RequestEntity['kind'] = 'invoic
     id: mockUuid(900), kind, status: 'pending', label: 'Vendor draft', title: null,
     subject: 'Vendor', session_id: null, run_id: null, created_at: '2026-09-18T12:00:00Z',
     version: 1, payload: { kind }, sources: [], missing: [],
+    provenance: { kind: 'unknown', source: 'not_recorded', recorded_at: '2026-09-18T12:00:00Z' },
+    presentation: { hidden: false, hidden_at: null, hidden_reason: null },
     decision_summary: {
       action: 'Approve invoice draft', primary: 'Invoice from Vendor', facts: [], consequence: null,
       approval_requirement: {

@@ -259,12 +259,13 @@ describe('caps', () => {
       attempts: 1,
     };
 
-    const sent = await runCapWarningJob(env as Env, job);
-    expect(sent.sent).toBe(true);
+    const recorded = await runCapWarningJob(env as Env, job);
+    expect(recorded.recorded).toBe(true);
+    expect(recorded.delivered).toBe(false);
     // Both seeded members are Admins? No: one Admin, one Member, and only the
     // Admin can change the cap, so only the Admin is told.
-    expect(sent.recipients).toBe(1);
-    expect(sent.fraction).toBeCloseTo(0.9, 3);
+    expect(recorded.recipients).toBe(1);
+    expect(recorded.fraction).toBeCloseTo(0.9, 3);
 
     const events = await asTenant(local, (c) =>
       c.query<{ kind: string }>(`SELECT kind FROM events WHERE workspace_id = $1 AND kind = 'usage.cap_warning'`, [
@@ -278,7 +279,8 @@ describe('caps', () => {
       c.query(`UPDATE workspace_settings SET daily_token_cap = 100000 WHERE workspace_id = $1`, [local.workspaceId]),
     );
     const again = await runCapWarningJob(env as Env, job);
-    expect(again.sent).toBe(false);
+    expect(again.recorded).toBe(false);
+    expect(again.delivered).toBe(false);
   });
 });
 

@@ -15,6 +15,8 @@ export const inboxFiltersSchema = z.object({
   status: z.enum(['pending', 'resolved']).optional(),
   kind: z.enum(['all', 'application', 'documents', 'invoice', 'agreement', 'task', 'approval']).optional(),
   reviewer: z.enum(['for_me', 'waiting', 'all']).optional(),
+  provenance: z.enum(['all', 'operational', 'sample', 'test', 'unknown']).optional(),
+  visibility: z.enum(['active', 'hidden', 'all']).optional(),
   sort: z.enum(['priority', 'recent']).optional(),
   query: z.string().max(200).optional(),
 }).strict();
@@ -66,7 +68,7 @@ export function viewFocusRef(target: z.infer<typeof viewFocusSchema>): Ref {
     case 'context': return CTX;
     case 'skills': return SKILLS_VIEW;
     case 'traces': return TRACES;
-    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', query: '', sort: 'priority', ...target.filters } };
+    case 'inbox': return { ...INBOX, filters: { status: 'pending', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active', query: '', sort: 'priority', ...target.filters } };
     case 'inbox_rules': return { section: 'inbox', view: 'rules' };
     case 'members': return MEMBERS;
     case 'history': return HISTORY();
@@ -93,6 +95,8 @@ export const sameRef = (a: Ref | null | undefined, b: Ref | null | undefined): b
     && (a.filters?.status ?? 'pending') === (b.filters?.status ?? 'pending')
     && (a.filters?.kind ?? 'all') === (b.filters?.kind ?? 'all')
     && (a.filters?.reviewer ?? 'for_me') === (b.filters?.reviewer ?? 'for_me')
+    && (a.filters?.provenance ?? 'all') === (b.filters?.provenance ?? 'all')
+    && (a.filters?.visibility ?? 'active') === (b.filters?.visibility ?? 'active')
     && (a.filters?.sort ?? 'priority') === (b.filters?.sort ?? 'priority')
     && (a.filters?.query ?? '') === (b.filters?.query ?? '');
 };

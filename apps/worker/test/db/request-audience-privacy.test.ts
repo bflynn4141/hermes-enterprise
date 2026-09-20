@@ -138,6 +138,14 @@ describe('request audience privacy projections', () => {
       `/w/${fx.workspaceId}/requests/${memberRequestId}/documents`,
     );
     expect(hiddenRequestDocuments.status).toBe(404);
+    const hiddenPresentationWrite = await asUser(
+      e.env,
+      fx.adminId,
+      `/w/${fx.workspaceId}/requests/${memberRequestId}/presentation`,
+      { method: 'PATCH', body: { hidden: true, reason: 'Must not organize another audience request.' } },
+    );
+    expect(hiddenPresentationWrite.status).toBe(404);
+    expect(await hiddenPresentationWrite.json()).toMatchObject({ reason: 'unknown_request' });
     const visibleRequestDocuments = await itemIds(await asUser(
       e.env,
       fx.memberId,

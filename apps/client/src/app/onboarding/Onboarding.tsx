@@ -161,7 +161,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
           <>
             <h1 className="portal-title">Add context</h1>
             <p className="meta">
-              Sources can be stored and reviewed inside the workspace. They are not connected to {agent} runs yet, so setup will continue from your instructions and chat messages.
+              Sources can be stored in Agent Context or attached to a message. {agent} receives only the sources selected for that work; nothing is imported automatically during setup.
             </p>
             <div className="portal-footer">
               <button type="button" className="portal-back" onClick={() => setStep('agent')}>
@@ -192,7 +192,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
               <Icon name="arrow" size={18} className="onboarding-flow-arrow" />
               <div className="onboarding-approval-step">
                 <span className="onboarding-approval-icon"><Icon name="check" size={20} /></span>
-                <strong>The action runs</strong>
+                <strong>The outcome is recorded</strong>
               </div>
             </div>
             <div className="onboarding-approval-grid">
@@ -207,7 +207,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
                 </article>
               ))}
             </div>
-            <p className="meta onboarding-approval-note">Add finance or specialist reviewers later. These safeguards stay on.</p>
+            <p className="meta onboarding-approval-note">Add finance or specialist reviewers later. Approval and execution remain separate: unsupported external actions stay pending.</p>
             {error && <p className="meta">{error}</p>}
             <div className="portal-footer">
               <button type="button" className="portal-back" onClick={() => setStep('context')}>

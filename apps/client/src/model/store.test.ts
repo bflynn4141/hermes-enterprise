@@ -155,6 +155,7 @@ describe('follow and pin', () => {
 describe('prompt-driven views and filters', () => {
   const pendingApplications: Ref = { section: 'inbox', view: 'list', filters: { status: 'pending', kind: 'application' } };
   const resolvedInvoices: Ref = { section: 'inbox', view: 'list', filters: { status: 'resolved', kind: 'invoice', query: 'Ada & Sons / 2026?' } };
+  const hiddenSamples: Ref = { section: 'inbox', view: 'list', filters: { status: 'pending', provenance: 'sample', visibility: 'hidden', sort: 'recent' } };
   const focusEvent = (ref: Ref, id: bigint = 1n, sessionId = SESSION_A): StreamEvent =>
     event('run.focus', { run_id: RUN, session_id: sessionId, ref, entity_type: null, entity_id: null }, id, sessionId);
 
@@ -234,9 +235,10 @@ describe('prompt-driven views and filters', () => {
     expect(sessionFocus.ui.historyTab).toBe('blocked');
   });
 
-  it('round-trips status, kind and a search containing URL punctuation', () => {
+  it('round-trips request state, origin, visibility and a search containing URL punctuation', () => {
     expect(parseRef(`#${serialiseRef(resolvedInvoices)}`)).toEqual(resolvedInvoices);
     expect(parseRef(`#${serialiseRef(pendingApplications)}`)).toEqual(pendingApplications);
+    expect(parseRef(`#${serialiseRef(hiddenSamples)}`)).toEqual(hiddenSamples);
     expect(parseRef('#inbox/list?status=invalid')).toBeNull();
     expect(parseRef('#inbox/list?kind=unknown')).toBeNull();
     expect(parseRef('#inbox/list?unexpected=true')).toBeNull();

@@ -72,7 +72,7 @@ describe('executing an effect', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; reason: string };
     expect(body.status).toBe('unavailable');
-    expect(body.reason).toMatch(/sends nothing, pays nothing, grants nothing and signs nothing/);
+    expect(body.reason).toMatch(/legacy effect has no configured executor/);
 
     await readTenant(fx.workspaceId, fx.adminId, async (c) => {
       const { rows } = await c.query<{ status: string; executed_by: string; enforcement_result: { result: string } }>(

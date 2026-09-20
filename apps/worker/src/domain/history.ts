@@ -214,6 +214,20 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 
+    case 'request.hidden':
+      text = `${actor} hid ${subjectOrNumber(row)} from their Inbox`;
+      detail = 'Personal organization only · Request and other reviewers unchanged';
+      status = 'Hidden';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'request.restored':
+      text = `${actor} restored ${subjectOrNumber(row)} to their Inbox`;
+      detail = 'Personal Inbox visibility restored · Workflow unchanged';
+      status = 'Restored';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
     case 'approval.proposed':
       text = `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`;
       detail = 'Human authorization pending · No effect executed';

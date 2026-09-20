@@ -937,6 +937,29 @@ export const requests = pgTable('requests', {
   updatedAt: now('updated_at'),
 });
 
+export const requestProvenance = pgTable('request_provenance', {
+  workspaceId: uuid('workspace_id').notNull(),
+  requestId: uuid('request_id').primaryKey(),
+  kind: text('kind').notNull().default('unknown'),
+  source: text('source').notNull().default('not_recorded'),
+  recordedAt: now('recorded_at'),
+});
+
+export const requestPresentations = pgTable(
+  'request_presentations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    hiddenAt: ts('hidden_at'),
+    hiddenReason: text('hidden_reason'),
+    restoredAt: ts('restored_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
+
 export const requestTriageAssessments = pgTable(
   'request_triage_assessments',
   {
@@ -2132,6 +2155,8 @@ export const ALL_TABLES = {
   approval_runtime_budgets: approvalRuntimeBudgets,
   approval_model_reservations: approvalModelReservations,
   requests,
+  request_provenance: requestProvenance,
+  request_presentations: requestPresentations,
   request_triage_assessments: requestTriageAssessments,
   onboarding_sample_runs: onboardingSampleRuns,
   onboarding_sample_applications: onboardingSampleApplications,
