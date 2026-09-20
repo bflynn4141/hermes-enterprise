@@ -50,6 +50,7 @@ import {
   actionsFor,
   autoTitleFrom,
   entityData,
+  titleSourceOf,
   isBlankSession,
   newClientTurnId,
   uuid,
@@ -198,13 +199,15 @@ export function createAdapter(options: AdapterOptions): Adapter {
       // A `loading` upsert is the reducer saying "I do not have this row"; the
       // fetch that answers it belongs here, not in a component's effect.
       if (action.type === 'entity/loading') ensure(action.kind, action.id);
-      // The row a queued title refinement was waiting for.
-      if (action.type === 'entity/upsert' && action.kind === 'request' && titleWaiting.size > 0) {
-        for (const id of [...titleWaiting]) refineTitle(id);
-      }
     }
-    // A completed run may have named its session better than its first turn did.
-    if (event.kind === 'run.status' && event.payload.status === 'completed' && event.session_id) refineTitle(event.session_id);
+    // The server renamed a session — after a completed run, or from another
+    // device. The row is re-read rather than trusted from the event, and the
+    // reducer keeps a manual rename over whatever comes back (decision C34).
+    if (event.kind === 'entity.updated' && event.payload.entity_type === 'session') {
+      void rest.getSession(workspaceId, event.payload.entity_id)
+        .then((row) => dispatch({ type: 'session/upsert', session: row }))
+        .catch(() => undefined);
+    }
     if (
       event.kind === 'run.status' &&
       event.session_id &&
@@ -459,8 +462,6 @@ export function createAdapter(options: AdapterOptions): Adapter {
       .then((data) => {
         const version = typeof (data as { version?: number }).version === 'number' ? (data as { version: number }).version : 1;
         dispatch({ type: 'entity/upsert', kind, id, version, data });
-        // A title refinement parked on this row (decision C34).
-        if (kind === 'request' && titleWaiting.size > 0) for (const sessionId of [...titleWaiting]) refineTitle(sessionId);
       })
       .catch((error: unknown) => {
         // "Request not found" is shown only after a completed fetch that 404s,
@@ -745,12 +746,10 @@ export function createAdapter(options: AdapterOptions): Adapter {
   // -------------------------------------------------------------------------
 
   /**
-   * Set a session's title from the client, and persist it.
-   *
-   * Refuses to touch a manually renamed session — the reducer refuses too, so
-   * this is the second of two lines, and the PATCH is the reason it is needed
-   * here as well: a write the reducer discarded must not still reach the
-   * server.
+   * Show the first turn's name before the server answers. The turn route
+   * writes the same six words to the row, so nothing is persisted from here:
+   * a PATCH would mark the name as a person's and stop a finished run from
+   * improving on it (decision C34).
    */
   function autoTitle(sessionId: string, source: string, { onlyIfPlaceholder = true } = {}): void {
     const session = state().sessions[sessionId];
@@ -759,48 +758,13 @@ export function createAdapter(options: AdapterOptions): Adapter {
     const title = autoTitleFrom(source);
     if (!title || title === session.title) return;
     dispatch({ type: 'session/auto-title', id: sessionId, title });
-    persistTitle(sessionId, title);
   }
 
-  /** A local id has no row to PATCH yet, so the title waits for `session/reconcile`. */
+  /** A local id has no row to PATCH yet, so a name waits for `session/reconcile`. */
   const pendingTitles = new Map<string, string>();
   function persistTitle(sessionId: string, title: string): void {
     if (sessionId.startsWith('local-')) pendingTitles.set(sessionId, title);
     else void rest.patchSession(workspaceId, sessionId, { title }).catch(() => undefined);
-  }
-
-  /**
-   * Once a run finishes, the object it produced is a better name than the first
-   * six words of the question that started it — "Ada Ling · application" rather
-   * than "Screen the applicant in the". It is derived entirely from rows the
-   * client already has: the session's focus ref and the request in the entity
-   * cache. No route was added for this.
-   */
-  const titleWaiting = new Set<string>();
-  function refineTitle(sessionId: string): void {
-    const session = state().sessions[sessionId];
-    if (!session || session.titleSource === 'manual') {
-      titleWaiting.delete(sessionId);
-      return;
-    }
-    const focus = session.focus;
-    if (!focus || focus.section !== 'inbox' || focus.view !== 'request' || !focus.id) return;
-    const request = entityData<import('@hermes/shared').RequestEntity>(state(), 'request', focus.id);
-    if (!request) {
-      // The run finished before the request row arrived, which is the ordinary
-      // case: the focus event and the entity fetch are two different round
-      // trips. Ask for the row, and retry when it lands.
-      titleWaiting.add(sessionId);
-      ensure('request', focus.id);
-      return;
-    }
-    titleWaiting.delete(sessionId);
-    const subject = request.subject?.trim() || request.label.trim();
-    if (!subject) return;
-    const title = `${subject} · ${request.kind}`;
-    if (title === session.title) return;
-    dispatch({ type: 'session/auto-title', id: sessionId, title });
-    persistTitle(sessionId, title);
   }
 
   async function send(sessionId: string, text: string, opts: { attachments?: AttachmentRef[] } = {}): Promise<void> {
@@ -1046,7 +1010,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         const parked = pendingTitles.get(localId);
         if (parked) {
           pendingTitles.delete(localId);
-          dispatch({ type: 'session/auto-title', id: row.id, title: parked });
+          dispatch({ type: 'session/rename', id: row.id, title: parked });
           void rest.patchSession(workspaceId, row.id, { title: parked }).catch(() => undefined);
         }
         return row.id;
@@ -1376,6 +1340,6 @@ function sessionSeed(row: import('@hermes/shared').Bootstrap['sessions'][number]
     pending: false,
     lastActivity: row.last_activity_at ? Date.parse(row.last_activity_at) : Date.now(),
     carried: null,
-    titleSource: (row.title === DEFAULT_SESSION_TITLE ? 'auto' : 'manual') as 'auto' | 'manual',
+    titleSource: titleSourceOf(row),
   };
 }
