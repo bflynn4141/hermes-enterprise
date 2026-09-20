@@ -71,7 +71,7 @@ async function seedIntelligenceFixture(): Promise<IntelligenceFixture> {
   return { ...fx, teamId, runIds, messageIds };
 }
 
-async function createAndSubmit(
+async function createDraft(
   fx: IntelligenceFixture,
   options: {
     teamId?: string;
@@ -81,7 +81,7 @@ async function createAndSubmit(
     rationale?: string;
     evidence?: Array<{ run_id: string; approved_excerpt: string }>;
   } = {},
-): Promise<{ proposal: SharedIntelligenceProposal; requestId: string }> {
+): Promise<SharedIntelligenceProposal> {
   const userId = options.userId ?? fx.adminId;
   return withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId }, async (tx) => {
     const work = { tx, workspaceId: fx.workspaceId, userId, jobs: [] } as unknown as TenantWork;
@@ -104,7 +104,18 @@ async function createAndSubmit(
         corroboration: { score: 3, confidence: .9 }, urgency: { score: 2, confidence: .9 }, uncertainty: { score: .5, confidence: .9 },
       },
     }, { evidenceCount: prepared.evidence.length, stateSha256: prepared.stateSha256, latencyMs: 12 });
-    const proposal = await saveSharedIntelligenceProposal(work, prepared, assessment);
+    return saveSharedIntelligenceProposal(work, prepared, assessment);
+  });
+}
+
+async function createAndSubmit(
+  fx: IntelligenceFixture,
+  options: Parameters<typeof createDraft>[1] = {},
+): Promise<{ proposal: SharedIntelligenceProposal; requestId: string }> {
+  const proposal = await createDraft(fx, options);
+  const userId = options.userId ?? fx.adminId;
+  return withTenantTransaction(env, 'app', { workspaceId: fx.workspaceId, userId }, async (tx) => {
+    const work = { tx, workspaceId: fx.workspaceId, userId, jobs: [] } as unknown as TenantWork;
     const submitted = await submitSharedIntelligenceProposal(work, proposal.id);
     return { proposal: submitted.proposal, requestId: submitted.approval_request_id };
   });
@@ -131,6 +142,70 @@ async function approve(fx: IntelligenceFixture, view: ApprovalView, reviewerId =
 describe('Shared Intelligence publication boundary', () => {
   let fx: IntelligenceFixture;
   beforeEach(async () => { fx = await seedIntelligenceFixture(); });
+
+  it('shows only explicitly shared excerpts to Admin and records reversible triage before independent review', async () => {
+    const goalResponse = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/goals`, {
+      method: 'POST', body: {
+        scope: 'workspace', team_id: null, title: 'Reduce partner review rework',
+        detail: 'Make repeated reviews faster without weakening evidence controls.',
+      },
+    });
+    expect(goalResponse.status).toBe(201);
+    const goal = await goalResponse.json() as { id: string };
+    const draft = await createDraft(fx);
+
+    const memberDenied = await asUser(env, fx.memberId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    expect({ status: memberDenied.status, body: await memberDenied.json() }).toMatchObject({ status: 403, body: { reason: 'admin_required' } });
+
+    const queued = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/shared-intelligence/proposals/${draft.id}/triage`, {
+      method: 'POST', body: { goal_id: goal.id },
+    });
+    expect(queued.status).toBe(200);
+    expect(await queued.json()).toMatchObject({
+      id: draft.id, triage_status: 'queued', triage_goal_id: goal.id,
+      triage_assessment: { status: 'unavailable', priority_score: null, failure_class: 'typesafe_key_unavailable' },
+    });
+
+    const adminView = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence`);
+    expect(adminView.status).toBe(200);
+    const adminBody = await adminView.json() as { candidates: Array<Record<string, unknown>> };
+    expect(adminBody.candidates).toHaveLength(1);
+    expect(JSON.stringify(adminBody)).toContain(FIRST_SOURCE_MESSAGE);
+    expect(JSON.stringify(adminBody)).not.toContain('runtime_request');
+    expect(JSON.stringify(adminBody)).not.toContain('messages');
+
+    const exclude = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/decision`, {
+      method: 'POST', body: { decision: 'exclude', note: 'Needs another independent outcome.' },
+    });
+    expect(await exclude.json()).toMatchObject({ candidate: { proposal: { triage_status: 'excluded' } }, approval_request_id: null });
+    const reopen = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/decision`, {
+      method: 'POST', body: { decision: 'reopen', note: 'Second outcome is now available.' },
+    });
+    expect(await reopen.json()).toMatchObject({ candidate: { proposal: { triage_status: 'queued' } }, approval_request_id: null });
+    const include = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/shared-intelligence/proposals/${draft.id}/decision`, {
+      method: 'POST', body: { decision: 'include', note: 'Send the frozen candidate for independent review.' },
+    });
+    expect(include.status).toBe(200);
+    const included = await include.json() as { approval_request_id: string; candidate: { proposal: SharedIntelligenceProposal } };
+    expect(included).toMatchObject({ candidate: { proposal: { triage_status: 'included', status: 'pending_review' } } });
+    expect(included.approval_request_id).toMatch(/^[0-9a-f-]{36}$/);
+    const pending = await approvalFor(fx, included.approval_request_id);
+    expect(pending.identities.reviewers.map((reviewer) => reviewer.user_id)).toContain(fx.memberId);
+
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN'); await setTenant(client, fx.workspaceId, fx.adminId);
+      const decisions = await client.query<{ decision: string; resulting_status: string }>(
+        `SELECT decision,resulting_status FROM shared_intelligence_triage_decisions
+          WHERE workspace_id=$1 AND proposal_id=$2 ORDER BY created_at,id`, [fx.workspaceId, draft.id],
+      );
+      expect(decisions.rows).toEqual([
+        { decision: 'exclude', resulting_status: 'excluded' },
+        { decision: 'reopen', resulting_status: 'queued' },
+        { decision: 'include', resulting_status: 'included' },
+      ]);
+      await client.query('ROLLBACK');
+    });
+  });
 
   it('publishes one immutable team-scoped Library version after an independent review, then revokes access without deleting audit facts', async () => {
     const submitted = await createAndSubmit(fx);
