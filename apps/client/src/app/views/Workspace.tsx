@@ -1031,30 +1031,62 @@ export function AdminSettings({ view }: { view: string }) {
   const nav = useNav();
   const admin = useIsAdmin();
   const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
+  const group = ADMIN_SETTINGS_GROUPS.find((entry) => entry.items.some((item) => item.id === selected))!;
+  const [collapsed, setCollapsed] = useState<string | null>(null);
   if (!admin) return null;
+  const panel = (
+    <div className="admin-settings-view">
+      {selected === 'Organization' && <OrganizationTab />}
+      {selected === 'Inbox rules' && <InboxRulesTab />}
+      {selected === 'Agents' && <AgentsTab />}
+      {selected === 'Slack' && <SlackTab />}
+      {selected === 'Email' && <EmailTab />}
+      {selected === 'Provider keys' && <ProviderKeysTab />}
+      {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
+      {selected === 'Usage' && <UsageTab />}
+      {selected === 'Data and privacy' && <PrivacyTab adminControls />}
+      {selected === 'intelligence' && <AdminSharedIntelligence />}
+    </div>
+  );
   return (
     <div className="scroll">
       <div className="app-body admin-settings-page">
         <SettingsViewHeader mode="admin" />
-        <div className="settings-section-tabs">
-          <Tabs tabs={ADMIN_SETTINGS_GROUPS.flatMap<{ id: string; label: string }>((group) => group.items)} value={selected} onChange={(next) => nav(ADMIN(next))} label="Admin sections" />
+        <div className="settings-section-tabs admin-group-tabs">
+          <Tabs
+            tabs={ADMIN_SETTINGS_GROUPS.map((entry) => ({ id: entry.items[0].id, label: entry.label }))}
+            value={group.items[0].id}
+            onChange={(next) => { setCollapsed(null); nav(ADMIN(next)); }}
+            label="Admin sections"
+          />
         </div>
-        <div className="admin-settings-layout">
-          <section className="admin-settings-content" aria-label={`${ADMIN_SETTINGS_LABELS[selected] ?? 'Admin'} admin settings`}>
-            <div className="admin-settings-view">
-              {selected === 'Organization' && <OrganizationTab />}
-              {selected === 'Inbox rules' && <InboxRulesTab />}
-              {selected === 'Agents' && <AgentsTab />}
-              {selected === 'Slack' && <SlackTab />}
-              {selected === 'Email' && <EmailTab />}
-              {selected === 'Provider keys' && <ProviderKeysTab />}
-              {selected === 'Runtime capacity' && <RuntimeCapacityTab />}
-              {selected === 'Usage' && <UsageTab />}
-              {selected === 'Data and privacy' && <PrivacyTab adminControls />}
-              {selected === 'intelligence' && <AdminSharedIntelligence />}
-            </div>
-          </section>
-        </div>
+        <section className="admin-settings-content" aria-label={`${group.label} admin settings`}>
+          {group.items.length === 1 ? panel : group.items.map((item) => {
+            const open = selected === item.id && collapsed !== item.id;
+            const panelId = `admin-panel-${item.id.replaceAll(' ', '-')}`;
+            return (
+              <div className="admin-settings-disclosure" key={item.id}>
+                <h2>
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={panelId}
+                    onClick={() => {
+                      setCollapsed(open ? item.id : null);
+                      if (selected !== item.id) nav(ADMIN(item.id));
+                    }}
+                  >
+                    {item.id === 'Organization' ? 'Workspace details' : ADMIN_SETTINGS_LABELS[item.id]}
+                    <span aria-hidden="true">{open ? '−' : '+'}</span>
+                  </button>
+                </h2>
+                <div id={panelId} hidden={!open} className="admin-settings-disclosure-body">
+                  {open && panel}
+                </div>
+              </div>
+            );
+          })}
+        </section>
       </div>
     </div>
   );

@@ -19,7 +19,7 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 /** Grouped Admin navigation avoids a ten-item horizontal tab strip. */
 export const ADMIN_SETTINGS_GROUPS = [
   {
-    label: 'Workspace',
+    label: 'Organization',
     items: [
       { id: 'Organization', label: 'Organization' },
       { id: 'Inbox rules', label: 'Inbox rules' },

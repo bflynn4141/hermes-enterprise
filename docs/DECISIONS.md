@@ -5810,3 +5810,8 @@ Reuse existing design tokens and grouped navigation. Settings navigation changes
 ### C87 navigation refinement — Admin View and User View
 
 September 20: Brian prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.
+
+
+### C87 navigation refinement — four consolidated tabs
+
+Brian’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
