@@ -36,6 +36,7 @@ import { IrisText } from './IrisText.js';
 import { ResponseFooter } from './ResponseFooter.js';
 import { ActivityArea } from './ActivityArea.js';
 import { RunActivity, RunStream } from './RunSurface.js';
+import { FocusLink } from './FocusLink.js';
 import { canReleaseRunStream, collapseHistoricalMessages, partitionRunMessages } from './message-groups.js';
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
@@ -374,6 +375,9 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
           {/* A run has one answer, even when tools required several provider
               turns to produce it. */}
           {currentRunMessages.answer && !streamOwnsAnswer && <IrisMessage message={currentRunMessages.answer} session={session} />}
+
+          {/* Where the run opened something, offered rather than imposed. */}
+          {!readOnly && <FocusLink session={session} />}
 
           {/* And the text that has not finalised yet. */}
           <RunStream session={session} canRelease={streamCanRelease} />

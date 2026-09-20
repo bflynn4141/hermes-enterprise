@@ -3,7 +3,9 @@ import { approvalReviewerLabel } from './approval-copy.js';
 // (`pendingRequests`, `workspaceMembers`, `historyEvents`, …) one for one, so
 // the views that consume them did not change shape when the data source did.
 import type { Bootstrap, InvitationEntity, MaskedProviderKey, RequestEntity, MemberEntity } from '@hermes/shared';
-import { listData, type AppState, type EntityKind } from '../model/store.js';
+import { entityData, listData, type AppState, type EntityKind } from '../model/store.js';
+import type { Ref } from '@hermes/shared';
+import { ADMIN_SETTINGS_LABELS } from '../model/constants.js';
 
 export const LIST_KEYS = {
   inboxNeedsReview: 'inbox:needs-review',
@@ -124,3 +126,55 @@ export function requestStatusLabel(request: RequestEntity): string {
 }
 
 export const agentName = (state: AppState): string => state.agent.name || 'Iris';
+
+export const SECTION_LABEL: Record<string, string> = { agents: 'Agents', inbox: 'Inbox', members: 'Members', admin: 'Admin', history: 'History', library: 'Library', settings: 'Settings' };
+
+/**
+ * A ref in words: `[crumb, detail]`. Reads the entity cache rather than a
+ * fixture map, so a ref whose entity has not arrived yet names its kind and
+ * never "Request not found" as a first impression.
+ */
+export function describeRef(state: AppState, app: Ref): [string, string] {
+  const agent = agentName(state);
+  const section = app.section;
+  const view = app.view;
+  if (section === 'agents') {
+    if (view === 'setup') return [agent, `${agent} / Ready to start`];
+    if (view === 'trace') return [agent, `${agent} / Run detail`];
+    if (view === 'traces') return [agent, `${agent} / Traces`];
+    if (view === 'context') return [agent, app.field ? `${agent} / ${app.field}` : `${agent} / Context`];
+    if (view === 'skills') return [agent, `${agent} / Skills`];
+    if (view === 'permissions') return [agent, `${agent} / Permissions`];
+    return [agent, `${agent} / Overview`];
+  }
+  if (section === 'inbox') {
+    if (view === 'request') {
+      const request = entityData<RequestEntity>(state, 'request', app.id);
+      return [request?.kind === 'approval' ? 'Approval' : request?.kind === 'invoice' ? 'Invoice' : request?.kind === 'agreement' ? 'Agreement' : request?.label ?? 'Request', 'Review'];
+    }
+    const label = view === 'rules' ? 'Rules' : app.filters?.status === 'resolved' ? 'Resolved' : 'Needs review';
+    return [label, label];
+  }
+  if (section === 'members') return ['Team', 'Members and invitations'];
+  if (section === 'admin') {
+    const label = ADMIN_SETTINGS_LABELS[app.view ?? 'Organization'] ?? 'Organization';
+    return [label, label];
+  }
+  if (section === 'history') return ['History', { all: 'All activity', decisions: 'Decisions', blocked: 'Blocked' }[view ?? 'decisions'] ?? 'Decisions'];
+  if (section === 'library') {
+    const label = { skills: 'Shared skills', documents: 'Documents', connections: 'Connections', intelligence: 'Shared Intelligence' }[view ?? 'skills'] ?? 'Skills';
+    return [label, label];
+  }
+  if (section === 'settings') return [app.view ?? 'Notifications', app.view ?? 'Notifications'];
+  return ['', ''];
+}
+
+/** One line for a link to a ref: "Inbox · Resolved", "Ada Ling · Review", "Members". */
+export function refLinkLabel(state: AppState, app: Ref): string {
+  const [crumb, detail] = describeRef(state, app);
+  const section = SECTION_LABEL[app.section] ?? 'Agents';
+  if (app.section === 'agents') return detail.replace(' / ', ' · ');
+  if (app.section === 'inbox' && app.view === 'request') return `${crumb} · ${detail}`;
+  if (app.section === 'members' || app.section === 'history') return crumb === section ? `${section} · ${detail}` : section === crumb ? section : `${section} · ${crumb}`;
+  return crumb === section ? section : `${section} · ${crumb}`;
+}
