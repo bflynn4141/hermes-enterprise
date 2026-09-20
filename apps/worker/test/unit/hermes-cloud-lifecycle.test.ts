@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   cloudAgentProvisioningName,
-  dispatchCloudAgentCreation,
   inspectCloudProvisioningSupport,
   listCloudAgents,
   reconcileCloudAgentCreation,
@@ -51,33 +50,11 @@ describe('Cloud lifecycle reconciliation boundary', () => {
     expect(await listCloudAgents(credential, fetcher)).toEqual([agent]);
   });
 
-  it('reconciles an existing deterministic instance without creating another', async () => {
-    const { fetcher, calls } = transport(call => ({ agents: call.name === 'agents' ? [agent] : [] }));
-    await expect(dispatchCloudAgentCreation(credential, { operationId, size: 'medium' }, fetcher))
-      .resolves.toMatchObject({ kind: 'confirmed', agent, reconciled: true });
+  it('reconciles an existing deterministic instance through the read-only tool', async () => {
+    const { fetcher, calls } = transport(() => ({ agents: [agent] }));
+    await expect(reconcileCloudAgentCreation(credential, operationId, fetcher))
+      .resolves.toMatchObject({ kind: 'confirmed', agent });
     expect(calls).toEqual([{ name: 'agents', arguments: { action: 'list' } }]);
-  });
-
-  it('dispatches one create with only the reviewed schema fields', async () => {
-    const { fetcher, calls } = transport(call => call.name === 'agents' ? { agents: [] } : { agent });
-    await expect(dispatchCloudAgentCreation(credential, {
-      operationId, size: 'medium', region: 'iad', model: 'test-model', env: { ENTERPRISE_MODE: '1' },
-    }, fetcher)).resolves.toMatchObject({ kind: 'confirmed', agent, reconciled: false });
-    expect(calls).toEqual([
-      { name: 'agents', arguments: { action: 'list' } },
-      { name: 'agent', arguments: { action: 'create', name: cloudName, size: 'medium', region: 'iad',
-        model: 'test-model', env: { ENTERPRISE_MODE: '1' } } },
-    ]);
-  });
-
-  it('turns an uncertain create response into reconciliation instead of replay', async () => {
-    const { fetcher, calls } = transport(call => {
-      if (call.name === 'agents') return { agents: [] };
-      throw new Error('connection lost after dispatch');
-    });
-    await expect(dispatchCloudAgentCreation(credential, { operationId, size: 'medium' }, fetcher))
-      .resolves.toEqual({ kind: 'reconciliation_required', cloudName });
-    expect(calls.map(call => call.name)).toEqual(['agents', 'agent']);
   });
 
   it('keeps a missing dispatched operation pending and never calls create', async () => {
@@ -87,13 +64,25 @@ describe('Cloud lifecycle reconciliation boundary', () => {
     expect(calls).toEqual([{ name: 'agents', arguments: { action: 'list' } }]);
   });
 
-  it('fails closed on duplicate names or a mismatched create response', async () => {
+  it('fails closed on duplicate deterministic names', async () => {
     const duplicate = transport(() => ({ agents: [agent, { ...agent, id: 'other' }] }));
     await expect(reconcileCloudAgentCreation(credential, operationId, duplicate.fetcher))
       .rejects.toThrow('cloud_contract_invalid');
-    const mismatch = transport(call => call.name === 'agents' ? { agents: [] } : { agent: { ...agent, name: 'other' } });
-    await expect(dispatchCloudAgentCreation(credential, { operationId, size: 'medium' }, mismatch.fetcher))
-      .rejects.toThrow('cloud_contract_invalid');
+  });
+
+  it.each([
+    { result: { content: [{ type: 'text', text: '{not-json' }], isError: false }, reason: 'malformed JSON' },
+    { result: { content: [], isError: false }, reason: 'missing result envelope' },
+    { result: { content: [{ type: 'text', text: JSON.stringify({ agents: [] }) }], isError: 'false' }, reason: 'invalid error marker' },
+  ])('maps $reason after tools/call to an outcome-unknown error', async ({ result }) => {
+    const fetcher = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id?: string; method: string };
+      if (body.method === 'initialize') return Response.json({ jsonrpc: '2.0', id: body.id,
+        result: { protocolVersion: '2025-03-26', capabilities: { tools: {} } } });
+      if (body.method === 'notifications/initialized') return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: '2.0', id: body.id, result });
+    }) as typeof fetch;
+    await expect(listCloudAgents(credential, fetcher)).rejects.toMatchObject({ reason: 'cloud_call_outcome_unknown' });
   });
 
   it('separates supported billing/lifecycle primitives from missing governed bootstrap', () => {

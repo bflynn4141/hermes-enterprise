@@ -232,7 +232,6 @@ async function rpcResponse(response: Response, id: string): Promise<ObjectValue>
 }
 
 export interface CloudToolContract { name: string; inputSchema: ObjectValue; outputSchema?: ObjectValue }
-export type CloudManagementToolName = 'agents' | 'agent' | 'service_credentials' | 'usage';
 
 async function openCloudManagementSession(
   credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
@@ -259,33 +258,31 @@ async function openCloudManagementSession(
 }
 
 /**
- * Invoke one allowlisted Cloud management tool and return its bounded JSON
- * payload. Once tools/call is dispatched, any missing or malformed response is
- * outcome-unknown: callers must reconcile instead of replaying a paid action.
+ * Exact read-only inventory call. Once tools/call is dispatched, any missing
+ * or malformed response is outcome-unknown. Mutating tool names and arguments
+ * are deliberately not parameters of this connection-layer function.
  */
-export async function callCloudManagementTool(
+export async function listCloudAgentPayload(
   credential: Pick<CloudManagementCredential, 'accessToken' | 'scope'>,
-  tool: CloudManagementToolName,
-  args: ObjectValue,
   fetcher: typeof fetch = fetch,
 ): Promise<ObjectValue> {
   const headers = await openCloudManagementSession(credential, fetcher);
   const id = crypto.randomUUID();
-  let result: ObjectValue;
   try {
-    result = await rpcResponse(await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: tool, arguments: args } }),
+    const result = await rpcResponse(await request(fetcher, CLOUD_RESOURCE, { method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'agents', arguments: { action: 'list' } } }),
     }), id);
+    if (result.isError === true) throw new CloudManagementError('cloud_action_rejected');
+    if (result.isError !== undefined && result.isError !== false) return invalid();
+    if (!Array.isArray(result.content) || result.content.length !== 1) return invalid();
+    const block = object(result.content[0]);
+    if (block.type !== 'text' || typeof block.text !== 'string' || block.text.length > MAX_BYTES) return invalid();
+    return parseJson(block.text);
   } catch (error) {
-    if (error instanceof CloudManagementError && error.reason === 'cloud_reconnect_required') throw error;
+    if (error instanceof CloudManagementError &&
+        (error.reason === 'cloud_reconnect_required' || error.reason === 'cloud_action_rejected')) throw error;
     throw new CloudManagementError('cloud_call_outcome_unknown');
   }
-  if (result.isError === true) throw new CloudManagementError('cloud_action_rejected');
-  if (result.isError !== undefined && result.isError !== false) return invalid();
-  if (!Array.isArray(result.content) || result.content.length !== 1) return invalid();
-  const block = object(result.content[0]);
-  if (block.type !== 'text' || typeof block.text !== 'string' || block.text.length > MAX_BYTES) return invalid();
-  return parseJson(block.text);
 }
 
 /** Authenticated account attribution only; never decode unsigned token claims. */

@@ -1,15 +1,12 @@
 import {
-  callCloudManagementTool,
   CloudManagementError,
+  listCloudAgentPayload,
   type CloudManagementCredential,
   type CloudToolContract,
 } from './management.js';
 
 type ObjectValue = Record<string, unknown>;
 type Credential = Pick<CloudManagementCredential, 'accessToken' | 'scope'>;
-
-const REGIONS = ['iad', 'sjc', 'lhr', 'nrt', 'syd', 'gru'] as const;
-export type CloudRegion = typeof REGIONS[number];
 
 export interface CloudAgentRecord {
   id: string;
@@ -24,18 +21,6 @@ export interface CloudAgentRecord {
   lastError: string | null;
   scheduledDeletionAt: string | null;
 }
-
-export interface CloudCreateSpec {
-  operationId: string;
-  size: string;
-  region?: CloudRegion;
-  model?: string;
-  env?: Record<string, string>;
-}
-
-export type CloudCreationDispatchResult =
-  | { kind: 'confirmed'; agent: CloudAgentRecord; reconciled: boolean }
-  | { kind: 'reconciliation_required'; cloudName: string };
 
 export type CloudCreationReconciliation =
   | { kind: 'confirmed'; agent: CloudAgentRecord }
@@ -94,29 +79,8 @@ export function cloudAgentProvisioningName(operationId: string): string {
   return `hermes-${operationId.toLowerCase()}`;
 }
 
-function createArguments(spec: CloudCreateSpec): ObjectValue {
-  const name = cloudAgentProvisioningName(spec.operationId);
-  const size = text(spec.size, 64);
-  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(size)) return invalid();
-  if (spec.region !== undefined && !REGIONS.includes(spec.region)) return invalid();
-  const env = spec.env === undefined ? undefined : object(spec.env);
-  if (env && Object.keys(env).length > 64) return invalid();
-  let envBytes = 0;
-  for (const [key, value] of Object.entries(env ?? {})) {
-    if (!/^[A-Z_][A-Z0-9_]{0,127}$/.test(key) || typeof value !== 'string' || value.length > 8192 || /\0/.test(value)) return invalid();
-    envBytes += key.length + value.length;
-  }
-  if (envBytes > 64 * 1024) return invalid();
-  return {
-    action: 'create', name, size,
-    ...(spec.region === undefined ? {} : { region: spec.region }),
-    ...(spec.model === undefined ? {} : { model: text(spec.model, 255) }),
-    ...(env === undefined ? {} : { env }),
-  };
-}
-
 export async function listCloudAgents(credential: Credential, fetcher: typeof fetch = fetch): Promise<CloudAgentRecord[]> {
-  return parseAgentList(await callCloudManagementTool(credential, 'agents', { action: 'list' }, fetcher));
+  return parseAgentList(await listCloudAgentPayload(credential, fetcher));
 }
 
 async function matchingAgent(
@@ -143,31 +107,6 @@ export async function reconcileCloudAgentCreation(
   return agent
     ? { kind: 'confirmed', agent }
     : { kind: 'pending', cloudName: cloudAgentProvisioningName(operationId) };
-}
-
-/**
- * Dispatch exactly once, only after the durable operation has entered its
- * `creating` state. Callers must use reconcileCloudAgentCreation on every
- * subsequent wake. The provider exposes no idempotency key for create.
- */
-export async function dispatchCloudAgentCreation(
-  credential: Credential,
-  spec: CloudCreateSpec,
-  fetcher: typeof fetch = fetch,
-): Promise<CloudCreationDispatchResult> {
-  const existing = await matchingAgent(credential, spec.operationId, fetcher);
-  if (existing) return { kind: 'confirmed', agent: existing, reconciled: true };
-  const args = createArguments(spec);
-  try {
-    const created = parseCloudAgent(object(await callCloudManagementTool(credential, 'agent', args, fetcher)).agent);
-    if (created.name !== args.name) return invalid();
-    return { kind: 'confirmed', agent: created, reconciled: false };
-  } catch (error) {
-    if (error instanceof CloudManagementError && error.reason === 'cloud_call_outcome_unknown') {
-      return { kind: 'reconciliation_required', cloudName: String(args.name) };
-    }
-    throw error;
-  }
 }
 
 function actionSet(contract: CloudToolContract | undefined): Set<string> {

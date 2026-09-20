@@ -5,8 +5,9 @@ The connection implementation begins with the protocol boundary in
 constructs an S256 authorization URL, refreshes an existing management grant,
 and initializes MCP to retrieve allowlisted management schemas. The separate
 `apps/worker/src/hermes-cloud/lifecycle.ts` adapter can list and reconcile agents
-and can dispatch one explicitly authorized create. It is not a job executor and
-is not wired to invitations. The admin connection is wired to
+through an exact read-only wrapper. Paid tool dispatch is intentionally not
+exported until the durable job executor owns a tenant-scoped atomic claim. The
+adapter is not wired to invitations. The admin connection is wired to
 encrypted storage and Organization Settings; invitation jobs and paid
 provisioning are not enabled.
 
@@ -37,11 +38,13 @@ It refuses an inference-only grant. Do not use Enterprise runtime discovery
 bearers, API Server keys, or provider inference credentials here.
 
 Output schemas are external data and do not authorize lifecycle calls. Cloud's
-authenticated `agent(action='create')` schema has no idempotency key. The typed
-adapter therefore derives a deterministic name from the durable operation and
-requires its caller to persist `creating` before dispatch. Every later wake uses
-the separate read-only exact-name reconciliation path. Missing or malformed
-post-dispatch responses are outcome-unknown and may not be replayed automatically.
+authenticated `agent(action='create')` schema has no idempotency key. A persisted
+`creating` label alone cannot prevent two workers from racing. The future paid
+executor must first win a tenant/workspace/operation/organization-connection
+one-use row transition; losers and every later wake use the separate read-only
+exact-name reconciliation path. After paid `tools/call` is dispatched, every
+response other than a fully validated exact-name result is outcome-unknown and
+may not be replayed automatically.
 
 ## Authenticated contract verification — September 19, 2026
 
@@ -59,7 +62,8 @@ and `usage`. No secrets, identifiers, names or dollar amounts were recorded.
   `create`, `list` and `revoke`; a created credential uses OAuth
   `client_credentials` for unattended short-lived management tokens.
 - `agent(action='create')` accepts `name`, `size`, optional `region`, optional
-  `model` and optional environment variables. It has no idempotency field.
+  `model` and optional environment variables. It has no idempotency field. No
+  create wrapper is exported in the connection slice.
 
 The organization-bound refresh grant already supports background work after the
 one-time browser authorization, so an additional machine credential is not a
@@ -114,7 +118,9 @@ unverified and can be reconnected. Users do not enter tokens or instance IDs.
    publish the reviewed Enterprise bridge in an approved image/profile. Instance
    creation and Enterprise readiness remain distinct.
 4. Add durable invite/provisioning operations and transactional outbox jobs,
-   retaining exact reservation semantics, role-readiness gates and email ordering.
+   including the atomic one-use provider-dispatch claim, exact reservation
+   semantics, role-readiness gates and email ordering. Only that executor may
+   expose the paid create wrapper, with server-derived environment values.
 5. Connect the compact Members states. Only server-confirmed setup completion
    may queue WorkOS email; a generic live instance must not be marked ready.
 
