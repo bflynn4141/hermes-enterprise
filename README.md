@@ -16,6 +16,55 @@ enforced by the database and the routes, not by a prompt or a policy document.
 > default, talks to the Nous Portal inference API. Trademarks belong to their
 > owners. Licensed under [MIT](LICENSE).
 
+## Overview
+
+Hermes Teams Demo is a reference implementation of a governed agent workspace:
+a place where a small team gives an AI agent real work, such as screening
+program applicants, drafting invoices and preparing agreements, while keeping
+every consequential decision with a person. It exists to show, in working code,
+how that separation can be built into the system rather than promised in a
+prompt.
+
+**Who it is for.** Teams that want an agent to do the legwork on operational
+work with money, access or commitments attached, and engineers who want to see
+how to enforce human approval at the database and route level.
+
+**How a workspace is organised.**
+
+- **Workspace and members.** One tenant with Admins and Members, signed in
+  through WorkOS AuthKit. Every request runs inside a transaction scoped to the
+  workspace and the user, with row-level security forced on.
+- **Iris, the agent.** A Hermes agent bound to the workspace. Each Iris has an
+  Overview, Context fields a person can edit, Skills it may use, and Traces of
+  every run. Iris runs on the official Hermes runtime, either locally or on a
+  managed Cloud profile.
+- **Sessions and turns.** People talk to Iris in sessions. A turn is one run:
+  a tool loop with deterministic steps, four controls (Stop, Guide, Queue,
+  Retry), and a failure taxonomy that says in words what went wrong. Runs can
+  wait on a human and resume when someone answers.
+- **Inbox and requests.** When Iris proposes something consequential, it
+  creates a typed request: an application to admit, an invoice to approve, an
+  agreement to approve, an access grant to consider. Requests wait in the Inbox
+  with the agent's findings and cited sources.
+- **Decisions.** A person records the decision through one guarded route. The
+  agent database role cannot write a decision at all.
+- **Effects and receipts.** A decision records what was decided. What it
+  implies, such as granting access, sending, paying or signing, is a separate
+  effect a person with the right role executes. Every decision leaves a receipt
+  in the session that asked for it, and History shows the record.
+- **Library and documents.** Approved drafts are saved to the Library as
+  documents, rendered to HTML, unsigned and unsent.
+- **Bring your own key.** Each workspace stores its own model provider key
+  under envelope encryption, and the key is only decrypted inside the one step
+  that calls the provider.
+
+**What is deliberately not here.** There is no code that sends outreach, moves
+money, grants access or signs anything, and there will not be. Those remain
+effects a person carries out outside the system. The pilot returns
+`unavailable` for every effect execution, in words, on purpose. The full
+real-versus-stubbed table is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#what-is-real-and-what-is-not).
+
 ## What it looks like
 
 Every consequential action arrives in the Inbox as a request of a specific
