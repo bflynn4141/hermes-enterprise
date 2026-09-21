@@ -33,8 +33,9 @@ const ERROR_COPY: Record<ErrorReason, string> = {
 };
 
 /**
- * Share links the host can paste before sending the page out. Empty until the
- * demo workspace has seeded sessions and real `/shared/...` URLs.
+ * Share links the host can paste before sending the page out. The section is
+ * not rendered while this is empty, so nothing on the page promises links
+ * that do not exist yet.
  */
 const SHARE_LINKS: ReadonlyArray<{ href: string; label: string; note: string }> = [
   // { href: '/shared/…', label: 'A partner screening turn', note: 'Read-only. No account needed.' },
@@ -99,25 +100,19 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
         </div>
       </header>
       <div className="portal-body demo-access-body">
-        <p className="demo-access-eyebrow">Hermes Enterprise Demo</p>
         <h1 className="portal-title">See how a named team runs Iris under review</h1>
         <p className="demo-access-lede">
           {/* WRITE-UP PLACEHOLDER — replace in your own voice before sending to Nous.
               Two or three sentences: what Hermes Enterprise is, what is real vs stubbed,
               and what they should try first once invited. */}
-          Hermes Enterprise is a workspace where every agent action is a named human&apos;s
-          decision. This staging deployment is the live demo: seeded sessions, shared
-          read-only links below, and a Member invite when you have the passcode.
+          Hermes Enterprise is a workspace where every consequential agent action is a named
+          human&apos;s decision. This staging deployment is the live demo. Request a Member
+          invite below with the passcode you were sent.
         </p>
 
-        <section className="demo-access-shares" aria-label="Read-only sessions">
-          <h2 className="demo-access-section-title">Look without an account</h2>
-          {SHARE_LINKS.length === 0 ? (
-            <p className="meta">
-              Share links will appear here once the demo workspace has a few seeded sessions.
-              Ask the host for `/shared/…` URLs in the meantime.
-            </p>
-          ) : (
+        {SHARE_LINKS.length > 0 && (
+          <section className="demo-access-shares" aria-label="Read-only sessions">
+            <h2 className="demo-access-section-title">Look without an account</h2>
             <ul className="demo-access-share-list">
               {SHARE_LINKS.map((link) => (
                 <li key={link.href}>
@@ -126,8 +121,8 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
                 </li>
               ))}
             </ul>
-          )}
-        </section>
+          </section>
+        )}
 
         <section className="demo-access-request" aria-label="Request access">
           <h2 className="demo-access-section-title">Request a Member invite</h2>
