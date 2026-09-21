@@ -8,7 +8,9 @@ A person reviews, approves or sends it back. Admissions, documents, sending,
 payment and signature can only happen when a human decides, and that rule is
 enforced by the database and the routes, not by a prompt or a policy document.
 
-![The workspace: sessions listed on the left, a conversation with Iris in the middle, and the Inbox on the right filled with applications, agreements, and invoices](docs/assets/readme-overview.png)
+![The workspace: organic session names on the left, a conversation with Iris in the middle, and the Inbox on the right filled with applications, agreements, and invoices](docs/assets/readme-overview.png)
+
+![An opened Inbox item: Aster Works scored 87 out of 100, with the screening notes and Admit or Decline](docs/assets/readme-inbox-detail.png)
 
 > **Independent project.** Hermes Teams Demo is not affiliated with, endorsed
 > by, or maintained by Nous Research. It runs the open-source
