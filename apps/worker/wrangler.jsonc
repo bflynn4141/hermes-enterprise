@@ -28,12 +28,15 @@
   // 405 before they were added, so the create-workspace and accept-invitation
   // routes were unreachable rather than broken. `/shared/*` is here so a share
   // link reaches the Worker's own catch-all, which answers a navigation with
-  // the app and a fetch with JSON. See decision F1.
+  // the app and a fetch with JSON. `/demo/*` is here for the same reason: the
+  // request-access page is a navigation, but its form posts to
+  // `/demo/request-access`, which the assets binding would answer with 405.
+  // See decision F1.
   "assets": {
     "directory": "../client/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/internal/*", "/integrations/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+    "run_worker_first": ["/health", "/internal/*", "/integrations/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
   },
 
   "vars": {
@@ -190,7 +193,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",
@@ -236,6 +239,17 @@
         // Production remains unset and therefore cannot enable this workflow.
         "HERMES_ENTERPRISE_PLUGIN_REVISION": "ca8b89192f5320845f259369a907b766de0cfc97",
         "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:922bfa57af420429fcee71f9cec770d4af6bfbd743c67249521b265ef2b86a5a",
+        // The public request-access page (`/demo`). The workspace id is the
+        // "Hermes Enterprise Demo" workspace on staging and is deliberately
+        // left empty here: the route answers `demo_access_not_configured`
+        // until it is set, and an invented uuid would invite people into
+        // nothing. Brian: fill this in from Settings → Members (the id is in
+        // the URL). The domain allowlist is empty on purpose, so the passcode
+        // is the only gate; set it to e.g. "nousresearch.com" to also require
+        // a work address from that domain. The passcode itself is a secret
+        // (RUNBOOK §12), never a var.
+        "DEMO_ACCESS_WORKSPACE_ID": "",
+        "DEMO_ACCESS_ALLOWED_DOMAINS": "",
         "R2_BUCKET": "hermes-uploads-staging"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
@@ -305,7 +319,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
       },
       "vars": {
         "ENVIRONMENT": "production",

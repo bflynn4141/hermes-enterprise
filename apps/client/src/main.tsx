@@ -22,6 +22,7 @@ import { activeSessionKey } from './model/constants.js';
 import { StoreProvider, useAdapter, useAppState } from './app/store-context.js';
 import { Shell } from './app/Shell.js';
 import { Onboarding, SignIn } from './app/onboarding/Onboarding.js';
+import { DemoAccess } from './app/demo/DemoAccess.js';
 import { SharedViewer } from './app/shared/SharedViewer.js';
 import { Avatar, Button, EmptyState, Skeleton } from './app/ui/primitives.js';
 
@@ -111,6 +112,29 @@ function MockOnboarding({ step, token }: { step: 'create-workspace' | 'join-work
       </div>
     );
   return <Onboarding route={step} token={token} fetchImpl={fetchImpl} />;
+}
+
+function MockDemoAccess() {
+  const [fetchImpl, setFetchImpl] = useState<typeof fetch | null>(null);
+  useEffect(() => {
+    let live = true;
+    void import('./model/mock.js').then((module) => {
+      if (!live) return;
+      setFetchImpl(() => module.createMockBackend().fetchImpl);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!fetchImpl)
+    return (
+      <div className="portal">
+        <div className="portal-body" style={{ paddingTop: 140 }}>
+          <Skeleton rows={3} label="Loading demo" />
+        </div>
+      </div>
+    );
+  return <DemoAccess fetchImpl={fetchImpl} />;
 }
 
 function Bootstrap({ route: current }: { route: Extract<Route, { kind: 'workspace' }> }) {
@@ -408,6 +432,7 @@ function WorkspacePicker() {
 
 function Root() {
   if (route.kind === 'shared') return <SharedRoute token={route.token} />;
+  if (route.kind === 'demo') return __MOCK__ ? <MockDemoAccess /> : <DemoAccess />;
   if (route.kind === 'onboarding') return __MOCK__ ? <MockOnboarding step={route.step} token={route.token} /> : <Onboarding route={route.step} token={route.token} />;
   if (route.kind === 'signin' || route.kind === 'callback') {
     // `/auth/callback` lands back inside the workspace; the pending step-up

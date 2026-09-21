@@ -493,6 +493,11 @@ pnpm --filter @hermes/worker exec wrangler secret put R2_SECRET_ACCESS_KEY --env
 # Observability. Optional: with no DSN the SDK is disabled and the code path is
 # identical.
 pnpm --filter @hermes/worker exec wrangler secret put SENTRY_DSN --env $E
+
+# The public request-access page (`/demo`). Optional: with no passcode the
+# route answers `demo_access_not_configured`. DEMO_ACCESS_WORKSPACE_ID and
+# DEMO_ACCESS_ALLOWED_DOMAINS are vars in wrangler.jsonc, not secrets.
+pnpm --filter @hermes/worker exec wrangler secret put DEMO_ACCESS_PASSCODE --env $E
 ```
 
 Confirm: `wrangler secret list --env $E`.

@@ -1128,6 +1128,17 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 
+    if (path === '/demo/request-access' && method === 'POST') {
+      const email = String(body.email ?? '').trim().toLowerCase();
+      const passcode = String(body.passcode ?? '');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(422, 'bad_email');
+      if (!passcode) return fail(422, 'bad_passcode');
+      if (passcode !== 'demo-pass') return fail(403, 'demo_passcode_invalid');
+      if (email.endsWith('@blocked.example')) return fail(403, 'demo_domain_not_allowed');
+      if (email === 'member@nous.example') return json({ status: 'already_member', email });
+      return json({ status: 'invited', email });
+    }
+
     if (path === '/auth/session') {
       const user = { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example' };
       if (!url.searchParams.has('ws')) {
