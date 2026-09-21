@@ -4,7 +4,7 @@ import { mockUuid, type EffectEntity, type Ref, type RequestEntity } from '@herm
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState, reduce } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, legacyEffectStatusLabel } from './Inbox.js';
+import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, SIMULATED_EFFECT_HONESTY, legacyEffectStatusLabel } from './Inbox.js';
 
 function request(id: number, subject: string, kind: RequestEntity['kind'], status: RequestEntity['status']): RequestEntity {
   const payload = kind === 'application'
@@ -359,5 +359,59 @@ describe('legacy effect execute honesty', () => {
     expect(html).toContain('Unavailable · nothing sent, paid, granted or signed');
     expect(html).not.toContain('>Execute</button>');
     expect(html).not.toContain('>Record attempt</button>');
+  });
+
+  const simulated: EffectEntity = {
+    ...pending,
+    id: mockUuid(503),
+    kind: 'payment',
+    required_role: 'finance',
+    label: 'Pay the invoice',
+    status: 'simulated',
+    reason: 'Simulated. No email, payment, access or signature action was completed; this environment invents the outcome so the flow can be followed to the end.',
+    simulation: {
+      reference: 'SIM-PAY-7F3A2C',
+      summary: 'USD 900.00 to Robin Ellis · simulated settlement · no money moved',
+      steps: [
+        { label: 'Payment instruction created (simulated)', at: '2026-09-20T11:59:51.000Z' },
+        { label: 'Marked settled · SIM-PAY-7F3A2C', at: '2026-09-20T11:59:59.000Z' },
+      ],
+    },
+  };
+
+  it('offers a simulated Execute, and never a bare Execute, when the Worker advertises the simulated executor', () => {
+    const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[pending]} executor="simulated" />);
+    expect(html).toContain(SIMULATED_EFFECT_HONESTY);
+    expect(html).toContain('>Execute (simulated)</button>');
+    expect(html).not.toContain('>Execute</button>');
+    expect(legacyEffectStatusLabel(pending, 'simulated')).toBe('Pending · simulated executor · needs the access role');
+  });
+
+  it('gives a saved invoice receipt actionable effect rows when the receipt owns the view', () => {
+    const invoice = request(7, 'Robin Ellis', 'invoice', 'created');
+    const store = createStore(initialState());
+    const html = renderToStaticMarkup(
+      <StoreProvider store={store} adapter={{} as Adapter}>
+        <DocumentView
+          request={invoice}
+          readOnly
+          effects={[{ ...pending, kind: 'payment', required_role: 'finance', label: 'Pay the invoice' }]}
+          effectActions={{ busy: null, reauthed: false, notice: null, executor: 'simulated', onRecordAttempt: () => {} }}
+        />
+      </StoreProvider>,
+    );
+    expect(html).toContain('What this implies');
+    expect(html).toContain('>Execute (simulated)</button>');
+    expect(html).not.toContain('Downstream actions unavailable');
+  });
+
+  it('labels a simulated outcome as simulated everywhere it appears and shows the invented timeline', () => {
+    expect(legacyEffectStatusLabel(simulated)).toBe('Simulated · USD 900.00 to Robin Ellis · simulated settlement · no money moved');
+    const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[simulated]} />);
+    expect(html).toContain('>Simulated</span>');
+    expect(html).toContain(SIMULATED_EFFECT_HONESTY);
+    expect(html).toContain('Marked settled · SIM-PAY-7F3A2C');
+    expect(html).not.toMatch(/>Execute(d)?</);
+    expect(html).not.toContain('Paid');
   });
 });

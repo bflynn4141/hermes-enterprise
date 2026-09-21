@@ -4,6 +4,29 @@ Choices made while building M1 where the production plan was silent, plus the
 places where reality differed from what the plan assumed. Each one says what was
 decided, why, and what would change it.
 
+## Simulated effect execution outside production — September 20, 2026
+
+Brian asked for payment, signature and mail-send outcomes that feel real in a
+demo without being production capabilities. The legacy effects ledger gains a
+third answer to Execute: `simulated`. `EFFECT_EXECUTOR_MODE=simulated` in
+development and staging makes the route invent a reference (`SIM-PAY-7F3A2C`),
+a one-line summary that itself says no money moved, and a short provider-style
+timeline, all written to `enforcement_result` under `status = 'simulated'`.
+Production pins the mode to `unavailable` in code (`effectExecutorMode`) as
+well as in `wrangler.jsonc`, and a unit test holds each.
+
+Why a new status rather than `executed` behind a flag: the approvals design is
+only worth anything if the row that says what happened is telling the truth.
+`executed` would let every reader, including History, the Inbox receipt and any
+future export, infer a real payment. `simulated` forces each of them to handle
+it as its own case, which is what the client does with a Simulated pill, an
+"Execute (simulated)" button and copy explaining what the word means. The
+bootstrap advertises `capabilities.effect_executor` so an older Worker is read
+as `unavailable`, fail-closed. Invariant 5 is untouched: no provider is called.
+What would change it: a real executor for one kind, at which point that kind
+would gain `executed` and the simulation for it would be removed rather than
+kept beside it.
+
 ## Navigation rail releases its grid column — September 15, 2026
 
 The left navigation's explicit collapse control now contracts both the shared

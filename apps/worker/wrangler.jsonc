@@ -42,6 +42,10 @@
     "AUTH_MODE": "fake",
     "MODEL_GATEWAY_MODE": "off",
     "ENGINE_PAUSED": "0",
+    // Execute on a legacy effect invents a `simulated` outcome here so the
+    // invoice, agreement and admission flows read to the end. The code ignores
+    // this under ENVIRONMENT=production (domain/effects.ts, effectExecutorMode).
+    "EFFECT_EXECUTOR_MODE": "simulated",
     // Development only: the engine answers from ScriptedProvider, so a run can
     // be created with no provider key in the store. A unit test asserts the
     // deployed environments never set it.
@@ -198,6 +202,9 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
+        // Staging is the demo environment: simulated payment, signature and
+        // delivery outcomes, each labelled `simulated` and never `executed`.
+        "EFFECT_EXECUTOR_MODE": "simulated",
         // Production-demo invariant: an invitation is deliverable only after a
         // verified warm-pool Iris has been reserved for it.
         "AGENT_RUNTIME": "hermes",
@@ -313,6 +320,8 @@
         "AUTH_MODE": "workos",
         "MODEL_GATEWAY_MODE": "off",
         "ENGINE_PAUSED": "0",
+        // Stated explicitly, and also enforced in code regardless of this value.
+        "EFFECT_EXECUTOR_MODE": "unavailable",
         // Keep the production invitation path fail-closed: no verified,
         // reserved Iris means no invitation is sent.
         "AGENT_RUNTIME": "hermes",

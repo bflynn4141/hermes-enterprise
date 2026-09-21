@@ -164,6 +164,7 @@ describe('F2 · the two routes with no tenant in their path', () => {
         turn_attachments: boolean;
         automated_triggers: boolean;
         member_invitations: { mode: string; role_templates: string[] };
+        effect_executor: string;
       };
       sessions: { id: string; title: string }[];
     };
@@ -174,6 +175,7 @@ describe('F2 · the two routes with no tenant in their path', () => {
       turn_attachments: true,
       automated_triggers: false,
       member_invitations: { mode: 'legacy_delivery', role_templates: [] },
+      effect_executor: 'unavailable',
     });
     expect(body.sessions).toHaveLength(1);
     expect(body.sessions[0]?.title).toBe('Set up Beacon');

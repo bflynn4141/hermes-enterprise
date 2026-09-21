@@ -1,10 +1,17 @@
 // The effects ledger.
 //
 //   GET  /w/:ws/effects?status=      what a decision implied and nobody has done
-//   POST /w/:ws/effects/:id/execute  answers `unavailable`, every time
+//   POST /w/:ws/effects/:id/execute  answers `unavailable`, or `simulated`
+//                                    outside production
 //
 // The execute route is the most important honest surface in the product, so it
 // is worth being explicit about what it is:
+//
+// Outside production, `EFFECT_EXECUTOR_MODE=simulated` makes it answer with an
+// invented outcome under its own status, `simulated`. The row then carries a
+// synthetic reference and timeline so the demo reads to the end, and the
+// status word keeps every reader honest: `executed` is still never written.
+// `effectExecutorMode` ignores the variable under `production`.
 //
 // There is no executor for these legacy ledger rows. Approved communications
 // can use the separate governed Gmail outbox when configured, but recording an
@@ -29,10 +36,18 @@ import {
   EFFECT_STATUSES,
 } from '@hermes/shared';
 import type { Env } from '../env.js';
+import type { Tx } from '../db/client.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, pathUuid, RouteError } from './tenant.js';
 import { effectRows, loadEffect, toEffectEntity } from '../domain/effect-rows.js';
-import { unavailableEnforcement } from '../domain/effects.js';
+import {
+  effectExecutorMode,
+  simulateEffect,
+  simulatedEnforcement,
+  unavailableEnforcement,
+  type SimulationContext,
+} from '../domain/effects.js';
+import type { EffectKind } from '@hermes/shared';
 import { publishEvents } from '../jobs.js';
 
 const effectPage = paginatedSchema(effectEntitySchema);
@@ -89,18 +104,27 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
       throw new RouteError('this effect was cancelled by a later version', 'effect_cancelled', 409);
     }
 
-    // Recorded once. A second press finds the row already `unavailable` and
-    // answers with it rather than appending a second identical audit row.
-    if (effect.status === 'unavailable') return effect;
+    // Recorded once. A second press finds the row already answered and
+    // returns it rather than appending a second identical audit row.
+    if (effect.status === 'unavailable' || effect.status === 'simulated') return effect;
+
+    const mode = effectExecutorMode(c.env);
+    const enforcement =
+      mode === 'simulated'
+        ? simulatedEnforcement(
+            work.userId,
+            simulateEffect(effect.kind as EffectKind, await simulationContext(work.tx, effect.request_id)),
+          )
+        : unavailableEnforcement(work.userId);
 
     await work.tx.query(
       `UPDATE effects
-          SET status = 'unavailable',
+          SET status = $4,
               executed_by = $2,
               executed_at = now(),
               enforcement_result = $3::jsonb
         WHERE id = $1`,
-      [effectId, work.userId, JSON.stringify(unavailableEnforcement(work.userId))],
+      [effectId, work.userId, JSON.stringify(enforcement), enforcement.result],
     );
     await work.tx.query(
       `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, request_id, decision_id, effect_id)
@@ -126,4 +150,33 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
   });
 
   return c.json(effectEntitySchema.parse(toEffectEntity(row)));
+}
+
+/**
+ * The few request facts a simulation may echo. Read inside the tenant
+ * transaction, so RLS applies; anything missing is simply omitted from the copy.
+ */
+async function simulationContext(tx: Tx, requestId: string): Promise<SimulationContext> {
+  const { rows } = await tx.query<{ label: string | null; payload: Record<string, unknown> | null }>(
+    `SELECT label, payload FROM requests WHERE id = $1`,
+    [requestId],
+  );
+  const payload = rows[0]?.payload ?? {};
+  const str = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 80) : null);
+  const record = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const applicant = record(payload['applicant']);
+  const parties = Array.isArray(payload['parties'])
+    ? (payload['parties'] as unknown[]).map((party) => str(record(party)['name'])).filter((name): name is string => name !== null)
+    : [];
+  // An agreement's counterparty is the last named party; the first is us.
+  const counterparty = parties.length > 1 ? parties[parties.length - 1] ?? null : null;
+  return {
+    subjectName: str(payload['name']) ?? str(applicant['name']) ?? str(payload['email']) ?? str(applicant['email']) ?? counterparty ?? rows[0]?.label ?? null,
+    payeeName: str(record(payload['payee'])['name']),
+    currency: str(payload['currency']),
+    totalMinor: typeof payload['total_minor'] === 'number' ? (payload['total_minor'] as number) : null,
+    documentNumber: str(payload['number']),
+    parties,
+  };
 }

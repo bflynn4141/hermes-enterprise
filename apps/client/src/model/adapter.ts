@@ -683,6 +683,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
           // client never sends a setup request unless the server advertised it.
           memberInvitationMode: boot.capabilities.member_invitations?.mode ?? 'legacy_delivery',
           memberRoleTemplates: boot.capabilities.member_invitations?.role_templates ?? [],
+          // Same fail-closed default: no advertised executor means the honest
+          // "Record attempt" copy, never a simulated Execute.
+          effectExecutor: boot.capabilities.effect_executor ?? 'unavailable',
         },
         sessions,
         sessionOrder: [...localIds, ...boot.sessions.map((row) => row.id)],
