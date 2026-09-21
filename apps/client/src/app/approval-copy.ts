@@ -1,4 +1,5 @@
 import type { ApprovalType, ApprovalView, RequestEntity } from '@hermes/shared';
+import { STEP_UP_MAX_AGE_MS } from '../model/constants.js';
 
 interface ApprovalMeta {
   label: string;
@@ -187,6 +188,14 @@ export function approvalWorkStartedLine(view: ApprovalView): string | null {
   if (view.payload.approval_type !== 'run_plan' || view.work.status !== 'admitted') return null;
   const budget = view.payload.details.budget;
   return `Search started · ${formatMinor(budget.cap_minor, budget.currency)} cap`;
+}
+
+/**
+ * Whether the decision routes would answer `reauth_required` right now. Null
+ * (no `/auth/session` yet) is unknown, not stale: the 401 path stays the authority.
+ */
+export function decisionSignInStale(authenticatedAt: number | null, now = Date.now()): boolean {
+  return authenticatedAt !== null && now - authenticatedAt > STEP_UP_MAX_AGE_MS;
 }
 
 export function requestActionLabel(request: RequestEntity): string {

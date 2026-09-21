@@ -9,8 +9,7 @@ import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Avatar, Button, EmptyState, MenuItem, Popover, Skeleton } from '../ui/primitives.js';
 import { LIST_KEYS } from '../selectors.js';
-import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy, approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine } from '../approval-copy.js';
-import { STEP_UP_MAX_AGE_MS } from '../../model/constants.js';
+import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy, approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine, decisionSignInStale } from '../approval-copy.js';
 export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, approvalPrimaryAction, approvalIcon, approvalReviewerLabel, matchesReviewerFilter, approvalPreview } from '../approval-copy.js';
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
@@ -509,8 +508,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   // The decision routes require a sign-in within the Worker's step-up window.
   // Saying so before the click is a hint only: the 401 path below stays the
   // authority, and an unknown `authenticated_at` is treated as unknown, not stale.
-  const signInStale = !resolved && (canApprove || canDecline || canRequestChanges)
-    && state.connection.authenticatedAt !== null && Date.now() - state.connection.authenticatedAt > STEP_UP_MAX_AGE_MS;
+  const signInStale = !resolved && (canApprove || canDecline || canRequestChanges) && decisionSignInStale(state.connection.authenticatedAt);
   const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);

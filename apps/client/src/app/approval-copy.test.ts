@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mockUuid, type RequestEntity } from '@hermes/shared';
-import { approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine, matchesReviewerFilter } from './approval-copy.js';
+import { approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine, decisionSignInStale, matchesReviewerFilter } from './approval-copy.js';
+import { STEP_UP_MAX_AGE_MS } from '../model/constants.js';
 import type { ApprovalView } from '@hermes/shared';
 
 function legacyRequest(canDecide: boolean, kind: RequestEntity['kind'] = 'invoice'): RequestEntity {
@@ -39,6 +40,13 @@ describe('approval result copy', () => {
     expect(approvalWorkReason('profile_missing')).toBe('Profile missing.');
     expect(approvalWorkReason('The proposal was declined.')).toBe('The proposal was declined.');
     expect(approvalWorkReason(null)).toBeNull();
+  });
+
+  it('shows the sign-in hint only for a sign-in older than the step-up window', () => {
+    const now = 1_700_000_000_000;
+    expect(decisionSignInStale(now - 1_000, now)).toBe(false);
+    expect(decisionSignInStale(now - STEP_UP_MAX_AGE_MS - 1, now)).toBe(true);
+    expect(decisionSignInStale(null, now)).toBe(false);
   });
 
   it('describes an admitted run_plan by its cap in major units', () => {
