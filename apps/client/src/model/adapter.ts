@@ -41,6 +41,7 @@ interface BootstrapExtra {
   /** True when the key list needs a step-up before it can be read at all. */
   providerKeysLocked: boolean;
   hubTicket: string;
+  authenticatedAt: number | null;
   sessionHead: string | null;
 }
 import { createRest, RestError, type FetchLike, type Rest } from './rest.js';
@@ -138,6 +139,11 @@ export function createAdapter(options: AdapterOptions): Adapter {
   const { store, workspaceId } = options;
   const auth = options.auth ?? createAuth();
   const now = options.now ?? (() => Date.now());
+  // An unparseable timestamp reads as "unknown", never as fresh.
+  const authenticatedAtMs = (value: string): number | null => {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  };
   const setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const setIntervalImpl = options.setInterval ?? ((fn, ms) => setInterval(fn, ms));
@@ -553,7 +559,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     try {
       const session = await rest.authSession(workspaceId);
       ticket = session.hub_ticket;
-      dispatch({ type: 'auth/refreshed', at: now() });
+      dispatch({ type: 'auth/refreshed', at: now(), authenticatedAt: authenticatedAtMs(session.authenticated_at) });
       workspaceHub?.extend(ticket);
       sessionHub?.extend(ticket);
       // Ticket refresh is also a cheap opportunity to prove the visible
@@ -617,6 +623,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
       providerKeys: keys.keys,
       providerKeysLocked: keys.locked,
       hubTicket: session?.hub_ticket ?? '',
+      authenticatedAt: session ? authenticatedAtMs(session.authenticated_at) : null,
       sessionHead: session?.stream_heads.session ?? null,
     };
   }
@@ -704,6 +711,9 @@ export function createAdapter(options: AdapterOptions): Adapter {
       },
     });
 
+    // Bootstrap replaces the store patch, not `connection`; record the sign-in
+    // age the same way a periodic refresh does.
+    dispatch({ type: 'auth/refreshed', at: now(), authenticatedAt: extra.authenticatedAt });
     for (const row of boot.catalog) dispatch({ type: 'entity/upsert', kind: 'catalog', id: row.model_id, version: 1, data: row });
     for (const row of boot.requests) {
       // Bootstrap carries only the list shape; the full row is fetched when the

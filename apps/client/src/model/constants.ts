@@ -146,6 +146,8 @@ export const AGENT_TABS = [
 export const draftsKey = (workspaceId: string, userId: string) => `hermes:drafts:${workspaceId}:${userId}`;
 export const activeSessionKey = (workspaceId: string) => `hermes:active-session:${workspaceId}`;
 export const STEPUP_KEY = 'hermes:stepup';
+/** Mirrors the Worker's `STEP_UP_MAX_AGE_SECONDS`: how old a sign-in may be for a decision route. */
+export const STEP_UP_MAX_AGE_MS = 5 * 60 * 1000;
 /**
  * The Iris panel's state and its remembered width, per workspace and user —
  * the same scoping as drafts, for the same reason: two people on one machine

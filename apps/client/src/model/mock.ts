@@ -1148,7 +1148,7 @@ export function createMockBackend(options: MockOptions = {}) {
               member_count: members.length,
             },
           ],
-          authenticated_at: iso(0),
+          authenticated_at: new Date().toISOString(),
         });
       }
       return json({
@@ -1157,7 +1157,7 @@ export function createMockBackend(options: MockOptions = {}) {
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
         expires_at: iso(600),
-        authenticated_at: iso(0),
+        authenticated_at: new Date().toISOString(),
       });
     }
 
