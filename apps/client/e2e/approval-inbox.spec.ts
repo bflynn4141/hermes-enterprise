@@ -6,14 +6,14 @@ const APPROVALS = '/?scenario=approvals';
 
 const APPROVAL_CASES = [
   { type: 'run_plan', subject: 'Launch partner research sprint', label: 'Plan and budget', marker: 'Enforced run limits', action: 'Approve plan', effect: null, work: null },
-  { type: 'team_commitment', subject: 'Assign the onboarding synthesis', label: 'Team commitment', marker: 'Bounded task', action: 'Accept task', effect: 'not required', work: 'admitted' },
-  { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'unavailable', work: 'completed' },
-  { type: 'communication', subject: 'Send pilot invitation', label: 'Communication', marker: 'Illustrative pilot outline.pdf', action: 'Approve send', effect: 'unavailable', work: 'completed' },
-  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Approve publication', effect: 'unavailable', work: 'completed' },
-  { type: 'deliverable', subject: 'Accept onboarding recommendation', label: 'Deliverable', marker: 'Smallest credible onboarding pilot', action: 'Accept result', effect: 'not required', work: 'ready' },
-  { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'unavailable', work: 'completed' },
-  { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'unavailable', work: 'completed' },
-  { type: 'exception', subject: 'Allow a 24-hour review extension', label: 'Exception', marker: 'Rule remains in force', action: 'Allow exception', effect: 'not required', work: 'completed' },
+  { type: 'team_commitment', subject: 'Assign the onboarding synthesis', label: 'Team commitment', marker: 'Bounded task', action: 'Accept task', effect: 'Not required', work: 'Work started' },
+  { type: 'access', subject: 'Read-only access to partner feedback', label: 'Temporary access', marker: 'Access recipient', action: 'Allow access', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'communication', subject: 'Send pilot invitation', label: 'Communication', marker: 'Illustrative pilot outline.pdf', action: 'Approve send', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'shared_learning', subject: 'Publish partner evidence checklist', label: 'Shared learning', marker: 'Skill changes', action: 'Approve publication', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'deliverable', subject: 'Accept onboarding recommendation', label: 'Deliverable', marker: 'Smallest credible onboarding pilot', action: 'Accept result', effect: 'Not required', work: 'Ready to start' },
+  { type: 'data_disclosure', subject: 'Share redacted pilot summary', label: 'Data disclosure', marker: 'Example Research Cooperative', action: 'Allow sharing', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'record_change', subject: 'Update pilot readiness records', label: 'Record change', marker: 'Record changes', action: 'Approve change', effect: 'No external effect', work: 'No follow-on work' },
+  { type: 'exception', subject: 'Allow a 24-hour review extension', label: 'Exception', marker: 'Rule remains in force', action: 'Allow exception', effect: 'Not required', work: 'No follow-on work' },
   { type: 'agent_governance', subject: 'Change Rowan’s schedule and tools', label: 'Agent governance', marker: 'Current schedule', action: null, effect: null, work: null },
 ] as const;
 
@@ -76,8 +76,8 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByText('Fictional Partner Cooperative')).toBeVisible();
     await expect(app.getByRole('link', { name: 'Open original source' })).toHaveAttribute('href', 'https://example.invalid/illustrative-pilot');
     await app.getByRole('button', { name: 'Approve draft' }).click();
-    await expect(app.locator('.approval-result-track').getByText('not required', { exact: true })).toBeVisible();
-    await expect(app.locator('.approval-result-track').getByText('approved', { exact: true })).toBeVisible();
+    await expect(app.locator('.approval-result-track').getByText('Not required', { exact: true })).toBeVisible();
+    await expect(app.locator('.approval-result-track').getByText('Approved', { exact: true })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Approve draft' })).toHaveCount(0);
   });
 
@@ -101,7 +101,7 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByRole('button', { name: 'Approve draft' })).toBeVisible();
     await app.getByRole('button', { name: 'Approve draft' }).click();
     await expect(app.locator('.approval-footer')).toContainText('authorization v2');
-    await expect(app.locator('.approval-result-track')).toContainText('not required');
+    await expect(app.locator('.approval-result-track')).toContainText('Not required');
   });
 
   test('an authorized pending draft can be revised at phone width without approving old text', async ({ page }) => {
@@ -218,10 +218,10 @@ test.describe('enterprise approval inbox', () => {
       }
 
       const result = app.locator('.approval-result-track');
-      await expect(result.getByText('approved', { exact: true })).toBeVisible();
+      await expect(result.getByText('Approved', { exact: true })).toBeVisible();
       await expect(result.getByText(approval.work, { exact: true })).toBeVisible();
       await expect(result.getByText(approval.effect, { exact: true })).toBeVisible();
-      if (approval.effect === 'unavailable') {
+      if (approval.effect === 'No external effect') {
         await expect(result.getByText('Illustrative demo only; no external provider is connected and no effect occurred.')).toBeVisible();
       }
     });
@@ -310,8 +310,8 @@ test.describe('enterprise approval inbox', () => {
     await app.getByRole('button', { name: 'Approve send' }).click();
     const result = app.locator('.approval-result-track');
     await expect(result.getByText('Human authorization')).toBeVisible();
-    await expect(result.getByText('approved', { exact: true })).toBeVisible();
-    await expect(result.getByText('unavailable', { exact: true })).toBeVisible();
+    await expect(result.getByText('Approved', { exact: true })).toBeVisible();
+    await expect(result.getByText('No external effect', { exact: true })).toBeVisible();
     await expect(result.getByText('Illustrative demo only; no external provider is connected and no effect occurred.')).toBeVisible();
   });
 

@@ -9,7 +9,8 @@ import { useAdapter, useAppState, useDispatch } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Avatar, Button, EmptyState, MenuItem, Popover, Skeleton } from '../ui/primitives.js';
 import { LIST_KEYS } from '../selectors.js';
-import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy } from '../approval-copy.js';
+import { APPROVAL_META, approvalPrimaryAction, approvalDecisionPrompt, approvalEffectCopy, approvalEffectLabel, approvalStatusLabel, approvalWorkLabel, approvalWorkReason, approvalWorkStartedLine } from '../approval-copy.js';
+import { STEP_UP_MAX_AGE_MS } from '../../model/constants.js';
 export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, approvalPrimaryAction, approvalIcon, approvalReviewerLabel, matchesReviewerFilter, approvalPreview } from '../approval-copy.js';
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
@@ -103,7 +104,7 @@ function RunPlanPreview({ view }: { view: ApprovalView }) {
         })}</section>
         <section><span className="approval-kicker">Outputs</span><CheckList items={details.deliverables} /></section>
       </div>
-      <p className="meta">Illustrative estimate · Models: {budget.model_ids.join(', ') || 'configured model'} · Tools: {budget.metered_tools.join(', ') || 'none'} · {budget.retries_included} retries included</p>
+      <p className="meta">{budget.illustrative ? 'Illustrative estimate · ' : ''}Models: {budget.model_ids.join(', ') || 'configured model'} · Tools: {budget.metered_tools.join(', ') || 'none'} · {budget.retries_included} retries included</p>
     </div>
   );
 }
@@ -289,8 +290,8 @@ export function ReviewerSequence({ view }: { view: ApprovalView }) {
 export function ApprovalDecisionHeader({ view }: { view: ApprovalView }) {
   const pending = view.status === 'pending';
   return <header className="approval-decision-header">
-    <div className="row"><h1>{pending ? 'Your decision' : ['approved', 'declined', 'changes_requested'].includes(view.status) ? 'Decision recorded' : view.status.replaceAll('_', ' ')}</h1><span className="grow" />{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
-    <p>{pending ? approvalDecisionPrompt(view) : `${view.status.replaceAll('_', ' ')} · Revision ${view.payload.authorization.revision}`}</p>
+    <div className="row"><h1>{pending ? 'Your decision' : ['approved', 'declined', 'changes_requested'].includes(view.status) ? 'Decision recorded' : approvalStatusLabel(view.status)}</h1><span className="grow" />{view.payload.illustrative && <span className="pill illustrative">Illustrative</span>}</div>
+    <p>{pending ? approvalDecisionPrompt(view) : `${approvalStatusLabel(view.status)} · Revision ${view.payload.authorization.revision}`}</p>
     <div className="approval-thresholds" aria-label="Required approvals">
       {[...view.steps].sort((a, b) => a.order - b.order).map((step) => <span key={step.step_id} data-state={step.status}>
         <strong>{step.label}</strong> {step.approvals_recorded}/{step.quorum} approved{step.status === 'current' ? ' · Current' : step.status === 'blocked' ? ' · Next' : ''}
@@ -302,16 +303,17 @@ export function ApprovalDecisionHeader({ view }: { view: ApprovalView }) {
 }
 
 function ResultState({ view }: { view: ApprovalView }) {
-  const effect = view.effect.status.replaceAll('_', ' ');
-  const work = view.work.status.replaceAll('_', ' ');
+  const effect = approvalEffectLabel(view.effect.status);
+  const work = approvalWorkLabel(view.work.status);
+  const started = approvalWorkStartedLine(view);
   const authorizationState = view.status === 'approved' ? 'done' : view.status === 'pending' ? 'waiting' : 'failed';
   return (
     <section className="approval-result" aria-labelledby="approval-result-heading">
       <h2 className="section-title" id="approval-result-heading">Decision and result</h2>
       <div className="approval-result-track">
-        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{view.status.replaceAll('_', ' ')}</strong><small>Human authorization</small></span>
+        <span data-state={authorizationState}><Icon name={view.status === 'approved' ? 'check' : view.status === 'pending' ? 'history' : 'close'} /> <strong>{approvalStatusLabel(view.status)}</strong><small>Human authorization</small></span>
         <Icon name="arrow" />
-        <span data-state={view.work.status === 'completed' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' ? 'check' : 'history'} /> <strong>{work}</strong><small>{view.work.reason ?? 'Dependent work'}</small></span>
+        <span data-state={view.work.status === 'completed' || view.work.status === 'admitted' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' || view.work.status === 'admitted' ? 'check' : 'history'} /> <strong>{work}</strong><small>{started ?? approvalWorkReason(view.work.reason) ?? 'Dependent work'}</small></span>
         <Icon name="arrow" />
         <span data-state={view.effect.status === 'executed' ? 'done' : view.effect.status === 'failed' ? 'failed' : 'waiting'}><Icon name={view.effect.status === 'executed' ? 'check' : 'history'} /> <strong>{effect}</strong><small>{view.effect.reason ?? 'Provider effect'}</small></span>
       </div>
@@ -504,6 +506,11 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   const canRequestChanges = !authorizationExpired && view.capabilities.allowed_decisions.includes('request_changes');
   const canRevise = !authorizationExpired && view.capabilities.can_submit_revision;
   const resolved = view.status !== 'pending';
+  // The decision routes require a sign-in within the Worker's step-up window.
+  // Saying so before the click is a hint only: the 401 path below stays the
+  // authority, and an unknown `authenticated_at` is treated as unknown, not stale.
+  const signInStale = !resolved && (canApprove || canDecline || canRequestChanges)
+    && state.connection.authenticatedAt !== null && Date.now() - state.connection.authenticatedAt > STEP_UP_MAX_AGE_MS;
   const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
@@ -541,8 +548,9 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
 
       <div className="app-footer approval-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{resolved ? `${view.status.replaceAll('_', ' ')} · authorization v${view.payload.authorization.revision}` : revisionMode ? 'Editing draft · Save a new revision to continue' : approvalEffectCopy(view)}</span>
+          <span className="f-title">{resolved ? `${approvalStatusLabel(view.status)} · authorization v${view.payload.authorization.revision}` : revisionMode ? 'Editing draft · Save a new revision to continue' : approvalEffectCopy(view)}</span>
           {error && <span className="f-sub" role="alert">{error}</span>}
+          {!error && !needsReauth && signInStale && <span className="f-sub">Recent sign-in required to decide · <a href={adapter.auth.stepUpUrl(typeof window === 'undefined' ? '/' : window.location.href, 'decision') ?? '#'} onClick={(event) => { event.preventDefault(); signInAgain(); }}>Sign in again</a></span>}
         </div>
         {needsReauth && <Button onClick={signInAgain}>Sign in again</Button>}
         {!resolved && !revisionMode && canRequestChanges && <Button disabled={busy} onClick={() => setChangeMode((open) => !open)}>Request changes</Button>}

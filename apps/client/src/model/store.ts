@@ -308,7 +308,18 @@ export interface AppState {
   };
   settings: Record<string, unknown>;
   cursors: { session: Record<string, bigint>; workspace: bigint };
-  connection: { session: LinkState; workspace: LinkState; authRefreshedAt: number };
+  connection: {
+    session: LinkState;
+    workspace: LinkState;
+    authRefreshedAt: number;
+    /**
+     * The server's `authenticated_at` as epoch ms, or null before the first
+     * `/auth/session`. Decision routes require it to be within the Worker's
+     * step-up window, so a view can say so before the click instead of after
+     * the 401.
+     */
+    authenticatedAt: number | null;
+  };
   ui: UiState;
   ready: boolean;
 }
@@ -383,7 +394,7 @@ export function initialState(): AppState {
     counts: { inbox: 0, pendingForMe: 0, pendingForOthers: 0, pendingGrants: 0, createdDocuments: 0, decisions: 0 },
     settings: {},
     cursors: { session: {}, workspace: 0n },
-    connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0 },
+    connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0, authenticatedAt: null },
     ui: {
       irisPanel: 'open',
       irisWidth: null,
@@ -572,7 +583,7 @@ export type Action =
   | { type: 'list/invalidate'; key: string }
   | { type: 'cursor/advance'; stream: 'workspace' | 'session'; sessionId?: string; id: bigint }
   | { type: 'link/state'; kind: 'session' | 'workspace'; patch: Partial<LinkState> }
-  | { type: 'auth/refreshed'; at: number }
+  | { type: 'auth/refreshed'; at: number; authenticatedAt?: number | null }
   | { type: 'auth/evicted' }
   | { type: 'counts/set'; patch: Partial<AppState['counts']> }
   | { type: 'settings/merge'; patch: Record<string, unknown> }
@@ -1304,7 +1315,14 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, connection, ui: { ...state.ui, banner } };
     }
     case 'auth/refreshed':
-      return { ...state, connection: { ...state.connection, authRefreshedAt: action.at } };
+      return {
+        ...state,
+        connection: {
+          ...state.connection,
+          authRefreshedAt: action.at,
+          ...(action.authenticatedAt !== undefined ? { authenticatedAt: action.authenticatedAt } : {}),
+        },
+      };
     case 'auth/evicted': {
       const settings = state.settings as Record<string, unknown>;
       const personalSettings = Object.fromEntries(
