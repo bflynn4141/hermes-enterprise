@@ -1359,6 +1359,18 @@ export function reduce(state: AppState, action: Action): AppState {
  * function is what lets the reducer tests drive the store with real contract
  * events rather than hand-built actions.
  */
+/**
+ * One more request needs review. `pendingForMe` is what the sidebar shows when
+ * the server sent it, and a decision decrements both; a creation that only
+ * touched `inbox` left the badge where it was while the pane gained a row.
+ */
+function countsPlusOne(counts: AppState['counts']): Partial<AppState['counts']> {
+  return {
+    inbox: counts.inbox + 1,
+    ...(counts.pendingForMe !== undefined ? { pendingForMe: counts.pendingForMe + 1 } : {}),
+  };
+}
+
 export function actionsFor(event: StreamEvent, state: AppState): Action[] {
   const id = BigInt(event.id);
   const sessionId = event.session_id;
@@ -1479,7 +1491,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
         if (unseen && kind === 'request') {
           out.push({ type: 'list/prepend', key: 'inbox:needs-review', id: p.entity_id });
           out.push({ type: 'list/prepend', key: 'requests', id: p.entity_id });
-          out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+          out.push({ type: 'counts/set', patch: countsPlusOne(state.counts) });
         }
       }
       break;
@@ -1553,7 +1565,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // The proposing session also emits `run.focus`. If that stream arrived
       // first, it already inserted the request and incremented the badge.
       // Count the request once across the two streams.
-      if (!alreadyKnown) out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+      if (!alreadyKnown) out.push({ type: 'counts/set', patch: countsPlusOne(state.counts) });
       break;
     }
     case 'decision.recorded': {

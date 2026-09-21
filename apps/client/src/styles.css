@@ -113,6 +113,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .iris-rail { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; background: var(--conversation); border-right: 1px solid var(--line); min-width: 0; overflow: hidden; }
 .rail-mark { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; }
 .rail-mark:hover { background: rgba(255,255,255,.07); }
+/* The count went up while the page was open: one 600 ms scale bump, on the
+   rail badge and on the Inbox count the sidebar component renders. */
+@keyframes badge-bump { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+.rail-badge[data-bump], .sidebar[data-bump] .sidebar-row > .tabular-nums { animation: badge-bump 600ms ease-out; }
+html[data-reduce-motion="true"] :is(.rail-badge[data-bump], .sidebar[data-bump] .sidebar-row > .tabular-nums) { animation: none; }
 .rail-badge { position: absolute; top: -1px; right: -1px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--action); color: #fff; font-size: 10px; line-height: 14.4px; font-weight: 500; text-align: center; box-shadow: 0 0 0 2px var(--ink); }
 .rail-rule { width: 22px; height: 1px; background: var(--line); margin: 2px 0; }
 .rail-btn { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: var(--muted); }
@@ -733,6 +738,11 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .inbox-item:hover { background: rgba(255,255,255,.04); }
 .inbox-item[aria-current="true"] { background-color: var(--context); background-image: var(--panel); }
 .inbox-item[aria-current="true"]::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--action); }
+/* Sent here by a receipt or a run's Open link: the bar rises once. An ordinary
+   click, a filter change or a reload selects without it (`deep-link.ts`). */
+@keyframes bar-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.inbox-item[data-highlight]::before { transform-origin: top; animation: bar-rise 200ms ease-out; }
+html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation: none; }
 .inbox-item-icon { margin-top: 1px; }
 .inbox-item-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 0; }
 .inbox-item-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -1023,6 +1033,14 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .chat-card .card-title { font-size: 12.8px; line-height: 19.2px; }
 .chat-card .card-sub { font-size: 11.2px; line-height: 16px; color: var(--muted); }
 .chat-card.static { background-image: none; }
+/* A receipt that arrived while the transcript was open settles in and its
+   border glows once. `data-fresh` is set by arrival (`fresh.ts`), never by a
+   timestamp, so an old session opened a second after its reply landed does
+   not move. Both run once; a re-render never restarts them. */
+@keyframes receipt-settle { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes receipt-glow { 0% { border-color: var(--line); box-shadow: 0 0 0 0 rgba(168,159,255,0); } 30% { border-color: rgba(168,159,255,.7); box-shadow: 0 0 0 4px rgba(168,159,255,.18); } 100% { border-color: var(--line); box-shadow: 0 0 0 0 rgba(168,159,255,0); } }
+.msg-iris[data-fresh] .chat-card.static { animation: receipt-settle 220ms ease-out both, receipt-glow 900ms ease-out; }
+html[data-reduce-motion="true"] .msg-iris[data-fresh] .chat-card.static { animation: none; }
 .chat-card.column { flex-direction: column; align-items: stretch; gap: 12px; }
 .req-rows { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .req-row { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: rgba(21,16,71,.35); width: 100%; text-align: left; transition: background-color 120ms ease-out; }
@@ -1076,6 +1094,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .chat-welcome .mark { flex-shrink: 0; }
 .chat-welcome p { font-size: 14.4px; line-height: 22.4px; }
 .chat-welcome-standalone { flex: 1; padding-inline: 24px; }
+.chat-starters { justify-content: center; max-width: 560px; }
 .error-block { border: 1px solid rgba(255,150,150,.35); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; background: rgba(60,10,40,.35); }
 .error-block .t { font-size: 12.8px; }
 .error-block .s { font-size: 11.2px; color: var(--muted); }
@@ -1224,7 +1243,9 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .iris-motion[data-state="comparing"] .glyph { animation: reason 2200ms ease-in-out infinite; }
 .iris-motion[data-state="comparing"] .halo { animation: glow 2200ms ease-in-out infinite; }
 .iris-motion[data-state="comparing"] .orbit { opacity: .38; }
-.iris-motion[data-state="waiting"] .halo { opacity: .35; } .iris-motion[data-state="waiting"] .orbit { opacity: .55; }
+/* Waiting is not stopped: the halo keeps breathing, slowly, so a run that is
+   waiting on a person still reads as a run. */
+.iris-motion[data-state="waiting"] .halo { animation: glow 2200ms ease-in-out infinite; } .iris-motion[data-state="waiting"] .orbit { opacity: .55; }
 .iris-motion[data-state="stopped"] .glyph { opacity: .52; } .iris-motion[data-state="stopped"] .halo, .iris-motion[data-state="stopped"] .orbit { opacity: 0; }
 .iris-motion[data-state="static"] .halo { opacity: 0; }
 @keyframes orbit { to { transform: rotate(360deg); } }
@@ -1657,8 +1678,8 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .live-tool-row[data-state="failed"] .live-tool-dot { background: var(--danger, #e58b82); opacity: .9; }
 @keyframes live-tool-pulse { 0% { box-shadow: 0 0 0 0 rgba(168,159,255,.38); } 70%, 100% { box-shadow: 0 0 0 6px rgba(168,159,255,0); } }
 @media (prefers-reduced-motion: reduce) { .live-tool-row[data-state="active"] .live-tool-dot { animation: none; } }
-[data-reduced-motion="true"] .live-tool-row[data-state="active"] .live-tool-dot,
-[data-reduced-motion="true"] .stream-caret { animation: none; }
+html[data-reduce-motion="true"] .live-tool-row[data-state="active"] .live-tool-dot,
+html[data-reduce-motion="true"] .stream-caret { animation: none; }
 
 /* Partnerships → Finance uses server projections for every status. Motion is
    limited to the form reveal; durable progress never pulses or implies work. */
@@ -1801,7 +1822,7 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .partner-workflow-form { scroll-behavior: auto; }
 }
-[data-reduced-motion="true"] .partner-workflow-form { scroll-behavior: auto; }
+html[data-reduce-motion="true"] .partner-workflow-form { scroll-behavior: auto; }
 
 /* Recovery uses immediate server states. Countdown text has no motion or live
    announcement loop; the existing button focus/hover feedback is sufficient. */

@@ -514,6 +514,13 @@ describe('the entity cache', () => {
     expect(created.counts.inbox).toBe(1);
   });
 
+  it('raises the badge the sidebar shows, not only the legacy inbox total, when a request arrives', () => {
+    const initial = base({ counts: { inbox: 4, pendingForMe: 2, pendingGrants: 0, createdDocuments: 0, decisions: 0 } });
+    const created = feed(initial, event('request.created', { request_id: REQUEST, kind: 'application', status: 'pending', label: 'Leah', run_id: RUN, session_id: SESSION_A }, 4n, null));
+    expect(created.counts.inbox).toBe(5);
+    expect(created.counts.pendingForMe).toBe(3);
+  });
+
   it('a decision is applied from the event; there is no client decide case', () => {
     const decided = feed(base({ counts: { inbox: 4, pendingGrants: 0, createdDocuments: 0, decisions: 0 } }), event('decision.recorded', { request_id: REQUEST, decision_id: mockUuid(70), decision: 'approve', resulting_status: 'admitted', decided_by: mockUuid(100), decided_at: '2026-10-12T09:50:00.000Z', effect_ids: [] }, 4n, null));
     expect(decided.counts.inbox).toBe(3);

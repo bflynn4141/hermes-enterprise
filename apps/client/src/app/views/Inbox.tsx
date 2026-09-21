@@ -24,6 +24,8 @@ import './legacy-documents.css';
 import { requestActionLabel } from '../approval-copy.js';
 import { requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
+import { useFreshIds } from '../fresh.js';
+import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import {
   ApprovalRequest,
@@ -173,6 +175,20 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
   const visibility = filters?.visibility ?? 'active';
   const filtered = query.length > 0 || kind !== 'all' || reviewer !== 'for_me' || provenance !== 'all' || visibility !== 'active';
   const selected = lists.requests.find((request) => request.id === selectedId) ?? null;
+  // Rows the workspace gained while the Inbox was open slide in; the ones a
+  // tab, a filter or the page load produced do not. Tracked on the whole
+  // workspace list rather than the filtered one for exactly that reason.
+  const fresh = useFreshIds(`${state.workspace.id}:${lists.loading ? 'loading' : 'ready'}`, lists.requests.map((request) => request.id));
+  // A receipt or a run's Open link sent us here: rise the selected row's bar
+  // once. `takeInboxHighlight` answers once per request, so a re-render or a
+  // later ordinary click of the same row does not repeat it.
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedId || !takeInboxHighlight(selectedId)) return;
+    setHighlighted(selectedId);
+    const timer = window.setTimeout(() => setHighlighted(null), 400);
+    return () => window.clearTimeout(timer);
+  }, [selectedId]);
   const activeTab = selected
     ? selected.status === 'pending' ? 'needs-review' : 'resolved'
     : tab;
@@ -292,8 +308,10 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                     className="inbox-item"
                     aria-current={isSelected ? 'true' : undefined}
                     onClick={() => nav(REQ(request.id, { filters }))}
+                    data-highlight={highlighted === request.id || undefined}
                     layout
-                    initial={false}
+                    initial={!reducedMotion && fresh.has(request.id) ? { opacity: 0, y: -6 } : false}
+                    animate={{ opacity: 1, y: 0 }}
                     exit={reducedMotion ? { opacity: 0 } : { opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }}
                     transition={reducedMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                   >

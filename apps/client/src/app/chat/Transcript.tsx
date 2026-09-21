@@ -41,7 +41,8 @@ import { canReleaseRunStream, collapseHistoricalMessages, partitionRunMessages }
 import { Glass } from '../ui/icons.js';
 import { Avatar, Button, Chip, IrisMark } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
-import { EMPTY } from '../../model/constants.js';
+import { EMPTY, STARTERS } from '../../model/constants.js';
+import { useFreshIds } from '../fresh.js';
 import type { SessionState } from '../../model/store.js';
 
 /**
@@ -313,6 +314,10 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
     currentRunMessages.answer ? [...before, currentRunMessages.answer] : before,
   );
 
+  // Which replies landed while this transcript was open. The receipt inside
+  // one settles in; everything that loaded with the session does not move.
+  const fresh = useFreshIds(session.id, messages.map((message) => message.id), { appendOnly: true });
+
   const lastIris = [...messages].reverse().find((m) => m.role === 'iris' && m.status !== 'streaming');
   const followUps = lastIris?.follow_ups ?? [];
   const showChips = !readOnly && (!session.run || session.run.status === 'completed');
@@ -338,6 +343,15 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
             <div className="chat-welcome">
               {readOnly ? <Glass name="loop" size={48} className="mark" /> : <IrisMark size={48} className="mark" />}
               <p>{readOnly ? 'No messages were stored for this session.' : EMPTY.chatReady(agent)}</p>
+              {!readOnly && (
+                <div className="suggestions chat-starters" aria-label="Suggested prompts">
+                  {STARTERS.map((prompt) => (
+                    <button type="button" key={prompt} className="suggestion" onClick={() => fill(prompt)}>
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -364,7 +378,7 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
                 <span>{message.text}</span>
               </div>
             ) : (
-              <IrisMessage key={message.id} message={message} session={session} />
+              <IrisMessage key={message.id} message={message} session={session} fresh={!reduce && fresh.has(message.id)} />
             ),
           )}
 
@@ -374,7 +388,7 @@ export function Transcript({ session, find, readOnly = false }: { session: Sessi
 
           {/* A run has one answer, even when tools required several provider
               turns to produce it. */}
-          {currentRunMessages.answer && !streamOwnsAnswer && <IrisMessage message={currentRunMessages.answer} session={session} />}
+          {currentRunMessages.answer && !streamOwnsAnswer && <IrisMessage message={currentRunMessages.answer} session={session} fresh={!reduce && fresh.has(currentRunMessages.answer.id)} />}
 
           {/* Where the run opened something, offered rather than imposed. */}
           {!readOnly && <FocusLink session={session} />}
@@ -468,7 +482,7 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-function IrisMessage({ message, session }: { message: Message; session: SessionState }) {
+function IrisMessage({ message, session, fresh = false }: { message: Message; session: SessionState; fresh?: boolean }) {
   const adapter = useAdapter();
   const state = useAppState();
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -490,7 +504,7 @@ function IrisMessage({ message, session }: { message: Message; session: SessionS
     );
   }
   return (
-    <div className="msg-iris" data-message-id={message.id}>
+    <div className="msg-iris" data-message-id={message.id} data-fresh={fresh || undefined}>
       <div className="lead">
         <Glass name="iris" size={26} className="mark" />
         <div className="grow col" style={{ gap: 8 }}>

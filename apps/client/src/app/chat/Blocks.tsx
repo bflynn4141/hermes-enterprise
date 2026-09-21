@@ -14,6 +14,7 @@ import { ApprovalCard } from '@hermes/motion-components';
 import type { Block as BlockType, RequestEntity } from '@hermes/shared';
 import { isModelCommand } from '@hermes/shared';
 import { useAdapter, useEntity, useNav } from '../store-context.js';
+import { requestInboxHighlight } from '../deep-link.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { BrokenBlock, Button, Skeleton } from '../ui/primitives.js';
 import { requestStatusLabel } from '../selectors.js';
@@ -209,7 +210,12 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
         <div className="card-title">{request.label}</div>
         <div className="card-sub">{request.kind === 'approval' ? `${approvalTypeLabel(request)} · ${approvalReviewerLabel(request)}` : requestStatusLabel(request)}</div>
       </div>
-      <Button onClick={() => nav({ section: 'inbox', view: 'request', id: request.id })}>
+      <Button
+        onClick={() => {
+          requestInboxHighlight(request.id);
+          nav({ section: 'inbox', view: 'request', id: request.id });
+        }}
+      >
         {action}
         <Icon name="arrow" size={14} />
       </Button>

@@ -121,6 +121,12 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  /**
+   * Which contract scenario a sent turn plays. `proposes_request` adds one
+   * request the workspace did not have, so the browser suite can watch a row
+   * and a receipt *arrive* rather than load with the page.
+   */
+  turn?: 'completed' | 'proposes_request' | 'waiting';
   communicationDraft?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
@@ -1099,8 +1105,8 @@ export function createMockBackend(options: MockOptions = {}) {
   };
 
   /** Run one contract scenario on the session socket, paced for a human. */
-  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
-    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date() });
+  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string, requestId?: string): void {
+    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date(), ...(requestId ? { requestId } : {}) });
     events.forEach((event, i) => {
       setTimeout(() => publish(event), 220 * (i + 1));
     });
@@ -1248,7 +1254,19 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
-        runScenario('completed', sessionId);
+        if (options.turn === 'proposes_request') {
+          const freshId = mockUuid(7000 + requests.length);
+          requests.push({
+            ...request(freshId, 'application', 'pending', 'Priya Natarajan', 'Priya Natarajan', {
+              kind: 'application', applicant: { name: 'Priya Natarajan' }, proposed_role: 'Delivery Partner', score: 79, score_max: 100,
+              criteria: [
+                { id: 'track-record', label: 'track-record', points: 26, points_max: 30, evidence: 'Shipped two partner integrations in the last year.', source_ids: ['linkedin'] },
+              ],
+            }),
+            created_at: new Date().toISOString(),
+          });
+          runScenario('proposes_request', sessionId, freshId);
+        } else runScenario(options.turn === 'waiting' ? 'waiting' : 'completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
       // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.
