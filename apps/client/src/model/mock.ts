@@ -475,7 +475,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const sessions: MockSession[] = empty
     ? [{ id: SESSION_A, agent_id: AGENT, title: 'New session', mode: 'ask', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: 'Empty', last_activity_at: iso(0), share: null, context: null, version: 1 }]
     : [
-        { id: SESSION_A, agent_id: AGENT, title: options.partnerWorkflow ? 'Robin Studio · invoice source' : 'Partner applications', mode: 'work', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: options.partnerWorkflow ? false : true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: options.partnerWorkflow ? 'Invoice received' : 'Needs review', last_activity_at: iso(0), share: null, context: { label: options.partnerWorkflow ? 'ENG-SAMPLE-42' : 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
+        { id: SESSION_A, agent_id: AGENT, title: 'Partner applications', mode: 'work', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: options.partnerWorkflow ? false : true, archived: false, focus_ref: { section: 'agents', view: 'overview' }, status: 'Needs review', last_activity_at: iso(0), share: null, context: { label: 'Partner Program', ref: { section: 'agents', view: 'overview' } }, version: 1 },
         { id: SESSION_B, agent_id: options.partnerWorkflow ? FINANCE_AGENT : AGENT, title: options.partnerWorkflow ? 'Robin Studio · Finance review' : 'Provider documents', mode: 'plan', model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, focus_ref: null, status: options.partnerWorkflow ? 'Awaiting Finance review' : 'Drafts ready', last_activity_at: options.partnerWorkflow ? iso(1) : iso(-10), share: null, context: null, version: 1 },
       ];
   if (options.partnerWorkflow) {
@@ -488,12 +488,16 @@ export function createMockBackend(options: MockOptions = {}) {
       ? []
       : options.partnerWorkflow
         ? [
-            { id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'Screen Robin Studio for the partner program and tell me what still needs human review.', blocks: [], status: 'complete', run_id: null, at: iso(-2) },
+            { id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'Screen the latest partner applicants and tell me what still needs human review.', blocks: [], status: 'complete', run_id: null, at: iso(-2) },
             {
               id: mockUuid(301), session_id: SESSION_A, seq: 2, role: 'iris', kind: null,
-              heading: 'Robin Studio is ready for human review',
-              text: 'I screened the application against the program criteria and cited the evidence. A person still needs to approve the engagement terms and confirm the invoice before I can hand it to Finance.',
-              blocks: [{ type: 'sources', title: 'Sources checked', subtitle: 'Partner criteria.md · Sample engagement terms.txt' }],
+              heading: 'Two partner applicants are ready for review',
+              text: 'I screened Leah Martinez and Owen Reilly against the program criteria and cited the evidence. Leah scored 82 out of 100 and Owen scored 78. A person still needs to review the applicants and decide whether to admit either one.',
+              blocks: [
+                { type: 'card', title: 'Leah Martinez', subtitle: '82 / 100 · Awaiting your review', action: { label: 'Open request', command: { type: 'open_request', id: REQ_LEAH } } },
+                { type: 'card', title: 'Owen Reilly', subtitle: '78 / 100 · Awaiting your review', action: { label: 'Open request', command: { type: 'open_request', id: REQ_OWEN } } },
+                { type: 'sources', title: 'Sources checked', subtitle: 'Partner criteria.md · Public profile evidence' },
+              ],
               status: 'complete', run_id: mockUuid(613), worked_ms: 42_000,
               steps: ['Read the application', 'Checked the program criteria', 'Prepared the evidence summary'], at: iso(-1),
             },
