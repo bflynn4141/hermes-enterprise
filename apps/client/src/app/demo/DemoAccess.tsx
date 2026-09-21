@@ -126,7 +126,7 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
         <section className="demo-access-request" aria-label="Request access">
           <h2 className="demo-access-section-title">Request a Member invite</h2>
           <p className="meta">
-            Enter your work email and the passcode from the recruiter. We send a real invitation
+            Enter your work email and the passcode you were given. We send a real invitation
             to that address; the invite link is what signs you into the demo workspace.
           </p>
 
