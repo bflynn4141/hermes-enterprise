@@ -1,8 +1,11 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  INBOX,
   REQ,
   type Attachment,
+  type HandoffDetail,
+  type HandoffInMotionItem,
   type InvoicePayload,
   type PartnerEngagementAuthorizationInput,
   type PartnerEngagementSummary,
@@ -16,6 +19,7 @@ import {
   type PartnerWorkflowViewV2,
 } from '@hermes/shared';
 import { RestError } from '../../model/rest.js';
+import { visibleSessions, type AppState } from '../../model/store.js';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Glass } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
@@ -116,27 +120,52 @@ function RoleReadinessCard({ readiness, workflow }: { readiness: PartnerRoleRead
   );
 }
 
+async function ensurePartnershipsSession(
+  adapter: ReturnType<typeof useAdapter>,
+  workspaceId: string,
+  partnershipsAgentId: string,
+  appState: AppState,
+): Promise<string> {
+  const existing = visibleSessions(appState).find(
+    (session) => session.agentId === partnershipsAgentId && !session.archived && !session.id.startsWith('local-'),
+  );
+  if (existing) return existing.id;
+  const row = await adapter.rest.createSession(workspaceId, {
+    title: 'Partner workflow source',
+    agent_id: partnershipsAgentId,
+  });
+  return row.id;
+}
+
 function UploadedSource({
   label,
   source,
   onSource,
   disabled,
+  partnershipsAgentId,
 }: {
   label: string;
   source: Attachment | null;
   onSource: (source: Attachment | null) => void;
   disabled: boolean;
+  partnershipsAgentId: string | null;
 }) {
   const adapter = useAdapter();
+  const state = useAppState();
   const input = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const upload = async (file: File): Promise<void> => {
+    if (!partnershipsAgentId) {
+      setError('The Partnerships agent must be configured before uploading a source.');
+      return;
+    }
     setUploading(true);
     setError(null);
     try {
-      const ready = await adapter.upload(file, { kind: 'attachment' });
+      const sessionId = await ensurePartnershipsSession(adapter, state.workspace.id, partnershipsAgentId, state);
+      const ready = await adapter.upload(file, { kind: 'attachment', sessionId });
       if (!ready.sha256) throw new Error('Source digest missing');
       onSource(ready);
     } catch {
@@ -233,7 +262,12 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 }
 
-function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkflowViewV2; onClose: () => void; onSaved: (requestId: string, inputProvenance: PartnerInputProvenance) => void }) {
+function partnershipsAgentId(workflow: PartnerWorkflowViewV2 | HandoffDetail): string | null {
+  if ('lanes' in workflow) return workflow.lanes.find((item) => item.team.slug === 'partnerships')?.agent_id ?? null;
+  return workflow.agents.find((item) => item.team.slug === 'partnerships')?.id ?? null;
+}
+
+function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkflowViewV2 | HandoffDetail; onClose: () => void; onSaved: (requestId: string, inputProvenance: PartnerInputProvenance) => void }) {
   const adapter = useAdapter();
   const state = useAppState();
   const reduce = useReducedMotion();
@@ -288,7 +322,7 @@ function EngagementForm({ workflow, onClose, onSaved }: { workflow: PartnerWorkf
         <label><span>Valid until</span><input required type="date" value={draft.validUntil} onChange={(event) => field('validUntil', event.target.value)} /></label>
         <label className="partner-form-wide"><span>Permitted evidence excerpt</span><textarea required rows={3} value={draft.excerpt} onChange={(event) => field('excerpt', event.target.value)} placeholder="The exact source excerpt Finance may review" /></label>
       </div>
-      <UploadedSource label={inputProvenance === 'sample' ? 'Source of the sample terms' : 'Source of the externally agreed terms'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} />
+      <UploadedSource label={inputProvenance === 'sample' ? 'Source of the sample terms' : 'Source of the externally agreed terms'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} partnershipsAgentId={partnershipsAgentId(workflow)} />
       <label className="partner-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I checked these {inputProvenance === 'sample' ? 'sample terms' : 'externally agreed terms'} and the permitted excerpt against the stored source.</span></label>
       {error && <p className="partner-error" role="alert">{error}</p>}
       <footer><span className="meta">Creates a record-change proposal for the named Finance reviewer.</span><Button primary disabled={!valid || busy} type="submit">{busy ? 'Creating proposal…' : inputProvenance === 'sample' ? 'Send sample terms to Finance' : 'Send to Finance for authorization'}</Button></footer>
@@ -325,7 +359,7 @@ function InvoiceForm({
   onClose,
   onSaved,
 }: {
-  workflow: PartnerWorkflowViewV2;
+  workflow: PartnerWorkflowViewV2 | HandoffDetail;
   correction: PartnerWorkflowHandoffV2 | null;
   onClose: () => void;
   onSaved: (handoffId: string) => void;
@@ -406,7 +440,7 @@ function InvoiceForm({
         <label><span>Due</span><input required type="date" value={draft.dueDate} onChange={(event) => field('dueDate', event.target.value)} /></label>
         <label className="partner-form-wide"><span>Internal note (optional)</span><textarea rows={2} value={draft.notes} onChange={(event) => field('notes', event.target.value)} /></label>
       </div>
-      <UploadedSource label={correction ? 'Corrected invoice source' : 'Received invoice source'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} />
+      <UploadedSource label={correction ? 'Corrected invoice source' : 'Received invoice source'} source={source} onSource={(next) => { setSource(next); setConfirmed(false); }} disabled={busy} partnershipsAgentId={partnershipsAgentId(workflow)} />
       {engagement && <div className="partner-authority-summary"><strong>{money(engagement.authorized_total_minor, engagement.currency)} authorized</strong><span>{engagement.purpose}</span><small>{engagement.reference} · valid {engagement.valid_from} through {engagement.valid_until} · one invoice · <InputProvenanceBadge value={engagement.input_provenance} /></small></div>}
       <label className="partner-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I checked the invoice number, parties, dates, purpose, currency, and amount against {source?.name ?? 'the stored source'}.</span></label>
       {error && <p className="partner-error" role="alert">{error}</p>}
@@ -509,11 +543,91 @@ function EvidenceSource({ title, source }: { title: string; source: PartnerHando
   );
 }
 
+function ownerLabel(step: HandoffDetail['steps'][number], lanes: HandoffDetail['lanes']): string {
+  const lane = lanes.find((item) => item.team.slug === step.owner.team_slug);
+  const person = lane?.person ?? (step.owner.team_slug === 'partnerships' ? 'Partnerships' : 'Finance');
+  if (step.owner.return_team_slug) return `${step.owner.team_slug === 'finance' ? 'Finance' : 'Partnerships'} → ${step.owner.return_team_slug === 'partnerships' ? 'Partnerships' : 'Finance'}`;
+  if (step.owner.kind === 'agent') return `${lane?.team.name ?? 'Finance'} · ${lane?.agent ?? 'Agent'}`;
+  return `${lane?.team.name ?? person} · ${person}`;
+}
+
+function admissionStatusCopy(detail: HandoffDetail): { label: string; tone: 'ok' | 'warn' } {
+  if (detail.handoff.admission_state === 'enabled') {
+    const when = detail.handoff.enabled_at ? new Date(detail.handoff.enabled_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'recently';
+    return { label: `Live · admitted ${when}`, tone: 'ok' };
+  }
+  const financeReady = detail.lanes.find((lane) => lane.team.slug === 'finance')?.readiness.native_status === 'ready';
+  return { label: financeReady ? 'Not admitted · enable when ready' : 'Not admitted · Finance seat missing', tone: 'warn' };
+}
+
+function primaryAction(detail: HandoffDetail): { label: string; action: 'admission' | 'engagement' | 'invoice' | 'inbox' | null } {
+  if (detail.actions.set_admission && detail.handoff.admission_state !== 'enabled') return { label: 'Verify and enable', action: 'admission' };
+  if (detail.actions.propose_engagement) return { label: 'Record agreed terms', action: 'engagement' };
+  if (detail.actions.submit_invoice) return { label: 'Submit an invoice', action: 'invoice' };
+  if (detail.actions.view_finance_review) return { label: 'Review in Inbox', action: 'inbox' };
+  return { label: '', action: null };
+}
+
+function InMotionRow({
+  item,
+  detail,
+  onCorrect,
+}: {
+  item: HandoffInMotionItem;
+  detail: HandoffDetail;
+  onCorrect: (handoff: PartnerWorkflowHandoffV2) => void;
+}) {
+  const adapter = useAdapter();
+  const state = useAppState();
+  const nav = useNav();
+  const [expanded, setExpanded] = useState(false);
+  const [result, setResult] = useState<PartnerHandoffResult | null>(null);
+  const handoff = item.handoff;
+  const showEvidence = (): void => {
+    if (!handoff) return;
+    setExpanded((open) => !open);
+    if (!result) void adapter.rest.partnerHandoffResult(state.workspace.id, handoff.id).then(setResult).catch(() => undefined);
+  };
+  return (
+    <article className="handoffs-motion-row" id={handoff ? `handoff-${handoff.id}` : undefined}>
+      <div className="handoffs-motion-copy">
+        <strong>{handoff?.invoice_number ?? item.title}</strong>
+        <span>{handoff ? `${item.title} · ${item.subtitle}` : item.subtitle}</span>
+      </div>
+      <ol className="handoffs-stage-strip" aria-label={`Progress for ${item.title}`}>
+        {item.stages.map((stage) => (
+          <li key={stage.key} data-state={stage.state} aria-current={stage.state === 'current' ? 'step' : undefined}>
+            <i aria-hidden="true" /><span>{stage.label}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="handoffs-motion-actions">
+        {handoff && <Button small onClick={showEvidence} aria-expanded={expanded}>{expanded ? 'Hide evidence' : 'View evidence'}</Button>}
+        {handoff?.request_id && detail.actions.view_finance_review && (
+          <Button small primary onClick={() => { adapter.ensure('request', handoff.request_id!, true); nav(REQ(handoff.request_id!)); }}>Open Finance decision</Button>
+        )}
+        {handoff && detail.actions.correct_invoice && handoff.current && ['needs_information', 'stale_source'].includes(handoff.result_kind) && (
+          <Button small primary onClick={() => onCorrect(handoff)}>Correct invoice</Button>
+        )}
+      </div>
+      {expanded && handoff && result && (
+        <div className="partner-handoff-evidence">
+          <div className="partner-evidence-grid">
+            <EvidenceSource title="Authorized engagement source" source={result.source_versions.engagement} />
+            <EvidenceSource title="Confirmed invoice source" source={result.source_versions.invoice} />
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
 export function PartnerWorkflow() {
   const state = useAppState();
   const adapter = useAdapter();
   const nav = useNav();
-  const [workflow, setWorkflow] = useState<PartnerWorkflowViewV2 | null>(null);
+  const [detail, setDetail] = useState<HandoffDetail | null>(null);
+  const [fallback, setFallback] = useState<PartnerWorkflowViewV2 | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<'setup' | 'engagement' | 'invoice' | null>(null);
@@ -525,8 +639,18 @@ export function PartnerWorkflow() {
 
   const load = (): void => {
     setError(null);
-    void adapter.rest.partnerWorkflow(state.workspace.id)
-      .then(setWorkflow)
+    void adapter.rest.listHandoffs(state.workspace.id)
+      .then(async (items) => {
+        if (items[0]) {
+          const next = await adapter.rest.getHandoff(state.workspace.id, items[0].id);
+          setDetail(next);
+          setFallback(null);
+          return;
+        }
+        const legacy = await adapter.rest.partnerWorkflow(state.workspace.id);
+        setFallback(legacy);
+        setDetail(null);
+      })
       .catch((caught: unknown) => setError(workflowError(caught)))
       .finally(() => setLoading(false));
   };
@@ -538,9 +662,9 @@ export function PartnerWorkflow() {
     return () => window.clearTimeout(timer);
   }, [lastStreamMessage]);
 
-  const currentHandoffs = useMemo(() => workflow?.handoffs.filter((handoff) => handoff.current) ?? [], [workflow]);
-  if (loading) return <Skeleton rows={4} label="Loading Partnerships and Finance" />;
-  if (error || !workflow) return <div className="error-block"><span className="t">Could not load Partnerships + Finance</span><span className="s">{error}</span><Button small onClick={load}>Try again</Button></div>;
+  const workflowView = detail ?? fallback;
+  if (loading) return <Skeleton rows={4} label="Loading handoffs" />;
+  if (error || !workflowView) return <div className="error-block"><span className="t">Could not load handoffs</span><span className="s">{error}</span><Button small onClick={load}>Try again</Button></div>;
 
   const proposalSaved = (requestId: string, inputProvenance: PartnerInputProvenance): void => {
     setForm(null);
@@ -554,60 +678,139 @@ export function PartnerWorkflow() {
     setCorrection(null);
     setNotice(correction ? 'Correction submitted. The original review remains in history.' : 'Invoice received. Partnerships and Finance activity will update here.');
     load();
-    const target = document.getElementById(`handoff-${handoffId}`);
-    target?.scrollIntoView({ block: 'nearest' });
+    document.getElementById(`handoff-${handoffId}`)?.scrollIntoView({ block: 'nearest' });
   };
   const updateAdmission = (): void => {
-    const enabled = workflow.admission_state !== 'enabled';
+    if (!detail) return;
+    const enabled = detail.handoff.admission_state !== 'enabled';
     setAdmissionBusy(true);
     setAdmissionError(null);
     void adapter.rest.setPartnerWorkflowAdmission(state.workspace.id, { enabled })
-      .then((view) => {
-        setWorkflow(view);
-        setNotice(enabled ? 'Partnerships + Finance is enabled for new governed work.' : 'New governed work is disabled. Existing records and receipts remain available.');
+      .then(() => {
+        setNotice(enabled ? 'Partner invoices is enabled for new governed work.' : 'New governed work is disabled. Existing records and receipts remain available.');
+        load();
       })
       .catch((caught: unknown) => setAdmissionError(workflowError(caught)))
       .finally(() => setAdmissionBusy(false));
   };
 
+  if (!detail) {
+    const workflow = fallback!;
+    return (
+      <section className="handoffs-page partner-workflow" aria-labelledby="partner-workflow-title">
+        <header className="handoffs-header">
+          <div><h2 id="partner-workflow-title">Partner invoices · Partnerships → Finance</h2><p>Configure both employee role templates to create this handoff.</p></div>
+        </header>
+        {workflow.actions.configure && (
+          <>
+            <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close setup' : 'Configure roles'}</Button>
+            <AnimatePresence initial={false}>
+              {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Role assignments saved.'); load(); }} />}
+            </AnimatePresence>
+          </>
+        )}
+        {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>Dismiss</Button></div>}
+      </section>
+    );
+  }
+
+  const status = admissionStatusCopy(detail);
+  const primary = primaryAction(detail);
+  const roleLabel = detail.handoff.viewer_role === 'unrelated'
+    ? 'No handoff access'
+    : detail.handoff.viewer_role === 'admin'
+      ? 'Admin view'
+      : `You are ${detail.handoff.viewer_role === 'finance' ? 'Finance' : 'Partnerships'}`;
+
   return (
-    <section className="partner-workflow" aria-labelledby="partner-workflow-title">
-      <div className="partner-workflow-route" aria-label="Current workflow location"><span>Library</span><span aria-hidden="true">/</span><strong>Partnerships + Finance workflow</strong></div>
-      <header className="partner-workflow-heading">
-        <div><h2 id="partner-workflow-title">Partnerships + Finance</h2><p>One governed handoff. Private team context stays private; only authorized terms, confirmed invoice fields, and the final acknowledgment cross teams.</p></div>
-        <div className="partner-heading-status"><span className="pill">{workflow.viewer_role === 'unrelated' ? 'No workflow access' : `${workflow.viewer_role[0]!.toUpperCase()}${workflow.viewer_role.slice(1)} view`}</span>{workflow.viewer_role !== 'unrelated' && <span className={`pill ${workflow.admission_state === 'enabled' ? 'pill-ok' : 'pill-warn'}`}>Workflow {workflow.admission_state}</span>}</div>
+    <section className="handoffs-page partner-workflow" aria-labelledby="handoffs-title">
+      <header className="handoffs-header">
+        <div>
+          <h2 id="handoffs-title">{detail.handoff.name}</h2>
+          <p>{detail.handoff.description}</p>
+        </div>
+        <div className="handoffs-header-actions">
+          <span className={`pill ${status.tone === 'ok' ? 'pill-ok' : 'pill-warn'}`}><i className="handoffs-status-dot" aria-hidden="true" />{status.label}</span>
+          <span className="pill">{roleLabel}</span>
+          {primary.action === 'admission' && (
+            <Button primary disabled={admissionBusy || !detail.configured} onClick={updateAdmission}>{admissionBusy ? 'Verifying profiles…' : primary.label}</Button>
+          )}
+          {primary.action === 'engagement' && <Button primary onClick={() => { setCorrection(null); setForm('engagement'); }}>{primary.label}</Button>}
+          {primary.action === 'invoice' && <Button primary onClick={() => { setCorrection(null); setForm('invoice'); }}>{primary.label}</Button>}
+          {primary.action === 'engagement' && detail.actions.submit_invoice && (
+            <Button onClick={() => { setCorrection(null); setForm('invoice'); }}>Submit an invoice</Button>
+          )}
+          {primary.action === 'inbox' && <Button primary onClick={() => nav(INBOX)}>{primary.label}</Button>}
+          {detail.actions.configure && <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close setup' : 'Edit role bindings'}</Button>}
+          {detail.actions.set_admission && detail.handoff.admission_state === 'enabled' && (
+            <Button disabled={admissionBusy} onClick={updateAdmission}>{admissionBusy ? 'Disabling…' : 'Disable handoff'}</Button>
+          )}
+        </div>
       </header>
-      {workflow.viewer_role !== 'unrelated' && <div className="partner-role-grid">{workflow.readiness.map((item) => <RoleReadinessCard key={item.role} readiness={item} workflow={workflow} />)}</div>}
-      <div className="partner-connector"><strong>Enterprise partner records</strong><span>{workflow.connector.summary}</span><small>Server enforced · exact record grants · private sessions are not shared</small></div>
-      {workflow.viewer_role === 'unrelated' ? (
+
+      {detail.handoff.viewer_role === 'unrelated' ? (
         <EmptyState icon="context" title="No Partnerships or Finance work assigned" detail="Your workspace membership does not grant access to these private handoffs." />
       ) : (
         <>
-          <div className="partner-actions">
-            <div><h3>Work in this role</h3><p>{workflow.viewer_role === 'admin' ? 'You can inspect setup readiness. Admin setup authority does not reveal private workflow content.' : workflow.viewer_role === 'finance' ? 'Review authorized evidence and record the human decision in Inbox.' : 'Record agreed terms, then submit the received invoice with fields you verified.'}</p></div>
-            {workflow.actions.configure && <Button onClick={() => { setCorrection(null); setForm(form === 'setup' ? null : 'setup'); }}>{form === 'setup' ? 'Close setup' : workflow.configured ? 'Edit role bindings' : 'Configure roles'}</Button>}
-            {workflow.actions.set_admission && <Button primary={workflow.admission_state !== 'enabled'} disabled={admissionBusy || (workflow.admission_state !== 'enabled' && !workflow.configured)} onClick={updateAdmission}>{admissionBusy ? workflow.admission_state === 'enabled' ? 'Disabling…' : 'Verifying profiles…' : workflow.admission_state === 'enabled' ? 'Disable workflow' : 'Verify and enable workflow'}</Button>}
-            {workflow.actions.propose_engagement && <Button onClick={() => { setCorrection(null); setForm(form === 'engagement' ? null : 'engagement'); }}>{form === 'engagement' ? 'Close terms form' : 'Record agreed terms'}</Button>}
-            {workflow.actions.submit_invoice && <Button primary onClick={() => { setCorrection(null); setForm(form === 'invoice' ? null : 'invoice'); }}>{form === 'invoice' && !correction ? 'Close invoice form' : 'Submit invoice to Finance'}</Button>}
+          <div className="handoffs-lanes">
+            {detail.lanes.map((lane) => {
+              const ready = lane.readiness.native_status === 'ready' && lane.readiness.assignment_state === 'active';
+              return (
+                <article key={lane.team.slug} className="handoffs-lane-card" data-ready={ready}>
+                  <header><h3>{lane.team.name}</h3><span className={`handoffs-ready-dot${ready ? ' is-ready' : ''}`}>{ready ? 'Ready' : 'Not ready'}</span></header>
+                  <dl>
+                    <div><dt>Person</dt><dd><span>{lane.person ?? '—'}</span><small>{lane.notes[0]}</small></dd></div>
+                    <div><dt>Agent</dt><dd><span>{lane.agent ?? '—'}</span><small>{lane.notes[1]}</small></dd></div>
+                    <div><dt>Skill</dt><dd><span>{lane.skill ?? '—'}</span><small>{lane.notes[2]} · {lane.notes[3]}</small></dd></div>
+                  </dl>
+                </article>
+              );
+            })}
+            <div className="handoffs-crossing" aria-label="Only this crosses">
+              <strong>Only this crosses</strong>
+              {detail.crossing.map((item) => (
+                <p key={item.key}>{item.direction === 'return' ? '← ' : ''}{item.label}{item.direction === 'forward' ? ' →' : ''}</p>
+              ))}
+            </div>
           </div>
-          {workflow.actions.set_admission && workflow.configured && workflow.admission_state !== 'enabled' && !admissionError && <p className="meta">Verification checks both native profiles against the exact reviewed role bindings, skills, tools, and provider attestations before any new work is admitted.</p>}
+
+          <section className="handoffs-steps" aria-labelledby="handoffs-steps-title">
+            <header><h3 id="handoffs-steps-title">How one invoice moves</h3><span className="meta">People decide · agents prepare · nothing is paid, signed or sent</span></header>
+            <ol>
+              {detail.steps.map((step) => (
+                <li key={step.index}>
+                  <span className="handoffs-step-index">{step.index}</span>
+                  <span className="handoffs-step-owner">{ownerLabel(step, detail.lanes)}</span>
+                  <span className="handoffs-step-text">{step.label}</span>
+                  <span className="handoffs-step-note">{step.note}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+
           {admissionError && <p className="partner-error" role="alert">{admissionError}</p>}
           <AnimatePresence initial={false}>
-            {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={(view) => { setWorkflow(view); setForm(null); setNotice('Role assignments saved. Native readiness is shown above.'); }} />}
-            {form === 'engagement' && <EngagementForm key="engagement" workflow={workflow} onClose={() => setForm(null)} onSaved={proposalSaved} />}
-            {form === 'invoice' && <InvoiceForm key={correction?.id ?? 'invoice'} workflow={workflow} correction={correction} onClose={() => { setForm(null); setCorrection(null); }} onSaved={invoiceSaved} />}
+            {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Role assignments saved.'); load(); }} />}
+            {form === 'engagement' && <EngagementForm key="engagement" workflow={detail} onClose={() => setForm(null)} onSaved={proposalSaved} />}
+            {form === 'invoice' && <InvoiceForm key={correction?.id ?? 'invoice'} workflow={detail} correction={correction} onClose={() => { setForm(null); setCorrection(null); }} onSaved={invoiceSaved} />}
           </AnimatePresence>
           {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>Dismiss</Button></div>}
-          {workflow.engagements.length > 0 && (
-            <details className="partner-engagements">
-              <summary>Authorized engagement terms ({workflow.engagements.length})</summary>
-              <div>{workflow.engagements.map((engagement) => <article key={engagement.id}><div><strong>{engagement.partner.name}</strong><span>{engagement.reference} · {engagement.purpose}</span></div><div><strong>{money(engagement.authorized_total_minor, engagement.currency)}</strong><span>{engagement.authorization_status} · through {engagement.valid_until} · <InputProvenanceBadge value={engagement.input_provenance} /></span></div></article>)}</div>
-            </details>
-          )}
-          <div className="partner-work-list">
-            <header><h3>Invoice handoffs</h3><span className="meta">{currentHandoffs.length} current</span></header>
-            {workflow.handoffs.length === 0 ? <EmptyState icon="invoice" title="No invoices handed to Finance yet" detail="A confirmed invoice appears here after Partnerships submits it." /> : workflow.handoffs.map((handoff) => <div id={`handoff-${handoff.id}`} key={handoff.id}><HandoffCard handoff={handoff} workflow={workflow} onCorrect={() => { setCorrection(handoff); setForm('invoice'); }} /></div>)}
-          </div>
+
+          <section className="handoffs-motion" aria-labelledby="handoffs-motion-title">
+            <header>
+              <h3 id="handoffs-motion-title">In motion</h3>
+              <span className="meta">
+                {detail.counts.in_motion === 0
+                  ? 'Nothing yet · admission opens the handoff'
+                  : `${detail.counts.waiting_on_viewer} waiting on you · ${Math.max(0, detail.counts.in_motion - detail.counts.waiting_on_viewer)} with others`}
+              </span>
+            </header>
+            {detail.in_motion.length === 0
+              ? <EmptyState icon="invoice" title="Nothing in motion yet" detail="Engagement proposals and confirmed invoices appear here once work starts." />
+              : detail.in_motion.map((item) => (
+                <InMotionRow key={item.id} item={item} detail={detail} onCorrect={(handoff) => { setCorrection(handoff); setForm('invoice'); }} />
+              ))}
+          </section>
         </>
       )}
     </section>

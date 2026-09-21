@@ -160,6 +160,7 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'partner_workflow_executions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'request_audiences', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_workflow_settings', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'handoffs', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_record_revisions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_engagement_authorizations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'partner_invoice_intakes', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },

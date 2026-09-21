@@ -62,6 +62,10 @@ import {
   enterpriseSkillAssignmentPageSchema,
   enterpriseSkillAssignmentSchema,
   partnerWorkflowViewV2Schema,
+  handoffListSchema,
+  handoffDetailSchema,
+  type HandoffDetail,
+  type HandoffList,
   partnerEngagementAuthorizationResultSchema,
   partnerInvoiceIntakeResultSchema,
   partnerInvoiceCorrectionResultSchema,
@@ -439,6 +443,10 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
     updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
       request('PATCH', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`, enterpriseSkillAssignmentSchema, body),
+    listHandoffs: (workspaceId: string) =>
+      optional(() => request('GET', `${ws(workspaceId)}/handoffs`, handoffListSchema), [] as HandoffList),
+    getHandoff: (workspaceId: string, handoffId: string) =>
+      request('GET', `${ws(workspaceId)}/handoffs/${handoffId}`, handoffDetailSchema) as Promise<HandoffDetail>,
     partnerWorkflow: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/partner-workflow`, partnerWorkflowViewV2Schema), {
         configured: false,

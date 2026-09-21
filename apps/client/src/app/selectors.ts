@@ -162,7 +162,7 @@ export function describeRef(state: AppState, app: Ref): [string, string] {
   }
   if (section === 'history') return ['History', { all: 'All activity', decisions: 'Decisions', blocked: 'Blocked' }[view ?? 'decisions'] ?? 'Decisions'];
   if (section === 'library') {
-    const label = { skills: 'Shared skills', documents: 'Documents', connections: 'Connections', intelligence: 'Shared Intelligence' }[view ?? 'skills'] ?? 'Skills';
+    const label = { handoffs: 'Handoffs', skills: 'Shared skills', documents: 'Documents', connections: 'Connections', intelligence: 'Shared Intelligence' }[view ?? 'handoffs'] ?? 'Handoffs';
     return [label, label];
   }
   if (section === 'settings') return [app.view ?? 'Notifications', app.view ?? 'Notifications'];

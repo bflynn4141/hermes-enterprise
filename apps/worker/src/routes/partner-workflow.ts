@@ -21,6 +21,7 @@ import {
   enterpriseReadinessToolNames,
   matchesExactManagedEnterpriseAttestation,
 } from '../runtime/readiness.js';
+import { updateHandoffAdmission } from '../handoffs/service.js';
 import {
   correctPartnerInvoiceIntake,
   getPartnerHandoffResult,
@@ -40,7 +41,7 @@ const ADMISSION_ROLE_TEMPLATE_KEYS = {
   finance: 'finance-agent',
 } as const;
 
-function routeError(error: unknown): never {
+export function routeError(error: unknown): never {
   if (error instanceof PartnerWorkflowError) {
     const forbidden = ['forbidden_partner_workflow_action', 'partnerships_principal_required', 'run_grant_missing'];
     const notFound = ['handoff_not_found', 'partner_not_found', 'attachment_not_accessible'];
@@ -132,10 +133,7 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
   if (!parsed.data.enabled) {
     const view = await inWorkspace(c, async (work) => {
       work.requireAdmin('disabling new partner workflow admission');
-      await work.tx.query(
-        `UPDATE partner_workflow_settings SET admission_state='disabled',enabled_by=NULL,enabled_at=NULL
-          WHERE workspace_id=$1`, [work.workspaceId],
-      );
+      await updateHandoffAdmission(work.tx, work.workspaceId, { admission_state: 'disabled', enabled_by: null });
       return loadPartnerWorkflowViewV2(work.tx, work.workspaceId, work.userId);
     });
     return c.json(partnerWorkflowViewV2Schema.parse(view));
@@ -244,12 +242,12 @@ export async function setPartnerWorkflowAdmission(c: Context<{ Bindings: Env }>)
         throw new RouteError('A role assignment changed after native readiness was checked.', 'workflow_readiness_incomplete', 409);
       }
     }
-    await work.tx.query(
-      `UPDATE partner_workflow_settings
-          SET admission_state='enabled',enabled_by=$2,enabled_at=now(),readiness=$3::jsonb,readiness_checked_at=now()
-        WHERE workspace_id=$1`,
-      [work.workspaceId, work.userId, JSON.stringify(readiness)],
-    );
+    await updateHandoffAdmission(work.tx, work.workspaceId, {
+      admission_state: 'enabled',
+      enabled_by: work.userId,
+      readiness,
+      readiness_checked_at: new Date(checkedAt),
+    });
     return loadPartnerWorkflowViewV2(work.tx, work.workspaceId, work.userId);
   });
   return c.json(partnerWorkflowViewV2Schema.parse(view));

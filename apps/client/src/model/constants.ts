@@ -115,6 +115,7 @@ export const EMPTY = {
 } as const;
 
 export const LIBRARY_TABS = [
+  { id: 'handoffs', label: 'Handoffs' },
   { id: 'skills', label: 'Skills' },
   { id: 'documents', label: 'Documents' },
   { id: 'connections', label: 'Connections' },

@@ -184,6 +184,7 @@ import {
   proposePartnerEngagement,
   setPartnerWorkflowAdmission,
 } from './routes/partner-workflow.js';
+import { getHandoff, listHandoffs } from './routes/handoffs.js';
 
 export { SessionHub, WorkspaceHub } from './hubs.js';
 export { RunAttempt } from './runs/workflow.js';
@@ -507,6 +508,8 @@ app.post('/w/:ws/skills/:id/adopt', adoptSkill);
 app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);
 app.get('/w/:ws/agents/:agentId/skill-assignments/:id', getSkillAssignment);
 app.patch('/w/:ws/agents/:agentId/skill-assignments/:id', patchSkillAssignment);
+app.get('/w/:ws/handoffs', listHandoffs);
+app.get('/w/:ws/handoffs/:handoffId', getHandoff);
 app.get('/w/:ws/partner-workflow', getPartnerWorkflow);
 app.post('/w/:ws/partner-workflow/configure', configurePartnerWorkflowRoute);
 app.post('/w/:ws/partner-workflow/invoice-review-handoffs', createPartnerInvoiceReviewHandoff);

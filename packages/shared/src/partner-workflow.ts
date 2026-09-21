@@ -462,6 +462,104 @@ export type PartnerWorkflowViewV2 = z.infer<typeof partnerWorkflowViewV2Schema>;
 export const partnerWorkflowAdmissionInputSchema = z.object({ enabled: z.boolean() }).strict();
 export type PartnerWorkflowAdmissionInput = z.infer<typeof partnerWorkflowAdmissionInputSchema>;
 
+export const handoffCrossingItemSchema = z.object({
+  key: z.string().min(1).max(64),
+  label: z.string().min(1).max(200),
+  direction: z.enum(['forward', 'return']),
+}).strict();
+
+export const handoffStepOwnerSchema = z.object({
+  team_slug: z.enum(['partnerships', 'finance']),
+  kind: z.enum(['person', 'agent']),
+  return_team_slug: z.enum(['partnerships', 'finance']).optional(),
+}).strict();
+
+export const handoffStepSchema = z.object({
+  index: z.number().int().positive(),
+  owner: handoffStepOwnerSchema,
+  label: z.string().min(1).max(1000),
+  note: z.string().min(1).max(1000),
+}).strict();
+
+export const handoffLaneSchema = z.object({
+  team: partnerTeamSchema,
+  person: z.string().min(1).max(120).nullable(),
+  agent: z.string().min(1).max(120).nullable(),
+  agent_id: uuidSchema.nullable(),
+  skill: z.string().min(1).max(120).nullable(),
+  readiness: partnerRoleReadinessSchema,
+  notes: z.array(z.string().min(1).max(200)).max(4),
+}).strict();
+export type HandoffLane = z.infer<typeof handoffLaneSchema>;
+
+export const handoffListItemSchema = z.object({
+  id: uuidSchema,
+  key: z.string().min(1).max(64),
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(1000),
+  from_team: partnerTeamSchema,
+  to_team: partnerTeamSchema,
+  admission_state: z.enum(['disabled', 'enabled']),
+  viewer_role: partnerWorkflowViewerRoleSchema,
+  counts: z.object({
+    in_motion: z.number().int().min(0).max(100),
+    waiting_on_viewer: z.number().int().min(0).max(100),
+  }).strict(),
+}).strict();
+export type HandoffListItem = z.infer<typeof handoffListItemSchema>;
+
+export const handoffDefinitionSchema = z.object({
+  id: uuidSchema,
+  key: z.string().min(1).max(64),
+  name: z.string().min(1).max(200),
+  description: z.string().min(1).max(1000),
+  admission_state: z.enum(['disabled', 'enabled']),
+  enabled_at: z.iso.datetime({ offset: true }).nullable(),
+  viewer_role: partnerWorkflowViewerRoleSchema,
+}).strict();
+
+export const handoffInMotionStageSchema = z.enum([
+  'terms_recorded', 'finance_verifying', 'invoice', 'decision', 'acknowledged',
+]);
+
+export const handoffInMotionItemSchema = z.object({
+  id: uuidSchema,
+  kind: z.enum(['engagement', 'invoice']),
+  title: z.string().min(1).max(240),
+  subtitle: z.string().min(1).max(400),
+  stage: handoffInMotionStageSchema,
+  stages: z.array(z.object({
+    key: handoffInMotionStageSchema,
+    label: z.string().min(1).max(64),
+    state: z.enum(['done', 'current', 'pending']),
+  }).strict()).length(5),
+  handoff: partnerWorkflowHandoffV2Schema.nullable(),
+  engagement: partnerEngagementSummarySchema.nullable(),
+}).strict();
+export type HandoffInMotionItem = z.infer<typeof handoffInMotionItemSchema>;
+
+export const handoffDetailSchema = z.object({
+  handoff: handoffDefinitionSchema,
+  lanes: z.array(handoffLaneSchema).max(2),
+  crossing: z.array(handoffCrossingItemSchema).max(8),
+  steps: z.array(handoffStepSchema).max(12),
+  actions: partnerWorkflowViewV2Schema.shape.actions,
+  configured: z.boolean(),
+  readiness: z.array(partnerRoleReadinessSchema).max(2),
+  partner_options: partnerWorkflowViewV2Schema.shape.partner_options,
+  engagements: z.array(partnerEngagementSummarySchema).max(25),
+  in_motion: z.array(handoffInMotionItemSchema).max(25),
+  connector: partnerWorkflowViewV2Schema.shape.connector,
+  counts: z.object({
+    in_motion: z.number().int().min(0).max(100),
+    waiting_on_viewer: z.number().int().min(0).max(100),
+  }).strict(),
+}).strict();
+export type HandoffDetail = z.infer<typeof handoffDetailSchema>;
+
+export const handoffListSchema = z.array(handoffListItemSchema).max(25);
+export type HandoffList = z.infer<typeof handoffListSchema>;
+
 export const PARTNER_WORKFLOW_ERROR_REASONS = [
   'bad_engagement_authorization', 'bad_invoice_intake', 'bad_invoice_correction',
   'forbidden_partner_workflow_action', 'partnerships_principal_required', 'finance_recipient_unavailable',

@@ -44,7 +44,7 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     if (app.section === 'members') return <Members />;
     if (app.section === 'admin') return <AdminSettings view={app.view ?? 'Organization'} />;
     if (app.section === 'history') return <History />;
-    if (app.section === 'library') return <Library view={app.view ?? 'skills'} id={app.id ?? null} />;
+    if (app.section === 'library') return <Library view={app.view ?? 'handoffs'} id={app.id ?? null} />;
     if (app.section === 'settings') return <Settings view={app.view ?? 'Notifications'} />;
     return <AgentOverview />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
