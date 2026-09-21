@@ -22,7 +22,8 @@ import { attachmentDetailSchema, attachmentSchema, attachmentUploadSchema } from
 import type { Env } from '../env.js';
 import { isDevelopment } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import {
   declareUpload,
   isComplete,

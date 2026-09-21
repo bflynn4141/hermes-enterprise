@@ -897,7 +897,7 @@ describe('the Iris panel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Sessions: no twins, and titles that name themselves (decision C34)
+// Sessions: no twins, and titles that name themselves (decision C34b)
 // ---------------------------------------------------------------------------
 
 describe('session titles and blank sessions', () => {

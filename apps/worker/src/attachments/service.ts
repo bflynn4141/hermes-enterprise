@@ -27,7 +27,8 @@ import {
   type AttachmentKind,
 } from '@hermes/shared';
 import { isDevelopment, type Env } from '../env.js';
-import { RouteError, type TenantWork } from '../routes/tenant.js';
+import { type TenantWork } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { uploadKey } from '../storage/keys.js';
 import { getObject, headObject, presignGet, presignPut, presigningAvailable } from '../storage/r2.js';

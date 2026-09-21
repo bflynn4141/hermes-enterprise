@@ -42,7 +42,8 @@ import type { Context } from 'hono';
 import { decisionResultSchema, type Decision } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { recordDecision } from '../domain/decisions.js';
 

@@ -1,6 +1,6 @@
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import type { Job } from '../jobs.js';
 import { enqueueJob, withWorkspaceTransaction } from '../jobs.js';
 import { openSecret, sealSecret, type StoredEnvelope } from '../keys/envelope.js';

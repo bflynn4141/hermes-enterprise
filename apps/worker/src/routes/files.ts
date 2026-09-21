@@ -18,7 +18,8 @@
 import type { Context } from 'hono';
 import { attachmentDetailSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { inWorkspace, RouteError } from './tenant.js';
+import { inWorkspace } from './tenant.js';
+import { RouteError } from './errors.js';
 import {
   completeAttachmentRoute,
   createAttachmentRoute,

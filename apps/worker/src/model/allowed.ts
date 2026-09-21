@@ -19,7 +19,7 @@
 // forgets is a route that forgot to call this function, which is a thing a
 // reviewer can see; a sixth route with its own copy of the rule is not.
 import { PROVIDER_NOT_ALLOWED_COPY, parseAllowedProviders, type Provider } from '@hermes/shared';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 /** Just the variable, so a test and a job can call this without a whole `Env`. */
 export interface AllowedProvidersEnv {

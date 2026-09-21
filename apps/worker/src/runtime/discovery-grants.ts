@@ -10,7 +10,7 @@ import {
   resolveEnterpriseSkillAssignment,
   resolvePartnerSkillAssignment,
 } from '../enterprise-skills/service.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { requireDynamicBridgeAuth, requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { requireDigestBearer } from './credentials.js';
 

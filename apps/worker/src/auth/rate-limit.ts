@@ -10,7 +10,7 @@
 // bucket boundary — is the right trade for a limit whose job is to stop a
 // runaway script rather than to meter a paying customer.
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 /** Actions with no workspace yet (creating one) count against this key. */
 export const PLATFORM_WORKSPACE_ID = '00000000-0000-4000-8000-000000000000';

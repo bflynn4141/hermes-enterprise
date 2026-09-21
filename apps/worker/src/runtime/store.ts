@@ -4,7 +4,7 @@ import { PgAgentDb } from '../engine/pg-agent-db.js';
 import type { EngineRunRow } from '../engine/agent-db.js';
 import type { RunErrorInput } from '../engine/agent-db.js';
 import type { ProviderMessage, ToolCall } from '../model/types.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import type { ProviderRetryAfter } from './retry-after.js';
 import {
   RuntimeBudgetError,

@@ -1,6 +1,6 @@
 import { partnerScreeningSnapshotSchema, type PartnerScreeningSnapshot } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { agentCashPeopleSearchArguments } from './agentcash-people.js';
 import { configSnapshot, partnerAgentConfigSchema, type PartnerAgentConfig } from './config.js';
 import type { DiscoveryPriority } from './score.js';

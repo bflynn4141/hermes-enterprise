@@ -28,7 +28,7 @@ import {
   importGmailEvidenceThread,
   startGmailEvidenceOAuth,
 } from './routes/inbound-email.js';
-import { RouteError } from './routes/tenant.js';
+import { RouteError } from './routes/errors.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
 import { acceptInvitation, previewInvitation } from './routes/invitations.js';

@@ -1,5 +1,5 @@
 // How a session is named, shared by the routes that write the name and the
-// client that shows it before the server has answered (decision C34, and the
+// client that shows it before the server has answered (decision C34b, and the
 // server-side move recorded beside it).
 
 /** The placeholder a session is created with, and the one signal that nobody has named it. */

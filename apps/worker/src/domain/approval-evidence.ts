@@ -1,6 +1,6 @@
 import { approvalEvidenceViewSchema, approvalPayloadSchema, type ApprovalEvidenceView } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { requestAudiencePredicate } from './audience.js';
 
 const unavailable = (): never => {

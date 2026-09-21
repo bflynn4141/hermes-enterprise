@@ -371,7 +371,7 @@ not a tunnel to a laptop.
 
 **Revalidated September 17, 2026.** Current Hermes, Cloudflare and durable
 execution documentation still supports this split. The broader comparison and
-migration triggers are recorded in [C71](DECISIONS.md#c71-keep-cloudflare-worker-and-workflows-around-the-official-hermes-runtime).
+migration triggers are recorded in [C71](decisions/08-runtime-and-team-workflows.md#c71-keep-cloudflare-worker-and-workflows-around-the-official-hermes-runtime).
 
 The Worker remains the right boundary for the current product, but its role is
 narrow: authenticate people and channels, enforce workspace and approval

@@ -6,7 +6,7 @@ import { connect } from '../db/client.js';
 import type { Env } from '../env.js';
 import { isEnginePaused } from '../env.js';
 import { enqueueJob, publishEvents, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { consumeRate } from '../auth/rate-limit.js';
 import { loadModel } from '../model/catalog.js';
 import { requireAllowedProvider, isProviderAllowed } from '../model/allowed.js';

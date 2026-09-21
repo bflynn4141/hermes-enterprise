@@ -2,9 +2,16 @@ packages:
   - packages/*
   - apps/*
 
+# The current Cloudflare Vitest pool pins an older sharp patch. Keep the pool,
+# but force the patched ABI-compatible release until its next upstream cut.
+overrides:
+  sharp@0.35.2: 0.35.4
+
 # esbuild and workerd ship prebuilt binaries and need their install scripts.
-# Both are wrangler's own dependencies; nothing else in the tree may build.
+# The motion package uses Tailwind's one-shot compiler; its optional file
+# watcher is not needed in CI and does not receive install-script permission.
 allowBuilds:
+  '@parcel/watcher': false
   esbuild: true
   workerd: true
 

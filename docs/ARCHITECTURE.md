@@ -1,43 +1,87 @@
 # Architecture and operations
 
-The long-form reference for Hermes Teams Demo: what is real and what is
-stubbed, how to run and exercise every route, the invariants, and the layout.
-Start with the [README](../README.md) for the short version.
+This is the current system reference for Hermes Teams Demo. Start with the
+[README](../README.md) for the product tour, use the [documentation index](README.md)
+to find a focused guide, and read [AGENTS.md](../AGENTS.md) before changing code.
 
-An agent workspace. Maya, a workspace Admin, talks to her agent Iris while the
-app follows the work. Every decision — admissions, documents, sending, payment,
-signature — is made by a human, and the product is built so that this is a
-property of the database and the routes rather than a promise in a document.
+Hermes Teams is an enterprise control plane around the official Hermes Agent
+runtime. The application owns identity, tenant isolation, policy, durable state,
+human approvals, and browser delivery. Hermes Agent owns the model and tool
+loop. Postgres is the source of truth; prompts and client state are never an
+authority boundary.
 
-This repository is milestone **M1: rails, contract and operations**, the server
-half of **M2: sign-in, workspaces, sessions, members, hubs and jobs**,
-**M3: the run engine** — turns, the tool loop, the four controls and the failure
-taxonomy — and **M4: decisions, effects, receipts, History and documents**, which
-is where the guarded decision route lands.
+## System shape
 
-## What is real, and what is not
+```mermaid
+flowchart LR
+  Person[Person in React client]
+  Worker[Cloudflare Worker\nHono routes and policy]
+  Database[(Postgres\ncanonical state and audit)]
+  Hubs[Durable Objects\nworkspace and session hubs]
+  Jobs[Durable jobs, queues,\ncron, and Workflows]
+  Runtime[Official Hermes Agent\nlocal or Hermes Cloud]
+  Provider[Nous Portal\nmodel inference]
+  Storage[R2\nuploads and renders]
+  WorkOS[WorkOS\nidentity and invitations]
 
-| Real today | Stubbed, with a landing milestone |
-|---|---|
-| The full Postgres schema: 37 tables, forced row-level security, three roles, the grant matrix, the append-only audit, the derived views | Executing an effect. `POST /w/:ws/effects/:id/execute` answers `unavailable` in words, and always will here |
-| `GET /health`, `GET /w/:ws/bootstrap`, `GET /w/:ws/events?stream=&after=` | Attachments, documents and the Ask/Plan tool allowlists (M3.5) |
-| The run engine: `POST /w/:ws/sessions/:id/turns`, the `RunAttempt` Workflow with deterministic step names, the twelve tools, Stop, Guide, Queue, Retry, waiting on a human, the failure taxonomy, and the minute orphan sweep | The PDF. Documents render to HTML; `@react-pdf/renderer` cannot run under workerd, and the row says `pdf_status = 'unavailable'` with the reason (DECISIONS, D7) |
-| WorkOS AuthKit behind the same `getSession(c) -> {userId, sid, authenticatedAt}` interface: `/auth/login` (with `max_age: 0` for step-up), `/auth/callback` (sealed cookie, user and membership mirror, `auth_sessions`), `/auth/session` (re-seal, stream heads, hub ticket), `/auth/logout`; local JWT verification against a JWKS cached ten minutes; refresh on expiry, 401 only on a terminal `invalid_grant`, 503 with `Retry-After` on a transient failure | Outreach, payment, access grants and signature. **No code for these exists or ever will in this repository** |
-| `POST /workspaces`, members and invitations (WorkOS `sendInvitation`, resend, withdraw, role change, removal) with the revocation transaction, the last-Admin rule, and the Events API poller that routes WorkOS-side changes through the same transaction | Outreach, payment and signature. **No code for these exists or ever will in this repository** |
-| Sessions: create from the workspace defaults, list (owner-private — a link share grants the link holder, never the workspace), rename, pin, archive, drafts, message pagination, shares with a hashed token and a cutoff redeemed at `GET /shared/:token`, feedback | Turns, stop, retry and guidance (M3) |
-| Uploads end to end: presigned PUT, magic-byte sniff and sha256 on `complete`, the `extract` queue with a DLQ consumer that writes a reason, PDF text through `unpdf` under workerd, extracted text in R2 with a 6,000-token read cap, the daily orphan sweep and the erasure hooks | Nothing here |
-| Decisions end to end: the five-guard route, the one transaction, the effects ledger, the receipt into the originating session, History rendered at read time, the Library, the `renders` consumer, and `DELETE /w/:ws/applicants/:subject_key` through `redact_subject` | Nothing here |
-| Both WebSocket upgrade routes with the `Origin` check, the socket attachment, HMAC hub tickets, evict fan-out and `requestStop`; `publish`, `evict`, `workos_sync`, `receipt` and `render` jobs run by the committing request and drained by the minute Cron | The orphan sweep's Workflow-status half, and the `reverify` job runner |
-| One transaction per tenant request, with `SET LOCAL app.workspace_id` and `app.user_id` derived from the path plus a members lookup | Nothing here. `resolveKey` now runs inside every provider step, so plaintext exists only for that step |
-| Provider keys end to end: envelope encryption on Web Crypto, `resolveKey`, verification against each provider's list-models endpoint, rotation, removal, the KEK re-wrap routine, `GET /w/:ws/catalog` | The AI Gateway passthrough. Wired behind `MODEL_GATEWAY_MODE`, off in every environment, with a test that payload logging can never be on |
-| The zod event contract, the refs format, the run-log validator, the two command registries and the block validator, the mock event stream | Nothing here |
-| The client, against this Worker: bootstrap, the two hubs with replay-then-buffer and a polling fallback, turns, Stop, Guide, Queue, Retry, decisions with step-up, provider keys and uploads; the M3 run surface; Traces and the trace detail (steps, tool calls with the 8 KB marker, fetched URLs, focus history); Skills and instruction review; Context fields, including the human write that resumes a waiting run; Settings → Usage, Agents caps, and Data and privacy with the attestation; Inbox, History, Members, the Library with the saved HTML render; effects on the receipt; workspace delete and undelete; onboarding through `POST /workspaces` and `POST /invitations/:token/accept`, and the workspace picker. `pnpm e2e:live` drives thirty-four scenarios through the live stack | `PromptBar` in the composer and `AgentScreen` on the trace detail — neither can be adopted without breaking something the product promises (DECISIONS, C23 and C27). Library → Connections and Library → Shared Intelligence are M6 and say so |
-| `SessionHub` and `WorkspaceHub` Durable Objects: hibernating sockets, auto-response heartbeat, fan-out, eviction, and the `forward` RPC that carries deltas out and Stop back | The nightly validator Workflow (M5a) |
-| Both wrangler environments, the queues with dead-letter queues, two cron triggers, two Hyperdrive bindings, the CPU limit | Outreach, payment and signature. **No code for these exists or ever will in this repository**; they are `effects` rows a human executes |
+  Person -->|HTTPS and WebSocket| Worker
+  Worker -->|tenant-scoped transaction| Database
+  Database -->|outbox and job pointers| Jobs
+  Jobs --> Worker
+  Worker <--> Hubs
+  Hubs -->|replay and live events| Person
+  Worker <--> Runtime
+  Runtime -->|governed provider proxy| Worker
+  Worker --> Provider
+  Worker <--> Storage
+  Worker <--> WorkOS
+```
+
+The central write path is intentionally narrow:
+
+```mermaid
+flowchart TD
+  Request[Authenticated request] --> Scope[Resolve workspace from the path]
+  Scope --> Tx[Open one tenant-scoped transaction]
+  Tx --> Rules[Apply route and domain rules]
+  Rules --> Commit[Commit state, audit, outbox, and jobs together]
+  Commit --> Deliver[Deliver events and run queued side effects]
+  Deliver --> Retry[Minute cron retries unfinished jobs]
+```
+
+Routes own HTTP parsing and authentication. `src/domain` owns business rules.
+Infrastructure modules implement integrations. `jobs.ts` owns durable dispatch,
+but job handlers load at that boundary instead of importing the dispatcher back
+through route orchestration. `pnpm lint:imports` enforces an acyclic Worker
+runtime graph.
+
+## Authority boundaries
+
+| Boundary | Enforced by |
+| --- | --- |
+| Workspace isolation | A workspace ID from the URL, one scoped transaction, forced Postgres row-level security, and a membership lookup |
+| Human decisions | The guarded decision route, the `app` database role, approval evidence, and revision checks |
+| Agent limits | The restricted `agent` database role plus server-owned tool, skill, model, and operation policy |
+| Runtime admission | A versioned Hermes contract, release-ring attestation, capacity checks, and exact run-attempt identity |
+| Delivery and retries | Transactional outbox rows, durable job pointers, queues, Workflows, and idempotency keys |
+| Secrets | Envelope encryption at rest and decryption only inside the provider step that needs the key |
+
+## What is implemented and intentionally limited
+
+| Implemented | Intentional limit or external prerequisite |
+| --- | --- |
+| WorkOS and local fake authentication, workspace creation, invitations, membership, step-up, and revocation | A hosted deployment needs configured WorkOS credentials and webhook or poller settings |
+| Private sessions, the official Hermes run loop, streaming, Stop, Guide, Queue, Retry, recovery, traces, and model selection | A hosted run needs verified Hermes capacity and a connected Nous Portal account |
+| Guarded requests, decisions, immutable evidence, receipts, history, role handoffs, and draft documents | Outreach, payment, access grants, and signatures remain recorded effects for a person to execute; this repository does not execute them |
+| Upload validation, extraction, R2 storage, HTML rendering, retention hooks, and subject erasure | PDF rendering is unavailable under workerd, so documents expose the HTML render and an explicit PDF status |
+| Durable event delivery through outbox rows, jobs, queues, Workflows, cron, and hibernating WebSockets | Optional external services fail without changing canonical product state |
+| Local scripted-provider development, mock browser tests, disposable live-stack tests, staging, and production configuration | Mock and scripted flows are clearly separated from live model behavior |
 
 ## Run it locally
 
-Everything except `pnpm install` works offline.
+The application and test suites work offline after dependencies are installed.
+The pinned gitleaks, actionlint, and official Hermes installers download their
+verified upstream artifacts when invoked.
 
 The opt-in Partner Program source connector and Iris review handoff are
 documented in [`docs/PARTNER-SCREENING.md`](PARTNER-SCREENING.md). It keeps
@@ -136,8 +180,8 @@ list and its catch-all answers JSON, so the SPA fallback never sees a navigation
 there (DECISIONS, C12). `apps/client/README.md` has the rest, including the
 server findings this integration turned up and what each one costs.
 
-To run the whole thing end to end — Postgres, migrations, seed, bundle, Worker,
-and thirty-four Playwright scenarios against all of it:
+To run the whole thing end to end, including Postgres, migrations, seed, bundle,
+Worker, and the live Playwright scenarios:
 
 ```sh
 pnpm e2e:live
@@ -835,23 +879,21 @@ the same transaction our own removal route uses.
 ## Layout
 
 ```
-packages/shared    the contract: events, refs, enums, document payloads,
-                   the run-log validator, the command registries, the mock stream
-apps/worker        the Cloudflare Worker: Hono routes, Durable Object hubs,
-                   the run Workflow, the Drizzle schema, the SQL migrations
-  src/domain       the decision transaction, the effects plan, request and
-                   History shaping — the rules, with no HTTP in them
-  src/documents    the document template, the render pipeline and its keys
-apps/client        the workspace client: React 19, esbuild, no router. Built
-                   into dist/, which the Worker's assets binding serves. Its
-                   README lists the server findings the integration turned up
-                   and which library components are adopted, and which are not
-docs/              DECISIONS.md, CONVENTIONS.md
+apps/client                 React workspace client and Playwright suites
+apps/worker                 Cloudflare API and control plane
+  src/domain                business rules without HTTP concerns
+  src/routes                request parsing and response boundaries
+  src/runtime               official Hermes admission and transport
+  migrations               append-only SQL source of truth
+packages/shared             wire contracts shared by client and Worker
+packages/motion-components  source and built assets for the reviewed UI package
+runtime/hermes              pinned official runtime and enterprise bridge
+docs                        current references, runbooks, and historical evidence
 ```
 
-`docs/CONVENTIONS.md` is the file to read before changing anything: it says who
-owns which directory, how to add a migration, and which invariants must never be
-violated.
+Read [CONVENTIONS.md](CONVENTIONS.md) before changing code. It defines directory
+ownership, migration rules, and invariants. The [documentation index](README.md)
+separates current references from dated delivery evidence.
 
 ## The invariants, in one place
 

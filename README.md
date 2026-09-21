@@ -188,12 +188,16 @@ views without WorkOS credentials.
 ### Run the checks
 
 ```sh
-pnpm typecheck
+pnpm check:quick
 pnpm test
 pnpm test:browser:mock
 pnpm db:migrations:verify
 pnpm e2e:live
 ```
+
+`pnpm check:quick` checks the Worker import graph, typechecks every workspace,
+and runs the fast unit suites. The broader commands add database and browser
+coverage.
 
 `pnpm e2e:live` creates a disposable Postgres container, runs the full stack,
 and drives the browser flows with Playwright. It does not write test data to the
@@ -257,8 +261,9 @@ role, security, and approval layers around it.
 | [`apps/worker`](apps/worker) | Cloudflare Worker, API routes, Durable Objects, Workflows, queues, and SQL migrations |
 | [`apps/worker/src/domain`](apps/worker/src/domain) | Decision rules and effect planning without HTTP concerns |
 | [`packages/shared`](packages/shared) | Shared event, entity, reference, and document contracts |
+| [`packages/motion-components`](packages/motion-components) | Source and built assets for the reviewed motion component package |
 | [`runtime/hermes`](runtime/hermes) | Pinned Hermes runtime installer and enterprise bridge |
-| [`docs`](docs) | Architecture notes, decisions, conventions, security reviews, and runbooks |
+| [`docs`](docs) | Indexed current references, decisions, runbooks, and historical evidence |
 
 The stack uses Cloudflare Workers, Durable Objects, Workflows, Queues, and R2;
 Postgres 17 on Neon through Hyperdrive; Drizzle; Hono; WorkOS AuthKit; React 19;
@@ -268,10 +273,12 @@ Vitest; and Playwright.
 
 - [Architecture](docs/ARCHITECTURE.md) explains what works today, what remains
   stubbed, and how the main routes fit together.
+- [Documentation index](docs/README.md) separates current references from dated
+  audits, delivery notes, and proposals.
 - [Enterprise skills](docs/ENTERPRISE-SKILLS.md) explains the reviewed role
   packages and the tools they receive.
-- [Decisions](docs/DECISIONS.md) records the reasoning behind consequential
-  implementation choices.
+- [Decision index](docs/DECISIONS.md) links the split, searchable reasoning
+  behind consequential implementation choices.
 - [Conventions](docs/CONVENTIONS.md) explains directory ownership, migrations,
   and invariants that contributors must preserve.
 - [Security review](docs/SECURITY-REVIEW.md) covers the threat model and current

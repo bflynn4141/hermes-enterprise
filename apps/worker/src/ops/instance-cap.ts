@@ -28,7 +28,7 @@
 //   rather than a Worker that refuses every turn.
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { logEvent } from '../keys/redact.js';
 
 /** The `platform_counters.bucket` value. One row per hour. */

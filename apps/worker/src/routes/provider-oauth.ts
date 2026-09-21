@@ -15,7 +15,8 @@ import {
 import { syncCatalogForKey } from '../keys/catalog-sync.js';
 import { adapterOptions } from '../model/index.js';
 import { allowedProviders } from '../model/allowed.js';
-import { inWorkspace, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const PORTAL_ORIGIN = 'https://portal.nousresearch.com';
 const INFERENCE_BASE = 'https://inference-api.nousresearch.com/v1';
