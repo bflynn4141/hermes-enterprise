@@ -45,6 +45,7 @@ PARTNER = packaged_skills()["enterprise_bridge:partner-program-screening"]
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 AGENT_ID = "22222222-2222-4222-8222-222222222222"
 MODEL = "test/cloud-managed-fixture"
+ALT_MODEL = "test/cloud-managed-fixture-alt"
 PLUGIN_REVISION = "3" * 40
 PLUGIN_SOURCE = "git@github.com:bflynn4141/hermes-enterprise.git#runtime/hermes/enterprise_bridge"
 FINANCE_TOOLS = ("get_partner_handoff_result", "list_requests", "get_request")
@@ -112,12 +113,16 @@ def schema(name):
     }
 
 
-def request(port, key, method, path, body=None, timeout=10):
+def request(
+    port, key, method, path, body=None, timeout=10,
+    idempotency_key="cloud-managed-process-probe",
+):
     encoded = json.dumps(body).encode() if body is not None else None
     headers = {"Authorization": "Bearer " + key, "Accept": "application/json"}
     if encoded is not None:
         headers["Content-Type"] = "application/json"
-        headers["Idempotency-Key"] = "cloud-managed-process-probe"
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
     call = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}", data=encoded, method=method, headers=headers,
     )
@@ -307,9 +312,10 @@ def main():
                     names.append("publish_partner_invoice_review")
                 self.reply(200, {"tools": [schema(name) for name in names]})
             elif self.path.endswith("/model/v1/models") or self.path.endswith("/models"):
-                self.reply(200, {"object": "list", "data": [{
-                    "id": MODEL, "object": "model", "context_length": 131072,
-                }]})
+                self.reply(200, {"object": "list", "data": [
+                    {"id": MODEL, "object": "model", "context_length": 131072},
+                    {"id": ALT_MODEL, "object": "model", "context_length": 131072},
+                ]})
             else:
                 self.reply(404, {})
 
@@ -335,7 +341,7 @@ def main():
                     ), ({}, "stop")):
                         chunk = {
                             "id": "fixture", "object": "chat.completion.chunk",
-                            "created": int(time.time()), "model": MODEL,
+                            "created": int(time.time()), "model": body.get("model", MODEL),
                             "choices": [{"index": 0, "delta": delta, "finish_reason": reason}],
                         }
                         self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
@@ -343,7 +349,8 @@ def main():
                     self.wfile.flush()
                 else:
                     self.reply(200, {
-                        "id": "fixture", "object": "chat.completion", "model": MODEL,
+                        "id": "fixture", "object": "chat.completion",
+                        "model": body.get("model", MODEL),
                         "choices": [{"index": 0, "message": {
                             "role": "assistant", "content": "Local managed fixture complete.",
                         }, "finish_reason": "stop"}],
@@ -487,6 +494,17 @@ def main():
             process.kill()
             process.wait(timeout=10)
         log.close()
+
+    def settle(port, run_id, profile):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status, result, _ = request(port, native_key, "GET", "/v1/runs/" + run_id)
+            if status == 200 and result.get("status") in {
+                "completed", "failed", "cancelled", "interrupted",
+            }:
+                return result
+            time.sleep(0.05)
+        raise AssertionError("managed run did not settle:\n" + (profile / "gateway.log").read_text())
 
     try:
         before = len(model_calls)
@@ -653,14 +671,31 @@ def main():
             "session_id": "managed-process-probe", "provider": "custom", "model": MODEL,
         })
         assert accepted[0] == 202, accepted
-        deadline = time.monotonic() + 60
-        while len(model_calls) == before and time.monotonic() < deadline:
-            time.sleep(0.05)
+        first_result = settle(port, accepted[1]["run_id"], profile)
+        assert first_result["status"] == "completed", first_result
         assert len(model_calls) > before, (
             "ready native submission never reached the local model fixture: "
             + (profile / "gateway.log").read_text()
         )
+        assert model_calls[-1]["model"] == MODEL, model_calls[-1]
         assert_pinned_skill(model_calls[-1], FINANCE, absent=PARTNER)
+
+        calls_before_model_switch = len(model_calls)
+        switched = request(port, native_key, "POST", "/v1/runs", {
+            "input": "Return one short sentence from the alternate model without tools.",
+            "session_id": "managed-process-probe-alt", "provider": "custom", "model": ALT_MODEL,
+        }, idempotency_key="cloud-managed-process-probe-alt-model")
+        assert switched[0] == 202, switched
+        switched_result = settle(port, switched[1]["run_id"], profile)
+        assert switched_result["status"] == "completed", switched_result
+        assert len(model_calls) > calls_before_model_switch, (
+            "alternate selected model never reached the governed model proxy: "
+            + (profile / "gateway.log").read_text()
+        )
+        assert model_calls[-1]["model"] == ALT_MODEL, model_calls[-1]
+        assert_pinned_skill(model_calls[-1], FINANCE, absent=PARTNER)
+        assert readiness.exists(), "selected model switch closed managed readiness"
+        assert request(port, native_key, "GET", "/health")[0] == 200
 
         plugin_path = profile / "home/plugins/enterprise_bridge/packages.py"
         with plugin_path.open("a") as file:
@@ -717,7 +752,7 @@ def main():
         stop_latest()
 
         print("PASS: ordinary pinned Hermes Cloud gateway installs the gate before fallible registration validation.")
-        print("Verified pre-ready capabilities, stale/artifact/tool/config rejection, post-202 provider gating, lost-flag restart closure, exact Finance and authenticated P1.7 preflight readiness (including local AgentCash MCP discovery), live boot-bound health, and dynamic post-ready closure using local fixtures only.")
+        print("Verified pre-ready capabilities, stale/artifact/tool/config rejection, post-202 provider gating, selected-model switching on the governed route, lost-flag restart closure, exact Finance and authenticated P1.7 preflight readiness (including local AgentCash MCP discovery), live boot-bound health, and dynamic post-ready closure using local fixtures only.")
     finally:
         while processes:
             stop_latest()

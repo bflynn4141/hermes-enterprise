@@ -163,7 +163,6 @@ class NativePolicyState:
                     raise RuntimeError("managed provider binding is unavailable")
                 actual = {
                     "provider": str(getattr(agent, "provider", "") or ""),
-                    "model": str(getattr(agent, "model", "") or ""),
                     "base_url": str(getattr(agent, "base_url", "") or "").rstrip("/"),
                     "api_key": str(getattr(agent, "api_key", "") or ""),
                     "api_mode": str(getattr(agent, "api_mode", "") or ""),
