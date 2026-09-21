@@ -1330,7 +1330,16 @@ html[data-reduce-motion="true"] .msg-iris[data-fresh] .chat-card.static { animat
 .workspace-create-card > span:last-child { display: flex; flex-direction: column; gap: 5px; }
 .workspace-create-card strong { font-size: 12.8px; line-height: 19.2px; font-weight: 500; }
 .workspace-create-card small { color: var(--muted); font-size: 10.4px; line-height: 16px; }
+.workspace-invitations { display: flex; flex-direction: column; gap: 14px; }
+.workspace-invitations h2 { font: 500 20.8px/24px var(--font-display); letter-spacing: -.01em; }
+.workspace-invitation-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.workspace-invitation { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 14px; background: rgba(12,10,65,.38); }
+.workspace-invitation-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.workspace-invitation-copy strong { overflow: hidden; font: 500 16px/20px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-invitation-copy span { color: var(--muted); font-size: 12.8px; line-height: 19.2px; }
+.join-invitation-summary { max-width: 440px; text-align: center; font-size: 14.4px; line-height: 22px; }
 @media (max-width: 720px) {
+  .workspace-invitation { flex-direction: column; align-items: stretch; }
   .workspace-picker-body { width: min(100% - 40px, 1120px); padding: 56px 0 48px; gap: 26px; }
   .workspace-picker-heading h1 { font-size: 32px; line-height: 35.2px; }
   .workspace-card-grid { grid-template-columns: minmax(0, 1fr); }

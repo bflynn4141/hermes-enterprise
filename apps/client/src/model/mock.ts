@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -132,6 +132,8 @@ interface MockOptions {
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** The picker lists one pending invitation addressed to the viewer. */
+  pendingInvitation?: boolean;
   /** Browser regression fixture for rejected Library skill adopts. */
   libraryAdopt?: 'ok' | 'fail';
   /** Browser regression fixture for rejected workspace settings writes. */
@@ -374,6 +376,14 @@ export function createMockBackend(options: MockOptions = {}) {
         version: 1,
       }];
   const runtimeDiscoveryGrants: RuntimeDiscoveryGrant[] = [];
+  const pendingInvitation: PendingInvitation = {
+    token: mockUuid(212),
+    workspace: { id: mockUuid(2), name: 'Finance Review' },
+    role: 'member',
+    role_template_key: 'finance-agent',
+    invited_by: 'Alex Rivera',
+    expires_at: iso(6 * 86_400),
+  };
 
   const providerKeys: MaskedProviderKey[] =
     keyMode === 'none'
@@ -1148,6 +1158,9 @@ export function createMockBackend(options: MockOptions = {}) {
               member_count: members.length,
             },
           ],
+          // A second workspace's invitation, so the picker's "Pending
+          // invitations" list has something to show in a mock build.
+          invitations: options.pendingInvitation ? [pendingInvitation] : [],
           authenticated_at: new Date().toISOString(),
         });
       }
@@ -1194,6 +1207,22 @@ export function createMockBackend(options: MockOptions = {}) {
       const token = decodeURIComponent(path.split('/')[2] ?? '');
       if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
       return json(bootstrap());
+    }
+    // The join page's token-scoped read: the workspace behind the demo token,
+    // and the same refusal the accept gives for anything else.
+    if (path.startsWith('/invitations/') && method === 'GET') {
+      const token = decodeURIComponent(path.split('/')[2] ?? '');
+      if (token === 'inv_forwarded') return fail(403, 'invitation_email_mismatch', 'This invitation was sent to a different address');
+      if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
+      const row = invitations.find((item) => item.id === token);
+      return json({
+        token,
+        workspace: { id: WS, name: workspaceName },
+        role: row?.role ?? 'member',
+        role_template_key: row?.role_template_key ?? 'finance-agent',
+        invited_by: 'Maya Chen',
+        expires_at: iso(6 * 86_400),
+      });
     }
 
     // There is no `/bootstrap/client` any more: the Worker has no such route,

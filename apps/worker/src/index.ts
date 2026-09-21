@@ -31,7 +31,7 @@ import {
 import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
-import { acceptInvitation } from './routes/invitations.js';
+import { acceptInvitation, previewInvitation } from './routes/invitations.js';
 import { getTrace, listTraces } from './routes/traces.js';
 import {
   acceptInstruction,
@@ -320,6 +320,9 @@ app.post('/workspaces', createWorkspace);
 // Accepting an invitation is the other one: the workspace is what the call is
 // trying to reach, so it cannot be the key the call is authorised under.
 app.post('/invitations/:token/accept', acceptInvitation);
+// What the join page may say before accepting: the workspace's name and the
+// role, scoped by the same token and refused for the same reasons.
+app.get('/invitations/:token', previewInvitation);
 // Slack calls these two routes without a Hermes browser session. The callback
 // is bound to a short-lived, single-use signed state row; Events API requests
 // are verified against the raw request bytes before JSON parsing.
