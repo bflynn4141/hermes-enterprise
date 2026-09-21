@@ -1,4 +1,4 @@
-// The sidebar's session list, before and after decision C34.
+// The sidebar's session list, before and after decision C34b.
 //
 // Three clicks on New session, and a picture of what the list says. It is
 // written so it runs against *either* codebase — the control's name and the

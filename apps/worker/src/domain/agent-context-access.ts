@@ -1,4 +1,5 @@
-import { RouteError, type TenantWork } from '../routes/tenant.js';
+import { type TenantWork } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 /** Content access is not administrative configuration authority. A governed
  * agent is private to its active owner/principal; only explicitly workspace

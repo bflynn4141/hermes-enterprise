@@ -9,7 +9,8 @@ import { SLACK_BOT_SCOPES, slackAuthorizeUrl, slackConfig } from '../integration
 import { resolveSlackAgent } from '../integrations/slack/principal.js';
 import { sha256Hex, signSlackOAuthState, verifySlackOAuthState } from '../integrations/slack/security.js';
 import { loadSlackInstallation, storeSlackInstallation } from '../integrations/slack/store.js';
-import { inWorkspace, RouteError } from './tenant.js';
+import { inWorkspace } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 

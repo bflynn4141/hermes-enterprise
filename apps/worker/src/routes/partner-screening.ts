@@ -16,7 +16,8 @@ import {
   failPartnerScreening,
   loadPartnerScreeningSnapshot,
 } from '../partner-screening/service.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 
 function sourceFetcher(env: Env): PartnerFetch {

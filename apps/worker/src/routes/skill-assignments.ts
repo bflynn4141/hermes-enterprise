@@ -7,7 +7,8 @@ import {
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { listEnterpriseSkillAssignments, updateEnterpriseSkillAssignment } from '../enterprise-skills/service.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { requireAgentConfigAccess } from '../domain/agent-config-access.js';
 
 export async function listSkillAssignments(c: Context<{ Bindings: Env }>): Promise<Response> {

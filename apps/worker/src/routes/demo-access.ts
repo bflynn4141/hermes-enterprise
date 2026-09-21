@@ -38,7 +38,8 @@ import { withCapacityGrantQuarantine } from '../hermes-cloud/capacity.js';
 import { memberProvisioningEnabled } from '../member-provisioning/service.js';
 import { invitationCorrelationId, logInvitationDiagnostic } from '../ops/invitation-diagnostics.js';
 import { inviteInTransaction, resendInTransaction, type InvitationWork } from './members.js';
-import { jsonBody, RouteError } from './tenant.js';
+import { jsonBody } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

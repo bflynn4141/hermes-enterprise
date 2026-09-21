@@ -202,7 +202,7 @@ export interface SessionState {
   lastActivity: number;
   carried: { from: string; context: string } | null;
   /**
-   * Whether this title is the client's guess or the person's word (C34).
+   * Whether this title is the client's guess or the person's word (C34b).
    *
    * A session starts `auto`: the first turn names it, and the run that follows
    * may rename it again once it knows what it was about. A manual rename moves
@@ -447,7 +447,7 @@ export function sessionFrom(row: Session): SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// Session titles (decision C34)
+// Session titles (decision C34b)
 // ---------------------------------------------------------------------------
 
 /** What `POST /w/:ws/sessions` names a session with nothing to go on. */
@@ -502,7 +502,7 @@ const RUN_WORDS: Record<string, string> = {
  * Not "New session": that is the name of the control that creates one, and two
  * buttons a keystroke apart with the same accessible name is a sidebar where
  * "New session" means two different things — which is how the three identical
- * rows read in the first place (decision C34). The stored title is untouched;
+ * rows read in the first place (decision C34b). The stored title is untouched;
  * this is what the row says until the first turn names it.
  */
 export const UNTITLED_SESSION = 'Untitled session';
@@ -920,7 +920,7 @@ export function reduce(state: AppState, action: Action): AppState {
             scrollTop: existing.scrollTop,
             unread: existing.unread,
             ...(existing.settingsPending || existing.settingsError ? { model: existing.model, effort: existing.effort } : {}),
-            // Two title races, both lost without this (decision C34). A manual
+            // Two title races, both lost without this (decision C34b). A manual
             // rename is sticky: the row that re-delivers the old title must not
             // undo it. And a local auto-title beats the server's placeholder,
             // because the PATCH that carries it may not have landed yet.

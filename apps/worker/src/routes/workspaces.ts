@@ -25,7 +25,8 @@ import { readCookie, SESSION_COOKIE, sessionCookie } from '../auth/cookies.js';
 import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { workosPort, type WorkOSPort } from '../auth/workos.js';
-import { jsonBody, RouteError } from './tenant.js';
+import { jsonBody } from './tenant.js';
+import { RouteError } from './errors.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';
 

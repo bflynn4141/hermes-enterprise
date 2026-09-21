@@ -30,7 +30,8 @@ import {
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { inWorkspace, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { effectRows, loadEffect, toEffectEntity } from '../domain/effect-rows.js';
 import { unavailableEnforcement } from '../domain/effects.js';
 import { publishEvents } from '../jobs.js';

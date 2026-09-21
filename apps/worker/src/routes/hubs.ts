@@ -18,7 +18,8 @@ import type { Env } from '../env.js';
 import { requireOrigin } from '../auth.js';
 import { TICKET_TTL_SECONDS } from '../auth/tickets.js';
 import { ATTACHMENT_HEADER, type SocketAttachment } from '../hubs.js';
-import { inWorkspace, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 
 function upgradeRequest(request: Request, attachment: SocketAttachment): Request {
   const headers = new Headers(request.headers);

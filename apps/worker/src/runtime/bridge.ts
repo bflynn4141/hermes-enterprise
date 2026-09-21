@@ -12,7 +12,8 @@ import { isProviderAllowed } from '../model/allowed.js';
 import { ATTRIBUTION_HEADERS, OPENROUTER_BASE } from '../model/openrouter.js';
 import { NOUS_PORTAL_BASE, NOUS_PORTAL_HEADERS } from '../model/nous.js';
 import type { ProviderMessage } from '../model/types.js';
-import { pathUuid, RouteError } from '../routes/tenant.js';
+import { pathUuid } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import {
   actualRuntimeCostUsd,
   meterRuntimeResponse,

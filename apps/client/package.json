@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@hermes/shared": "workspace:*",
-    "@hermes/motion-components": "file:../../vendor/hermes-motion-components-0.1.0.tgz",
+    "@hermes/motion-components": "workspace:*",
     "motion": "13.3.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

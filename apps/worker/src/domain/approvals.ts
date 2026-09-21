@@ -22,7 +22,7 @@ import {
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
 import { queueApprovedEmail } from '../outbound-email/outbox.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_EXECUTOR = 'No supported executor is configured for this approved consequence.';

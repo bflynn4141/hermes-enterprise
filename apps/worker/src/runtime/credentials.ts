@@ -1,4 +1,4 @@
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 const TOKEN = /^[0-9a-f]{64}$/;
 const encoder = new TextEncoder();

@@ -25,7 +25,8 @@ import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 import {
   enqueueCapacityWarning,
   expireInvitationReservations,

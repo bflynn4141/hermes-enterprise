@@ -6,10 +6,12 @@ the bar is the same one the codebase already holds itself to.
 
 ## Before you start
 
-- Read `README.md` for what is real and what is stubbed, and
-  `docs/DECISIONS.md` for why things are the way they are. A change that
+- Read `README.md` for what is real and what is stubbed, `AGENTS.md` for the
+  code map and invariants, and `docs/DECISIONS.md` for why things are the way
+  they are. A change that
   contradicts a recorded decision needs a new decision entry, not a quiet edit.
-- `docs/CONVENTIONS.md` covers naming, migrations and test layout.
+- `docs/README.md` identifies current references and historical evidence.
+  `docs/CONVENTIONS.md` covers naming, migrations, and test layout.
 
 ## Local setup
 
@@ -17,11 +19,14 @@ the bar is the same one the codebase already holds itself to.
 pnpm install
 pnpm db:up            # Postgres 17 in Docker on 127.0.0.1:5433
 pnpm db:migrate
+pnpm check:quick      # import cycles, typecheck, and fast unit tests
 pnpm test             # unit, worker and database tests
-pnpm lint:secrets     # gitleaks over the working tree
+pnpm lint:secrets     # pinned, checksum-verified gitleaks scan
 ```
 
-Everything except `pnpm install` works offline.
+The application and test suites work offline after dependencies are installed.
+The pinned scanner and runtime installers download their verified upstream
+artifacts when invoked.
 
 ## Pull requests
 
@@ -30,8 +35,8 @@ Everything except `pnpm install` works offline.
 - Migrations are append-only. Never edit a shipped migration; add a new one.
 - Anything that touches row-level security, the grant matrix, the decision
   route or provider-key handling needs a test that fails without the change.
-- CI must be green: typecheck, tests, the migration replay, workflow lint and
-  the secret scan.
+- CI must be green: import-cycle check, typecheck, tests, migration replay,
+  workflow lint, and the secret scan.
 
 ## Not accepted
 

@@ -15,13 +15,9 @@ import { approvalFinalizedHookSchema } from '@hermes/shared';
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
-import { loadApprovalView } from './domain/approvals.js';
-import { runReceiptJob } from './runs/receipt.js';
 import { runAttemptInstanceId } from './runs/instance-id.js';
 import { admitApprovalContinuation } from './runtime/continuation.js';
 import { runBackupUploads } from './storage/backup.js';
-import { runCapWarningJob } from './ops/cap-warning.js';
-import { runEventsExport } from './ops/events-export.js';
 import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
 import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
@@ -764,6 +760,7 @@ async function runRender(env: Env, job: Job): Promise<void> {
 async function runApprovalContinue(env: Env, job: Job): Promise<void> {
   const hook = approvalFinalizedHookSchema.parse(job.payload);
   if (hook.workspace_id !== job.workspace_id) throw new Error('approval_continue_workspace_mismatch');
+  const { loadApprovalView } = await import('./domain/approvals.js');
 
   const admission = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const current = await loadApprovalView(tx, hook.request_id, null);
@@ -831,7 +828,7 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'receipt':
       // The two lines a decision leaves in the originating session, keyed on
       // `decision_id` so a replay writes nothing. See src/runs/receipt.ts.
-      await runReceiptJob(env, job);
+      await (await import('./runs/receipt.js')).runReceiptJob(env, job);
       return;
     case 'render':
       // The job row is the durable half and the queue message is the working
@@ -844,11 +841,11 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       // Spend crossed 80 percent of the workspace's daily token cap. Re-reads
       // the caps rather than trusting the payload: a cap raised in the minute
       // since it was queued means the right answer is to do nothing.
-      await runCapWarningJob(env, job);
+      await (await import('./ops/cap-warning.js')).runCapWarningJob(env, job);
       return;
     case 'events_export':
       // The weekly CSV of one workspace's audit trail into the backup bucket.
-      await runEventsExport(env, job);
+      await (await import('./ops/events-export.js')).runEventsExport(env, job);
       return;
     case 'approval_continue':
       await runApprovalContinue(env, job);

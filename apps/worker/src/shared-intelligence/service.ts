@@ -22,7 +22,8 @@ import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { callSystemOne } from '../jev/client.js';
 import { proposeApproval, type ApprovalWork } from '../domain/approvals.js';
-import { RouteError, type TenantWork } from '../routes/tenant.js';
+import { type TenantWork } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 export const SHARED_INTELLIGENCE_MODEL_ID = 'jev-1.13.0';
 export const SHARED_INTELLIGENCE_RUBRIC_VERSION = '1';

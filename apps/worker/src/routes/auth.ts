@@ -41,7 +41,7 @@ import {
 } from '../auth/transactions.js';
 import { optionalWorkosPort, workosPort } from '../auth/workos.js';
 import { connect, withTenantTransaction, type Tx } from '../db/client.js';
-import { RouteError } from './tenant.js';
+import { RouteError } from './errors.js';
 import { mirrorMembership } from './members.js';
 import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';

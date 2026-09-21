@@ -208,7 +208,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
     }
     // The server renamed a session — after a completed run, or from another
     // device. The row is re-read rather than trusted from the event, and the
-    // reducer keeps a manual rename over whatever comes back (decision C34).
+    // reducer keeps a manual rename over whatever comes back (decision C34b).
     if (event.kind === 'entity.updated' && event.payload.entity_type === 'session') {
       void rest.getSession(workspaceId, event.payload.entity_id)
         .then((row) => dispatch({ type: 'session/upsert', session: row }))
@@ -759,7 +759,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * Show the first turn's name before the server answers. The turn route
    * writes the same six words to the row, so nothing is persisted from here:
    * a PATCH would mark the name as a person's and stop a finished run from
-   * improving on it (decision C34).
+   * improving on it (decision C34b).
    */
   function autoTitle(sessionId: string, source: string, { onlyIfPlaceholder = true } = {}): void {
     const session = state().sessions[sessionId];
@@ -901,7 +901,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         if (source.kind === 'source' && source.sha256) dispatch({ type: 'session/attach', id, attachment: { id: source.id, label: source.label, kind: 'source', sha256: source.sha256, ...(source.source_kind ? { source_kind: source.source_kind } : {}), icon: 'context' } });
       }
       // And the name goes back, unless a person has renamed it in between: a
-      // manual rename wins permanently (decision C34), and that is still true
+      // manual rename wins permanently (decision C34b), and that is still true
       // when the thing being undone is the client's own guess.
       const now = state().sessions[id];
       if (now && now.titleSource !== 'manual' && now.title !== titleBefore) {
@@ -920,7 +920,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
    * has to wait for the real id rather than putting `local-…` in a URL, which
    * the Worker answers `400 bad_id` to. That used to be unreachable because
    * nothing focused the composer on New session; it is reachable now, and the
-   * failure was a turn that vanished (decision C34).
+   * failure was a turn that vanished (decision C34b).
    */
   const creating = new Map<string, Promise<string>>();
   const createdIds = new Map<string, string>();
@@ -1023,7 +1023,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
         dispatch({ type: 'session/reconcile', localId, serverId: row.id });
         dispatch({ type: 'session/upsert', session: row });
         if (state().activeSessionId === row.id) openSession(row.id);
-        // A title chosen while the row was still local (decision C34). Somebody
+        // A title chosen while the row was still local (decision C34b). Somebody
         // who types their first sentence fast enough beats this POST, and the
         // PATCH that would have persisted their title had nowhere to go.
         const parked = pendingTitles.get(localId);
@@ -1044,7 +1044,7 @@ export function createAdapter(options: AdapterOptions): Adapter {
   async function createSession(opts: { title?: string; mode?: string; runtime?: 'cloud' | 'local'; reuse?: boolean } = {}): Promise<string> {
     if (!state().agent.id) throw new Error('No agent is available for a new session.');
     // "New session" clicked three times used to be three blank sessions, all
-    // titled "New session", all identical in the sidebar (decision C34). A
+    // titled "New session", all identical in the sidebar (decision C34b). A
     // blank one is already a new session, so it is opened rather than joined by
     // a twin. `reuse: false` is the escape hatch for a caller that genuinely
     // wants a second one; nothing uses it yet, and the option exists so the

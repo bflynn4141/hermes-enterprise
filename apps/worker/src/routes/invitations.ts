@@ -21,7 +21,7 @@ import { AuthError, getSession, requireCsrf, requireOrigin } from '../auth.js';
 import { connect } from '../db/client.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
-import { RouteError } from './tenant.js';
+import { RouteError } from './errors.js';
 import { mirrorMembership } from './members.js';
 import { allowedProviders } from '../model/allowed.js';
 import { loadBootstrap } from './workspace.js';

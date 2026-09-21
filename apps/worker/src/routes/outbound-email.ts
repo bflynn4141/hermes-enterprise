@@ -9,7 +9,8 @@ import { signGmailOAuthState, verifyGmailOAuthState } from '../outbound-email/gm
 import { loadGmailAccount, storeGmailAccount } from '../outbound-email/gmail-store.js';
 import { sha256Hex } from '../integrations/slack/security.js';
 import { automatedTriggersEnabled, automationIntervalMinutes } from '../partner-screening/automation.js';
-import { inWorkspace, RouteError } from './tenant.js';
+import { inWorkspace } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const OAUTH_TTL_SECONDS = 10 * 60;
 export async function getOutboundEmailConnection(c: Context<{ Bindings: Env }>): Promise<Response> {

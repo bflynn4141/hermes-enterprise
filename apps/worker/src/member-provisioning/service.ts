@@ -10,7 +10,7 @@ import {
   hasVerifiedCapacityForRole,
 } from '../hermes-cloud/capacity.js';
 import { FINANCE_CAPACITY_ROLE } from '../runtime/discovery-grants.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { invitationCorrelationId } from '../ops/invitation-diagnostics.js';
 
 interface OperationRow {
