@@ -233,6 +233,110 @@ async function existingDecision(tx: Tx, requestId: string): Promise<DecisionOutc
   };
 }
 
+/**
+ * After Partnerships admits an applicant, prepare one pending contractor
+ * agreement for Finance when the contractor-agreements handoff is enabled.
+ * Creates a new pending decision — never grants access, signs, or sends.
+ */
+async function prepareContractorAgreement(
+  work: TenantWork,
+  application: RequestRow,
+): Promise<string | null> {
+  const admission = await work.tx.query<{ admission_state: string }>(
+    `SELECT admission_state FROM handoffs
+      WHERE workspace_id=$1 AND key='contractor-agreements'`,
+    [work.workspaceId],
+  );
+  if (admission.rows[0]?.admission_state !== 'enabled') return null;
+
+  const finance = await work.tx.query<{ principal_user_id: string }>(
+    `SELECT eta.principal_user_id
+       FROM enterprise_team_agents eta
+       JOIN enterprise_teams t ON t.workspace_id=eta.workspace_id AND t.id=eta.team_id
+      WHERE eta.workspace_id=$1 AND t.slug='finance'
+      LIMIT 1`,
+    [work.workspaceId],
+  );
+  const financePrincipalId = finance.rows[0]?.principal_user_id;
+  if (!financePrincipalId) return null;
+
+  const payload = application.payload && typeof application.payload === 'object' && !Array.isArray(application.payload)
+    ? application.payload as Record<string, unknown>
+    : null;
+  const applicant = payload?.applicant && typeof payload.applicant === 'object' && !Array.isArray(payload.applicant)
+    ? payload.applicant as Record<string, unknown>
+    : null;
+  const name = typeof applicant?.name === 'string' && applicant.name.trim()
+    ? applicant.name.trim().slice(0, 200)
+    : application.label.slice(0, 200);
+  if (!name) return null;
+  const email = typeof applicant?.email === 'string' ? applicant.email : undefined;
+  const proposedRole = typeof payload?.proposed_role === 'string' && payload.proposed_role.trim()
+    ? payload.proposed_role.trim().slice(0, 120)
+    : 'Independent contractor';
+  const discovery = payload?.discovery && typeof payload.discovery === 'object' && !Array.isArray(payload.discovery)
+    ? payload.discovery as Record<string, unknown>
+    : null;
+  const candidateId = typeof discovery?.candidate_id === 'string' ? discovery.candidate_id : undefined;
+
+  const number = `AGR-${application.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+  const agreementPayload = {
+    kind: 'agreement' as const,
+    number,
+    version_label: 'draft',
+    parties: [
+      { name: 'Nous Research' },
+      email ? { name, email } : { name },
+    ],
+    sections: [{
+      id: 'scope',
+      heading: 'Scope',
+      body: `Independent contractor engagement for ${proposedRole}.`,
+      source_ids: [] as string[],
+    }],
+    workflow_provenance: {
+      handoff_key: 'contractor-agreements' as const,
+      source_application_id: application.id,
+      admitted_partner: {
+        name,
+        ...(email ? { email } : {}),
+        ...(candidateId ? { candidate_id: candidateId } : {}),
+      },
+    },
+  };
+
+  const subjectKey = `partner-contractor-agreement:${application.id}`;
+  const inserted = await work.tx.query<{ id: string }>(
+    `INSERT INTO requests
+       (workspace_id, kind, subject_key, label, payload, status, session_id)
+     VALUES ($1,'agreement',$2,$3,$4::jsonb,'pending',$5)
+     ON CONFLICT (workspace_id, subject_key) WHERE subject_key LIKE 'partner-contractor-agreement:%'
+     DO NOTHING
+     RETURNING id`,
+    [work.workspaceId, subjectKey, name, JSON.stringify(agreementPayload), application.session_id],
+  );
+  let agreementId = inserted.rows[0]?.id;
+  if (!agreementId) {
+    agreementId = (await work.tx.query<{ id: string }>(
+      `SELECT id FROM requests WHERE workspace_id=$1 AND subject_key=$2`,
+      [work.workspaceId, subjectKey],
+    )).rows[0]?.id ?? undefined;
+  }
+  if (!agreementId) return null;
+
+  await work.tx.query(
+    `INSERT INTO request_audiences (workspace_id, request_id, user_id, purpose)
+     VALUES ($1,$2,$3,'owner') ON CONFLICT (request_id, user_id) DO NOTHING`,
+    [work.workspaceId, agreementId, financePrincipalId],
+  );
+  await work.tx.query(
+    `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, request_id, session_id)
+     VALUES ($1,'user',$2,'request.created',$3,$4)`,
+    [work.workspaceId, work.userId, agreementId, application.session_id],
+  );
+  return agreementId;
+}
+
 export async function recordDecision(
   work: TenantWork,
   requestId: string,
@@ -409,6 +513,11 @@ export async function recordDecision(
     }
   }
 
+  let spawnedAgreementId: string | null = null;
+  if (decision === 'approve' && request.kind === 'application') {
+    spawnedAgreementId = await prepareContractorAgreement(work, request);
+  }
+
   if (partnerBinding) {
     const consumed = await work.tx.query(
       `UPDATE partner_engagement_authorizations
@@ -490,6 +599,15 @@ export async function recordDecision(
         version: null,
       },
     })),
+    ...(spawnedAgreementId ? [{
+      kind: 'entity.updated' as const,
+      payload: {
+        entity_type: 'request' as const,
+        entity_id: spawnedAgreementId,
+        ref: { section: 'inbox' as const, view: 'request' as const, id: spawnedAgreementId },
+        version: null,
+      },
+    }] : []),
   ]);
   work.jobs.push(...publishJobs);
 

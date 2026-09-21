@@ -1379,7 +1379,7 @@ export function createMockBackend(options: MockOptions = {}) {
       }
       if (rest === '/decisions' && method === 'POST') {
         if (!row) return fail(404, 'not_found');
-        const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+        const financeScoped = (row.kind === 'invoice' || row.kind === 'agreement') && 'workflow_provenance' in row.payload;
         if (seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
         if (row.status !== 'pending') return fail(409, 'already_decided', 'Already decided');
         const decision = body.decision === 'decline' ? 'decline' : 'approve';
@@ -1388,6 +1388,23 @@ export function createMockBackend(options: MockOptions = {}) {
         row.version += 1;
         row.decided_at = iso(1);
         row.decided_by_name = viewerName;
+        if (decision === 'approve' && row.kind === 'application' && options.partnerWorkflow && partnerAdmissionEnabled) {
+          const applicant = (row.payload as { applicant?: { name?: string; email?: string } }).applicant;
+          const name = applicant?.name ?? row.label;
+          const agreementId = mockUuid(700 + requests.length);
+          requests.unshift(request(agreementId, 'agreement', 'pending', name, name, {
+            kind: 'agreement',
+            number: `AGR-${agreementId.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+            version_label: 'draft',
+            parties: [{ name: 'Nous Research' }, { name }],
+            sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
+            workflow_provenance: {
+              handoff_key: 'contractor-agreements',
+              source_application_id: id,
+              admitted_partner: { name, ...(applicant?.email ? { email: applicant.email } : {}) },
+            },
+          }));
+        }
         if (id === REQ_INVOICE && options.partnerWorkflow) {
           const handoff = partnerHandoffs.find((item) => item.request_id === id && item.current);
           if (handoff) {
@@ -1747,12 +1764,64 @@ export function createMockBackend(options: MockOptions = {}) {
         readiness,
         partner_options: canSeeWork ? [{ id: mockUuid(611), name: 'Robin Studio', source: 'engagement' }, { id: mockUuid(617), name: 'Northstar Labs', source: 'candidate' }] : [],
         engagements: canSeeWork ? partnerEngagements : [],
-        in_motion: [],
+        in_motion: (() => {
+          if (!canSeeWork) return [];
+          const stageKeys = ['terms_recorded', 'finance_verifying', 'invoice', 'decision', 'acknowledged'] as const;
+          const stageLabels = ['Admit', 'Prep', 'Review', 'Decide', 'Done'];
+          const stagesFor = (current: typeof stageKeys[number]) => stageKeys.map((key, idx) => ({
+            key,
+            label: stageLabels[idx]!,
+            state: (idx < stageKeys.indexOf(current) ? 'done' : idx === stageKeys.indexOf(current) ? 'current' : 'pending') as 'done' | 'current' | 'pending',
+          }));
+          const apps = requests.filter((row) => row.kind === 'application' && (row.status === 'pending' || row.status === 'admitted'));
+          const agreements = requests.filter((row) => {
+            const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string; source_application_id?: string } }).workflow_provenance;
+            return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+          });
+          const byApp = new Map(agreements.map((row) => {
+            const source = (row.payload as { workflow_provenance?: { source_application_id?: string } }).workflow_provenance?.source_application_id;
+            return [source ?? row.id, row] as const;
+          }));
+          const items = [];
+          for (const app of apps) {
+            const agreement = byApp.get(app.id);
+            if (app.status === 'admitted' && !agreement) continue;
+            if (app.status === 'pending') {
+              items.push({
+                id: app.id,
+                kind: 'application' as const,
+                title: app.label,
+                subtitle: 'Admit',
+                stage: 'terms_recorded' as const,
+                stages: stagesFor('terms_recorded'),
+                handoff: null,
+                engagement: null,
+                open_request_id: app.id,
+              });
+            } else if (agreement) {
+              items.push({
+                id: agreement.id,
+                kind: 'agreement' as const,
+                title: app.label,
+                subtitle: 'Finance',
+                stage: 'decision' as const,
+                stages: stagesFor('decision'),
+                handoff: null,
+                engagement: null,
+                open_request_id: agreement.id,
+              });
+            }
+          }
+          return items.slice(0, 25);
+        })(),
         connector: {
           name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
           summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
         },
-        counts: { in_motion: 0, waiting_on_viewer: 0 },
+        counts: { in_motion: canSeeWork ? requests.filter((row) => row.kind === 'application' && row.status === 'pending').length + requests.filter((row) => {
+          const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
+          return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+        }).length : 0, waiting_on_viewer: 0 },
       });
     }
     if (p('/partner-workflow') && method === 'GET') {

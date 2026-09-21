@@ -4,7 +4,6 @@ import {
   type HandoffDetail,
   type HandoffInMotionItem,
   type HandoffList,
-  type PartnerWorkflowHandoffV2,
   type PartnerWorkflowViewV2,
 } from '@hermes/shared';
 import type { QueryResultRow } from 'pg';
@@ -149,21 +148,13 @@ export async function ensurePartnerInvoicesHandoff(
   return handoffId;
 }
 
-function resultKind(validationStatus: string): PartnerWorkflowHandoffV2['result_kind'] {
-  if (validationStatus === 'passed') return 'checks_passed';
-  if (validationStatus === 'needs_information') return 'needs_information';
-  if (validationStatus === 'stale') return 'stale_source';
-  if (validationStatus === 'failed') return 'failed_processing';
-  return 'pending_checks';
-}
-
 function stageLabels(): Array<{ key: HandoffInMotionItem['stage']; label: string }> {
   return [
-    { key: 'terms_recorded', label: 'Applicant admitted' },
-    { key: 'finance_verifying', label: 'Agreement prepared' },
-    { key: 'invoice', label: 'Finance review' },
-    { key: 'decision', label: 'Decision' },
-    { key: 'acknowledged', label: 'Acknowledged' },
+    { key: 'terms_recorded', label: 'Admit' },
+    { key: 'finance_verifying', label: 'Prep' },
+    { key: 'invoice', label: 'Review' },
+    { key: 'decision', label: 'Decide' },
+    { key: 'acknowledged', label: 'Done' },
   ];
 }
 
@@ -177,62 +168,134 @@ function stageStates(current: HandoffInMotionItem['stage']): HandoffInMotionItem
   }));
 }
 
-function invoiceStage(handoff: PartnerWorkflowHandoffV2): HandoffInMotionItem['stage'] {
-  if (handoff.outcome.acknowledgment === 'delivered'
-      || handoff.outcome.human_decision === 'approved'
-      || handoff.outcome.human_decision === 'declined') {
-    return handoff.outcome.acknowledgment === 'delivered' ? 'acknowledged' : 'decision';
-  }
-  if (handoff.outcome.human_decision === 'pending') return 'decision';
-  if (handoff.outcome.validation === 'passed' || handoff.outcome.agent_explanation === 'completed') return 'decision';
-  if (handoff.outcome.validation !== 'queued') return 'invoice';
-  return 'invoice';
-}
-
-function engagementStage(status: string): HandoffInMotionItem['stage'] {
-  if (status === 'pending') return 'finance_verifying';
-  return 'terms_recorded';
-}
-
 function waitingOnViewer(
   viewerRole: PartnerWorkflowViewV2['viewer_role'],
   item: HandoffInMotionItem,
 ): boolean {
-  if (viewerRole === 'partnerships') {
-    return item.stage === 'terms_recorded' && item.kind === 'engagement';
-  }
-  if (viewerRole === 'finance') {
-    return item.stage === 'finance_verifying'
-      || (item.stage === 'decision' && item.handoff?.outcome.human_decision === 'pending');
-  }
+  if (viewerRole === 'partnerships') return item.stage === 'terms_recorded';
+  if (viewerRole === 'finance') return item.stage === 'invoice' || item.stage === 'decision';
   return false;
 }
 
-function buildInMotion(
-  _viewerRole: PartnerWorkflowViewV2['viewer_role'],
-  _handoffs: PartnerWorkflowHandoffV2[],
-  _engagements: PartnerWorkflowViewV2['engagements'],
-): HandoffInMotionItem[] {
-  // Contractor agreements move through Inbox application + agreement requests.
-  // Legacy invoice intakes are not listed on this handoff surface.
-  return [];
+interface MotionRequestRow {
+  id: string;
+  kind: 'application' | 'agreement';
+  status: string;
+  label: string;
+  source_application_id: string | null;
+  updated_at: Date;
+}
+
+function contractorStage(
+  applicationStatus: string | null,
+  agreementStatus: string | null,
+): HandoffInMotionItem['stage'] {
+  if (applicationStatus === 'pending') return 'terms_recorded';
+  if (applicationStatus === 'declined') return 'acknowledged';
+  if (!agreementStatus || agreementStatus === 'pending') return 'decision';
+  return 'acknowledged';
+}
+
+async function buildInMotion(
+  tx: Tx,
+  workspaceId: string,
+  viewerRole: PartnerWorkflowViewV2['viewer_role'],
+): Promise<HandoffInMotionItem[]> {
+  if (viewerRole === 'unrelated') return [];
+
+  const applications = await tx.query<MotionRequestRow>(
+    `SELECT id, kind, status, label,
+            NULL::text AS source_application_id, updated_at
+       FROM requests
+      WHERE workspace_id=$1 AND kind='application'
+        AND status IN ('pending','admitted','declined')
+      ORDER BY updated_at DESC
+      LIMIT 25`,
+    [workspaceId],
+  );
+  const agreements = await tx.query<MotionRequestRow>(
+    `SELECT id, kind, status, label,
+            payload #>> '{workflow_provenance,source_application_id}' AS source_application_id,
+            updated_at
+       FROM requests
+      WHERE workspace_id=$1 AND kind='agreement'
+        AND payload #>> '{workflow_provenance,handoff_key}' = 'contractor-agreements'
+        AND status IN ('pending','drafted','declined')
+      ORDER BY updated_at DESC
+      LIMIT 25`,
+    [workspaceId],
+  );
+
+  const byApplication = new Map<string, MotionRequestRow>();
+  for (const row of agreements.rows) {
+    if (row.source_application_id && !byApplication.has(row.source_application_id)) {
+      byApplication.set(row.source_application_id, row);
+    }
+  }
+
+  const items: HandoffInMotionItem[] = [];
+  const seenAgreements = new Set<string>();
+
+  for (const application of applications.rows) {
+    const agreement = byApplication.get(application.id) ?? null;
+    if (agreement) seenAgreements.add(agreement.id);
+    if (application.status === 'admitted' && !agreement) continue;
+    if (application.status === 'declined') continue;
+    if (agreement && agreement.status !== 'pending') continue;
+
+    const stage = contractorStage(application.status, agreement?.status ?? null);
+    if (stage === 'acknowledged') continue;
+    const openRequestId = stage === 'terms_recorded'
+      ? application.id
+      : agreement && (stage === 'decision' || stage === 'invoice')
+        ? agreement.id
+        : agreement?.id ?? application.id;
+
+    items.push({
+      id: agreement?.id ?? application.id,
+      kind: agreement ? 'agreement' : 'application',
+      title: application.label.slice(0, 240) || 'Partner',
+      subtitle: stage === 'terms_recorded' ? 'Admit'
+        : stage === 'decision' ? 'Finance'
+          : agreement?.status === 'declined' ? 'Declined'
+            : 'Done',
+      stage,
+      stages: stageStates(stage),
+      handoff: null,
+      engagement: null,
+      open_request_id: openRequestId,
+    });
+    if (items.length >= 25) break;
+  }
+
+  if (items.length < 25) {
+    for (const agreement of agreements.rows) {
+      if (seenAgreements.has(agreement.id)) continue;
+      if (agreement.status !== 'pending') continue;
+      const stage = 'decision' as const;
+      items.push({
+        id: agreement.id,
+        kind: 'agreement',
+        title: agreement.label.slice(0, 240) || 'Agreement',
+        subtitle: 'Finance',
+        stage,
+        stages: stageStates(stage),
+        handoff: null,
+        engagement: null,
+        open_request_id: agreement.id,
+      });
+      if (items.length >= 25) break;
+    }
+  }
+
+  return items;
 }
 
 function laneNotes(slug: 'partnerships' | 'finance', ready: boolean, scheduleEnabled: boolean, skillVersion: string | null): string[] {
   if (slug === 'partnerships') {
-    return [
-      'admits applicants, prepares contractor agreements',
-      'screens partners and drafts outreach',
-      scheduleEnabled ? 'Partner program screening · schedule on' : 'Partner program screening · schedule off',
-      skillVersion ? `${skillVersion} attested` : 'skill version unavailable',
-    ];
+    return ['Admit', 'Iris', scheduleEnabled ? 'On' : 'Off', skillVersion ?? '—'];
   }
-  return [
-    'reviews contractor agreements',
-    'prepares evidence for the human decision',
-    scheduleEnabled ? 'Partner invoice review · schedule on' : 'Partner invoice review · schedule off',
-    skillVersion ? `${skillVersion} attested` : 'skill version unavailable',
-  ];
+  return ['Review', 'Ledger', scheduleEnabled ? 'On' : 'Off', skillVersion ?? '—'];
 }
 
 export async function loadHandoffsList(
@@ -252,10 +315,7 @@ export async function loadHandoffsList(
       ORDER BY h.key`,
     [workspaceId],
   );
-  const inMotion = buildInMotion(view.viewer_role, view.handoffs, view.engagements.map((row) => ({
-    ...row,
-    authorization_status: row.authorization_status,
-  })));
+  const inMotion = await buildInMotion(tx, workspaceId, view.viewer_role);
   const waiting = inMotion.filter((item) => waitingOnViewer(view.viewer_role, item)).length;
   return handoffListSchema.parse(rows.rows.map((row) => ({
     id: row.id,
@@ -281,10 +341,7 @@ export async function loadHandoffDetail(
     [workspaceId, handoffId],
   )).rows[0];
   if (!row) throw new PartnerWorkflowError('handoff_not_found', 'That handoff is not available in this workspace.');
-  const inMotion = buildInMotion(view.viewer_role, view.handoffs, view.engagements.map((item) => ({
-    ...item,
-    authorization_status: item.authorization_status,
-  })));
+  const inMotion = await buildInMotion(tx, workspaceId, view.viewer_role);
   const waiting = inMotion.filter((item) => waitingOnViewer(view.viewer_role, item)).length;
   const expectedDefinitions = {
     partnerships: PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
@@ -336,5 +393,3 @@ export async function loadHandoffDetail(
     counts: { in_motion: inMotion.length, waiting_on_viewer: waiting },
   });
 }
-
-export { resultKind };

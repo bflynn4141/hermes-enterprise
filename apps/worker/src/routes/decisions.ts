@@ -73,8 +73,11 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
            FROM requests r
            JOIN request_audiences ra ON ra.workspace_id=r.workspace_id AND ra.request_id=r.id
            JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=ra.user_id
-          WHERE r.workspace_id=$1 AND r.id=$2 AND r.kind='invoice'
-            AND r.payload ? 'workflow_provenance'
+          WHERE r.workspace_id=$1 AND r.id=$2
+            AND (
+              (r.kind='invoice' AND r.payload ? 'workflow_provenance')
+              OR (r.kind='agreement' AND r.payload #>> '{workflow_provenance,handoff_key}' = 'contractor-agreements')
+            )
             AND ra.user_id=$3 AND 'finance'=ANY(m.reviewer_roles) AND m.status='active'`,
         [work.workspaceId, requestId, work.userId],
       );

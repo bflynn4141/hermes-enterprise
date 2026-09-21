@@ -115,6 +115,21 @@ export const agreementPayloadSchema = z
     currency: currency.optional(),
     total_minor: z.number().int().min(0).max(1_000_000_000).optional(),
     sections: z.array(agreementSectionSchema).min(1).max(100),
+    /** Set when Partnerships admit auto-prepares a Finance contractor agreement. */
+    workflow_provenance: z
+      .object({
+        handoff_key: z.literal('contractor-agreements'),
+        source_application_id: z.uuid(),
+        admitted_partner: z
+          .object({
+            name: z.string().min(1).max(200),
+            email: z.email().max(320).optional(),
+            candidate_id: z.uuid().optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

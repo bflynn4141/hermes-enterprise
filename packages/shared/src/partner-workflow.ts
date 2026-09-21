@@ -524,7 +524,7 @@ export const handoffInMotionStageSchema = z.enum([
 
 export const handoffInMotionItemSchema = z.object({
   id: uuidSchema,
-  kind: z.enum(['engagement', 'invoice']),
+  kind: z.enum(['engagement', 'invoice', 'application', 'agreement']),
   title: z.string().min(1).max(240),
   subtitle: z.string().min(1).max(400),
   stage: handoffInMotionStageSchema,
@@ -535,6 +535,8 @@ export const handoffInMotionItemSchema = z.object({
   }).strict()).length(5),
   handoff: partnerWorkflowHandoffV2Schema.nullable(),
   engagement: partnerEngagementSummarySchema.nullable(),
+  /** Inbox request the viewer should open for the current stage. */
+  open_request_id: uuidSchema.nullable().default(null),
 }).strict();
 export type HandoffInMotionItem = z.infer<typeof handoffInMotionItemSchema>;
 

@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { recordDecision } from '../../src/domain/decisions.js';
 import { loadHandoffDetail, loadHandoffsList, readHandoffAdmission } from '../../src/handoffs/service.js';
 import { configurePartnerWorkflow } from '../../src/partner-workflow/service.js';
 import { loadPartnerWorkflowViewV2 } from '../../src/partner-workflow/v2.js';
+import type { TenantWork } from '../../src/routes/tenant.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
+import { applicationPayload, seedRequest } from './m4-fixtures.js';
 
 async function configuredFixture() {
   const fx = await seedWorkspace();
@@ -59,6 +62,78 @@ describe('handoffs table', () => {
         expect(detail.lanes).toHaveLength(2);
         expect(detail.steps[0]?.label).toBe('Screens and admits the applicant');
         expect(detail.crossing[1]?.key).toBe('contractor_agreement');
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+  });
+
+  it('admits an applicant into a Finance contractor agreement and shows the pair in motion', async () => {
+    const fx = await configuredFixture();
+    const applicationId = await seedRequest(fx, 'application', {
+      label: 'Nova Partner',
+      payload: applicationPayload('Nova Partner', 'Contractor'),
+    });
+
+    await withClient('app', async (client) => {
+      await client.query('BEGIN');
+      try {
+        await setTenant(client, fx.workspaceId, fx.adminId);
+        await client.query(
+          `UPDATE handoffs SET admission_state='enabled', enabled_by=$2, enabled_at=now()
+            WHERE workspace_id=$1 AND key='contractor-agreements'`,
+          [fx.workspaceId, fx.adminId],
+        );
+        await client.query(
+          `UPDATE members SET reviewer_roles = ARRAY['finance']::text[]
+            WHERE workspace_id=$1 AND user_id=$2`,
+          [fx.workspaceId, fx.memberId],
+        );
+
+        const work = {
+          tx: client,
+          workspaceId: fx.workspaceId,
+          userId: fx.adminId,
+          role: 'admin' as const,
+          session: { sid: randomUUID(), authenticated_at: new Date().toISOString() },
+          jobs: [] as string[],
+          requireAdmin: () => undefined,
+        } as unknown as TenantWork;
+
+        const outcome = await recordDecision(work, applicationId, 'approve', null);
+        expect(outcome.resulting_status).toBe('admitted');
+
+        const agreement = await client.query<{
+          id: string;
+          status: string;
+          payload: { workflow_provenance?: { source_application_id?: string; handoff_key?: string } };
+        }>(
+          `SELECT id, status, payload FROM requests
+            WHERE workspace_id=$1 AND kind='agreement'
+              AND subject_key=$2`,
+          [fx.workspaceId, `partner-contractor-agreement:${applicationId}`],
+        );
+        expect(agreement.rows).toHaveLength(1);
+        expect(agreement.rows[0]?.status).toBe('pending');
+        expect(agreement.rows[0]?.payload.workflow_provenance?.handoff_key).toBe('contractor-agreements');
+        expect(agreement.rows[0]?.payload.workflow_provenance?.source_application_id).toBe(applicationId);
+
+        const audience = await client.query<{ user_id: string }>(
+          `SELECT user_id FROM request_audiences WHERE request_id=$1`,
+          [agreement.rows[0]!.id],
+        );
+        expect(audience.rows.map((row) => row.user_id)).toContain(fx.memberId);
+
+        const view = await loadPartnerWorkflowViewV2(client, fx.workspaceId, fx.memberId);
+        const list = await loadHandoffsList(client, fx.workspaceId, fx.memberId, view);
+        const detail = await loadHandoffDetail(client, fx.workspaceId, list[0]!.id, view);
+        expect(detail.in_motion).toHaveLength(1);
+        expect(detail.in_motion[0]?.title).toBe('Nova Partner');
+        expect(detail.in_motion[0]?.subtitle).toBe('Finance');
+        expect(detail.in_motion[0]?.open_request_id).toBe(agreement.rows[0]!.id);
+
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');

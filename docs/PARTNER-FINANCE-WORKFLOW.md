@@ -1,11 +1,11 @@
 # Partnerships + Finance handoff
 
 This **Handoff** (`contractor-agreements`) gives two employees one agent each.
-Partnerships admits applicants and prepares the independent contractor
-agreement. Finance reviews that agreement draft, followed by a named Finance
-employee's decision. Models explain evidence; they do not create authority,
-choose a recipient, approve, pay, sign or send. Legacy invoice-intake APIs remain
-for compatibility but are not the Handoffs surface.
+Partnerships admits applicants; when the handoff is enabled, admit automatically
+prepares one pending contractor agreement for Finance. Finance reviews that
+draft. Models explain evidence; they do not create authority, choose a
+recipient, approve, pay, sign or send. Legacy invoice-intake APIs remain for
+compatibility but are not the Handoffs surface.
 
 ## Setup and admission
 
