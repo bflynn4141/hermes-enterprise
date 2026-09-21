@@ -1,0 +1,65 @@
+name: Link a staging workspace to its WorkOS organization
+
+# A manual, logged, one-workspace data fix. The owner connection string lives
+# only in the staging environment, so this is the one place the link can be
+# written from. Dry run unless `apply` is ticked; the script refuses to
+# overwrite a different existing organization either way.
+on:
+  workflow_dispatch:
+    inputs:
+      workspace_id:
+        description: Workspace uuid
+        required: true
+        type: string
+      organization_id:
+        description: WorkOS organization id (org_…)
+        required: true
+        type: string
+      workspace_name:
+        description: New workspace name (leave empty to keep the current name)
+        required: false
+        type: string
+        default: ''
+      apply:
+        description: Write the change (unticked = dry run)
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  link:
+    name: ${{ inputs.apply && 'apply' || 'dry run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Link the workspace
+        run: pnpm --filter @hermes/worker exec node scripts/workspace-link.mjs
+        env:
+          DATABASE_URL_OWNER: ${{ secrets.MIGRATIONS_DATABASE_URL }}
+          LINK_WORKSPACE_ID: ${{ inputs.workspace_id }}
+          LINK_ORGANIZATION_ID: ${{ inputs.organization_id }}
+          LINK_WORKSPACE_NAME: ${{ inputs.workspace_name }}
+          LINK_APPLY: ${{ inputs.apply && 'true' || 'false' }}
