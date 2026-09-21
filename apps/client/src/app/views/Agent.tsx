@@ -316,7 +316,7 @@ export function AgentContext({ field }: { field: string | null }) {
           <>
             <Panel icon="context" title="Paused reply" subtitle={blocked ? 'Blocked · Destination missing' : `Ready for review · ${destination?.value}`} />
             {blocked && admin ? <DestinationForm /> : <Panel icon="context" title={destination?.value ?? EMPTY.context} subtitle={destination?.scope === 'future' ? 'Future replies · Saved' : 'For this reply · Saved'} right={<Button onClick={() => nav(CTX)}>Done</Button>} />}
-            {blocked && !admin && <p className="meta">{EMPTY.adminOnly}</p>}
+            {blocked && !admin && <p className="meta">{EMPTY.adminRequired}</p>}
           </>
         ) : (
           <>
@@ -476,7 +476,7 @@ export function AgentSkills() {
                     .catch(() => setError('Could not adopt that skill. Try again.'));
                 }}
               >
-                {admin ? `Add to ${agent}` : EMPTY.adminOnly}
+                {admin ? `Add to ${agent}` : EMPTY.adminRequired}
               </Button>
               <Ack show={ack === skill.id} style={{ right: 0, top: -40 }}>
                 Added

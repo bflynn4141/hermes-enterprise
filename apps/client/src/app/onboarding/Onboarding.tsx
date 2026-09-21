@@ -84,7 +84,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
         const reason = (caught as { reason?: string }).reason;
         setError(
           reason === 'email_unverified'
-            ? 'Verify your email address before creating a workspace. An invitation sent from an unverified address is a phishing primitive, so the server refuses it.'
+            ? 'Verify your email address before creating a workspace. Open the verification link we sent you, then try again.'
               : reason === 'rate_limited'
                 ? 'Three workspaces a day, per person. Try again tomorrow.'
               : reason === 'bad_name'
@@ -305,7 +305,7 @@ function JoinWorkspace({ token, rest, auth }: { token: string | null; rest: Retu
         ) : (
           <>
             <p className="meta" style={{ textAlign: 'center' }}>
-              Accepting this invitation adds you to the workspace with the role it was sent with. A Member works with agents and reads every request; only an Admin records a decision.
+              Accepting this invitation adds you to the workspace with the role it was sent with. You'll get your own agent. It proposes; you and the reviewers named on each request decide.
             </p>
             {me && <p className="meta">Signed in as {me.email}. The invitation has to have been sent to this address.</p>}
             {error && (

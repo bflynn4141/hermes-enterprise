@@ -130,7 +130,7 @@ test('Partnerships proposes verified terms and the named Finance principal can a
   await expect(pane.getByText('Sample data', { exact: true })).toBeVisible();
   await expect(pane.getByText('For demonstration only. Approval does not confirm an external agreement.', { exact: true })).toBeVisible();
   await expect(pane.getByText('4 proposed changes', { exact: true })).toBeVisible();
-  await pane.locator('details.approval-disclosure').first().locator('summary').click();
+  await pane.locator('details.approval-disclosure').first().locator('summary').first().click();
   await expect(pane.locator('p').getByText('Authorize sample Robin Studio terms for an invoice-checking demonstration.', { exact: true })).toBeVisible();
   await pane.getByRole('button', { name: 'Approve change' }).click();
   await expect(pane.getByText('approved · authorization v1', { exact: true })).toBeVisible();
@@ -165,8 +165,8 @@ test('an admin sees actionable native profile setup without a fake role switch',
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   const pane = app(page);
   await expect(pane.getByText('Setup needed', { exact: true })).toHaveCount(2);
-  await expect(pane.getByText('Upgrade the native profile to Partnerships1.8', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Upgrade the native profile to Finance1.0.1', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Upgrade the native profile to Partnerships 1.8', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Upgrade the native profile to Finance 1.0.1', { exact: true })).toBeVisible();
   await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Verify and enable workflow' })).toBeDisabled();
   await pane.getByRole('button', { name: 'Configure roles' }).click();

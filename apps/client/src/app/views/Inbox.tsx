@@ -357,7 +357,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <EmptyState
                 icon={activeTab === 'resolved' ? 'trace' : 'admission'}
                 title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                detail={filtered ? 'Try a different search, reviewer, origin, visibility, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
+                detail={filtered ? 'Try a different search, reviewer, origin, visibility, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : state.counts.decisions ? `${state.counts.decisions} decisions are in History.` : undefined}
                 action={filtered
                   ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active' })}>Clear filters</Button>
                   : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
@@ -516,8 +516,8 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
     return (
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{financeScoped ? 'Finance reviewer required' : EMPTY.adminOnly}</span>
-          <span className="f-sub">You can read the request and its evidence. {financeScoped ? 'The assigned Finance reviewer' : 'An Admin'} records the decision.</span>
+          <span className="f-title">{financeScoped ? 'The assigned Finance reviewer records this decision' : EMPTY.adminOnly}</span>
+          <span className="f-sub">You can read the request and its evidence.</span>
         </div>
       </div>
     );
@@ -770,7 +770,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
       </Dialog>
       <Dialog open={!!source} title={source?.name ?? ''} onClose={() => setSource(null)} actions={<Button onClick={() => setSource(null)}>Close</Button>}>
         <p>{source?.note}</p>
-        <p className="meta">{isDemo ? 'Illustrative source for this local demo.' : 'Source cited by Iris. Open-link verification is not available in this client yet.'}</p>
+        <p className="meta">{isDemo ? 'Illustrative source for this local demo.' : 'Source cited by Iris. Check it against the original before you decide.'}</p>
       </Dialog>
     </>
   );

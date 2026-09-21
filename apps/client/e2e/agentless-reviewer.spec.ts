@@ -35,7 +35,7 @@ test('an agentless reviewer can use Inbox and explicitly read old session histor
   await app.getByRole('tab', { name: 'Needs review' }).click();
 
   await app.getByRole('listitem').filter({ hasText: 'Leah Martinez' }).click();
-  await expect(app.getByText('You can read the request and its evidence. An Admin records the decision.')).toBeVisible();
+  await expect(app.getByText('A workspace Admin records this decision')).toBeVisible();
 
   const beforeHistory = await requests(page);
   expect(beforeHistory.some((request) => request.path.includes('/agents/'))).toBe(false);
