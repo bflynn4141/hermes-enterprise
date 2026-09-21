@@ -1744,8 +1744,7 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .partner-handoff-card > header > div { flex: 1 1 0; min-width: 0; }
 .partner-handoff-card h3 { margin-top: 2px; font: 500 18px/22px var(--font-display); }
 .partner-card-kicker { color: var(--muted); font-size: 10.4px; line-height: 14px; }
-.list-row .partner-progress { margin-top: 10px; }
-.partner-progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
+.partner-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
 .partner-progress li { position: relative; display: flex; flex-direction: column; gap: 7px; min-width: 0; color: var(--muted); font-size: 10.4px; line-height: 14px; }
 .partner-progress li::before { content: ''; position: absolute; top: 5px; left: 8px; right: -8px; height: 1px; background: var(--line-strong); }
 .partner-progress li:last-child::before { display: none; }
@@ -1804,18 +1803,28 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 }
 [data-reduced-motion="true"] .partner-workflow-form { scroll-behavior: auto; }
 
-.handoffs-page { display: flex; flex-direction: column; gap: 18px; padding: 0; container-type: inline-size; }
-.handoffs-header { display: flex; align-items: flex-start; gap: 20px; }
-.handoffs-header > div:first-child { flex: 1 1 0; min-width: 0; }
-.handoffs-header h2 { font: 500 20.8px/24px var(--font-display); }
-.handoffs-header p { max-width: 760px; margin-top: 6px; color: var(--muted); }
-.handoffs-header-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.handoffs-status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+/* Handoffs: one chain row (who hands to whom) and one list-row per partner in motion.
+   The track is five unlabeled dots; the longer seam after the first dot is where
+   work crosses from Partnerships to Finance. Labels live in each dot's title. */
+.handoff-chain { flex-wrap: wrap; }
+.handoff-chain .row-main { flex: 1 1 220px; }
+.handoff-chain h2 { font: inherit; }
+.handoff-route { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.handoff-route svg { color: var(--muted); }
+.handoff-track { display: flex; align-items: center; margin: 0; padding: 0; list-style: none; flex-shrink: 0; }
+.handoff-track li { display: flex; align-items: center; }
+.handoff-track li:not(:last-child)::after { content: ''; width: 10px; height: 1px; background: var(--line-strong); }
+.handoff-track li:first-child::after { width: 18px; }
+.handoff-track li[data-state="done"]:not(:last-child)::after { background: #73CBA2; }
+.handoff-track i { display: block; width: 9px; height: 9px; border: 2px solid var(--line-strong); border-radius: 50%; background: var(--context); }
+.handoff-track li[data-state="done"] i { border-color: #73CBA2; background: #73CBA2; }
+.handoff-track li[data-state="current"] i { border-color: #9B9AE0; box-shadow: 0 0 0 3px rgba(155,154,224,.15); }
 .agent-handoff-chip { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(13, 9, 52, .44); color: var(--muted); font-size: 13px; line-height: 18px; }
 .agent-handoff-chip button { padding: 0; border: 0; background: transparent; color: var(--body); font: inherit; text-decoration: underline; cursor: pointer; }
-@container (max-width: 900px) {
-  .partner-role-grid { grid-template-columns: 1fr; }
-  .partner-progress { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 600px) {
+  .handoff-row { flex-wrap: wrap; }
+  .handoff-row .row-main { flex-basis: 100%; }
+  .handoff-row .handoff-track { margin-left: 48px; }
 }
 
 /* Recovery uses immediate server states. Countdown text has no motion or live
