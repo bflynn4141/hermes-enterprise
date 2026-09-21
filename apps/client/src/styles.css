@@ -1744,6 +1744,7 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .partner-handoff-card > header > div { flex: 1 1 0; min-width: 0; }
 .partner-handoff-card h3 { margin-top: 2px; font: 500 18px/22px var(--font-display); }
 .partner-card-kicker { color: var(--muted); font-size: 10.4px; line-height: 14px; }
+.list-row .partner-progress { margin-top: 10px; }
 .partner-progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
 .partner-progress li { position: relative; display: flex; flex-direction: column; gap: 7px; min-width: 0; color: var(--muted); font-size: 10.4px; line-height: 14px; }
 .partner-progress li::before { content: ''; position: absolute; top: 5px; left: 8px; right: -8px; height: 1px; background: var(--line-strong); }

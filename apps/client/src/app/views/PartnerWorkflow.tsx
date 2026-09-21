@@ -99,30 +99,25 @@ function InMotionRow({ item }: { item: HandoffInMotionItem }) {
     adapter.ensure('request', item.open_request_id, true);
     nav(REQ(item.open_request_id));
   };
+  const actionLabel = item.stage === 'terms_recorded' ? 'Admit' : 'Review';
   return (
-    <article className="partner-handoff-card">
-      <header>
-        <div>
-          <span className="partner-card-kicker">{item.subtitle}</span>
-          <h3>{item.title}</h3>
-        </div>
-        <span className={`pill ${item.stage === 'decision' || item.stage === 'terms_recorded' ? 'pill-warn' : 'pill-ok'}`}>
-          {item.subtitle}
-        </span>
-      </header>
-      <ol className="partner-progress" aria-label={item.title}>
-        {item.stages.map((stage) => (
-          <li key={stage.key} data-state={progressState(stage.state)} aria-current={stage.state === 'current' ? 'step' : undefined}>
-            <i aria-hidden="true" /><span>{stage.label}</span>
-          </li>
-        ))}
-      </ol>
-      <footer>
-        {item.open_request_id && (
-          <Button small primary onClick={open}>{item.stage === 'terms_recorded' ? 'Admit' : 'Review'}</Button>
-        )}
-      </footer>
-    </article>
+    <div className="list-row tall">
+      <Glass name={item.stage === 'terms_recorded' ? 'people' : 'invoice'} size={32} className="row-icon" />
+      <div className="row-main">
+        <span className="t">{item.title}</span>
+        <span className="s">{item.subtitle}</span>
+        <ol className="partner-progress" aria-label={`${item.title} progress`}>
+          {item.stages.map((stage) => (
+            <li key={stage.key} data-state={progressState(stage.state)} aria-current={stage.state === 'current' ? 'step' : undefined}>
+              <i aria-hidden="true" /><span>{stage.label}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+      {item.open_request_id && (
+        <Button small primary onClick={open}>{actionLabel}</Button>
+      )}
+    </div>
   );
 }
 
@@ -260,31 +255,31 @@ export function PartnerWorkflow() {
       {detail.handoff.viewer_role === 'unrelated' ? (
         <EmptyState icon="context" title="No access" detail="This handoff is for Partnerships and Finance only." />
       ) : (
-        <>
-          <div className="partner-role-grid">
-            {detail.lanes.map((lane) => {
-              const ready = lane.readiness.native_status === 'ready' && lane.readiness.assignment_state === 'active';
-              return (
-                <article key={lane.team.slug} className="partner-role-card" data-ready={ready}>
-                  <div className="partner-role-card-head">
-                    <Glass name={lane.team.slug === 'finance' ? 'invoice' : 'people'} size={28} />
-                    <div className="col grow">
-                      <h3>{lane.team.name}</h3>
-                      <span className="meta">{lane.person && lane.agent ? `${lane.person} · ${lane.agent}` : 'Unassigned'}</span>
-                    </div>
-                    <span className={`pill ${ready ? 'pill-ok' : 'pill-warn'}`}>{ready ? 'Ready' : 'Not ready'}</span>
-                  </div>
-                  {lane.skill && <p className="meta">{lane.skill}</p>}
-                </article>
-              );
-            })}
-          </div>
+        <div className="col">
+          {detail.lanes.map((lane) => {
+            const ready = lane.readiness.native_status === 'ready' && lane.readiness.assignment_state === 'active';
+            return (
+              <div key={lane.team.slug} className="list-row">
+                <Glass name={lane.team.slug === 'finance' ? 'invoice' : 'people'} size={32} className="row-icon" />
+                <div className="row-main">
+                  <span className="t">{lane.team.name}</span>
+                  <span className="s">
+                    {lane.person && lane.agent ? `${lane.person} · ${lane.agent}` : 'Unassigned'}
+                    {lane.skill ? ` · ${lane.skill}` : ''}
+                  </span>
+                </div>
+                <span className={`pill ${ready ? 'pill-ok' : 'pill-warn'}`}>{ready ? 'Ready' : 'Not ready'}</span>
+              </div>
+            );
+          })}
 
           {detail.crossing.length > 0 && (
-            <div className="partner-connector" aria-label="What crosses">
-              <span>Crosses</span>
-              <span>{detail.crossing.map((item) => item.label).join(' → ')}</span>
-            </div>
+            <p className="partner-workflow-route" aria-label="What crosses">
+              <strong>Crosses</strong>
+              {detail.crossing.map((item, index) => (
+                <span key={item.key}>{index > 0 ? ' → ' : ' '}{item.label}</span>
+              ))}
+            </p>
           )}
 
           {admissionError && <p className="partner-error" role="alert">{admissionError}</p>}
@@ -306,7 +301,7 @@ export function PartnerWorkflow() {
               ? <EmptyState icon="people" title="Nothing in motion" detail="Admitted partners appear here for Finance review." />
               : detail.in_motion.map((item) => <InMotionRow key={item.id} item={item} />)}
           </div>
-        </>
+        </div>
       )}
     </section>
   );

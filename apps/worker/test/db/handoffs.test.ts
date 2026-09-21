@@ -131,7 +131,7 @@ describe('handoffs table', () => {
         const detail = await loadHandoffDetail(client, fx.workspaceId, list[0]!.id, view);
         expect(detail.in_motion).toHaveLength(1);
         expect(detail.in_motion[0]?.title).toBe('Nova Partner');
-        expect(detail.in_motion[0]?.subtitle).toBe('Finance');
+        expect(detail.in_motion[0]?.subtitle).toBe('Agreement ready for review');
         expect(detail.in_motion[0]?.open_request_id).toBe(agreement.rows[0]!.id);
 
         await client.query('COMMIT');

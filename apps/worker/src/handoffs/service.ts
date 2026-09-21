@@ -255,8 +255,8 @@ async function buildInMotion(
       id: agreement?.id ?? application.id,
       kind: agreement ? 'agreement' : 'application',
       title: application.label.slice(0, 240) || 'Partner',
-      subtitle: stage === 'terms_recorded' ? 'Admit'
-        : stage === 'decision' ? 'Finance'
+      subtitle: stage === 'terms_recorded' ? 'Awaiting admission'
+        : stage === 'decision' ? 'Agreement ready for review'
           : agreement?.status === 'declined' ? 'Declined'
             : 'Done',
       stage,
@@ -277,7 +277,7 @@ async function buildInMotion(
         id: agreement.id,
         kind: 'agreement',
         title: agreement.label.slice(0, 240) || 'Agreement',
-        subtitle: 'Finance',
+        subtitle: 'Agreement ready for review',
         stage,
         stages: stageStates(stage),
         handoff: null,
