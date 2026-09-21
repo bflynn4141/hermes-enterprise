@@ -82,6 +82,14 @@ export const rateCounters = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.action, t.windowStart, t.workspaceId] })],
 );
 
+export const demoAccessRequests = pgTable('demo_access_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  ipHash: text('ip_hash').notNull(),
+  outcome: text('outcome').notNull(),
+  createdAt: now('created_at'),
+});
+
 export const catalog = pgTable('catalog', {
   modelId: text('model_id').primaryKey(),
   provider: text('provider').notNull(),
@@ -2252,6 +2260,7 @@ export const ALL_TABLES = {
   auth_sessions: authSessions,
   workos_events_cursor: workosEventsCursor,
   rate_counters: rateCounters,
+  demo_access_requests: demoAccessRequests,
   catalog,
   workspaces,
   members,

@@ -32,6 +32,7 @@ import { RouteError } from './routes/tenant.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
 import { acceptInvitation, previewInvitation } from './routes/invitations.js';
+import { requestDemoAccess } from './routes/demo-access.js';
 import { getTrace, listTraces } from './routes/traces.js';
 import {
   acceptInstruction,
@@ -323,6 +324,11 @@ app.post('/invitations/:token/accept', acceptInvitation);
 // What the join page may say before accepting: the workspace's name and the
 // role, scoped by the same token and refused for the same reasons.
 app.get('/invitations/:token', previewInvitation);
+// The public request-access form. No session: a passcode and a persistent
+// per-address budget stand in for one, and the invitation it creates is the
+// Admin's own path (`inviteInTransaction`), so `/demo` cannot admit anyone the
+// Members screen could not. See src/routes/demo-access.ts.
+app.post('/demo/request-access', requestDemoAccess);
 // Slack calls these two routes without a Hermes browser session. The callback
 // is bound to a short-lived, single-use signed state row; Events API requests
 // are verified against the raw request bytes before JSON parsing.

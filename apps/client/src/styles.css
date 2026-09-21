@@ -1373,6 +1373,19 @@ html[data-reduce-motion="true"] .msg-iris[data-fresh] .chat-card.static { animat
 .portal-btn:hover { background: var(--action-hover); }
 .portal-btn.outline { background: transparent; border: 1px solid var(--line-strong); font-size: 11.2px; font-weight: 400; padding: 10px 16px; }
 .portal-back { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; font-size: 11.2px; color: var(--body); }
+.demo-access-body { width: min(640px, calc(100% - 64px)); padding-top: 48px; gap: 28px; }
+.demo-access-lede { margin: 0; max-width: 54ch; color: var(--muted); font-size: 14.4px; line-height: 1.55; }
+.demo-access-section-title { margin: 0; font: 500 18px/24px var(--font-display); }
+.demo-access-shares, .demo-access-request { display: flex; flex-direction: column; gap: 12px; }
+.demo-access-request > .meta, .demo-access-result .meta { font-size: 13.6px; line-height: 20px; max-width: 54ch; }
+.demo-access-share-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.demo-access-share-list li { display: flex; flex-direction: column; gap: 4px; }
+.demo-access-share-list a { color: var(--body); font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.demo-access-form { display: flex; flex-direction: column; gap: 12px; max-width: 420px; }
+.demo-access-form .portal-btn { align-self: flex-start; }
+.demo-access-error { color: var(--red, #f07d86); }
+.demo-access-result { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.demo-access-result .portal-btn { align-self: flex-start; }
 .own-list { display: flex; flex-direction: column; width: 432px; flex-shrink: 0; }
 .own-row { display: flex; align-items: center; gap: 12px; height: 64px; padding: 12px 16px; border-bottom: 1px solid var(--line-strong); width: 100%; text-align: left; font-size: 14.4px; font-weight: 500; }
 .own-row .radio-ring { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line-strong); margin-left: auto; display: grid; place-items: center; flex-shrink: 0; }

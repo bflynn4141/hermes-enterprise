@@ -169,6 +169,9 @@ describe('wrangler.jsonc', () => {
       expect(assets.not_found_handling).toBe('single-page-application');
       expect(assets.run_worker_first).toContain('/w/*');
       expect(assets.run_worker_first).toContain('/health');
+      // The request-access form posts to `/demo/request-access`; without this
+      // the assets binding answers the POST with 405 and the page cannot work.
+      expect(assets.run_worker_first).toContain('/demo/*');
     }
   });
 
@@ -184,6 +187,7 @@ describe('wrangler.jsonc', () => {
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',
+      'DEMO_ACCESS_PASSCODE',
       'localConnectionString',
     ]) {
       expect(text, `${secret} appears in wrangler.jsonc`).not.toContain(secret);
