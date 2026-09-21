@@ -9,7 +9,7 @@ import type { Env } from '../../src/env.js';
 
 const env = (overrides: Partial<Env> = {}): Env =>
   ({
-    DEMO_ACCESS_PASSCODE: 'secret-pass', // gitleaks:allow (test fixture, not a credential)
+    DEMO_ACCESS_PASSCODE: 'secret-pass',
     DEMO_ACCESS_WORKSPACE_ID: '8cb93c4c-6af3-41cd-bae5-94f849b4976b',
     DEMO_ACCESS_ALLOWED_DOMAINS: 'nousresearch.com',
     ...overrides,
