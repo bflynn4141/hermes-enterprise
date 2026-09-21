@@ -62,7 +62,7 @@ describe('the Worker in workerd', () => {
     // fallback configuration is checked by the wrangler dry run in CI.
     const response = await env.ASSETS.fetch('https://hermes.test/index.html');
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain('Hermes Enterprise');
+    expect(await response.text()).toContain('Hermes Teams Demo');
   });
 
   it('answers an unknown API path with JSON, not the shell', async () => {
