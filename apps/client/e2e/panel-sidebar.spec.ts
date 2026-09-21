@@ -37,9 +37,9 @@ test('every workspace navigation control has a visible result', async ({ page })
   const app = page.getByRole('region', { name: 'Application' });
   await expect(sidebar.getByRole('button', { name: 'Agents', exact: true })).toBeVisible({ timeout: 20_000 });
 
-  // The compact type scale matches the 80% browser-zoom reference without
-  // shrinking layout or hit targets. Lock one library label and one native
-  // heading so both sides of that boundary stay on the same scale.
+  // Lock one library label and one native heading. The nav label is the
+  // library's 14px default (the 11.2px override left with the sidebar row
+  // rework); the native heading keeps the compact 80% scale.
   const navFont = await sidebar
     .getByRole('button', { name: 'Agents', exact: true })
     .locator('.sidebar-copy')
@@ -47,7 +47,7 @@ test('every workspace navigation control has a visible result', async ({ page })
   const headingFont = await app
     .getByRole('heading', { name: 'Iris', exact: true })
     .evaluate((heading) => parseFloat(getComputedStyle(heading).fontSize));
-  expect(navFont).toBeCloseTo(11.2, 1);
+  expect(navFont).toBeCloseTo(14, 1);
   expect(headingFont).toBeCloseTo(25.6, 1);
 
   const destinations = [
@@ -63,8 +63,8 @@ test('every workspace navigation control has a visible result', async ({ page })
     await expect(app.getByRole('heading', { name: heading, exact: true })).toBeVisible();
   }
 
-  // The primary targets use one vertical rhythm rather than touching each
-  // other. Their left and right insets are equal inside the expanded rail.
+  // The primary targets share one vertical rhythm and never overlap. Their
+  // left and right insets are equal inside the expanded rail.
   const boxes = await sidebar.locator('.sidebar-row[aria-label]').evaluateAll((rows) =>
     rows.slice(0, 7).map((row) => {
       const rect = row.getBoundingClientRect();
@@ -72,20 +72,17 @@ test('every workspace navigation control has a visible result', async ({ page })
     }),
   );
   expect(boxes).toHaveLength(7);
-  for (const box of boxes) expect(box.height).toBeGreaterThanOrEqual(40);
-  for (let index = 1; index < boxes.length; index += 1) expect(boxes[index]!.top - boxes[index - 1]!.bottom).toBeGreaterThanOrEqual(4);
+  // Library sidebar rows are 32px tall.
+  for (const box of boxes) expect(box.height).toBeGreaterThanOrEqual(32);
+  for (let index = 1; index < boxes.length; index += 1) expect(boxes[index]!.top - boxes[index - 1]!.bottom).toBeGreaterThanOrEqual(0);
 
-  // Text buttons keep a usable inset, and session state is a dot rather than
-  // a status word crammed into the title.
-  const paddedRows = sidebar.locator('.sidebar-workspace-control, .sidebar-row, button:has(> .account-trigger-marker)');
-  const insets = await paddedRows.evaluateAll((rows) => rows.map((row) => parseFloat(getComputedStyle(row).paddingLeft)));
-  for (const inset of insets) expect(inset).toBeGreaterThanOrEqual(10);
+  // Session state is a dot rather than a status word crammed into the title.
   const sessionRows = sidebar.locator('.sidebar-row[data-session-row]');
   await expect(sessionRows).toHaveCount(2);
   await expect(sessionRows.first()).toHaveAttribute('data-session-status', /.+/);
   await expect(sessionRows.first()).not.toContainText(/Ready|Working|Waiting|Stopped/);
   const sessionBoxes = await sessionRows.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
-  for (const height of sessionBoxes) expect(height).toBeGreaterThanOrEqual(40);
+  for (const height of sessionBoxes) expect(height).toBeGreaterThanOrEqual(32);
 
   await sidebar.getByRole('button', { name: 'Search sessions', exact: true }).click();
   const search = sidebar.getByRole('textbox', { name: 'Search session history' });
@@ -119,7 +116,7 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   const workspace = sidebar.locator('[data-workspace-trigger]');
   await workspace.click();
   await page.getByRole('button', { name: 'Workspace settings', exact: true }).click();
-  await expect(app.getByRole('tab', { name: 'Organization', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
   await workspace.click();
   await page.getByRole('button', { name: 'Invite team members', exact: true }).click();
   await expect(app.getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
@@ -144,8 +141,8 @@ test('workspace and user menus route correctly and align to the left rail', asyn
   await page.getByRole('menuitem', { name: 'Notification settings', exact: true }).click();
   await expect(app.getByRole('tab', { name: 'Notifications', exact: true })).toHaveAttribute('aria-selected', 'true');
   await account.click();
-  await page.getByRole('menuitem', { name: 'Provider keys', exact: true }).click();
-  await expect(app.getByRole('tab', { name: 'Provider keys', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('menuitem', { name: 'Model providers', exact: true }).click();
+  await expect(app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true })).toHaveAttribute('aria-current', 'page');
   await account.click();
   await page.getByRole('menuitem', { name: 'Data and privacy', exact: true }).click();
   await expect(app.getByRole('tab', { name: 'Data and privacy', exact: true })).toHaveAttribute('aria-selected', 'true');

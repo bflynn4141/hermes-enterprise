@@ -16,7 +16,7 @@ export const SETTINGS_TABS = [
 ] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
-/** Grouped Admin navigation avoids a ten-item horizontal tab strip. */
+/** Grouped Admin sidebar: one left rail, no stacked tab rows. */
 export const ADMIN_SETTINGS_GROUPS = [
   {
     label: 'Organization',

@@ -53,14 +53,12 @@ async function openShell(page: Page, workspaceId: string): Promise<void> {
 
 /**
  * Workspace controls moved out of Settings and under the Admin entry (PR92,
- * then grouped in PR95 and PR96): a group tab strip, then a page index for the
- * group, then the page. Personal Settings kept only what belongs to the person.
+ * then grouped in PR95/PR96, then a single sidebar in place of stacked tabs).
  */
-async function openAdminPage(page: Page, group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
+async function openAdminPage(page: Page, _group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
   const app = pane(page);
-  await app.getByRole('tab', { name: group }).click();
-  await app.getByRole('navigation', { name: `${group} settings pages` }).getByRole('button', { name: item, exact: true }).click();
+  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: item, exact: true }).click();
 }
 
 /** A turn through the real route, so the run is a real run. */
