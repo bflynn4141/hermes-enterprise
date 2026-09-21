@@ -25,6 +25,12 @@ async function openInbox(page: Page) {
   return app;
 }
 
+// The reviewer segments carry a count after the label ("For me 13"), so match
+// on the leading words rather than the exact accessible name.
+async function pickReviewer(app: ReturnType<Page['getByRole']>, label: 'For me' | 'Waiting on others' | 'All') {
+  await app.getByLabel('Reviewer').getByRole('button', { name: new RegExp(`^${label}`) }).click();
+}
+
 async function openRequest(app: ReturnType<Page['getByRole']>, name: RegExp) {
   await app.locator('.inbox-item').filter({ hasText: name }).click();
 }
@@ -138,12 +144,12 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.locator('.inbox-item').filter({ hasText: /Invoice/ })).toBeVisible();
     await expect(app.locator('.inbox-item').filter({ hasText: /Signature/ })).toBeVisible();
 
-    await app.getByLabel('Reviewer').selectOption('waiting');
+    await pickReviewer(app, 'Waiting on others');
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
     await expect(app.getByText('Waiting for Alex Rivera')).toBeVisible();
     await expect(app.getByText('Launch partner research sprint')).toHaveCount(0);
 
-    await app.getByLabel('Reviewer').selectOption('all');
+    await pickReviewer(app, 'All');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
   });
@@ -155,7 +161,7 @@ test.describe('enterprise approval inbox', () => {
     await app.getByLabel('Request origin').selectOption('sample');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
 
-    await app.getByLabel('Reviewer').selectOption('waiting');
+    await pickReviewer(app, 'Waiting on others');
     await openRequest(app, /Change Rowan’s schedule and tools/);
     await expect(app.getByRole('button', { name: 'Hide', exact: true })).toBeEnabled();
     await app.getByRole('button', { name: 'Hide', exact: true }).click();
@@ -195,7 +201,7 @@ test.describe('enterprise approval inbox', () => {
 
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
-    await app.getByLabel('Reviewer').selectOption('all');
+    await pickReviewer(app, 'All');
     for (const approval of APPROVAL_CASES) {
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
@@ -207,7 +213,7 @@ test.describe('enterprise approval inbox', () => {
   for (const approval of APPROVAL_CASES.filter((item) => item.action !== null)) {
     test(`${approval.type} records the configured action and result states`, async ({ page }) => {
       const app = await openInbox(page);
-      await app.getByLabel('Reviewer').selectOption('all');
+      await pickReviewer(app, 'All');
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await app.getByRole('button', { name: approval.action }).click();
 
@@ -233,7 +239,7 @@ test.describe('enterprise approval inbox', () => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const app = await openInbox(page);
-      await app.getByLabel('Reviewer').selectOption('all');
+      await pickReviewer(app, 'All');
 
       for (const approval of APPROVAL_CASES) {
         await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -296,7 +302,7 @@ test.describe('enterprise approval inbox', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('12');
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();
-    await app.getByLabel('Reviewer').selectOption('waiting');
+    await pickReviewer(app, 'Waiting on others');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
 

@@ -13,10 +13,11 @@
 //     decision.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { CTX, HISTORY, INBOX, LIB, OV, REQ, type DocumentEntity, type EffectEntity, type PartnerHandoffResult, type Ref, type RequestEntity } from '@hermes/shared';
+import { CTX, HISTORY, INBOX, LIB, OV, REQ, type AgentFile, type Attachment, type DocumentEntity, type EffectEntity, type PartnerHandoffResult, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
+import { entityData } from '../../model/store.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
@@ -137,6 +138,12 @@ function requestAction(request: RequestEntity): string {
   return 'Review request';
 }
 
+const REVIEWER_SEGMENTS: readonly [NonNullable<NonNullable<Ref['filters']>['reviewer']>, string][] = [
+  ['for_me', 'For me'],
+  ['waiting', 'Waiting on others'],
+  ['all', 'All'],
+];
+
 const PROVENANCE_LABELS: Record<RequestEntity['provenance']['kind'], string> = {
   operational: 'Operational',
   sample: 'Sample',
@@ -231,11 +238,12 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
             </label>
             {activeTab === 'needs-review' && (
-              <select className="btn reviewer-filter" aria-label="Reviewer" value={reviewer} onChange={(event) => setFilters({ reviewer: event.target.value as NonNullable<Ref['filters']>['reviewer'] })}>
-                <option value="for_me">For me</option>
-                <option value="waiting">Waiting on others</option>
-                <option value="all">All reviewers</option>
-              </select>
+              <span className="inbox-sort reviewer-filter" role="group" aria-label="Reviewer">
+                {REVIEWER_SEGMENTS.map(([value, label]) => {
+                  const count = value === 'for_me' ? state.counts.pendingForMe ?? state.counts.inbox : value === 'waiting' ? state.counts.pendingForOthers ?? 0 : 0;
+                  return <button type="button" key={value} aria-pressed={reviewer === value} onClick={() => setFilters({ reviewer: value })}>{label}{count > 0 && <span className="seg-count">{count}</span>}</button>;
+                })}
+              </span>
             )}
             <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
               <option value="all">All types</option>
@@ -771,6 +779,31 @@ const documentSourceIds = (value: unknown): string[] => Array.isArray(value)
   ? value.filter((id): id is string => typeof id === 'string' && id.length > 0)
   : [];
 
+// A draft cites sources by id. Show the person the thing, not the id: a saved
+// Library document links to itself, an agent source links to Context, an
+// upload shows its file name. Anything the cache cannot resolve is reported
+// once, because a list of opaque uuids tells a reviewer nothing.
+function DocumentSources({ ids }: { ids: readonly string[] }) {
+  const state = useAppState();
+  const nav = useNav();
+  const resolved = ids.flatMap((id): { id: string; label: string; ref: Ref | null }[] => {
+    const doc = entityData<DocumentEntity>(state, 'document', id);
+    if (doc) return [{ id, label: doc.title, ref: LIB('documents', doc.id) }];
+    const file = entityData<AgentFile>(state, 'agent_file', id);
+    if (file) return [{ id, label: file.name, ref: CTX }];
+    const attachment = entityData<Attachment>(state, 'attachment', id);
+    return attachment ? [{ id, label: attachment.name, ref: null }] : [];
+  });
+  return (
+    <ul className="legacy-source-list">
+      {resolved.map(({ id, label, ref }) => <li key={id}>{ref ? <Button link onClick={() => nav(ref)}>{label}</Button> : <span>{label}</span>}</li>)}
+      {resolved.length < ids.length && <li className="meta">Source no longer available</li>}
+    </ul>
+  );
+}
+
+const sourceCount = (count: number): string => `${count} source${count === 1 ? '' : 's'}`;
+
 function PartnerResultEvidence({ handoffId, fallback }: { handoffId: string; fallback: ReactNode }) {
   const adapter = useAdapter();
   const state = useAppState();
@@ -982,13 +1015,12 @@ export function DocumentView({
           <h2 id={`document-sources-${request.id}`}>Related messages &amp; documents</h2>
           {handoffId ? <PartnerResultEvidence handoffId={handoffId} fallback={legacyWorkflowEvidence} /> : legacyWorkflowEvidence}
           {sourceIds.length > 0 && <details className="legacy-disclosure">
-            <summary>{sourceIds.length} unresolved source reference{sourceIds.length === 1 ? '' : 's'}</summary>
-            <p className="meta">These references are stored on the draft. Their source content and dates are not available here.</p>
-            <ul>{sourceIds.map((id) => <li key={id}><code>{id}</code></li>)}</ul>
+            <summary>{sourceCount(sourceIds.length)} cited by this draft</summary>
+            <DocumentSources ids={sourceIds} />
           </details>}
           {request.sources.length > 0 && <details className="legacy-disclosure">
             <summary>Stored citations ({request.sources.length})</summary>
-            <p className="meta">Citations supplied with this draft; source messages have not been linked.</p>
+            <p className="meta">Citations supplied with this draft.</p>
             <ul>{request.sources.map((source) => <li key={source.id}><strong>{source.name}</strong>{source.note && <p>{source.note}</p>}</li>)}</ul>
           </details>}
           {request.missing.length > 0 && <ul className="legacy-missing">{request.missing.map((item) => <li key={item}>{item}</li>)}</ul>}
@@ -1027,7 +1059,7 @@ export function DocumentView({
                 </> : <>
                   {(text(effectiveDates.from) || text(effectiveDates.to)) && <p>Effective · {text(effectiveDates.from) ?? 'Not supplied'} – {text(effectiveDates.to) ?? 'Not supplied'}</p>}
                   {totalMinor !== null && <p>Amount · {amount}</p>}
-                  {sections.map((section) => <section className="legacy-agreement-section" key={section.id}><h4>{section.heading}</h4><p>{section.body}</p>{section.sourceIds.length > 0 && <details><summary>{section.sourceIds.length} source reference{section.sourceIds.length === 1 ? '' : 's'}</summary><p>Source content not available here.</p>{section.sourceIds.map((id) => <code key={id}>{id}</code>)}</details>}</section>)}
+                  {sections.map((section) => <section className="legacy-agreement-section" key={section.id}><h4>{section.heading}</h4><p>{section.body}</p>{section.sourceIds.length > 0 && <details className="legacy-section-sources"><summary>{sourceCount(section.sourceIds.length)}</summary><DocumentSources ids={section.sourceIds} /></details>}</section>)}
                 </>}
                 <div className="doc-foot"><span>{isInvoice ? 'Not sent · No money moved' : 'Unsigned · Not sent'}</span><span>{number}</span></div>
               </div>}
@@ -1043,7 +1075,7 @@ export function DocumentView({
             onKeep={(value) => { if (state.activeSessionId) { adapter.applyCommand(state.activeSessionId, { type: 'chat/prompt', text: value }); setAck(true); } }}
             onDiscard={() => { setLine(null); setAck(false); }}
           />
-          {selected.sourceIds.length > 0 && <p className="meta">{selected.sourceIds.length} unresolved source reference{selected.sourceIds.length === 1 ? '' : 's'} for this line.</p>}
+          {selected.sourceIds.length > 0 && <><p className="meta">{sourceCount(selected.sourceIds.length)} for this line</p><DocumentSources ids={selected.sourceIds} /></>}
           <Ack show={ack}>Added to the composer</Ack>
         </div>}
         {request.note && <details className="legacy-disclosure"><summary>Review note</summary><p className="legacy-excerpt">{request.note}</p><p className="meta">Internal note. This does not record a payment or an applied signature.</p></details>}
