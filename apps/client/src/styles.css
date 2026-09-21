@@ -722,18 +722,20 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
    them is untouched: this whole surface is still only the app column beside
    Iris, and its container queries respond to that column's actual width. */
 .inbox-surface { display: flex; flex-direction: column; min-height: 0; flex: 1 1 0; }
-.inbox-topbar { display: grid; grid-template-columns: auto minmax(260px, 1fr) minmax(480px, 620px); align-items: end; gap: 16px 24px; padding: 18px 24px 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.inbox-topbar { display: grid; grid-template-columns: auto minmax(200px, 1fr) minmax(0, 1.6fr); align-items: end; gap: 16px 24px; padding: 18px 24px 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .inbox-title-row { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; }
 .inbox-count { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 12px; background: var(--context); color: var(--muted); font-size: 10.4px; line-height: 19.2px; }
 .inbox-topbar .tabs { min-width: 0; }
-.inbox-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; padding-bottom: 10px; min-width: 0; }
+.inbox-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px 10px; padding-bottom: 10px; min-width: 0; }
+.inbox-tool-main { display: flex; flex: 1 0 auto; align-items: center; gap: 8px 10px; min-width: 0; max-width: 100%; }
+.inbox-tool-end { display: flex; align-items: center; justify-content: flex-end; gap: 8px 10px; min-width: 0; flex: 1 1 auto; margin-left: auto; }
 .approval-demo-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.inbox-tools .search { min-width: 120px; padding-block: 8px; }
+.inbox-tools .search { min-width: 140px; flex: 1 1 160px; max-width: 280px; padding-block: 8px; }
 .inbox-sort { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(21,16,71,.52); flex-shrink: 0; }
 .inbox-sort button { min-height: 30px; padding: 5px 9px; border-radius: 6px; color: var(--muted); font-size: 10.4px; line-height: 14px; white-space: nowrap; }
 .inbox-sort button:hover { color: var(--body); }
 .inbox-sort button[aria-pressed="true"] { color: var(--body); background: var(--selected); }
-.inbox-tools select.btn { max-width: 138px; padding: 8px 30px 8px 12px; background: var(--context); appearance: auto; font-size: 11.2px; }
+.inbox-tools select.btn { flex: 0 0 auto; max-width: 138px; padding: 8px 30px 8px 12px; background: var(--context); appearance: auto; font-size: 11.2px; }
 .inbox-columns { display: flex; flex: 1 1 0; min-height: 0; overflow: hidden; }
 .inbox-master { width: 310px; flex: 0 0 310px; border-right: 1px solid var(--line); background: rgba(5, 3, 43, .34); }
 .inbox-surface[data-detail="false"] .inbox-master { width: 100%; flex-basis: 100%; border-right: 0; padding-inline: max(24px, calc((100% - 920px) / 2)); }
@@ -957,9 +959,11 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
   .inbox-title-row { display: none; }
   .inbox-topbar .tabs { overflow-x: auto; }
   .inbox-tools { grid-column: auto; }
-  .inbox-tools { flex-wrap: wrap; }
-  .approval-demo-tools { order: 3; }
-  .reviewer-filter { order: 4; }
+  .inbox-tool-main { flex-wrap: wrap; flex-basis: 100%; }
+  .inbox-tool-end { flex: 1 1 100%; margin-left: 0; justify-content: flex-start; }
+  .inbox-tools .search { min-width: 0; flex: 1 1 80px; }
+  .approval-demo-tools { flex-basis: 100%; }
+  .reviewer-filter { flex-basis: 100%; }
   .inbox-surface[data-detail="true"] .inbox-topbar { display: none; }
   .inbox-surface[data-detail="true"] .inbox-master { display: none; }
   .inbox-surface[data-detail="false"] .inbox-master { padding-inline: 0; }
