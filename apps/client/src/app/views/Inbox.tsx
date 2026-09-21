@@ -23,7 +23,7 @@ import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMone
 import { EMPTY } from '../../model/constants.js';
 import './legacy-documents.css';
 import { requestActionLabel } from '../approval-copy.js';
-import { requestStatusLabel } from '../selectors.js';
+import { agentName, requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
@@ -571,6 +571,7 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
 
 function ApplicationView({ request }: { request: RequestEntity }) {
   const state = useAppState();
+  const screeningAgent = agentName(state);
   const payload = record(request.payload);
   const applicant = record(payload.applicant);
   const name = text(applicant.name) ?? request.subject ?? request.label;
@@ -640,11 +641,11 @@ function ApplicationView({ request }: { request: RequestEntity }) {
             <div className="panel application-summary">
               <Glass name="iris" size={30} />
               <div className="col grow" style={{ gap: 3 }}>
-                <span>Iris screened this application</span>
+                <span>{screeningAgent} screened this application</span>
                 <span className="meta">{sources.length > 0 ? `${sources.length} sources used` : 'No linked sources'}</span>
               </div>
               {sources.length > 0 && (
-                <span className="source-stack" aria-label={`${sources.length} sources used by Iris`}>
+                <span className="source-stack" aria-label={`${sources.length} sources used by ${screeningAgent}`}>
                   {sources.slice(0, 4).map((item) => <SourceMark key={item.id} source={item} size={24} />)}
                 </span>
               )}

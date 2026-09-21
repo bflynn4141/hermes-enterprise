@@ -7,40 +7,39 @@ test.use({ viewport: { width: 1680, height: 1000 } });
 const app = (page: import('@playwright/test').Page) => page.getByRole('region', { name: 'Application' });
 const asset = (name: string) => fileURLToPath(new URL(`../../../docs/assets/${name}`, import.meta.url));
 
-test('capture the two-role Partnerships and Finance workflow', async ({ page }) => {
+test('capture the two-role Partnerships and Finance workflow in the Inbox', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
 
   await page.goto('/?partnerWorkflow=1&workflowRole=partnerships&seat=admin');
-  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await page.getByRole('button', { name: /^Inbox/ }).click();
   await expect(page.getByText('Scout sessions', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Robin Studio · invoice source' })).toBeVisible();
-  await expect(page.getByText('Robin Studio is ready for human review', { exact: true })).toBeVisible();
-  await expect(app(page).getByText('Maya Chen · Scout', { exact: true })).toBeVisible();
-  await expect(app(page).getByText('Alex Rivera · Ledger', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Partner applications' })).toBeVisible();
+  await expect(page.getByText('Two partner applicants are ready for review', { exact: true })).toBeVisible();
+  await page.locator('.chat-card').filter({ hasText: 'Leah Martinez' }).getByRole('button', { name: 'Open request' }).click();
+  await expect(app(page).getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
+  await expect(app(page).getByText('Leah Martinez', { exact: true }).first()).toBeVisible();
+  await expect(app(page).getByLabel('82 out of 100')).toBeVisible();
+  await expect(app(page).getByRole('heading', { name: 'Library', exact: true })).toHaveCount(0);
   await page.screenshot({ path: asset('readme-partnerships.png'), animations: 'disabled' });
 
   await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member');
-  await page.getByRole('button', { name: 'Library', exact: true }).click();
   await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Robin Studio · Finance review' })).toBeVisible();
   await expect(page.getByText('Ready for Alex’s decision', { exact: true })).toBeVisible();
-  const handoff = app(page).locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
-  await handoff.getByRole('button', { name: 'View checks and evidence' }).click();
-  await expect(handoff.getByText('Sample engagement terms.txt', { exact: true })).toBeVisible();
-  await page.screenshot({ path: asset('readme-finance-handoff.png'), animations: 'disabled' });
-
-  await handoff.getByRole('button', { name: 'Open Finance decision' }).click();
+  await page.locator('.chat-card').filter({ hasText: 'INV-SAMPLE-014' }).getByRole('button', { name: 'Open request' }).click();
+  await expect(app(page).getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
   await expect(app(page).getByRole('heading', { name: 'Your decision' })).toBeVisible();
-  await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
+  await expect(app(page).getByText('Authorized workflow evidence (4 checks)', { exact: true })).toBeVisible();
+  await expect(app(page).getByRole('heading', { name: 'Library', exact: true })).toHaveCount(0);
   await page.screenshot({ path: asset('readme-finance-decision.png'), animations: 'disabled' });
 
   await app(page).getByRole('button', { name: 'Approve invoice draft', exact: true }).click();
   await expect(app(page).getByRole('heading', { name: 'Saved in Library' })).toBeVisible();
-  await page.getByRole('button', { name: 'Library', exact: true }).click();
-  const decided = app(page).locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
-  await expect(decided.getByText('Finance saved the invoice draft', { exact: true })).toBeVisible();
-  await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
-  await decided.scrollIntoViewIfNeeded();
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await app(page).getByRole('button', { name: 'Back to Inbox' }).click();
+  await app(page).getByRole('tab', { name: 'Resolved', exact: true }).click();
+  await expect(app(page).getByRole('tab', { name: 'Resolved', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const resolvedInvoice = app(page).locator('.inbox-item').filter({ hasText: 'Robin Studio' });
+  await expect(resolvedInvoice.getByText('Invoice draft created · Not sent · No money moved', { exact: true })).toBeVisible();
+  await expect(app(page).getByRole('heading', { name: 'Library', exact: true })).toHaveCount(0);
   await page.screenshot({ path: asset('readme-finance-receipt.png'), animations: 'disabled' });
 });

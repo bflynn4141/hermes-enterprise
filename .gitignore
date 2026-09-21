@@ -3,6 +3,8 @@ node_modules/
 dist/
 !apps/client/dist/
 !apps/client/dist/**
+!runtime/hermes/enterprise_bridge/dashboard/dist/
+!runtime/hermes/enterprise_bridge/dashboard/dist/**
 coverage/
 *.tsbuildinfo
 
