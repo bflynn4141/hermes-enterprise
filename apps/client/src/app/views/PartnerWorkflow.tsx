@@ -1,15 +1,17 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  LIB,
   REQ,
   type HandoffDetail,
   type HandoffInMotionItem,
   type HandoffLane,
   type PartnerWorkflowSetup,
   type PartnerWorkflowViewV2,
+  type RequestEntity,
 } from '@hermes/shared';
 import { RestError } from '../../model/rest.js';
-import { useAdapter, useAppState, useNav } from '../store-context.js';
+import { useAdapter, useAppState, useEntity, useNav } from '../store-context.js';
 import { Glass, Icon } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
 
@@ -93,6 +95,118 @@ function turnCopy(item: HandoffInMotionItem, detail: HandoffDetail): string {
   }
 }
 
+const STAGE_ORDER: Array<{ key: HandoffInMotionItem['stage']; label: string }> = [
+  { key: 'terms_recorded', label: 'Admit' },
+  { key: 'finance_verifying', label: 'Prep' },
+  { key: 'invoice', label: 'Review' },
+  { key: 'decision', label: 'Decide' },
+  { key: 'acknowledged', label: 'Done' },
+];
+
+/** Five dots for a partner at `current`, mirroring the server's stage states. */
+export function stagesAt(current: HandoffInMotionItem['stage']): HandoffInMotionItem['stages'] {
+  const at = STAGE_ORDER.findIndex((stage) => stage.key === current);
+  return STAGE_ORDER.map((stage, index) => ({
+    key: stage.key,
+    label: stage.label,
+    state: index < at ? 'done' : index === at ? 'current' : 'pending',
+  }));
+}
+
+/**
+ * Five unlabeled dots. The longer seam after the first dot is where work
+ * crosses from Partnerships to Finance; stage names live in the tooltips.
+ */
+export function HandoffTrack({ stages, title }: { stages: HandoffInMotionItem['stages']; title: string }) {
+  const current = stages.find((stage) => stage.state === 'current');
+  return (
+    <ol className="handoff-track" aria-label={`${title}: ${current?.label ?? 'Done'}`}>
+      {stages.map((stage) => (
+        <li key={stage.key} data-state={stage.state} title={stage.label} aria-current={stage.state === 'current' ? 'step' : undefined}>
+          <i aria-hidden="true" />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** The contractor-agreements handoff as this viewer sees it, or null. Reloads on stream activity. */
+export function useContractorHandoff(): HandoffDetail | null {
+  const state = useAppState();
+  const adapter = useAdapter();
+  const [detail, setDetail] = useState<HandoffDetail | null>(null);
+  const lastStreamMessage = state.connection.workspace.lastMessageAt;
+  useEffect(() => {
+    let current = true;
+    void adapter.rest.listHandoffs(state.workspace.id)
+      .then((items) => {
+        const first = items.find((item) => item.key === 'contractor-agreements') ?? items[0];
+        return first ? adapter.rest.getHandoff(state.workspace.id, first.id) : null;
+      })
+      .then((next) => { if (current) setDetail(next); })
+      .catch(() => { if (current) setDetail(null); });
+    return () => { current = false; };
+  }, [adapter.rest, state.workspace.id, lastStreamMessage]);
+  return detail;
+}
+
+function partnerNameOf(request: RequestEntity): string {
+  const payload = request.payload as { applicant?: { name?: unknown } } | null;
+  const name = payload?.applicant?.name;
+  return typeof name === 'string' && name.trim() ? name.trim() : request.subject ?? request.label;
+}
+
+/**
+ * The moment the baton passes. Shown on an admitted application's receipt:
+ * one sentence naming the Finance agent and person, the track, and a way to
+ * watch it on Handoffs. Nothing here if the handoff is off or private.
+ */
+export function AdmissionHandoff({ request }: { request: RequestEntity }) {
+  const detail = useContractorHandoff();
+  const nav = useNav();
+  if (!detail || detail.handoff.admission_state !== 'enabled' || detail.handoff.viewer_role === 'unrelated') return null;
+  const finance = detail.lanes.find((lane) => lane.team.slug === 'finance');
+  const name = partnerNameOf(request);
+  const first = name.split(' ')[0] ?? name;
+  const item = detail.in_motion.find((row) => row.kind === 'agreement' && row.title === name) ?? null;
+  const agent = finance?.agent ?? 'Finance';
+  const title = `${agent} is preparing ${first}'s contractor agreement${finance?.person ? ` for ${finance.person}` : ''}.`;
+  return (
+    <div className="panel handoff-panel" role="status" aria-label="Handed to Finance">
+      <Glass name="agreement" size={28} className="panel-icon" />
+      <div className="panel-body">
+        <div className="panel-title">{title}</div>
+        <HandoffTrack stages={item?.stages ?? stagesAt('finance_verifying')} title={name} />
+      </div>
+      <Button small onClick={() => nav(LIB('handoffs'))}>Open Handoffs</Button>
+    </div>
+  );
+}
+
+/**
+ * Where an agreement came from, on the Finance side: who admitted the partner
+ * and through which agent, with a way back to the application.
+ */
+export function AgreementOrigin({ sourceApplicationId }: { sourceApplicationId: string }) {
+  const source = useEntity<RequestEntity>('request', sourceApplicationId);
+  const detail = useContractorHandoff();
+  const nav = useNav();
+  const application = source.data;
+  if (!application) return null;
+  const partnerships = detail?.lanes.find((lane) => lane.team.slug === 'partnerships');
+  const by = application.decided_by_name ?? partnerships?.person ?? 'Partnerships';
+  const when = application.decided_at
+    ? new Date(application.decided_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+  return (
+    <p className="handoff-origin">
+      <Glass name="admission" size={18} />
+      <span>Admitted by {by}{partnerships?.agent ? ` · via ${partnerships.agent}` : ''}{when ? ` · ${when}` : ''}</span>
+      <Button link small onClick={() => { nav(REQ(application.id)); }}>Open application</Button>
+    </p>
+  );
+}
+
 function InMotionRow({ item, detail }: { item: HandoffInMotionItem; detail: HandoffDetail }) {
   const adapter = useAdapter();
   const nav = useNav();
@@ -101,7 +215,6 @@ function InMotionRow({ item, detail }: { item: HandoffInMotionItem; detail: Hand
     adapter.ensure('request', item.open_request_id, true);
     nav(REQ(item.open_request_id));
   };
-  const current = item.stages.find((stage) => stage.state === 'current');
   return (
     <div className="list-row handoff-row">
       <Glass name={item.stage === 'terms_recorded' ? 'admission' : 'agreement'} size={32} className="row-icon" />
@@ -109,13 +222,7 @@ function InMotionRow({ item, detail }: { item: HandoffInMotionItem; detail: Hand
         <span className="t">{item.title}</span>
         <span className="s">{turnCopy(item, detail)}</span>
       </div>
-      <ol className="handoff-track" aria-label={`${item.title}: ${current?.label ?? 'Done'}`}>
-        {item.stages.map((stage) => (
-          <li key={stage.key} data-state={stage.state} title={stage.label} aria-current={stage.state === 'current' ? 'step' : undefined}>
-            <i aria-hidden="true" />
-          </li>
-        ))}
-      </ol>
+      <HandoffTrack stages={item.stages} title={item.title} />
       {item.open_request_id && (
         <Button small primary onClick={open}>{item.stage === 'terms_recorded' ? 'Admit' : 'Review'}</Button>
       )}

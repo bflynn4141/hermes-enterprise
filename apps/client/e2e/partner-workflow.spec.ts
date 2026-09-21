@@ -49,9 +49,24 @@ test('admitting an applicant in Inbox adds them to Handoffs', async ({ page }) =
   await pane.getByText('Leah Martinez', { exact: true }).first().click();
   await pane.getByRole('button', { name: 'Admit Leah' }).click();
   await expect(pane.getByRole('button', { name: 'Admit Leah' })).toHaveCount(0, { timeout: 10_000 });
-  const handoffs = await openHandoffs(page);
+  // The receipt shows the baton passing to Finance.
+  const handed = pane.getByRole('status', { name: 'Handed to Finance' });
+  await expect(handed).toContainText("Ledger is preparing Leah's contractor agreement for Alex Rivera.");
+  await expect(handed.getByRole('list', { name: /^Leah Martinez:/ })).toBeVisible();
+  await handed.getByRole('button', { name: 'Open Handoffs' }).click();
+  const handoffs = app(page);
   await expect(handoffs.getByText('Leah Martinez', { exact: true })).toBeVisible();
   await expect(handoffs.getByText('Owen Reilly', { exact: true })).toHaveCount(0);
+});
+
+test('Finance sees where an agreement came from', async ({ page }) => {
+  await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member');
+  const pane = await openHandoffs(page);
+  await pane.getByRole('button', { name: 'Review' }).click();
+  await expect(pane.getByRole('heading', { name: /^Agreement AGR-PRIYA-001/ })).toBeVisible();
+  await expect(pane.getByText(/^Admitted by Maya Chen · via Iris/)).toBeVisible();
+  await pane.getByRole('button', { name: 'Open application' }).click();
+  await expect(pane.getByRole('heading', { name: 'Priya Nair' })).toBeVisible();
 });
 
 test('an unrelated member receives no private workflow content', async ({ page }) => {

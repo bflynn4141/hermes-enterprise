@@ -288,10 +288,10 @@ export function createMockBackend(options: MockOptions = {}) {
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
         ...(options.partnerWorkflow ? [
-          request(REQ_PRIYA, 'application', 'admitted', 'Priya Nair', 'Priya Nair', {
+          { ...request(REQ_PRIYA, 'application', 'admitted', 'Priya Nair', 'Priya Nair', {
             kind: 'application', applicant: { name: 'Priya Nair' }, proposed_role: 'Delivery Partner', score: 88, score_max: 100,
             criteria: [], sources: demoProfileSources, missing: [], benefits: ['Partner directory listing'],
-          }),
+          }), decided_at: iso(-3), decided_by_name: 'Maya Chen' },
           request(REQ_PRIYA_AGREEMENT, 'agreement', 'pending', 'Priya Nair', 'Priya Nair', {
             kind: 'agreement', number: 'AGR-PRIYA-001', version_label: 'draft',
             parties: [{ name: 'Nous Research' }, { name: 'Priya Nair' }],
