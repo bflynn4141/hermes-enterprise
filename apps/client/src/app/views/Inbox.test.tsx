@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { mockUuid, type EffectEntity, type Ref, type RequestEntity } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
-import { createStore, initialState, reduce } from '../../model/store.js';
+import { createStore, initialState, reduce, type AppState } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
 import { DocumentView, InboxList, LEGACY_EFFECT_HONESTY, LegacyEffectsPanel, RequestReview, legacyEffectStatusLabel } from './Inbox.js';
 
@@ -75,12 +75,12 @@ function render(ref: Ref, selectedId?: string): string {
   );
 }
 
-function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', readOnly = false): string {
-  const state = {
+function renderDocument(row: RequestEntity, role: 'admin' | 'member' = 'admin', readOnly = false, seed: (state: AppState) => AppState = (state) => state): string {
+  const state = seed({
     ...initialState(),
     workspace: { ...initialState().workspace, id: mockUuid(1) },
     user: { id: mockUuid(200), name: 'Maya Chen', email: 'maya@nous.research', role },
-  };
+  });
   const reviewer = row.payload.workflow_provenance ? 'Finance reviewer' : 'Workspace Admin';
   const requirement = row.decision_summary?.approval_requirement;
   const eligibleRole = reviewer === 'Finance reviewer' ? 'member' : 'admin';
@@ -215,14 +215,27 @@ describe('the Inbox renders the focused view', () => {
     expect(agreement).not.toContain('Approve &amp; sign');
   });
 
-  it('uses currency-aware invoice amounts and discloses unresolved citations without invented links', () => {
+  it('uses currency-aware invoice amounts and reports unresolved citations once, without ids or invented links', () => {
     const base = requests[3]!;
     const invoice = renderDocument({ ...base, payload: { ...base.payload, currency: 'GBP', lines: [{ id: 'line-1', label: 'Partner workshop', qty: 1, amount_minor: 120000, source_ids: ['message-1', 'https://unverified.example/source'] }] } });
     expect(invoice).toContain('GBP');
     expect(invoice).not.toContain('$1,200');
-    expect(invoice).toContain('2 unresolved source references');
-    expect(invoice).toContain('message-1');
+    expect(invoice).toContain('2 sources cited by this draft');
+    expect(invoice.match(/Source no longer available/g)).toHaveLength(1);
+    expect(invoice).not.toContain('message-1');
     expect(invoice).not.toContain('href="https://unverified.example/source"');
+  });
+
+  it('names an agreement section’s sources from the Library instead of printing ids', () => {
+    const base = requests[4]!;
+    const agreement = renderDocument({ ...base, payload: { ...base.payload, sections: [{ id: 'fees', heading: 'Fees', body: 'USD 1,200.', source_ids: [mockUuid(30), mockUuid(31)] }] } }, 'admin', false, (state) =>
+      reduce(state, { type: 'entity/upsert', kind: 'document', id: mockUuid(30), version: 1, data: { id: mockUuid(30), kind: 'invoice', number: 'INV-42', title: 'Invoice INV-42', status: 'Draft', request_id: null, pdf_status: 'none', pdf_url: null, pdf_error: null, payload: {}, version: 1, created_at: '2026-09-15T12:00:00.000Z' } }));
+    expect(agreement).toContain('2 sources');
+    expect(agreement).toContain('Invoice INV-42');
+    expect(agreement).toContain('Source no longer available');
+    expect(agreement).not.toContain(mockUuid(30));
+    expect(agreement).not.toContain(mockUuid(31));
+    expect(agreement).not.toContain('not available here');
   });
 
   it('shows the scoped workflow excerpts and links only the Finance-owned source session', () => {

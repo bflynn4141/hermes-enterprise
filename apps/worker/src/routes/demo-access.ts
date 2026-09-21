@@ -12,7 +12,7 @@
 // Three things the route is careful about, because it has no session:
 //
 //   * **It is a guessing oracle, so every attempt is a row.** The budget lives
-//     in `demo_access_requests` (migration 0066), not in isolate memory, and
+//     in `demo_access_requests` (migration 0067), not in isolate memory, and
 //     it is spent per address, per caller and in total before the passcode is
 //     even looked at. A wrong guess is not refunded.
 //   * **The passcode is compared in constant time**, on SHA-256 digests so the

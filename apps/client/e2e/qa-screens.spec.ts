@@ -140,7 +140,7 @@ test('the Member seat renders', async ({ page }) => {
   await page.goto('/?seat=member');
   const appPane = page.getByRole('region', { name: 'Application' });
   await appPane.getByRole('button', { name: /^Review/ }).first().click();
-  await expect(appPane.getByText('Admin decision required')).toBeVisible();
+  await expect(appPane.getByText('A workspace Admin records this decision')).toBeVisible();
   await page.screenshot(shot('23-member-review'));
 });
 

@@ -806,6 +806,57 @@ describe('enterprise approval policy and voting', () => {
     expect((await changed.json() as { reason: string }).reason).toBe('idempotency_conflict');
   });
 
+  it('writes one receipt into the originating session on the final vote and none on an idempotent retry', async () => {
+    const e = env();
+    const proposed = await propose(fx, runPlan(fx), `proposal:${randomUUID()}`);
+    const path = `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`;
+    const receipts = () => readTenant(fx.workspaceId, fx.adminId, async (c) => (await c.query<{ role: string; kind: string; text: string; blocks: unknown; client_id: string }>(
+      `SELECT role, kind, text, blocks, client_id FROM messages WHERE session_id = $1 AND kind = 'receipt' ORDER BY seq`, [fx.sessionId],
+    )).rows);
+
+    const first = await asUser(e.env, fx.memberId, path, { method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`) });
+    expect(first.status).toBe(201);
+    // A vote that leaves the request pending is not a decision the chat should announce.
+    expect(await receipts()).toHaveLength(0);
+
+    const finalKey = `vote:${randomUUID()}`;
+    const second = await asUser(e.env, fx.secondReviewerUserId, path, { method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, finalKey) });
+    expect(second.status).toBe(201);
+    expect((await second.json() as ApprovalView).status).toBe('approved');
+    const written = await receipts();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      role: 'system', kind: 'receipt',
+      client_id: `receipt:approval:${proposed.request_id}:1:approved`,
+      text: 'Avery Singh approved the plan in Inbox',
+    });
+    expect(written[0]!.blocks).toEqual([expect.objectContaining({ type: 'receipt', requestId: proposed.request_id })]);
+    expect((written[0]!.blocks as { subtitle: string }[])[0]!.subtitle).toContain('$5.00 cap');
+
+    const retry = await asUser(e.env, fx.secondReviewerUserId, path, { method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, finalKey) });
+    expect(retry.status).toBe(200);
+    expect(retry.headers.get('X-Hermes-Duplicate')).toBe('true');
+    expect(await receipts()).toHaveLength(1);
+
+    const published = await readTenant(fx.workspaceId, fx.adminId, async (c) => (await c.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM jobs WHERE kind = 'publish' AND payload->>'session_id' = $1`, [fx.sessionId],
+    )).rows[0]!.count);
+    expect(published).toBeGreaterThan(0);
+  });
+
+  it('writes a declined receipt when a single vote ends the review', async () => {
+    const e = env();
+    const proposed = await propose(fx, runPlan(fx), `proposal:${randomUUID()}`);
+    const declined = await asUser(e.env, fx.memberId, `/w/${fx.workspaceId}/requests/${proposed.request_id}/approval/decisions`, {
+      method: 'POST', headers: INBOX_HEADERS, body: decision(proposed, `vote:${randomUUID()}`, 'decline'),
+    });
+    expect(declined.status).toBe(201);
+    const rows = await readTenant(fx.workspaceId, fx.adminId, async (c) => (await c.query<{ client_id: string; text: string }>(
+      `SELECT client_id, text FROM messages WHERE session_id = $1 AND kind = 'receipt'`, [fx.sessionId],
+    )).rows);
+    expect(rows).toEqual([{ client_id: `receipt:approval:${proposed.request_id}:1:declined`, text: expect.stringContaining('declined the plan in Inbox') }]);
+  });
+
   it('rejects reuse of a proposal idempotency key with different material', async () => {
     const key = `proposal:${randomUUID()}`;
     await propose(fx, runPlan(fx), key);

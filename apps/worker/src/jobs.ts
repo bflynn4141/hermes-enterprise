@@ -553,15 +553,32 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
         ].includes(persistedTerminalReason)) {
           return { deliver: false, done: false, failure: persistedTerminalReason };
         }
-        if (env.AGENT_RUNTIME === 'hermes') {
+        // A setup-first invitation is delivered only while its operation is
+        // still `ready` and the exact reservation behind it is current, on any
+        // runtime: the reservation is what the recipient is being promised.
+        // Legacy rows check the same thing on the Hermes runtime only.
+        const setupBacked = await tx.query<{ id: string }>(
+          `SELECT id FROM member_provisioning_operations WHERE workspace_id=$1 AND invitation_id=$2`,
+          [job.workspace_id, invitationId],
+        );
+        if (env.AGENT_RUNTIME === 'hermes' || setupBacked.rows.length > 0) {
           const { capacityRoleForInvitation, hasCurrentReservedCapacityForInvitation } =
             await import('./hermes-cloud/capacity.js');
-          const role = await capacityRoleForInvitation(
-            tx, job.workspace_id, invitationId, { requireReadyOperation: true },
-          );
-          if (!await hasCurrentReservedCapacityForInvitation(
-            env, tx, job.workspace_id, invitationId, role,
-          )) {
+          let current = false;
+          try {
+            const role = await capacityRoleForInvitation(
+              tx, job.workspace_id, invitationId, { requireReadyOperation: true },
+            );
+            current = await hasCurrentReservedCapacityForInvitation(
+              env, tx, job.workspace_id, invitationId, role,
+            );
+          } catch (error) {
+            // An operation that stopped being ready between queueing and this
+            // claim is the same fact as a lost reservation: fail closed, never
+            // send an email for capacity nobody holds.
+            if ((error as { reason?: string }).reason !== 'invitation_capacity_unavailable') throw error;
+          }
+          if (!current) {
             return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
           }
         }

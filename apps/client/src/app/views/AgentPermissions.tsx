@@ -5,6 +5,7 @@ import { useAdapter, useAppState, useIsAdmin } from '../store-context.js';
 import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AgentHead, AgentTabsRow } from './Agent.js';
 import { agentName } from '../selectors.js';
+import { readableTool } from '../tool-copy.js';
 import './agent-settings.css';
 
 export function AgentPermissions() {
@@ -71,9 +72,19 @@ function PermissionsContents() {
       <div><p className="meta">{admin ? 'Changes save automatically.' : 'Read-only. An admin can change approval settings.'}</p><p className="meta">On: {agentName(state)} asks first. Off: {agentName(state)} can do this without asking.</p><p className="meta">Existing review requirements and data access still apply. Changing a switch does not approve a waiting action.</p></div>
       <div role="status" aria-live="polite" className="agent-settings-status">{status}</div>
       {permissions.pending_approvals.length > 0 && <section aria-label="Actions waiting for approval"><h2 className="section-title">Waiting for your approval</h2>{permissions.pending_approvals.map((approval) => <div className="agent-settings-editor agent-pending-approval" key={approval.id}>
-        <h3>{permissions.operations.find((operation) => operation.id === approval.operation_id)?.label ?? 'Requested action'}</h3><span className="meta">{approval.tool_name} · {new Date(approval.created_at).toLocaleString()}</span><pre>{JSON.stringify(approval.arguments, null, 2)}</pre><p className="meta">Approval applies only to this exact action in this run.</p>
+        <h3>{permissions.operations.find((operation) => operation.id === approval.operation_id)?.label ?? 'Requested action'}</h3><span className="meta">{readableTool(approval.tool_name, true)} · {new Date(approval.created_at).toLocaleString()}</span><ApprovalArguments value={approval.arguments} /><p className="meta">Approval applies only to this exact action in this run.</p>
         {admin ? <div className="agent-settings-actions"><Button primary disabled={busy !== null} onClick={() => { if (agentId) void mutate(approval.id, () => adapter.rest.decideOperationApproval(workspaceId, agentId, approval.id, 'approved'), 'Action approved once.'); }}>Approve once</Button><Button disabled={busy !== null} onClick={() => { if (agentId) void mutate(approval.id, () => adapter.rest.decideOperationApproval(workspaceId, agentId, approval.id, 'denied'), 'Action declined.'); }}>Decline</Button></div> : <p className="meta">An admin must approve this action.</p>}
       </div>)}</section>}
     </>}
   </div></div>;
+}
+
+/** Each top-level argument as a labelled value; the exact JSON stays one click away. */
+function ApprovalArguments({ value }: { value: Record<string, unknown> }) {
+  const entries = Object.entries(value);
+  const text = (item: unknown): string => typeof item === 'string' ? item : typeof item === 'number' || typeof item === 'boolean' ? String(item) : item == null ? '—' : JSON.stringify(item);
+  return <div className="agent-approval-arguments">
+    {entries.length === 0 ? <p className="meta">No arguments.</p> : <dl>{entries.map(([key, item]) => <div key={key}><dt>{key.replace(/[_-]+/g, ' ')}</dt><dd>{text(item)}</dd></div>)}</dl>}
+    <details><summary>Exact arguments</summary><pre>{JSON.stringify(value, null, 2)}</pre></details>
+  </div>;
 }

@@ -2192,6 +2192,8 @@ export const invitationDirectory = pgTable('invitation_directory', {
   invitationId: uuid('invitation_id').notNull(),
   workspaceId: uuid('workspace_id').notNull(),
   createdAt: now('created_at'),
+  /** sha256 of the lower-cased invited address, so the picker can ask "who invited me?" without a tenant key (0066). */
+  emailDigest: bytea('email_digest'),
 });
 
 /**

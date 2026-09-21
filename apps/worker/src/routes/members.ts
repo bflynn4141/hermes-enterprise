@@ -284,7 +284,32 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
   const body = await inWorkspace(c, async (work) => {
     work.requireAdmin('viewing invitations');
     await expireInvitationReservations(work.tx, work.workspaceId);
-    const { rows } = await work.tx.query(
+    const rows = await invitationRows(work);
+    return paginatedSchema(invitationEntitySchema).parse({
+      items: rows.map((row) => invitationItem(work, row)),
+      cursor: null,
+      total: rows.length,
+    });
+  });
+  return c.json(body);
+}
+
+interface InvitationRow {
+  id: string; email: string; role: string; status: string; expires_at: Date; created_at: Date;
+  delivery_status: string; workos_invitation_id: string | null;
+  operation_id: string | null; operation_workspace_id: string; operation_revision: number;
+  preparation: MemberProvisioningOperation['preparation']; cancellation: MemberProvisioningOperation['cancellation'];
+  issue: MemberProvisioningOperation['issue']; role_template_key: MemberRoleTemplate; role_template_version: string;
+  ready_reservation_current: boolean; delivery_reason: string | null; delivery_trace_id: string | null;
+}
+
+/**
+ * One read for the list and for the post-commit re-read of a create/resend:
+ * the delivery columns, the operation, whether the reservation behind a
+ * `ready` operation is still the exact one, and the latest delivery trace.
+ */
+async function invitationRows(work: TenantWork, invitationId?: string): Promise<InvitationRow[]> {
+  const { rows } = await work.tx.query<InvitationRow>(
       `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status,
               i.workos_invitation_id,
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
@@ -335,46 +360,45 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
             ORDER BY created_at DESC
             LIMIT 1
          ) sync ON true
-        WHERE i.workspace_id = $1 ORDER BY i.created_at DESC LIMIT 100`,
-      [work.workspaceId],
-    );
-    return paginatedSchema(invitationEntitySchema).parse({
-      items: rows.map((row) => ({
-        id: row.id,
-        email: row.email,
-        role: row.role,
-        status: row.status === 'pending'
-          && (row.expires_at as Date).getTime() < Date.now()
-          && !(row.operation_id && row.cancellation !== 'complete' && row.workos_invitation_id === null)
-          ? 'expired'
-          : row.status,
-        invited_at: (row.created_at as Date).toISOString(),
-        ...(work.role === 'admin' ? {
-          delivery_status: row.delivery_status,
-          delivery_reason: row.delivery_reason,
-          delivery_trace_id: row.delivery_trace_id,
-        } : {}),
-        ...(row.operation_id ? {
-          role_template_key: row.role_template_key,
-          provisioning: projectMemberProvisioning({
-            id: row.operation_id, workspace_id: row.operation_workspace_id,
-            invitation_id: row.id,
-            revision: row.operation_revision, preparation: row.preparation,
-            cancellation: row.cancellation, issue: row.issue,
-            role_template_key: row.role_template_key,
-            role_template_version: row.role_template_version,
-            ready_reservation_current: row.ready_reservation_current,
-            invitation_status: row.status, delivery_status: row.delivery_status,
-            delivery_error: row.delivery_reason,
-          }),
-        } : {}),
-        version: 0,
-      })),
-      cursor: null,
-      total: rows.length,
-    });
-  });
-  return c.json(body);
+        WHERE i.workspace_id = $1 AND ($2::uuid IS NULL OR i.id = $2::uuid)
+        ORDER BY i.created_at DESC LIMIT 100`,
+      [work.workspaceId, invitationId ?? null],
+  );
+  return rows;
+}
+
+function invitationItem(work: TenantWork, row: InvitationRow): unknown {
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    status: row.status === 'pending'
+      && row.expires_at.getTime() < Date.now()
+      && !(row.operation_id && row.cancellation !== 'complete' && row.workos_invitation_id === null)
+      ? 'expired'
+      : row.status,
+    invited_at: row.created_at.toISOString(),
+    ...(work.role === 'admin' ? {
+      delivery_status: row.delivery_status,
+      delivery_reason: row.delivery_reason,
+      delivery_trace_id: row.delivery_trace_id,
+    } : {}),
+    ...(row.operation_id ? {
+      role_template_key: row.role_template_key,
+      provisioning: projectMemberProvisioning({
+        id: row.operation_id, workspace_id: row.operation_workspace_id,
+        invitation_id: row.id,
+        revision: row.operation_revision, preparation: row.preparation,
+        cancellation: row.cancellation, issue: row.issue,
+        role_template_key: row.role_template_key,
+        role_template_version: row.role_template_version,
+        ready_reservation_current: row.ready_reservation_current,
+        invitation_status: row.status, delivery_status: row.delivery_status,
+        delivery_error: row.delivery_reason,
+      }),
+    } : {}),
+    version: 0,
+  };
 }
 
 /**
@@ -438,6 +462,7 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
         delivery_status: delivery.delivery_status,
         delivery_reason: delivery.delivery_reason,
         delivery_trace_id: delivery.delivery_trace_id,
+        ...(delivery.provisioning ? { provisioning: delivery.provisioning } : {}),
       });
     });
 
@@ -496,6 +521,7 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
         delivery_status: delivery.delivery_status,
         delivery_reason: delivery.delivery_reason,
         delivery_trace_id: delivery.delivery_trace_id,
+        ...(delivery.provisioning ? { provisioning: delivery.provisioning } : {}),
       });
     });
 
@@ -1104,9 +1130,11 @@ function mapDeliveryReason(error: string | null): string | null {
 }
 
 /**
- * Re-read delivery after post-commit WorkOS jobs so create/resend responses
- * match what the Admin will see on the next list refresh — queued only when
- * email was actually queued, failed when the provider rejected or was absent.
+ * Re-read delivery *and* setup after post-commit jobs so create/resend
+ * responses match what the Admin will see on the next list refresh — queued
+ * only when email was actually queued, failed when the provider rejected or
+ * was absent, and `ready`/`sent` only once the setup job and the delivery job
+ * it handed off to have actually run.
  */
 async function invitationDeliverySnapshot(
   work: TenantWork,
@@ -1115,36 +1143,17 @@ async function invitationDeliverySnapshot(
   delivery_status: string;
   delivery_reason: string | null;
   delivery_trace_id: string | null;
+  provisioning?: MemberProvisioningOperation;
 }> {
-  const { rows } = await work.tx.query<{
-    delivery_status: string;
-    delivery_error: string | null;
-    delivery_trace_id: string | null;
-  }>(
-    `SELECT i.delivery_status, i.delivery_error,
-            sync.correlation_id AS delivery_trace_id
-       FROM invitations i
-       LEFT JOIN LATERAL (
-         SELECT CASE
-                  WHEN payload->>'correlation_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-                  THEN payload->>'correlation_id'
-                  ELSE NULL
-                END AS correlation_id
-           FROM workos_sync
-          WHERE workspace_id=i.workspace_id AND resource_type='invitation' AND resource_id=i.id
-          ORDER BY created_at DESC
-          LIMIT 1
-       ) sync ON true
-      WHERE i.workspace_id = $1 AND i.id = $2`,
-    [work.workspaceId, invitationId],
-  );
-  const row = rows[0];
+  const row = (await invitationRows(work, invitationId))[0];
   if (!row) {
     return { delivery_status: 'not_required', delivery_reason: null, delivery_trace_id: null };
   }
+  const item = invitationItem(work, row) as { provisioning?: MemberProvisioningOperation };
   return {
     delivery_status: row.delivery_status,
-    delivery_reason: mapDeliveryReason(row.delivery_error),
+    delivery_reason: row.delivery_reason,
     delivery_trace_id: row.delivery_trace_id,
+    ...(item.provisioning ? { provisioning: item.provisioning } : {}),
   };
 }

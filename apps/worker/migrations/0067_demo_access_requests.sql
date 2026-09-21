@@ -1,4 +1,4 @@
--- 0066_demo_access_requests.sql
+-- 0067_demo_access_requests.sql
 -- The budget behind the public request-access form.
 --
 -- `POST /demo/request-access` takes an email and a passcode from somebody with

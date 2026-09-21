@@ -1,7 +1,7 @@
 import { memberProvisioningOperationSchema, type MemberProvisioningOperation, type MemberRoleTemplate } from '@hermes/shared';
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
-import { enqueueJob, type Job, type JobDisposition, withWorkspaceTransaction } from '../jobs.js';
+import { enqueueJob, type Job, type JobDisposition, runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import {
   hasCurrentReservedCapacityForInvitation,
   releaseInvitationCapacity,
@@ -11,6 +11,7 @@ import {
 } from '../hermes-cloud/capacity.js';
 import { FINANCE_CAPACITY_ROLE } from '../runtime/discovery-grants.js';
 import { RouteError } from '../routes/tenant.js';
+import { invitationCorrelationId } from '../ops/invitation-diagnostics.js';
 
 interface OperationRow {
   id: string; workspace_id: string; invitation_id: string; revision: number;
@@ -61,23 +62,124 @@ export function memberProvisioningEnabled(env: Env): boolean {
   return env.HERMES_MEMBER_PROVISIONING_ENABLED === '1';
 }
 
+/**
+ * The delivery half of the projection comes from the invitation row the
+ * `workos_sync` job writes, never from the operation: setup completion is a
+ * reservation, and only the provider's answer is "sent". A failed delivery
+ * names its cause as an issue so the Members card can offer the right action
+ * (resend for a rejected address or a lost reservation; reconciliation for an
+ * unknown outcome) instead of a generic "needs attention".
+ */
 export function projectMemberProvisioning(row: OperationRow): MemberProvisioningOperation {
   const lostReadyReservation = row.preparation === 'ready'
     && row.ready_reservation_current === false
     && (row.delivery_status === undefined || row.delivery_status === 'not_required')
     && row.invitation_status !== 'accepted';
+  const unknownOutcome = ['workos_invitation_delivery_outcome_unknown', 'workos_invitation_local_commit_failed']
+    .includes(row.delivery_error ?? '');
   const delivery = row.invitation_status === 'accepted' ? 'sent' : row.delivery_status === 'queued' ? 'queued'
     : row.delivery_status === 'sending' ? 'sending'
       : row.delivery_status === 'delivered' ? 'sent'
-        : row.delivery_status === 'failed' && ['workos_invitation_delivery_outcome_unknown', 'workos_invitation_local_commit_failed'].includes(row.delivery_error ?? '')
+        : row.delivery_status === 'failed' && unknownOutcome
           ? 'reconciliation_required'
           : row.delivery_status === 'failed' ? 'failed' : 'not_queued';
+  const deliveryIssue: MemberProvisioningOperation['issue'] = row.delivery_status !== 'failed' || row.invitation_status === 'accepted'
+    ? null
+    : unknownOutcome ? 'delivery_outcome_unknown'
+      : row.delivery_error === 'workos_invitation_delivery_rejected' ? 'delivery_rejected'
+        : row.delivery_error === 'iris_capacity_reservation_missing' ? 'readiness_failed'
+          : 'temporary_failure';
   return memberProvisioningOperationSchema.parse({
     id: row.id, workspace_id: row.workspace_id, revision: row.revision,
     preparation: lostReadyReservation ? 'queued' : row.preparation, delivery,
     membership: row.invitation_status === 'accepted' ? 'joined' : 'not_joined',
-    cancellation: row.cancellation, issue: lostReadyReservation ? 'readiness_failed' : row.issue,
+    cancellation: row.cancellation,
+    issue: lostReadyReservation ? 'readiness_failed' : row.issue ?? deliveryIssue,
   });
+}
+
+/**
+ * The handoff from "capacity reserved and current" to "WorkOS is asked to
+ * send the email" — the step docs/CLOUD-MANAGEMENT.md item 5 kept separate.
+ *
+ * It runs inside the setup job's transaction, after the operation has been
+ * written as `ready`, because the `jobs` trigger from 0061 refuses a
+ * `send_invitation` job for any operation that is not. The invitation's
+ * seven-day clock starts here, not at creation: a slow Cloud preparation must
+ * not eat the recipient's response window, so the expiry job is queued now
+ * and the row's `expires_at` is moved to match. WorkOS's own expiry replaces
+ * both once it accepts the send.
+ *
+ * Returns the delivery job id, or null when nothing was queued: `AUTH_MODE=fake`
+ * keeps `not_required` (the invitation id is the join token), and a row that
+ * has already been queued, sent or failed is never re-queued by readiness —
+ * a resend creates a fresh row for that.
+ */
+export async function queueSetupInvitationDelivery(env: Env, tx: Tx, input: {
+  workspaceId: string; invitationId: string; inviterUserId: string | null;
+}): Promise<string | null> {
+  const invitation = await tx.query<{
+    email: string; role: string; status: string; delivery_status: string; previous_workos_invitation_id: string | null;
+  }>(
+    `SELECT i.email, i.role, i.status, i.delivery_status,
+            (SELECT p.workos_invitation_id FROM invitations p
+              WHERE p.workspace_id=i.workspace_id AND p.superseded_by=i.id
+              ORDER BY p.created_at DESC LIMIT 1) AS previous_workos_invitation_id
+       FROM invitations i WHERE i.workspace_id=$1 AND i.id=$2 FOR UPDATE`,
+    [input.workspaceId, input.invitationId],
+  );
+  const row = invitation.rows[0];
+  if (!row || row.status !== 'pending' || row.delivery_status !== 'not_required') return null;
+  if (env.AUTH_MODE !== 'workos') return null;
+
+  const directory = await tx.query<{ workos_organization_id: string | null }>(
+    `SELECT workos_organization_id FROM workspace_directory WHERE workspace_id=$1`,
+    [input.workspaceId],
+  );
+  const organizationId = directory.rows[0]?.workos_organization_id ?? null;
+  if (!organizationId) {
+    // Deployed auth with no organization cannot deliver. Say so on the row
+    // rather than leaving `not_required`, which the card would read as "not
+    // queued yet" forever.
+    await tx.query(
+      `UPDATE invitations SET delivery_status='failed', delivery_error='workos_invitation_delivery_not_configured'
+        WHERE workspace_id=$1 AND id=$2`,
+      [input.workspaceId, input.invitationId],
+    );
+    return null;
+  }
+
+  const correlationId = invitationCorrelationId();
+  const key = `workos:invitation:${input.invitationId}:send`;
+  await tx.query(
+    `UPDATE invitations
+        SET delivery_status='queued', delivery_error=NULL, expires_at=now()+interval '7 days'
+      WHERE workspace_id=$1 AND id=$2`,
+    [input.workspaceId, input.invitationId],
+  );
+  await tx.query(
+    `INSERT INTO workos_sync (workspace_id, resource_type, resource_id, direction, payload)
+     VALUES ($1,'invitation',$2,'outbound',$3::jsonb)`,
+    [input.workspaceId, input.invitationId, JSON.stringify({ job_key: key, correlation_id: correlationId })],
+  );
+  const jobId = await enqueueJob(tx, input.workspaceId, 'workos_sync', key, {
+    action: row.previous_workos_invitation_id ? 'resend_invitation' : 'send_invitation',
+    invitation_id: input.invitationId,
+    previous_workos_invitation_id: row.previous_workos_invitation_id,
+    organization_id: organizationId,
+    email: row.email,
+    role: row.role === 'admin' ? 'admin' : 'member',
+    inviter_user_id: input.inviterUserId,
+    correlation_id: correlationId,
+  });
+  const expiryJob = await enqueueJob(
+    tx, input.workspaceId, 'hermes_invitation_expire', `invitation-expire:${input.invitationId}`, { invitation_id: input.invitationId },
+  );
+  if (expiryJob) {
+    await tx.query(`UPDATE jobs SET next_at=now()+interval '7 days' WHERE id=$1`, [expiryJob]);
+    await tx.query(`UPDATE job_ready SET next_at=now()+interval '7 days' WHERE job_id=$1`, [expiryJob]);
+  }
+  return jobId;
 }
 
 async function enqueueRevision(tx: Tx, workspaceId: string, id: string, revision: number): Promise<string | null> {
@@ -158,13 +260,34 @@ export async function rebindMemberProvisioningOperation(tx: Tx, workspaceId: str
 
 /**
  * This runner performs only local, already-proven work. It may reserve a
- * pre-existing verified Partnerships profile. It never calls Cloud lifecycle
- * tools, creates paid capacity, configures a profile, or sends an invitation.
+ * pre-existing verified profile, and once that reservation is verified current
+ * it hands the invitation to the existing `workos_sync` delivery job. It never
+ * calls Cloud lifecycle tools, creates paid capacity, configures a profile, or
+ * talks to WorkOS itself: the send is a separate durable job that re-checks
+ * the reservation before it calls the provider.
  */
 export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobDisposition> {
   const payload = (job.payload ?? {}) as { operation_id?: string; revision?: number };
   if (!payload.operation_id || !Number.isInteger(payload.revision) || (payload.revision ?? -1) < 0) return;
-  return withCapacityGrantQuarantine(env, () => withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
+  const outcome = await withCapacityGrantQuarantine(env, () => runMemberProvisioningStep(env, job, payload));
+  if (outcome?.disposition === 'paused') return 'paused';
+  // Delivery runs after the readiness commit, the way a route runs the jobs
+  // it queued: immediately when it can, by the Cron when it cannot.
+  if (outcome?.deliveryJobId) await runJobsAfterCommit(env, job.workspace_id, [outcome.deliveryJobId]);
+  return;
+}
+
+interface ProvisioningStepOutcome {
+  readonly disposition?: 'paused';
+  readonly deliveryJobId?: string | null;
+}
+
+async function runMemberProvisioningStep(
+  env: Env,
+  job: Job,
+  payload: { operation_id?: string; revision?: number },
+): Promise<ProvisioningStepOutcome | void> {
+  return withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const reference = await tx.query<{ invitation_id: string }>(
       `SELECT invitation_id FROM member_provisioning_operations
         WHERE workspace_id=$1 AND id=$2`,
@@ -219,7 +342,7 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobD
     // The release flag is checked again by the claimed job. Turning the feature
     // off stops forward progress immediately, while the cancellation branch
     // above remains available to release an existing local reservation.
-    if (!memberProvisioningEnabled(env)) return 'paused';
+    if (!memberProvisioningEnabled(env)) return { disposition: 'paused' };
 
     // Authorization is not inherited from enqueue time. A removed or demoted
     // Admin cannot leave a delayed job that continues reserving workspace
@@ -244,7 +367,14 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobD
     if (row.preparation === 'ready'
         && await hasCurrentReservedCapacityForInvitation(
           env, tx, job.workspace_id, row.invitation_id, expectedRole,
-        )) return;
+        )) {
+      // A resend rebinds the operation to a fresh row whose delivery is
+      // `not_required`; the transferred reservation is still current, so the
+      // successor is delivered from here without another reservation pass.
+      return { deliveryJobId: await queueSetupInvitationDelivery(env, tx, {
+        workspaceId: job.workspace_id, invitationId: row.invitation_id, inviterUserId: row.requested_by ?? null,
+      }) };
+    }
 
     // Existing capacity is safe to use because reserveCapacityForInvitation
     // revalidates the exact reviewed discovery grant under the row lock.
@@ -258,7 +388,9 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobD
           WHERE workspace_id=$1 AND id=$2 AND revision=$3`,
         [job.workspace_id, row.id, row.revision],
       );
-      return;
+      return { deliveryJobId: await queueSetupInvitationDelivery(env, tx, {
+        workspaceId: job.workspace_id, invitationId: row.invitation_id, inviterUserId: row.requested_by ?? null,
+      }) };
     }
 
     if (!row.cloud_status || row.cloud_status === 'reconnect_required') {
@@ -282,5 +414,5 @@ export async function runMemberProvisioningJob(env: Env, job: Job): Promise<JobD
       [job.workspace_id, row.id, row.revision],
     );
     return;
-  }));
+  });
 }

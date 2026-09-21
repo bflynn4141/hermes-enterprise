@@ -17,7 +17,7 @@
 // membership itself, but only when AuthKit selected an organization. A callback
 // with no organization lands on the explicit workspace picker.
 import type { Context } from 'hono';
-import { authSessionSchema, authWorkspacesSchema } from '@hermes/shared';
+import { authSessionSchema, authWorkspacesSchema, pendingInvitationSchema, type PendingInvitation } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { isDevelopment } from '../env.js';
 import { getSession } from '../auth.js';
@@ -40,10 +40,10 @@ import {
   readAuthTransaction,
 } from '../auth/transactions.js';
 import { optionalWorkosPort, workosPort } from '../auth/workos.js';
-import { connect, withTenantTransaction } from '../db/client.js';
+import { connect, withTenantTransaction, type Tx } from '../db/client.js';
 import { RouteError } from './tenant.js';
 import { mirrorMembership } from './members.js';
-import { runJobsAfterCommit } from '../jobs.js';
+import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { coordinateAcceptedMember } from '../domain/member-agent-coordination.js';
 import {
   persistCapacityGrantDrift,
@@ -418,11 +418,11 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
   const requested = c.req.query('ws') ?? null;
 
   const client = await connect(c.env, 'app');
-  let user: { id: string; email: string; name: string | null };
+  let user: { id: string; email: string; name: string | null; email_verified: boolean };
   let workspaceId: string | null;
   try {
-    const { rows } = await client.query<{ id: string; email: string; name: string | null }>(
-      `SELECT id, email, name FROM users WHERE id = $1`,
+    const { rows } = await client.query<{ id: string; email: string; name: string | null; email_verified: boolean }>(
+      `SELECT id, email, name, email_verified FROM users WHERE id = $1`,
       [session.userId],
     );
     const row = rows[0];
@@ -446,7 +446,13 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
         `SELECT workspace_id, name, role FROM hermes_user_workspaces($1)`,
         [session.userId],
       );
-      if (mine.rows.length === 0) {
+      // Invitations addressed to this person, so the picker can offer them
+      // without the emailed link. Only a *verified* address is an identity
+      // (see `acceptInvitation`), so an unverified session sees none.
+      const invitations = user.email_verified
+        ? await pendingInvitationsFor(c.env, client, user.email, new Set(mine.rows.map((row) => row.workspace_id)))
+        : [];
+      if (mine.rows.length === 0 && invitations.length === 0) {
         throw new RouteError('this account belongs to no workspace yet', 'no_workspace', 404);
       }
       // No workspace was named, so there are no stream heads and no hub ticket
@@ -505,6 +511,7 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
               member_count: members[0]?.member_count ?? 0,
             };
           }),
+          invitations,
           authenticated_at: session.authenticatedAt.toISOString(),
         }),
       );
@@ -563,4 +570,61 @@ export async function authSession(c: Context<{ Bindings: Env }>): Promise<Respon
   const refreshed = takeRefreshedCookie(c.req.raw);
   if (refreshed) response.headers.append('Set-Cookie', refreshed);
   return response;
+}
+
+/**
+ * The pending invitations addressed to `email`, for the picker.
+ *
+ * Two steps, for the same reason `acceptInvitation` has two: the platform-side
+ * directory can only say *which* invitations carry this address (by digest,
+ * migration 0066), and everything worth showing — the workspace's name, the
+ * role, who sent it — lives under that workspace's own row-level security. So
+ * each id is read under its workspace key, and the row is matched against the
+ * session's email a second time there. Workspaces the person already belongs
+ * to are skipped: the membership mirror will mark those accepted, and offering
+ * "Accept" for a seat they hold would be a button that does nothing.
+ */
+async function pendingInvitationsFor(
+  env: Env,
+  client: Pick<Tx, 'query'>,
+  email: string,
+  memberOf: ReadonlySet<string>,
+): Promise<PendingInvitation[]> {
+  const found = await client.query<{ invitation_id: string; workspace_id: string }>(
+    `SELECT invitation_id, workspace_id FROM hermes_user_invitations($1)`,
+    [email],
+  );
+  const invitations: PendingInvitation[] = [];
+  for (const pointer of found.rows) {
+    if (memberOf.has(pointer.workspace_id)) continue;
+    const row = await withWorkspaceTransaction(env, pointer.workspace_id, async (tx) => {
+      const { rows } = await tx.query<{
+        id: string; role: string; expires_at: Date; workspace_name: string;
+        invited_by: string | null; role_template_key: string | null;
+      }>(
+        `SELECT i.id, i.role, i.expires_at, w.name AS workspace_name,
+                COALESCE(u.name, u.email) AS invited_by, op.role_template_key
+           FROM invitations i
+           JOIN workspaces w ON w.id = i.workspace_id
+           LEFT JOIN users u ON u.id = i.invited_by AND u.deleted_at IS NULL
+           LEFT JOIN member_provisioning_operations op
+             ON op.workspace_id = i.workspace_id AND op.invitation_id = i.id AND op.cancellation <> 'complete'
+          WHERE i.workspace_id = $1 AND i.id = $2 AND i.email = lower($3)
+            AND i.status = 'pending' AND i.expires_at > now()`,
+        [pointer.workspace_id, pointer.invitation_id, email],
+      );
+      return rows[0] ?? null;
+    });
+    if (!row) continue;
+    invitations.push(pendingInvitationSchema.parse({
+      token: row.id,
+      workspace: { id: pointer.workspace_id, name: row.workspace_name },
+      role: row.role === 'admin' ? 'admin' : 'member',
+      role_template_key: row.role_template_key,
+      invited_by: row.invited_by,
+      expires_at: row.expires_at.toISOString(),
+    }));
+  }
+  invitations.sort((a, b) => a.expires_at.localeCompare(b.expires_at));
+  return invitations;
 }
