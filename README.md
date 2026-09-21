@@ -16,6 +16,42 @@ enforced by the database and the routes, not by a prompt or a policy document.
 > default, talks to the Nous Portal inference API. Trademarks belong to their
 > owners. Licensed under [MIT](LICENSE).
 
+## What it looks like
+
+Every consequential action arrives in the Inbox as a request of a specific
+type, with what the agent found and a decision a person has to make. The chat
+stays on the left the whole time, so the conversation and the decision are one
+flow. All data below is fixture data.
+
+**1. An application, screened by Iris.** Iris scores the applicant against the
+program's criteria and cites its sources. The Admin admits or declines. Iris
+says it plainly in chat: it cannot admit anyone itself.
+
+![Application review: Iris's screening scores and sources on the right, the chat that produced the request on the left, Admit and Decline at the bottom](docs/assets/flow-1-application-review.jpg)
+
+**2. A services agreement.** The draft, its scope, fees and term, the sources
+it cites, and who may approve. Approval saves an unsigned agreement to the
+Library. Nothing is signed or sent.
+
+![Agreement review: the draft agreement with its scope and fees, the approval requirement, and Approve agreement draft](docs/assets/flow-2-agreement-review.jpg)
+
+**3. An invoice.** Same shape, different type: the amount, line items and
+dates, and an approval that saves a draft without any payment ceremony.
+
+![Invoice review: amount, issued and due dates, line items, and Approve invoice draft with the note that no payment or email is sent](docs/assets/flow-3-invoice-review.jpg)
+
+**4. After the decision.** The request moves to Resolved with who decided and
+when. The document is saved, still unsigned, and the chat card updates to
+"Draft saved, unsigned, not sent".
+
+![The agreement after approval: Saved unsigned, one of one Admin approval by Maya Chen, and the chat card showing draft saved](docs/assets/flow-4-agreement-saved.jpg)
+
+**5. The receipt lands in the conversation.** The decision is recorded in the
+session that asked for it, and Iris continues from there. What the decision
+implies, such as granting access, is a separate effect a person executes later.
+
+![Receipt in chat: Iris reports the applicant is admitted and access is pending, and the Resolved pane shows What this implies with a pending access grant](docs/assets/flow-5-receipt-in-chat.jpg)
+
 ## Try it in a minute
 
 You need Node 22+, pnpm and Docker. Python 3.11 to 3.13 is only needed to run a
