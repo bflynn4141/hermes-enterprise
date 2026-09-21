@@ -18,6 +18,7 @@ import { Icon } from '../ui/icons.js';
 import { IrisMark, Tip } from '../ui/primitives.js';
 import { agentName } from '../selectors.js';
 import { requestComposerFocus } from '../panel.js';
+import { useBump } from '../fresh.js';
 import type { Run } from '@hermes/shared';
 
 /**
@@ -46,6 +47,7 @@ export function IrisRail({ shortcut }: { shortcut: string }) {
   const markState = railMarkState(session?.run ?? null);
   const run = session?.run;
   const unread = state.ui.irisUnread;
+  const bump = useBump(unread);
   const open = (): void => dispatch({ type: 'iris/panel', panel: 'open' });
 
   return (
@@ -60,7 +62,7 @@ export function IrisRail({ shortcut }: { shortcut: string }) {
         >
           <IrisMark size={28} state={markState} />
           {unread > 0 && (
-            <span className="rail-badge" aria-hidden="true">
+            <span className="rail-badge" aria-hidden="true" data-bump={bump || undefined}>
               {unread > 99 ? '99+' : unread}
             </span>
           )}

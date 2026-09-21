@@ -156,7 +156,7 @@ export function Composer({ session }: { session: SessionState }) {
                   : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
-          {approvalWaiting && <Button onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
+          {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
           {(status.status === 'working' || status.status === 'waiting') && !admitting && (
             <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
               Stop work

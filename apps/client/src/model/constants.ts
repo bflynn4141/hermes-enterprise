@@ -63,6 +63,17 @@ export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   intelligence: 'Shared Intelligence',
 };
 
+/**
+ * What an empty conversation offers. Each one fills the composer and nothing
+ * more: the person still decides to send. The first is the question the
+ * seeded fixture answers, so the demo and the empty state agree.
+ */
+export const STARTERS = [
+  'What needs me before the partner work can move forward?',
+  'Screen the newest applicant',
+  'Summarize what Iris did this week',
+] as const;
+
 /** Copy strings from the spec's §7 table. Exact, and asserted by the e2e suite. */
 export const EMPTY = {
   chatReady: (_agent: string) => 'What do you need help with?',

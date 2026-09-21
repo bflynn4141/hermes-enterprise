@@ -64,6 +64,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
       runtimeCapacityStepUp: params.get('runtimeCapacity') === 'stepup',
       reply: params.get('reply') === 'markdown' ? 'markdown' : 'seeded',
       scenario: params.get('scenario') === 'approvals' ? 'approvals' : 'legacy',
+      turn: params.get('turn') === 'proposes_request' ? 'proposes_request' : params.get('turn') === 'waiting' ? 'waiting' : 'completed',
       communicationDraft: params.get('communicationDraft') === '1',
       workspaceName: readMockWorkspaceName(),
       memberWrites: params.get('memberWrites') === 'fail' ? 'fail' : 'ok',
