@@ -1,26 +1,36 @@
 # Hermes Teams Demo
 
-Hermes Teams Demo gives a small team one workspace where an AI agent can do the
-legwork and people keep control of every decision.
+Most teams want to work with Hermes, but they do not know how to fit an agent
+into the way their organization already works. Some teams use one agent. Others
+coordinate several. Hermes Teams gives either group one workspace where it can
+provision a dedicated agent for each employee and configure that agent for a
+specific role.
 
-The team talks to Iris, its workspace agent. Iris can research applicants,
-gather evidence, and draft invoices or agreements. When the work needs a
-decision, Iris sends a request to the Inbox. A person reviews the evidence and
-chooses what happens next.
+Each person keeps ownership of their work while their agent handles research,
+preparation, and structured handoffs. An agent can pass ready work to another
+agent or person. The shared Inbox keeps the evidence, approval, decision, and
+receipt together, so people can decide without rebuilding the story from chat
+messages.
 
-The database and API enforce this boundary. The agent role cannot admit a
-person, approve a document, send outreach, move money, grant access, or sign an
-agreement.
+The current demo implements two roles:
 
-![Hermes workspace with a conversation on the left and the Iris overview on the right](docs/assets/readme-overview.png)
+- **Partnerships Manager** screens partner applicants, gathers evidence,
+  prepares draft-only work, and sends a confirmed invoice handoff to Finance.
+- **Finance** receives the scoped handoff, checks the invoice against authorized
+  terms, flags mismatches, and prepares the request for a named Finance
+  employee's decision.
+
+During workspace setup, the creator chooses the first agent's name. The product
+does not require a fixed agent name. Each role keeps its own sessions and private
+context; only the approved handoff fields cross between Partnerships and
+Finance.
 
 ## Try the hosted demo
 
-The demo runs at https://staging.hermes.brianflynn.dev. Open
-[`/demo`](https://staging.hermes.brianflynn.dev/demo), enter a work email and
-the passcode you were given, and a Member invitation arrives by email for the
-Hermes Teams Demo workspace. Sign-up is invite-only; there is no public
-registration.
+The demo runs at [staging.hermes.brianflynn.dev](https://staging.hermes.brianflynn.dev).
+Open the [demo access page](https://staging.hermes.brianflynn.dev/demo), enter a
+work email and the passcode you received, and the app emails a Member invitation
+for the Hermes Teams Demo workspace. The demo accepts invitations only.
 
 > **Independent project.** Nous Research does not maintain, endorse, or sponsor
 > Hermes Teams Demo. This project runs the open source
@@ -28,84 +38,112 @@ registration.
 > Portal inference API by default. The trademark owners retain their respective
 > marks. The [MIT License](LICENSE) covers this repository.
 
-## How it works
+## Two roles, one governed workflow
 
-1. **A person assigns work.** A team member asks Iris to research a question,
-   screen an applicant, or prepare a draft.
-2. **Iris does the legwork.** The agent uses approved tools, records its steps,
-   and cites the sources behind its findings.
-3. **Iris asks for a decision.** The app creates a specific request, such as an
-   application or invoice, and sends it to the Inbox with the relevant evidence.
-4. **A person decides.** An authorized team member approves, declines, or sends
-   the request back.
-5. **The app records the result.** Hermes adds a receipt to the original
-   conversation and stores any follow-up action as a separate effect.
+| Role | What the agent does | What the person does |
+| --- | --- | --- |
+| Partnerships Manager | Screens partner prospects against program criteria, cites evidence, prepares draft-only work and exact terms for review, and submits invoice fields that a person confirmed. | Reviews the prospect, approves the exact engagement terms, and confirms the invoice before the handoff. |
+| Finance | Receives the shared partner identity, authorized terms, confirmed invoice fields, and permitted evidence. It checks for duplicate invoices, missing evidence, currency mismatches, and amount mismatches. | Reviews the checks and evidence, then approves or declines the invoice draft. |
 
-This flow keeps the conversation, evidence, decision, and receipt connected.
-It also gives the system a clear point where human authority begins.
+The two agents do not share their private conversations. Partnerships sends a
+frozen, server-scoped handoff to Finance. Finance receives its own session and
+only the information that the workflow authorizes.
 
-## What you can do
+### How the work moves
 
-| Area | What the workspace supports |
+1. **Partnerships screens the applicant.** The Partnerships agent researches the
+   prospect, checks the program criteria, cites its sources, and prepares the
+   result for human review.
+2. **A person approves the exact terms.** The app records the partner, purpose,
+   amount, currency, validity dates, evidence, and named Finance reviewer.
+3. **Partnerships confirms the invoice.** A person verifies the invoice fields
+   and source. The Partnerships agent can publish only that confirmed intake.
+4. **Finance checks the handoff.** The Finance agent compares the invoice with
+   the authorized terms and prepares a Finance-scoped request.
+5. **A named Finance employee decides.** The employee reviews the evidence and
+   approves or declines. Approval saves an invoice draft in the Library.
+6. **Hermes records the receipt.** The app returns a bounded acknowledgment to
+   Partnerships without exposing Finance notes or private conversation.
+
+The database and API enforce this boundary. Agents cannot admit a person,
+approve a document, send outreach, move money, grant access, or sign an
+agreement.
+
+## See the workflow
+
+All screenshots use sample fixture data and simulated execution. The fixtures
+do not call a model.
+
+### 1. Partnerships works in its own chat
+
+The Partnerships Manager works with a dedicated agent named Scout in this
+example. The left rail shows Scout's sessions. The role cards on the right show
+the separate Partnerships and Finance assignments.
+
+![Scout chat with the Partnerships session list, screening result, and separate role assignments](docs/assets/readme-partnerships.png)
+
+### 2. Finance receives a scoped handoff
+
+The Finance agent, Ledger, receives a message from Scout in a separate session.
+Ledger checks only the authorized terms and confirmed invoice source that the
+server included in the handoff.
+
+![Ledger chat with its Finance session list and the checked invoice handoff](docs/assets/readme-finance-handoff.png)
+
+### 3. The Finance employee makes the decision
+
+The Inbox names the decision, shows the evidence, and identifies the authorized
+reviewer. The agent prepares this request but cannot decide it.
+
+![Finance chat and session list beside the invoice decision for Alex Rivera](docs/assets/readme-finance-decision.png)
+
+### 4. Hermes records a limited receipt
+
+After Alex approves the invoice draft, Hermes records who decided and what the
+app saved. The receipt confirms that the app did not send an email or start a
+payment. It also keeps Finance notes and private conversation inside Finance.
+
+![Finance session list and recorded invoice draft receipt](docs/assets/readme-finance-receipt.png)
+
+## How team setup works
+
+1. **Create an organization.** The workspace creator names the organization and
+   its first agent during onboarding.
+2. **Invite employees.** When an operator enables member provisioning, the
+   invitation flow can prepare a dedicated agent for the invited employee.
+3. **Assign the job.** An Admin binds two different employees and their agents
+   to the Partnerships and Finance role templates.
+4. **Verify runtime capacity.** Partnerships uses its reviewed screening skill.
+   Finance requires a verified, unreserved Finance runtime before the invite
+   flow offers that role.
+5. **Keep each role scoped.** The server gives each agent its own tools,
+   sessions, and data access. It rejects a workflow when either role loses its
+   verified assignment.
+
+Read [Partnerships + Finance workflow](docs/PARTNER-FINANCE-WORKFLOW.md) for the
+exact admission, privacy, and handoff rules.
+
+## What the workspace supports
+
+| Area | What you can do |
 | --- | --- |
-| Conversations | Create sessions, talk to Iris, upload source material, and control a run with Stop, Guide, Queue, and Retry. A run can pause for a person's answer and continue afterward. |
-| Review | Send applications, invoices, agreements, and access requests to the Inbox with evidence and approval rules. |
-| Records | Review run traces, decision history, receipts, and saved HTML documents. |
-| Team access | Sign in with WorkOS AuthKit, invite members, assign roles, and keep each workspace isolated with forced row-level security. |
-| Agent setup | Configure context, assign managed skills, choose an allowed model, and bring a workspace-owned provider key. |
+| Conversations | Create private sessions for each employee's agent, upload source material, and control a run with Stop, Guide, Queue, and Retry. A run can pause for a person's answer and continue afterward. |
+| Role handoffs | Pass an authorized, immutable work package from Partnerships to Finance without sharing either role's private conversation. |
+| Review | Send applications, invoices, agreements, record changes, and access requests to the Inbox with evidence and approval rules. |
+| Records | Review run traces, decision history, acknowledgments, and saved HTML documents. |
+| Team access | Sign in with WorkOS AuthKit, invite members, assign roles, and isolate each workspace with forced row-level security. |
+| Agent setup | Name the first agent during onboarding, configure context, assign managed skills, choose an allowed model, and connect a workspace-owned provider account. |
 
 ### What people still handle
 
-The demo stops after a person records a decision. It does not send outreach,
-transfer funds, grant access, or sign documents. Instead, the app records the
-intended action as an effect. The execution endpoint returns `unavailable`, and
-an authorized person completes the action outside the demo.
+The demo stops after a person records a decision. It never sends outreach,
+transfers funds, grants access, or signs documents. The app records any intended
+follow-up as a separate effect, and an authorized person completes that action
+outside the demo.
 
-Approved documents render as HTML and remain unsigned and unsent. See
+Approval saves HTML documents as unsigned, unsent drafts. See
 [Architecture](docs/ARCHITECTURE.md#what-is-real-and-what-is-not) for the full
 list of implemented and stubbed behavior.
-
-## See the approval flow
-
-All screenshots below use fixture data.
-
-### 1. Iris screens an application
-
-Iris scores the applicant against the program criteria and cites its sources.
-An Admin can admit or decline the applicant.
-
-![Application review with screening scores, sources, and Admit and Decline actions](docs/assets/flow-1-application-review.jpg)
-
-### 2. A person reviews an agreement
-
-The request shows the draft, scope, fees, term, sources, and approval rule.
-Approval saves an unsigned copy to the Library. The app does not sign or send
-it.
-
-![Agreement review with the draft terms, approval rule, and Approve agreement draft action](docs/assets/flow-2-agreement-review.jpg)
-
-### 3. A person reviews an invoice
-
-The invoice request shows the amount, dates, and line items. Approval saves the
-draft without sending it or starting a payment.
-
-![Invoice review with the amount, dates, line items, and approval action](docs/assets/flow-3-invoice-review.jpg)
-
-### 4. Hermes records the decision
-
-The request moves to Resolved and names the person who decided. The chat card
-also updates so the team can see that the app saved the draft without signing
-or sending it.
-
-![Resolved agreement with the approver and a chat card that says the app saved an unsigned draft](docs/assets/flow-4-agreement-saved.jpg)
-
-### 5. Iris receives the receipt
-
-The receipt appears in the conversation that started the request. Iris can
-continue from the decision, while any follow-up action remains a separate
-effect.
-
-![Conversation receipt with the decision and its pending follow-up effect](docs/assets/flow-5-receipt-in-chat.jpg)
 
 ## Run it locally
 
@@ -160,29 +198,35 @@ pnpm db:migrations:verify
 pnpm e2e:live
 ```
 
-`pnpm e2e:live` creates its own disposable Postgres container, runs the full
-stack, and drives the browser flows with Playwright. It does not write test data
-to the development database.
+`pnpm e2e:live` creates a disposable Postgres container, runs the full stack,
+and drives the browser flows with Playwright. It does not write test data to the
+development database.
+
+To rebuild the README screenshots from the current mock product flow, run:
+
+```sh
+pnpm --filter @hermes/client screenshots:readme
+```
 
 ### Self-hosting
 
 The local path above works offline: `AUTH_MODE=fake` signs you in as a seeded
-user and the Worker answers from the scripted provider (`MODEL_SCRIPTED=1`). A
-fresh hosted workspace needs more before Iris can run: a connected Nous Portal
-account and registered Hermes Cloud capacity. See
-[docs/HERMES-AGENT-RUNTIME.md](docs/HERMES-AGENT-RUNTIME.md) and
-[docs/CLOUD-MANAGEMENT.md](docs/CLOUD-MANAGEMENT.md).
+user, and the Worker answers from the scripted provider (`MODEL_SCRIPTED=1`). A
+fresh hosted workspace needs a connected Nous Portal account and registered
+Hermes Cloud capacity before its agents can run. See
+[Hermes Agent runtime](docs/HERMES-AGENT-RUNTIME.md) and
+[Cloud management](docs/CLOUD-MANAGEMENT.md).
 
-To install and start the official Hermes runtime, follow
-[runtime/hermes/README.md](runtime/hermes/README.md).
+To install and start the official Hermes runtime, follow the
+[runtime guide](runtime/hermes/README.md).
 
 ## How Hermes keeps people in control
 
-The approval boundary lives in the system rather than the prompt:
+The system enforces the approval boundary outside the prompt:
 
 - **Database roles block agent decisions.** The `agent` role cannot insert
-  decisions or effects, and it cannot update requests. It also cannot add
-  members, invitations, or jobs. CI checks the full grant matrix on every push.
+  decisions or effects, update requests, or add members, invitations, or jobs.
+  CI checks the full grant matrix on every push.
 - **One API route records decisions.** Five guards protect
   `POST /w/:ws/requests/:id/decisions`, and one transaction records the result.
 - **The app separates decisions from effects.** A decision captures a person's
@@ -197,16 +241,16 @@ Read the complete set of invariants and their tests in
 
 ## How this project uses Hermes Agent
 
-This repository runs the official Hermes agent loop and adds the workspace,
-security, and approval boundary around it.
+This repository runs the official Hermes agent loop and adds the organization,
+role, security, and approval layers around it.
 
 | Component | Responsibility | Location |
 | --- | --- | --- |
 | Official runtime | Nous Research's Hermes Agent runs the agent loop. This repository pins commit `345cd2b0` and package version 0.21.3, then verifies the source, lock file, and installed packages. | [`runtime/hermes`](runtime/hermes) |
-| Enterprise bridge | A Hermes plugin receives turns from the Worker, streams events back, and exposes only the tools and skills that the workspace allows. | [`runtime/hermes/enterprise_bridge`](runtime/hermes/enterprise_bridge) |
+| Enterprise bridge | A Hermes plugin receives turns from the Worker, streams events back, and exposes only the tools and skills that the employee's role allows. | [`runtime/hermes/enterprise_bridge`](runtime/hermes/enterprise_bridge) |
 | Runtime contract | A versioned contract defines events, terminal errors, and supported release rings. The Worker checks the contract before it admits a run. | [`runtime/hermes/contract.json`](runtime/hermes/contract.json) |
 | Worker boundary | The Worker chooses which tools and models a run may use. It decrypts a provider key only inside the step that calls that provider. | [`apps/worker/src/runtime`](apps/worker/src/runtime) |
-| Managed skills | The workspace packages and assigns versioned Hermes skills, including Partner Program screening. | [`docs/ENTERPRISE-SKILLS.md`](docs/ENTERPRISE-SKILLS.md) |
+| Managed skills | The workspace assigns reviewed, versioned skills to each role, including Partnerships screening and Finance invoice review. | [`docs/ENTERPRISE-SKILLS.md`](docs/ENTERPRISE-SKILLS.md) |
 
 ## Repository layout
 
@@ -227,6 +271,8 @@ Vitest; and Playwright.
 
 - [Architecture](docs/ARCHITECTURE.md) explains what works today, what remains
   stubbed, and how the main routes fit together.
+- [Enterprise skills](docs/ENTERPRISE-SKILLS.md) explains the reviewed role
+  packages and the tools they receive.
 - [Decisions](docs/DECISIONS.md) records the reasoning behind consequential
   implementation choices.
 - [Conventions](docs/CONVENTIONS.md) explains directory ownership, migrations,
