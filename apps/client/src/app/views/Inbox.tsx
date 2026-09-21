@@ -230,13 +230,6 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <Icon name="search" />
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
             </label>
-            {activeTab === 'needs-review' && (
-              <select className="btn reviewer-filter" aria-label="Reviewer" value={reviewer} onChange={(event) => setFilters({ reviewer: event.target.value as NonNullable<Ref['filters']>['reviewer'] })}>
-                <option value="for_me">For me</option>
-                <option value="waiting">Waiting on others</option>
-                <option value="all">All reviewers</option>
-              </select>
-            )}
             <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
               <option value="all">All types</option>
               <option value="application">Applications</option>
@@ -245,18 +238,6 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <option value="agreement">Signatures</option>
               <option value="task">Tasks</option>
               <option value="approval">Approvals</option>
-            </select>
-            <select className="btn provenance-filter" aria-label="Request origin" value={provenance} onChange={(event) => setFilters({ provenance: event.target.value as NonNullable<Ref['filters']>['provenance'] })}>
-              <option value="all">All origins</option>
-              <option value="operational">Operational</option>
-              <option value="sample">Samples</option>
-              <option value="test">Tests</option>
-              <option value="unknown">Origin not recorded</option>
-            </select>
-            <select className="btn visibility-filter" aria-label="Inbox visibility" value={visibility} onChange={(event) => setFilters({ visibility: event.target.value as NonNullable<Ref['filters']>['visibility'] })}>
-              <option value="active">Active</option>
-              <option value="hidden">Hidden</option>
-              <option value="all">Active + hidden</option>
             </select>
           </div>
         )}
@@ -331,7 +312,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <EmptyState
                 icon={activeTab === 'resolved' ? 'trace' : 'admission'}
                 title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                detail={filtered ? 'Try a different search, reviewer, origin, visibility, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
+                detail={filtered ? 'Try a different search or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : `${state.counts.decisions} decisions are in History.`}
                 action={filtered
                   ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active' })}>Clear filters</Button>
                   : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}
