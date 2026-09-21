@@ -1,4 +1,10 @@
-# Hermes Enterprise
+# Hermes Teams Demo
+
+> **Independent project.** Hermes Teams Demo is not affiliated with, endorsed by,
+> or maintained by Nous Research. "Hermes" is used here because the demo runs
+> the open-source Hermes agent runtime and, by default, talks to the Nous Portal
+> inference API. Trademarks belong to their owners. Licensed under
+> [MIT](LICENSE); the first-party package in `vendor/` is under the same license.
 
 An agent workspace. Maya, a workspace Admin, talks to her agent Iris while the
 app follows the work. Every decision — admissions, documents, sending, payment,

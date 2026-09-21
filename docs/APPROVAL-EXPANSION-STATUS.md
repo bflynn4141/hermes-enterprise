@@ -5,7 +5,7 @@ Updated September 15, 2026. Scope: [implementation plan](APPROVAL-EXPANSION-PLAN
 ## Integration
 
 - Lead: `01a09653-559f-7c90-bf22-0a9f9a3e5fed` on local.
-- Checkout: `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/hermes-enterprise`, branch `main`.
+- Checkout: `<local checkout of this repository>`, branch `main`.
 - Working app baseline: `9a46b7d`. Plan commit: `19d70b4`.
 - Existing app: `http://localhost:8787`. Workers must not reset its data or restart its services.
 - Delivery state: all three implementation tasks active. Shared contract `12920a6` integrated as `82b5042`; explicit budget maxima and resource bindings `0a46b61` integrated as `22d4269`. Server, runtime and UI implementation remain in progress.

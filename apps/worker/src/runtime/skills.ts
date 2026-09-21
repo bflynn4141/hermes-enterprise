@@ -232,7 +232,7 @@ export function runtimeSkillCard(assignment: EnterpriseSkillAssignment): {
     id: `managed:${assignment.skill_key}`,
     name: assignment.name,
     version: `v${assignment.version}`,
-    shared_by: 'Hermes Enterprise',
+    shared_by: 'Hermes Teams Demo',
     description: assignment.description,
     detail: state + (assignment.skill_key === PARTNER_INVOICE_REVIEW_DEFINITION.key
       ? 'Checks a Finance-private invoice against an explicitly shared engagement reference, flags duplicates or missing context, and prepares a human decision. It cannot approve or pay.'
