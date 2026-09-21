@@ -42,3 +42,10 @@
   .agent-approval-track, .agent-approval-track::after { transition: none; }
 }
 [data-reduce-motion='true'] .agent-approval-track, [data-reduce-motion='true'] .agent-approval-track::after { transition: none; }
+.agent-approval-arguments { display: flex; flex-direction: column; gap: 12px; }
+.agent-approval-arguments dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
+.agent-approval-arguments dl > div { display: contents; }
+.agent-approval-arguments dt { color: var(--muted); }
+.agent-approval-arguments dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agent-approval-arguments summary { cursor: pointer; color: var(--muted); }
+.agent-approval-arguments pre { margin: 8px 0 0; }

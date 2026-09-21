@@ -292,7 +292,7 @@ export function createMockBackend(options: MockOptions = {}) {
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
         request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
-        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
+        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop on Oct 22–23, with materials prepared in advance.', source_ids: [] }, { id: 'fees', heading: 'Fees', body: 'USD 1,200, payable 14 days after an accepted delivery statement.', source_ids: [DOC_INVOICE, mockUuid(699)] }, { id: 'term', heading: 'Term', body: 'Effective on signature by both parties; either party may end it with 14 days notice.', source_ids: [] }] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
     communicationDraft: options.communicationDraft,
