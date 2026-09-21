@@ -763,7 +763,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 /* ---------- generalized approvals ----------
    One shell, ten previews. Authorization, dependent work and provider effects
    stay separate; motion follows confirmed state and reduced motion is instant. */
-.inbox-tools select.reviewer-filter { color: var(--body); background: rgba(21,16,71,.52); }
+.inbox-sort .seg-count { margin-left: 6px; padding: 0 5px; border-radius: 8px; background: var(--context); color: var(--muted); font-size: 10.4px; line-height: 16px; }
+.inbox-sort button[aria-pressed="true"] .seg-count { color: var(--body); }
 
 .approval-shell { padding-top: 0; }
 .approval-shell .request-content { max-width: 980px; width: 100%; margin-inline: auto; gap: 22px; }
