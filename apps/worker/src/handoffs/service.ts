@@ -15,7 +15,9 @@ import {
   PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
 } from '../enterprise-skills/registry.js';
 
-export const PARTNER_INVOICES_HANDOFF_KEY = 'partner-invoices';
+export const CONTRACTOR_AGREEMENTS_HANDOFF_KEY = 'contractor-agreements';
+/** @deprecated Use CONTRACTOR_AGREEMENTS_HANDOFF_KEY */
+export const PARTNER_INVOICES_HANDOFF_KEY = CONTRACTOR_AGREEMENTS_HANDOFF_KEY;
 
 interface HandoffRow extends QueryResultRow {
   id: string;
@@ -120,30 +122,29 @@ export async function ensurePartnerInvoicesHandoff(
      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,'disabled')
      ON CONFLICT (workspace_id,key) DO UPDATE SET updated_at=handoffs.updated_at
      RETURNING id`,
-    [workspaceId, PARTNER_INVOICES_HANDOFF_KEY,
-      'Partner invoices · Partnerships → Finance',
-      'One governed invoice handoff. Private team context stays private; only authorized terms, confirmed invoice fields, and the final acknowledgment cross teams.',
+    [workspaceId, CONTRACTOR_AGREEMENTS_HANDOFF_KEY,
+      'Contractor agreements · Partnerships → Finance',
+      'After Partnerships admits an applicant, Finance reviews the independent contractor agreement. Private team context stays private; only the admitted partner identity, the agreement draft, and the final acknowledgment cross teams.',
       fromTeamId, toTeamId,
       JSON.stringify([
-        { key: 'authorized_terms', label: 'Authorized terms', direction: 'forward' },
-        { key: 'confirmed_invoice', label: 'Confirmed invoice fields', direction: 'forward' },
+        { key: 'admitted_partner', label: 'Admitted partner', direction: 'forward' },
+        { key: 'contractor_agreement', label: 'Contractor agreement draft', direction: 'forward' },
         { key: 'final_acknowledgment', label: 'Final acknowledgment', direction: 'return' },
       ]),
       JSON.stringify([
-        { index: 1, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Records agreed terms with the source document', note: 'Creates a proposal for Finance' },
-        { index: 2, owner: { team_slug: 'finance', kind: 'person' }, label: 'Verifies the terms and authorizes one invoice', note: 'Human decision in Inbox' },
-        { index: 3, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Submits the received invoice with confirmed fields', note: 'Immutable intake' },
-        { index: 4, owner: { team_slug: 'finance', kind: 'agent' }, label: 'Checks the invoice against the authorized terms and flags gaps', note: 'Evidence only · cannot approve' },
-        { index: 5, owner: { team_slug: 'finance', kind: 'person' }, label: 'Approves or declines', note: 'Human decision in Inbox' },
-        { index: 6, owner: { team_slug: 'finance', kind: 'person', return_team_slug: 'partnerships' }, label: 'One acknowledgment returns: invoice draft saved, or declined', note: 'No payment, email or signature' },
+        { index: 1, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Screens and admits the applicant', note: 'Human decision in Inbox' },
+        { index: 2, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Prepares the independent contractor agreement', note: 'Draft for Finance review' },
+        { index: 3, owner: { team_slug: 'finance', kind: 'agent' }, label: 'Prepares agreement evidence for the reviewer', note: 'Evidence only · cannot approve' },
+        { index: 4, owner: { team_slug: 'finance', kind: 'person' }, label: 'Approves or declines the contractor agreement', note: 'Human decision in Inbox' },
+        { index: 5, owner: { team_slug: 'finance', kind: 'person', return_team_slug: 'partnerships' }, label: 'One acknowledgment returns: agreement draft saved, or declined', note: 'Nothing is signed, paid, or sent' },
       ])],
   );
   const handoffId = inserted.rows[0]?.id ?? (await tx.query<{ id: string }>(
     `SELECT id FROM handoffs WHERE workspace_id=$1 AND key=$2`,
-    [workspaceId, PARTNER_INVOICES_HANDOFF_KEY],
+    [workspaceId, CONTRACTOR_AGREEMENTS_HANDOFF_KEY],
   )).rows[0]?.id;
   if (!handoffId) {
-    throw new PartnerWorkflowError('workflow_not_configured', 'Could not create the partner-invoices handoff.');
+    throw new PartnerWorkflowError('workflow_not_configured', 'Could not create the contractor-agreements handoff.');
   }
   return handoffId;
 }
@@ -158,9 +159,9 @@ function resultKind(validationStatus: string): PartnerWorkflowHandoffV2['result_
 
 function stageLabels(): Array<{ key: HandoffInMotionItem['stage']; label: string }> {
   return [
-    { key: 'terms_recorded', label: 'Terms recorded' },
-    { key: 'finance_verifying', label: 'Finance verifying' },
-    { key: 'invoice', label: 'Invoice' },
+    { key: 'terms_recorded', label: 'Applicant admitted' },
+    { key: 'finance_verifying', label: 'Agreement prepared' },
+    { key: 'invoice', label: 'Finance review' },
     { key: 'decision', label: 'Decision' },
     { key: 'acknowledged', label: 'Acknowledged' },
   ];
@@ -208,55 +209,27 @@ function waitingOnViewer(
 }
 
 function buildInMotion(
-  viewerRole: PartnerWorkflowViewV2['viewer_role'],
-  handoffs: PartnerWorkflowHandoffV2[],
-  engagements: PartnerWorkflowViewV2['engagements'],
+  _viewerRole: PartnerWorkflowViewV2['viewer_role'],
+  _handoffs: PartnerWorkflowHandoffV2[],
+  _engagements: PartnerWorkflowViewV2['engagements'],
 ): HandoffInMotionItem[] {
-  const currentHandoffs = handoffs.filter((row) => row.current);
-  const motion: HandoffInMotionItem[] = [];
-  for (const engagement of engagements) {
-    if (engagement.authorization_status !== 'authorized') continue;
-    if (currentHandoffs.some((row) => row.partner_id === engagement.partner.id && row.engagement_reference === engagement.reference)) continue;
-    const stage = engagementStage(engagement.authorization_status);
-    motion.push({
-      id: engagement.id,
-      kind: 'engagement',
-      title: `${engagement.partner.name} · ${engagement.reference}`,
-      subtitle: `${engagement.input_provenance === 'sample' ? 'Sample' : 'Customer'} · ${engagement.currency} ${(engagement.authorized_total_minor / 100).toFixed(2)} · terms authorized`,
-      stage,
-      stages: stageStates(stage),
-      handoff: null,
-      engagement,
-    });
-  }
-  for (const handoff of currentHandoffs) {
-    const stage = invoiceStage(handoff);
-    motion.push({
-      id: handoff.id,
-      kind: 'invoice',
-      title: `${handoff.partner_name} · ${handoff.engagement_reference}`,
-      subtitle: `${handoff.input_provenance === 'sample' ? 'Sample' : handoff.input_provenance === 'customer' ? 'Customer' : 'Unknown'} · ${handoff.invoice_currency} ${(handoff.invoice_total_minor / 100).toFixed(2)} · terms sent`,
-      stage,
-      stages: stageStates(stage),
-      handoff,
-      engagement: null,
-    });
-  }
-  return motion.slice(0, 25);
+  // Contractor agreements move through Inbox application + agreement requests.
+  // Legacy invoice intakes are not listed on this handoff surface.
+  return [];
 }
 
 function laneNotes(slug: 'partnerships' | 'finance', ready: boolean, scheduleEnabled: boolean, skillVersion: string | null): string[] {
   if (slug === 'partnerships') {
     return [
-      'records terms, submits invoices',
-      'prepares evidence, publishes the review',
+      'admits applicants, prepares contractor agreements',
+      'screens partners and drafts outreach',
       scheduleEnabled ? 'Partner program screening · schedule on' : 'Partner program screening · schedule off',
       skillVersion ? `${skillVersion} attested` : 'skill version unavailable',
     ];
   }
   return [
-    'checks invoices, prepares evidence',
-    'explains stored results only',
+    'reviews contractor agreements',
+    'prepares evidence for the human decision',
     scheduleEnabled ? 'Partner invoice review · schedule on' : 'Partner invoice review · schedule off',
     skillVersion ? `${skillVersion} attested` : 'skill version unavailable',
   ];

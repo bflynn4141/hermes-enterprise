@@ -208,7 +208,7 @@ async function workflowFixture(): Promise<WorkflowFixture> {
       `UPDATE handoffs
           SET admission_state='enabled',enabled_by=$2,enabled_at=now(),readiness=$3::jsonb,
               readiness_checked_at=now()
-        WHERE workspace_id=$1 AND key='partner-invoices'`,
+        WHERE workspace_id=$1 AND key='contractor-agreements'`,
       [fx.workspaceId, fx.adminId, JSON.stringify(readiness)],
     );
   });
@@ -497,7 +497,7 @@ async function decideInvoice(
 }
 
 describe('Partnerships + Finance exact-authority workflow v2', () => {
-  it('creates a first-class partner-invoices handoff when roles are configured', async () => {
+  it('creates a first-class contractor-agreements handoff when roles are configured', async () => {
     const fx = await workflowFixture();
     await appTransaction(fx, fx.adminId, async (client) => {
       const admission = await readHandoffAdmission(client, fx.workspaceId);
@@ -505,11 +505,17 @@ describe('Partnerships + Finance exact-authority workflow v2', () => {
       const view = await loadPartnerWorkflowViewV2(client, fx.workspaceId, fx.adminId);
       const list = await loadHandoffsList(client, fx.workspaceId, fx.adminId, view);
       expect(list).toHaveLength(1);
-      expect(list[0]?.key).toBe('partner-invoices');
+      expect(list[0]?.key).toBe('contractor-agreements');
       const detail = await loadHandoffDetail(client, fx.workspaceId, list[0]!.id, view);
-      expect(detail.steps).toHaveLength(6);
+      expect(detail.steps).toHaveLength(5);
       expect(detail.crossing).toHaveLength(3);
       expect(detail.lanes).toHaveLength(2);
+      expect(detail.in_motion).toHaveLength(0);
+      expect(detail.crossing.map((item) => item.key)).toEqual([
+        'admitted_partner',
+        'contractor_agreement',
+        'final_acknowledgment',
+      ]);
     });
   });
 

@@ -1692,14 +1692,14 @@ export function createMockBackend(options: MockOptions = {}) {
       if (!configured) return json([]);
       const listItem = {
         id: handoffId,
-        key: 'partner-invoices',
-        name: 'Partner invoices · Partnerships → Finance',
-        description: 'One governed invoice handoff. Private team context stays private; only authorized terms, confirmed invoice fields, and the final acknowledgment cross teams.',
+        key: 'contractor-agreements',
+        name: 'Contractor agreements · Partnerships → Finance',
+        description: 'After Partnerships admits an applicant, Finance reviews the independent contractor agreement. Private team context stays private; only the admitted partner identity, the agreement draft, and the final acknowledgment cross teams.',
         from_team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
         to_team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
         admission_state: partnerAdmissionEnabled ? 'enabled' : 'disabled',
         viewer_role: viewerRole,
-        counts: { in_motion: partnerHandoffs.length, waiting_on_viewer: workflowRole === 'finance' ? 1 : 0 },
+        counts: { in_motion: 0, waiting_on_viewer: 0 },
       };
       if (!handoffsListMatch[1]) return json([listItem]);
       if (handoffsListMatch[1] !== handoffId) return fail(404, 'handoff_not_found');
@@ -1709,13 +1709,13 @@ export function createMockBackend(options: MockOptions = {}) {
         { role: 'finance', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
       ];
       const lanes = workflowRole === 'unrelated' ? [] : [
-        { team: listItem.from_team, person: 'Maya Chen', agent: 'Iris', agent_id: AGENT, skill: 'Partner program screening', readiness: readiness[0]!, notes: ['records terms, submits invoices', 'prepares evidence, publishes the review', 'Partner program screening · schedule off', '1.8.0 attested'] },
-        { team: listItem.to_team, person: 'Alex Rivera', agent: 'Ledger', agent_id: FINANCE_AGENT, skill: 'Partner invoice review', readiness: readiness[1]!, notes: ['checks invoices, prepares evidence', 'explains stored results only', 'Partner invoice review · schedule off', '1.0.1 attested'] },
+        { team: listItem.from_team, person: 'Maya Chen', agent: 'Iris', agent_id: AGENT, skill: 'Partner program screening', readiness: readiness[0]!, notes: ['admits applicants, prepares contractor agreements', 'screens partners and drafts outreach', 'Partner program screening · schedule off', '1.8.0 attested'] },
+        { team: listItem.to_team, person: 'Alex Rivera', agent: 'Ledger', agent_id: FINANCE_AGENT, skill: 'Partner invoice review', readiness: readiness[1]!, notes: ['reviews contractor agreements', 'prepares evidence for the human decision', 'Partner invoice review · schedule off', '1.0.1 attested'] },
       ];
       return json({
         handoff: {
           id: handoffId,
-          key: 'partner-invoices',
+          key: 'contractor-agreements',
           name: listItem.name,
           description: listItem.description,
           admission_state: listItem.admission_state,
@@ -1724,17 +1724,16 @@ export function createMockBackend(options: MockOptions = {}) {
         },
         lanes,
         crossing: [
-          { key: 'authorized_terms', label: 'Authorized terms', direction: 'forward' },
-          { key: 'confirmed_invoice', label: 'Confirmed invoice fields', direction: 'forward' },
+          { key: 'admitted_partner', label: 'Admitted partner', direction: 'forward' },
+          { key: 'contractor_agreement', label: 'Contractor agreement draft', direction: 'forward' },
           { key: 'final_acknowledgment', label: 'Final acknowledgment', direction: 'return' },
         ],
         steps: [
-          { index: 1, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Records agreed terms with the source document', note: 'Creates a proposal for Finance' },
-          { index: 2, owner: { team_slug: 'finance', kind: 'person' }, label: 'Verifies the terms and authorizes one invoice', note: 'Human decision in Inbox' },
-          { index: 3, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Submits the received invoice with confirmed fields', note: 'Immutable intake' },
-          { index: 4, owner: { team_slug: 'finance', kind: 'agent' }, label: 'Checks the invoice against the authorized terms and flags gaps', note: 'Evidence only · cannot approve' },
-          { index: 5, owner: { team_slug: 'finance', kind: 'person' }, label: 'Approves or declines', note: 'Human decision in Inbox' },
-          { index: 6, owner: { team_slug: 'finance', kind: 'person', return_team_slug: 'partnerships' }, label: 'One acknowledgment returns: invoice draft saved, or declined', note: 'No payment, email or signature' },
+          { index: 1, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Screens and admits the applicant', note: 'Human decision in Inbox' },
+          { index: 2, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Prepares the independent contractor agreement', note: 'Draft for Finance review' },
+          { index: 3, owner: { team_slug: 'finance', kind: 'agent' }, label: 'Prepares agreement evidence for the reviewer', note: 'Evidence only · cannot approve' },
+          { index: 4, owner: { team_slug: 'finance', kind: 'person' }, label: 'Approves or declines the contractor agreement', note: 'Human decision in Inbox' },
+          { index: 5, owner: { team_slug: 'finance', kind: 'person', return_team_slug: 'partnerships' }, label: 'One acknowledgment returns: agreement draft saved, or declined', note: 'Nothing is signed, paid, or sent' },
         ],
         actions: {
           configure: seat === 'admin',
@@ -1748,27 +1747,12 @@ export function createMockBackend(options: MockOptions = {}) {
         readiness,
         partner_options: canSeeWork ? [{ id: mockUuid(611), name: 'Robin Studio', source: 'engagement' }, { id: mockUuid(617), name: 'Northstar Labs', source: 'candidate' }] : [],
         engagements: canSeeWork ? partnerEngagements : [],
-        in_motion: canSeeWork ? partnerHandoffs.map((handoff) => ({
-          id: handoff.id,
-          kind: 'invoice',
-          title: `${handoff.partner_name} · ${handoff.engagement_reference}`,
-          subtitle: `${handoff.input_provenance === 'sample' ? 'Sample' : 'Customer'} · ${handoff.invoice_currency} ${(handoff.invoice_total_minor / 100).toFixed(2)} · terms sent`,
-          stage: handoff.outcome.human_decision === 'pending' ? 'decision' : 'invoice',
-          stages: [
-            { key: 'terms_recorded', label: 'Terms recorded', state: 'done' },
-            { key: 'finance_verifying', label: 'Finance verifying', state: 'done' },
-            { key: 'invoice', label: 'Invoice', state: handoff.outcome.human_decision === 'pending' ? 'done' : 'current' },
-            { key: 'decision', label: 'Decision', state: handoff.outcome.human_decision === 'pending' ? 'current' : 'pending' },
-            { key: 'acknowledged', label: 'Acknowledged', state: 'pending' },
-          ],
-          handoff,
-          engagement: null,
-        })) : [],
+        in_motion: [],
         connector: {
           name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
           summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
         },
-        counts: { in_motion: partnerHandoffs.length, waiting_on_viewer: workflowRole === 'finance' ? 1 : 0 },
+        counts: { in_motion: 0, waiting_on_viewer: 0 },
       });
     }
     if (p('/partner-workflow') && method === 'GET') {

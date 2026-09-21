@@ -191,7 +191,7 @@ export function AgentOverview() {
         <AgentTabsRow value="overview" />
         {handoffChip && (
           <p className="agent-handoff-chip">
-            Part of · Partner invoices · Partnerships → Finance ·
+            Part of · Contractor agreements · Partnerships → Finance ·
             <button type="button" onClick={() => nav(LIB('handoffs'))}>Open Handoffs</button>
           </p>
         )}

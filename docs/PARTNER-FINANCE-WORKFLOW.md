@@ -1,16 +1,17 @@
 # Partnerships + Finance handoff
 
-This **Handoff** gives two employees one agent each. Partnerships uses Iris to
-collect partner evidence and prepare draft-only work. Finance uses a separate
-agent to check one confirmed invoice, followed by a named Finance employee's
-decision. Models explain evidence; they do not create authority, choose a
-recipient, approve, pay, sign or send.
+This **Handoff** (`contractor-agreements`) gives two employees one agent each.
+Partnerships admits applicants and prepares the independent contractor
+agreement. Finance reviews that agreement draft, followed by a named Finance
+employee's decision. Models explain evidence; they do not create authority,
+choose a recipient, approve, pay, sign or send. Legacy invoice-intake APIs remain
+for compatibility but are not the Handoffs surface.
 
 ## Setup and admission
 
 An Admin applies the two role templates with
 `POST /w/:ws/partner-workflow/configure`, which creates the workspace's
-`partner-invoices` handoff row. The Handoffs page lives at **Library → Handoffs**
+`contractor-agreements` handoff row. The Handoffs page lives at **Library → Handoffs**
 (`GET /w/:ws/handoffs`, `GET /w/:ws/handoffs/:id`). The request binds two distinct active
 members to two distinct agents. Applying a template replaces semantic grants
 with the reviewed allowlist, pauses that agent's other role assignment and

@@ -1,5 +1,7 @@
 -- Handoff becomes a first-class workspace object. Admission authority moves to
 -- the handoffs row; partner_workflow_settings stays as a compatibility mirror.
+-- The first seeded handoff is contractor onboarding: Partnerships admits an
+-- applicant, then Finance reviews the independent contractor agreement.
 
 CREATE TABLE IF NOT EXISTS handoffs (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -51,23 +53,22 @@ INSERT INTO handoffs
    admission_state, enabled_by, enabled_at, readiness, readiness_checked_at)
 SELECT
   pws.workspace_id,
-  'partner-invoices',
-  'Partner invoices · Partnerships → Finance',
-  'One governed invoice handoff. Private team context stays private; only authorized terms, confirmed invoice fields, and the final acknowledgment cross teams.',
+  'contractor-agreements',
+  'Contractor agreements · Partnerships → Finance',
+  'After Partnerships admits an applicant, Finance reviews the independent contractor agreement. Private team context stays private; only the admitted partner identity, the agreement draft, and the final acknowledgment cross teams.',
   partnerships.id,
   finance.id,
   '[
-    {"key":"authorized_terms","label":"Authorized terms","direction":"forward"},
-    {"key":"confirmed_invoice","label":"Confirmed invoice fields","direction":"forward"},
+    {"key":"admitted_partner","label":"Admitted partner","direction":"forward"},
+    {"key":"contractor_agreement","label":"Contractor agreement draft","direction":"forward"},
     {"key":"final_acknowledgment","label":"Final acknowledgment","direction":"return"}
   ]'::jsonb,
   '[
-    {"index":1,"owner":{"team_slug":"partnerships","kind":"person"},"label":"Records agreed terms with the source document","note":"Creates a proposal for Finance"},
-    {"index":2,"owner":{"team_slug":"finance","kind":"person"},"label":"Verifies the terms and authorizes one invoice","note":"Human decision in Inbox"},
-    {"index":3,"owner":{"team_slug":"partnerships","kind":"person"},"label":"Submits the received invoice with confirmed fields","note":"Immutable intake"},
-    {"index":4,"owner":{"team_slug":"finance","kind":"agent"},"label":"Checks the invoice against the authorized terms and flags gaps","note":"Evidence only · cannot approve"},
-    {"index":5,"owner":{"team_slug":"finance","kind":"person"},"label":"Approves or declines","note":"Human decision in Inbox"},
-    {"index":6,"owner":{"team_slug":"finance","kind":"person","return_team_slug":"partnerships"},"label":"One acknowledgment returns: invoice draft saved, or declined","note":"No payment, email or signature"}
+    {"index":1,"owner":{"team_slug":"partnerships","kind":"person"},"label":"Screens and admits the applicant","note":"Human decision in Inbox"},
+    {"index":2,"owner":{"team_slug":"partnerships","kind":"person"},"label":"Prepares the independent contractor agreement","note":"Draft for Finance review"},
+    {"index":3,"owner":{"team_slug":"finance","kind":"agent"},"label":"Prepares agreement evidence for the reviewer","note":"Evidence only · cannot approve"},
+    {"index":4,"owner":{"team_slug":"finance","kind":"person"},"label":"Approves or declines the contractor agreement","note":"Human decision in Inbox"},
+    {"index":5,"owner":{"team_slug":"finance","kind":"person","return_team_slug":"partnerships"},"label":"One acknowledgment returns: agreement draft saved, or declined","note":"Nothing is signed, paid, or sent"}
   ]'::jsonb,
   pws.admission_state,
   pws.enabled_by,
@@ -84,12 +85,12 @@ ON CONFLICT (workspace_id, key) DO NOTHING;
 UPDATE partner_workflow_settings pws
    SET handoff_id = h.id
   FROM handoffs h
- WHERE h.workspace_id = pws.workspace_id AND h.key = 'partner-invoices';
+ WHERE h.workspace_id = pws.workspace_id AND h.key = 'contractor-agreements';
 
 UPDATE partner_handoffs ph
    SET handoff_id = h.id
   FROM handoffs h
- WHERE h.workspace_id = ph.workspace_id AND h.key = 'partner-invoices';
+ WHERE h.workspace_id = ph.workspace_id AND h.key = 'contractor-agreements';
 
 CREATE OR REPLACE FUNCTION sync_handoff_admission_to_settings()
 RETURNS trigger LANGUAGE plpgsql AS $$
