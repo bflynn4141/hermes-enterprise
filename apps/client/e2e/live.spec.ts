@@ -378,10 +378,9 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
   await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
   await expect(page.getByText('No reviews waiting')).toBeVisible();
 
-  // Model providers live under Admin → Agents since the Admin split (PR92–96).
+  // Model providers live under Admin since the Admin split (PR92–96).
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Agents' }).click();
-  await page.getByRole('navigation', { name: 'Agents settings pages' }).getByRole('button', { name: 'Model providers', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
   await expect(page.getByText('Connect Nous Portal to enable models')).toBeVisible();
   await context.close();
 });

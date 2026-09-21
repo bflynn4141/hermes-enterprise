@@ -1041,10 +1041,8 @@ export function Settings({ view }: { view: string }) {
 }
 
 export function AdminSettings({ view }: { view: string }) {
-  const nav = useNav();
   const admin = useIsAdmin();
   const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
-  const group = ADMIN_SETTINGS_GROUPS.find((entry) => entry.items.some((item) => item.id === selected))!;
   if (!admin) return null;
   const panel = (
     <div className="admin-settings-view">
@@ -1064,15 +1062,7 @@ export function AdminSettings({ view }: { view: string }) {
     <div className="scroll">
       <div className="app-body admin-settings-page">
         <SettingsViewHeader mode="admin" />
-        <div className="settings-section-tabs admin-group-tabs">
-          <Tabs
-            tabs={ADMIN_SETTINGS_GROUPS.map((entry) => ({ id: entry.items[0].id, label: entry.label }))}
-            value={group.items[0].id}
-            onChange={(next) => nav(ADMIN(next))}
-            label="Admin sections"
-          />
-        </div>
-        <AdminDetailLayout group={group.label} items={group.items} selected={selected}>
+        <AdminDetailLayout selected={selected}>
           {panel}
         </AdminDetailLayout>
       </div>
