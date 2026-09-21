@@ -88,9 +88,9 @@ const valueOf = (body: Line[], key: string): string | undefined =>
   body.find((line) => line.key === key)?.value;
 
 describe('the workflow files', () => {
-  it('exist, and cover CI, both deploys and the backup', () => {
+  it('exist, and cover CI, both deploys, the backup and the workspace link', () => {
     expect(files.sort()).toEqual(
-      ['backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml'].sort(),
+      ['backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml', 'workspace-link.yml'].sort(),
     );
   });
 
