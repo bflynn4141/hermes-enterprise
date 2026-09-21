@@ -124,7 +124,7 @@ function TeamCommitmentPreview({ view }: { view: ApprovalView }) {
       <div className="approval-facts"><Fact label="Due">{shortDateTime(details.due_at)}</Fact><Fact label="Mandate">Receiving agent only</Fact></div>
       <div className="approval-two-col"><section><span className="approval-kicker">Dependencies</span><CheckList items={details.dependencies} /></section><section><span className="approval-kicker">Acceptance criteria</span><CheckList items={details.acceptance_criteria} /></section></div>
       {view.payload.context.source.trigger?.kind === 'member_agent_joined' && (
-        <p className="approval-boundary-note">Approval records this proposed collaboration. No agent message or run is sent until a delivery executor exists.</p>
+        <p className="approval-boundary-note">Approval records the commitment. Delivery is a separate step.</p>
       )}
     </div>
   );
@@ -528,8 +528,11 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
               <h2 className="section-title">{request.subject ?? request.label}</h2>
               <AgentIdentity name={view.identities.requester_agent.name} email={view.identities.requester_agent.email} label="Proposer" />
               <p>{view.payload.summary}</p><p>{view.payload.consequence}</p>
-              <p className="meta">Request {request.id} · Policy {view.payload.policy.key} v{view.payload.policy.version}</p>
-              <p className="meta">Source run {view.payload.context.source.run_id} · Source session {view.payload.context.source.session_id}</p>
+              <details className="approval-technical-details">
+                <summary>Technical details</summary>
+                <p className="meta">{[`Request ${request.id}`, `Policy ${view.payload.policy.key} v${view.payload.policy.version}`].join(' · ')}</p>
+                {(view.payload.context.source.run_id || view.payload.context.source.session_id) && <p className="meta">{[view.payload.context.source.run_id && `Source run ${view.payload.context.source.run_id}`, view.payload.context.source.session_id && `Source session ${view.payload.context.source.session_id}`].filter(Boolean).join(' · ')}</p>}
+              </details>
             </div>
           </details>
           <ApprovalEvidence key={view.payload.authorization.revision} view={view} load={(id) => adapter.rest.getApprovalEvidence(state.workspace.id, request.id, id)} />

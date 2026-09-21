@@ -554,7 +554,7 @@ function LibraryConnections() {
       stepUp();
       return;
     }
-    setNotice(error.reason === 'admin_required' ? EMPTY.adminOnly
+    setNotice(error.reason === 'admin_required' ? EMPTY.adminRequired
       : error.reason === 'gmail_evidence_unavailable' ? 'Read-only Gmail evidence is not configured for this deployment.'
         : error.reason === 'gmail_evidence_not_connected' ? 'Connect the read-only Gmail account before importing a thread.'
           : 'The evidence action could not be completed. Nothing was sent or changed outside Hermes.');
@@ -700,7 +700,7 @@ function LibrarySkills() {
               <span style={{ position: 'relative', display: 'flex', gap: 8 }}>
                 {assignment && (
                   <Button disabled={!admin} onClick={() => setEditing(editing === assignment.id ? null : assignment.id)}>
-                    {editing === assignment.id ? 'Close' : admin ? 'Configure' : EMPTY.adminOnly}
+                    {editing === assignment.id ? 'Close' : admin ? 'Configure' : EMPTY.adminRequired}
                   </Button>
                 )}
                 {!assignment && (
@@ -718,7 +718,7 @@ function LibrarySkills() {
                         .catch(() => setError('Could not add that skill. Try again.'));
                     }}
                   >
-                    {skill.adopted ? 'In use' : admin ? 'Add' : EMPTY.adminOnly}
+                    {skill.adopted ? 'In use' : admin ? 'Add' : EMPTY.adminRequired}
                   </Button>
                 )}
                 <Ack show={ack === skill.id} style={{ right: 0, top: -40 }}>Added</Ack>
@@ -1114,7 +1114,7 @@ function EmailTab() {
       } else {
         setNotice(error.reason === 'gmail_unavailable'
           ? 'Gmail outreach is not configured for this Hermes deployment.'
-          : error.reason === 'admin_required' ? EMPTY.adminOnly : 'Gmail authorization could not be started. Try again.');
+          : error.reason === 'admin_required' ? EMPTY.adminRequired : 'Gmail authorization could not be started. Try again.');
       }
       setBusy(false);
     }
@@ -1260,7 +1260,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
         setNotice(error.reason === 'slack_unavailable'
           ? 'Slack is not configured for this Hermes deployment.'
           : error.reason === 'admin_required'
-            ? EMPTY.adminOnly
+            ? EMPTY.adminRequired
             : 'Slack authorization could not be started. Try again.');
       }
       setBusy(false);
@@ -1280,7 +1280,7 @@ function SlackTab({ personal = false }: { personal?: boolean }) {
     } catch (caught) {
       const error = caught as { status?: number; reason?: string };
       if (error.status === 401 && error.reason === 'reauth_required') stepUp();
-      else setNotice(error.reason === 'admin_required' ? EMPTY.adminOnly : 'Slack could not be disconnected. Try again.');
+      else setNotice(error.reason === 'admin_required' ? EMPTY.adminRequired : 'Slack could not be disconnected. Try again.');
     } finally {
       setBusy(false);
     }
@@ -1564,7 +1564,7 @@ function OrganizationTab() {
           : error.reason === 'not_scheduled'
             ? 'This workspace is not scheduled for deletion.'
             : error.reason === 'not_admin'
-              ? EMPTY.adminOnly
+              ? EMPTY.adminRequired
               : 'That did not go through. Try again.',
       );
     }
@@ -1776,7 +1776,7 @@ function AgentsTab() {
       })
       .catch((caught: unknown) => {
         const reason = (caught as { reason?: string }).reason;
-        setError(reason === 'not_admin' ? EMPTY.adminOnly : reason === 'bad_cap' ? 'A cap is a whole number of tokens, or none.' : 'Could not save that. Try again.');
+        setError(reason === 'not_admin' ? EMPTY.adminRequired : reason === 'bad_cap' ? 'A cap is a whole number of tokens, or none.' : 'Could not save that. Try again.');
         return false;
       });
   };
@@ -2104,7 +2104,7 @@ function ProviderKeysTab() {
   if (!admin) {
     return (
       <>
-        <EmptyState icon="context" title={EMPTY.adminOnly} detail="Keys are never shown to a Member, not even masked values." />
+        <EmptyState icon="context" title={EMPTY.adminRequired} detail="Keys are never shown to a Member, not even masked values." />
       </>
     );
   }
@@ -2692,7 +2692,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           else setNotice('This needs a recent sign-in. Sign in again to continue.');
           return;
         }
-        setNotice(error.reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record that attestation. Try again.');
+        setNotice(error.reason === 'not_admin' ? EMPTY.adminRequired : 'Could not record that attestation. Try again.');
       });
   };
 

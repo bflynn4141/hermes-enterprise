@@ -192,7 +192,7 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
   const record = useEntity<RequestEntity>('request', requestId || null);
   if (!requestId) return <BrokenBlock reason="The receipt named no request." />;
   if (record.state === 'loading') return <Skeleton rows={2} label="Loading the request" />;
-  if (record.state === 'unavailable') return <BrokenBlock reason="Not available yet" />;
+  if (record.state === 'unavailable') return <BrokenBlock reason="This request cannot be loaded from the server yet. Check Inbox for its current state." />;
   if (record.state === 'missing' || !record.data) return <BrokenBlock reason="Request not found" />;
   const request = record.data;
   const action = request.status !== 'pending'
@@ -200,14 +200,14 @@ export function ReceiptBlock({ requestId }: { requestId: string }) {
     : request.kind !== 'approval'
       ? ['invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : 'Review'
       : request.approval?.pending_for_viewer
-        ? approvalActionLabel(request)
+        ? 'Review in Inbox'
         : 'Open request';
   return (
     <div className="chat-card static">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={28} className="card-icon" />
       <div className="card-body">
         <div className="card-title">{request.label}</div>
-        <div className="card-sub">{request.kind === 'approval' ? `${approvalTypeLabel(request)} · ${approvalReviewerLabel(request)}` : requestStatusLabel(request)}</div>
+        <div className="card-sub">{request.kind === 'approval' ? `${approvalTypeLabel(request)} · ${approvalReviewerLabel(request)}${request.status === 'pending' && request.approval?.pending_for_viewer ? ` · ${approvalActionLabel(request)}` : ''}` : requestStatusLabel(request)}</div>
       </div>
       <Button onClick={() => nav({ section: 'inbox', view: 'request', id: request.id })}>
         {action}

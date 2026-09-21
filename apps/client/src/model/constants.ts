@@ -95,7 +95,9 @@ export const EMPTY = {
   keyNotAllowed: 'No longer usable — only Nous Portal keys can be used',
   providerKeys: 'Connect Nous Portal to enable models',
   attach: 'No documents yet',
-  adminOnly: 'Admin decision required',
+  adminOnly: 'A workspace Admin records this decision',
+  /** Admin-gated configuration, not a request decision. */
+  adminRequired: 'Workspace Admin only',
   shareGone: 'This link is no longer available.',
   blockBroken: 'Could not display this block',
   reconnecting: 'Reconnecting…',

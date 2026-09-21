@@ -340,7 +340,7 @@ test.describe('enterprise approval inbox', () => {
 
     // Approval receipt cards resolve the same request id as Inbox rows.
     await expect(page.getByText('Research sprint plan')).toBeVisible();
-    await page.getByRole('button', { name: 'Approve plan' }).click();
+    await page.locator('.chat-card').filter({ hasText: 'Research sprint plan' }).getByRole('button', { name: 'Review in Inbox' }).click();
     await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();
 
     await app.getByRole('button', { name: 'Back to Inbox' }).click();

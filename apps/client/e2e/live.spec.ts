@@ -126,7 +126,7 @@ test('P4 · two contexts deciding the same request yield one decision and one "A
 // P5 · the Member seat
 // ---------------------------------------------------------------------------
 
-test('P5 · a Member opening a request sees "Admin decision required" and cannot decide', async ({ browser }) => {
+test('P5 · a Member opening a request sees "A workspace Admin records this decision" and cannot decide', async ({ browser }) => {
   const [requestId] = rows(
     `SELECT id::text FROM requests WHERE workspace_id = '${SEED_WORKSPACE}' AND status = 'pending' ORDER BY created_at DESC LIMIT 1;`,
   );
@@ -135,7 +135,7 @@ test('P5 · a Member opening a request sees "Admin decision required" and cannot
   const context = await asUser(browser, SEED_MEMBER);
   const page = await context.newPage();
   await page.goto(`${shell(SEED_WORKSPACE)}#inbox/request/${requestId}`);
-  await expect(page.getByText('Admin decision required')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('A workspace Admin records this decision')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole('button', { name: 'Admit' })).toHaveCount(0);
 
   // And the route refuses it too: the copy is a courtesy, the guard is the law.
