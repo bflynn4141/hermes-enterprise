@@ -148,11 +148,11 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
   });
 
-  test('origin filters and personal hiding stay visible, reversible, and reviewer-safe', async ({ page }) => {
+  test('sample chips and personal hiding stay visible, reversible, and reviewer-safe', async ({ page }) => {
     const app = await openInbox(page);
-    await expect(app.getByLabel('Request origin')).toHaveValue('all');
+    // Sample and test rows keep their chip; operational and unrecorded origins carry none.
     await expect(app.getByText('Sample', { exact: true }).first()).toBeVisible();
-    await app.getByLabel('Request origin').selectOption('sample');
+    await expect(app.getByText('Origin not recorded')).toHaveCount(0);
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
 
     await app.getByLabel('Reviewer').selectOption('waiting');
@@ -176,15 +176,13 @@ test.describe('enterprise approval inbox', () => {
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
   });
 
-  test('origin and visibility controls remain usable at phone width', async ({ page }) => {
+  test('visibility controls remain usable at phone width', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(APPROVALS);
     await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('inbox');
     const app = page.getByRole('region', { name: 'Application' });
-    await expect(app.getByLabel('Request origin')).toBeVisible();
     await expect(app.getByLabel('Inbox visibility')).toBeVisible();
-    await app.getByLabel('Request origin').selectOption('sample');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
     const bounds = await app.locator('.inbox-topbar').evaluate((node) => ({
       clientWidth: node.clientWidth,
