@@ -270,18 +270,6 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <option value="task">Tasks</option>
               <option value="approval">Approvals</option>
             </select>
-            <select className="btn provenance-filter" aria-label="Request origin" value={provenance} onChange={(event) => setFilters({ provenance: event.target.value as NonNullable<Ref['filters']>['provenance'] })}>
-              <option value="all">All origins</option>
-              <option value="operational">Operational</option>
-              <option value="sample">Samples</option>
-              <option value="test">Tests</option>
-              <option value="unknown">Origin not recorded</option>
-            </select>
-            <select className="btn visibility-filter" aria-label="Inbox visibility" value={visibility} onChange={(event) => setFilters({ visibility: event.target.value as NonNullable<Ref['filters']>['visibility'] })}>
-              <option value="active">Active</option>
-              <option value="hidden">Hidden</option>
-              <option value="all">Active + hidden</option>
-            </select>
           </div>
         )}
       </div>
@@ -357,7 +345,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <EmptyState
                 icon={activeTab === 'resolved' ? 'trace' : 'admission'}
                 title={filtered ? 'No matching requests' : activeTab === 'resolved' ? EMPTY.inboxResolved : EMPTY.inbox}
-                detail={filtered ? 'Try a different search, reviewer, origin, visibility, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : state.counts.decisions ? `${state.counts.decisions} decisions are in History.` : undefined}
+                detail={filtered ? 'Try a different search, reviewer, or request type.' : activeTab === 'resolved' ? 'Completed reviews appear here.' : state.counts.decisions ? `${state.counts.decisions} decisions are in History.` : undefined}
                 action={filtered
                   ? <Button onClick={() => setFilters({ query: '', kind: 'all', reviewer: 'for_me', provenance: 'all', visibility: 'active' })}>Clear filters</Button>
                   : <Button onClick={() => nav(activeTab === 'resolved' ? INBOX : HISTORY())}>{activeTab === 'resolved' ? 'Needs review' : 'View History'}</Button>}

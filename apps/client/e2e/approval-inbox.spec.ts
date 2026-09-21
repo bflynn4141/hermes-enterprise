@@ -17,9 +17,29 @@ const APPROVAL_CASES = [
   { type: 'agent_governance', subject: 'Change Rowan’s schedule and tools', label: 'Agent governance', marker: 'Current schedule', action: null, effect: null, work: null },
 ] as const;
 
-async function openInbox(page: Page) {
-  await page.goto(APPROVALS);
-  await page.getByRole('button', { name: /^Inbox/ }).click();
+/**
+ * The Inbox row shows one search box and the request-type select. Reviewer,
+ * origin and visibility are still part of the Inbox ref and travel in the URL
+ * hash, so tests reach "waiting on others", samples and hidden rows that way.
+ */
+type InboxFilters = { reviewer?: 'for_me' | 'waiting' | 'all'; provenance?: 'all' | 'sample'; visibility?: 'active' | 'hidden' | 'all' };
+
+function inboxHash(filters: InboxFilters = {}): string {
+  const query = new URLSearchParams(filters as Record<string, string>).toString();
+  return `#inbox/list${query ? `?${query}` : ''}`;
+}
+
+async function openInbox(page: Page, filters: InboxFilters = {}) {
+  await page.goto(`${APPROVALS}${inboxHash(filters)}`);
+  const app = page.getByRole('region', { name: 'Application' });
+  await expect(app.getByRole('tab', { name: 'Needs review' })).toBeVisible();
+  return app;
+}
+
+async function filterInbox(page: Page, filters: InboxFilters) {
+  const url = new URL(page.url());
+  url.hash = inboxHash(filters);
+  await page.goto(url.toString());
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByRole('tab', { name: 'Needs review' })).toBeVisible();
   return app;
@@ -154,11 +174,9 @@ test.describe('enterprise approval inbox', () => {
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
   });
 
-  test('origin filters and personal hiding stay visible, reversible, and reviewer-safe', async ({ page }) => {
-    const app = await openInbox(page);
-    await expect(app.getByLabel('Request origin')).toHaveValue('all');
+  test('personal hiding stays reversible and reviewer-safe', async ({ page }) => {
+    const app = await openInbox(page, { provenance: 'sample' });
     await expect(app.getByText('Sample', { exact: true }).first()).toBeVisible();
-    await app.getByLabel('Request origin').selectOption('sample');
     await expect(app.getByText('Launch partner research sprint')).toBeVisible();
 
     await pickReviewer(app, 'Waiting on others');
@@ -173,25 +191,25 @@ test.describe('enterprise approval inbox', () => {
     // must not change Maya's thirteen required reviews.
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
 
-    await app.getByRole('button', { name: 'Back to Inbox' }).click();
+    await filterInbox(page, { reviewer: 'waiting' });
     await expect(app.getByText('Change Rowan’s schedule and tools')).toHaveCount(0);
-    await app.getByLabel('Inbox visibility').selectOption('hidden');
+    await filterInbox(page, { reviewer: 'waiting', visibility: 'hidden' });
     await expect(app.getByText('Change Rowan’s schedule and tools')).toBeVisible();
     await openRequest(app, /Change Rowan’s schedule and tools/);
     await app.getByRole('button', { name: 'Restore', exact: true }).click();
     await expect(page.getByRole('button', { name: /^Inbox/ })).toContainText('13');
   });
 
-  test('origin and visibility controls remain usable at phone width', async ({ page }) => {
+  test('the Inbox row stays on one line at phone width', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(APPROVALS);
     await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('inbox');
     const app = page.getByRole('region', { name: 'Application' });
-    await expect(app.getByLabel('Request origin')).toBeVisible();
-    await expect(app.getByLabel('Inbox visibility')).toBeVisible();
-    await app.getByLabel('Request origin').selectOption('sample');
-    await expect(app.getByText('Launch partner research sprint')).toBeVisible();
+    await expect(app.getByLabel('Search requests')).toBeVisible();
+    await expect(app.getByLabel('Request type')).toBeVisible();
+    await expect(app.getByLabel('Request origin')).toHaveCount(0);
+    await expect(app.getByLabel('Inbox visibility')).toHaveCount(0);
     const bounds = await app.locator('.inbox-topbar').evaluate((node) => ({
       clientWidth: node.clientWidth,
       scrollWidth: node.scrollWidth,
