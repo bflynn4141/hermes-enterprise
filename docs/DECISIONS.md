@@ -5910,3 +5910,30 @@ The project owner’s follow-up replaces the ten-section wrapping strip with one
 The project owner requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
 
 References: https://vercel.com/docs/project-configuration/general-settings and https://vercel.com/docs/integrations/install-an-integration/manage-integrations-reference. Adapt section hierarchy and integration management concepts to Hermes tokens, rather than copying Vercel’s brand.
+
+---
+
+## C88. Managed readiness pins the inference route, not one catalog model
+
+**Decided September 21, 2026.** A Cloud-managed Hermes process pins the custom
+provider, Enterprise model-proxy URL, runtime credential and API mode for its
+entire ready lifetime. It does not pin `agent.model`: each admitted run may use
+the model selected and authorized by the Enterprise Worker through that same
+proxy. Provider, URL, credential or API-mode drift still fails closed and
+removes the process readiness artifact.
+
+**Why.** The Worker intentionally supplies the selected Nous catalog model per
+run. Treating the configured startup default as an immutable provider binding
+made the first non-default selection look like route escape, permanently
+closing native readiness before inference. The model name is request data at
+this boundary; the authenticated proxy and its server-side catalog policy are
+the governed route.
+
+**Evidence.** The policy regression switches between two model names without
+losing readiness, then proves a provider/base-URL escape still closes it. The
+ordinary pinned Hermes 0.21.3 gateway probe submits both fixture models through
+the same governed proxy, verifies both reach the real `AIAgent` loop with the
+assigned skill prompt, and rechecks live readiness and health before exercising
+the existing post-ready drift closures. Hosted acceptance still requires a
+fresh gateway boot and successful staging runs across the intended demo model
+matrix.

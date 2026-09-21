@@ -639,6 +639,12 @@ describe('durable member provisioning', () => {
     const organizationId = await linkOrganization(fx);
     const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
     const email = 'finance-delivered@example.test';
+    // The Admin signed in through WorkOS once, so the users row carries the
+    // WorkOS id; the email must name that id, never our uuid.
+    const adminWorkosUserId = `user_${fx.adminId.replace(/-/g, '').slice(0, 12)}`;
+    await withClient('owner', async (c) => {
+      await c.query('UPDATE users SET workos_user_id = $2 WHERE id = $1', [fx.adminId, adminWorkosUserId]);
+    });
 
     const created = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
       email, role: 'member', role_template_key: 'finance-agent',
@@ -652,7 +658,9 @@ describe('durable member provisioning', () => {
     expect(invitation.provisioning).toMatchObject({ preparation: 'ready', delivery: 'sent' });
     const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation');
     expect(sends).toHaveLength(1);
-    expect(sends[0]!.argument).toMatchObject({ email, organizationId, roleSlug: 'member', expiresInDays: 7 });
+    expect(sends[0]!.argument).toMatchObject({
+      email, organizationId, roleSlug: 'member', expiresInDays: 7, inviterUserId: adminWorkosUserId,
+    });
 
     // Draining again finds nothing to send twice.
     await drainJobs(env, 50);
@@ -732,6 +740,41 @@ describe('durable member provisioning', () => {
       )).rows).toEqual([{ count: 1 }]);
       expect((await c.query(`SELECT status FROM workos_sync WHERE resource_type='invitation' AND resource_id=$1`, [seeded.invitationId])).rows)
         .toEqual([{ status: 'pending' }]);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('sends the invitation unsigned when the inviter has no WorkOS identity, rather than refusing it', async () => {
+    const fx = await seedWorkspace();
+    const fake = await useFakeWorkOS(new FakeWorkOS());
+    const env = workosHermesEnv();
+    const organizationId = await linkOrganization(fx);
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const seeded = await seedQueuedProvisioningJob(fx, 'unsigned-inviter@example.test', 'finance-agent');
+    await withClient('owner', async (c) => {
+      // A seeded Admin who never signed in through WorkOS.
+      await c.query('UPDATE users SET workos_user_id = NULL WHERE id = $1', [fx.adminId]);
+    });
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE hermes_cloud_capacity SET state='reserved', reserved_invitation_id=$2 WHERE id=$1`, [capacityId, seeded.invitationId]);
+      await c.query(`UPDATE member_provisioning_operations SET preparation='ready' WHERE id=$1`, [seeded.operationId]);
+      await c.query('COMMIT');
+    });
+    const deliveryJobId = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      env, tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(deliveryJobId).not.toBeNull();
+    await drainJobs(env, 50);
+
+    const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation');
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.argument).toMatchObject({ email: 'unsigned-inviter@example.test', organizationId, roleSlug: 'member' });
+    expect(sends[0]!.argument).not.toHaveProperty('inviterUserId');
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT delivery_status, delivery_error FROM invitations WHERE id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ delivery_status: 'delivered', delivery_error: null }]);
       await c.query('COMMIT');
     });
   });

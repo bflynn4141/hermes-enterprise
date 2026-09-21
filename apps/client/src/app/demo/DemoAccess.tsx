@@ -1,4 +1,4 @@
-// `/demo` — the public Hermes Enterprise Demo landing page.
+// `/demo` — the public Hermes Teams Demo landing page.
 //
 // Anyone can read the write-up and share links. Requesting a Member invitation
 // needs a work email and the passcode the visitor was given. There is no
@@ -96,7 +96,7 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
       <header className="portal-header">
         <div className="pl">
           <Glass name="iris" size={30} />
-          <span>Hermes Enterprise Demo</span>
+          <span>Hermes Teams Demo</span>
         </div>
       </header>
       <div className="portal-body demo-access-body">

@@ -333,8 +333,9 @@ The native probe launches the actual official HTTP gateway and AIAgent with a **
 The Cloud-managed probe starts the ordinary supervised gateway command. It
 proves the route gate survives a caught validation failure after plugin
 registration begins, inert capabilities remain observable while unready, stale
-readiness is removed, and fallback/model-route escape configuration is
-rejected. It also proves drift after HTTP 202 is stopped at the real provider
+readiness is removed, selected catalog models can change on the same governed
+proxy, and fallback/provider-route escape configuration is rejected. It also
+proves drift after HTTP 202 is stopped at the real provider
 boundary, a managed profile restarted without its flag remains closed, and
 one-byte plugin drift fails both startup and an already-ready latch. Its Worker
 and model are fixtures; the probe does not establish hosted installation,

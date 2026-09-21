@@ -240,7 +240,7 @@
         "HERMES_ENTERPRISE_PLUGIN_REVISION": "ca8b89192f5320845f259369a907b766de0cfc97",
         "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:922bfa57af420429fcee71f9cec770d4af6bfbd743c67249521b265ef2b86a5a",
         // The public request-access page (`/demo`). The workspace id is the
-        // "Hermes Enterprise Demo" workspace on staging (the same workspace
+        // "Hermes Teams Demo" workspace on staging (the same workspace
         // the deploy preflight checks, CONTEXT_PREFLIGHT_WORKSPACE_ID). With
         // it unset the route answers `demo_access_not_configured`. The
         // domain allowlist is empty on purpose, so the passcode

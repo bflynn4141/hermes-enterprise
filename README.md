@@ -1,93 +1,168 @@
 # Hermes Teams Demo
 
-An agent workspace where the agent does the work and people make the decisions.
+Hermes Teams Demo gives a small team one workspace where an AI agent can do the
+legwork and people keep control of every decision.
 
-A team talks to their agent, Iris, in one workspace. Iris screens applicants,
-drafts invoices and agreements, and queues each one in an Inbox with a receipt.
-A person reviews, approves or sends it back. Admissions, documents, sending,
-payment and signature can only happen when a human decides, and that rule is
-enforced by the database and the routes, not by a prompt or a policy document.
+The team talks to Iris, its workspace agent. Iris can research applicants,
+gather evidence, and draft invoices or agreements. When the work needs a
+decision, Iris sends a request to the Inbox. A person reviews the evidence and
+chooses what happens next.
 
-![The workspace: a chat with Iris on the left, the Iris overview and the Needs you list on the right](docs/assets/readme-overview.png)
+The database and API enforce this boundary. The agent role cannot admit a
+person, approve a document, send outreach, move money, grant access, or sign an
+agreement.
 
-> **Independent project.** Hermes Teams Demo is not affiliated with, endorsed
-> by, or maintained by Nous Research. It runs the open-source
-> [Hermes agent](https://github.com/NousResearch/hermes-agent) runtime and, by
-> default, talks to the Nous Portal inference API. Trademarks belong to their
-> owners. Licensed under [MIT](LICENSE).
+![Hermes workspace with a conversation on the left and the Iris overview on the right](docs/assets/readme-overview.png)
 
 ## Try the hosted demo
 
 The demo runs at https://staging.hermes.brianflynn.dev. Open
 [`/demo`](https://staging.hermes.brianflynn.dev/demo), enter a work email and
 the passcode you were given, and a Member invitation arrives by email for the
-Hermes Enterprise Demo workspace. Sign-up is invite-only; there is no public
+Hermes Teams Demo workspace. Sign-up is invite-only; there is no public
 registration.
 
-## What it looks like
+> **Independent project.** Nous Research does not maintain, endorse, or sponsor
+> Hermes Teams Demo. This project runs the open source
+> [Hermes Agent](https://github.com/NousResearch/hermes-agent) and uses the Nous
+> Portal inference API by default. The trademark owners retain their respective
+> marks. The [MIT License](LICENSE) covers this repository.
 
-Every consequential action arrives in the Inbox as a request of a specific
-type, with what the agent found and a decision a person has to make. The chat
-stays on the left the whole time, so the conversation and the decision are one
-flow. All data below is fixture data.
+## How it works
 
-**1. An application, screened by Iris.** Iris scores the applicant against the
-program's criteria and cites its sources. The Admin admits or declines. Iris
-says it plainly in chat: it cannot admit anyone itself.
+1. **A person assigns work.** A team member asks Iris to research a question,
+   screen an applicant, or prepare a draft.
+2. **Iris does the legwork.** The agent uses approved tools, records its steps,
+   and cites the sources behind its findings.
+3. **Iris asks for a decision.** The app creates a specific request, such as an
+   application or invoice, and sends it to the Inbox with the relevant evidence.
+4. **A person decides.** An authorized team member approves, declines, or sends
+   the request back.
+5. **The app records the result.** Hermes adds a receipt to the original
+   conversation and stores any follow-up action as a separate effect.
 
-![Application review: Iris's screening scores and sources on the right, the chat that produced the request on the left, Admit and Decline at the bottom](docs/assets/flow-1-application-review.jpg)
+This flow keeps the conversation, evidence, decision, and receipt connected.
+It also gives the system a clear point where human authority begins.
 
-**2. A services agreement.** The draft, its scope, fees and term, the sources
-it cites, and who may approve. Approval saves an unsigned agreement to the
-Library. Nothing is signed or sent.
+## What you can do
 
-![Agreement review: the draft agreement with its scope and fees, the approval requirement, and Approve agreement draft](docs/assets/flow-2-agreement-review.jpg)
+| Area | What the workspace supports |
+| --- | --- |
+| Conversations | Create sessions, talk to Iris, upload source material, and control a run with Stop, Guide, Queue, and Retry. A run can pause for a person's answer and continue afterward. |
+| Review | Send applications, invoices, agreements, and access requests to the Inbox with evidence and approval rules. |
+| Records | Review run traces, decision history, receipts, and saved HTML documents. |
+| Team access | Sign in with WorkOS AuthKit, invite members, assign roles, and keep each workspace isolated with forced row-level security. |
+| Agent setup | Configure context, assign managed skills, choose an allowed model, and bring a workspace-owned provider key. |
 
-**3. An invoice.** Same shape, different type: the amount, line items and
-dates, and an approval that saves a draft without any payment ceremony.
+### What people still handle
 
-![Invoice review: amount, issued and due dates, line items, and Approve invoice draft with the note that no payment or email is sent](docs/assets/flow-3-invoice-review.jpg)
+The demo stops after a person records a decision. It does not send outreach,
+transfer funds, grant access, or sign documents. Instead, the app records the
+intended action as an effect. The execution endpoint returns `unavailable`, and
+an authorized person completes the action outside the demo.
 
-**4. After the decision.** The request moves to Resolved with who decided and
-when. The document is saved, still unsigned, and the chat card updates to
-"Draft saved, unsigned, not sent".
+Approved documents render as HTML and remain unsigned and unsent. See
+[Architecture](docs/ARCHITECTURE.md#what-is-real-and-what-is-not) for the full
+list of implemented and stubbed behavior.
 
-![The agreement after approval: Saved unsigned, one of one Admin approval by Maya Chen, and the chat card showing draft saved](docs/assets/flow-4-agreement-saved.jpg)
+## See the approval flow
 
-**5. The receipt lands in the conversation.** The decision is recorded in the
-session that asked for it, and Iris continues from there. What the decision
-implies, such as granting access, is a separate effect a person executes later.
+All screenshots below use fixture data.
 
-![Receipt in chat: Iris reports the applicant is admitted and access is pending, and the Resolved pane shows What this implies with a pending access grant](docs/assets/flow-5-receipt-in-chat.jpg)
+### 1. Iris screens an application
 
-## Try it in a minute
+Iris scores the applicant against the program criteria and cites its sources.
+An Admin can admit or decline the applicant.
 
-You need Node 22+, pnpm and Docker. Python 3.11 to 3.13 is only needed to run a
-Hermes agent locally (see `runtime/hermes/README.md`). Everything except
-`pnpm install` works offline.
+![Application review with screening scores, sources, and Admit and Decline actions](docs/assets/flow-1-application-review.jpg)
+
+### 2. A person reviews an agreement
+
+The request shows the draft, scope, fees, term, sources, and approval rule.
+Approval saves an unsigned copy to the Library. The app does not sign or send
+it.
+
+![Agreement review with the draft terms, approval rule, and Approve agreement draft action](docs/assets/flow-2-agreement-review.jpg)
+
+### 3. A person reviews an invoice
+
+The invoice request shows the amount, dates, and line items. Approval saves the
+draft without sending it or starting a payment.
+
+![Invoice review with the amount, dates, line items, and approval action](docs/assets/flow-3-invoice-review.jpg)
+
+### 4. Hermes records the decision
+
+The request moves to Resolved and names the person who decided. The chat card
+also updates so the team can see that the app saved the draft without signing
+or sending it.
+
+![Resolved agreement with the approver and a chat card that says the app saved an unsigned draft](docs/assets/flow-4-agreement-saved.jpg)
+
+### 5. Iris receives the receipt
+
+The receipt appears in the conversation that started the request. Iris can
+continue from the decision, while any follow-up action remains a separate
+effect.
+
+![Conversation receipt with the decision and its pending follow-up effect](docs/assets/flow-5-receipt-in-chat.jpg)
+
+## Run it locally
+
+### Requirements
+
+- Node.js 26 or newer
+- pnpm 11.10.0
+- Docker
+- Python 3.11 to 3.13, Git, and `uv` only if you want to run Hermes Agent
+  locally
+
+### Install and prepare the database
 
 ```sh
 pnpm install
-pnpm db:up                                  # Postgres 17 in Docker on 127.0.0.1:5433
-pnpm db:migrate                             # roles, then every pending migration
+pnpm db:up
+pnpm db:migrate
 
 cd apps/worker
-cp .env.example .env                        # local connection strings
-cp .dev.vars.example .dev.vars              # secret names; empty is fine in fake mode
-node scripts/seed-dev.mjs                   # one workspace, one Admin, one Member
+cp .env.example .env
+cp .dev.vars.example .dev.vars
+node scripts/seed-dev.mjs
 cd ../..
-
-AUTH_MODE=fake pnpm --filter client build   # the client, with a dev account switcher
-pnpm --filter @hermes/worker exec wrangler dev --local
-open http://localhost:8787/workspace/11111111-1111-4111-8111-111111111111
 ```
 
-To run the whole thing end to end, with thirty-plus Playwright scenarios against
-a real Postgres, Worker and client:
+The seed creates one workspace, one Admin, and one Member. The local database
+runs in Postgres 17 on `127.0.0.1:5433`.
+
+### Start the app
 
 ```sh
+AUTH_MODE=fake pnpm --filter client build
+pnpm dev
+```
+
+Then open:
+
+```text
+http://localhost:8787/workspace/11111111-1111-4111-8111-111111111111
+```
+
+Fake auth adds a local account switcher, so you can test the Admin and Member
+views without WorkOS credentials.
+
+### Run the checks
+
+```sh
+pnpm typecheck
+pnpm test
+pnpm test:browser:mock
+pnpm db:migrations:verify
 pnpm e2e:live
 ```
+
+`pnpm e2e:live` creates its own disposable Postgres container, runs the full
+stack, and drives the browser flows with Playwright. It does not write test data
+to the development database.
 
 ### Self-hosting
 
@@ -98,77 +173,64 @@ account and registered Hermes Cloud capacity. See
 [docs/HERMES-AGENT-RUNTIME.md](docs/HERMES-AGENT-RUNTIME.md) and
 [docs/CLOUD-MANAGEMENT.md](docs/CLOUD-MANAGEMENT.md).
 
-## How the human-decision guarantee is enforced
+To install and start the official Hermes runtime, follow
+[runtime/hermes/README.md](runtime/hermes/README.md).
 
-The product's one promise is that the agent cannot decide. It is built as a
-property of the data, so it holds even if the agent, the prompt or the UI is
-wrong.
+## How Hermes keeps people in control
 
-- **Three database roles, forced row-level security.** Every tenant request
-  runs in one transaction that sets the workspace and user, and every table has
-  RLS forced on. Start at `apps/worker/migrations/0003_rls.sql` and
-  `0004_grants.sql`.
-- **The `agent` role cannot write a decision.** It has no INSERT on
-  `decisions`, `effects`, `members`, `invitations` or `jobs`, and no UPDATE on
-  `requests`. A trigger limits what it may publish. CI asserts the whole grant
-  matrix on every push.
-- **One guarded route.** `POST /w/:ws/requests/:id/decisions` is the only path
-  that changes a request's status. Five guards in front, one transaction
-  behind. The rules live in `apps/worker/src/domain`, with no HTTP in them.
-- **Effects are separate from decisions.** A decision records what a person
-  decided. What it implies, such as an access grant, an email, a payment or a
-  signature, is an `effects` row that a person with the required role executes.
-  There is no code in this repository that sends outreach, moves money or
-  signs anything, and there will not be.
-- **Counts are views, receipts are rows.** Inbox counts and statuses are
-  derived, so there is no counter to drift. Every run leaves a trace and every
-  decision leaves a receipt in the session where it was asked for.
+The approval boundary lives in the system rather than the prompt:
 
-The long list of invariants, with the tests that hold each one, is in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-invariants-in-one-place).
+- **Database roles block agent decisions.** The `agent` role cannot insert
+  decisions or effects, and it cannot update requests. It also cannot add
+  members, invitations, or jobs. CI checks the full grant matrix on every push.
+- **One API route records decisions.** Five guards protect
+  `POST /w/:ws/requests/:id/decisions`, and one transaction records the result.
+- **The app separates decisions from effects.** A decision captures a person's
+  choice. A separate effect records any action that choice may require.
+- **Every tenant request sets its scope.** Each transaction sets the workspace
+  and user before Postgres applies forced row-level security.
+- **Receipts preserve the trail.** Every run leaves a trace, and every decision
+  leaves a receipt in the session that requested it.
 
-## How this uses Hermes
+Read the complete set of invariants and their tests in
+[Architecture](docs/ARCHITECTURE.md#the-invariants-in-one-place).
 
-This repository does not implement its own agent loop. It runs the official
-Hermes agent and puts an enterprise boundary around it.
+## How this project uses Hermes Agent
 
-| Piece | What it is | Where |
-|---|---|---|
-| Upstream runtime | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) pinned at `345cd2b0`, package version 0.21.3. The installer verifies the commit, the lock file and the package inventory before anything runs. | `runtime/hermes/install.py`, `runtime/hermes/README.md` |
-| Enterprise bridge | A Hermes plugin that connects a running agent to this Worker: it receives turns, streams events back, and exposes the workspace's tools and skills. A Cloud-managed profile refuses to start if the pinned runtime files or plugin digest do not match. | `runtime/hermes/enterprise_bridge/` |
-| Runtime contract | The versioned agreement between the Worker and the bridge: event shapes, terminal error taxonomy, supported release rings. The Worker checks it at admission and in `/health`, and CI runs a canary against it. | `runtime/hermes/contract.json`, `packages/shared` |
-| Tool and model boundary | Which tools a run may call, in which mode, and which provider it may reach. Provider keys are envelope-encrypted and resolve inside the single step that needs them. | `apps/worker/src/runtime`, `apps/worker/src/model` |
-| Managed skills | Versioned Hermes skills the workspace packages and shares, such as Partner Program screening. | `docs/ENTERPRISE-SKILLS.md` |
+This repository runs the official Hermes agent loop and adds the workspace,
+security, and approval boundary around it.
 
-Everything above the bridge is this project. Everything below it is upstream
-Hermes, unmodified.
+| Component | Responsibility | Location |
+| --- | --- | --- |
+| Official runtime | Nous Research's Hermes Agent runs the agent loop. This repository pins commit `345cd2b0` and package version 0.21.3, then verifies the source, lock file, and installed packages. | [`runtime/hermes`](runtime/hermes) |
+| Enterprise bridge | A Hermes plugin receives turns from the Worker, streams events back, and exposes only the tools and skills that the workspace allows. | [`runtime/hermes/enterprise_bridge`](runtime/hermes/enterprise_bridge) |
+| Runtime contract | A versioned contract defines events, terminal errors, and supported release rings. The Worker checks the contract before it admits a run. | [`runtime/hermes/contract.json`](runtime/hermes/contract.json) |
+| Worker boundary | The Worker chooses which tools and models a run may use. It decrypts a provider key only inside the step that calls that provider. | [`apps/worker/src/runtime`](apps/worker/src/runtime) |
+| Managed skills | The workspace packages and assigns versioned Hermes skills, including Partner Program screening. | [`docs/ENTERPRISE-SKILLS.md`](docs/ENTERPRISE-SKILLS.md) |
 
-## Layout
+## Repository layout
 
-```
-packages/shared    the contract: events, refs, enums, document payloads, validators
-apps/worker        the Cloudflare Worker: Hono routes, Durable Object hubs, the run
-                   Workflow, the Drizzle schema, the SQL migrations
-  src/domain       the decision transaction and effects plan, with no HTTP in them
-apps/client        the workspace client: React 19, esbuild, served by the Worker
-runtime/hermes     the pinned upstream runtime and the enterprise bridge plugin
-docs/              ARCHITECTURE, DECISIONS, CONVENTIONS, runbooks
-```
+| Path | Contents |
+| --- | --- |
+| [`apps/client`](apps/client) | React workspace interface |
+| [`apps/worker`](apps/worker) | Cloudflare Worker, API routes, Durable Objects, Workflows, queues, and SQL migrations |
+| [`apps/worker/src/domain`](apps/worker/src/domain) | Decision rules and effect planning without HTTP concerns |
+| [`packages/shared`](packages/shared) | Shared event, entity, reference, and document contracts |
+| [`runtime/hermes`](runtime/hermes) | Pinned Hermes runtime installer and enterprise bridge |
+| [`docs`](docs) | Architecture notes, decisions, conventions, security reviews, and runbooks |
 
-## Stack
-
-Cloudflare Workers, Durable Objects, Workflows, Queues and R2. Postgres 17 on
-Neon through Hyperdrive, with Drizzle for the schema. Hono for routes. WorkOS
-AuthKit for sign-in. React 19 built with esbuild. Vitest and Playwright.
+The stack uses Cloudflare Workers, Durable Objects, Workflows, Queues, and R2;
+Postgres 17 on Neon through Hyperdrive; Drizzle; Hono; WorkOS AuthKit; React 19;
+Vitest; and Playwright.
 
 ## Read next
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): what is real and what is
-  stubbed, every route with a curl, uploads, decisions, tools and modes.
-- [docs/DECISIONS.md](docs/DECISIONS.md): why things are the way they are.
-  A change that contradicts a recorded decision needs a new entry.
-- [docs/CONVENTIONS.md](docs/CONVENTIONS.md): who owns which directory, how to
-  add a migration, which invariants must never be violated.
-- [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md): the threat model and
-  current findings. To report a vulnerability, see [SECURITY.md](SECURITY.md).
-- [CONTRIBUTING.md](CONTRIBUTING.md) if you want to change something.
+- [Architecture](docs/ARCHITECTURE.md) explains what works today, what remains
+  stubbed, and how the main routes fit together.
+- [Decisions](docs/DECISIONS.md) records the reasoning behind consequential
+  implementation choices.
+- [Conventions](docs/CONVENTIONS.md) explains directory ownership, migrations,
+  and invariants that contributors must preserve.
+- [Security review](docs/SECURITY-REVIEW.md) covers the threat model and current
+  findings. Use [SECURITY.md](SECURITY.md) to report a vulnerability.
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains how to propose and verify a change.

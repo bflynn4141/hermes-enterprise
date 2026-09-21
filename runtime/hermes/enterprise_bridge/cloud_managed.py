@@ -553,7 +553,6 @@ def _initializer(settings, state, enterprise_tool_names):
             validate_current,
             provider_binding={
                 "provider": "custom",
-                "model": identity["model"],
                 "base_url": identity["base"] + "/model/v1",
                 "api_key": identity["token"],
                 "api_mode": "chat_completions",
