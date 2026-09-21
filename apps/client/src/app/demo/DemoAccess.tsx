@@ -102,12 +102,11 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
       <div className="portal-body demo-access-body">
         <h1 className="portal-title">See how a named team runs Iris under review</h1>
         <p className="demo-access-lede">
-          {/* WRITE-UP PLACEHOLDER — replace in your own voice before sending to Nous.
-              Two or three sentences: what Hermes Enterprise is, what is real vs stubbed,
-              and what they should try first once invited. */}
-          Hermes Enterprise is a workspace where every consequential agent action is a named
-          human&apos;s decision. This staging deployment is the live demo. Request a Member
-          invite below with the passcode you were sent.
+          Hermes Enterprise is Hermes Agent run the way a company has to run it: one workspace,
+          named people, and an agent called Iris who does the research, drafting and follow-up
+          while every consequential step waits for a human decision. This staging deployment
+          is the live demo. Request a Member invite below with the passcode you were sent, and
+          once you are in, open a session with Iris and ask her to screen a partner.
         </p>
 
         {SHARE_LINKS.length > 0 && (
