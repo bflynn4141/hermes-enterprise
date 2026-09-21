@@ -244,32 +244,36 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
         />
         {activeTab !== 'rules' && (
           <div className="inbox-tools">
-            {approvalDemo && <span className="approval-demo-tools"><span className="pill illustrative">Illustrative demo</span><Button link onClick={() => window.location.reload()} aria-label="Reset approval demo">Reset</Button></span>}
-            <span className="inbox-sort" role="group" aria-label="Sort requests">
-              <button type="button" aria-pressed={sort === 'priority'} onClick={() => setFilters({ sort: 'priority' })}>Priority</button>
-              <button type="button" aria-pressed={sort === 'recent'} onClick={() => setFilters({ sort: 'recent' })}>Recent</button>
-            </span>
-            <label className="search grow">
-              <Icon name="search" />
-              <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
-            </label>
-            {activeTab === 'needs-review' && (
-              <span className="inbox-sort reviewer-filter" role="group" aria-label="Reviewer">
-                {REVIEWER_SEGMENTS.map(([value, label]) => {
-                  const count = value === 'for_me' ? state.counts.pendingForMe ?? state.counts.inbox : value === 'waiting' ? state.counts.pendingForOthers ?? 0 : 0;
-                  return <button type="button" key={value} aria-pressed={reviewer === value} onClick={() => setFilters({ reviewer: value })}>{label}{count > 0 && <span className="seg-count">{count}</span>}</button>;
-                })}
+            <span className="inbox-tool-main">
+              {activeTab === 'needs-review' && (
+                <span className="inbox-sort reviewer-filter" role="group" aria-label="Reviewer">
+                  {REVIEWER_SEGMENTS.map(([value, label]) => {
+                    const count = value === 'for_me' ? state.counts.pendingForMe ?? state.counts.inbox : value === 'waiting' ? state.counts.pendingForOthers ?? 0 : 0;
+                    return <button type="button" key={value} aria-pressed={reviewer === value} onClick={() => setFilters({ reviewer: value })}>{label}{count > 0 && <span className="seg-count">{count}</span>}</button>;
+                  })}
+                </span>
+              )}
+              <span className="inbox-tool-end">
+              <span className="inbox-sort" role="group" aria-label="Sort requests">
+                <button type="button" aria-pressed={sort === 'priority'} onClick={() => setFilters({ sort: 'priority' })}>Priority</button>
+                <button type="button" aria-pressed={sort === 'recent'} onClick={() => setFilters({ sort: 'recent' })}>Recent</button>
               </span>
-            )}
-            <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
-              <option value="all">All types</option>
-              <option value="application">Applications</option>
-              <option value="documents">Documents</option>
-              <option value="invoice">Invoices</option>
-              <option value="agreement">Signatures</option>
-              <option value="task">Tasks</option>
-              <option value="approval">Approvals</option>
-            </select>
+              <label className="search grow">
+                <Icon name="search" />
+                <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
+              </label>
+              <select className="btn" aria-label="Request type" value={kind} onChange={(event) => setFilters({ kind: event.target.value as NonNullable<Ref['filters']>['kind'] })}>
+                <option value="all">All types</option>
+                <option value="application">Applications</option>
+                <option value="documents">Documents</option>
+                <option value="invoice">Invoices</option>
+                <option value="agreement">Signatures</option>
+                <option value="task">Tasks</option>
+                <option value="approval">Approvals</option>
+              </select>
+              </span>
+            </span>
+            {approvalDemo && <span className="approval-demo-tools"><span className="pill illustrative">Illustrative demo</span><Button link onClick={() => window.location.reload()} aria-label="Reset approval demo">Reset</Button></span>}
           </div>
         )}
       </div>
