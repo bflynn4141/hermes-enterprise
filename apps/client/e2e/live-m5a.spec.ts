@@ -121,10 +121,10 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   const app = pane(page);
   // The detail heading is the session, the runtime and the mode; the model
   // sits on the fact line beneath it.
-  await expect(app.getByRole('heading', { name: /M1 trace · .* · work/ })).toBeVisible({ timeout: 15_000 });
-  await expect(app.getByText('nous:anthropic/claude-sonnet-5').first()).toBeVisible();
+  await expect(app.getByRole('heading', { name: /M1 trace · Work mode/ })).toBeVisible({ timeout: 15_000 });
+  await expect(app.getByText(/Claude Sonnet 5|claude-sonnet-5/).first()).toBeVisible();
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
-  await expect(app.getByText('propose_request').first()).toBeVisible();
+  await expect(app.getByText('Prepared a review request').first()).toBeVisible();
 
   await app.getByRole('button', { name: 'Show arguments and result' }).first().click();
   await expect(app.getByText('propose_request.arguments.json')).toBeVisible();

@@ -73,7 +73,7 @@ test('live · the main screens', async ({ browser }) => {
   });
   const sessionId = (await created.json()).id as string;
   await page.goto(`/workspace/${ws}/s/${sessionId}`);
-  await expect(page.getByText(/is ready\. Describe what you need/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await settle(page);
   await shot(page, '01-shell-empty-session');
 
@@ -209,7 +209,7 @@ test('live · settings, with a verified provider key', async ({ browser }) => {
   const context = await asUser(browser, fixture.adminEmail);
   const page = await context.newPage();
   await page.goto(`/workspace/${fixture.workspaceId}`);
-  await expect(page.getByText(/is ready\./)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   refreshStepUp();
 
   await page.getByRole('button', { name: 'Settings', exact: true }).first().click();
@@ -247,7 +247,7 @@ test('live · the first-run empty states', async ({ browser }) => {
   const admin = await asUser(browser, fixture.adminEmail);
   const adminPage = await admin.newPage();
   await adminPage.goto(`/workspace/${fixture.workspaceId}`);
-  await expect(adminPage.getByText(/is ready\./)).toBeVisible({ timeout: 15_000 });
+  await expect(adminPage.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await settle(adminPage);
   await shot(adminPage, '17-empty-admin-shell');
 
@@ -260,7 +260,7 @@ test('live · the first-run empty states', async ({ browser }) => {
   const member = await asUser(browser, fixture.memberEmail);
   const memberPage = await member.newPage();
   await memberPage.goto(`/workspace/${fixture.workspaceId}`);
-  await expect(memberPage.getByText(/is ready\./)).toBeVisible({ timeout: 15_000 });
+  await expect(memberPage.getByText('What do you need help with?')).toBeVisible({ timeout: 15_000 });
   await settle(memberPage);
   await shot(memberPage, '19-empty-member-shell');
   await member.close();
