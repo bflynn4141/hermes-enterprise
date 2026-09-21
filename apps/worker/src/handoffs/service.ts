@@ -239,8 +239,9 @@ async function buildInMotion(
   for (const application of applications.rows) {
     const agreement = byApplication.get(application.id) ?? null;
     if (agreement) seenAgreements.add(agreement.id);
-    if (application.status === 'admitted' && !agreement) continue;
-    if (application.status === 'declined') continue;
+    // A handoff starts at admission. Pending or declined applications are
+    // Partnerships' business and stay in Inbox until someone is admitted.
+    if (application.status !== 'admitted' || !agreement) continue;
     if (agreement && agreement.status !== 'pending') continue;
 
     const stage = contractorStage(application.status, agreement?.status ?? null);

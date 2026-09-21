@@ -9,7 +9,7 @@ async function openHandoffs(page: import('@playwright/test').Page) {
   return pane;
 }
 
-test('Finance sees the chain and linked in-motion work', async ({ page }) => {
+test('Finance sees the chain and only admitted partners', async ({ page }) => {
   await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member');
   const pane = await openHandoffs(page);
   await expect(pane.getByRole('heading', { name: 'Contractor agreements', exact: true })).toBeVisible();
@@ -17,13 +17,17 @@ test('Finance sees the chain and linked in-motion work', async ({ page }) => {
   await expect(pane.getByText('Finance · Alex Rivera · Ledger')).toBeVisible();
   await expect(pane.getByText('Live', { exact: true })).toBeVisible();
   await expect(pane.getByRole('switch')).toHaveCount(0);
-  await expect(pane.getByText('Leah Martinez', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Waiting on Partnerships').first()).toBeVisible();
-  await expect(pane.getByRole('list', { name: 'Leah Martinez: Admit' })).toBeVisible();
+  await expect(pane.getByText('Priya Nair', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Waiting on you')).toBeVisible();
+  await expect(pane.getByRole('list', { name: 'Priya Nair: Decide' })).toBeVisible();
+  await expect(pane.getByRole('button', { name: 'Review' })).toBeVisible();
+  // Applicants Partnerships has not admitted are not handoffs yet.
+  await expect(pane.getByText('Leah Martinez', { exact: true })).toHaveCount(0);
+  await expect(pane.getByRole('button', { name: 'Admit' })).toHaveCount(0);
   await expect(pane.getByRole('button', { name: 'Submit an invoice' })).toHaveCount(0);
 });
 
-test('Partnerships sees admit actions without invoice forms', async ({ page }) => {
+test('Partnerships sees admitted partners waiting on Finance', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/?partnerWorkflow=1&workflowRole=partnerships&seat=admin');
@@ -31,17 +35,30 @@ test('Partnerships sees admit actions without invoice forms', async ({ page }) =
   const pane = app(page);
   await pane.getByRole('tab', { name: 'Handoffs' }).click();
   await expect(pane.getByText('Partnerships · Maya Chen · Iris')).toBeVisible();
-  await expect(pane.getByText('Waiting on you').first()).toBeVisible();
-  await expect(pane.getByRole('button', { name: 'Admit' }).first()).toBeVisible();
+  await expect(pane.getByText('Priya Nair', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Waiting on Finance')).toBeVisible();
+  await expect(pane.getByText('Leah Martinez', { exact: true })).toHaveCount(0);
   await expect(pane.getByRole('button', { name: 'Submit an invoice' })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('admitting an applicant in Inbox adds them to Handoffs', async ({ page }) => {
+  await page.goto('/?partnerWorkflow=1&workflowRole=partnerships&seat=admin');
+  await page.getByRole('button', { name: 'Inbox', exact: true }).click();
+  const pane = app(page);
+  await pane.getByText('Leah Martinez', { exact: true }).first().click();
+  await pane.getByRole('button', { name: 'Admit Leah' }).click();
+  await expect(pane.getByRole('button', { name: 'Admit Leah' })).toHaveCount(0, { timeout: 10_000 });
+  const handoffs = await openHandoffs(page);
+  await expect(handoffs.getByText('Leah Martinez', { exact: true })).toBeVisible();
+  await expect(handoffs.getByText('Owen Reilly', { exact: true })).toHaveCount(0);
 });
 
 test('an unrelated member receives no private workflow content', async ({ page }) => {
   await page.goto('/?partnerWorkflow=1&workflowRole=unrelated&seat=member');
   const pane = await openHandoffs(page);
   await expect(pane.getByText('No access', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Leah Martinez', { exact: true })).toHaveCount(0);
+  await expect(pane.getByText('Priya Nair', { exact: true })).toHaveCount(0);
 });
 
 test('an admin configures and toggles the handoff', async ({ page }) => {

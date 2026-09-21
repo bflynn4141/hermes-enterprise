@@ -36,6 +36,8 @@ const REQ_LEAH = mockUuid(11);
 const REQ_OWEN = mockUuid(12);
 const REQ_INVOICE = mockUuid(13);
 const REQ_AGREEMENT = mockUuid(14);
+const REQ_PRIYA = mockUuid(730);
+const REQ_PRIYA_AGREEMENT = mockUuid(731);
 const DOC_INVOICE = mockUuid(30);
 const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
@@ -285,6 +287,18 @@ export function createMockBackend(options: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
+        ...(options.partnerWorkflow ? [
+          request(REQ_PRIYA, 'application', 'admitted', 'Priya Nair', 'Priya Nair', {
+            kind: 'application', applicant: { name: 'Priya Nair' }, proposed_role: 'Delivery Partner', score: 88, score_max: 100,
+            criteria: [], sources: demoProfileSources, missing: [], benefits: ['Partner directory listing'],
+          }),
+          request(REQ_PRIYA_AGREEMENT, 'agreement', 'pending', 'Priya Nair', 'Priya Nair', {
+            kind: 'agreement', number: 'AGR-PRIYA-001', version_label: 'draft',
+            parties: [{ name: 'Nous Research' }, { name: 'Priya Nair' }],
+            sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
+            workflow_provenance: { handoff_key: 'contractor-agreements', source_application_id: REQ_PRIYA, admitted_partner: { name: 'Priya Nair' } },
+          }),
+        ] : []),
         request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
       ];
@@ -1773,7 +1787,7 @@ export function createMockBackend(options: MockOptions = {}) {
             label: stageLabels[idx]!,
             state: (idx < stageKeys.indexOf(current) ? 'done' : idx === stageKeys.indexOf(current) ? 'current' : 'pending') as 'done' | 'current' | 'pending',
           }));
-          const apps = requests.filter((row) => row.kind === 'application' && (row.status === 'pending' || row.status === 'admitted'));
+          const apps = requests.filter((row) => row.kind === 'application' && row.status === 'admitted');
           const agreements = requests.filter((row) => {
             const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string; source_application_id?: string } }).workflow_provenance;
             return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
@@ -1785,20 +1799,7 @@ export function createMockBackend(options: MockOptions = {}) {
           const items = [];
           for (const app of apps) {
             const agreement = byApp.get(app.id);
-            if (app.status === 'admitted' && !agreement) continue;
-            if (app.status === 'pending') {
-              items.push({
-                id: app.id,
-                kind: 'application' as const,
-                title: app.label,
-                subtitle: 'Awaiting admission',
-                stage: 'terms_recorded' as const,
-                stages: stagesFor('terms_recorded'),
-                handoff: null,
-                engagement: null,
-                open_request_id: app.id,
-              });
-            } else if (agreement) {
+            if (agreement) {
               items.push({
                 id: agreement.id,
                 kind: 'agreement' as const,
@@ -1818,12 +1819,12 @@ export function createMockBackend(options: MockOptions = {}) {
           name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
           summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
         },
-        counts: { in_motion: canSeeWork ? requests.filter((row) => row.kind === 'application' && row.status === 'pending').length + requests.filter((row) => {
+        counts: { in_motion: canSeeWork ? requests.filter((row) => {
           const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
           return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
         }).length : 0, waiting_on_viewer: canSeeWork
           ? (workflowRole === 'partnerships'
-            ? requests.filter((row) => row.kind === 'application' && row.status === 'pending').length
+            ? 0
             : workflowRole === 'finance'
               ? requests.filter((row) => {
                 const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
