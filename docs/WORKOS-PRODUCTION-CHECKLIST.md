@@ -221,6 +221,88 @@ evidence for the items that do not require a disposable inbox or IdP:
 Private-browser items above remain blocked on a disposable inbox and an
 SSO test IdP; they were not attempted in this re-verify.
 
+### Demo framing — September 20, 2026
+
+Nous Research visitors should see **Hermes Enterprise Demo**, not
+"Brian Interview Demo" or an unbranded "Hermes". This note records the
+inventory, what was verified from the shared checkout, and the exact steps
+that still need dashboard or staging access. Nothing below was renamed yet:
+the local `apps/worker/.dev.vars` carries empty WorkOS values and
+`AUTH_MODE=fake`, and no staging database URL exists locally
+(`MIGRATIONS_DATABASE_URL` is a GitHub environment secret only), so the API
+and SQL steps are written out for a holder of the staging credentials.
+
+**Where each visible name lives**
+
+| Surface a visitor sees | Set where | Who changes it |
+|---|---|---|
+| Invitation email body (WorkOS names the inviting organization) and any AuthKit organization picker | WorkOS **organization** name, staging environment (client suffix `…E90T`); created once by `createOrganization(name)` in `apps/worker/src/auth/workos.ts` | WorkOS API or dashboard |
+| Invitation email subject **[STAGING] You've been invited to Hermes**, hosted sign-in page title | WorkOS **application/environment branding** (staging) | WorkOS dashboard only |
+| Hermes workspace picker, sidebar, agent header, shared read-only session header | `workspaces.name` row on the staging database | Staging SQL as `owner` |
+| Admin › Cloud connection page (organization line) | Nous Portal organization name, cached in `provider_oauth.oauth_organization_name` at connect time | Nous Portal; then reconnect in Hermes to refresh the cache |
+| Browser tab title | `apps/client/build.mjs` `<title>Hermes Enterprise</title>` | Already product-branded; unchanged |
+| Onboarding header and **Sign in to Hermes** heading | `apps/client/src/app/onboarding/Onboarding.tsx` | Product copy; unchanged (a demo suffix here would ship to production) |
+
+**Code path check.** Renaming is safe on the Hermes side: the Worker reads
+the WorkOS organization name only at creation and never displays it; the
+events poller subscribes to `organization_membership.*` and `user.deleted`
+only, so an `organization.updated` event is ignored; nothing compares
+`workspaces.name` to WorkOS. There is no workspace rename endpoint in
+`apps/worker/src/routes/settings.ts` (its two `UPDATE workspaces` statements
+manage deletion scheduling), so the row must change by SQL. `workspaces.slug`
+stays as it is; the client routes by workspace id.
+
+**Checklist for the credential holder**
+
+1. WorkOS organization (staging key only; confirm `WORKOS_CLIENT_ID` ends
+   in `E90T` before running). List, then update by id, then list again:
+
+   ```sh
+   curl -s https://api.workos.com/organizations?limit=100 \
+     -H "Authorization: Bearer $WORKOS_API_KEY" | jq '.data[] | {id, name}'
+   curl -s -X PUT https://api.workos.com/organizations/<org_id> \
+     -H "Authorization: Bearer $WORKOS_API_KEY" -H 'Content-Type: application/json' \
+     -d '{"name":"Hermes Enterprise Demo"}' | jq '{id, name}'
+   ```
+
+   Existing invitations keep working; the `org_id` claim is unchanged.
+2. Staging workspace row, as `owner` on the staging branch (the same role
+   `scripts/migrate.mjs` uses). Expect exactly one row before updating:
+
+   ```sql
+   SELECT id, name, slug, workos_organization_id FROM workspaces WHERE name = 'Brian Interview Demo';
+   UPDATE workspaces SET name = 'Hermes Enterprise Demo', updated_at = now() WHERE name = 'Brian Interview Demo';
+   SELECT id, name FROM workspaces WHERE name = 'Hermes Enterprise Demo';
+   ```
+
+   Members see the new name on their next page load; no sign-out is needed.
+3. WorkOS dashboard, environment switcher set to **Staging**:
+   - **Branding** (left nav, under Authentication in the current dashboard;
+     the application name field may sit under **Settings → General** in
+     some layouts): set the application/display name to **Hermes Enterprise
+     Demo**; keep the saved dark theme, Inter and Iris mark. This name is the
+     "Hermes" in the hosted page title and the invitation subject.
+   - **Emails** (same section): review the invitation preview after saving.
+     The **[STAGING]** prefix is WorkOS's environment label on staging
+     emails; it is not a branding setting and, as far as WorkOS documents,
+     cannot be removed from a staging environment. Only production sends
+     without it.
+   - Leave **Sign up** disabled (invite-only stays as documented above) and
+     do not change redirect URIs or the invitation URL.
+4. Nous Portal organization: the Hermes Cloud management MCP and
+   `apps/worker/src/hermes-cloud/management.ts` expose only read-only
+   inventory (`agents list`) and account attribution; there is no rename
+   tool. Rename the organization in the Portal's organization settings
+   (portal.nousresearch.com), then, in Hermes **Admin → Cloud connection**,
+   reconnect once so `oauth_organization_name` is refreshed from
+   `/api/oauth/account`. The instance `iris-enterprise-staging` keeps its
+   name; visitors do not see it.
+5. After steps 1–4, send one fresh invitation to a disposable inbox and
+   confirm the subject reads **[STAGING] You've been invited to Hermes
+   Enterprise Demo** and the body names the renamed organization. Then
+   update the September 20 note above, `docs/HERMES-AGENT-RUNTIME.md`
+   (Portal organization) and `docs/DECISIONS.md` C-note references.
+
 ## What automated tests prove—and do not prove
 
 `FakeWorkOS` signs genuine RS256 JWTs and publishes an in-memory JWKS. Database
