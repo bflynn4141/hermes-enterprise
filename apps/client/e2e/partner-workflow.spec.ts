@@ -16,11 +16,10 @@ test('Finance sees contractor handoff and linked in-motion work', async ({ page 
   await expect(pane.getByText('Finance', { exact: true }).first()).toBeVisible();
   await expect(pane.getByText('Maya Chen')).toBeVisible();
   await expect(pane.getByText('Alex Rivera')).toBeVisible();
-  await expect(pane.getByRole('button', { name: 'Inbox' })).toBeVisible();
+  await expect(pane.getByRole('button', { name: 'Open Inbox' })).toBeVisible();
   await expect(pane.getByText('Leah Martinez', { exact: true })).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Admit' }).first()).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Submit an invoice' })).toHaveCount(0);
-  await page.screenshot({ path: 'qa/multi-party-finance-desktop.png', fullPage: true });
 });
 
 test('Partnerships sees admit actions without invoice forms', async ({ page }) => {
@@ -34,7 +33,6 @@ test('Partnerships sees admit actions without invoice forms', async ({ page }) =
   await expect(pane.getByRole('button', { name: 'Admit' }).first()).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Submit an invoice' })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: 'qa/multi-party-partnerships-narrow.png', fullPage: true });
 });
 
 test('an unrelated member receives no private workflow content', async ({ page }) => {
@@ -47,28 +45,28 @@ test('an unrelated member receives no private workflow content', async ({ page }
 test('an admin configures and toggles the handoff', async ({ page }) => {
   await page.goto('/?workflowRole=admin&seat=admin');
   const pane = await openHandoffs(page);
-  await pane.getByRole('button', { name: 'Configure' }).click();
+  await pane.getByRole('button', { name: 'Configure roles' }).click();
   await expect(pane.getByRole('form', { name: 'Configure employee roles' })).toBeVisible();
 
   await page.goto('/?partnerWorkflow=1&workflowRole=admin&seat=admin');
   const configuredPane = await openHandoffs(page);
   await expect(configuredPane.getByRole('button', { name: 'Disable' })).toBeEnabled();
   await configuredPane.getByRole('button', { name: 'Disable' }).click();
-  await expect(configuredPane.getByText('Off', { exact: true })).toBeVisible();
+  await expect(configuredPane.getByText('Not admitted', { exact: true })).toBeVisible();
   await expect(configuredPane.getByRole('button', { name: 'Enable' })).toBeEnabled();
   await configuredPane.getByRole('button', { name: 'Enable' }).click();
-  await expect(configuredPane.getByText('Live', { exact: true })).toBeVisible();
+  await expect(configuredPane.getByText(/^Live/)).toBeVisible();
 });
 
 test('enable succeeds and shows a short notice', async ({ page }) => {
   await page.goto('/?workflowRole=admin&seat=admin&workflowActivation=success');
   const pane = await openHandoffs(page);
-  await expect(pane.getByText('Off', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Not admitted', { exact: true })).toBeVisible();
   const enable = pane.getByRole('button', { name: 'Enable' });
   await expect(enable).toBeEnabled();
   await enable.click();
-  await expect(pane.getByText('Live', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Enabled', { exact: true })).toBeVisible();
+  await expect(pane.getByText(/^Live/)).toBeVisible();
+  await expect(pane.getByText('Handoff enabled.', { exact: true })).toBeVisible();
 });
 
 for (const fixture of [
@@ -81,7 +79,7 @@ for (const fixture of [
     const enable = pane.getByRole('button', { name: 'Enable' });
     await expect(enable).toBeEnabled();
     await enable.click();
-    await expect(pane.getByRole('alert')).toHaveText('Profiles did not match. Still disabled.');
-    await expect(pane.getByText('Off', { exact: true })).toBeVisible();
+    await expect(pane.getByRole('alert')).toHaveText('The native profiles did not match. The handoff remains disabled.');
+    await expect(pane.getByText('Not admitted', { exact: true })).toBeVisible();
   });
 }

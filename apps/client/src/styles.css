@@ -1744,7 +1744,7 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 .partner-handoff-card > header > div { flex: 1 1 0; min-width: 0; }
 .partner-handoff-card h3 { margin-top: 2px; font: 500 18px/22px var(--font-display); }
 .partner-card-kicker { color: var(--muted); font-size: 10.4px; line-height: 14px; }
-.partner-progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
+.partner-progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
 .partner-progress li { position: relative; display: flex; flex-direction: column; gap: 7px; min-width: 0; color: var(--muted); font-size: 10.4px; line-height: 14px; }
 .partner-progress li::before { content: ''; position: absolute; top: 5px; left: 8px; right: -8px; height: 1px; background: var(--line-strong); }
 .partner-progress li:last-child::before { display: none; }
@@ -1803,63 +1803,18 @@ html[data-reduce-motion="true"] .skeleton-row { animation: none; }
 }
 [data-reduced-motion="true"] .partner-workflow-form { scroll-behavior: auto; }
 
-.handoffs-page { display: flex; flex-direction: column; gap: 18px; padding: 40px 56px; container-type: inline-size; }
+.handoffs-page { display: flex; flex-direction: column; gap: 18px; padding: 0; container-type: inline-size; }
 .handoffs-header { display: flex; align-items: flex-start; gap: 20px; }
 .handoffs-header > div:first-child { flex: 1 1 0; min-width: 0; }
-.handoffs-header h2 { font: 500 26px/30px var(--font-display); }
-.handoffs-header p { max-width: 760px; margin-top: 6px; color: var(--muted); font-size: 15px; line-height: 22px; }
+.handoffs-header h2 { font: 500 20.8px/24px var(--font-display); }
+.handoffs-header p { max-width: 760px; margin-top: 6px; color: var(--muted); }
 .handoffs-header-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .handoffs-status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
-.handoffs-lanes { display: grid; grid-template-columns: minmax(0, 560px) minmax(180px, 1fr) minmax(0, 560px); gap: 18px; align-items: stretch; }
-.handoffs-lane-card { display: flex; flex-direction: column; gap: 14px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--context); }
-.handoffs-lane-card[data-ready="true"] { border-color: rgba(94, 225, 165, .36); }
-.handoffs-lane-card header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.handoffs-lane-card h3 { font: 500 22px/26px var(--font-display); }
-.handoffs-ready-dot { color: var(--muted); font-size: 13px; }
-.handoffs-ready-dot.is-ready { color: #5EE1A5; }
-.handoffs-ready-dot.is-ready::before { content: '● '; }
-.handoffs-ready-dot:not(.is-ready)::before { content: '○ '; color: #F5B841; }
-.handoffs-lane-card dl { display: flex; flex-direction: column; gap: 10px; margin: 0; }
-.handoffs-lane-card dl > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; align-items: start; }
-.handoffs-lane-card dt { color: var(--muted); font-size: 13px; line-height: 18px; }
-.handoffs-lane-card dd { margin: 0; font-size: 15px; line-height: 22px; }
-.handoffs-lane-card dd small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; line-height: 18px; }
-.handoffs-crossing { display: flex; flex-direction: column; justify-content: center; gap: 0; padding: 8px 0; color: var(--muted); font-size: 13px; line-height: 18px; }
-.handoffs-crossing strong { margin-bottom: 8px; color: var(--body); font-size: 13px; font-weight: 500; }
-.handoffs-crossing p { margin: 0; padding: 10px 0; border-top: 1px solid var(--line); }
-.handoffs-steps > header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
-.handoffs-steps h3 { font: 500 22px/26px var(--font-display); }
-.handoffs-steps ol { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-.handoffs-steps li { display: grid; grid-template-columns: 32px 184px minmax(0, 1fr) 220px; gap: 16px; align-items: center; min-height: 52px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-.handoffs-step-index { font: 500 32px/1 var(--font-display); color: var(--muted); }
-.handoffs-step-owner { font-size: 15px; line-height: 22px; }
-.handoffs-step-text { font-size: 15px; line-height: 22px; }
-.handoffs-step-note { color: var(--muted); font-size: 13px; line-height: 18px; }
-.handoffs-motion > header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
-.handoffs-motion h3 { font: 500 22px/26px var(--font-display); }
-.handoffs-motion-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 1.2fr) auto; gap: 16px; align-items: center; min-height: 64px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.handoffs-motion-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.handoffs-motion-copy strong { font-size: 15px; line-height: 22px; }
-.handoffs-motion-copy span { color: var(--muted); font-size: 13px; line-height: 18px; }
-.handoffs-stage-strip { display: flex; align-items: center; gap: 0; margin: 0; padding: 0; list-style: none; }
-.handoffs-stage-strip li { position: relative; display: flex; flex: 1 1 0; flex-direction: column; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font-size: 10px; line-height: 13px; text-align: center; }
-.handoffs-stage-strip li::before { content: ''; position: absolute; top: 6px; left: calc(50% + 8px); width: calc(100% - 16px); height: 1px; background: var(--line); }
-.handoffs-stage-strip li:last-child::before { display: none; }
-.handoffs-stage-strip i { position: relative; z-index: 1; width: 12px; height: 12px; border: 2px solid var(--line-strong); border-radius: 50%; background: var(--context); }
-.handoffs-stage-strip li[data-state="done"] i { border-color: #5EE1A5; background: #5EE1A5; }
-.handoffs-stage-strip li[data-state="current"] i { border-color: #F2F2F2; background: transparent; box-shadow: 0 0 0 2px rgba(242,242,242,.18); }
-.handoffs-stage-strip li[data-state="pending"] i { border-color: var(--line-strong); opacity: .55; }
-.handoffs-motion-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .agent-handoff-chip { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(13, 9, 52, .44); color: var(--muted); font-size: 13px; line-height: 18px; }
 .agent-handoff-chip button { padding: 0; border: 0; background: transparent; color: var(--body); font: inherit; text-decoration: underline; cursor: pointer; }
 @container (max-width: 900px) {
-  .handoffs-page { padding: 28px 24px; }
-  .handoffs-header, .handoffs-motion-row { grid-template-columns: 1fr; display: flex; flex-direction: column; align-items: stretch; }
-  .handoffs-lanes { grid-template-columns: 1fr; }
-  .handoffs-steps li { grid-template-columns: 32px 1fr; }
-  .handoffs-step-owner, .handoffs-step-note { grid-column: 2; }
-  .handoffs-stage-strip { flex-wrap: wrap; gap: 8px; }
-  .handoffs-stage-strip li::before { display: none; }
+  .partner-role-grid { grid-template-columns: 1fr; }
+  .partner-progress { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
 
 /* Recovery uses immediate server states. Countdown text has no motion or live

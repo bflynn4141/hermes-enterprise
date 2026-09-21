@@ -9,12 +9,13 @@ import {
 } from '@hermes/shared';
 import { RestError } from '../../model/rest.js';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
+import { Glass } from '../ui/icons.js';
 import { Button, EmptyState, Skeleton } from '../ui/primitives.js';
 
 function workflowError(error: unknown): string {
   if (!(error instanceof RestError)) return 'Could not complete that action.';
   if (error.reason === 'workflow_readiness_incomplete') {
-    return 'Profiles did not match. Still disabled.';
+    return 'The native profiles did not match. The handoff remains disabled.';
   }
   return error.message || 'Could not complete that action.';
 }
@@ -46,29 +47,48 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
   };
   return (
     <motion.form className="partner-workflow-form" aria-label="Configure employee roles" onSubmit={submit} initial={{ opacity: 0, y: reduce ? 0 : -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .16, ease: [0.22, 1, 0.36, 1] }}>
-      <header><div><h3>Roles</h3></div><Button small onClick={onClose}>Close</Button></header>
+      <header>
+        <div>
+          <h3>Configure roles</h3>
+          <p>Bind two employees to two dedicated agents.</p>
+        </div>
+        <Button small onClick={onClose}>Close</Button>
+      </header>
       <div className="partner-form-grid">
-        <label><span>Partnerships user</span><input required value={partnershipsUser} onChange={(event) => setPartnershipsUser(event.target.value)} /></label>
+        <label><span>Partnerships employee</span><input required value={partnershipsUser} onChange={(event) => setPartnershipsUser(event.target.value)} /></label>
         <label><span>Partnerships agent</span><input required value={partnershipsAgent} onChange={(event) => setPartnershipsAgent(event.target.value)} /></label>
-        <label><span>Finance user</span><input required value={financeUser} onChange={(event) => setFinanceUser(event.target.value)} /></label>
+        <label><span>Finance employee</span><input required value={financeUser} onChange={(event) => setFinanceUser(event.target.value)} /></label>
         <label><span>Finance agent</span><input required value={financeAgent} onChange={(event) => setFinanceAgent(event.target.value)} /></label>
       </div>
       {error && <p className="partner-error" role="alert">{error}</p>}
-      <footer><Button primary type="submit" disabled={!valid || busy}>{busy ? 'Saving…' : 'Save'}</Button></footer>
+      <footer>
+        <span className="meta">Schedules stay off until readiness passes.</span>
+        <Button primary type="submit" disabled={!valid || busy}>{busy ? 'Saving…' : 'Save'}</Button>
+      </footer>
     </motion.form>
   );
 }
 
 function admissionStatusCopy(detail: HandoffDetail): { label: string; tone: 'ok' | 'warn' } {
-  if (detail.handoff.admission_state === 'enabled') return { label: 'Live', tone: 'ok' };
-  return { label: 'Off', tone: 'warn' };
+  if (detail.handoff.admission_state === 'enabled') {
+    const when = detail.handoff.enabled_at
+      ? new Date(detail.handoff.enabled_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      : null;
+    return { label: when ? `Live · ${when}` : 'Live', tone: 'ok' };
+  }
+  return { label: 'Not admitted', tone: 'warn' };
 }
 
 function primaryAction(detail: HandoffDetail): { label: string; action: 'admission' | 'inbox' | null } {
   if (detail.actions.set_admission && detail.handoff.admission_state !== 'enabled') return { label: 'Enable', action: 'admission' };
-  if (detail.handoff.viewer_role === 'finance' || detail.actions.view_finance_review) return { label: 'Inbox', action: 'inbox' };
-  if (detail.handoff.viewer_role === 'partnerships' || detail.handoff.viewer_role === 'admin') return { label: 'Inbox', action: 'inbox' };
-  return { label: '', action: null };
+  if (detail.handoff.viewer_role === 'unrelated') return { label: '', action: null };
+  return { label: 'Open Inbox', action: 'inbox' };
+}
+
+function progressState(state: HandoffInMotionItem['stages'][number]['state']): 'complete' | 'current' | 'waiting' {
+  if (state === 'done') return 'complete';
+  if (state === 'current') return 'current';
+  return 'waiting';
 }
 
 function InMotionRow({ item }: { item: HandoffInMotionItem }) {
@@ -80,23 +100,28 @@ function InMotionRow({ item }: { item: HandoffInMotionItem }) {
     nav(REQ(item.open_request_id));
   };
   return (
-    <article className="handoffs-motion-row">
-      <div className="handoffs-motion-copy">
-        <strong>{item.title}</strong>
-        <span>{item.subtitle}</span>
-      </div>
-      <ol className="handoffs-stage-strip" aria-label={item.title}>
+    <article className="partner-handoff-card">
+      <header>
+        <div>
+          <span className="partner-card-kicker">{item.subtitle}</span>
+          <h3>{item.title}</h3>
+        </div>
+        <span className={`pill ${item.stage === 'decision' || item.stage === 'terms_recorded' ? 'pill-warn' : 'pill-ok'}`}>
+          {item.subtitle}
+        </span>
+      </header>
+      <ol className="partner-progress" aria-label={item.title}>
         {item.stages.map((stage) => (
-          <li key={stage.key} data-state={stage.state} aria-current={stage.state === 'current' ? 'step' : undefined}>
+          <li key={stage.key} data-state={progressState(stage.state)} aria-current={stage.state === 'current' ? 'step' : undefined}>
             <i aria-hidden="true" /><span>{stage.label}</span>
           </li>
         ))}
       </ol>
-      <div className="handoffs-motion-actions">
+      <footer>
         {item.open_request_id && (
           <Button small primary onClick={open}>{item.stage === 'terms_recorded' ? 'Admit' : 'Review'}</Button>
         )}
-      </div>
+      </footer>
     </article>
   );
 }
@@ -142,7 +167,15 @@ export function PartnerWorkflow() {
 
   const workflowView = detail ?? fallback;
   if (loading) return <Skeleton rows={4} label="Loading handoffs" />;
-  if (error || !workflowView) return <div className="error-block"><span className="t">Could not load</span><Button small onClick={load}>Retry</Button></div>;
+  if (error || !workflowView) {
+    return (
+      <div className="error-block">
+        <span className="t">Could not load handoffs</span>
+        <span className="s">{error}</span>
+        <Button small onClick={load}>Try again</Button>
+      </div>
+    );
+  }
 
   const updateAdmission = (): void => {
     if (!detail) return;
@@ -151,7 +184,7 @@ export function PartnerWorkflow() {
     setAdmissionError(null);
     void adapter.rest.setPartnerWorkflowAdmission(state.workspace.id, { enabled })
       .then(() => {
-        setNotice(enabled ? 'Enabled' : 'Disabled');
+        setNotice(enabled ? 'Handoff enabled.' : 'Handoff disabled.');
         load();
       })
       .catch((caught: unknown) => setAdmissionError(workflowError(caught)))
@@ -161,21 +194,22 @@ export function PartnerWorkflow() {
   if (!detail) {
     const workflow = fallback!;
     return (
-      <section className="handoffs-page partner-workflow" aria-labelledby="partner-workflow-title">
-        <header className="handoffs-header">
+      <section className="partner-workflow" aria-labelledby="partner-workflow-title">
+        <header className="partner-workflow-heading">
           <div>
-            <h2 id="partner-workflow-title">Contractor agreements</h2>
+            <h2 id="partner-workflow-title" className="section-title">Contractor agreements</h2>
+            <p>Configure both employee role templates to create this handoff.</p>
           </div>
         </header>
         {workflow.actions.configure && (
-          <>
-            <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close' : 'Configure'}</Button>
-            <AnimatePresence initial={false}>
-              {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Saved'); load(); }} />}
-            </AnimatePresence>
-          </>
+          <div className="partner-actions">
+            <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close' : 'Configure roles'}</Button>
+          </div>
         )}
-        {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>OK</Button></div>}
+        <AnimatePresence initial={false}>
+          {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Roles saved.'); load(); }} />}
+        </AnimatePresence>
+        {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>Dismiss</Button></div>}
       </section>
     );
   }
@@ -187,68 +221,91 @@ export function PartnerWorkflow() {
     : detail.handoff.viewer_role === 'admin'
       ? 'Admin'
       : detail.handoff.viewer_role === 'finance' ? 'Finance' : 'Partnerships';
+  const inboxKind = detail.handoff.viewer_role === 'finance' ? 'agreement' : 'application';
 
   return (
-    <section className="handoffs-page partner-workflow" aria-labelledby="handoffs-title">
-      <header className="handoffs-header">
+    <section className="partner-workflow" aria-labelledby="handoffs-title">
+      <header className="partner-workflow-heading">
         <div>
-          <h2 id="handoffs-title">Contractor agreements</h2>
+          <h2 id="handoffs-title" className="section-title">Contractor agreements</h2>
+          <p>Partnerships admits · Finance reviews the agreement</p>
         </div>
-        <div className="handoffs-header-actions">
-          <span className={`pill ${status.tone === 'ok' ? 'pill-ok' : 'pill-warn'}`}>{status.label}</span>
+        <div className="partner-heading-status">
+          <span className={`pill ${status.tone === 'ok' ? 'pill-ok' : 'pill-warn'}`}>
+            <i className="handoffs-status-dot" aria-hidden="true" />{status.label}
+          </span>
           <span className="pill">{roleLabel}</span>
-          {primary.action === 'admission' && (
-            <Button primary disabled={admissionBusy || !detail.configured} onClick={updateAdmission}>{admissionBusy ? '…' : primary.label}</Button>
-          )}
-          {primary.action === 'inbox' && (
-            <Button primary onClick={() => nav({
-              section: 'inbox',
-              view: 'list',
-              filters: { status: 'pending', kind: detail.handoff.viewer_role === 'finance' ? 'agreement' : 'application' },
-            })}>{primary.label}</Button>
-          )}
-          {detail.actions.configure && <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close' : 'Roles'}</Button>}
-          {detail.actions.set_admission && detail.handoff.admission_state === 'enabled' && (
-            <Button disabled={admissionBusy} onClick={updateAdmission}>{admissionBusy ? '…' : 'Disable'}</Button>
-          )}
         </div>
       </header>
 
+      <div className="partner-actions">
+        {primary.action === 'admission' && (
+          <Button primary disabled={admissionBusy || !detail.configured} onClick={updateAdmission}>
+            {admissionBusy ? 'Verifying…' : primary.label}
+          </Button>
+        )}
+        {primary.action === 'inbox' && (
+          <Button primary onClick={() => nav({ section: 'inbox', view: 'list', filters: { status: 'pending', kind: inboxKind } })}>
+            {primary.label}
+          </Button>
+        )}
+        {detail.actions.configure && (
+          <Button onClick={() => setForm(form === 'setup' ? null : 'setup')}>{form === 'setup' ? 'Close' : 'Edit roles'}</Button>
+        )}
+        {detail.actions.set_admission && detail.handoff.admission_state === 'enabled' && (
+          <Button disabled={admissionBusy} onClick={updateAdmission}>{admissionBusy ? '…' : 'Disable'}</Button>
+        )}
+      </div>
+
       {detail.handoff.viewer_role === 'unrelated' ? (
-        <EmptyState icon="context" title="No access" detail="" />
+        <EmptyState icon="context" title="No access" detail="This handoff is for Partnerships and Finance only." />
       ) : (
         <>
-          <div className="handoffs-lanes">
+          <div className="partner-role-grid">
             {detail.lanes.map((lane) => {
               const ready = lane.readiness.native_status === 'ready' && lane.readiness.assignment_state === 'active';
               return (
-                <article key={lane.team.slug} className="handoffs-lane-card" data-ready={ready}>
-                  <header>
-                    <h3>{lane.team.name}</h3>
-                    <span className={`handoffs-ready-dot${ready ? ' is-ready' : ''}`}>{ready ? 'Ready' : '—'}</span>
-                  </header>
-                  <p className="meta">{[lane.person, lane.agent].filter(Boolean).join(' · ') || '—'}</p>
+                <article key={lane.team.slug} className="partner-role-card" data-ready={ready}>
+                  <div className="partner-role-card-head">
+                    <Glass name={lane.team.slug === 'finance' ? 'invoice' : 'people'} size={28} />
+                    <div className="col grow">
+                      <h3>{lane.team.name}</h3>
+                      <span className="meta">{lane.person && lane.agent ? `${lane.person} · ${lane.agent}` : 'Unassigned'}</span>
+                    </div>
+                    <span className={`pill ${ready ? 'pill-ok' : 'pill-warn'}`}>{ready ? 'Ready' : 'Not ready'}</span>
+                  </div>
+                  {lane.skill && <p className="meta">{lane.skill}</p>}
                 </article>
               );
             })}
           </div>
 
+          {detail.crossing.length > 0 && (
+            <div className="partner-connector" aria-label="What crosses">
+              <span>Crosses</span>
+              <span>{detail.crossing.map((item) => item.label).join(' → ')}</span>
+            </div>
+          )}
+
           {admissionError && <p className="partner-error" role="alert">{admissionError}</p>}
           <AnimatePresence initial={false}>
-            {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Saved'); load(); }} />}
+            {form === 'setup' && <WorkflowSetupForm key="setup" onClose={() => setForm(null)} onSaved={() => { setForm(null); setNotice('Roles saved.'); load(); }} />}
           </AnimatePresence>
-          {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>OK</Button></div>}
+          {notice && <div className="partner-notice" role="status"><span>{notice}</span><Button small onClick={() => setNotice(null)}>Dismiss</Button></div>}
 
-          <section className="handoffs-motion" aria-labelledby="handoffs-motion-title">
+          <div className="partner-work-list">
             <header>
-              <h3 id="handoffs-motion-title">In motion</h3>
+              <h3>In motion</h3>
+              <span className="meta">
+                {detail.counts.in_motion === 0
+                  ? 'Nothing yet'
+                  : `${detail.counts.waiting_on_viewer} waiting on you`}
+              </span>
             </header>
             {detail.in_motion.length === 0
-              ? <EmptyState icon="people" title="Nothing yet" detail="" />
-              : detail.in_motion.map((item) => (
-                <InMotionRow key={item.id} item={item} />
-              ))}
-          </section>
+              ? <EmptyState icon="people" title="Nothing in motion" detail="Admitted partners appear here for Finance review." />
+              : detail.in_motion.map((item) => <InMotionRow key={item.id} item={item} />)}
+          </div>
         </>
       )}
     </section>

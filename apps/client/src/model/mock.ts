@@ -1726,8 +1726,8 @@ export function createMockBackend(options: MockOptions = {}) {
         { role: 'finance', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
       ];
       const lanes = workflowRole === 'unrelated' ? [] : [
-        { team: listItem.from_team, person: 'Maya Chen', agent: 'Iris', agent_id: AGENT, skill: 'Partner program screening', readiness: readiness[0]!, notes: ['admits applicants, prepares contractor agreements', 'screens partners and drafts outreach', 'Partner program screening · schedule off', '1.8.0 attested'] },
-        { team: listItem.to_team, person: 'Alex Rivera', agent: 'Ledger', agent_id: FINANCE_AGENT, skill: 'Partner invoice review', readiness: readiness[1]!, notes: ['reviews contractor agreements', 'prepares evidence for the human decision', 'Partner invoice review · schedule off', '1.0.1 attested'] },
+        { team: listItem.from_team, person: 'Maya Chen', agent: 'Iris', agent_id: AGENT, skill: 'Partner program screening', readiness: readiness[0]!, notes: ['Admit', 'Iris', 'Off', '1.8.0'] },
+        { team: listItem.to_team, person: 'Alex Rivera', agent: 'Ledger', agent_id: FINANCE_AGENT, skill: 'Agreement review', readiness: readiness[1]!, notes: ['Review', 'Ledger', 'Off', '1.0.1'] },
       ];
       return json({
         handoff: {
@@ -1821,7 +1821,16 @@ export function createMockBackend(options: MockOptions = {}) {
         counts: { in_motion: canSeeWork ? requests.filter((row) => row.kind === 'application' && row.status === 'pending').length + requests.filter((row) => {
           const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
           return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
-        }).length : 0, waiting_on_viewer: 0 },
+        }).length : 0, waiting_on_viewer: canSeeWork
+          ? (workflowRole === 'partnerships'
+            ? requests.filter((row) => row.kind === 'application' && row.status === 'pending').length
+            : workflowRole === 'finance'
+              ? requests.filter((row) => {
+                const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
+                return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+              }).length
+              : 0)
+          : 0 },
       });
     }
     if (p('/partner-workflow') && method === 'GET') {
@@ -1856,7 +1865,7 @@ export function createMockBackend(options: MockOptions = {}) {
             id: FINANCE_AGENT, name: 'Ledger', principal_user_id: MEMBER_USER, principal_name: 'Alex Rivera',
             team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
             role_template: { key: 'finance-agent', name: 'Finance agent', version: '1.0.1' },
-            skill_key: 'partner-invoice-review', skill_name: 'Partner invoice review', skill_version: '1.0.1',
+            skill_key: 'partner-invoice-review', skill_name: 'Agreement review', skill_version: '1.0.1',
             assignment_id: mockUuid(623), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
             capabilities: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
           },
