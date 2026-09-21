@@ -985,7 +985,8 @@ export function createMockBackend(options: MockOptions = {}) {
   function requestForViewer(row: MockRequest): MockRequest {
     const approval = approvalViews.get(row.id);
     if (approval) return { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) };
-    const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+    const financeScoped = (row.kind === 'invoice' && 'workflow_provenance' in row.payload)
+      || (row.kind === 'agreement' && (row.payload.workflow_provenance as { handoff_key?: string } | undefined)?.handoff_key === 'contractor-agreements');
     // Preserve the older Worker response shape for the existing legacy Member
     // browser fixture. The scoped Finance fixture exercises the new projection.
     if (!financeScoped && seat === 'member') return row;

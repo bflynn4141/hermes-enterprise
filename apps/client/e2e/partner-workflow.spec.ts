@@ -69,6 +69,18 @@ test('Finance sees where an agreement came from', async ({ page }) => {
   await expect(pane.getByRole('heading', { name: 'Priya Nair' })).toBeVisible();
 });
 
+test('Finance can approve a contractor agreement and the handoff completes', async ({ page }) => {
+  await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member');
+  const pane = await openHandoffs(page);
+  await pane.getByRole('button', { name: 'Review' }).click();
+  await expect(pane.getByText('Finance reviewer required')).toHaveCount(0);
+  await expect(pane.getByText('Admin decision required')).toHaveCount(0);
+  await pane.getByRole('button', { name: 'Approve agreement draft' }).click();
+  await expect(pane.getByRole('heading', { name: 'Saved unsigned' })).toBeVisible();
+  const handoffs = await openHandoffs(page);
+  await expect(handoffs.getByText('Nothing in motion')).toBeVisible();
+});
+
 test('an unrelated member receives no private workflow content', async ({ page }) => {
   await page.goto('/?partnerWorkflow=1&workflowRole=unrelated&seat=member');
   const pane = await openHandoffs(page);
