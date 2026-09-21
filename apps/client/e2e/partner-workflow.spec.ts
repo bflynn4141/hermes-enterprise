@@ -12,7 +12,7 @@ test('Finance reviews authorized evidence, records the decision, and returns a s
   await expect(pane.getByText('Maya Chen · Scout', { exact: true })).toBeVisible();
   await expect(pane.getByText('Alex Rivera · Ledger', { exact: true })).toBeVisible();
   await expect(pane.getByText('Ready', { exact: true })).toHaveCount(2);
-  await expect(page.getByRole('button', { name: 'Robin Studio · invoice source' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Partner applications' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Robin Studio · Finance review' })).toBeVisible();
   await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
   await expect(page.getByText('Scout sessions', { exact: true })).toHaveCount(0);

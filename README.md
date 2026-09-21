@@ -74,36 +74,33 @@ agreement.
 All screenshots use sample fixture data and simulated execution. The fixtures
 do not call a model.
 
-### 1. Partnerships works in its own chat
+### 1. Partnerships screens applicants in the Inbox
 
 The Partnerships Manager works with a dedicated agent named Scout in this
-example. The left rail shows Scout's sessions. The role cards on the right show
-the separate Partnerships and Finance assignments.
+example. Scout screens the latest applicants and prepares the evidence. The
+left rail keeps Scout's sessions visible while a person reviews the applicant
+in the Inbox.
 
-![Scout chat with the Partnerships session list, screening result, and separate role assignments](docs/assets/readme-partnerships.png)
+![Scout chat and Partnerships session list beside Leah Martinez's Inbox review](docs/assets/readme-partnerships.png)
 
-### 2. Finance receives a scoped handoff
+### 2. Finance reviews the scoped handoff in the Inbox
 
 The Finance agent, Ledger, receives a message from Scout in a separate session.
 Ledger checks only the authorized terms and confirmed invoice source that the
-server included in the handoff.
-
-![Ledger chat with its Finance session list and the checked invoice handoff](docs/assets/readme-finance-handoff.png)
-
-### 3. The Finance employee makes the decision
-
-The Inbox names the decision, shows the evidence, and identifies the authorized
-reviewer. The agent prepares this request but cannot decide it.
+server included in the handoff. The Inbox names the decision, shows the
+evidence, and identifies the authorized reviewer. Ledger prepares the request
+but cannot decide it.
 
 ![Finance chat and session list beside the invoice decision for Alex Rivera](docs/assets/readme-finance-decision.png)
 
-### 4. Hermes records a limited receipt
+### 3. The Inbox records the result
 
-After Alex approves the invoice draft, Hermes records who decided and what the
-app saved. The receipt confirms that the app did not send an email or start a
-payment. It also keeps Finance notes and private conversation inside Finance.
+After Alex approves the invoice draft, the request moves to the Inbox's
+Resolved view. The result states that the app created a draft without sending
+an email or moving money. Ledger's session list and Finance conversation remain
+visible beside it.
 
-![Finance session list and recorded invoice draft receipt](docs/assets/readme-finance-receipt.png)
+![Ledger chat and Finance session list beside the resolved invoice in the Inbox](docs/assets/readme-finance-receipt.png)
 
 ## How team setup works
 
