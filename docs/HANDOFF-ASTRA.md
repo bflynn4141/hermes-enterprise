@@ -24,7 +24,7 @@ Ask Brian for these in one message and wait:
 | Which domain | must already be a zone in the Cloudflare account, or DNS moves first | ask |
 | First provider for the spike | RUNBOOK §3 records the measured Stop latency from it | OpenRouter (Brian has a key) |
 
-Prerequisites to confirm exist (do not create accounts without asking): Cloudflare account `bflynn.me@gmail.com` (account id `348159a4e1d2d54077bc01aafc1866be`; `npx wrangler whoami` in the repo confirms the login), a Neon account, a WorkOS account, a GitHub account with access to create a private repo, an OpenRouter account (Brian rotates the key himself; you never handle it).
+Prerequisites to confirm exist (do not create accounts without asking): the project's Cloudflare account (`npx wrangler whoami` in the repo confirms the login and prints the account id), a Neon account, a WorkOS account, a GitHub account with access to create a private repo, an OpenRouter account (Brian rotates the key himself; you never handle it).
 
 ## Phase A. Neon (database)
 
@@ -54,7 +54,7 @@ Report: project name, region, branch names, role names. No strings.
 
 ## Phase B. Cloudflare
 
-Sign in at https://dash.cloudflare.com as `bflynn.me@gmail.com`. Everything below is under the account `Bflynn.me@gmail.com's Account`.
+Sign in at https://dash.cloudflare.com with the project's Cloudflare login. Everything below is under that account.
 
 1. **Workers Paid plan** (Workers & Pages → Plans). $5/month. Ask Brian before purchasing. Workflows, Queues and the 30 s CPU limit need it.
 2. **Account security**: confirm 2FA is on for Brian's login (My Profile → Authentication). Do not change it yourself; report if it is off.
