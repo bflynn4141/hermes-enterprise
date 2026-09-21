@@ -292,14 +292,13 @@ class CloudManagedPolicyTests(unittest.TestCase):
                 conversation_loop.perform_api_call(object())
         self.assertEqual(calls, ["provider"])
 
-    def test_effective_provider_binding_rejects_request_or_fallback_escape(self):
+    def test_effective_provider_binding_allows_model_selection_but_rejects_route_escape(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary) / "runtime-readiness.json"
             path.write_text("checked")
             state = NativePolicyState(path)
             expected = {
                 "provider": "custom",
-                "model": "governed-model",
                 "base_url": "https://enterprise.example/model/v1",
                 "api_key": "runtime-token",
                 "api_mode": "chat_completions",
@@ -308,7 +307,11 @@ class CloudManagedPolicyTests(unittest.TestCase):
                 hashlib.sha256(path.read_bytes()).hexdigest(), lambda: None,
                 provider_binding=expected,
             )
-            self.assertTrue(state.ensure_provider_current(types.SimpleNamespace(**expected)))
+            first_model = {**expected, "model": "catalog/model-a"}
+            second_model = {**expected, "model": "catalog/model-b"}
+            self.assertTrue(state.ensure_provider_current(types.SimpleNamespace(**first_model)))
+            self.assertTrue(state.ensure_provider_current(types.SimpleNamespace(**second_model)))
+            self.assertTrue(path.exists())
             escaped = {**expected, "provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"}
             self.assertFalse(state.ensure_provider_current(types.SimpleNamespace(**escaped)))
             self.assertFalse(path.exists())

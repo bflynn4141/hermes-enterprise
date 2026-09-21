@@ -16,7 +16,7 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
@@ -121,11 +121,19 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  /**
+   * Which contract scenario a sent turn plays. `proposes_request` adds one
+   * request the workspace did not have, so the browser suite can watch a row
+   * and a receipt *arrive* rather than load with the page.
+   */
+  turn?: 'completed' | 'proposes_request' | 'waiting';
   communicationDraft?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
   /** Browser regression fixture for rejected member and invitation writes. */
   memberWrites?: 'ok' | 'fail';
+  /** The picker lists one pending invitation addressed to the viewer. */
+  pendingInvitation?: boolean;
   /** Browser regression fixture for rejected Library skill adopts. */
   libraryAdopt?: 'ok' | 'fail';
   /** Browser regression fixture for rejected workspace settings writes. */
@@ -286,7 +294,7 @@ export function createMockBackend(options: MockOptions = {}) {
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
         request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
-        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
+        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop on Oct 22–23, with materials prepared in advance.', source_ids: [] }, { id: 'fees', heading: 'Fees', body: 'USD 1,200, payable 14 days after an accepted delivery statement.', source_ids: [DOC_INVOICE, mockUuid(699)] }, { id: 'term', heading: 'Term', body: 'Effective on signature by both parties; either party may end it with 14 days notice.', source_ids: [] }] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
     communicationDraft: options.communicationDraft,
@@ -368,6 +376,14 @@ export function createMockBackend(options: MockOptions = {}) {
         version: 1,
       }];
   const runtimeDiscoveryGrants: RuntimeDiscoveryGrant[] = [];
+  const pendingInvitation: PendingInvitation = {
+    token: mockUuid(212),
+    workspace: { id: mockUuid(2), name: 'Finance Review' },
+    role: 'member',
+    role_template_key: 'finance-agent',
+    invited_by: 'Alex Rivera',
+    expires_at: iso(6 * 86_400),
+  };
 
   const providerKeys: MaskedProviderKey[] =
     keyMode === 'none'
@@ -604,7 +620,7 @@ export function createMockBackend(options: MockOptions = {}) {
       ];
 
   const skills = [
-    { id: 'managed:partner-program-screening', name: 'Partner program screening', version: 'v1.7.0', shared_by: 'Hermes Enterprise', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', detail: 'Adopted by Iris. Review rules are unchanged by configuration.', adopted: true },
+    { id: 'managed:partner-program-screening', name: 'Partner program screening', version: 'v1.7.0', shared_by: 'Hermes Teams Demo', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', detail: 'Adopted by Iris. Review rules are unchanged by configuration.', adopted: true },
     { id: 'feedback-synthesis', name: 'Feedback synthesis', version: 'v2', shared_by: 'Alex Rivera', description: 'Turn partner feedback into a routed, reviewable summary.', detail: null, adopted: false },
   ];
   let skillAssignment: EnterpriseSkillAssignment = {
@@ -1099,8 +1115,8 @@ export function createMockBackend(options: MockOptions = {}) {
   };
 
   /** Run one contract scenario on the session socket, paced for a human. */
-  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
-    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date() });
+  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string, requestId?: string): void {
+    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date(), ...(requestId ? { requestId } : {}) });
     events.forEach((event, i) => {
       setTimeout(() => publish(event), 220 * (i + 1));
     });
@@ -1128,6 +1144,17 @@ export function createMockBackend(options: MockOptions = {}) {
 
     if (path === '/health') return json({ status: 'ok', version: 'mock', checks: [] });
 
+    if (path === '/demo/request-access' && method === 'POST') {
+      const email = String(body.email ?? '').trim().toLowerCase();
+      const passcode = String(body.passcode ?? '');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(422, 'bad_email');
+      if (!passcode) return fail(422, 'bad_passcode');
+      if (passcode !== 'demo-pass') return fail(403, 'demo_passcode_invalid');
+      if (email.endsWith('@blocked.example')) return fail(403, 'demo_domain_not_allowed');
+      if (email === 'member@nous.example') return json({ status: 'already_member', email });
+      return json({ status: 'invited', email });
+    }
+
     if (path === '/auth/session') {
       const user = { id: viewerUserId, name: viewerName, email: seat === 'admin' ? 'maya@nous.example' : 'alex@nous.example' };
       if (!url.searchParams.has('ws')) {
@@ -1142,7 +1169,10 @@ export function createMockBackend(options: MockOptions = {}) {
               member_count: members.length,
             },
           ],
-          authenticated_at: iso(0),
+          // A second workspace's invitation, so the picker's "Pending
+          // invitations" list has something to show in a mock build.
+          invitations: options.pendingInvitation ? [pendingInvitation] : [],
+          authenticated_at: new Date().toISOString(),
         });
       }
       return json({
@@ -1151,7 +1181,7 @@ export function createMockBackend(options: MockOptions = {}) {
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
         expires_at: iso(600),
-        authenticated_at: iso(0),
+        authenticated_at: new Date().toISOString(),
       });
     }
 
@@ -1188,6 +1218,22 @@ export function createMockBackend(options: MockOptions = {}) {
       const token = decodeURIComponent(path.split('/')[2] ?? '');
       if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
       return json(bootstrap());
+    }
+    // The join page's token-scoped read: the workspace behind the demo token,
+    // and the same refusal the accept gives for anything else.
+    if (path.startsWith('/invitations/') && method === 'GET') {
+      const token = decodeURIComponent(path.split('/')[2] ?? '');
+      if (token === 'inv_forwarded') return fail(403, 'invitation_email_mismatch', 'This invitation was sent to a different address');
+      if (token !== 'inv_demo' && !invitations.some((row) => row.id === token)) return fail(404, 'invitation_unavailable', 'Invitation unavailable');
+      const row = invitations.find((item) => item.id === token);
+      return json({
+        token,
+        workspace: { id: WS, name: workspaceName },
+        role: row?.role ?? 'member',
+        role_template_key: row?.role_template_key ?? 'finance-agent',
+        invited_by: 'Maya Chen',
+        expires_at: iso(6 * 86_400),
+      });
     }
 
     // There is no `/bootstrap/client` any more: the Worker has no such route,
@@ -1248,7 +1294,19 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
-        runScenario('completed', sessionId);
+        if (options.turn === 'proposes_request') {
+          const freshId = mockUuid(7000 + requests.length);
+          requests.push({
+            ...request(freshId, 'application', 'pending', 'Priya Natarajan', 'Priya Natarajan', {
+              kind: 'application', applicant: { name: 'Priya Natarajan' }, proposed_role: 'Delivery Partner', score: 79, score_max: 100,
+              criteria: [
+                { id: 'track-record', label: 'track-record', points: 26, points_max: 30, evidence: 'Shipped two partner integrations in the last year.', source_ids: ['linkedin'] },
+              ],
+            }),
+            created_at: new Date().toISOString(),
+          });
+          runScenario('proposes_request', sessionId, freshId);
+        } else runScenario(options.turn === 'waiting' ? 'waiting' : 'completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
       // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.

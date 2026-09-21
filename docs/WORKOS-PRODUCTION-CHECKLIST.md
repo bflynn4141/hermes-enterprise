@@ -184,7 +184,7 @@ invalid by design.
   returned `400` with the “Your sign-in expired” page and a link to
   `/auth/login` (no code exchange).
 - **Authenticated shell:** An existing sealed session opened the
-  workspace picker (one membership: Brian Interview Demo) and the
+  workspace picker (one membership: Hermes Teams Demo) and the
   workspace shell (Agents / Inbox / Members / Admin). Session cookie
   is not readable from JavaScript; only `hermes_csrf` appears in
   `document.cookie`.
@@ -220,6 +220,18 @@ evidence for the items that do not require a disposable inbox or IdP:
 
 Private-browser items above remain blocked on a disposable inbox and an
 SSO test IdP; they were not attempted in this re-verify.
+
+### Demo naming — September 21, 2026
+
+The hosted demo is **Hermes Teams Demo** everywhere, matching the public
+repository name. On September 21 the WorkOS staging organization
+`org_01M2M1NJF0ENKS96QW7C2CQYSZ` was renamed to Hermes Teams Demo by API, the
+staging workspace `8cb93c4c-…` was renamed through `workspace-link.yml`
+(dry run, then apply; the organization link was already present), and the
+`/demo` page follows. Still dashboard-only: the staging application name
+under Branding, which drives the invitation subject. A live invitation sent
+the same day arrived as "[STAGING] Brian Flynn invited you to Hermes" with the
+body naming the organization, after PR #145 fixed the inviter id.
 
 ## What automated tests prove—and do not prove
 

@@ -43,30 +43,34 @@ test('every main screen renders', async ({ page }) => {
   // 6. The document viewer (the invoice request).
   await page.getByRole('button', { name: /^Inbox/ }).click();
   await appPane.getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
-  await expect(appPane.getByText('Services delivered')).toBeVisible();
+  await expect(appPane.getByRole('heading', { name: /^Invoice from/ })).toBeVisible();
   await page.screenshot(shot('06-document-viewer'));
 
-  // 7. The receipt, after a decision.
-  await appPane.getByRole('button', { name: 'Review payment' }).click();
-  await appPane.getByRole('checkbox', { name: /authorize this payment instruction/i }).check();
-  await appPane.getByRole('button', { name: 'Review authorization' }).click();
-  await appPane.getByRole('button', { name: 'Authorize payment' }).click();
-  await expect(appPane.getByText('Provider actions')).toBeVisible();
+  // 7. The receipt, after a decision. Approving saves a draft; nothing is paid or sent.
+  await appPane.getByRole('button', { name: 'Approve invoice draft' }).click();
+  await expect(appPane.getByRole('heading', { name: 'Saved in Library' })).toBeVisible();
   await page.screenshot(shot('07-receipt'));
+
+  // With Iris open the app pane is narrow, so the agent tabs render as a select.
+  const agentView = async (label: string) => {
+    const tab = appPane.getByRole('tab', { name: label });
+    if (await tab.isVisible()) await tab.click();
+    else await appPane.getByRole('combobox', { name: 'Agent view' }).selectOption({ label });
+  };
 
   // 8. Agent → Context.
   await page.getByRole('button', { name: 'Agents' }).click();
-  await appPane.getByRole('tab', { name: 'Context' }).click();
-  await expect(appPane.getByText('Program sources')).toBeVisible();
+  await agentView('Context');
+  await expect(appPane.getByRole('heading', { name: 'What Iris knows' })).toBeVisible();
   await page.screenshot(shot('08-agent-context'));
 
   // 9. Agent → Skills.
-  await appPane.getByRole('tab', { name: 'Skills' }).click();
-  await expect(appPane.getByText('Screening instructions')).toBeVisible();
+  await agentView('Skills');
+  await expect(appPane.getByRole('heading', { name: 'Instructions for Iris' })).toBeVisible();
   await page.screenshot(shot('09-agent-skills'));
 
   // 10. Agent → Traces.
-  await appPane.getByRole('tab', { name: 'Traces' }).click();
+  await agentView('Traces');
   await expect(appPane.getByRole('heading', { name: 'Runs' })).toBeVisible();
   await page.screenshot(shot('10-traces'));
 
@@ -97,24 +101,26 @@ test('every main screen renders', async ({ page }) => {
   await expect(appPane.getByText('Partner Program Guide', { exact: true })).toBeVisible();
   await page.screenshot(shot('15-library-documents'));
 
-  // 16. Settings → Provider keys.
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await appPane.getByRole('tab', { name: 'Provider keys' }).click();
-  await expect(appPane.getByRole('heading', { name: 'Provider keys' })).toBeVisible();
+  // 16. Admin → Model providers. Admin pages live in one left rail.
+  const adminPage = (label: string) => appPane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: label, exact: true });
+  await page.getByRole('button', { name: 'Admin', exact: true }).click();
+  await adminPage('Model providers').click();
+  await expect(appPane.getByRole('heading', { name: 'Model providers' })).toBeVisible();
   await page.screenshot(shot('16-settings-provider-keys'));
 
-  // 17. Settings → Usage.
-  await appPane.getByRole('tab', { name: 'Usage' }).click();
+  // 17. Admin → Usage.
+  await adminPage('Usage').click();
   // The server's own sentence, which the client renders beside the total.
   await expect(appPane.getByText(/Estimated, billed by your provider/)).toBeVisible();
   await page.screenshot(shot('17-settings-usage'));
 
-  // 18. Settings → Agents.
-  await appPane.getByRole('tab', { name: 'Agents' }).click();
-  await expect(appPane.getByText('Model defaults')).toBeVisible();
+  // 18. Admin → Agent defaults.
+  await adminPage('Agent defaults').click();
+  await expect(appPane.getByRole('heading', { name: 'Model defaults' })).toBeVisible();
   await page.screenshot(shot('18-settings-agents'));
 
   // 19. Settings → Data and privacy, with the processor facts.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await appPane.getByRole('tab', { name: 'Data and privacy' }).click();
   await expect(appPane.getByText('Processors')).toBeVisible();
   await page.screenshot(shot('19-settings-privacy'));
@@ -130,8 +136,8 @@ test('the first-run empty states render', async ({ page }) => {
   await expect(appPane.getByText('No reviews waiting')).toBeVisible();
   await page.screenshot(shot('21-empty-inbox'));
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await appPane.getByRole('tab', { name: 'Provider keys' }).click();
+  await page.getByRole('button', { name: 'Admin', exact: true }).click();
+  await appPane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
   await expect(appPane.getByText(/Connect Nous Portal to enable models/)).toBeVisible();
   await page.screenshot(shot('22-empty-provider-keys'));
 });
@@ -140,7 +146,7 @@ test('the Member seat renders', async ({ page }) => {
   await page.goto('/?seat=member');
   const appPane = page.getByRole('region', { name: 'Application' });
   await appPane.getByRole('button', { name: /^Review/ }).first().click();
-  await expect(appPane.getByText('Admin decision required')).toBeVisible();
+  await expect(appPane.getByText('A workspace Admin records this decision')).toBeVisible();
   await page.screenshot(shot('23-member-review'));
 });
 

@@ -1,4 +1,4 @@
-# Hermes Enterprise Slack app — production HTTP Events API template.
+# Hermes Teams Demo Slack app — production HTTP Events API template.
 #
 # Before importing, replace every occurrence of slack-adapter.example.com with
 # the public HTTPS hostname of the implemented Slack adapter. Slack manifests
@@ -10,8 +10,8 @@
 # agent_view remain disabled until their handlers and authorization model exist.
 
 display_information:
-  name: Hermes Enterprise
-  description: Talk to your governed Hermes Enterprise agent from Slack.
+  name: Hermes Teams Demo
+  description: Talk to your governed Hermes Teams Demo agent from Slack.
   background_color: "#110B30"
 
 features:

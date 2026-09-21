@@ -126,7 +126,7 @@ test('P4 · two contexts deciding the same request yield one decision and one "A
 // P5 · the Member seat
 // ---------------------------------------------------------------------------
 
-test('P5 · a Member opening a request sees "Admin decision required" and cannot decide', async ({ browser }) => {
+test('P5 · a Member opening a request sees "A workspace Admin records this decision" and cannot decide', async ({ browser }) => {
   const [requestId] = rows(
     `SELECT id::text FROM requests WHERE workspace_id = '${SEED_WORKSPACE}' AND status = 'pending' ORDER BY created_at DESC LIMIT 1;`,
   );
@@ -135,7 +135,7 @@ test('P5 · a Member opening a request sees "Admin decision required" and cannot
   const context = await asUser(browser, SEED_MEMBER);
   const page = await context.newPage();
   await page.goto(`${shell(SEED_WORKSPACE)}#inbox/request/${requestId}`);
-  await expect(page.getByText('Admin decision required')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('A workspace Admin records this decision')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole('button', { name: 'Admit' })).toHaveCount(0);
 
   // And the route refuses it too: the copy is a courtesy, the guard is the law.
@@ -378,10 +378,9 @@ test('P13 · a fresh workspace shows the first-run empty states for an Admin', a
   await page.getByRole('button', { name: 'Inbox', exact: true }).first().click();
   await expect(page.getByText('No reviews waiting')).toBeVisible();
 
-  // Model providers live under Admin → Agents since the Admin split (PR92–96).
+  // Model providers live under Admin since the Admin split (PR92–96).
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Agents' }).click();
-  await page.getByRole('navigation', { name: 'Agents settings pages' }).getByRole('button', { name: 'Model providers', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
   await expect(page.getByText('Connect Nous Portal to enable models')).toBeVisible();
   await context.close();
 });

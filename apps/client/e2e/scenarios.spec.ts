@@ -55,7 +55,21 @@ test.describe('P1 · onboarding', () => {
 
     await page.goto('/onboarding/join?token=inv_demo');
     await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeEnabled();
-    await expect(page.getByText(/only an Admin records a decision/)).toBeVisible();
+    await expect(page.getByText(/you and the reviewers named on each request decide/)).toBeVisible();
+  });
+
+  test('the join page names the workspace it joins, and refuses a forwarded link by name', async ({ page }) => {
+    await page.goto('/onboarding/join?token=inv_demo');
+    // The token-scoped read names the workspace and the job role before the
+    // person accepts; the invited address is never shown.
+    await expect(page.getByRole('heading', { name: 'Join Nous' })).toBeVisible();
+    await expect(page.getByText('Maya Chen invited you to join as a Finance member.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeEnabled();
+
+    await page.goto('/onboarding/join?token=inv_forwarded');
+    await expect(page.getByRole('heading', { name: 'Join a workspace' })).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText('This invitation was sent to a different address');
+    await expect(page.getByRole('button', { name: 'Accept invitation' })).toHaveCount(0);
   });
 
   test('a fresh workspace opens with Inbox 0 and every first-run empty state', async ({ page }) => {
@@ -135,6 +149,30 @@ test.describe('workspace picker states', () => {
     await expect(page.getByText('Partner Program')).toBeVisible();
     await expect(page.getByText('Finance Review')).toBeVisible();
     await expect(page.getByRole('button', { name: /Open (Partner Program|Finance Review)/ })).toHaveCount(2);
+  });
+
+  test('pending invitations are listed under the workspaces and Accept opens the join page', async ({ page }) => {
+    const invitation = {
+      token: '00000000-0000-4000-8000-000000000212',
+      workspace: { id: '00000000-0000-4000-8000-000000000002', name: 'Finance Review' },
+      role: 'member',
+      role_template_key: 'finance-agent',
+      invited_by: 'Alex Rivera',
+      expires_at: '2026-10-18T09:49:00.000Z',
+    };
+    let response: object = { ...directory([]), invitations: [invitation] };
+    await page.route('**/auth/session', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(response) }));
+    await page.goto('/?picker=1');
+    // No membership yet, but an invitation: the empty state points at it.
+    await expect(page.getByText('You are not in a workspace yet')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Pending invitations' })).toBeVisible();
+    await expect(page.getByText('Alex Rivera invited you as a Finance member')).toBeVisible();
+
+    response = { ...directory([workspace(1, 'Partner Program')]), invitations: [invitation] };
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Open Partner Program' })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Accept the invitation to Finance Review' }).click();
+    await expect(page).toHaveURL(/\/onboarding\/join\?token=00000000-0000-4000-8000-000000000212/);
   });
 
   test('a network failure offers an explicit retry', async ({ page }) => {
@@ -388,9 +426,9 @@ test.describe('P2 · triage', () => {
     await page.goto('/?seat=member');
     const appPane = page.getByRole('region', { name: 'Application' });
     await appPane.getByRole('button', { name: /^Review/ }).first().click();
-    await expect(appPane.getByText('Admin decision required')).toBeVisible();
+    await expect(appPane.getByText('A workspace Admin records this decision')).toBeVisible();
     await expect(appPane.getByRole('button', { name: 'Admit' })).toHaveCount(0);
-    await expect(appPane.getByText('You can read the request and its evidence. An Admin records the decision.')).toBeVisible();
+    await expect(appPane.getByText('You can read the request and its evidence.')).toBeVisible();
   });
 });
 

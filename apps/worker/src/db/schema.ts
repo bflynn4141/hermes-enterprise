@@ -82,6 +82,14 @@ export const rateCounters = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.action, t.windowStart, t.workspaceId] })],
 );
 
+export const demoAccessRequests = pgTable('demo_access_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').notNull(),
+  ipHash: text('ip_hash').notNull(),
+  outcome: text('outcome').notNull(),
+  createdAt: now('created_at'),
+});
+
 export const catalog = pgTable('catalog', {
   modelId: text('model_id').primaryKey(),
   provider: text('provider').notNull(),
@@ -2184,6 +2192,8 @@ export const invitationDirectory = pgTable('invitation_directory', {
   invitationId: uuid('invitation_id').notNull(),
   workspaceId: uuid('workspace_id').notNull(),
   createdAt: now('created_at'),
+  /** sha256 of the lower-cased invited address, so the picker can ask "who invited me?" without a tenant key (0066). */
+  emailDigest: bytea('email_digest'),
 });
 
 /**
@@ -2250,6 +2260,7 @@ export const ALL_TABLES = {
   auth_sessions: authSessions,
   workos_events_cursor: workosEventsCursor,
   rate_counters: rateCounters,
+  demo_access_requests: demoAccessRequests,
   catalog,
   workspaces,
   members,

@@ -25,7 +25,7 @@ test('the overview stays live after Iris is collapsed', async ({ page }) => {
   // the first tool after already observing the working state. Any later exact
   // tool pair proves the collapsed overview kept consuming the same live run.
   await expect(card).toContainText(
-    /(?:get_request\s*→\s*Review(?:ing|ed) a request|get_document_text\s*→\s*Read(?:ing)? a source document|propose_request\s*→\s*Prepar(?:ing|ed) a review request)/,
+    /(?:Review(?:ing|ed) a request\s*·\s*get_request|Read(?:ing)? a source document\s*·\s*get_document_text|Prepar(?:ing|ed) a review request\s*·\s*propose_request)/,
   );
 
   const animation = await card.locator('.agent-activity-status i').evaluate((element) => getComputedStyle(element).animationName);
@@ -73,7 +73,7 @@ test('a completed run keeps its last tool visible when the pane is narrow', asyn
   const card = activity(page);
   await expect(card.getByRole('status')).toHaveText('Idle');
   await expect(card.getByText('Last tool', { exact: true })).toBeVisible();
-  await expect(card).toContainText(/get_document_text\s*→\s*Read a source document/);
+  await expect(card).toContainText(/Read a source document\s*·\s*get_document_text/);
   await expect(card.locator('.agent-tool-pair')).toHaveAttribute('data-tool-state', 'complete');
   expect(await runningAnimations(card.locator('.agent-tool-pair i'))).toBe(0);
   expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);

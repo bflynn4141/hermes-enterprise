@@ -5,8 +5,7 @@ const FRESH_WORKSPACE = '/?data=empty&key=none';
 async function selectModelProviders(page: import('@playwright/test').Page) {
   const app = page.getByRole('region', { name: 'Application' });
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-  await app.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await app.getByRole('button', { name: 'Model providers', exact: true }).click();
+  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Model providers', exact: true }).click();
   return app;
 }
 

@@ -27,6 +27,7 @@ export type Route =
   | { kind: 'workspace'; workspaceId: string; sessionId: string | null; app: Ref | null }
   | { kind: 'onboarding'; step: 'create-workspace' | 'join-workspace'; token: string | null }
   | { kind: 'shared'; token: string }
+  | { kind: 'demo' }
   | { kind: 'signin'; returnTo: string | null }
   | { kind: 'callback'; returnTo: string | null }
   | { kind: 'unknown' };
@@ -78,6 +79,7 @@ export function parseRoute(url: URL): Route {
     return { kind: 'onboarding', step, token: url.searchParams.get('token') };
   }
   if (segments[0] === 'shared' && segments[1]) return { kind: 'shared', token: segments[1] };
+  if (segments[0] === 'demo') return { kind: 'demo' };
   if (segments[0] === 'auth' && (segments[1] === 'signin' || segments[1] === 'login'))
     return { kind: 'signin', returnTo: url.searchParams.get('return_to') };
   if (segments[0] === 'auth' && segments[1] === 'callback') return { kind: 'callback', returnTo: url.searchParams.get('return_to') };
@@ -96,6 +98,8 @@ export function toHref(route: Route): string {
       return route.step === 'join-workspace' ? `/onboarding/join${route.token ? `?token=${encodeURIComponent(route.token)}` : ''}` : '/onboarding/create';
     case 'shared':
       return `/shared/${route.token}`;
+    case 'demo':
+      return '/demo';
     case 'signin':
       return `/auth/login${route.returnTo ? `?return_to=${encodeURIComponent(route.returnTo)}` : ''}`;
     case 'callback':

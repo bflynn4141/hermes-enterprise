@@ -228,7 +228,7 @@ staging profile whose `enterprise_url` points back to staging. The temporary
 tunnel and its Worker secrets were removed after the proof.
 
 Hermes Cloud is the selected managed-hosting target. A Medium instance named
-`iris-enterprise-staging` is running in the **Brian Interview Demo** Portal
+`iris-enterprise-staging` is running in the **Hermes Teams Demo** Portal
 organization on Hermes `0.21.3`. The official Cloud management MCP provides
 instance lifecycle and configuration tools through interactive OAuth/PKCE.
 It does not issue a separate service API key or client secret. This authorizes
