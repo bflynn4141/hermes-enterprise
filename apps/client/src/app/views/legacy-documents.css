@@ -43,6 +43,11 @@
 .legacy-invoice-line[aria-pressed="true"] { background: #E8E8FF; outline: 1px solid #7777F0; }
 .legacy-invoice-line:focus-visible { outline: 2px solid #5D58E8; }
 .legacy-agreement-section { display: flex; flex-direction: column; gap: 8px; }
+.legacy-section-sources summary { cursor: pointer; }
+.legacy-source-list { display: flex; flex-direction: column; gap: 6px; list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+.legacy-source-list li { display: flex; overflow-wrap: anywhere; }
+.doc-page .legacy-source-list .btn.link { color: #5D58E8; font-size: 13px; line-height: 1.5; min-height: 0; justify-content: flex-start; }
+.doc-page .legacy-source-list .meta { color: #555563; }
 .legacy-agreement-section h4 { margin: 0; font-size: 14px; font-weight: 600; }
 .legacy-agreement-section details { font-size: 12px; color: #555563; }
 .legacy-agreement-section code { display: block; }
