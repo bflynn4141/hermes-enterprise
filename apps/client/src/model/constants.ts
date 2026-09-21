@@ -63,6 +63,17 @@ export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   intelligence: 'Shared Intelligence',
 };
 
+/**
+ * What an empty conversation offers. Each one fills the composer and nothing
+ * more: the person still decides to send. The first is the question the
+ * seeded fixture answers, so the demo and the empty state agree.
+ */
+export const STARTERS = [
+  'What needs me before the partner work can move forward?',
+  'Screen the newest applicant',
+  'Summarize what Iris did this week',
+] as const;
+
 /** Copy strings from the spec's §7 table. Exact, and asserted by the e2e suite. */
 export const EMPTY = {
   chatReady: (_agent: string) => 'What do you need help with?',
@@ -95,7 +106,9 @@ export const EMPTY = {
   keyNotAllowed: 'No longer usable — only Nous Portal keys can be used',
   providerKeys: 'Connect Nous Portal to enable models',
   attach: 'No documents yet',
-  adminOnly: 'Admin decision required',
+  adminOnly: 'A workspace Admin records this decision',
+  /** Admin-gated configuration, not a request decision. */
+  adminRequired: 'Workspace Admin only',
   shareGone: 'This link is no longer available.',
   blockBroken: 'Could not display this block',
   reconnecting: 'Reconnecting…',
@@ -133,6 +146,8 @@ export const AGENT_TABS = [
 export const draftsKey = (workspaceId: string, userId: string) => `hermes:drafts:${workspaceId}:${userId}`;
 export const activeSessionKey = (workspaceId: string) => `hermes:active-session:${workspaceId}`;
 export const STEPUP_KEY = 'hermes:stepup';
+/** Mirrors the Worker's `STEP_UP_MAX_AGE_SECONDS`: how old a sign-in may be for a decision route. */
+export const STEP_UP_MAX_AGE_MS = 5 * 60 * 1000;
 /**
  * The Iris panel's state and its remembered width, per workspace and user —
  * the same scoping as drafts, for the same reason: two people on one machine

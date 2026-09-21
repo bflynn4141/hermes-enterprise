@@ -22,9 +22,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { LoadingState, TaskRows, ToolChips } from '@hermes/motion-components';
-import type { Message, RunStep } from '@hermes/shared';
+import type { Message, Run, RunStep } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
-import { readableTool } from '../tool-copy.js';
+import { readableStep, readableTool, readableWaitingLabel } from '../tool-copy.js';
 import { IrisText } from './IrisText.js';
 import type { SessionState } from '../../model/store.js';
 import { commonPrefixLength, revealBatchSize, splitGraphemes } from './stream-reveal.js';
@@ -65,14 +65,57 @@ function toolSteps(steps: readonly RunStep[]) {
     .filter((step) => Boolean(step.tool_call_id))
     .map((step) => ({
       icon: step.state === 'done' ? 'check' : step.state === 'failed' ? 'alert' : 'play',
-      label: step.label,
+      label: readableStep(step),
       chip: step.state === 'done' ? 'Done' : step.state === 'failed' ? 'Failed' : 'Running',
       mono: false,
       detailMono: true,
-      // The 8 KB truncation marker the engine puts on a tool result renders as
-      // the chip's sub text rather than being hidden.
-      detail: step.detail ? [{ text: step.detail }] : [],
+      // The exact tool id stays readable in the mono sub text, and the 8 KB
+      // truncation marker the engine puts on a tool result renders after it
+      // rather than being hidden.
+      detail: [{ text: step.label }, ...(step.detail ? [{ text: step.detail }] : [])],
     }));
+}
+
+/** The steps of the run's current attempt; an earlier attempt's steps collapse elsewhere. */
+const currentSteps = (run: Run): RunStep[] => run.steps.filter((step) => (step.step_attempt ?? run.attempt) === run.attempt);
+
+export const TOOL_DONE_HOLD_MS = 800;
+
+/**
+ * The tool sentence for the working indicator and the composer status bar.
+ *
+ * While a tool runs it is that tool's active wording. When a tool step
+ * completes, its completed wording ("Read a source document") holds for
+ * 800 ms before the next phase shows, so a fast run does not flash three
+ * gerunds in a row and a reader sees each step land. Reduced motion skips the
+ * hold: the phrase changes the moment the server says so. Both surfaces call
+ * this so they never disagree about what just happened.
+ */
+export function useToolPhase(run: Run | null | undefined): string | null {
+  const appReducedMotion = useAppState().ui.reduceMotion;
+  const systemReducedMotion = useReducedMotion() ?? false;
+  const reducedMotion = appReducedMotion || systemReducedMotion;
+  const working = run?.status === 'working';
+  const current = run ? currentSteps(run) : [];
+  const activeTool = [...current].reverse().find((step) => step.state === 'active' && step.tool_call_id);
+  const lastDone = [...current].reverse().find((step) => step.state === 'done' && step.tool_call_id);
+  const doneKey = lastDone && run ? `${run.id}:${run.attempt}:${lastDone.id}` : null;
+  // A step that was already done when this mounted is history, not news.
+  const seen = useRef<string | null>(doneKey);
+  const [held, setHeld] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!doneKey || doneKey === seen.current) return;
+    seen.current = doneKey;
+    if (reducedMotion || !working) return;
+    setHeld(doneKey);
+    const timer = window.setTimeout(() => setHeld(null), TOOL_DONE_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [doneKey, reducedMotion, working]);
+
+  if (working && held && held === doneKey && lastDone) return readableTool(lastDone.label, false);
+  if (activeTool) return readableTool(activeTool.label, true);
+  return null;
 }
 
 function progressLabel(messages: readonly Message[]): string | null {
@@ -84,6 +127,7 @@ function progressLabel(messages: readonly Message[]): string | null {
 export function RunActivity({ session, progress = [], now = systemNow, readOnly = false }: { session: SessionState; progress?: readonly Message[]; now?: () => number; readOnly?: boolean }) {
   const adapter = useAdapter();
   const run = session.run;
+  const toolPhase = useToolPhase(run);
   if (!run) return null;
 
   const steps = run.steps;
@@ -94,7 +138,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
   // labelled "Thinking" for every model call, and a row that says the model
   // thought is a row that says nothing: it is true of every turn, it is the
   // same words every time, and it was appearing twice per turn.
-  const current = steps.filter((step) => (step.step_attempt ?? run.attempt) === run.attempt);
+  const current = currentSteps(run);
   const earlier = steps.filter((step) => (step.step_attempt ?? run.attempt) !== run.attempt);
   const tools = toolSteps(current);
   const earlierTools = toolSteps(earlier);
@@ -105,11 +149,10 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
   // step. The run status is authoritative, and the activity stays visible as
   // the phase moves from reasoning through tools into writing.
   const showWorkingActivity = working;
-  const phaseLabel = activeTool
-    ? readableTool(activeTool.label, true)
-    : answerIsStreaming
+  const phaseLabel = toolPhase
+    ?? (answerIsStreaming
       ? 'Writing response'
-      : progressLabel(progress) ?? (reasoningComplete ? 'Preparing response' : 'Reasoning through the request');
+      : progressLabel(progress) ?? (reasoningComplete ? 'Preparing response' : 'Reasoning through the request'));
   const liveTools = current.filter((step) => step.tool_call_id && step.state !== 'todo');
 
   // TaskRows is for the two things a person can act on: a queued follow-up, and
@@ -124,16 +167,22 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
       details: [{ label: 'Position', meta: String(item.position + 1) }],
     }));
 
+  // The run's own question ("Feedback destination", "Waiting for your
+  // approval · …") names the row; the step's tool id is a detail underneath.
+  const waitingLabel = readableWaitingLabel(run.waiting_label);
   const waitingRows =
     run.status === 'waiting'
       ? current
           .filter((step) => step.state === 'active')
           .map((step) => ({
             key: step.id,
-            label: step.label,
+            label: waitingLabel ?? readableStep(step),
             amount: 'Waiting',
             status: 'blocked' as const,
-            details: step.detail ? [{ label: 'Detail', meta: step.detail }] : [],
+            details: [
+              ...(step.tool_call_id ? [{ label: 'Tool', meta: step.label }] : []),
+              ...(step.detail ? [{ label: 'Detail', meta: step.detail }] : []),
+            ],
           }))
       : [];
 
@@ -165,8 +214,8 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
               {liveTools.map((step) => (
                 <div className="live-tool-row" data-state={step.state} role="listitem" key={step.id}>
                   <span className="live-tool-dot" aria-hidden="true" />
-                  <code>{step.label}</code>
                   <span>{step.state === 'active' ? readableTool(step.label, true) : step.state === 'failed' ? 'Tool failed' : readableTool(step.label, false)}</span>
+                  <code>{step.label}</code>
                 </div>
               ))}
             </div>
@@ -201,7 +250,7 @@ export function RunActivity({ session, progress = [], now = systemNow, readOnly 
           labels={{
             completed: 'Done',
             failed: run.error?.message ?? 'Failed',
-            blocked: run.waiting_label ?? 'Waiting',
+            blocked: waitingLabel ?? 'Waiting',
           }}
           onRetry={readOnly ? undefined : (key) => {
             void key;

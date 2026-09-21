@@ -5,6 +5,7 @@
 // Follow again. Now the run records where it worked and the reply offers it:
 // one line, one click, and the pane moves because somebody asked it to.
 import { useAppState, useDispatch } from '../store-context.js';
+import { requestInboxHighlight } from '../deep-link.js';
 import { Icon } from '../ui/icons.js';
 import { agentName, refLinkLabel } from '../selectors.js';
 import type { SessionState } from '../../model/store.js';
@@ -22,7 +23,14 @@ export function FocusLink({ session }: { session: SessionState }) {
   if (!label) return null;
   return (
     <div className="focus-link" aria-label={`${agentName(state)} opened`}>
-      <button type="button" className="suggestion" onClick={() => dispatch({ type: 'nav/app', object: focus, manual: true })}>
+      <button
+        type="button"
+        className="suggestion"
+        onClick={() => {
+          if (focus.section === 'inbox' && focus.view === 'request' && focus.id) requestInboxHighlight(focus.id);
+          dispatch({ type: 'nav/app', object: focus, manual: true });
+        }}
+      >
         <Icon name="open" size={14} /> Open {label}
       </button>
     </div>

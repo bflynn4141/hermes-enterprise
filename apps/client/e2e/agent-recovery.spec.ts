@@ -48,7 +48,7 @@ test('a no-output failure can be retried from Overview without using chat', asyn
   await expect(card.getByRole('button', { name: 'Retry task', exact: true })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'Message Iris' })).toBeEmpty();
   await card.getByRole('button', { name: 'Open current task →' }).click();
-  await expect(page.getByRole('heading', { name: 'Automated partner screening · Hermes Agent · work' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Automated partner screening · Work mode' })).toBeVisible();
   await expect(page.getByText('This run called no tools.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });
@@ -89,7 +89,7 @@ test('Run now can report no eligible work and stays absent on a completed trace'
   await expect(card.getByRole('status')).toHaveText('Idle');
   await expect(card).toContainText('No eligible pending work right now.');
   await card.getByRole('button', { name: 'View trace →', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Automated partner screening · Hermes Agent · work' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Automated partner screening · Work mode' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run now', exact: true })).toHaveCount(0);
 });
 

@@ -275,7 +275,7 @@ test('live · the Member seat on a request an Admin must decide', async ({ brows
   const context = await asUser(browser, SEED_MEMBER);
   const page = await context.newPage();
   await page.goto(`/workspace/${SEED_WORKSPACE}#inbox/request/${requestId}`);
-  await expect(page.getByText('Admin decision required')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('A workspace Admin records this decision')).toBeVisible({ timeout: 15_000 });
   await settle(page);
   await shot(page, '20-member-review');
   await context.close();

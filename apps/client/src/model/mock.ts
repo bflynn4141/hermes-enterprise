@@ -121,6 +121,12 @@ interface MockOptions {
   reply?: 'seeded' | 'markdown';
   /** Dedicated opt-in enterprise approval fixture. The default remains the legacy four-request demo. */
   scenario?: 'legacy' | 'approvals';
+  /**
+   * Which contract scenario a sent turn plays. `proposes_request` adds one
+   * request the workspace did not have, so the browser suite can watch a row
+   * and a receipt *arrive* rather than load with the page.
+   */
+  turn?: 'completed' | 'proposes_request' | 'waiting';
   communicationDraft?: boolean;
   /** Preserve the name created by the credential-free onboarding fixture. */
   workspaceName?: string;
@@ -288,7 +294,7 @@ export function createMockBackend(options: MockOptions = {}) {
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
         request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
-        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [['Scope', 'One partner workshop on Oct 22–23, with materials prepared in advance.'], ['Fees', 'USD 1,200, payable 14 days after an accepted delivery statement.'], ['Term', 'Effective on signature by both parties; either party may end it with 14 days notice.']] }),
+        request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop on Oct 22–23, with materials prepared in advance.', source_ids: [] }, { id: 'fees', heading: 'Fees', body: 'USD 1,200, payable 14 days after an accepted delivery statement.', source_ids: [DOC_INVOICE, mockUuid(699)] }, { id: 'term', heading: 'Term', body: 'Effective on signature by both parties; either party may end it with 14 days notice.', source_ids: [] }] }),
       ];
   const approvalDemo = createApprovalDemoFixtures({
     communicationDraft: options.communicationDraft,
@@ -1109,8 +1115,8 @@ export function createMockBackend(options: MockOptions = {}) {
   };
 
   /** Run one contract scenario on the session socket, paced for a human. */
-  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string): void {
-    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date() });
+  function runScenario(scenario: Parameters<typeof mockRunStream>[0], sessionId: string, requestId?: string): void {
+    const events = mockRunStream(scenario, { workspaceId: WS, sessionId, runId: RUN, firstId: head + 1n, startedAt: new Date(), ...(requestId ? { requestId } : {}) });
     events.forEach((event, i) => {
       setTimeout(() => publish(event), 220 * (i + 1));
     });
@@ -1155,7 +1161,7 @@ export function createMockBackend(options: MockOptions = {}) {
           // A second workspace's invitation, so the picker's "Pending
           // invitations" list has something to show in a mock build.
           invitations: options.pendingInvitation ? [pendingInvitation] : [],
-          authenticated_at: iso(0),
+          authenticated_at: new Date().toISOString(),
         });
       }
       return json({
@@ -1164,7 +1170,7 @@ export function createMockBackend(options: MockOptions = {}) {
         stream_heads: { workspace: head.toString() },
         hub_ticket: 'mock-ticket',
         expires_at: iso(600),
-        authenticated_at: iso(0),
+        authenticated_at: new Date().toISOString(),
       });
     }
 
@@ -1277,7 +1283,19 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
-        runScenario('completed', sessionId);
+        if (options.turn === 'proposes_request') {
+          const freshId = mockUuid(7000 + requests.length);
+          requests.push({
+            ...request(freshId, 'application', 'pending', 'Priya Natarajan', 'Priya Natarajan', {
+              kind: 'application', applicant: { name: 'Priya Natarajan' }, proposed_role: 'Delivery Partner', score: 79, score_max: 100,
+              criteria: [
+                { id: 'track-record', label: 'track-record', points: 26, points_max: 30, evidence: 'Shipped two partner integrations in the last year.', source_ids: ['linkedin'] },
+              ],
+            }),
+            created_at: new Date().toISOString(),
+          });
+          runScenario('proposes_request', sessionId, freshId);
+        } else runScenario(options.turn === 'waiting' ? 'waiting' : 'completed', sessionId);
         return json({ run_id: RUN, status: 'working', attempt: 1 }, 201);
       }
       // Every control is scoped to a run: `/runs/:runId/{stop,guide,queue,retry}`.

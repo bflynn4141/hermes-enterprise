@@ -55,7 +55,7 @@ test.describe('P1 · onboarding', () => {
 
     await page.goto('/onboarding/join?token=inv_demo');
     await expect(page.getByRole('button', { name: 'Accept invitation' })).toBeEnabled();
-    await expect(page.getByText(/only an Admin records a decision/)).toBeVisible();
+    await expect(page.getByText(/you and the reviewers named on each request decide/)).toBeVisible();
   });
 
   test('the join page names the workspace it joins, and refuses a forwarded link by name', async ({ page }) => {
@@ -426,9 +426,9 @@ test.describe('P2 · triage', () => {
     await page.goto('/?seat=member');
     const appPane = page.getByRole('region', { name: 'Application' });
     await appPane.getByRole('button', { name: /^Review/ }).first().click();
-    await expect(appPane.getByText('Admin decision required')).toBeVisible();
+    await expect(appPane.getByText('A workspace Admin records this decision')).toBeVisible();
     await expect(appPane.getByRole('button', { name: 'Admit' })).toHaveCount(0);
-    await expect(appPane.getByText('You can read the request and its evidence. An Admin records the decision.')).toBeVisible();
+    await expect(appPane.getByText('You can read the request and its evidence.')).toBeVisible();
   });
 });
 

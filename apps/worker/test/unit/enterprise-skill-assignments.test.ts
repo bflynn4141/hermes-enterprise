@@ -79,6 +79,20 @@ describe('enterprise skill assignments', () => {
       .resolves.toEqual([expect.objectContaining({ name: 'enterprise_bridge:partner-program-screening', version: '1.7.0' })]);
   });
 
+  it('serves the runtime a config without null leaves because Hermes config.yaml cannot keep them', async () => {
+    // Hermes save_config drops every leaf equal to its (absent) default, so a
+    // Cloud dashboard can never persist `search_after: null`. The managed
+    // plugin compares its pinned settings byte-for-byte with this manifest.
+    const [manifest] = await runtimeSkillManifestsForAgent({} as Env, queryFor('active'), workspaceId, agentId);
+    const program = manifest!.config.partner_program as { people_search: Record<string, unknown> };
+    expect(program.people_search).toEqual({
+      current_position_seniority_level: ['Founder'], person_skills: ['AI agents'],
+      current_position_titles: [], person_locations: [], offset: 0,
+    });
+    expect('search_after' in program.people_search).toBe(false);
+    expect(program).toEqual(expect.objectContaining({ program_name: 'Hermes Partner Program', max_spend_usd: 0.15 }));
+  });
+
   it('makes pause a runtime boundary rather than a visual-only state', async () => {
     const resolved = await resolvePartnerSkillAssignment({} as Env, queryFor('paused'), workspaceId, agentId);
     expect(resolved.config).toBeNull();

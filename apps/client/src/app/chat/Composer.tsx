@@ -21,6 +21,8 @@ import { sourceUploadError } from '../views/source-upload-error.js';
 import { ModelMenu, modelRouteLabel } from './ModelMenu.js';
 import { refusalFor, type Refusal } from './refusal.js';
 import { AgentFileExtractionError, waitForAgentFileReady } from './wait-agent-file-ready.js';
+import { useToolPhase } from './RunSurface.js';
+import { readableStep, readableWaitingLabel, runErrorSentence } from '../tool-copy.js';
 import type { SessionState } from '../../model/store.js';
 
 const COMPOSER_MAX_HEIGHT = 132;
@@ -133,6 +135,11 @@ export function Composer({ session }: { session: SessionState }) {
   };
 
   const status = run && ['working', 'waiting', 'stopped', 'error'].includes(run.status) ? run : null;
+  // The same phrase the run surface shows, held for the same 800 ms, so the
+  // status bar and the activity line never name two different steps.
+  const toolPhase = useToolPhase(run);
+  const activeStep = status?.steps.find((step) => step.state === 'active');
+  const workingPhase = toolPhase ?? (activeStep ? readableStep(activeStep) : null);
 
   return (
     <div className="composer-wrap">
@@ -141,15 +148,15 @@ export function Composer({ session }: { session: SessionState }) {
           <IrisMark size={20} state={status.status === 'working' ? 'reading' : status.status === 'waiting' ? 'waiting' : 'stopped'} className="mark" />
           <span>
             {status.status === 'working'
-              ? `${status.title ?? 'Working'}${status.steps.find((s) => s.state === 'active') ? ` · ${status.steps.find((s) => s.state === 'active')!.label}` : ''}`
+              ? `${status.title ?? 'Working'}${workingPhase ? ` · ${workingPhase}` : ''}`
               : status.status === 'waiting'
-                ? `${status.waiting_label ?? 'Waiting'} · Nothing sent`
+                ? `${readableWaitingLabel(status.waiting_label) ?? 'Waiting'} · Nothing sent`
                 : status.status === 'stopped'
                   ? 'Stopped · Completed work kept'
-                  : `${status.error?.message ?? 'Error'} · Completed work kept`}
+                  : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
-          {approvalWaiting && <Button onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
+          {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
           {(status.status === 'working' || status.status === 'waiting') && !admitting && (
             <Button onClick={() => void adapter.stop(session.id).catch(() => undefined)} aria-label="Stop work">
               Stop work

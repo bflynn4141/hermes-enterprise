@@ -130,6 +130,15 @@ admission rehashes the installed tree. The digest covers framed relative paths
 and file bytes, ignores only Python bytecode caches, and rejects symlinks; the
 install metadata lives outside the tree, so there is no self-hash cycle.
 
+Also persist `HERMES_ENTERPRISE_SOURCE_REVISION` as the full 40-character
+pinned official Hermes commit (`345cd2b057a452236de401d3534b8502a7465e8d` for
+this pin; it must equal `contract.json`'s `source_revision`). The connector
+refuses to build its `enterprise_contract` block without this attestation, and
+the Worker then reports `hermes:runs` as "Hermes request failed (502)". The
+verified native launcher supplies this value itself; a stock Hermes Cloud
+profile must set it explicitly. Every `update_env` on Hermes Cloud restarts the
+instance, so set all three identity values in one call.
+
 The managed flag is opt-in, so installing the additive bundle does not change
 an existing Iris 1.7 gateway. In managed mode the plugin installs a persistent
 API route gate before control authentication or Worker discovery. Only inert
@@ -168,6 +177,12 @@ workspace/agent-scoped discovery grant for those two GET endpoints. That grant
 must not authorize model, tool, run, capacity-claim or mutation routes. Reuse
 the same random `ENTERPRISE_RUNTIME_TOKEN` when the binding is promoted instead
 of swapping a Cloud secret during activation.
+
+The Worker serves the manifest `config` without null leaves. Hermes 0.21.3
+`save_config` drops every leaf equal to its (absent) default, so a Cloud
+dashboard save can never persist `search_after: null`; managed startup compares
+the pinned `partner_program` settings and `skills.config` byte-for-byte with
+that served config, so both sides carry the YAML-representable projection.
 
 Do not reconstruct or replace a shared static runtime-agent map from an old
 bootstrap bundle. Install the connector while the pool is unclaimed, confirm

@@ -11,8 +11,9 @@ import { CTX, CTX_DEST, HISTORY, INBOX, OV, REQ, SKILLS_VIEW, TRACE, TRACES, typ
 import { useAdapter, useAppState, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, KIND_ICON } from '../ui/icons.js';
 import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from '../ui/primitives.js';
-import { AGENT_TABS, EMPTY } from '../../model/constants.js';
-import { LIST_KEYS, agentName, requestStatusLabel, rows } from '../selectors.js';
+import { AGENT_TABS, EMPTY, MODES } from '../../model/constants.js';
+import { LIST_KEYS, agentName, catalogRows, requestStatusLabel, rows } from '../selectors.js';
+import { readableEntityType, readableModel, readableRef, readableRunStatus, readableStep, readableStepState, readableTool } from '../tool-copy.js';
 import { useWorkspaceLists } from './lists.js';
 import { requestActionLabel, approvalActionLabel, approvalIcon, approvalType, approvalTypeLabel, matchesReviewerFilter } from '../approval-copy.js';
 import { agentActivity, type AgentActivityState } from './agent-activity.js';
@@ -80,7 +81,7 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
   const type = request.kind === 'application' ? 'Program admission' : request.kind === 'invoice' ? 'Create invoice' : request.kind === 'agreement' ? 'Create agreement' : request.kind === 'task' ? 'Setup task' : approvalTypeLabel(request);
   const copy = requestRowCopy(request);
   return (
-    <div className="list-row">
+    <div className="list-row request-row">
       <Glass name={request.kind === 'approval' ? approvalIcon(request) : KIND_ICON[request.kind] ?? 'context'} size={32} className="row-icon" />
       <div className={`row-id${copy.compact ? ' approval-compact-copy' : ''}`}>
         <span className="t" title={copy.title}>{copy.title}</span>
@@ -88,9 +89,9 @@ export function RequestRow({ request, action, onAction }: { request: RequestEnti
       </div>
       <div className="row-main">
         <span className="t">{type}</span>
-        <span className="s">{requestStatusLabel(request)}</span>
+        <span className="s request-status">{requestStatusLabel(request)}</span>
       </div>
-      <Button onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
+      <Button className="request-action" onClick={onAction}>{['approval', 'invoice', 'agreement'].includes(request.kind) ? requestActionLabel(request) : action} →</Button>
     </div>
   );
 }
@@ -152,9 +153,9 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
               <span className="agent-activity-label">{activity.tool.state === 'active' ? 'Tool running' : 'Last tool'}</span>
               <span className="agent-tool-pair" data-tool-state={activity.tool.state}>
                 <i aria-hidden="true" />
-                <code>{activity.tool.name}</code>
-                <span aria-hidden="true">→</span>
                 <span>{activity.tool.summary}</span>
+                <span aria-hidden="true">·</span>
+                <code>{activity.tool.name}</code>
               </span>
             </>
           )}
@@ -190,7 +191,7 @@ export function AgentOverview() {
             Open Inbox →
           </Button>
         </div>
-        <div className="col" role="list" aria-label="Requests that need you">
+        <div className="col request-list" role="list" aria-label="Requests that need you">
           <AnimatePresence initial={false}>
             {pending.map((request) => (
               <motion.div key={request.id} role="listitem" layout initial={false} exit={{ opacity: 0, height: 0, overflow: 'hidden', transition: { duration: 0.18 } }} transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}>
@@ -315,7 +316,7 @@ export function AgentContext({ field }: { field: string | null }) {
           <>
             <Panel icon="context" title="Paused reply" subtitle={blocked ? 'Blocked · Destination missing' : `Ready for review · ${destination?.value}`} />
             {blocked && admin ? <DestinationForm /> : <Panel icon="context" title={destination?.value ?? EMPTY.context} subtitle={destination?.scope === 'future' ? 'Future replies · Saved' : 'For this reply · Saved'} right={<Button onClick={() => nav(CTX)}>Done</Button>} />}
-            {blocked && !admin && <p className="meta">{EMPTY.adminOnly}</p>}
+            {blocked && !admin && <p className="meta">{EMPTY.adminRequired}</p>}
           </>
         ) : (
           <>
@@ -475,7 +476,7 @@ export function AgentSkills() {
                     .catch(() => setError('Could not adopt that skill. Try again.'));
                 }}
               >
-                {admin ? `Add to ${agent}` : EMPTY.adminOnly}
+                {admin ? `Add to ${agent}` : EMPTY.adminRequired}
               </Button>
               <Ack show={ack === skill.id} style={{ right: 0, top: -40 }}>
                 Added
@@ -594,10 +595,10 @@ export function AgentTraces() {
               <Glass name="trace" size={28} className="row-icon" />
               <div className="row-id" style={{ width: 230 }}>
                 <span className="t">{trace.name}</span>
-                <span className="s">{trace.type}</span>
+                <span className="s">{traceModeLabel(trace)}</span>
               </div>
               <div className="row-main">
-                <span className="t">{trace.status}</span>
+                <span className="t">{readableRunStatus(trace.status)}</span>
                 <span className="s">{trace.sub}</span>
               </div>
               <Button link onClick={() => nav({ section: 'agents', view: 'trace', id: trace.id })}>
@@ -655,8 +656,8 @@ function RunFlow({ steps }: { steps: TraceEntity['steps'] }) {
       w: 300,
       kind: { label: step.tool_call_id ? 'Tool' : 'Model', hue: step.tool_call_id ? HUE_TOOL : HUE_THINK },
       hue: step.state === 'failed' ? HUE_FAILED : step.tool_call_id ? HUE_TOOL : HUE_THINK,
-      title: step.label,
-      caption: step.state === 'failed' ? `failed · attempt ${step.step_attempt}` : `${step.state} · attempt ${step.step_attempt}`,
+      title: readableStep(step),
+      caption: step.step_attempt ? `${readableStepState(step.state)} · attempt ${step.step_attempt}` : readableStepState(step.state),
     }));
     const edges: FlowEdge[] = nodes.slice(1).map((node, index) => ({ from: `s${index}`, to: node.id }));
     return { nodes, edges };
@@ -694,6 +695,7 @@ export function TraceFailure({ error }: { error: NonNullable<TraceEntity['error'
  */
 export function TraceDetail({ id }: { id: string | null }) {
   const adapter = useAdapter();
+  const catalog = catalogRows(useAppState());
   const record = useEntity<TraceEntity>('trace', id);
   const [open, setOpen] = useState<string | null>(null);
 
@@ -749,18 +751,18 @@ export function TraceDetail({ id }: { id: string | null }) {
         <AgentTabsRow value="traces" />
         <div className="row">
           <h2 className="display-28">
-            {trace.name} · {trace.type}
+            {trace.name} · {traceModeLabel(trace)}
           </h2>
           <span className="grow" />
-          <span className="meta">{trace.status}</span>
+          <span className="meta">{readableRunStatus(trace.status)}</span>
         </div>
-        <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${trace.model_id ?? 'unknown model'}`} />
+        <Panel icon="trace" title={trace.sub} subtitle={`${trace.runtime_kind === 'hermes' ? 'Hermes Agent' : 'Previous runtime'} · ${readableModel(trace.model_id, catalog)}`} />
         {trace.error && <TraceFailure error={trace.error} />}
         {id && <AgentRecovery runId={id} />}
 
         <h2 className="section-title">Steps</h2>
         <div className="hermes-ui">
-          <ThinkingState stage={stage} rows={trace.steps.map((step) => ({ primary: step.label, ...(step.detail ? { secondary: step.detail } : {}) }))} active={trace.status} done={`${done} of ${trace.steps.length} steps`} additionalSources={0} />
+          <ThinkingState stage={stage} rows={trace.steps.map((step) => ({ primary: readableStep(step), ...(step.detail ? { secondary: step.detail } : {}) }))} active={readableRunStatus(trace.status)} done={`${done} of ${trace.steps.length} steps`} additionalSources={0} />
         </div>
         <RunFlow steps={trace.steps} />
 
@@ -782,9 +784,9 @@ export function TraceDetail({ id }: { id: string | null }) {
                 <div className="list-row compact" style={{ borderBottom: 0 }}>
                   <Glass name="trace" size={22} className="row-icon" />
                   <div className="row-main">
-                    <span className="t">{call.name}</span>
+                    <span className="t">{readableTool(call.name, false)}</span>
                     <span className="s">
-                      turn {call.turn} · {call.tool_call_id}
+                      turn {call.turn}
                       {call.truncated ? ' · result truncated at 8 KB' : ''}
                     </span>
                   </div>
@@ -794,6 +796,7 @@ export function TraceDetail({ id }: { id: string | null }) {
                 </div>
                 {open === call.tool_call_id && (
                   <div className="col" style={{ gap: 14 }}>
+                    <span className="meta">{call.name} · {call.tool_call_id}</span>
                     <div className="hermes-ui">
                       <CodeBlock filename={`${call.name}.arguments.json`} lines={prettyJson(call.arguments ?? 'null')} diff={[]} />
                     </div>
@@ -814,7 +817,7 @@ export function TraceDetail({ id }: { id: string | null }) {
 
         <h2 className="section-title">Pages fetched</h2>
         {urls.length === 0 ? (
-          <div className="meta" style={{ padding: '12px 0' }}>No page was fetched. `fetch_url` reaches only the hosts on the workspace allowlist, and an empty allowlist reaches nothing.</div>
+          <div className="meta" style={{ padding: '12px 0' }}>No page was fetched. Web reads reach only the hosts on the workspace allowlist, and an empty allowlist reaches nothing.</div>
         ) : (
           <div className="hermes-ui">
             <ContextCards
@@ -840,8 +843,8 @@ export function TraceDetail({ id }: { id: string | null }) {
               <div className="list-row compact" key={`${entry.entity_id}-${index}`}>
                 <span className="time">{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 <div className="row-main">
-                  <span className="t">{entry.entity_type}</span>
-                  <span className="s">{entry.ref ? `${entry.ref.section}${entry.ref.view ? ` · ${entry.ref.view}` : ''} · ${entry.entity_id}` : entry.entity_id}</span>
+                  <span className="t">{readableEntityType(entry.entity_type)}</span>
+                  <span className="s">{readableRef(entry.ref) ?? 'Opened in place'}</span>
                 </div>
               </div>
             ))}
@@ -853,6 +856,17 @@ export function TraceDetail({ id }: { id: string | null }) {
       </div>
     </div>
   );
+}
+
+/**
+ * The run's mode in the composer's words ("Work"), from the trace's own `mode`
+ * when the server sent one and otherwise from the tail of the older
+ * "Hermes Agent · work" type string. A legacy trace's type is already prose.
+ */
+function traceModeLabel(trace: TraceEntity): string {
+  const mode = trace.mode ?? /·\s*(ask|plan|work)$/.exec(trace.type)?.[1];
+  const words = MODES.find((item) => item.id === mode);
+  return words ? `${words.label} mode` : trace.type;
 }
 
 /** A URL's host, or the URL itself when it does not parse. Never a throw. */
