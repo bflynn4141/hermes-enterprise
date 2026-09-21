@@ -178,6 +178,12 @@ must not authorize model, tool, run, capacity-claim or mutation routes. Reuse
 the same random `ENTERPRISE_RUNTIME_TOKEN` when the binding is promoted instead
 of swapping a Cloud secret during activation.
 
+The Worker serves the manifest `config` without null leaves. Hermes 0.21.3
+`save_config` drops every leaf equal to its (absent) default, so a Cloud
+dashboard save can never persist `search_after: null`; managed startup compares
+the pinned `partner_program` settings and `skills.config` byte-for-byte with
+that served config, so both sides carry the YAML-representable projection.
+
 Do not reconstruct or replace a shared static runtime-agent map from an old
 bootstrap bundle. Install the connector while the pool is unclaimed, confirm
 the inert native capabilities endpoint, create the scoped discovery grant, then
