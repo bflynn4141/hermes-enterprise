@@ -192,6 +192,7 @@ export function createMockBackend(options: MockOptions = {}) {
   const seat = options.seat ?? 'admin';
   const setupOnly = options.memberInvitations === 'setup_only';
   const workflowRole = options.workflowRole ?? (seat === 'member' ? 'finance' : 'admin');
+  const partnershipsAgentName = options.partnerWorkflow ? 'Scout' : 'Iris';
   const empty = options.data === 'empty';
   const approvalScenario = options.scenario === 'approvals' && !empty;
   const keyMode = options.providerKey ?? (empty ? 'none' : 'verified');
@@ -248,7 +249,7 @@ export function createMockBackend(options: MockOptions = {}) {
             input_provenance: 'sample',
             shared_partner: { id: mockUuid(611), name: 'Robin Studio', engagement_reference: 'ENG-SAMPLE-42' },
             source_sessions: [
-              { role: 'partnerships', agent_name: 'Iris', session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
+              { role: 'partnerships', agent_name: partnershipsAgentName, session_id: SESSION_A, run_id: RUN, excerpt: 'Sample authorized engagement excerpt only.', simulated: true },
               { role: 'finance', agent_name: 'Ledger', session_id: SESSION_B, run_id: mockUuid(612), excerpt: 'Sample invoice fields matched the authorized amount.', simulated: true },
             ],
             source_record_revisions: { engagement: 1, invoice: 1 },
@@ -486,7 +487,17 @@ export function createMockBackend(options: MockOptions = {}) {
     [SESSION_A]: empty
       ? []
       : options.partnerWorkflow
-        ? [{ id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'Sample fixture input — no model call: received INV-SAMPLE-014 for the authorized Robin Studio workshop.', blocks: [], status: 'complete', run_id: null, at: iso(-2) }]
+        ? [
+            { id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'Screen Robin Studio for the partner program and tell me what still needs human review.', blocks: [], status: 'complete', run_id: null, at: iso(-2) },
+            {
+              id: mockUuid(301), session_id: SESSION_A, seq: 2, role: 'iris', kind: null,
+              heading: 'Robin Studio is ready for human review',
+              text: 'I screened the application against the program criteria and cited the evidence. A person still needs to approve the engagement terms and confirm the invoice before I can hand it to Finance.',
+              blocks: [{ type: 'sources', title: 'Sources checked', subtitle: 'Partner criteria.md · Sample engagement terms.txt' }],
+              status: 'complete', run_id: mockUuid(613), worked_ms: 42_000,
+              steps: ['Read the application', 'Checked the program criteria', 'Prepared the evidence summary'], at: iso(-1),
+            },
+          ]
       : [
           { id: mockUuid(300), session_id: SESSION_A, seq: 1, role: 'user', kind: null, text: 'What needs me before the partner work can move forward?', blocks: [], status: 'complete', run_id: null, at: iso(-2) },
           {
@@ -513,7 +524,17 @@ export function createMockBackend(options: MockOptions = {}) {
             at: iso(-1),
           },
         ],
-    [SESSION_B]: options.partnerWorkflow ? [{ id: mockUuid(302), session_id: SESSION_B, seq: 1, role: 'user', kind: null, text: 'Message from 🤖 Iris (@agent-partnerships): Sample fixture — no model call. Review INV-SAMPLE-014 against ENG-SAMPLE-42.', blocks: [], status: 'complete', run_id: null, at: iso(0) }] : [],
+    [SESSION_B]: options.partnerWorkflow ? [
+      { id: mockUuid(302), session_id: SESSION_B, seq: 1, role: 'user', kind: null, text: `Message from 🤖 ${partnershipsAgentName} (@agent-partnerships): Sample fixture — no model call. Review INV-SAMPLE-014 against ENG-SAMPLE-42.`, blocks: [], status: 'complete', run_id: null, at: iso(0) },
+      {
+        id: mockUuid(303), session_id: SESSION_B, seq: 2, role: 'iris', kind: null,
+        heading: 'Ready for Alex’s decision',
+        text: 'I checked the invoice against the authorized terms. The amount, currency, and source match. I prepared the Finance request and did not approve, pay, or send anything.',
+        blocks: [{ type: 'card', title: 'INV-SAMPLE-014', subtitle: 'USD 1,200.00 · Ready for Finance decision', action: { label: 'Open request', command: { type: 'open_request', id: REQ_INVOICE } } }],
+        status: 'complete', run_id: mockUuid(612), worked_ms: 18_000,
+        steps: ['Read the governed handoff', 'Checked the invoice against authorized terms', 'Prepared the Finance request'], at: iso(1),
+      },
+    ] : [],
   };
 
   const documents = empty
@@ -1090,7 +1111,7 @@ export function createMockBackend(options: MockOptions = {}) {
       viewer: { user_id: viewerUserId, role: seat, reviewer_roles: seat === 'admin' ? ['access', 'workspace_owner'] : ['finance', 'agent_admin'] },
       agent: options.agentless ? null : workflowRole === 'finance'
         ? { id: FINANCE_AGENT, name: 'Ledger', email: null, responsibility: 'Finance review', setup_step: null }
-        : { id: AGENT, name: 'Iris', email: null, responsibility: 'Partner Program', setup_step: null },
+        : { id: AGENT, name: partnershipsAgentName, email: null, responsibility: options.partnerWorkflow ? 'Partnerships Manager' : 'Partner Program', setup_step: null },
       capabilities: {
         email_ingress: false,
         turn_attachments: Boolean(options.agentSettings),
@@ -1763,7 +1784,7 @@ export function createMockBackend(options: MockOptions = {}) {
         ] : [],
         agents: configured && workflowRole !== 'unrelated' ? [
           {
-            id: AGENT, name: 'Iris', principal_user_id: USER, principal_name: 'Maya Chen',
+            id: AGENT, name: partnershipsAgentName, principal_user_id: USER, principal_name: 'Maya Chen',
             team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
             role_template: { key: 'partnerships-agent', name: 'Partnerships agent', version: '1.8.0' },
             skill_key: 'partner-program-screening', skill_name: 'Partner program screening', skill_version: '1.8.0',

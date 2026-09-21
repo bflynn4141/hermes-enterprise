@@ -9,13 +9,13 @@ test('Finance reviews authorized evidence, records the decision, and returns a s
   const pane = app(page);
   await expect(pane.getByRole('heading', { name: 'Partnerships + Finance', exact: true })).toBeVisible();
   await expect(pane.getByText('Finance view', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Maya Chen · Iris', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Maya Chen · Scout', { exact: true })).toBeVisible();
   await expect(pane.getByText('Alex Rivera · Ledger', { exact: true })).toBeVisible();
   await expect(pane.getByText('Ready', { exact: true })).toHaveCount(2);
   await expect(page.getByRole('button', { name: 'Robin Studio · invoice source' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Robin Studio · Finance review' })).toBeVisible();
   await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
-  await expect(page.getByText('Iris sessions', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Scout sessions', { exact: true })).toHaveCount(0);
   await expect(pane.getByRole('link', { name: 'Open source session' })).toHaveCount(0);
 
   const handoff = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
@@ -156,7 +156,7 @@ test('an unrelated member receives no private workflow ids or content', async ({
   await expect(pane.getByText('No Partnerships or Finance work assigned', { exact: true })).toBeVisible();
   await expect(pane.getByText('INV-SAMPLE-014', { exact: true })).toHaveCount(0);
   await expect(pane.getByText('Robin Studio', { exact: true })).toHaveCount(0);
-  await expect(pane.getByText('Maya Chen · Iris', { exact: true })).toHaveCount(0);
+  await expect(pane.getByText('Maya Chen · Scout', { exact: true })).toHaveCount(0);
   await expect(pane.getByText('Alex Rivera · Ledger', { exact: true })).toHaveCount(0);
 });
 
