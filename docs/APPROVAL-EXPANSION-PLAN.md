@@ -6,7 +6,7 @@ September 15, 2026 · Implementation plan and delegation contract
 
 Make it easy for Maya to unblock Iris and other employees' agents without becoming the team's coordinator. Keep one Inbox beside the existing Iris conversation. Each request names the decision, the authorized human, its evidence, and what happens next.
 
-Brian requested a complete enterprise demo, then authorized implementation in separate GPT-5.6 Sol tasks at xhigh with the current Hermes lead orchestrating. This plan covers ten additions to the existing application, invoice and agreement flows. It does not authorize external messages, real payments, legal execution, new paid services or production deployment.
+The project owner requested a complete enterprise demo and authorized implementation in three isolated work sessions, with a lead session integrating. This plan covers ten additions to the existing application, invoice and agreement flows. It does not authorize external messages, real payments, legal execution, new paid services or production deployment.
 
 ## Baseline and constraints
 
@@ -106,7 +106,7 @@ Legacy documents remain fully usable. Where old document consent remains a proto
 
 ## Delivery sequence and ownership
 
-Three isolated GPT-5.6 Sol / xhigh work sessions, with the current Hermes task integrating. Main stays the known working app while workers build.
+Three isolated work sessions, with a lead session integrating. Main stays the known working app while workers build.
 
 ### A. Approval contract and server
 

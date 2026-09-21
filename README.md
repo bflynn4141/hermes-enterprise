@@ -14,7 +14,13 @@ agreement.
 
 ![Hermes workspace with a conversation on the left and the Iris overview on the right](docs/assets/readme-overview.png)
 
-[Request access to the hosted demo](https://staging.hermes.brianflynn.dev/demo).
+## Try the hosted demo
+
+The demo runs at https://staging.hermes.brianflynn.dev. Open
+[`/demo`](https://staging.hermes.brianflynn.dev/demo), enter a work email and
+the passcode you were given, and a Member invitation arrives by email for the
+Hermes Teams Demo workspace. Sign-up is invite-only; there is no public
+registration.
 
 > **Independent project.** Nous Research does not maintain, endorse, or sponsor
 > Hermes Teams Demo. This project runs the open source
@@ -157,6 +163,15 @@ pnpm e2e:live
 `pnpm e2e:live` creates its own disposable Postgres container, runs the full
 stack, and drives the browser flows with Playwright. It does not write test data
 to the development database.
+
+### Self-hosting
+
+The local path above works offline: `AUTH_MODE=fake` signs you in as a seeded
+user and the Worker answers from the scripted provider (`MODEL_SCRIPTED=1`). A
+fresh hosted workspace needs more before Iris can run: a connected Nous Portal
+account and registered Hermes Cloud capacity. See
+[docs/HERMES-AGENT-RUNTIME.md](docs/HERMES-AGENT-RUNTIME.md) and
+[docs/CLOUD-MANAGEMENT.md](docs/CLOUD-MANAGEMENT.md).
 
 To install and start the official Hermes runtime, follow
 [runtime/hermes/README.md](runtime/hermes/README.md).

@@ -562,7 +562,7 @@ sequence is `docs/WORKOS-PRODUCTION-CHECKLIST.md`.
 
 ## 13. First deploy checklist
 
-For Brian, in order. Nothing later works if something earlier is missing, and
+For the operator, in order. Nothing later works if something earlier is missing, and
 three of these are unchangeable once created — they are marked **permanent**.
 
 ### Cloudflare
