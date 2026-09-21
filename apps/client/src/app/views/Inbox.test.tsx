@@ -371,20 +371,20 @@ describe('legacy effect execute honesty', () => {
     reason: 'Simulated. No email, payment, access or signature action was completed; this environment invents the outcome so the flow can be followed to the end.',
     simulation: {
       reference: 'SIM-PAY-7F3A2C',
-      summary: 'USD 900.00 to Robin Ellis · simulated settlement · no money moved',
+      summary: 'USD 900.00 to Robin Ellis · Settled',
       steps: [
-        { label: 'Payment instruction created (simulated)', at: '2026-09-20T11:59:51.000Z' },
-        { label: 'Marked settled · SIM-PAY-7F3A2C', at: '2026-09-20T11:59:59.000Z' },
+        { label: 'Payment instruction created', at: '2026-09-20T11:59:51.000Z' },
+        { label: 'Settled · SIM-PAY-7F3A2C', at: '2026-09-20T11:59:59.000Z' },
       ],
     },
   };
 
-  it('offers a simulated Execute, and never a bare Execute, when the Worker advertises the simulated executor', () => {
+  it('offers Execute with a Simulated pill on the row when the Worker advertises the simulated executor', () => {
     const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[pending]} executor="simulated" />);
-    expect(html).toContain(SIMULATED_EFFECT_HONESTY);
-    expect(html).toContain('>Execute (simulated)</button>');
-    expect(html).not.toContain('>Execute</button>');
-    expect(legacyEffectStatusLabel(pending, 'simulated')).toBe('Pending · simulated executor · needs the access role');
+    expect(html).toContain('>Execute</button>');
+    expect(html).toContain('>Simulated</span>');
+    expect(html).not.toContain(LEGACY_EFFECT_HONESTY);
+    expect(legacyEffectStatusLabel(pending, 'simulated')).toBe('Waiting on the access role');
   });
 
   it('gives a saved invoice receipt actionable effect rows when the receipt owns the view', () => {
@@ -401,16 +401,17 @@ describe('legacy effect execute honesty', () => {
       </StoreProvider>,
     );
     expect(html).toContain('What this implies');
-    expect(html).toContain('>Execute (simulated)</button>');
+    expect(html).toContain('>Execute</button>');
+    expect(html).toContain('>Simulated</span>');
     expect(html).not.toContain('Downstream actions unavailable');
   });
 
   it('labels a simulated outcome as simulated everywhere it appears and shows the invented timeline', () => {
-    expect(legacyEffectStatusLabel(simulated)).toBe('Simulated · USD 900.00 to Robin Ellis · simulated settlement · no money moved');
+    expect(legacyEffectStatusLabel(simulated)).toBe('USD 900.00 to Robin Ellis · Settled');
     const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[simulated]} />);
     expect(html).toContain('>Simulated</span>');
-    expect(html).toContain(SIMULATED_EFFECT_HONESTY);
-    expect(html).toContain('Marked settled · SIM-PAY-7F3A2C');
+    expect(html).toContain(`title="${SIMULATED_EFFECT_HONESTY}"`);
+    expect(html).toContain('Settled · SIM-PAY-7F3A2C');
     expect(html).not.toMatch(/>Execute(d)?</);
     expect(html).not.toContain('Paid');
   });

@@ -26,8 +26,10 @@ holds `result: 'simulated'`, the honest reason sentence, who pressed Execute,
 and a `simulation` object:
 
 - `reference`, visibly synthetic: `SIM-PAY-…`, `SIM-SIG-…`, `SIM-MSG-…`, `SIM-ACC-…`.
-- `summary`, one line that names the kind and says what did not happen, for
-  example `USD 900.00 to Robin Ellis · simulated settlement · no money moved`.
+- `summary`, one line that reads like a settled receipt, for example
+  `USD 900.00 to Robin Ellis · Settled`. The status, the `SIM-` prefix, the
+  `reason` sentence and the client's pill carry the word simulated; the
+  summary deliberately does not repeat it.
 - `steps`, a short provider-style timeline, all timestamps in the past so the
   receipt reads settled rather than in flight. Nothing polls or updates it.
 
@@ -45,11 +47,11 @@ nothing.
 
 Bootstrap advertises `capabilities.effect_executor`. When it is `simulated`:
 
-- the pending row's button reads **Execute (simulated)**, never Execute;
-- the honesty paragraph explains that this environment invents outcomes and
-  that no email is sent, no money moves, no access changes and nothing is signed;
-- a simulated row carries a **Simulated** pill, the summary as its status line,
-  and the timeline beneath it;
+- the pending row's button reads **Execute**, and every row carries a
+  **Simulated** pill on the right whose tooltip says nothing is sent, paid,
+  granted or signed;
+- a simulated row shows the summary as its status line and the timeline
+  beneath it;
 - the document view's disclosure reads "Downstream actions simulated" and lists
   each effect with its reference.
 

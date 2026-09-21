@@ -705,7 +705,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .inbox-topbar .tabs { min-width: 0; }
 .inbox-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 10px; padding-bottom: 10px; min-width: 0; }
 .approval-demo-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.inbox-tools .search { min-width: 120px; padding-block: 8px; }
+.inbox-tools .search { min-width: 120px; flex: 1 1 160px; padding-block: 8px; }
+.inbox-tools .inbox-filters { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
 .inbox-sort { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: rgba(21,16,71,.52); flex-shrink: 0; }
 .inbox-sort button { min-height: 30px; padding: 5px 9px; border-radius: 6px; color: var(--muted); font-size: 10.4px; line-height: 14px; white-space: nowrap; }
 .inbox-sort button:hover { color: var(--body); }

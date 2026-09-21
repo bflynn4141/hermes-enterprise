@@ -39,23 +39,24 @@ describe('simulateEffect', () => {
     }
   });
 
-  it('says in its own summary that nothing moved, was sent, granted or signed', () => {
+  it('reads like a settled receipt; the status, reference and reason carry the word simulated', () => {
     const summaries: Record<EffectKind, string> = {
       payment: simulateEffect('payment', { payeeName: 'Robin Ellis', currency: 'usd', totalMinor: 90000 }, now).summary,
       signature: simulateEffect('signature', { documentNumber: 'AGR-1', parties: ['Nous Research', 'Robin Ellis'] }, now).summary,
       email_send: simulateEffect('email_send', { documentNumber: 'INV-1', payeeName: 'Robin Ellis' }, now).summary,
       access_grant: simulateEffect('access_grant', { subjectName: 'ada@example.test' }, now).summary,
     };
-    expect(summaries.payment).toBe('USD 900.00 to Robin Ellis · simulated settlement · no money moved');
-    expect(summaries.signature).toBe('AGR-1 · 2 simulated signatures · nothing legally signed');
-    expect(summaries.email_send).toBe('INV-1 to Robin Ellis · simulated delivery · no email sent');
-    expect(summaries.access_grant).toBe('Workspace access for ada@example.test · simulated grant · no access changed');
+    expect(summaries.payment).toBe('USD 900.00 to Robin Ellis · Settled');
+    expect(summaries.signature).toBe('AGR-1 · Signed by 2 parties');
+    expect(summaries.email_send).toBe('INV-1 sent to Robin Ellis · Delivered');
+    expect(summaries.access_grant).toBe('Workspace access for ada@example.test · Granted');
+    for (const summary of Object.values(summaries)) expect(summary).not.toMatch(/simulat/i);
   });
 
   it('names signers from the agreement parties and caps them', () => {
     const simulation = simulateEffect('signature', { parties: ['A', 'B', 'C', 'D'] }, now);
-    const signed = simulation.steps.filter((step) => step.label.endsWith('signed (simulated)'));
-    expect(signed.map((step) => step.label)).toEqual(['A signed (simulated)', 'B signed (simulated)', 'C signed (simulated)']);
+    const signed = simulation.steps.filter((step) => step.label.endsWith(' signed'));
+    expect(signed.map((step) => step.label)).toEqual(['A signed', 'B signed', 'C signed']);
     expect(simulation.steps.length).toBeLessThanOrEqual(6);
   });
 });

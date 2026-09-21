@@ -19,8 +19,9 @@ Why a new status rather than `executed` behind a flag: the approvals design is
 only worth anything if the row that says what happened is telling the truth.
 `executed` would let every reader, including History, the Inbox receipt and any
 future export, infer a real payment. `simulated` forces each of them to handle
-it as its own case, which is what the client does with a Simulated pill, an
-"Execute (simulated)" button and copy explaining what the word means. The
+it as its own case, which is what the client does with one Simulated pill on
+the right of each row while the receipt copy itself reads like a settled
+provider event (Brian's request: feel real, say simulated once). The
 bootstrap advertises `capabilities.effect_executor` so an older Worker is read
 as `unavailable`, fail-closed. Invariant 5 is untouched: no provider is called.
 What would change it: a real executor for one kind, at which point that kind

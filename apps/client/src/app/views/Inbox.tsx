@@ -230,6 +230,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <Icon name="search" />
               <input placeholder="Search requests" value={query} maxLength={200} onChange={(event) => setFilters({ query: event.target.value })} aria-label="Search requests" />
             </label>
+            <span className="inbox-filters">
             {activeTab === 'needs-review' && (
               <select className="btn reviewer-filter" aria-label="Reviewer" value={reviewer} onChange={(event) => setFilters({ reviewer: event.target.value as NonNullable<Ref['filters']>['reviewer'] })}>
                 <option value="for_me">For me</option>
@@ -258,6 +259,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
               <option value="hidden">Hidden</option>
               <option value="all">Active + hidden</option>
             </select>
+            </span>
           </div>
         )}
       </div>
@@ -1123,12 +1125,12 @@ export const LEGACY_EFFECT_HONESTY =
  * "simulated" means so nobody reads a settled-looking timeline as a payment.
  */
 export const SIMULATED_EFFECT_HONESTY =
-  'This environment simulates effects. Execute invents a reference and a provider-style timeline so the flow can be followed to the end; no email is sent, no money moves, no access changes and nothing is signed.';
+  'Simulated effects. Nothing is sent, paid, granted or signed; each row says so on the right.';
 
 /** Status line for a legacy ledger effect — never implies an external action completed. */
 export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavailable' | 'simulated' = 'unavailable'): string {
   if (effect.status === 'simulated') {
-    return effect.simulation ? `Simulated · ${effect.simulation.summary}` : 'Simulated · nothing sent, paid, granted or signed';
+    return effect.simulation?.summary ?? 'Simulated · nothing sent, paid, granted or signed';
   }
   const base =
     effect.status === 'unavailable'
@@ -1136,7 +1138,7 @@ export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavail
       : effect.status === 'cancelled'
         ? 'Cancelled'
         : executor === 'simulated'
-          ? `Pending · simulated executor · needs the ${effect.required_role} role`
+          ? `Waiting on the ${effect.required_role} role`
           : `Pending · no executor · needs the ${effect.required_role} role`;
   return effect.reason ? `${base} · ${effect.reason}` : base;
 }
@@ -1163,13 +1165,13 @@ export function LegacyEffectsPanel({
 }) {
   const simulated = executor === 'simulated' || effects.some((effect) => effect.status === 'simulated');
   const showsHonesty = effects.some((effect) => effect.status === 'pending' || effect.status === 'unavailable' || effect.status === 'simulated');
-  const action = simulated ? 'Execute (simulated)' : 'Record attempt';
+  const action = simulated ? 'Execute' : 'Record attempt';
   return (
     <>
       {reauthed && <p className="meta">Re-authenticated — press {action} again to continue.</p>}
-      {showsHonesty && (
+      {showsHonesty && !simulated && (
         <p className="meta" style={{ maxWidth: 760 }} data-testid="legacy-effect-honesty">
-          {simulated ? SIMULATED_EFFECT_HONESTY : LEGACY_EFFECT_HONESTY}
+          {LEGACY_EFFECT_HONESTY}
         </p>
       )}
       <div className="col">
@@ -1178,10 +1180,7 @@ export function LegacyEffectsPanel({
           <div className="list-row" key={effect.id} style={{ minHeight: 88 }}>
             <Glass name="context" size={22} className="row-icon" />
             <div className="row-main">
-              <span className="t">
-                {effect.label}
-                {effect.status === 'simulated' && <span className="pill illustrative" style={{ marginLeft: 8 }}>Simulated</span>}
-              </span>
+              <span className="t">{effect.label}</span>
               <span className="s">{legacyEffectStatusLabel(effect, executor)}</span>
               {effect.status === 'simulated' && effect.simulation && (
                 <ol className="meta" data-testid="effect-simulation-steps" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
@@ -1193,9 +1192,12 @@ export function LegacyEffectsPanel({
                 </ol>
               )}
             </div>
+            {simulated && (effect.status === 'simulated' || effect.status === 'pending') && (
+              <span className="pill illustrative" title={SIMULATED_EFFECT_HONESTY}>Simulated</span>
+            )}
             {effect.status === 'pending' && (
               <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>
-                {busy === effect.id ? (simulated ? 'Simulating…' : 'Recording…') : action}
+                {busy === effect.id ? (simulated ? 'Executing…' : 'Recording…') : action}
               </Button>
             )}
           </div>

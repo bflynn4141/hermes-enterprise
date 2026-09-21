@@ -122,8 +122,8 @@ describe('executing an effect', () => {
     expect(body.status).not.toBe('executed');
     expect(body.reason).toMatch(/^Simulated\./);
     expect(body.simulation?.reference).toMatch(/^SIM-PAY-[0-9A-F]{6}$/);
-    // The invoice fixture is USD 900.00 to Robin Ellis; the simulation echoes it and says no money moved.
-    expect(body.simulation?.summary).toBe('USD 900.00 to Robin Ellis · simulated settlement · no money moved');
+    // The invoice fixture is USD 900.00 to Robin Ellis; the summary reads like a receipt while `status` and `reason` say simulated.
+    expect(body.simulation?.summary).toBe('USD 900.00 to Robin Ellis · Settled');
     expect(body.simulation?.steps.length).toBeGreaterThanOrEqual(3);
 
     // A second press returns the same simulated row and appends no second audit row.

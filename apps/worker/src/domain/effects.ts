@@ -154,9 +154,11 @@ function randomHex(): string {
 }
 
 /**
- * The invented outcome for one effect kind. Steps are spaced a few seconds
- * apart and all lie in the past, so the receipt reads like a settled provider
- * event rather than something still in flight; nothing polls or updates it.
+ * The invented outcome for one effect kind. The copy reads like a settled
+ * provider receipt on purpose: the row's `simulated` status, its `SIM-` reference
+ * and the client's pill are what say it was simulated, not every sentence.
+ * Steps are spaced a few seconds apart and all lie in the past, so nothing
+ * looks in flight; nothing polls or updates it.
  */
 export function simulateEffect(
   kind: EffectKind,
@@ -171,11 +173,11 @@ export function simulateEffect(
       const amount = money(context.currency, context.totalMinor);
       return {
         reference,
-        summary: `${amount ? `${amount} to ${who}` : `Payment to ${who}`} · simulated settlement · no money moved`,
+        summary: `${amount ? `${amount} to ${who}` : `Payment to ${who}`} · Settled`,
         steps: [
-          { label: 'Payment instruction created (simulated)', at: at(9) },
-          { label: 'Simulated bank accepted the instruction', at: at(6) },
-          { label: `Marked settled · ${reference}`, at: at(1) },
+          { label: 'Payment instruction created', at: at(9) },
+          { label: 'Bank accepted the instruction', at: at(6) },
+          { label: `Settled · ${reference}`, at: at(1) },
         ],
       };
     }
@@ -183,10 +185,10 @@ export function simulateEffect(
       const signers = context.parties && context.parties.length > 0 ? context.parties : [who];
       return {
         reference,
-        summary: `${context.documentNumber ?? 'Agreement'} · ${signers.length} simulated signature${signers.length === 1 ? '' : 's'} · nothing legally signed`,
+        summary: `${context.documentNumber ?? 'Agreement'} · Signed by ${signers.length === 1 ? signers[0] : `${signers.length} parties`}`,
         steps: [
-          { label: 'Signing envelope created (simulated)', at: at(12) },
-          ...signers.slice(0, 3).map((name, index) => ({ label: `${name} signed (simulated)`, at: at(8 - index * 2) })),
+          { label: 'Signing envelope sent', at: at(12) },
+          ...signers.slice(0, 3).map((name, index) => ({ label: `${name} signed`, at: at(8 - index * 2) })),
           { label: `Envelope completed · ${reference}`, at: at(1) },
         ],
       };
@@ -194,21 +196,21 @@ export function simulateEffect(
     case 'email_send':
       return {
         reference,
-        summary: `${context.documentNumber ?? 'Message'} to ${who} · simulated delivery · no email sent`,
+        summary: `${context.documentNumber ?? 'Message'} sent to ${who} · Delivered`,
         steps: [
-          { label: 'Message rendered (simulated)', at: at(6) },
-          { label: 'Simulated mail service accepted it', at: at(4) },
-          { label: `Marked delivered · ${reference}`, at: at(1) },
+          { label: 'Message rendered', at: at(6) },
+          { label: 'Accepted by the mail service', at: at(4) },
+          { label: `Delivered · ${reference}`, at: at(1) },
         ],
       };
     case 'access_grant':
     default:
       return {
         reference,
-        summary: `Workspace access for ${who} · simulated grant · no access changed`,
+        summary: `Workspace access for ${who} · Granted`,
         steps: [
-          { label: 'Grant recorded (simulated)', at: at(3) },
-          { label: `Marked granted · ${reference}`, at: at(1) },
+          { label: 'Grant recorded', at: at(3) },
+          { label: `Granted · ${reference}`, at: at(1) },
         ],
       };
   }
