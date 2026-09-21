@@ -1,7 +1,7 @@
 // `/demo` — the public Hermes Enterprise Demo landing page.
 //
 // Anyone can read the write-up and share links. Requesting a Member invitation
-// needs a work email and the passcode the recruiter forwarded. There is no
+// needs a work email and the passcode the visitor was given. There is no
 // separate password gate: the passcode only protects the invite action.
 import { useState, type FormEvent } from 'react';
 import {

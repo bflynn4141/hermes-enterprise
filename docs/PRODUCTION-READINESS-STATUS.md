@@ -4,7 +4,7 @@ Updated September 15, 2026. Scope: [production-readiness plan](PRODUCTION-READIN
 
 ## Integration
 
-- Lead: `01a09653-559f-7c90-bf22-0a9f9a3e5fed` on local.
+- Lead: one integrating session on the main checkout.
 - Main checkout: `<local checkout of this repository>`.
 - Plan baseline: `92083de`.
 - Approval Inbox, server and runtime workstreams are integrated on `main`.
@@ -12,13 +12,13 @@ Updated September 15, 2026. Scope: [production-readiness plan](PRODUCTION-READIN
 
 ## New isolated tasks
 
-| Workstream | Native task | Branch / worktree | State |
-| --- | --- | --- | --- |
-| WorkOS email + SSO | `01a0a78b-0709-7950-8be9-c7b1599abfdf` | `codex/workos-auth-hardening` · `/Users/gia/Documents/Codex/2026-09-15/hermes-workos-auth` | Complete and integrated as `0683347` |
-| Official Hermes compliance | `01a0a78b-5ebb-7d92-95b4-e9e9493405fc` | `codex/hermes-runtime-compliance` · `/Users/gia/Documents/Codex/2026-09-15/hermes-runtime-compliance` | Audit integrated as `4168c43` |
-| Production placeholder cleanup | `01a0a791-83d8-7211-9549-7820b098d3df` | `codex/production-placeholder-cleanup` · `/Users/gia/Documents/Codex/2026-09-15/hermes-production-cleanup` | Complete and integrated as `f73b713` |
-| CI and artifact hardening | `01a0a793-8669-7301-a9c4-12f826e6ed59` | `codex/repository-production-hardening` · `/Users/gia/Documents/Codex/2026-09-15/hermes-repository-hardening` | Complete and integrated as `a98e7d7` + `bfbfcfe` |
-| Hermes code-level hardening | `01a0a7be-e7f5-74e1-b72d-407c88e170a1` | `codex/hermes-runtime-hardening` · `/Users/gia/Documents/Codex/2026-09-15/hermes-runtime-hardening` | Complete and integrated as `96fcfd1` |
+| Workstream | Branch | State |
+| --- | --- | --- |
+| WorkOS email + SSO | `codex/workos-auth-hardening` | Complete and integrated as `0683347` |
+| Official Hermes compliance | `codex/hermes-runtime-compliance` | Audit integrated as `4168c43` |
+| Production placeholder cleanup | `codex/production-placeholder-cleanup` | Complete and integrated as `f73b713` |
+| CI and artifact hardening | `codex/repository-production-hardening` | Complete and integrated as `a98e7d7` + `bfbfcfe` |
+| Hermes code-level hardening | `codex/hermes-runtime-hardening` | Complete and integrated as `96fcfd1` |
 
 Three internal read-only subagents completed client, server and repository sweeps. Their deduplicated report is [PRODUCTION-READINESS-FINDINGS.md](PRODUCTION-READINESS-FINDINGS.md). The approval Inbox branch was integrated as `d6eba9d`; the production-placeholder task began from the post-Inbox baseline so it can safely own its narrow files.
 

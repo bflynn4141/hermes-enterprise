@@ -15,7 +15,7 @@ the change immediate.
 
 ## Empty-chat welcome — September 15, 2026
 
-Brian's supplied reference replaces the left-aligned ready message and subtitle
+The project owner's supplied reference replaces the left-aligned ready message and subtitle
 with a centered Iris icon above one line: “What do you need help with?” The
 group is centered in the available transcript area above the composer. The
 no-session state uses the same copy and preserves Start; carried context keeps
@@ -3981,7 +3981,7 @@ that is already taller than its viewport and wrong in the one case that matters:
 the moment a question is asked. `el.scrollTop = el.scrollHeight` on a short
 transcript is a no-op, so the new question and the first lines of the reply were
 drawn wherever there happened to be room, which at an 800 px pane is under the
-subheader. Brian's screenshot is a reply whose first line is cut off by the
+subheader. The reported screenshot is a reply whose first line is cut off by the
 breadcrumb.
 
 **Decision.** Three positions, and nothing else moves the viewport.
@@ -4487,7 +4487,7 @@ identity, where a seat count would be about the thing being switched.
 
 ## C48. Iris executes in one official Hermes profile; the app owns enterprise authority
 
-**Decided September 15, 2026.** Brian approved the official Nous runtime and one
+**Decided September 15, 2026.** The project owner approved the official Nous runtime and one
 agent per profile, including the necessary architecture change. The native
 Hermes process owns the agent loop and session transcript. The existing Worker
 continues to own identity, tool permissions, review decisions and the auditable
@@ -4606,7 +4606,7 @@ provenance only when the request payload carries that source id.
 
 ## C52. The workspace uses the 80% type scale without scaling its controls
 
-**Decided September 15, 2026.** Brian chose the visual density of the workspace
+**Decided September 15, 2026.** The project owner chose the visual density of the workspace
 at 80% browser zoom as the typography target. Client-owned font sizes and line
 heights are therefore 80% of the previous scale, with a 10 px floor for the
 smallest labels, including display type, conversation text, list rows, menus,
@@ -5410,7 +5410,8 @@ failure tests prove approval budgets and partner handoffs cannot be projected by
 a stale attempt.
 Browser tests cover Overview/trace actions, no-output failure,
 countdown, cancellation, navigation and narrow reduced-motion layout. Deployment
-and live-provider acceptance are recorded in the Tech Lead delivery note.
+and live-provider acceptance were recorded in internal delivery notes and are
+not reproduced here.
 
 ---
 
@@ -5608,7 +5609,7 @@ asserts a complete model/tool turn without any `/api/show` request.
 
 ## C80. Approval review starts with the decision and the content
 
-**Decided September 18, 2026.** Brian accepted the compact decision/header/email
+**Decided September 18, 2026.** The project owner accepted the compact decision/header/email
 arrangement and evidence expanding below. Each governed review starts with the
 decision, exact per-step approval counts, policy ordering, expiry and the server's
 eligibility reason. Specialized previews remain intact. Proposer, long summary,
@@ -5891,21 +5892,21 @@ Navigation explains authority; server routes independently enforce it. Protect a
 
 An active approval reviewer may not yet have an agent assigned. Bootstrap must still return their authorized workspace and Inbox state with a null agent, never substitute another member’s private agent. Agent-dependent controls stay unavailable until an accessible agent exists.
 
-Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence live in the tech lead's current task notes.
+Reuse existing design tokens and grouped navigation. Settings navigation changes immediately; additional animation would delay a utility task without clarifying state. Verify focus, responsive layout, and reduced-motion behavior. Implementation and release evidence were recorded in internal delivery notes and are not reproduced here.
 
 
 ### C87 navigation refinement — Admin View and User View
 
-September 20: Brian prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.
+September 20: the project owner prefers a top-right Admin View / User View selector with section tabs in each view. Replace the grouped desktop navigation and narrow section dropdown with wrapping tabs at every width. The view selector navigates between existing authorized routes; it never changes membership or grants access. Members see User View only. Preserve direct-link and server enforcement. Reuse the shared keyboard-accessible Tabs component, with an immediate selected-tab underline so wrapping and reduced-motion remain clear.
 
 
 ### C87 navigation refinement — four consolidated tabs
 
-Brian’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
+The project owner’s follow-up replaces the ten-section wrapping strip with one row: Organization (workspace details, rules, privacy, usage), Agents (defaults, providers, capacity), Connections (Slack/email), Intelligence. Related controls use expandable sections, one open at a time, while preserving existing direct links. Mount only the open section so viewing Agents does not inadvertently enter the protected capacity credential flow. User View remains three personal tabs.
 
 
 ### C87 detail-page design — September20
 
-Brian requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
+The project owner requested a Vercel-inspired design pass beneath the unchanged Organization/Agents/Connections/Intelligence tabs and Admin/User View switch. Direction: selected settings become full detail pages with a quiet section index, clear heading, bordered sections, and actions in consistent footers. Integration pages must remain useful when unavailable: show actual status/setup requirements and explain operating scope without fabricating a connection or capability. Separate destructive management from primary setup. Preserve existing authorization, confirmation and lazy mounting of protected capacity. Keep motion immediate for utility navigation and respect existing reduced-motion.
 
 References: https://vercel.com/docs/project-configuration/general-settings and https://vercel.com/docs/integrations/install-an-integration/manage-integrations-reference. Adapt section hierarchy and integration management concepts to Hermes tokens, rather than copying Vercel’s brand.

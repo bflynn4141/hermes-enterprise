@@ -129,8 +129,8 @@ Cloudflare Cron uses the active assignment's schedule, defaulting to six-hour
 idempotency buckets. Pausing the assignment or disabling its schedule prevents
 new proactive jobs. Paid AgentCash runs have a
 second kill switch, `PARTNER_SCREENING_PAID_AUTOMATION_ENABLED`. Local and
-production keep it at `0`; staging is `1` under Brian's 2026-09-17 approval for
-the existing Iris demo. The approved staging maximum is $0.23 per six-hour run
+production keep it at `0`; staging is `1` under the project owner's 2026-09-17 approval
+for the hosted Hermes Enterprise Demo workspace. The approved staging maximum is $0.23 per six-hour run
 for each configured agent: $0.15 discovery plus $0.05 enrichment and $0.03
 verification for one shortlisted candidate. A new environment or agent still needs
 its own recurring-budget approval before this switch can authorize spending.

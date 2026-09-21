@@ -16,6 +16,14 @@ enforced by the database and the routes, not by a prompt or a policy document.
 > default, talks to the Nous Portal inference API. Trademarks belong to their
 > owners. Licensed under [MIT](LICENSE).
 
+## Try the hosted demo
+
+The demo runs at https://staging.hermes.brianflynn.dev. Open
+[`/demo`](https://staging.hermes.brianflynn.dev/demo), enter a work email and
+the passcode you were given, and a Member invitation arrives by email for the
+Hermes Enterprise Demo workspace. Sign-up is invite-only; there is no public
+registration.
+
 ## What it looks like
 
 Every consequential action arrives in the Inbox as a request of a specific
@@ -81,7 +89,14 @@ a real Postgres, Worker and client:
 pnpm e2e:live
 ```
 
-Hosted demo: [request access](https://staging.hermes.brianflynn.dev/demo).
+### Self-hosting
+
+The local path above works offline: `AUTH_MODE=fake` signs you in as a seeded
+user and the Worker answers from the scripted provider (`MODEL_SCRIPTED=1`). A
+fresh hosted workspace needs more before Iris can run: a connected Nous Portal
+account and registered Hermes Cloud capacity. See
+[docs/HERMES-AGENT-RUNTIME.md](docs/HERMES-AGENT-RUNTIME.md) and
+[docs/CLOUD-MANAGEMENT.md](docs/CLOUD-MANAGEMENT.md).
 
 ## How the human-decision guarantee is enforced
 

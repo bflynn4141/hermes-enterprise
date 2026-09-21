@@ -4,7 +4,7 @@ Updated September 15, 2026. Scope: [implementation plan](APPROVAL-EXPANSION-PLAN
 
 ## Integration
 
-- Lead: `01a09653-559f-7c90-bf22-0a9f9a3e5fed` on local.
+- Lead: one integrating session on the main checkout.
 - Checkout: `<local checkout of this repository>`, branch `main`.
 - Working app baseline: `9a46b7d`. Plan commit: `19d70b4`.
 - Existing app: `http://localhost:8787`. Workers must not reset its data or restart its services.
@@ -12,13 +12,13 @@ Updated September 15, 2026. Scope: [implementation plan](APPROVAL-EXPANSION-PLAN
 
 ## Owners
 
-All three tasks were created using `gpt-5.6-sol` with `thinking: xhigh` as Brian requested. Hermes is not currently a registered saved project, so each native projectless task was given an explicit, separately created Git worktree at the committed plan baseline.
+Each workstream ran in its own isolated work session with a separately created Git worktree at the committed plan baseline.
 
-| Workstream | Native task | Branch / checkout |
-| --- | --- | --- |
-| Contract and server | `01a0a762-8cfe-7ed3-bc21-c9b1159d5a7f` | `codex/approval-server` · `/Users/gia/Documents/Codex/2026-09-15/hermes-approval-server` |
-| Inbox and chat | `01a0a762-f7ad-7fd3-b0a2-b232efa7d9ca` | `codex/approval-inbox` · `/Users/gia/Documents/Codex/2026-09-15/hermes-approval-inbox` |
-| Runtime and budgets | `01a0a763-63c9-7001-a775-ca35508ac57e` | `codex/approval-runtime` · `/Users/gia/Documents/Codex/2026-09-15/hermes-approval-runtime` |
+| Workstream | Branch |
+| --- | --- |
+| Contract and server | `codex/approval-server` |
+| Inbox and chat | `codex/approval-inbox` |
+| Runtime and budgets | `codex/approval-runtime` |
 
 ## Dependencies and verification
 

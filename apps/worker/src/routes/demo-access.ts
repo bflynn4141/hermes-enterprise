@@ -1,6 +1,6 @@
 // `POST /demo/request-access` — the public request-access form.
 //
-// A recruiter forwards one link and one passcode to people whose addresses we
+// The demo host forwards one link and one passcode to people whose addresses we
 // do not know in advance. Each of them types a work email and the passcode on
 // `/demo`, and if the passcode is right this route creates the same invitation
 // an Admin's click on Members → Invite would create, on behalf of the demo
@@ -98,7 +98,7 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
 
 /**
  * The hourly budget. Modest on purpose: a real visitor types the passcode
- * once, perhaps twice, and a recruiter's whole cohort fits inside the total.
+ * once, perhaps twice, and a whole invited cohort fits inside the total.
  */
 export const DEMO_ACCESS_BUDGET = {
   perEmail: 5,

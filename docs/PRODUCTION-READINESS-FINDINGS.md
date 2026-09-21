@@ -156,7 +156,7 @@ The integrated Inbox still labels its seeded payment account, signature and file
 ## Documentation residue
 
 - `README.md` and `docs/CONVENTIONS.md` still describe earlier milestone/placeholders after those areas evolved.
-- `docs/SECURITY-REVIEW.md`, `docs/HANDOFF-ASTRA.md` and parts of the runbook still present resolved Hyperdrive provisioning as future work.
+- `docs/SECURITY-REVIEW.md`, `docs/PROVISIONING.md` and parts of the runbook still present resolved Hyperdrive provisioning as future work.
 - Preserve historical handoffs as records, but mark them archived and make the current status documents authoritative.
 
 ## Integration order
