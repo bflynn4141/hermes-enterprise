@@ -5,7 +5,7 @@ Updated September 15, 2026. Scope: [production-readiness plan](PRODUCTION-READIN
 ## Integration
 
 - Lead: `01a09653-559f-7c90-bf22-0a9f9a3e5fed` on local.
-- Main checkout: `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/hermes-enterprise`.
+- Main checkout: `<local checkout of this repository>`.
 - Plan baseline: `92083de`.
 - Approval Inbox, server and runtime workstreams are integrated on `main`.
 - The implementation tasks did not mutate the existing localhost workspace or Iris profile. After integration, the existing profile was started through the hardened launcher for the live smoke check recorded below.

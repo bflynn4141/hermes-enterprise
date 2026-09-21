@@ -4,7 +4,7 @@ September 15, 2026 · Active delivery plan
 
 ## Outcome
 
-Turn the current interview/demo application into a production-shaped Hermes Enterprise build without deleting useful test coverage or silently presenting simulated capabilities as live. This work answers three questions:
+Turn the current demo application into a production-shaped Hermes Enterprise build without deleting useful test coverage or silently presenting simulated capabilities as live. This work answers three questions:
 
 1. Which prototype, QA, fixture and placeholder paths are still present, and can any of them reach a deployed user?
 2. Can people authenticate through WorkOS using email and enterprise SSO with safe sessions and workspace membership?

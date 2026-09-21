@@ -5301,7 +5301,7 @@ grant completed on StepFun with HTTP 200 and authoritative streamed usage,
 proving that identity, credential refresh and the Enterprise transport were
 healthy. The failing boundary was model availability at Nous Portal.
 
-The Brian Interview Demo workspace and its proactive Iris session were moved
+The Hermes Teams Demo workspace and its proactive Iris session were moved
 to the proven StepFun route so scheduled and interactive work can continue
 while the premium routes are unavailable. That operational choice is visible
 in the session and workspace model selectors; the bridge does not silently

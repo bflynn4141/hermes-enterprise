@@ -620,7 +620,7 @@ export function createMockBackend(options: MockOptions = {}) {
       ];
 
   const skills = [
-    { id: 'managed:partner-program-screening', name: 'Partner program screening', version: 'v1.7.0', shared_by: 'Hermes Enterprise', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', detail: 'Adopted by Iris. Review rules are unchanged by configuration.', adopted: true },
+    { id: 'managed:partner-program-screening', name: 'Partner program screening', version: 'v1.7.0', shared_by: 'Hermes Teams Demo', description: 'Screen public partner prospects and prepare cited outreach drafts for human review.', detail: 'Adopted by Iris. Review rules are unchanged by configuration.', adopted: true },
     { id: 'feedback-synthesis', name: 'Feedback synthesis', version: 'v2', shared_by: 'Alex Rivera', description: 'Turn partner feedback into a routed, reviewable summary.', detail: null, adopted: false },
   ];
   let skillAssignment: EnterpriseSkillAssignment = {

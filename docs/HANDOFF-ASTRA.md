@@ -2,7 +2,7 @@
 
 This is an operator procedure for an agent with computer use (browser + terminal on Brian's Mac). It covers everything in RUNBOOK.md sections 11 to 13 that needs a dashboard or a credential, in the order the dependencies require. Read RUNBOOK.md and README.md first; this file tells you *how to click and type*, those tell you *why*.
 
-Repository: `/Users/gia/Documents/Codex/2026-09-12/hermes-interview/outputs/hermes-enterprise` (pnpm monorepo; the Worker lives in `apps/worker`).
+Repository: `<local checkout of this repository>` (pnpm monorepo; the Worker lives in `apps/worker`).
 
 ## Ground rules
 

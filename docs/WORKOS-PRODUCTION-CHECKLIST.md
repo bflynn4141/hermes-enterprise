@@ -184,7 +184,7 @@ invalid by design.
   returned `400` with the “Your sign-in expired” page and a link to
   `/auth/login` (no code exchange).
 - **Authenticated shell:** An existing sealed session opened the
-  workspace picker (one membership: Brian Interview Demo) and the
+  workspace picker (one membership: Hermes Teams Demo) and the
   workspace shell (Agents / Inbox / Members / Admin). Session cookie
   is not readable from JavaScript; only `hermes_csrf` appears in
   `document.cookie`.
