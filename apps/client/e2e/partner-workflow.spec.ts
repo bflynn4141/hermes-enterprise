@@ -133,7 +133,7 @@ test('Partnerships proposes verified terms and the named Finance principal can a
   await pane.locator('details.approval-disclosure').first().locator('summary').click();
   await expect(pane.locator('p').getByText('Authorize sample Robin Studio terms for an invoice-checking demonstration.', { exact: true })).toBeVisible();
   await pane.getByRole('button', { name: 'Approve change' }).click();
-  await expect(pane.getByText('approved · authorization v1', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Approved · authorization v1', { exact: true })).toBeVisible();
 });
 
 test('native Finance execution keeps sample input provenance distinct from execution state', async ({ page }) => {
