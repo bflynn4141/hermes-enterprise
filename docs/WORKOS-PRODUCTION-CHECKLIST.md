@@ -221,16 +221,45 @@ evidence for the items that do not require a disposable inbox or IdP:
 Private-browser items above remain blocked on a disposable inbox and an
 SSO test IdP; they were not attempted in this re-verify.
 
-### Demo framing — September 20, 2026
+### Demo framing — September 20–21, 2026
 
 Nous Research visitors should see **Hermes Enterprise Demo**, not
 "Brian Interview Demo" or an unbranded "Hermes". This note records the
-inventory, what was verified from the shared checkout, and the exact steps
-that still need dashboard or staging access. Nothing below was renamed yet:
-the local `apps/worker/.dev.vars` carries empty WorkOS values and
-`AUTH_MODE=fake`, and no staging database URL exists locally
-(`MIGRATIONS_DATABASE_URL` is a GitHub environment secret only), so the API
-and SQL steps are written out for a holder of the staging credentials.
+inventory, what was verified, what was changed, and the exact steps that
+still need dashboard or staging database access.
+
+**Verified against the WorkOS staging API on September 21, 2026** (client
+suffix `…E90T`):
+
+- The environment holds two organizations: `org_01M2M1NJF0ENKS96QW7C2CQYSZ`,
+  created September 15 at 7:45 PM Pacific as **Hermes Test Demo**, and
+  `org_01M2JX5H9PMHF9H03TY8FKD01Q` **Test Organization** (WorkOS's sample,
+  domain `example.com`). No organization was ever named "Brian Interview
+  Demo".
+- **Renamed:** `org_01M2M1NJF0ENKS96QW7C2CQYSZ` → **Hermes Enterprise Demo**
+  by `PUT /organizations/:id` at 15:07:49 UTC; a fresh list confirms the new
+  name. The org id is unchanged, so nothing that referenced it breaks. Its
+  environment roles are `admin` and `member`, matching what Hermes sends.
+- **Neither organization has any membership.** The two users
+  (`bflynn4141@gmail.com`, September 20; `bflynn.me@gmail.com`, September 15,
+  who accepted an application-wide invitation) belong to no organization. So
+  the "Brian Interview Demo" membership seen in the workspace picker on
+  September 20 was written directly into the Hermes database, and the
+  workspace's `workspace_directory.workos_organization_id` is most likely
+  NULL. Only staging SQL (step 2) can confirm this, and **without that link
+  no WorkOS invitation can be sent for the workspace**: the delivery job
+  fails closed as `workos_invitation_delivery_not_configured`.
+- **Staging sends no invitation email today, link or no link.** Staging runs
+  `HERMES_MEMBER_PROVISIONING_ENABLED=1`. In that mode `inviteInTransaction`
+  writes `delivery_status='not_required'`, the setup job reserves pool
+  capacity and stops at `preparation='ready'`, and nothing enqueues the
+  WorkOS `send_invitation` job. PR #125 (`codex/setup-invitation-delivery`)
+  adds that handoff and is the prerequisite for any emailed demo invitation;
+  it is green but conflicts with `main` and numbers its migration 0066,
+  which PR #136 also uses.
+- Each Partner invitation reserves one Hermes Cloud pool instance (pools
+  02–07 are registered), so the demo admits about six Members before more
+  pools are needed.
 
 **Where each visible name lives**
 
@@ -254,28 +283,44 @@ stays as it is; the client routes by workspace id.
 
 **Checklist for the credential holder**
 
-1. WorkOS organization (staging key only; confirm `WORKOS_CLIENT_ID` ends
-   in `E90T` before running). List, then update by id, then list again:
-
-   ```sh
-   curl -s https://api.workos.com/organizations?limit=100 \
-     -H "Authorization: Bearer $WORKOS_API_KEY" | jq '.data[] | {id, name}'
-   curl -s -X PUT https://api.workos.com/organizations/<org_id> \
-     -H "Authorization: Bearer $WORKOS_API_KEY" -H 'Content-Type: application/json' \
-     -d '{"name":"Hermes Enterprise Demo"}' | jq '{id, name}'
-   ```
-
-   Existing invitations keep working; the `org_id` claim is unchanged.
-2. Staging workspace row, as `owner` on the staging branch (the same role
-   `scripts/migrate.mjs` uses). Expect exactly one row before updating:
+1. ~~WorkOS organization rename~~ **Done September 21, 2026** (see above).
+   If the demo workspace turns out to be linked to a different organization
+   in step 2, rename that one instead with the same call and revert this
+   one's name.
+2. Staging workspace row and organization link, as `owner` on the staging
+   branch (the same role `scripts/migrate.mjs` uses). Read first; expect
+   exactly one row:
 
    ```sql
-   SELECT id, name, slug, workos_organization_id FROM workspaces WHERE name = 'Brian Interview Demo';
-   UPDATE workspaces SET name = 'Hermes Enterprise Demo', updated_at = now() WHERE name = 'Brian Interview Demo';
-   SELECT id, name FROM workspaces WHERE name = 'Hermes Enterprise Demo';
+   SELECT w.id, w.name, w.slug, w.workos_organization_id, d.workos_organization_id AS directory_org
+     FROM workspaces w LEFT JOIN workspace_directory d ON d.workspace_id = w.id
+    WHERE w.name = 'Brian Interview Demo';
+   ```
+
+   Then rename, and link the workspace to the renamed organization if both
+   organization columns are NULL (if either already holds an org id, stop
+   and rename that organization instead):
+
+   ```sql
+   UPDATE workspaces
+      SET name = 'Hermes Enterprise Demo', updated_at = now(),
+          workos_organization_id = COALESCE(workos_organization_id, 'org_01M2M1NJF0ENKS96QW7C2CQYSZ')
+    WHERE name = 'Brian Interview Demo';
+   UPDATE workspace_directory d
+      SET workos_organization_id = COALESCE(d.workos_organization_id, 'org_01M2M1NJF0ENKS96QW7C2CQYSZ')
+     FROM workspaces w
+    WHERE w.id = d.workspace_id AND w.name = 'Hermes Enterprise Demo';
+   SELECT w.id, w.name, w.workos_organization_id, d.workos_organization_id AS directory_org
+     FROM workspaces w JOIN workspace_directory d ON d.workspace_id = w.id
+    WHERE w.name = 'Hermes Enterprise Demo';
    ```
 
    Members see the new name on their next page load; no sign-out is needed.
+   Once linked, add the Admin's WorkOS user to the organization so the
+   mirror and the picker agree
+   (`POST /user_management/organization_memberships` with
+   `user_id=user_01M30HPW4699T2J61GFRQ5R9QZ`, `organization_id` as above,
+   `role_slug=admin`).
 3. WorkOS dashboard, environment switcher set to **Staging**:
    - **Branding** (left nav, under Authentication in the current dashboard;
      the application name field may sit under **Settings → General** in
