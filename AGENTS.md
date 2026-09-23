@@ -71,6 +71,11 @@ Changes to RLS, grants, migrations, decisions, provider credentials, or runtime
 admission require focused tests in addition to typechecking. Validate interface
 changes in a rendered browser at desktop and narrow widths.
 
+For a user-visible change, deploy a preview once the pull request exists and
+check the change there: `node scripts/preview.mjs up <pr> --comment`. It posts
+the link on the PR; take it down with `down <pr>` when the PR closes. See
+[docs/PREVIEWS.md](docs/PREVIEWS.md).
+
 ## Generated and review artifacts
 
 - Build outputs under `apps/*/dist` and `packages/shared/dist` are generated and
