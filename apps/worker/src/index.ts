@@ -10,6 +10,7 @@
 // uploads routes and the `extract` consumer; M4 filled in the decision route,
 // the effects ledger, History, the Library and the `renders` consumer.
 import { Hono } from 'hono';
+import { isWorkerFirstPath, previewGate } from './preview-gate.js';
 import { getAgentPermissions, patchAgentPermissions, decideAgentOperation } from './routes/agent-permissions.js';
 import { withSentry } from '@sentry/cloudflare';
 import type { Env } from './env.js';
@@ -554,7 +555,15 @@ app.get('/w/:ws/hub/session/:id', sessionSocket);
 app.all('*', appShellOrUnknownRoute);
 
 const handler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // A pull-request preview only: the passcode gate, then the assets binding
+    // for everything the Worker does not own (the preview deploys with
+    // `run_worker_first: true` so that the gate sees the app shell too).
+    if (env.PREVIEW_PASSCODE) {
+      const answered = await previewGate(request, env);
+      if (answered) return answered;
+      if (!isWorkerFirstPath(new URL(request.url).pathname)) return env.ASSETS.fetch(request);
+    }
     return app.fetch(request, env, ctx);
   },
 
