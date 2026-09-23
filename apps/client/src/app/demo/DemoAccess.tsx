@@ -26,7 +26,7 @@ const ERROR_COPY: Record<ErrorReason, string> = {
   bad_email: 'Enter the work email address the invitation should go to.',
   bad_passcode: 'Enter the passcode you were sent.',
   demo_passcode_invalid: 'That passcode is not right.',
-  demo_domain_not_allowed: 'This demo is open to work addresses only.',
+  demo_domain_not_allowed: 'This email’s domain is not on the demo’s access list. Use the address your invitation was meant for.',
   rate_limited: 'Too many requests for this address or from this connection. Try again in an hour.',
   demo_access_not_configured: 'Request access is not available right now. Ask the person who shared this link.',
   unavailable: 'Request access is not available right now. Ask the person who shared this link.',
@@ -100,13 +100,13 @@ export function DemoAccess({ fetchImpl }: { fetchImpl?: typeof fetch } = {}) {
         </div>
       </header>
       <div className="portal-body demo-access-body">
-        <h1 className="portal-title">See how a named team runs Iris under review</h1>
+        <h1 className="portal-title">See a team work with role agents, with people making every decision</h1>
         <p className="demo-access-lede">
-          Hermes Enterprise is Hermes Agent run the way a company has to run it: one workspace,
-          named people, and an agent called Iris who does the research, drafting and follow-up
-          while every consequential step waits for a human decision. This staging deployment
-          is the live demo. Request a Member invite below with the passcode you were sent, and
-          once you are in, open a session with Iris and ask her to screen a partner.
+          Hermes Teams Demo gives each employee an agent configured for their role. The agents
+          research, draft and prepare handoffs, and every consequential step waits for a person
+          to decide. This staging deployment is the live demo, open to invited organizations.
+          Request a Member invite below with the passcode you were sent, then open a session
+          with your agent and ask it to screen a partner.
         </p>
 
         {SHARE_LINKS.length > 0 && (
