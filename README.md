@@ -139,7 +139,7 @@ follow-up as a separate effect, and an authorized person completes that action
 outside the demo.
 
 Approval saves HTML documents as unsigned, unsent drafts. See
-[Architecture](docs/ARCHITECTURE.md#what-is-real-and-what-is-not) for the full
+[Architecture](docs/ARCHITECTURE.md#what-is-implemented-and-intentionally-limited) for the full
 list of implemented and stubbed behavior.
 
 ## Run it locally

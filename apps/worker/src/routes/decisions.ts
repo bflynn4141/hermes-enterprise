@@ -1,7 +1,8 @@
 // POST /w/:ws/requests/:id/decisions
 //
-// The only route in this system that changes a request's status, and the only
-// writer of `decisions`. Everything about it is deliberate, so it is worth
+// The only writer of `decisions`. (Typed approvals change a request's status
+// through `/approval/decisions` in routes/approvals.ts, behind the same
+// Origin, surface, CSRF and step-up guards.) Everything about it is deliberate, so it is worth
 // reading the five guards in the order they run and what each one is for:
 //
 //   1. **An allowlisted `Origin`, required.** Every other state-changing route
