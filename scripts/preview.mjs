@@ -300,8 +300,21 @@ async function init() {
   log(`the preview passcode is in ${STATE_FILE}`);
 }
 
+/**
+ * A preview runs fake sign-in, so it must never deploy code without the gate.
+ * The smoke test would catch it, but only after the Worker was already live.
+ */
+function assertGatePresent() {
+  const gate = join(WORKER_DIR, 'src/preview-gate.ts');
+  const entry = readFileSync(join(WORKER_DIR, 'src/index.ts'), 'utf8');
+  if (!existsSync(gate) || !entry.includes('previewGate(request, env)')) {
+    throw new Error('this checkout has no preview gate (apps/worker/src/preview-gate.ts wired into index.ts); refusing to deploy fake sign-in unlocked');
+  }
+}
+
 async function up(pr) {
   const name = previewName(pr);
+  assertGatePresent();
   const state = requireState();
   previewProject(state);
   const preview = state.previews[name] ?? { kek: randomBytes(32).toString('base64'), hubTicket: secret(), cookie: secret() };
