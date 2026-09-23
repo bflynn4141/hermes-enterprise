@@ -60,13 +60,19 @@ function assertPreviewResource(resource) {
 const log = (message) => process.stdout.write(`${message}\n`);
 const secret = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
+/** The error lines of a command's output, without wrangler's log-file notices. */
+function meaningful(output) {
+  return output.split('\n').filter((line) => line.trim() && !/Logs were written|update available|^[─-]+$/.test(line))
+    .slice(-6).join('\n');
+}
+
 function run(bin, args, { cwd = ROOT, env = {}, allowFailure = false, quiet = false } = {}) {
   const result = spawnSync(bin, args, { cwd, env: { ...process.env, ...env }, encoding: 'utf8' });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   if (result.status !== 0 && !allowFailure) {
-    throw new Error(`${bin.split('/').pop()} ${args.slice(0, 3).join(' ')} failed:\n${output.slice(-2000)}`);
+    throw new Error(`${bin.split('/').pop()} ${args.slice(0, 3).join(' ')} failed:\n${meaningful(output)}`);
   }
-  if (!quiet && result.status !== 0) log(output.trim().split('\n').slice(-3).join('\n'));
+  if (!quiet && result.status !== 0) log(meaningful(output));
   return { ok: result.status === 0, output };
 }
 
@@ -225,8 +231,16 @@ function deploy(config, secrets) {
   writeFileSync(configPath, JSON.stringify(config, null, 2));
   writeFileSync(secretsPath, JSON.stringify(secrets), { mode: 0o600 });
   try {
-    const { output } = wrangler(['deploy', '--config', configPath, '--secrets-file', secretsPath]);
-    return output.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/)?.[0] ?? null;
+    // A deploy uploads several megabytes; retry the network failures that
+    // wrangler reports as `fetch failed`, and nothing else.
+    for (let attempt = 1; ; attempt += 1) {
+      const result = wrangler(['deploy', '--config', configPath, '--secrets-file', secretsPath], { allowFailure: true, quiet: true });
+      if (result.ok) return result.output.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/)?.[0] ?? null;
+      if (attempt === 3 || !/fetch failed|ECONNRESET|ETIMEDOUT|connectivity/i.test(result.output)) {
+        throw new Error(`wrangler deploy failed:\n${result.output.slice(-2000)}`);
+      }
+      log(`deploy attempt ${attempt} hit a network error; retrying`);
+    }
   } finally {
     writeFileSync(secretsPath, '{}');
   }
@@ -353,20 +367,34 @@ async function down(pr) {
   const state = requireState();
   previewProject(state);
   const config = previewConfig({ name, pr, origin: null, hyperdrive: { app: 'x', agent: 'x' } });
+  const queues = config.queues.consumers.map((consumer) => consumer.queue);
+  const problems = [];
+  const gone = (output) => /not[ _]found|does not exist|10007|10200|could not find|11000/i.test(output);
+  const attempt = (label, args) => {
+    const result = wrangler(args, { allowFailure: true, quiet: true });
+    if (!result.ok && !gone(result.output)) problems.push(`${label}: ${meaningful(result.output)}`);
+  };
 
-  assertPreviewResource(name);
-  wrangler(['delete', name, '--force'], { allowFailure: true });
-  for (const workflow of config.workflows) wrangler(['workflows', 'delete', workflow.name], { allowFailure: true });
-  for (const queue of ['extract', 'extract-dlq', 'renders', 'renders-dlq']) {
-    assertPreviewResource(`${name}-${queue}`);
-    wrangler(['queues', 'delete', `${name}-${queue}`], { allowFailure: true });
+  // Cloudflare refuses to delete a Worker that still consumes a queue, so the
+  // consumers come off first, then the Worker, then everything it used.
+  for (const queue of queues) {
+    assertPreviewResource(queue);
+    attempt(`detach ${queue}`, ['queues', 'consumer', 'remove', queue, name]);
   }
+  assertPreviewResource(name);
+  attempt(`delete Worker ${name}`, ['delete', name, '--force']);
+  for (const workflow of config.workflows) attempt(`delete Workflow ${workflow.name}`, ['workflows', 'delete', workflow.name]);
+  for (const queue of queues) attempt(`delete queue ${queue}`, ['queues', 'delete', queue]);
   for (const role of ['app', 'agent']) {
     const id = hyperdriveId(`${name}-${role}`);
-    if (id) wrangler(['hyperdrive', 'delete', id], { allowFailure: true });
+    if (id) attempt(`delete Hyperdrive ${name}-${role}`, ['hyperdrive', 'delete', id]);
   }
   if (branchExists(state, `pr-${pr}`)) {
     neon(['branches', 'delete', `pr-${pr}`, '--project-id', state.neonProjectId]);
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`some of ${name} is still there; run down again after fixing:\n${problems.join('\n')}`);
   }
   delete state.previews[name];
   saveState(state);
