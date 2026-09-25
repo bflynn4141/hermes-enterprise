@@ -513,7 +513,7 @@ Roll out a runtime change in this order:
 
 1. Start one dedicated profile with `HERMES_ENTERPRISE_RELEASE_RING=canary`.
    A stock Hermes Cloud profile must also set
-   `HERMES_ENTERPRISE_SOURCE_REVISION=345cd2b057a452236de401d3534b8502a7465e8d`
+   `HERMES_ENTERPRISE_SOURCE_REVISION=f97608f178d1ffeca59860195ab7da295f7c8e5f`
    (the current pin in `runtime/hermes/contract.json`);
    the verified native launcher supplies this attestation itself.
 2. Add `"release_ring":"canary"` only to that profile's

@@ -411,7 +411,7 @@ def main():
             )
             partner_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
             assert partner_readiness["agent_id"] == partner_agent_id, partner_readiness
-            assert partner_readiness["runtime_revision"] == "345cd2b057a452236de401d3534b8502a7465e8d"
+            assert partner_readiness["runtime_revision"] == "f97608f178d1ffeca59860195ab7da295f7c8e5f"
             assert partner_readiness["skills"] == [{
                 "name": PARTNER_PACKAGE["name"], "version": PARTNER_PACKAGE["version"],
                 "artifact_digest": PARTNER_PACKAGE["artifact_digest"],

@@ -36,17 +36,17 @@ from .runtime_policy import (
 
 
 FLAG = "HERMES_ENTERPRISE_CLOUD_MANAGED"
-EXPECTED_HERMES_VERSION = "0.21.3"
+EXPECTED_HERMES_VERSION = "0.21.5"
 SOURCE_DIGESTS = {
-    "agent.conversation_loop": "2086d4d084a7cba728a5862f2f27d172860908af967e2b83a43d22fe757548c2",
-    "gateway.platforms.api_server": "7ec405dc2a59789582ad9f61a189a41079e621f14642d3c9dc754e312616a868",
-    "hermes_cli.plugins": "1b5aae9a34e97c9922b5ab7e76c4bd3562a6ab715a983bf9c4dfe6031c457942",
-    "hermes_cli.plugins_dispatch": "6de218e8b72e9717a5bfba701e54595b21c9f89a6dd78a938c72140bf5ab0501",
-    "hermes_cli.plugins_loader": "38280b9a7f83e6f4c0e03dbec91cd986c41b3f3a7eff05772c844e5d4b3c58ff",
-    "hermes_cli.runtime_provider": "013831a166ff862fbc4284d43556f9bd124ecd8beaadce3b4adc9d9fc0032f17",
-    "hermes_cli.tools_config": "039dc85e2494bd44b692ebdad022fdef40526f6048a3275efdeeb97939a16afd",
-    "model_tools": "c99620c824ab59f341ac7d0e22cde016b0c469d0643e7a5a5a82e0d63176e4b5",
-    "cron.jobs": "bedc0a7bad306df456b6c84d44b26ebfad2320725d2175f6cf6512b9b5d7ef9a",
+    "agent.conversation_loop": "c93ee86e1da583abc7cc57417380cd71241ae028c04a4cb8456580b52ffbf3d8",
+    "gateway.platforms.api_server": "fa83a20bd4f9f3a90a3ac010db0a68f548259587946ea80b81b2f3253bafd5ec",
+    "hermes_cli.plugins": "51c7fdd506b187c8713e706a7b264614902b28039e79875770e4b120180b423c",
+    "hermes_cli.plugins_dispatch": "fd1185e23edb80234e3f816a2fbbf990cdab37a3bf5c3d98b38337c7dd50e330",
+    "hermes_cli.plugins_loader": "8f5761948f135faf5f75c112fcd0a819d8c44eb0652dcbc46517563961764ac3",
+    "hermes_cli.runtime_provider": "8013320d5b8b393f1a21d7b7858b638772b9aaf1fe15718e9c85bc4a1c785d64",
+    "hermes_cli.tools_config": "113274934cd85734005e04acc2b86216899ccde6db9eb632660eec784ee71fb7",
+    "model_tools": "5d5a947d84f31f1ba4ef5267e28154b819e8f957a0b378739696f1ac305e1509",
+    "cron.jobs": "24cbaf90ccec442ca34cf8ad200f30bed9de6ea74b90b7ae62d6f963aaf38763",
 }
 AGENTCASH_SERVER = {
     "command": "npx",
@@ -156,7 +156,7 @@ def validate_native_source():
     """Prove the source files whose private seams this plugin relies on."""
     import hermes_cli
     if getattr(hermes_cli, "__version__", None) != EXPECTED_HERMES_VERSION:
-        raise RuntimeError("Cloud-managed Enterprise requires Hermes 0.21.3")
+        raise RuntimeError("Cloud-managed Enterprise requires Hermes " + EXPECTED_HERMES_VERSION)
     paths = {}
     for module_name, expected in SOURCE_DIGESTS.items():
         module = importlib.import_module(module_name)

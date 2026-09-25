@@ -32,7 +32,7 @@ const capabilities = (durable = true) => ({
   },
   enterprise_contract: {
     schema_version: 1,
-    source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+    source_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
     release_ring: 'stable',
     terminal_errors: { supported: true, schema_version: 1 },
   },
@@ -43,7 +43,7 @@ const expectedCapabilities = {
   retentionSeconds: 86_400,
   contractVersion: 1 as const,
   terminalErrorSchemaVersion: 1 as const,
-  sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+  sourceRevision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
   releaseRing: 'stable' as const,
 };
 
@@ -69,7 +69,7 @@ describe('official Hermes Runs transport', () => {
   it('reads the checked native identity, skill and tool inventory through the fixed connector', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      runtime_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
       workspace_id: '11111111-1111-4111-8111-111111111111',
       agent_id: '22222222-2222-4222-8222-222222222222',
@@ -83,7 +83,7 @@ describe('official Hermes Runs transport', () => {
       tools: ['publish_partner_invoice_review', 'skill_view'],
     }));
     await expect(client.enterpriseReadiness()).resolves.toMatchObject({
-      version: '1.7.0', runtimeRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      version: '1.7.0', runtimeRevision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifactDigest: PLUGIN_DIGEST },
       skills: [{
         name: 'enterprise_bridge:partner-program-screening-v1-8', version: '1.8.0',
@@ -102,7 +102,7 @@ describe('official Hermes Runs transport', () => {
   ])('rejects a %s readiness attestation', async (_label, changed) => {
     const body = {
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      runtime_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       plugin: { name: 'enterprise_bridge', version: '1.7.0', revision: PLUGIN_REVISION, artifact_digest: PLUGIN_DIGEST },
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1', artifact_digest: `sha256:${'a'.repeat(64)}`, content_digest: `sha256:${'a'.repeat(64)}` }],
@@ -131,7 +131,7 @@ describe('official Hermes Runs transport', () => {
   it('keeps the two-field plugin identity accepted for an original legacy profile', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      runtime_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       plugin: { name: 'enterprise_bridge', version: '1.7.0' },
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       skills: [{ name: 'enterprise_bridge:partner-invoice-review', version: '1.0.1',
@@ -147,7 +147,7 @@ describe('official Hermes Runs transport', () => {
   it('rejects a partial attestation instead of downgrading it to legacy readiness', async () => {
     const { client } = connectorTransport(() => json({
       object: 'hermes.enterprise_bridge.readiness', version: '1.7.0',
-      runtime_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      runtime_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       workspace_id: 'workspace', agent_id: 'agent', enterprise_url: 'https://staging.example',
       agentcash_enabled: false, agentcash_wallet_present: false, native_cron_disabled: true,
     }));
@@ -359,6 +359,18 @@ describe('official Hermes Runs transport', () => {
     const failure = client.status(RUN_ID);
     await expect(failure).rejects.toEqual(new HermesApiError(503, 'request'));
     await expect(failure).rejects.not.toThrow(SECRET);
+  });
+
+  it('keeps only a known readiness code from a refused connector submit', async () => {
+    const { client } = connectorTransport(() => json({
+      error: `Authorization: Bearer ${SECRET}`, code: 'native_readiness_unavailable',
+    }, 503));
+    const failure = client.submit({ input: 'Screen the applicants.' }, 'enterprise-run-a1');
+    await expect(failure).rejects.toEqual(new HermesApiError(503, 'request', 'native_readiness_unavailable'));
+    await expect(failure).rejects.toThrow('Hermes request failed (503 native_readiness_unavailable)');
+    await expect(failure).rejects.not.toThrow(SECRET);
+    const unknown = connectorTransport(() => json({ code: `leak ${SECRET}` }, 503));
+    await expect(unknown.client.submit({ input: 'x' }, 'enterprise-run-a1')).rejects.toEqual(new HermesApiError(503, 'request'));
   });
 
   it.each([301, 302, 307, 308])('rejects a %s redirect without forwarding the bearer token', async (status) => {

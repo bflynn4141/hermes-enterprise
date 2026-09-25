@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EngineRunRow } from '../../src/engine/agent-db.js';
 import type { ProviderMessage } from '../../src/model/types.js';
 import { runHermesAttempt, type RuntimeDeps, type RuntimePersistence, type RuntimeTerminalFailure } from '../../src/runtime/adapter.js';
-import { HermesClient, HermesCapabilitiesError, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import { HermesApiError, HermesClient, HermesCapabilitiesError, terminalHermesStatus, type HermesEvent, type HermesStatus } from '../../src/runtime/client.js';
+import type { StepConfig } from '../../src/engine/engine.js';
 import type { HermesEnterpriseReadiness } from '../../src/runtime/client.js';
 import type { RuntimeSkillManifest } from '../../src/runtime/skills.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../../src/enterprise-skills/registry.js';
@@ -27,7 +28,7 @@ const nativeCapabilities = {
   },
   enterprise_contract: {
     schema_version: 1,
-    source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+    source_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
     release_ring: 'stable',
     terminal_errors: { supported: true, schema_version: 1 },
   },
@@ -153,7 +154,7 @@ class FakeHermesClient extends HermesClient {
           retentionSeconds: 86_400,
           contractVersion: 1 as const,
           terminalErrorSchemaVersion: 1 as const,
-          sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+          sourceRevision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
           releaseRing: 'stable' as const,
         });
   }
@@ -190,6 +191,17 @@ class FakeHermesClient extends HermesClient {
     this.current = this.final;
     if (this.disconnect) throw this.streamFailure ?? new Error('stream disconnected');
     yield { event: `run.${this.final.status}`, ...this.final };
+  }
+}
+
+/** Workflows rethrows a failed step with its message but not its class. */
+class ClassErasingStep extends FakeStep {
+  override async do<T>(name: string, config: StepConfig, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await super.do(name, config, fn);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
   }
 }
 
@@ -1011,7 +1023,7 @@ describe('official Hermes enterprise projection', () => {
           retentionSeconds: 86_400,
           contractVersion: 1 as const,
           terminalErrorSchemaVersion: 1 as const,
-          sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+          sourceRevision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
           releaseRing: 'stable' as const,
         };
         if (this.capabilityReads !== 1) {
@@ -1205,6 +1217,25 @@ describe('official Hermes enterprise projection', () => {
     expect(db.statusChanges.at(-1)?.status).toBe('stopped');
     expect(db.modelCalls).toEqual([]);
     expect(db.messages.get(0)?.status).toBe('incomplete');
+  });
+
+  it('names a runtime whose readiness gate refused the run after the step boundary drops the error class', async () => {
+    const client = new FakeHermesClient();
+    client.onSubmit = () => { throw new HermesApiError(503, 'request', 'native_readiness_unavailable'); };
+    const { db } = await execute(new FakeRuntimeDb(), client, new ClassErasingStep());
+    expect(db.statusChanges.at(-1)).toMatchObject({
+      status: 'error', error: { class: 'transient', retryable: true, reason: 'hermes_runtime_not_ready' },
+    });
+  });
+
+  it('keeps a contract violation permanent after the step boundary drops the error class', async () => {
+    const client = new FakeHermesClient();
+    client.capabilityFailure = new HermesCapabilitiesError();
+    const { db } = await execute(new FakeRuntimeDb(), client, new ClassErasingStep());
+    expect(client.submissions).toHaveLength(0);
+    expect(db.statusChanges.at(-1)).toMatchObject({
+      status: 'error', error: { class: 'permanent', retryable: false, reason: 'hermes_contract_violation' },
+    });
   });
 
   it('closes activity and preserves partial output when runtime status becomes unreachable', async () => {

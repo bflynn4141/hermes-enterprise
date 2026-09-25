@@ -44,6 +44,8 @@ export function readableTool(name: string, active: boolean): string {
  */
 const RUN_ERROR_SENTENCES: Readonly<Record<string, string>> = {
   hermes_unavailable: 'The Hermes runtime is unavailable. Retry to reconnect.',
+  hermes_runtime_not_ready: "This agent's runtime didn't pass its safety check. If retrying doesn't help, an admin needs to update it.",
+  hermes_contract_violation: 'This Hermes runtime needs an Enterprise compatibility update before it can continue.',
   hermes_run_failed: 'The Hermes runtime could not finish this run. Retry to try again.',
   hermes_provider_unavailable: "The model provider didn't answer. Retry.",
   hermes_provider_rate_limited: "The model provider didn't answer. Retry.",
