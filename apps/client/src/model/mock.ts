@@ -16,11 +16,12 @@
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
 import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
-import type { ApprovalView, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
+import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
 import { actionsFor, initialState, reduce, sessionFrom } from './store.js';
 import type { RuntimeDiscoveryGrant } from './runtime-capacity.js';
+import { readWalkthroughStory, resetWalkthroughStory, walkthroughDecision, walkthroughDocumentFor, walkthroughRunEvents, walkthroughSeed, walkthroughTurn, writeWalkthroughStory, type WalkthroughContext } from './walkthrough.js';
 
 const WS = mockUuid(1);
 const USER = mockUuid(100);
@@ -154,6 +155,12 @@ interface MockOptions {
   workflowRole?: PartnerWorkflowViewerRole;
   /** First-activation fixture: roles exist, but no native readiness has been saved yet. */
   workflowActivation?: 'success' | 'native-mismatch' | 'binding-drift';
+  /**
+   * The scripted Partnerships → Finance story for recording a walkthrough
+   * (`walkthrough.ts`). The person and the story come from localStorage, so
+   * they override `seat` and `workflowRole`; `reset` starts the story over.
+   */
+  walkthrough?: 'play' | 'reset';
 }
 
 type MockRequest = RequestEntity;
@@ -188,7 +195,12 @@ function request(id: string, kind: 'application' | 'invoice' | 'agreement', stat
   };
 }
 
-export function createMockBackend(options: MockOptions = {}) {
+export function createMockBackend(input: MockOptions = {}) {
+  if (input.walkthrough === 'reset') resetWalkthroughStory();
+  let story = input.walkthrough ? readWalkthroughStory() : null;
+  const options: MockOptions = story
+    ? { ...input, partnerWorkflow: true, seat: story.person === 'alex' ? 'member' : 'admin', workflowRole: story.person === 'alex' ? 'finance' : 'partnerships' }
+    : input;
   const seat = options.seat ?? 'admin';
   const setupOnly = options.memberInvitations === 'setup_only';
   const workflowRole = options.workflowRole ?? (seat === 'member' ? 'finance' : 'admin');
@@ -541,11 +553,21 @@ export function createMockBackend(options: MockOptions = {}) {
     ] : [],
   };
 
-  const documents = empty
+  const documents: DocumentEntity[] = empty
     ? []
     : [
         { id: DOC_INVOICE, kind: 'invoice' as const, number: 'INV-2026-014', title: 'Invoice INV-2026-014', status: 'Draft · Not sent', request_id: REQ_INVOICE, pdf_status: 'preparing' as const, pdf_url: null, pdf_error: null, payload: {}, version: 1, created_at: iso(-3) },
       ];
+
+  const walkthroughCtx: WalkthroughContext = { workspaceId: WS, scoutAgentId: AGENT, ledgerAgentId: FINANCE_AGENT, now: () => new Date().toISOString() };
+  if (story) {
+    const seed = walkthroughSeed(walkthroughCtx, story);
+    sessions.splice(0, sessions.length, ...seed.sessions.map((row) => ({ ...row, model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT, runtime: 'cloud', pinned: false, archived: false, share: null, version: 1 })));
+    for (const key of Object.keys(messages)) delete messages[key];
+    Object.assign(messages, seed.messages);
+    requests.splice(0, requests.length, ...seed.requests);
+    documents.splice(0, documents.length, ...seed.documents);
+  }
 
   const agentFiles = empty
     ? []
@@ -742,6 +764,7 @@ export function createMockBackend(options: MockOptions = {}) {
     can_retry: false, can_run_now: empty || Boolean(options.activity), can_cancel: false,
   };
   if (recoveryView.state === 'waiting') recoveryView.message = 'Waiting for the current request to be reviewed.';
+  if (story) recoveryView = { ...recoveryView, state: 'idle', run_id: null, session_id: null, attempt: null, can_run_now: true };
   if (options.recovery) {
     recoveryView = {
       ...recoveryView,
@@ -1012,6 +1035,7 @@ export function createMockBackend(options: MockOptions = {}) {
   function requestForViewer(row: MockRequest): MockRequest {
     const approval = approvalViews.get(row.id);
     if (approval) return { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) };
+    if (story) return row;
     const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
     // Preserve the older Worker response shape for the existing legacy Member
     // browser fixture. The scoped Finance fixture exercises the new projection.
@@ -1213,6 +1237,7 @@ export function createMockBackend(options: MockOptions = {}) {
     if (p('/bootstrap')) return json(bootstrap());
 
     if (p(`/agents/${AGENT}/recovery`) && method === 'GET') return json(recoveryView);
+    if (story && p(`/agents/${FINANCE_AGENT}/recovery`) && method === 'GET') return json(recoveryView);
     if (p(`/agents/${AGENT}/wake`) && method === 'POST') {
       // Keep submission observable to browser tests; this is a mock admission,
       // never an inference call or another paid discovery cycle.
@@ -1319,6 +1344,27 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
+        if (story) {
+          const turn = walkthroughTurn(walkthroughCtx, story, String(body.text ?? ''));
+          story = turn.next;
+          writeWalkthroughStory(story);
+          const pending = new Map(turn.requests.map((item) => [item.id, item]));
+          for (const { event, delayMs } of walkthroughRunEvents(walkthroughCtx, sessionId, turn, head + 1n, String(body.client_turn_id ?? 'walkthrough'))) {
+            setTimeout(() => {
+              // A proposed request exists from the moment its event says so.
+              const created = event.kind === 'request.created' ? pending.get(event.payload.request_id) : undefined;
+              if (created && !requests.some((item) => item.id === created.id)) requests.push(created);
+              publish(event);
+              if (event.kind === 'run.status' && event.payload.status === 'completed' && row) {
+                if (turn.title) row.title = turn.title;
+                row.status = 'Needs review';
+                row.version += 1;
+                publish({ id: (head + 1n).toString(), workspace_id: WS, session_id: null, kind: 'entity.updated', schema_version: SCHEMA_VERSION, trace_id: 'walkthrough-title', at: new Date().toISOString(), payload: { entity_type: 'session', entity_id: sessionId, ref: null, version: row.version } } as StreamEvent);
+              }
+            }, delayMs);
+          }
+          return json({ run_id: turn.runId, status: 'working', attempt: 1 }, 201);
+        }
         if (options.turn === 'proposes_request') {
           const freshId = mockUuid(7000 + requests.length);
           requests.push({
@@ -1463,7 +1509,7 @@ export function createMockBackend(options: MockOptions = {}) {
       if (rest === '/decisions' && method === 'POST') {
         if (!row) return fail(404, 'not_found');
         const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
-        if (seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
+        if (!story && seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
         if (row.status !== 'pending') return fail(409, 'already_decided', 'Already decided');
         const decision = body.decision === 'decline' ? 'decline' : 'approve';
         const resulting = decision === 'decline' ? 'declined' : row.kind === 'application' ? 'admitted' : row.kind === 'invoice' ? 'created' : 'drafted';
@@ -1471,6 +1517,14 @@ export function createMockBackend(options: MockOptions = {}) {
         row.version += 1;
         row.decided_at = iso(1);
         row.decided_by_name = viewerName;
+        if (story) {
+          row.decided_at = new Date().toISOString();
+          if (row.decision_summary) row.decision_summary = { ...row.decision_summary, approval_requirement: { ...row.decision_summary.approval_requirement, completed_steps: 1, remaining_approvals: 0, current: [], pending_for_viewer: false } };
+          story = walkthroughDecision(walkthroughCtx, story, id, decision === 'approve');
+          writeWalkthroughStory(story);
+          const saved = decision === 'approve' ? walkthroughDocumentFor(walkthroughCtx, id, row.decided_at) : null;
+          if (saved && !documents.some((item) => item.id === saved.id)) documents.push(saved);
+        }
         if (id === REQ_INVOICE && options.partnerWorkflow) {
           const handoff = partnerHandoffs.find((item) => item.request_id === id && item.current);
           if (handoff) {
