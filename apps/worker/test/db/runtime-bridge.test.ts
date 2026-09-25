@@ -5,7 +5,7 @@ import { RuntimeDb } from '../../src/runtime/store.js';
 import { dispatchRuntimeCall, type RuntimeCall } from '../../src/runtime/bridge.js';
 import { loadRaindropRunSnapshot } from '../../src/ops/raindrop.js';
 import { AGENT_URL, APP_URL } from '../../scripts/db-config.mjs';
-import { seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
+import { seedPendingRequest, seedWorkspace, withClient, setTenant, type Fixture } from './helpers.js';
 
 const env = { ENVIRONMENT: 'test', ENGINE_VERSION: '1', HYPERDRIVE_APP: { connectionString: APP_URL }, HYPERDRIVE_AGENT: { connectionString: AGENT_URL } } as unknown as Env;
 const nativeCall = (remote: string, name = 'propose_instruction', args: Record<string, unknown> = { body: 'Use published evidence.', sources: [] }): RuntimeCall => ({ runtime_run_id: remote, tool_call_id: 'native-call-1', name, arguments: args });
@@ -87,6 +87,35 @@ describe('official runtime on the restricted agent role', () => {
       expect(rows[0]?.count).toBe('1');
       await expect(dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, { ...call, arguments: { body: 'Mutated instructions.' } })).rejects.toMatchObject({ reason: 'runtime_call_conflict' });
     } finally { await first.close(); await second.close(); }
+  });
+  it('answers a note on a malformed, unknown or foreign request with a reason the model can act on', async () => {
+    const fx = await seedWorkspace(); const other = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const { remote } = await mappedRun(fx, store);
+      await owner(fx, (q) => q(`INSERT INTO agent_capabilities (workspace_id,agent_id,kind,title,tool_names)
+                                VALUES ($1,$2,'can','Notes',ARRAY['save_review_note'])`, [fx.workspaceId, fx.agentId]));
+      const own = await seedPendingRequest(fx);
+      const foreign = await seedPendingRequest(other);
+      const note = (requestId: string, callId: string) => dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, {
+        runtime_run_id: remote, tool_call_id: callId, name: 'save_review_note', arguments: { request_id: requestId, body: 'Duplicate; keep one.' },
+      });
+      // The short ids a model copies from a summary are the common mistake.
+      const short = await note(own.slice(0, 8), 'note-short');
+      expect(short.reply).toMatchObject({ ok: false });
+      expect((short.reply as { content: string }).content).toContain('full request id');
+      for (const [requestId, callId] of [[crypto.randomUUID(), 'note-unknown'], [foreign, 'note-foreign']] as const) {
+        const missing = await note(requestId, callId);
+        expect(missing.reply).toMatchObject({ ok: false });
+        expect((missing.reply as { content: string }).content).toContain('No request');
+      }
+      // A person created this request, so the note saves without a live
+      // entity.updated the agent role may not publish about it.
+      const saved = await note(own, 'note-own');
+      expect(saved.reply).toMatchObject({ ok: true });
+      expect(saved.events.filter((event) => event.kind === 'entity.updated')).toEqual([]);
+      const { rows } = await store.runtimeQuery<{ count: string }>('SELECT count(*)::text AS count FROM request_notes WHERE request_id=$1', [own]);
+      expect(rows[0]?.count).toBe('1');
+    } finally { await store.close(); }
   });
   it('rolls back both the tool write and its reserved trace when the callback fails', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx);

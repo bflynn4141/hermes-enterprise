@@ -23,7 +23,7 @@ import {
   type RuntimeBudgetReservation,
   type ProviderStreamObservation,
 } from './budget.js';
-import { logEvent } from '../keys/redact.js';
+import { logError, logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { PARTNER_PROGRAM_TOOLS, preflightDiscoveryManifest, runtimeSkillManifestsForAgent } from './skills.js';
@@ -445,6 +445,25 @@ async function publish(env: Env, workspaceId: string, result: CallResult): Promi
     if (workspace.length) await env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(workspaceId)).publish(workspace);
   } catch { /* The outbox is authoritative. */ }
 }
+// Refusals the model can act on. The plugin turns any status other than 200,
+// 202 or its retried 409s into one generic "rejected", so these travel as a
+// failed tool result the model can read. `mapping_pending` (retried by the
+// plugin), `runtime_run_inactive` and authentication keep their statuses.
+const MODEL_CORRECTABLE_REFUSALS = new Set(['runtime_tool_forbidden', 'runtime_run_waiting', 'runtime_call_conflict']);
+export function modelVisibleRefusal(error: unknown, toolName: string): CallReply | null {
+  if (error instanceof RouteError) {
+    return MODEL_CORRECTABLE_REFUSALS.has(error.reason)
+      ? { ok: false, content: `${error.message} (${error.reason})` }
+      : null;
+  }
+  // The tool's transaction rolled back, so nothing was saved and a new call is
+  // safe. The error itself stays in the Worker log; the model gets guidance.
+  return {
+    ok: false,
+    content: `The server could not run ${toolName} with these arguments, and nothing was saved. `
+      + 'Check that every id is complete and the arguments match the tool schema, then try once more.',
+  };
+}
 export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const call = parseRuntimeCall(await body(c));
@@ -455,6 +474,13 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
     });
     await publish(c.env, workspaceId, result);
     return c.json(result.reply, 'status' in result.reply ? 202 : 200);
+  } catch (error) {
+    const reply = modelVisibleRefusal(error, call.name);
+    if (!reply) throw error;
+    const fields = { at: 'runtime.tool_refused', workspace_id: workspaceId, agent_id: agentId, tool: call.name };
+    if (error instanceof RouteError) logEvent({ ...fields, reason: error.reason });
+    else logError({ ...fields, reason: 'tool_error', error });
+    return c.json(reply, 200);
   } finally { await db.close(); }
 }
 
