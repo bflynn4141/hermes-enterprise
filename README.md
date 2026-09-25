@@ -1,7 +1,5 @@
 # Hermes Teams Demo
 
-<video src="https://github.com/bflynn4141/hermes-enterprise/raw/main/docs/assets/readme-video.mp4" poster="docs/assets/readme-video-poster.jpg" controls width="100%"></video>
-
 [![Watch the 33-second overview](docs/assets/readme-video-poster.jpg)](docs/assets/readme-video.mp4)
 
 Most teams want to work with Hermes, but they do not know how to fit an agent
