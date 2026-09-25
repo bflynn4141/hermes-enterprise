@@ -1,7 +1,5 @@
 # Hermes Teams Demo
 
-https://github.com/user-attachments/assets/ca65510c-e7b3-47cc-8caf-b80d9a4b95d5
-
 Most teams want to work with Hermes, but they do not know how to fit an agent
 into the way their organization already works. Some teams use one agent. Others
 coordinate several. Hermes Teams gives either group one workspace where it can
