@@ -10,7 +10,7 @@ import shutil
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent
-REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+REVISION = "f97608f178d1ffeca59860195ab7da295f7c8e5f"
 REPOSITORY = "https://github.com/NousResearch/hermes-agent.git"
 
 

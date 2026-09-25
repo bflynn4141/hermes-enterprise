@@ -50,7 +50,7 @@ class CloudControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pathlib.Path(directory, cloud.RUNTIME_READINESS_FILENAME).write_text(json.dumps({
                 "schema_version": 1,
-                "runtime_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
+                "runtime_revision": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
                 "plugin": {"name": "enterprise_bridge", "version": "1.7.0"},
                 "workspace_id": "workspace",
                 "agent_id": "agent",
@@ -69,7 +69,7 @@ class CloudControlTests(unittest.TestCase):
                 status, body = self.control().dispatch({"operation": "readiness"})
         self.assertEqual(status, 200)
         self.assertEqual(body["version"], "1.7.0")
-        self.assertEqual(body["runtime_revision"], "345cd2b057a452236de401d3534b8502a7465e8d")
+        self.assertEqual(body["runtime_revision"], "f97608f178d1ffeca59860195ab7da295f7c8e5f")
         self.assertEqual(body["skills"][0]["name"], "enterprise_bridge:partner-invoice-review")
         self.assertEqual(body["tools"], ["get_partner_handoff_result", "skill_view"])
         self.assertFalse(body["agentcash_enabled"])
@@ -86,7 +86,7 @@ class CloudControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             pathlib.Path(directory, cloud.RUNTIME_READINESS_FILENAME).write_text(json.dumps({
                 "schema_version": 1,
-                "runtime_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
+                "runtime_revision": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
                 "plugin": {
                     "name": "enterprise_bridge", "version": "1.7.0",
                     "revision": "c" * 40, "artifact_digest": "sha256:" + "d" * 64,
@@ -209,7 +209,7 @@ class CloudControlTests(unittest.TestCase):
         self.assertEqual(body["object"], "hermes.api_server.capabilities")
         self.assertEqual(body["enterprise_contract"], {
             "schema_version": 1,
-            "source_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
+            "source_revision": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
             "release_ring": "stable",
             "terminal_errors": {"supported": True, "schema_version": 1},
         })

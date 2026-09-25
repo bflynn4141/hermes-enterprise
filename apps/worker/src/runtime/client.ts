@@ -74,20 +74,54 @@ export interface HermesEnterpriseReadiness {
   nativeCronDisabled: boolean;
 }
 export type HermesTransport = 'native' | 'dashboard_connector';
+// Upstream error bodies are discarded so no prose can leak; only these fixed
+// connector codes are kept, because they tell a person what to do next.
+const KNOWN_API_ERROR_CODES = ['native_readiness_unavailable'] as const;
+export type HermesApiErrorCode = typeof KNOWN_API_ERROR_CODES[number];
 export class HermesApiError extends Error {
-  constructor(readonly status: number, readonly operation: string) {
-    super(`Hermes ${operation} failed (${status})`);
+  constructor(readonly status: number, readonly operation: string, readonly code?: HermesApiErrorCode) {
+    super(`Hermes ${operation} failed (${status}${code ? ` ${code}` : ''})`);
   }
 }
+async function knownErrorCode(response: Response): Promise<HermesApiErrorCode | undefined> {
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    await response.body?.cancel();
+    return undefined;
+  }
+  const text = await response.text().catch(() => '');
+  let body: Record<string, unknown> | null = null;
+  try { body = text.length <= 4096 ? record(JSON.parse(text)) : null; } catch { /* Not a connector error. */ }
+  return KNOWN_API_ERROR_CODES.find((code) => body?.code === code);
+}
+const CAPABILITIES_MESSAGE = 'Hermes does not expose the required durable Runs contract';
+const CONTRACT_MESSAGE = 'Hermes returned data outside the negotiated Enterprise contract';
+export const MANAGED_READINESS_INCOMPLETE = 'managed_runtime_readiness_incomplete';
 export class HermesCapabilitiesError extends Error {
   constructor() {
-    super('Hermes does not expose the required durable Runs contract');
+    super(CAPABILITIES_MESSAGE);
   }
 }
 export class HermesContractError extends Error {
   constructor() {
-    super('Hermes returned data outside the negotiated Enterprise contract');
+    super(CONTRACT_MESSAGE);
   }
+}
+export type HermesFailureKind = 'contract_violation' | 'not_ready' | 'unavailable';
+/**
+ * Workflows rethrows a failed step with its message but not its class, so a
+ * failure is classified by the fixed messages these errors carry.
+ */
+export function hermesFailureKind(error: unknown): HermesFailureKind {
+  const message = error instanceof Error ? error.message : '';
+  if (message === CAPABILITIES_MESSAGE || message === CONTRACT_MESSAGE) return 'contract_violation';
+  if (message === MANAGED_READINESS_INCOMPLETE ||
+      /^Hermes (?:request|steer|stop) failed \(\d{3} native_readiness_unavailable\)$/.test(message)) return 'not_ready';
+  return 'unavailable';
+}
+/** The API failure summary, which carries no upstream prose, or null. */
+export function hermesApiFailureMessage(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : '';
+  return /^Hermes (?:request|steer|stop) failed \(\d{3}(?: [a-z_]+)?\)$/.test(message) ? message : null;
 }
 
 const REQUIRED_RUN_ENDPOINTS = {
@@ -147,8 +181,8 @@ export class HermesClient {
     if (init.body) headers.set('Content-Type', 'application/json');
     const response = await this.send(`${this.baseUrl.replace(/\/$/, '')}${path}`, { ...init, headers, redirect: 'manual', signal: init.signal ?? AbortSignal.timeout(15_000) });
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new HermesApiError(response.status, path.endsWith('/steer') ? 'steer' : path.endsWith('/stop') ? 'stop' : 'request');
+      throw new HermesApiError(response.status, path.endsWith('/steer') ? 'steer' : path.endsWith('/stop') ? 'stop' : 'request',
+        await knownErrorCode(response));
     }
     return response;
   }
@@ -172,8 +206,8 @@ export class HermesClient {
       signal: signal ?? AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      await response.body?.cancel();
-      throw new HermesApiError(response.status, operation === 'steer' ? 'steer' : operation === 'stop' ? 'stop' : 'request');
+      throw new HermesApiError(response.status, operation === 'steer' ? 'steer' : operation === 'stop' ? 'stop' : 'request',
+        await knownErrorCode(response));
     }
     return response;
   }

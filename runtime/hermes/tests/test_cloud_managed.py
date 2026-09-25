@@ -350,7 +350,7 @@ class CloudManagedPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = pathlib.Path(temporary) / "pinned.py"
             source.write_text("PINNED = True\n")
-            fake_hermes = types.SimpleNamespace(__version__="0.21.3")
+            fake_hermes = types.SimpleNamespace(__version__="0.21.5")
             fake_module = types.SimpleNamespace(__file__=str(source))
             digest = hashlib.sha256(source.read_bytes()).hexdigest()
 

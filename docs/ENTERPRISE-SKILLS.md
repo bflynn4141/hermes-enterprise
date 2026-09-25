@@ -59,7 +59,7 @@ The runtime fetches `GET /internal/runtime/w/:workspace/agents/:agent/skills` wi
 The dedicated enterprise profile removes Hermes's general bundled-skill catalog on startup and marks the profile as managed. Only plugin-packaged enterprise skills are available. The runtime exposes Hermes's read-only `skill_view` only for the exact assigned package so the model can re-read it; the pinned 0.21.3 release has no `skills.auto_load`, and the launcher and Cloud validator reject that key. `skills_list`, `skill_manage`, native skill discovery, background review and automatic skill creation remain disabled. The plugin vetoes any attempt to view another skill or a linked file. This prevents a bundled or agent-authored procedure from expanding the governed tool boundary.
 
 New multi-party admission requires exact native readiness: runtime revision
-`345cd2b057a452236de401d3534b8502a7465e8d`, plugin/version `1.7.0`, one current
+`f97608f178d1ffeca59860195ab7da295f7c8e5f`, plugin/version `1.7.0`, one current
 skill with artifact and content digests equal to the assignment, the exact tool
 inventory, and native cron disabled. Partnerships 1.8 requires AgentCash and a
 wallet; Finance 1.0.1 requires both absent. Compatibility readiness keeps old

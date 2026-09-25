@@ -70,7 +70,7 @@ SSE_HEADERS = {
 }
 CONTRACT_VERSION = 1
 TERMINAL_ERROR_SCHEMA_VERSION = 1
-SOURCE_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+SOURCE_REVISION = "f97608f178d1ffeca59860195ab7da295f7c8e5f"
 TERMINAL_ERROR_CODES = {
     "provider_auth": ("auth", False, "provider", "The selected model connection needs attention."),
     "provider_quota": ("quota", False, "provider", "The selected model account has no available quota."),

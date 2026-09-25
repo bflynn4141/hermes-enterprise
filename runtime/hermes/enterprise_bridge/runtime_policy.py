@@ -17,7 +17,7 @@ import urllib.request
 from .packages import PLUGIN_NAME, PLUGIN_VERSION, packaged_skills, sha256_file
 
 
-RUNTIME_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+RUNTIME_REVISION = "f97608f178d1ffeca59860195ab7da295f7c8e5f"
 RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
 MANAGED_PROFILE_MARKER_FILENAME = "enterprise-cloud-managed.json"
 EXPECTED_PLUGIN_SOURCES = frozenset({

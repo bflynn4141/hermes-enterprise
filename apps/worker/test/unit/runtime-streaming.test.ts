@@ -58,7 +58,7 @@ class StreamingClient extends HermesClient {
       retentionSeconds: 86400,
       contractVersion: 1 as const,
       terminalErrorSchemaVersion: 1 as const,
-      sourceRevision: '345cd2b057a452236de401d3534b8502a7465e8d',
+      sourceRevision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
       releaseRing: 'stable' as const,
     });
   }
