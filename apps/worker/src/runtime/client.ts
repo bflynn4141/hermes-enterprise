@@ -84,7 +84,8 @@ export class HermesApiError extends Error {
   }
 }
 async function knownErrorCode(response: Response): Promise<HermesApiErrorCode | undefined> {
-  if (!response.headers.get('content-type')?.includes('application/json')) {
+  const declaredLength = Number(response.headers.get('content-length') ?? 0);
+  if (!response.headers.get('content-type')?.includes('application/json') || declaredLength > 4096) {
     await response.body?.cancel();
     return undefined;
   }
