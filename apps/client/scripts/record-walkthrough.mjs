@@ -63,8 +63,11 @@ function encoder() {
   mkdirSync(dirname(out), { recursive: true });
   const ffmpeg = spawn('ffmpeg', [
     '-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-i', '-',
-    '-vf', `scale=${outWidth}:${outHeight}:flags=lanczos`,
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out,
+    // Screencast JPEGs are full range; QuickTime and phones expect TV-range BT.709.
+    '-vf', `scale=${outWidth}:${outHeight}:flags=lanczos:in_range=full:out_range=tv,format=yuv420p`,
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
+    '-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-tag:v', 'avc1',
+    '-movflags', '+faststart', out,
   ], { stdio: ['pipe', 'inherit', 'inherit'] });
   const done = new Promise((resolve, reject) => ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))));
   let started = null;
