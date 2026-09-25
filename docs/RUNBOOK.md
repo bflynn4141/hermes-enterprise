@@ -527,6 +527,34 @@ Roll out a runtime change in this order:
    new launcher in the `stable` ring. Roll back by restoring the previous
    launcher and binding together; never relabel an unverified process.
 
+### Re-pinning managed Hermes Cloud instances
+
+Hermes Cloud moves an instance to its latest image when the instance restarts,
+and the management API can only move forward (`update_image`). The managed
+plugin requires one exact Hermes version, so a Cloud release refuses every run
+until the repo is re-pinned. The symptom is a 503 `native_readiness_unavailable`
+on submit while capabilities still pass. Check `/api/status` on each instance
+(it needs no login) to see the version it runs.
+
+After the re-pin merges, update each instance from a dashboard session:
+
+1. Install the plugin at the merge commit:
+   `POST /api/dashboard/agent-plugins/install` with
+   `{identifier: "https://github.com/bflynn4141/hermes-enterprise.git#runtime/hermes/enterprise_bridge", ref: <merge sha>, enable: true, force: true}`.
+2. Write `HERMES_ENTERPRISE_SOURCE_REVISION`, `HERMES_ENTERPRISE_PLUGIN_REVISION`
+   and `HERMES_ENTERPRISE_PLUGIN_SHA256` with `PUT /api/env {key, value}`.
+   The management API's `update_env` accepts these keys, but the instance's
+   `.env` values win, so it changes nothing on its own.
+3. Diff `toolsets.TOOLSETS` and the config defaults between the two releases.
+   Add new toolsets to `agent.disabled_toolsets`, and set any governed key
+   whose default changed explicitly, through `GET`/`PUT /api/config/raw`.
+   Compare the file line by line before and after the write. (0.21.5 added
+   `a2a`, `setup` and `stt`, and flipped `gateway.multiplex_profiles` to true.)
+4. Stop and then start the instance through the management API. Its `restart`
+   call times out while the stop continues, and the start is lost. Readiness
+   is confirmed only when `/api/logs?file=agent` shows "Cloud-managed
+   Enterprise runtime ready".
+
 Create alerts from the `hermes.stream` and `hermes.terminal_failure` Analytics
 Engine series. Page immediately for any `contract_violation`/unknown terminal
 failure or a sustained inability to admit the stable ring. Warn when
