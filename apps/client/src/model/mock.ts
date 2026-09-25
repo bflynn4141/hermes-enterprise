@@ -658,6 +658,8 @@ export function createMockBackend(input: MockOptions = {}) {
   const contextFields: { id: string; field: string; label: string; value: string | null; scope: 'reply' | 'future' | null; version: number }[] = [
     { id: 'destination', field: 'destination', label: 'Feedback destination', value: null, scope: null, version: 1 },
   ];
+  // The walkthrough's agents have no missing context and no earlier traces.
+  if (story) contextFields.splice(0);
 
   const instructions: InstructionVersion[] = empty
     ? [{ id: mockUuid(70), state: 'current' as const, text: 'Screen applications against the partner criteria and show the evidence you used.', before: null, provenance: null, created_at: iso(-9000), version: 1 }]
@@ -764,7 +766,8 @@ export function createMockBackend(input: MockOptions = {}) {
     can_retry: false, can_run_now: empty || Boolean(options.activity), can_cancel: false,
   };
   if (recoveryView.state === 'waiting') recoveryView.message = 'Waiting for the current request to be reviewed.';
-  if (story) recoveryView = { ...recoveryView, state: 'idle', run_id: null, session_id: null, attempt: null, can_run_now: true };
+  if (story) traces.splice(0);
+  if (story) recoveryView = { ...recoveryView, state: 'idle', run_id: null, session_id: null, attempt: null, can_run_now: false, message: 'No eligible pending work right now.' };
   if (options.recovery) {
     recoveryView = {
       ...recoveryView,
@@ -1120,8 +1123,8 @@ export function createMockBackend(input: MockOptions = {}) {
       recoveryView = {
         ...recoveryView, state: recoveryState, run_id: event.payload.run_id, session_id: event.session_id,
         attempt: event.payload.attempt, can_retry: recoveryState === 'retryable' || recoveryState === 'stopped',
-        can_run_now: recoveryState === 'idle',
-        message: recoveryState === 'working' ? 'Iris is working on the current task.' : recoveryState === 'waiting' ? 'Waiting for your input.' : recoveryState === 'idle' ? 'No eligible pending work right now.' : 'The task needs attention.',
+        can_run_now: recoveryState === 'idle' && !story,
+        message: recoveryState === 'working' ? `${workflowRole === 'finance' ? 'Ledger' : partnershipsAgentName} is working on the current task.` : recoveryState === 'waiting' ? 'Waiting for your input.' : recoveryState === 'idle' ? 'No eligible pending work right now.' : 'The task needs attention.',
       };
     }
     for (const listener of listeners) listener(event);
@@ -1341,6 +1344,7 @@ export function createMockBackend(input: MockOptions = {}) {
           recovery: null,
         });
       }
+      if (!rest && method === 'GET' && row) return json(row);
       if (rest === '/messages') return page(url.searchParams.get('before') ? [] : messages[sessionId] ?? []);
       if (rest === '/turns') {
         if (!hasVerifiedKey) return fail(409, 'no_verified_key', 'Connect Nous Portal in Settings to start');
@@ -1349,18 +1353,23 @@ export function createMockBackend(input: MockOptions = {}) {
           story = turn.next;
           writeWalkthroughStory(story);
           const pending = new Map(turn.requests.map((item) => [item.id, item]));
-          for (const { event, delayMs } of walkthroughRunEvents(walkthroughCtx, sessionId, turn, head + 1n, String(body.client_turn_id ?? 'walkthrough'))) {
+          const transcript = (messages[sessionId] ??= []);
+          const played = walkthroughRunEvents(walkthroughCtx, sessionId, turn, {
+            firstId: head + 1n, clientTurnId: String(body.client_turn_id ?? 'walkthrough'), text: String(body.text ?? ''), seq: transcript.length + 1,
+          });
+          transcript.push(played.messages[0]);
+          for (const { event, delayMs } of played.events) {
             setTimeout(() => {
+              if (event.kind === 'message.final') transcript.push(played.messages[1]);
+              // The session row changes before its update event is heard.
+              if (event.kind === 'entity.updated' && row) {
+                if (turn.title) row.title = turn.title;
+                row.version += 1;
+              }
               // A proposed request exists from the moment its event says so.
               const created = event.kind === 'request.created' ? pending.get(event.payload.request_id) : undefined;
               if (created && !requests.some((item) => item.id === created.id)) requests.push(created);
               publish(event);
-              if (event.kind === 'run.status' && event.payload.status === 'completed' && row) {
-                if (turn.title) row.title = turn.title;
-                row.status = 'Needs review';
-                row.version += 1;
-                publish({ id: (head + 1n).toString(), workspace_id: WS, session_id: null, kind: 'entity.updated', schema_version: SCHEMA_VERSION, trace_id: 'walkthrough-title', at: new Date().toISOString(), payload: { entity_type: 'session', entity_id: sessionId, ref: null, version: row.version } } as StreamEvent);
-              }
             }, delayMs);
           }
           return json({ run_id: turn.runId, status: 'working', attempt: 1 }, 201);

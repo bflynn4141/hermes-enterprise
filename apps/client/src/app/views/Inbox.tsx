@@ -693,7 +693,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
                 <div className="row">
                   <h2 className="section-title" id="sources-heading">Sources used</h2>
                   <span className="grow" />
-                  <span className="meta">{isDemo ? 'Illustrative' : 'Cited by Iris'}</span>
+                  <span className="meta">{isDemo ? 'Illustrative' : `Cited by ${screeningAgent}`}</span>
                 </div>
                 <div className="source-grid" role="list">
                   {sources.map((item) => (

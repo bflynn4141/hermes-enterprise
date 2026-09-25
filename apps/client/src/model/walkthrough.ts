@@ -60,7 +60,8 @@ export function resetWalkthroughStory(): void {
 /** The account menu's person switch: save who is next, then reload as them. */
 export function switchWalkthroughPerson(person: WalkthroughPerson): void {
   writeWalkthroughStory({ ...readWalkthroughStory(), person });
-  window.location.reload();
+  // Start from the app's home, not the other person's open request.
+  window.location.assign(`${window.location.origin}/?walkthrough=1`);
 }
 
 export const WALKTHROUGH_PEOPLE: readonly { person: WalkthroughPerson; name: string; role: string }[] = [
@@ -168,6 +169,9 @@ function mayaSeed(ctx: WalkthroughContext, story: WalkthroughStory, ids: typeof 
     ? candidates(ctx, story).map((candidate) => candidateRequest(ctx, candidate, story))
     : [];
   requests.push(renewalRequest(ctx));
+  // The approved agreement has no Finance-only audience, so Partnerships can
+  // open it too; that is how Maya picks it up for signature.
+  if (story.agreementApproved) requests.push(agreementRequest(ctx, story));
   return {
     sessions: [
       session(ids.scoutSession, ctx.scoutAgentId, story.shortlist ? 'November workshop partners' : 'New session', story.agreementApproved ? 'Agreement ready' : story.handoff ? 'With Finance' : story.shortlist ? 'Needs review' : 'Empty', story.agreementApproved?.at ?? story.handoff?.at ?? story.shortlist?.at ?? ctx.now()),
@@ -588,19 +592,20 @@ export function walkthroughDocumentFor(ctx: WalkthroughContext, requestId: strin
 }
 
 /**
- * One run as timed events: the tool calls tick through, then the reply
- * streams in a few words at a time, then it finalizes. `delayMs` is when each
- * event is published, relative to the turn being accepted.
+ * One run as timed events: the person's turn is echoed, the tool calls tick
+ * through, the reply streams a few words at a time, then it finalizes.
+ * `delayMs` is when each event is published, relative to the turn being
+ * accepted. The two messages come back too, so the backend keeps them the way
+ * the Worker does and a refetch finds the same transcript.
  */
 export function walkthroughRunEvents(
   ctx: WalkthroughContext,
   sessionId: string,
   turn: WalkthroughTurn,
-  firstId: bigint,
-  clientTurnId: string,
-): { event: StreamEvent; delayMs: number }[] {
+  input: { firstId: bigint; clientTurnId: string; text: string; seq: number },
+): { events: { event: StreamEvent; delayMs: number }[]; messages: Record<string, unknown>[] } {
   const out: { event: StreamEvent; delayMs: number }[] = [];
-  let id = firstId;
+  let id = input.firstId;
   let clock = 0;
   const started = Date.now();
   const push = (kind: string, payload: unknown, delayMs: number, sessionScoped = true): void => {
@@ -616,11 +621,14 @@ export function walkthroughRunEvents(
     id += 1n;
   };
   const { runId, reply } = turn;
-  const messageId = mockUuid(8_400 + Number(firstId % 500n));
+  const userMessageId = mockUuid(8_500 + input.seq);
+  const messageId = mockUuid(8_600 + input.seq);
+  const userMessage = { id: userMessageId, session_id: sessionId, seq: input.seq, role: 'user', kind: null, text: input.text, blocks: [], status: 'complete', run_id: null, at: new Date(started).toISOString() };
+  push('message.appended', { message_id: userMessageId, session_id: sessionId, seq: input.seq, role: 'user', kind: null, text: input.text, blocks: [], status: 'complete', run_id: null, client_turn_id: input.clientTurnId }, 50);
   push('run.started', {
-    run_id: runId, session_id: sessionId, attempt: 1, engine_version: 1, client_turn_id: clientTurnId,
+    run_id: runId, session_id: sessionId, attempt: 1, engine_version: 1, client_turn_id: input.clientTurnId,
     mode: 'work', model_id: 'nous:anthropic/claude-sonnet-5', effort: 'medium', title: turn.title ?? null, steps: [],
-  }, 250);
+  }, 200);
   push('run.status', { run_id: runId, attempt: 1, status: 'working' }, 700);
   reply.tools.forEach((tool, index) => {
     const stepId = `tool-${index}`;
@@ -639,8 +647,13 @@ export function walkthroughRunEvents(
     text: reply.text, blocks: reply.blocks, worked_ms: reply.workedMs,
   }, 300);
   push('run.status', { run_id: runId, attempt: 1, status: 'completed', active_ms: reply.workedMs }, 100);
+  if (turn.title) push('entity.updated', { entity_type: 'session', entity_id: sessionId, ref: null, version: null }, 50, false);
   for (const request of turn.requests) {
     push('request.created', { request_id: request.id, kind: request.kind, status: request.status, label: request.label, run_id: runId, session_id: sessionId }, 250, false);
   }
-  return out;
+  const agentMessage = {
+    id: messageId, session_id: sessionId, seq: input.seq + 1, role: 'iris', kind: null, text: reply.text, blocks: reply.blocks,
+    status: 'complete', run_id: runId, worked_ms: reply.workedMs, steps: reply.tools.map((tool) => tool.name), at: new Date(started + clock).toISOString(),
+  };
+  return { events: out, messages: [userMessage, agentMessage] };
 }
