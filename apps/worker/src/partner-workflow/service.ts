@@ -28,13 +28,9 @@ import {
   PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS,
 } from '../enterprise-skills/role-instructions.js';
 import { ensurePartnerInvoicesHandoff } from '../handoffs/service.js';
+import { PartnerWorkflowError } from './errors.js';
 
-export class PartnerWorkflowError extends Error {
-  constructor(readonly reason: string, message: string) {
-    super(message);
-    this.name = 'PartnerWorkflowError';
-  }
-}
+export { PartnerWorkflowError };
 
 const DEFAULT_PARTNERSHIPS_CONFIG = {
   source: 'github',

@@ -8,7 +8,7 @@ import {
 } from '@hermes/shared';
 import type { QueryResultRow } from 'pg';
 import type { Tx } from '../db/client.js';
-import { PartnerWorkflowError } from '../partner-workflow/service.js';
+import { PartnerWorkflowError } from '../partner-workflow/errors.js';
 import {
   PARTNER_INVOICE_REVIEW_DEFINITION,
   PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
