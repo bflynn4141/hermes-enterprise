@@ -12,6 +12,7 @@ dated evidence and proposals that may no longer describe current behavior.
 | [Conventions](CONVENTIONS.md) | Directory ownership, naming, migrations, tests, and dependency rules |
 | [Decision index](DECISIONS.md) | Split, searchable record of consequential implementation choices |
 | [Runbook](RUNBOOK.md) | Deployment, health, incident, restore, and operator procedures |
+| [Pull request previews](PREVIEWS.md) | A passcode-locked running copy of the app for one pull request |
 | [Security review](SECURITY-REVIEW.md) | Threat model, controls, and security findings |
 | [Contributor guide](../CONTRIBUTING.md) | Setup, pull request expectations, and required checks |
 

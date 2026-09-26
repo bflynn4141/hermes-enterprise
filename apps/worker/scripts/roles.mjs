@@ -31,12 +31,23 @@ try {
       process.stdout.write(`role ${role} already exists\n`);
     }
     // None of the three may bypass row-level security, including owner: the
-    // tables are FORCEd, and a BYPASSRLS role would undo that quietly.
-    await client.query(`ALTER ROLE ${ident(role)} NOBYPASSRLS NOSUPERUSER`);
+    // tables are FORCEd, and a BYPASSRLS role would undo that quietly. Only a
+    // superuser may run this ALTER, and a hosted Postgres such as Neon has
+    // none, so it runs only when a role actually holds one of the attributes.
+    // A freshly created role never does.
+    const { rows } = await client.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1', [role]);
+    if (rows[0]?.rolsuper || rows[0]?.rolbypassrls) {
+      await client.query(`ALTER ROLE ${ident(role)} NOBYPASSRLS NOSUPERUSER`);
+    }
   }
 
   // `owner` owns the schema so that migrations can create objects in it; `app`
   // and `agent` get USAGE only, and their table grants come from 0004.
+  // Handing the schema over requires being able to SET ROLE to the new owner.
+  // A superuser always can; a hosted database's admin role (Neon's) must be
+  // made a member first, which its CREATEROLE lets it do for a role it made.
+  const { rows: self } = await client.query('SELECT rolsuper FROM pg_roles WHERE rolname = current_user');
+  if (!self[0]?.rolsuper) await client.query('GRANT "owner" TO CURRENT_USER');
   await client.query('ALTER SCHEMA public OWNER TO "owner"');
   await client.query('GRANT ALL ON SCHEMA public TO "owner"');
   await client.query('GRANT USAGE ON SCHEMA public TO "app", "agent"');
