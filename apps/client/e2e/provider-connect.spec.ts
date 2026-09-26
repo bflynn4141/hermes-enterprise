@@ -46,7 +46,7 @@ test.describe('Nous Portal connection', () => {
     await connect.click();
 
     await expect(dialog.getByText('Nous Portal connected')).toBeVisible();
-    await expect(dialog.getByText('3 models are ready for Iris.')).toBeVisible();
+    await expect(dialog.getByText('3 models are ready for your agents.')).toBeVisible();
     await dialog.getByRole('button', { name: 'Done' }).click();
     await expect(dialog).toHaveCount(0);
 
@@ -82,7 +82,7 @@ test.describe('Nous Portal connection', () => {
     const app = await selectModelProviders(page);
 
     await expect(app.getByText('Provider connection details are protected')).toBeVisible();
-    await expect(app.getByText(/Iris can keep using a saved Nous Portal connection/)).toBeVisible();
+    await expect(app.getByText(/Your agents can keep using a saved Nous Portal connection/)).toBeVisible();
     await expect(app.getByRole('button', { name: 'Sign in to manage' })).toBeVisible();
     await expect(app.getByRole('button', { name: 'Connect Nous Portal' })).toHaveCount(0);
     await expect(app.getByText('Connect Nous Portal to enable models')).toHaveCount(0);

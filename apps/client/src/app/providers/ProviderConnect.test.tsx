@@ -58,7 +58,7 @@ describe('ProviderConnect', () => {
     const html = render({ status: { kind: 'connected', modelCount: 342 } });
     expect(html).toContain('role="status"');
     expect(html).toContain('Nous Portal connected');
-    expect(html).toContain('342 models are ready for Iris.');
+    expect(html).toContain('342 models are ready for your agents.');
     expect(html).toContain('>Done</button>');
   });
 

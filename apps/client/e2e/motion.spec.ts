@@ -77,9 +77,9 @@ test('an empty conversation offers starters that fill the composer without sendi
   await expect(chips).toHaveCount(3);
   await page.screenshot(shot('empty-chat-chips'));
 
-  await chips.filter({ hasText: 'Summarize what Iris did this week' }).click();
+  await chips.filter({ hasText: 'Summarize what you did this week' }).click();
   const input = page.getByRole('textbox', { name: 'Message Iris' });
-  await expect(input).toHaveValue('Summarize what Iris did this week');
+  await expect(input).toHaveValue('Summarize what you did this week');
   await expect(input).toBeFocused();
   await expect(welcome).toBeVisible();
   await expect(page.locator('.msg-user')).toHaveCount(0);

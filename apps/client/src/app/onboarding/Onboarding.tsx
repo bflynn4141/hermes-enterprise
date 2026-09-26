@@ -183,7 +183,7 @@ export function Onboarding({ route, token, fetchImpl }: { route: 'create-workspa
             <div className="onboarding-approval-flow" aria-label="How an approval works">
               <div className="onboarding-approval-step">
                 <span className="onboarding-approval-icon"><Glass name="iris" size={34} /></span>
-                <strong>Iris prepares</strong>
+                <strong>{agent.trim() || 'Your agent'} prepares</strong>
               </div>
               <Icon name="arrow" size={18} className="onboarding-flow-arrow" />
               <div className="onboarding-approval-step">

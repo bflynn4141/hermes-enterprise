@@ -11,7 +11,7 @@ export function invitationFailureMessage(error: unknown): string {
     return 'Could not record the invitation. Check your connection and try again.';
   }
   const message = error.reason === 'iris_capacity_unavailable'
-    ? 'No verified Iris profile is available. Add ready capacity, then try again.'
+    ? 'No verified agent profile is available. Add ready capacity, then try again.'
     : error.reason === 'member_setup_unavailable'
       ? 'Background member setup is paused right now. The existing setup was not changed.'
     : error.reason === 'member_setup_role_unavailable'
@@ -68,7 +68,7 @@ export function invitationDeliveryMessage(invitation: InvitationEntity): string 
     : invitation.delivery_reason === 'workos_invitation_payload_invalid'
       ? 'Email delivery needs Admin attention.'
       : invitation.delivery_reason === 'iris_capacity_reservation_missing'
-        ? 'Reserved Iris capacity is missing. Add capacity, then resend.'
+        ? 'Reserved agent capacity is missing. Add capacity, then resend.'
         : invitation.delivery_reason === 'workos_invitation_delivery_not_configured'
           ? 'Email delivery is waiting for WorkOS configuration.'
           : invitation.delivery_reason === 'workos_invitation_delivery_outcome_unknown'
