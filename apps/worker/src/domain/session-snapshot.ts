@@ -10,7 +10,7 @@ import {
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { runtimeLocation } from '../runtime/config.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { VISIBLE } from './session-visibility.js';
 
 export function projectSessionMessage(row: Record<string, unknown>): Message {

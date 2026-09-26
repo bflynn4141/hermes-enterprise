@@ -22,7 +22,7 @@ import {
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
 import { queueApprovedEmail } from '../outbound-email/outbox.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NO_EXECUTOR = 'No supported executor is configured for this approved consequence.';
@@ -1283,6 +1283,112 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
   }
 }
 
+// ---------------------------------------------------------------------------
+// The receipt a typed decision leaves in the originating chat
+// ---------------------------------------------------------------------------
+
+const RECEIPT_SUBJECT: Record<ApprovalPayload['approval_type'], string> = {
+  run_plan: 'the plan',
+  team_commitment: 'the task',
+  access: 'the access request',
+  communication: 'the message',
+  shared_learning: 'the publication',
+  deliverable: 'the result',
+  data_disclosure: 'the disclosure',
+  record_change: 'the record change',
+  exception: 'the exception',
+  agent_governance: 'the agent configuration',
+};
+
+type ReceiptDecision = 'approved' | 'declined' | 'changes_requested';
+
+/** `client_id` of the one receipt row a final typed decision writes. */
+export const approvalReceiptClientId = (requestId: string, revision: number, decision: ReceiptDecision): string =>
+  `receipt:approval:${requestId}:${revision}:${decision}`;
+
+const minorMoney = (minor: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(minor / 100);
+  } catch {
+    return `${(minor / 100).toFixed(2)} ${currency}`;
+  }
+};
+
+/** The two lines; every sentence names what did *not* happen yet, as `runs/receipt.ts` does. */
+export function approvalReceiptText(input: {
+  actor: string;
+  payload: ApprovalPayload;
+  decision: ReceiptDecision;
+  revision: number;
+}): { title: string; subtitle: string } {
+  const subject = RECEIPT_SUBJECT[input.payload.approval_type];
+  const revision = `authorization v${input.revision}`;
+  if (input.decision === 'declined') {
+    return { title: `${input.actor} declined ${subject} in Inbox`, subtitle: `Declined · ${revision}. Nothing was started or sent.` };
+  }
+  if (input.decision === 'changes_requested') {
+    return { title: `${input.actor} requested changes to ${subject} in Inbox`, subtitle: `Changes requested · ${revision}. A revised proposal needs a fresh review before anything starts.` };
+  }
+  if (input.payload.approval_type === 'run_plan') {
+    const budget = input.payload.details.budget;
+    return {
+      title: `${input.actor} approved ${subject} in Inbox`,
+      subtitle: `Approved within a ${minorMoney(budget.cap_minor, budget.currency)} cap · ${revision}. Work starts only after the admission checks pass.`,
+    };
+  }
+  return { title: `${input.actor} approved ${subject} in Inbox`, subtitle: `Approved · ${revision}. No external effect ran; any follow-on work is admitted separately.` };
+}
+
+/**
+ * One `system`/`receipt` message in the session the proposal came from, so the
+ * decision closes the loop where the person asked for it (legacy decisions do
+ * the same through the `receipt` job). Keyed on request, revision and outcome
+ * under UNIQUE(session_id, client_id): a replayed or retried decision writes
+ * nothing the second time, because a duplicated receipt reads as a second
+ * decision. The block carries only the request id; the client renders the
+ * request's *current* state from its cache, never a snapshot.
+ */
+async function writeApprovalReceipt(
+  work: ApprovalWork,
+  row: ApprovalRow,
+  payload: ApprovalPayload,
+  decision: ReceiptDecision,
+  actor: string,
+): Promise<void> {
+  const sessionId = row.source_session_id;
+  if (!sessionId) return;
+  const clientId = approvalReceiptClientId(row.request_id, row.authorization_revision, decision);
+  // Check before `next_seq` moves, so a replay leaves no gap in the transcript.
+  const existing = await work.tx.query(`SELECT 1 FROM messages WHERE session_id = $1 AND client_id = $2`, [sessionId, clientId]);
+  if (existing.rowCount && existing.rowCount > 0) return;
+  const text = approvalReceiptText({ actor, payload, decision, revision: row.authorization_revision });
+  const blocks = [{ type: 'receipt', title: text.title, subtitle: text.subtitle, requestId: row.request_id }];
+  const seqRow = await work.tx.query<{ seq: number }>(
+    `UPDATE sessions SET next_seq = next_seq + 1, last_activity_at = now()
+      WHERE workspace_id = $1 AND id = $2 RETURNING next_seq - 1 AS seq`,
+    [work.workspaceId, sessionId],
+  );
+  const seq = seqRow.rows[0]?.seq;
+  if (seq === undefined) return;
+  const inserted = await work.tx.query<{ id: string }>(
+    `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status, client_id)
+     VALUES ($1, $2, $3, 'system', 'receipt', $4, $5::jsonb, 'complete', $6)
+     ON CONFLICT (session_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [work.workspaceId, sessionId, seq, text.title, JSON.stringify(blocks), clientId],
+  );
+  const id = inserted.rows[0]?.id;
+  if (!id) return;
+  work.jobs.push(...await publishEvents(work.tx, work.workspaceId, [{
+    kind: 'message.appended',
+    sessionId,
+    payload: {
+      message_id: id, session_id: sessionId, seq, role: 'system', kind: 'receipt',
+      text: text.title, blocks, status: 'complete', run_id: null,
+    },
+  }]));
+}
+
 export async function decideApproval(context: ApprovalHumanContext, requestId: string, rawInput: unknown): Promise<{ view: ApprovalView; duplicate: boolean }> {
   const input: DecideApprovalInput = decideApprovalInputSchema.parse(rawInput);
   const inputHash = await commandHash('decision', input);
@@ -1334,6 +1440,7 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
   if (input.decision !== 'approve') {
     const status = input.decision === 'decline' ? 'declined' : 'changes_requested';
     await context.tx.query(`UPDATE approval_requests SET status = $2, work_status = 'cancelled', work_reason = $3 WHERE request_id = $1`, [requestId, status, status === 'declined' ? 'The proposal was declined.' : 'A material revision is required.']);
+    await writeApprovalReceipt(context, row, payload, status, reviewer.name);
     await context.tx.query(`UPDATE approval_revisions SET status = $3 WHERE request_id = $1 AND revision = $2`, [requestId, row.authorization_revision, status]);
     await context.tx.query(`UPDATE requests SET status = $2 WHERE id = $1`, [requestId, status]);
     await context.tx.query(
@@ -1359,7 +1466,10 @@ export async function decideApproval(context: ApprovalHumanContext, requestId: s
     const refreshedVotes = await votesFor(context.tx, row);
     const refreshed = progress(row, payload, members, refreshedVotes, assignments);
     const allApproved = payload.policy.steps.every((policyStep) => (refreshed.validApprovals.get(policyStep.id)?.size ?? 0) >= policyStep.quorum);
-    if (allApproved) await finalizeApproval(context, row, payload);
+    if (allApproved) {
+      await finalizeApproval(context, row, payload);
+      await writeApprovalReceipt(context, row, payload, 'approved', reviewer.name);
+    }
   }
   await publishRequestChanged(context, requestId);
   return { view: await loadApprovalView(context.tx, requestId, context.userId), duplicate: false };

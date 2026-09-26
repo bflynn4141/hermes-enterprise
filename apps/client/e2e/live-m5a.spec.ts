@@ -53,14 +53,12 @@ async function openShell(page: Page, workspaceId: string): Promise<void> {
 
 /**
  * Workspace controls moved out of Settings and under the Admin entry (PR92,
- * then grouped in PR95 and PR96): a group tab strip, then a page index for the
- * group, then the page. Personal Settings kept only what belongs to the person.
+ * then grouped in PR95/PR96, then a single sidebar in place of stacked tabs).
  */
-async function openAdminPage(page: Page, group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
+async function openAdminPage(page: Page, _group: 'Organization' | 'Agents' | 'Connections' | 'Intelligence', item: string): Promise<void> {
   await page.getByRole('button', { name: 'Admin', exact: true }).first().click();
   const app = pane(page);
-  await app.getByRole('tab', { name: group }).click();
-  await app.getByRole('navigation', { name: `${group} settings pages` }).getByRole('button', { name: item, exact: true }).click();
+  await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: item, exact: true }).click();
 }
 
 /** A turn through the real route, so the run is a real run. */
@@ -121,10 +119,10 @@ test('M1 · the trace detail shows the run\'s steps, its tool call and the argum
   const app = pane(page);
   // The detail heading is the session, the runtime and the mode; the model
   // sits on the fact line beneath it.
-  await expect(app.getByRole('heading', { name: /M1 trace · .* · work/ })).toBeVisible({ timeout: 15_000 });
-  await expect(app.getByText('nous:anthropic/claude-sonnet-5').first()).toBeVisible();
+  await expect(app.getByRole('heading', { name: /M1 trace · Work mode/ })).toBeVisible({ timeout: 15_000 });
+  await expect(app.getByText(/Claude Sonnet 5|claude-sonnet-5/).first()).toBeVisible();
   await expect(app.getByText('Steps', { exact: true })).toBeVisible();
-  await expect(app.getByText('propose_request').first()).toBeVisible();
+  await expect(app.getByText('Prepared a review request').first()).toBeVisible();
 
   await app.getByRole('button', { name: 'Show arguments and result' }).first().click();
   await expect(app.getByText('propose_request.arguments.json')).toBeVisible();

@@ -146,3 +146,11 @@ HERMES_ENTERPRISE_PUBLIC_URL="https://staging.example.com"
 # Exact values produced and reviewed with the installed enterprise_bridge build.
 HERMES_ENTERPRISE_PLUGIN_REVISION=""
 HERMES_ENTERPRISE_PLUGIN_SHA256=""
+
+# The public request-access page (`/demo`). The passcode is the one secret; the
+# other two are plain vars in wrangler.jsonc for staging and may be overridden
+# here for a local run. Empty means the route answers
+# `demo_access_not_configured` and invites nobody.
+DEMO_ACCESS_PASSCODE=""
+DEMO_ACCESS_WORKSPACE_ID=
+DEMO_ACCESS_ALLOWED_DOMAINS=

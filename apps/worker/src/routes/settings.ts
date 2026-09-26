@@ -37,7 +37,8 @@ import { checkCaps } from '../model/usage.js';
 import { DELETION_SLEEP_DAYS } from '../workflows-long/workspace-deletion.js';
 import { workspaceDeletionInstanceId } from '../workflows-long/index.js';
 import { logEvent } from '../keys/redact.js';
-import { RouteError, inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 
 // ---------------------------------------------------------------------------
 // The copy this route is the source of truth for

@@ -28,7 +28,8 @@ import {
   proposePartnerEngagementAuthorization,
   submitPartnerInvoiceIntake,
 } from '../partner-workflow/v2.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 
 type AdmissionRole = 'partnerships' | 'finance';
 const ADMISSION_SKILL_KEYS = {

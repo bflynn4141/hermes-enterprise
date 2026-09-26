@@ -24,7 +24,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, 'Agents').click();
       await app(page).getByRole('tab', { name: 'Context' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Program sources')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'What Iris knows' })).toBeVisible()),
   },
   {
     key: 'skills',
@@ -32,7 +32,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, 'Agents').click();
       await app(page).getByRole('tab', { name: 'Skills' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Screening instructions')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Instructions for Iris' })).toBeVisible()),
   },
   {
     key: 'traces',
@@ -72,19 +72,16 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, /^Inbox/).click();
       await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Services delivered')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: /^Invoice from/ })).toBeVisible()),
   },
   {
     key: 'receipt',
     go: async (page) => {
       await nav(page, /^Inbox/).click();
       await app(page).getByRole('list', { name: 'Requests needing review' }).getByRole('listitem').nth(2).click();
-      await app(page).getByRole('button', { name: 'Review payment' }).click();
-      await app(page).getByRole('checkbox', { name: /authorize this payment instruction/i }).check();
-      await app(page).getByRole('button', { name: 'Review authorization' }).click();
-      await app(page).getByRole('button', { name: 'Authorize payment' }).click();
+      await app(page).getByRole('button', { name: 'Approve invoice draft' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Provider actions')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Saved in Library' })).toBeVisible()),
   },
   {
     key: 'history',
@@ -123,7 +120,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, 'Library').click();
       await app(page).getByRole('tab', { name: 'Shared Intelligence' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText(/Not available yet/).first()).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Turn completed work into reviewed reference material' })).toBeVisible()),
   },
   {
     key: 'settings-notifications',
@@ -131,28 +128,28 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
     ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Settings' })).toBeVisible()),
   },
   {
-    key: 'settings-provider-keys',
+    key: 'admin-model-providers',
     go: async (page) => {
-      await nav(page, 'Settings').click();
-      await app(page).getByRole('tab', { name: 'Provider keys' }).click();
+      await nav(page, 'Admin').click();
+      await adminPage(page, 'Model providers').click();
     },
-    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Provider keys' })).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Model providers' })).toBeVisible()),
   },
   {
-    key: 'settings-usage',
+    key: 'admin-usage',
     go: async (page) => {
-      await nav(page, 'Settings').click();
-      await app(page).getByRole('tab', { name: 'Usage' }).click();
+      await nav(page, 'Admin').click();
+      await adminPage(page, 'Usage').click();
     },
     ready: async (page) => void (await expect(app(page).getByText(/Estimated, billed by your provider/)).toBeVisible()),
   },
   {
-    key: 'settings-agents',
+    key: 'admin-agent-defaults',
     go: async (page) => {
-      await nav(page, 'Settings').click();
-      await app(page).getByRole('tab', { name: 'Agents' }).click();
+      await nav(page, 'Admin').click();
+      await adminPage(page, 'Agent defaults').click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Model defaults')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByRole('heading', { name: 'Model defaults' })).toBeVisible()),
   },
   {
     key: 'settings-privacy',
@@ -165,6 +162,8 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
 ];
 
 const app = (page: Page) => page.getByRole('region', { name: 'Application' });
+/** One Admin page in the settings rail. */
+const adminPage = (page: Page, label: string) => app(page).getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: label, exact: true });
 /** The app pane's content, below its header and subheader. */
 const view = (page: Page) => page.locator('.pane-app .object-view');
 /** Nav clicks are scoped: "History" is also a button inside the app pane. */

@@ -48,7 +48,7 @@ const missingCopy: Record<PartnerRoleReadiness['missing'][number], string> = {
 };
 
 function missingReadinessCopy(readiness: PartnerRoleReadiness, item: PartnerRoleReadiness['missing'][number]): string {
-  if (item === 'skill') return `Upgrade the native profile to ${readiness.role === 'finance' ? 'Finance1.0.1' : 'Partnerships1.8'}`;
+  if (item === 'skill') return `Upgrade the native profile to ${readiness.role === 'finance' ? 'Finance 1.0.1' : 'Partnerships 1.8'}`;
   if (item === 'provider') return 'Record the model provider readiness attestation';
   return missingCopy[item];
 }

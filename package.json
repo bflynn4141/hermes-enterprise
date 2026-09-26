@@ -2,6 +2,15 @@
   "name": "hermes-enterprise",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bflynn4141/hermes-enterprise.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bflynn4141/hermes-enterprise/issues"
+  },
+  "homepage": "https://github.com/bflynn4141/hermes-enterprise#readme",
   "type": "module",
   "packageManager": "pnpm@11.10.0",
   "engines": {
@@ -9,8 +18,10 @@
   },
   "scripts": {
     "dev": "pnpm --filter @hermes/worker dev",
-    "build": "pnpm --filter @hermes/shared build && pnpm --filter @hermes/client build && pnpm --filter @hermes/worker build",
+    "build": "pnpm --filter @hermes/motion-components build && pnpm --filter @hermes/shared build && pnpm --filter @hermes/client build && pnpm --filter @hermes/worker build",
     "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "lint:imports": "node scripts/check-import-cycles.mjs",
+    "check:quick": "pnpm lint:imports && pnpm typecheck && pnpm test:unit",
     "test": "pnpm --filter @hermes/shared test && pnpm --filter @hermes/client test && pnpm --filter @hermes/worker test",
     "test:unit": "pnpm --filter @hermes/shared test && pnpm --filter @hermes/client test && pnpm --filter @hermes/worker test:unit",
     "test:browser:mock": "pnpm --filter @hermes/client test:browser:mock",
@@ -24,7 +35,7 @@
     "db:test:up": "node scripts/test-db.mjs",
     "restore:check": "pnpm --filter @hermes/worker exec node scripts/restore-check.mjs",
     "e2e:live": "pnpm --filter @hermes/client e2e:live",
-    "lint:secrets": "gitleaks detect --no-git --redact"
+    "lint:secrets": ".github/scripts/gitleaks-scan.sh"
   },
   "devDependencies": {
     "typescript": "5.9.3"

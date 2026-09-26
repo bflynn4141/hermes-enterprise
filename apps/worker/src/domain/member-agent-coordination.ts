@@ -16,7 +16,7 @@ import {
   discoveryProfileDescriptor,
   type CapacityRoleTemplate,
 } from '../runtime/discovery-grants.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 

@@ -1,27 +1,40 @@
 import type { ReactNode } from 'react';
 import { ADMIN } from '@hermes/shared';
+import { ADMIN_SETTINGS_GROUPS } from '../../model/constants.js';
 import { useNav } from '../store-context.js';
 
-/** The top-level tabs stay fixed; this index selects one complete settings page. */
-export function AdminDetailLayout({ group, items, selected, children }: {
-  group: string;
-  items: readonly { id: string; label: string }[];
+function pageLabel(id: string, label: string): string {
+  return id === 'Organization' ? 'Workspace details' : label;
+}
+
+/** One left rail for every Admin page — no stacked tab rows. */
+export function AdminDetailLayout({ selected, children }: {
   selected: string;
   children: ReactNode;
 }) {
   const nav = useNav();
   return (
-    <div className={`admin-detail-layout${items.length === 1 ? ' admin-detail-layout-single' : ''}`}>
-      {items.length > 1 && (
-        <nav className="admin-detail-index" aria-label={`${group} settings pages`}>
-          {items.map((item) => (
-            <button type="button" key={item.id} aria-current={selected === item.id ? 'page' : undefined} onClick={() => nav(ADMIN(item.id))}>
-              {item.id === 'Organization' ? 'Workspace details' : item.label}
-            </button>
-          ))}
-        </nav>
-      )}
-      <section className="admin-settings-content" aria-label={`${group} admin settings`}>
+    <div className="admin-detail-layout">
+      <nav className="admin-detail-index" aria-label="Admin settings">
+        {ADMIN_SETTINGS_GROUPS.map((group) => (
+          <div key={group.label} className="admin-detail-group">
+            <p className="admin-detail-group-label">{group.label}</p>
+            <div className="admin-detail-group-items">
+              {group.items.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  aria-current={selected === item.id ? 'page' : undefined}
+                  onClick={() => nav(ADMIN(item.id))}
+                >
+                  {pageLabel(item.id, item.label)}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+      <section className="admin-settings-content" aria-label="Admin settings content">
         {children}
       </section>
     </div>

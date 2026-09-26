@@ -32,7 +32,8 @@ import { loadSessionSnapshot, projectSessionMessage } from '../domain/session-sn
 import { parseExpectedSettings, requireExpectedSettings, validateSessionEffort } from '../domain/session-settings.js';
 import { VISIBLE } from '../domain/session-visibility.js';
 import { requireAgentContextAccess } from '../domain/agent-context-access.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const MAX_PAGE = 100;
 

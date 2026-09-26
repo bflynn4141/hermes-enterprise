@@ -20,13 +20,15 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
   await page.setViewportSize({ width: 1840, height: 1000 });
   await page.goto('/#settings/Organization');
   const app = page.getByRole('region', { name: 'Application' });
+  const adminNav = app.getByRole('navigation', { name: 'Admin settings' });
 
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
-  await expect(app.getByRole('tab', { name: 'Organization', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(adminNav.getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveURL(/#admin\/Organization$/);
-  await expect(app.getByRole('tablist', { name: 'Admin sections' }).getByRole('tab')).toHaveCount(4);
-  await expect(app.getByRole('tab', { name: 'Agents', exact: true })).toBeVisible();
-  await expect(app.getByRole('tab', { name: 'Connections', exact: true })).toBeVisible();
+  await expect(adminNav.getByRole('button')).toHaveCount(10);
+  await expect(adminNav.getByText('Agents', { exact: true })).toBeVisible();
+  await expect(adminNav.getByText('Connections', { exact: true })).toBeVisible();
+  await expect(adminNav.getByText('Intelligence', { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('admin-settings-desktop.png'), fullPage: true });
 
   await app.getByRole('combobox', { name: 'Settings view' }).selectOption('user');
@@ -37,11 +39,10 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
   await expect(app.getByRole('tab', { name: 'Provider keys', exact: true })).toHaveCount(0);
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveValue('user');
   await app.getByRole('combobox', { name: 'Settings view' }).selectOption('admin');
-  await expect(app.getByRole('tab', { name: 'Organization', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await app.getByRole('tab', { name: 'Organization', exact: true }).focus();
-  await page.keyboard.press('ArrowRight');
-  await expect(app.getByRole('tab', { name: 'Agents', exact: true })).toBeFocused();
-  await expect(app.getByRole('tab', { name: 'Agents', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(adminNav.getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
+  await adminNav.getByRole('button', { name: 'Agent defaults', exact: true }).click();
+  await expect(adminNav.getByRole('button', { name: 'Agent defaults', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page).toHaveURL(/#admin\/Agents$/);
 });
 
 test('a Member direct or legacy Admin link falls back before privileged effects run', async ({ page }) => {
@@ -113,15 +114,13 @@ test('Admin navigation stays compact at the narrow desktop floor', async ({ page
   await page.setViewportSize({ width: 900, height: 760 });
   await page.goto('/#admin/Organization');
   const app = page.getByRole('region', { name: 'Application' });
+  const adminNav = app.getByRole('navigation', { name: 'Admin settings' });
   await expect(app.getByRole('combobox', { name: 'Admin section' })).toHaveCount(0);
   await expect(app.getByRole('combobox', { name: 'Settings view' })).toHaveValue('admin');
-  for (const tab of await app.getByRole('tablist', { name: 'Admin sections' }).getByRole('tab').all()) {
-    await expect(tab).toBeVisible();
-  }
-  const positions = await app.getByRole('tablist', { name: 'Admin sections' }).getByRole('tab').evaluateAll((tabs) => tabs.map((tab) => tab.getBoundingClientRect().top));
-  expect(new Set(positions).size).toBe(1);
-  await app.getByRole('tab', { name: 'Agents', exact: true }).click();
-  await app.getByRole('button', { name: 'Model providers', exact: true }).click();
+  await expect(app.getByRole('tablist', { name: 'Admin sections' })).toHaveCount(0);
+  await expect(adminNav).toBeVisible();
+  await expect(adminNav.getByRole('button', { name: 'Model providers', exact: true })).toBeVisible();
+  await adminNav.getByRole('button', { name: 'Model providers', exact: true }).click();
   await expect(app.locator('.admin-settings-view').getByRole('heading', { name: 'Model providers', exact: false })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('admin-settings-narrow.png'), fullPage: true });
   const overflow = await app.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);

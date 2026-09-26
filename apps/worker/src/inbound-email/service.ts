@@ -2,7 +2,7 @@ import type { InboundEmailThreadImport, InboundEmailThreadImportInput } from '@h
 import type { Env } from '../env.js';
 import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import type { TenantWork } from '../routes/tenant.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { sha256Hex } from '../storage/sigv4.js';
 import {
   getSelectedGmailThread,

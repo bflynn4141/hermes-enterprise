@@ -19,7 +19,7 @@
 // is itself a check the Origin allowlist then answers.
 import type { Context } from 'hono';
 import type { Env } from '../env.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 /** The only value the decision route accepts. */
 export const INBOX_SURFACE = 'inbox';

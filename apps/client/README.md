@@ -301,7 +301,7 @@ e2e/          scenarios.spec.ts   P1–P3, against the mock bundle
                                   sessions list, against the live stack
               panel-screens.spec.ts every page × three panel states × two widths
               panel-sidebar.spec.ts the sidebar's list plus every navigation,
-                                  workspace and account-menu route (C34, C50)
+                                  workspace and account-menu route (C34b, C50)
               panel-narrow.spec.ts  900 and 1100 in all three states: the
                                   navigation keeps its own column
               panel-helpers.ts    the assertions the panel suites share
@@ -347,7 +347,7 @@ Follow and pin are unchanged by any of it: while collapsed, `run.focus` still
 moves the app pane when following, and a decision receipt still counts on the
 rail's badge.
 
-Sessions behave differently too (decision C34). **New session** reuses a blank
+Sessions behave differently too (decision C34b). **New session** reuses a blank
 session rather than creating a second one, opens the panel and focuses the
 composer; a blank session is listed only while it is the one you are in; the
 first turn names the session from its first six words and the finished run

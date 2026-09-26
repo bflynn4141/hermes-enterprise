@@ -1,7 +1,7 @@
 // Compare the exact settings the user confirmed while the session row is locked.
 // This guards cross-tab writes without changing idempotent turn/retry admission.
 import { sessionSettingsSchema, type SessionSettings } from '@hermes/shared';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 export function parseExpectedSettings(value: unknown): SessionSettings | undefined {
   if (value === undefined) return undefined;

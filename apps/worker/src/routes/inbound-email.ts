@@ -21,7 +21,8 @@ import { loadGmailEvidenceAccount, storeGmailEvidenceAccount } from '../inbound-
 import { importSelectedGmailThread } from '../inbound-email/service.js';
 import { withWorkspaceTransaction } from '../jobs.js';
 import { signGmailOAuthState, verifyGmailOAuthState } from '../outbound-email/gmail-security.js';
-import { inWorkspace, RouteError } from './tenant.js';
+import { inWorkspace } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const OAUTH_TTL_SECONDS = 10 * 60;
 

@@ -147,10 +147,10 @@ describe('wrangler.jsonc', () => {
     const staging = envs.staging!.vars as Record<string, string>;
     const production = envs.production!.vars as Record<string, string>;
     expect(staging.HERMES_ENTERPRISE_PLUGIN_REVISION).toBe(
-      'ca8b89192f5320845f259369a907b766de0cfc97',
+      '6f2182db485a237e27954cef24e9f6880ed4c14b',
     );
     expect(staging.HERMES_ENTERPRISE_PLUGIN_SHA256).toBe(
-      'sha256:922bfa57af420429fcee71f9cec770d4af6bfbd743c67249521b265ef2b86a5a',
+      'sha256:3900bcca172e1aa46165c2d3de2eec97785577098817cf4d2916070a9eaa5a18',
     );
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_REVISION');
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_SHA256');
@@ -169,6 +169,9 @@ describe('wrangler.jsonc', () => {
       expect(assets.not_found_handling).toBe('single-page-application');
       expect(assets.run_worker_first).toContain('/w/*');
       expect(assets.run_worker_first).toContain('/health');
+      // The request-access form posts to `/demo/request-access`; without this
+      // the assets binding answers the POST with 405 and the page cannot work.
+      expect(assets.run_worker_first).toContain('/demo/*');
     }
   });
 
@@ -184,6 +187,7 @@ describe('wrangler.jsonc', () => {
       'SENTRY_DSN',
       'R2_ACCESS_KEY_ID',
       'R2_SECRET_ACCESS_KEY',
+      'DEMO_ACCESS_PASSCODE',
       'localConnectionString',
     ]) {
       expect(text, `${secret} appears in wrangler.jsonc`).not.toContain(secret);

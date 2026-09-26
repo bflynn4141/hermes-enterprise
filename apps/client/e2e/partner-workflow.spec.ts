@@ -9,13 +9,13 @@ test('Finance reviews authorized evidence, records the decision, and returns a s
   const pane = app(page);
   await expect(pane.getByRole('heading', { name: 'Partnerships + Finance', exact: true })).toBeVisible();
   await expect(pane.getByText('Finance view', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Maya Chen · Iris', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Maya Chen · Scout', { exact: true })).toBeVisible();
   await expect(pane.getByText('Alex Rivera · Ledger', { exact: true })).toBeVisible();
   await expect(pane.getByText('Ready', { exact: true })).toHaveCount(2);
-  await expect(page.getByRole('button', { name: 'Robin Studio · invoice source' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Partner applications' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Robin Studio · Finance review' })).toBeVisible();
   await expect(page.getByText('Ledger sessions', { exact: true })).toBeVisible();
-  await expect(page.getByText('Iris sessions', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Scout sessions', { exact: true })).toHaveCount(0);
   await expect(pane.getByRole('link', { name: 'Open source session' })).toHaveCount(0);
 
   const handoff = pane.locator('.partner-handoff-card').filter({ hasText: 'INV-SAMPLE-014' });
@@ -130,10 +130,10 @@ test('Partnerships proposes verified terms and the named Finance principal can a
   await expect(pane.getByText('Sample data', { exact: true })).toBeVisible();
   await expect(pane.getByText('For demonstration only. Approval does not confirm an external agreement.', { exact: true })).toBeVisible();
   await expect(pane.getByText('4 proposed changes', { exact: true })).toBeVisible();
-  await pane.locator('details.approval-disclosure').first().locator('summary').click();
+  await pane.locator('details.approval-disclosure').first().locator('summary').first().click();
   await expect(pane.locator('p').getByText('Authorize sample Robin Studio terms for an invoice-checking demonstration.', { exact: true })).toBeVisible();
   await pane.getByRole('button', { name: 'Approve change' }).click();
-  await expect(pane.getByText('approved · authorization v1', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Approved · authorization v1', { exact: true })).toBeVisible();
 });
 
 test('native Finance execution keeps sample input provenance distinct from execution state', async ({ page }) => {
@@ -156,7 +156,7 @@ test('an unrelated member receives no private workflow ids or content', async ({
   await expect(pane.getByText('No Partnerships or Finance work assigned', { exact: true })).toBeVisible();
   await expect(pane.getByText('INV-SAMPLE-014', { exact: true })).toHaveCount(0);
   await expect(pane.getByText('Robin Studio', { exact: true })).toHaveCount(0);
-  await expect(pane.getByText('Maya Chen · Iris', { exact: true })).toHaveCount(0);
+  await expect(pane.getByText('Maya Chen · Scout', { exact: true })).toHaveCount(0);
   await expect(pane.getByText('Alex Rivera · Ledger', { exact: true })).toHaveCount(0);
 });
 
@@ -165,8 +165,8 @@ test('an admin sees actionable native profile setup without a fake role switch',
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   const pane = app(page);
   await expect(pane.getByText('Setup needed', { exact: true })).toHaveCount(2);
-  await expect(pane.getByText('Upgrade the native profile to Partnerships1.8', { exact: true })).toBeVisible();
-  await expect(pane.getByText('Upgrade the native profile to Finance1.0.1', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Upgrade the native profile to Partnerships 1.8', { exact: true })).toBeVisible();
+  await expect(pane.getByText('Upgrade the native profile to Finance 1.0.1', { exact: true })).toBeVisible();
   await expect(pane.getByText('Workflow disabled', { exact: true })).toBeVisible();
   await expect(pane.getByRole('button', { name: 'Verify and enable workflow' })).toBeDisabled();
   await pane.getByRole('button', { name: 'Configure roles' }).click();

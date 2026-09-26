@@ -22,6 +22,14 @@ from start import (  # noqa: E402
 class RuntimeContractTests(unittest.TestCase):
     def test_contract_and_source_pin_cannot_drift(self):
         self.assertEqual(CONTRACT["source_revision"], REVISION)
+        # The Worker, the managed validator and the dashboard connector each
+        # carry the validated releases; all three must name the same set, with
+        # the launcher's pin first.
+        from enterprise_bridge.runtimes import PRIMARY_VERSION, RUNTIMES
+        from enterprise_bridge.dashboard import plugin_api
+        self.assertEqual(RUNTIMES[PRIMARY_VERSION]["revision"], REVISION)
+        self.assertEqual(CONTRACT["supported_source_revisions"], [runtime["revision"] for runtime in RUNTIMES.values()])
+        self.assertEqual(plugin_api.SUPPORTED_SOURCE_REVISIONS, {version: runtime["revision"] for version, runtime in RUNTIMES.items()})
         self.assertEqual(CONTRACT["contract_version"], 1)
         self.assertEqual(CONTRACT["terminal_error_schema_version"], 1)
 

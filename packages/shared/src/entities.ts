@@ -542,6 +542,22 @@ export type AuthSessionResponse = z.infer<typeof authSessionSchema>;
  * because neither exists until a workspace is named. The client picks one and
  * asks again by id. See decision F7.
  */
+/** One row of the picker's "you have been invited" list. */
+export const pendingInvitationSchema = z
+  .object({
+    /** The accept token the join route already takes (the invitation id). */
+    token: z.string().min(1).max(200),
+    workspace: z.object({ id: uuidSchema, name: z.string().max(200) }).strict(),
+    role: memberRoleSchema,
+    /** Present when the invitation was set up first (a job role), else null. */
+    role_template_key: memberRoleTemplateSchema.nullable(),
+    /** Display name of whoever invited them; null when that account is gone. */
+    invited_by: z.string().max(200).nullable(),
+    expires_at: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type PendingInvitation = z.infer<typeof pendingInvitationSchema>;
+
 export const authWorkspacesSchema = z
   .object({
     user: z.object({ id: uuidSchema, name: z.string().max(120), email: z.string().max(200) }).strict(),
@@ -570,10 +586,26 @@ export const authWorkspacesSchema = z
           .strict(),
       )
       .max(200),
+    /**
+     * Pending, unexpired invitations addressed to the caller's *verified*
+     * email. The server matches on the session's email and nothing else, so
+     * the list can never be used to enumerate somebody else's invitations.
+     * `token` is what the existing join flow already accepts.
+     */
+    invitations: z.array(pendingInvitationSchema).max(50).default([]),
     authenticated_at: z.iso.datetime({ offset: true }),
   })
   .strict();
 export type AuthWorkspacesResponse = z.infer<typeof authWorkspacesSchema>;
+
+/**
+ * What `/onboarding/join?token=…` may learn about an invitation before the
+ * person accepts it: which workspace, in what role, from whom, until when.
+ * Never the invited address — the caller either already is that person or
+ * has no business learning it — and never a provider id.
+ */
+export const invitationPreviewSchema = pendingInvitationSchema;
+export type InvitationPreview = PendingInvitation;
 
 export const turnResponseSchema = z
   .object({ run_id: uuidSchema, client_turn_id: z.string().max(128), duplicate: z.boolean().default(false) })

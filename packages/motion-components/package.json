@@ -1,0 +1,47 @@
+{
+  "name": "@hermes/motion-components",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Reviewable Hermes motion components adapted from Beautiful UI",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/components.css"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node server.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "glimm": "0.3.1",
+    "iconoir-react": "7.12.1",
+    "liveline": "0.0.7",
+    "shadow-plugin": "2.1.0",
+    "tailwind-merge": "3.7.0"
+  },
+  "peerDependencies": {
+    "motion": "13.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.25.10",
+    "motion": "13.3.0",
+    "postcss": "8.5.28",
+    "postcss-prefix-selector": "2.2.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
+  }
+}

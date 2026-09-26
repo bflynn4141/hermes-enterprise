@@ -1,6 +1,6 @@
 // The session's name is the server's to keep: the first turn names it, a
 // completed run renames it after what it produced, and a person's own name
-// beats both. Decision C34, moved server-side.
+// beats both. Decision C34b, moved server-side.
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { PgAgentDb } from '../../src/engine/pg-agent-db.js';

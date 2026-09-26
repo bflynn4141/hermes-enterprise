@@ -88,9 +88,12 @@ const valueOf = (body: Line[], key: string): string | undefined =>
   body.find((line) => line.key === key)?.value;
 
 describe('the workflow files', () => {
-  it('exist, and cover CI, both deploys and the backup', () => {
+  it('exist, and cover CI, both deploys, the backup, the workspace link and the release watch', () => {
     expect(files.sort()).toEqual(
-      ['backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml'].sort(),
+      [
+        'backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml',
+        'hermes-release-watch.yml', 'workspace-link.yml',
+      ].sort(),
     );
   });
 
@@ -116,14 +119,13 @@ describe('the workflow files', () => {
     }
   });
 
-  it('pin every action to a major version rather than a moving ref', () => {
+  it('pins every action to an immutable commit', () => {
     for (const file of files) {
       for (const line of read(file).split('\n')) {
         const match = /^\s*-?\s*uses:\s*(\S+)/.exec(line);
         if (!match?.[1]) continue;
         const ref = match[1];
-        expect(ref, `${file} uses an unpinned action: ${ref}`).toContain('@');
-        expect(ref, `${file} tracks a branch: ${ref}`).not.toMatch(/@(main|master|latest)$/);
+        expect(ref, `${file} uses an unpinned action: ${ref}`).toMatch(/@[0-9a-f]{40}$/);
       }
     }
   });
@@ -134,7 +136,18 @@ describe('the workflow files', () => {
       expect(text, `${file} does not declare permissions`).toContain('permissions:');
       // The pipeline is inside the BYOK trust boundary; a workflow that can
       // write to the repository is a workflow that can change what deploys.
-      expect(text, `${file} grants write permissions`).not.toMatch(/permissions:[\s\S]{0,200}write/);
+      // The release watch may write issues, which cannot change what deploys.
+      const checked = file === 'hermes-release-watch.yml' ? text.replace(/^ {6}issues: write\n/gm, '') : text;
+      expect(checked, `${file} grants write permissions`).not.toMatch(/permissions:[\s\S]{0,200}write/);
+    }
+  });
+
+  it('never hand a write token to the job that runs a new upstream release', () => {
+    const watch = jobs(read('hermes-release-watch.yml'));
+    const runsUpstream = [...watch].filter(([, body]) => body.some((line) => line.value.includes('install.py')));
+    expect(runsUpstream.map(([name]) => name)).toEqual(['release']);
+    for (const [name, body] of runsUpstream) {
+      expect(body.some((line) => line.value === 'write'), `${name} holds a write permission`).toBe(false);
     }
   });
 
@@ -243,7 +256,7 @@ describe('the workflow files', () => {
       expect(clientPackage.scripts['test:browser:mock']).not.toContain('live');
       expect(text).toContain('name: mock client browser tests');
       expect(text).toContain('pnpm test:browser:mock');
-      expect(text).toContain('actions/upload-artifact@v4');
+      expect(text).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
     });
 
     it('verifies migration replay only in the disposable CI shadow path', () => {

@@ -9,8 +9,8 @@ through an exact read-only wrapper. Paid tool dispatch is intentionally not
 exported until the durable job executor owns a tenant-scoped atomic claim. The
 adapter is not wired to invitations. The admin connection is wired to
 encrypted storage and Organization Settings. Local member-setup jobs are
-feature-gated; invitation delivery and paid provisioning are not enabled by
-this work.
+feature-gated; they deliver the invitation through WorkOS once readiness is
+verified, and paid provisioning is not enabled by this work.
 
 The independent shared operation contract in `packages/shared/src/member-provisioning.ts`
 defines validated preparation/delivery/cancellation states, concise UI presentation,
@@ -126,9 +126,15 @@ unverified and can be reconnected. Users do not enter tokens or instance IDs.
    cannot prove the required lifecycle/bootstrap contract. Paid creation remains
    unavailable until a separate reviewed executor owns an atomic, tenant-scoped,
    one-use provider-dispatch claim.
-5. After exact role readiness, add a separately reviewed transactional delivery
-   handoff. The compact Members states are connected, but this runner does not
-   queue WorkOS email and must not present setup completion as delivery.
+5. Done: after exact role readiness, the setup job hands the invitation to the
+   existing `workos_sync` `send_invitation` job in the same transaction
+   (`queueSetupInvitationDelivery`). The row moves `not_required → queued`,
+   its seven-day clock and expiry job start at that handoff, and the delivery
+   job re-checks the reservation before calling WorkOS, failing closed as
+   `iris_capacity_reservation_missing` if it was lost. `AUTH_MODE=fake` keeps
+   `not_required` with the invitation id as the join token. The Members card
+   still reports only what the provider answered: queued, sending, sent or
+   failed — never setup completion as delivery.
 
 Live read-only validation: public metadata, authenticated schemas, selected
 organization billing attribution and read-only agent/usage operations passed.

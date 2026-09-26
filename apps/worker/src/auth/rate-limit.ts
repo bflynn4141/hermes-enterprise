@@ -10,7 +10,7 @@
 // bucket boundary — is the right trade for a limit whose job is to stop a
 // runaway script rather than to meter a paying customer.
 import type { Tx } from '../db/client.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 /** Actions with no workspace yet (creating one) count against this key. */
 export const PLATFORM_WORKSPACE_ID = '00000000-0000-4000-8000-000000000000';
@@ -40,6 +40,12 @@ export const LIMITS = {
    * which is the opposite of what a guessing limit is for.
    */
   acceptInvitation: { action: 'invitation.accept', limit: 10, windowSeconds: 3_600 },
+  /**
+   * Reading an invitation's workspace name before accepting takes the same
+   * opaque secret, so it is the same oracle; a separate, looser bucket keeps a
+   * few page refreshes from spending the ten accept attempts.
+   */
+  previewInvitation: { action: 'invitation.preview', limit: 60, windowSeconds: 3_600 },
 } as const satisfies Record<string, RateLimit>;
 
 /**

@@ -16,7 +16,7 @@
 // There is no executor for these legacy ledger rows. Approved communications
 // can use the separate governed Gmail outbox when configured, but recording an
 // attempt on a legacy effect does not enqueue that outbox or prove delivery.
-// POST …/execute always answers unavailable: it writes `status = 'unavailable'`
+// In production POST …/execute always answers unavailable: it writes `status = 'unavailable'`
 // with the reason, appends an `effect.executed` audit row (attempt recorded),
 // and states which work remains undone. It never claims bank, mail, access, or
 // signature work completed.
@@ -38,7 +38,8 @@ import {
 import type { Env } from '../env.js';
 import type { Tx } from '../db/client.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { inWorkspace, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { effectRows, loadEffect, toEffectEntity } from '../domain/effect-rows.js';
 import {
   effectExecutorMode,

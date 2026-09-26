@@ -30,7 +30,8 @@ import { contextFieldSchema, instructionVersionSchema, paginatedSchema, skillVer
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
 import { CONTEXT_ANSWERED_EVENT } from '../engine/constants.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 import { requireRequestedFrom, SKILLS_SURFACE } from '../domain/guards.js';
 import { runtimeSkillCard } from '../runtime/skills.js';
 import { listEnterpriseSkillAssignments } from '../enterprise-skills/service.js';

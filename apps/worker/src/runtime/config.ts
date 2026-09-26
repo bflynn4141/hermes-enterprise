@@ -1,6 +1,6 @@
 // The official-runtime allowlist and scoped bridge credentials. Neither a model
 // argument nor a runtime URL may select a different enterprise workspace.
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import type { Tx } from '../db/client.js';
 import type { Env } from '../env.js';
 import { openSecret, type StoredEnvelope } from '../keys/envelope.js';

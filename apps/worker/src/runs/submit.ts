@@ -11,7 +11,7 @@ import { requireAllowedProvider } from '../model/allowed.js';
 import { resolveRuntimeBinding } from '../runtime/config.js';
 import { HermesClient } from '../runtime/client.js';
 import { DEFAULT_MAX_TURNS } from '../engine/constants.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { runAttemptInstanceId } from './workflow.js';
 
 const TURN_LIMIT: RateLimit = { action: 'run.turn', limit: 30, windowSeconds: 60 };

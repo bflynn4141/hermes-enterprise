@@ -5,7 +5,8 @@ import { requireAgentContextAccess } from '../domain/agent-context-access.js';
 import { contextNoteInputSchema, contextNoteUpdateSchema, MAX_CONTEXT_NOTES } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 
 async function agent(work: TenantWork, id: string): Promise<void> {
   await requireAgentContextAccess(work, id);

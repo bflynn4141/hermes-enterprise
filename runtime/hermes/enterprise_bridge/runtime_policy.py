@@ -15,9 +15,10 @@ import urllib.parse
 import urllib.request
 
 from .packages import PLUGIN_NAME, PLUGIN_VERSION, packaged_skills, sha256_file
+from .runtimes import PRIMARY_VERSION, RUNTIMES
 
 
-RUNTIME_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+RUNTIME_REVISION = RUNTIMES[PRIMARY_VERSION]["revision"]
 RUNTIME_READINESS_FILENAME = "runtime-readiness.json"
 MANAGED_PROFILE_MARKER_FILENAME = "enterprise-cloud-managed.json"
 EXPECTED_PLUGIN_SOURCES = frozenset({
@@ -163,7 +164,6 @@ class NativePolicyState:
                     raise RuntimeError("managed provider binding is unavailable")
                 actual = {
                     "provider": str(getattr(agent, "provider", "") or ""),
-                    "model": str(getattr(agent, "model", "") or ""),
                     "base_url": str(getattr(agent, "base_url", "") or "").rstrip("/"),
                     "api_key": str(getattr(agent, "api_key", "") or ""),
                     "api_mode": str(getattr(agent, "api_mode", "") or ""),
@@ -503,10 +503,12 @@ def actual_plugin_attestation(manager):
     return {"name": matches[0]["name"], "version": matches[0]["version"]}
 
 
-def write_runtime_attestation(home, metadata, plugin, skills, tool_names):
+def write_runtime_attestation(home, metadata, plugin, skills, tool_names, runtime_revision=RUNTIME_REVISION):
     attestation = {
         "schema_version": 1,
-        "runtime_revision": RUNTIME_REVISION,
+        # The validated release actually running, which Cloud may have moved
+        # past the primary pin.
+        "runtime_revision": runtime_revision,
         "plugin": plugin,
         "workspace_id": metadata["workspace_id"],
         "agent_id": metadata["agent_id"],

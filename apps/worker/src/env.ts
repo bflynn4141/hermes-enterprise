@@ -9,6 +9,15 @@ export interface Env {
   // --- Variables (plain text, set per environment in wrangler.jsonc) --------
   /** 'staging' | 'production' | 'development'. */
   ENVIRONMENT: string;
+  /**
+   * The public request-access form (`POST /demo/request-access`). The
+   * workspace id names the demo workspace an invitation is created in; the
+   * allowlist is comma-separated email domains, and empty means any domain.
+   * Both unset, or the passcode secret unset, and the route answers
+   * `demo_access_not_configured` rather than inviting anyone anywhere.
+   */
+  DEMO_ACCESS_WORKSPACE_ID?: string;
+  DEMO_ACCESS_ALLOWED_DOMAINS?: string;
   /** Bumped when a deploy changes existing Workflow step names. */
   ENGINE_VERSION: string;
   /** Official execution plane; unset preserves legacy runs during rollout. */
@@ -180,6 +189,8 @@ export interface Env {
    */
   KEK_CURRENT?: string;
   SENTRY_DSN?: string;
+  /** The one passcode the request-access form accepts. Compared in constant time. */
+  DEMO_ACCESS_PASSCODE?: string;
   /** Server-side Raindrop ingestion credential. Never exposed to the client. */
   RAINDROP_WRITE_KEY?: string;
   /**
