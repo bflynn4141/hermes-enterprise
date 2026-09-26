@@ -3,6 +3,7 @@
 // replay source, and GET run is authoritative after a stream disconnect.
 import { readSse } from '../model/sse.js';
 import runtimeContract from '../../../../runtime/hermes/contract.json';
+import { SUPPORTED_NATIVE_REVISIONS } from './readiness.js';
 
 export type HermesReleaseRing = 'canary' | 'stable';
 export type HermesTerminalErrorCode =
@@ -243,7 +244,8 @@ export class HermesClient {
         idempotency?.supported !== true || idempotency.durable !== true ||
         typeof retentionSeconds !== 'number' || !Number.isFinite(retentionSeconds) || retentionSeconds <= 0 ||
         enterpriseContract?.schema_version !== runtimeContract.contract_version ||
-        enterpriseContract.source_revision !== runtimeContract.source_revision ||
+        typeof enterpriseContract.source_revision !== 'string' ||
+        !SUPPORTED_NATIVE_REVISIONS.has(enterpriseContract.source_revision) ||
         enterpriseContract.release_ring !== this.expectedReleaseRing ||
         terminalErrors?.supported !== true ||
         terminalErrors.schema_version !== runtimeContract.terminal_error_schema_version ||
@@ -255,7 +257,7 @@ export class HermesClient {
       retentionSeconds,
       contractVersion: 1,
       terminalErrorSchemaVersion: 1,
-      sourceRevision: runtimeContract.source_revision,
+      sourceRevision: enterpriseContract.source_revision as string,
       releaseRing: this.expectedReleaseRing,
     };
   }
