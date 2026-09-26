@@ -373,7 +373,7 @@ def child(metadata_path):
     from toolsets import TOOLSETS
 
     # The plugin pins the verified skill text into every new session's system
-    # prompt; Hermes 0.21.3 has no skills.auto_load. A dedicated one-tool set
+    # prompt; native skills.auto_load stays unused. A dedicated one-tool set
     # keeps only the read-only viewer for re-reading the assigned package; the
     # stock `skills` toolset would also expose discovery and mutation.
     TOOLSETS["enterprise_skill_reader"] = {

@@ -10,6 +10,7 @@ describe('tool copy', () => {
 
   it('keys the error sentence off the reason before the provider message', () => {
     expect(runErrorSentence({ reason: 'hermes_unavailable', message: 'ECONNREFUSED 10.0.0.4:8642' })).toBe('The Hermes runtime is unavailable. Retry to reconnect.');
+    expect(runErrorSentence({ reason: 'hermes_runtime_not_ready', message: 'Hermes request failed (503 native_readiness_unavailable)' })).toBe("This agent's runtime didn't pass its safety check. If retrying doesn't help, an admin needs to update it.");
     expect(runErrorSentence({ reason: 'provider_5xx', message: 'The provider returned 503.' })).toBe("The model provider didn't answer. Retry.");
     expect(runErrorSentence({ reason: 'something_new', message: 'A message a human wrote.' })).toBe('A message a human wrote.');
     expect(runErrorSentence(null)).toBe('Error');

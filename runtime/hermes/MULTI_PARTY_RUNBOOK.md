@@ -1,6 +1,6 @@
 # Partnerships and Finance native rollout
 
-This runbook installs two dedicated Hermes 0.21.3 profiles for the governed partner-invoice workflow while keeping existing Partnerships 1.7 profiles restartable. It does not create an employee, buy provider capacity, change a hosted profile, enable a schedule, or admit a workspace.
+This runbook installs two dedicated Hermes 0.21.5 profiles for the governed partner-invoice workflow while keeping existing Partnerships 1.7 profiles restartable. It does not create an employee, buy provider capacity, change a hosted profile, enable a schedule, or admit a workspace.
 
 ## Required bindings
 
