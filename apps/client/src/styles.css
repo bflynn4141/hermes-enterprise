@@ -557,7 +557,8 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .member-card-title { color: var(--body); font-size: 14.4px; line-height: 19.2px; }
 .member-card-email { color: var(--muted); font-size: 11.2px; line-height: 16px; overflow-wrap: anywhere; }
 .member-card-facts { grid-area: facts; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.member-card-summary { grid-area: status; align-self: center; color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.member-card-summary { grid-area: status; align-self: center; display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11.2px; line-height: 16px; }
+.member-card-roles { color: var(--body); font-size: 12.8px; line-height: 18px; }
 .member-card-status { grid-area: status; display: grid; grid-template-columns: 8px minmax(0,1fr); align-items: start; gap: 10px; min-width: 0; }
 .member-card-status > i { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #85819D; box-shadow: 0 0 0 3px rgba(133,129,157,.12); }
 .member-card-status[data-tone="positive"] > i { background: #73CBA2; box-shadow: 0 0 0 3px rgba(115,203,162,.12); }

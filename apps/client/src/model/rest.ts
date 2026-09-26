@@ -16,6 +16,10 @@ import {
   contextNoteSchema,
   agentPermissionsSchema,
   agentDirectorySchema,
+  workspaceRoleListSchema,
+  workspaceRoleSchema,
+  type WorkspaceRoleCreate,
+  type WorkspaceRolePatch,
   approvalEvidenceViewSchema,
   type ApprovalEvidenceView,
   agentRecoveryViewSchema,
@@ -490,6 +494,14 @@ export function createRest(options: RestOptions) {
     invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member'; role_template_key?: 'partnerships-agent' | 'finance-agent' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
+
+    // --- workspace roles (Admin only; writes need a recent sign-in) ---
+    listRoles: (workspaceId: string) => request('GET', `${ws(workspaceId)}/roles`, workspaceRoleListSchema),
+    createRole: (workspaceId: string, body: WorkspaceRoleCreate) => request('POST', `${ws(workspaceId)}/roles`, workspaceRoleSchema, body),
+    updateRole: (workspaceId: string, id: string, patch: WorkspaceRolePatch) => request('PATCH', `${ws(workspaceId)}/roles/${id}`, workspaceRoleSchema, patch),
+    /** Replaces who holds the role with exactly these people. */
+    setRoleMembers: (workspaceId: string, id: string, userIds: string[]) => request('PUT', `${ws(workspaceId)}/roles/${id}/members`, workspaceRoleSchema, { user_ids: userIds }),
+    deleteRole: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/roles/${id}`),
     /**
      * A resend writes a *new* invitation and supersedes the old one, so the
      * server answers with the successor row; "Reinvite" on an expired row is
