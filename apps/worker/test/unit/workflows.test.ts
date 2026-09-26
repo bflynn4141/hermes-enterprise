@@ -256,7 +256,7 @@ describe('the workflow files', () => {
       expect(clientPackage.scripts['test:browser:mock']).not.toContain('live');
       expect(text).toContain('name: mock client browser tests');
       expect(text).toContain('pnpm test:browser:mock');
-      expect(text).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02');
+      expect(text).toContain('actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a');
     });
 
     it('verifies migration replay only in the disposable CI shadow path', () => {
