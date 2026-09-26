@@ -259,7 +259,7 @@ role, security, and approval layers around it.
 
 | Component | Responsibility | Location |
 | --- | --- | --- |
-| Official runtime | Nous Research's Hermes Agent runs the agent loop. This repository pins commit `345cd2b0` and package version 0.21.3, then verifies the source, lock file, and installed packages. | [`runtime/hermes`](runtime/hermes) |
+| Official runtime | Nous Research's Hermes Agent runs the agent loop. This repository pins commit `f97608f1` and package version 0.21.5, then verifies the source, lock file, and installed packages. | [`runtime/hermes`](runtime/hermes) |
 | Enterprise bridge | A Hermes plugin receives turns from the Worker, streams events back, and exposes only the tools and skills that the employee's role allows. | [`runtime/hermes/enterprise_bridge`](runtime/hermes/enterprise_bridge) |
 | Runtime contract | A versioned contract defines events, terminal errors, and supported release rings. The Worker checks the contract before it admits a run. | [`runtime/hermes/contract.json`](runtime/hermes/contract.json) |
 | Worker boundary | The Worker chooses which tools and models a run may use. It decrypts a provider key only inside the step that calls that provider. | [`apps/worker/src/runtime`](apps/worker/src/runtime) |

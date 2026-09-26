@@ -656,7 +656,11 @@ describe('durable member provisioning', () => {
     // ran it: the response is re-read, so it reports what WorkOS answered.
     expect(invitation.delivery_status).toBe('delivered');
     expect(invitation.provisioning).toMatchObject({ preparation: 'ready', delivery: 'sent' });
-    const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation');
+    // The drain is global, so another test's queued job can reach this fake;
+    // count only the sends for this invitation's address.
+    const sendsForThisInvitation = () => fake.calls.filter((entry) => entry.method === 'sendInvitation'
+      && (entry.argument as { email?: string }).email === email);
+    const sends = sendsForThisInvitation();
     expect(sends).toHaveLength(1);
     expect(sends[0]!.argument).toMatchObject({
       email, organizationId, roleSlug: 'member', expiresInDays: 7, inviterUserId: adminWorkosUserId,
@@ -664,7 +668,7 @@ describe('durable member provisioning', () => {
 
     // Draining again finds nothing to send twice.
     await drainJobs(env, 50);
-    expect(fake.calls.filter((entry) => entry.method === 'sendInvitation')).toHaveLength(1);
+    expect(sendsForThisInvitation()).toHaveLength(1);
 
     await withClient('app', async c => {
       await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
@@ -767,7 +771,9 @@ describe('durable member provisioning', () => {
     expect(deliveryJobId).not.toBeNull();
     await drainJobs(env, 50);
 
-    const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation');
+    // The drain is global; count only this invitation's sends.
+    const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation'
+      && (entry.argument as { email?: string }).email === 'unsigned-inviter@example.test');
     expect(sends).toHaveLength(1);
     expect(sends[0]!.argument).toMatchObject({ email: 'unsigned-inviter@example.test', organizationId, roleSlug: 'member' });
     expect(sends[0]!.argument).not.toHaveProperty('inviterUserId');

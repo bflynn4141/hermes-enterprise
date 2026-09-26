@@ -350,21 +350,46 @@ class CloudManagedPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = pathlib.Path(temporary) / "pinned.py"
             source.write_text("PINNED = True\n")
-            fake_hermes = types.SimpleNamespace(__version__="0.21.3")
+            fake_hermes = types.SimpleNamespace(__version__="0.21.5")
             fake_module = types.SimpleNamespace(__file__=str(source))
             digest = hashlib.sha256(source.read_bytes()).hexdigest()
 
             def import_module(name):
                 return fake_module if name == "pinned.module" else __import__(name)
 
+            runtimes = {"0.21.5": {"revision": "a" * 40, "source_digests": {"pinned.module": digest}}}
             with patch.dict(sys.modules, {"hermes_cli": fake_hermes}), \
-                    patch.object(cloud_managed, "SOURCE_DIGESTS", {"pinned.module": digest}), \
+                    patch.object(cloud_managed, "RUNTIMES", runtimes), \
                     patch.object(cloud_managed.importlib, "import_module", side_effect=import_module), \
                     patch.object(cloud_managed.inspect, "getsourcefile", return_value=str(source)):
                 self.assertEqual(cloud_managed.validate_native_source()["pinned.module"], source)
                 source.write_text("PINNED = False\n")
                 with self.assertRaisesRegex(RuntimeError, "source drifted"):
                     cloud_managed.validate_native_source()
+
+    def test_readiness_accepts_any_validated_release_and_no_other(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = pathlib.Path(temporary) / "pinned.py"
+            source.write_text("NEXT = True\n")
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            runtimes = {
+                "0.21.5": {"revision": "a" * 40, "source_digests": {"pinned.module": "0" * 64}},
+                "0.21.6": {"revision": "b" * 40, "source_digests": {"pinned.module": digest}},
+            }
+            fake_module = types.SimpleNamespace(__file__=str(source))
+
+            def import_module(name):
+                return fake_module if name == "pinned.module" else __import__(name)
+
+            with patch.object(cloud_managed, "RUNTIMES", runtimes), \
+                    patch.object(cloud_managed.importlib, "import_module", side_effect=import_module), \
+                    patch.object(cloud_managed.inspect, "getsourcefile", return_value=str(source)):
+                with patch.dict(sys.modules, {"hermes_cli": types.SimpleNamespace(__version__="0.21.6")}):
+                    self.assertEqual(cloud_managed.detected_runtime(), ("0.21.6", runtimes["0.21.6"]))
+                    self.assertEqual(cloud_managed.validate_native_source()["pinned.module"], source)
+                with patch.dict(sys.modules, {"hermes_cli": types.SimpleNamespace(__version__="0.21.7")}):
+                    with self.assertRaisesRegex(RuntimeError, "requires Hermes 0.21.5 or 0.21.6"):
+                        cloud_managed.validate_native_source()
 
     def test_plugin_source_accepts_only_canonical_pinned_repo_transports(self):
         with tempfile.TemporaryDirectory() as temporary:

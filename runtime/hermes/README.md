@@ -2,7 +2,7 @@
 
 This directory installs and launches the official Nous Hermes agent loop behind the enterprise tool and model boundaries. It does not implement an alternative agent loop.
 
-Pinned source: [NousResearch/hermes-agent at 345cd2b057a452236de401d3534b8502a7465e8d](https://github.com/NousResearch/hermes-agent/tree/345cd2b057a452236de401d3534b8502a7465e8d), reporting package version **0.21.3**. Do not upgrade this pin without running the native probe below: the plugin uses two pinned internal ContextVars for trusted correlation.
+Pinned source: [NousResearch/hermes-agent at f97608f178d1ffeca59860195ab7da295f7c8e5f](https://github.com/NousResearch/hermes-agent/tree/f97608f178d1ffeca59860195ab7da295f7c8e5f), reporting package version **0.21.5** (release v2026.9.24). Do not upgrade this pin without running the native probe below: the plugin uses two pinned internal ContextVars for trusted correlation.
 
 ## Start an agent
 
@@ -131,7 +131,7 @@ and file bytes, ignores only Python bytecode caches, and rejects symlinks; the
 install metadata lives outside the tree, so there is no self-hash cycle.
 
 Also persist `HERMES_ENTERPRISE_SOURCE_REVISION` as the full 40-character
-pinned official Hermes commit (`345cd2b057a452236de401d3534b8502a7465e8d` for
+pinned official Hermes commit (`f97608f178d1ffeca59860195ab7da295f7c8e5f` for
 this pin; it must equal `contract.json`'s `source_revision`). The connector
 refuses to build its `enterprise_contract` block without this attestation, and
 the Worker then reports `hermes:runs` as "Hermes request failed (502)". The
@@ -236,7 +236,7 @@ The launcher disables every native built-in toolset except a dedicated read-only
 
 ### Assigned skill text in every session
 
-Hermes 0.21.3 has no `skills.auto_load`; the launcher and the managed Cloud validator reject it so an inert key cannot look like policy. The plugin pins the assigned skill itself through the pinned plugin API's system prompt sections (`register_system_prompt_section` in `hermes_cli/plugins.py`). At registration it fetches the authenticated assignment, refuses configured `allowed_skills` or `partner_program` values that differ from it, reads the exact packaged `SKILL.md` bytes, binds them to the reviewed package version and digests, and only then registers the text as numbered `enterprise-skill.NN` continuation sections. Hermes freezes those sections into the system prompt of each new session before the first model request and restores the persisted bytes on resume without re-running plugin code. The pinned runtime limits every section to 4,000 characters and all sections to 8,000 framed characters; the largest packaged skill uses about 7,900, so a skill edit that exceeds the budget fails at registration. Before readiness, both the launcher and the Cloud validator render the live sections through the plugin manager and require them to equal the sections recomputed from the reviewed bytes; the Cloud validator repeats that comparison at every provider and tool attempt. `skills.config` still carries the assignment's non-secret values for native skill consumers, but this release does not render them into the prompt.
+Native `skills.auto_load` stays unused (0.21.3 had none; 0.21.5 would load skills outside the reviewed assignment), so the launcher and the managed Cloud validator reject it. The plugin pins the assigned skill itself through the pinned plugin API's system prompt sections (`register_system_prompt_section` in `hermes_cli/plugins.py`). At registration it fetches the authenticated assignment, refuses configured `allowed_skills` or `partner_program` values that differ from it, reads the exact packaged `SKILL.md` bytes, binds them to the reviewed package version and digests, and only then registers the text as numbered `enterprise-skill.NN` continuation sections. Hermes freezes those sections into the system prompt of each new session before the first model request and restores the persisted bytes on resume without re-running plugin code. The pinned runtime limits every section to 4,000 characters and all sections to 8,000 framed characters; the largest packaged skill uses about 7,900, so a skill edit that exceeds the budget fails at registration. Before readiness, both the launcher and the Cloud validator render the live sections through the plugin manager and require them to equal the sections recomputed from the reviewed bytes; the Cloud validator repeats that comparison at every provider and tool attempt. `skills.config` still carries the assignment's non-secret values for native skill consumers, but this release does not render them into the prompt.
 
 `API_SERVER_HOST=127.0.0.1`, bearer auth, no CORS allowance, one active run per profile. By default the launcher removes native `/api/jobs*` and `/api/cron*` routes before the listener binds, and health returns 503 if the cron store later becomes nonempty. `HERMES_NATIVE_CRON_ENABLED=1` retains those authenticated routes, while `cron.allow_agent_scheduling` remains false; Cloudflare stays the owner of business triggers. The remaining native REST routes require the secret; expose the native listener only to the enterprise adapter. `HERMES_HOME` is data isolation, not an OS sandbox. The narrow tool boundary is what keeps the model from directly executing local shell/file/browser/delegation operations.
 
@@ -343,10 +343,10 @@ current provider availability or production quality.
 
 ## Official source anchors
 
-- [Runs implementation and worker context binding](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/gateway/platforms/api_server_runs.py)
-- [Durable run reservations](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/gateway/platforms/api_server_run_idempotency.py)
-- [API adapter, SSE framing and agent construction](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/gateway/platforms/api_server.py)
-- [Tool execution context binding](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/model_tools.py) and [approval ContextVars](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/tools/approval_context.py)
-- [Custom provider resolution](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/hermes_cli/runtime_provider_backends.py)
-- [MCP tool call path](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/tools/mcp_tool_handlers.py) and [connection headers](https://github.com/NousResearch/hermes-agent/blob/345cd2b057a452236de401d3534b8502a7465e8d/tools/mcp_tool_transport.py)
+- [Runs implementation and worker context binding](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/gateway/platforms/api_server_runs.py)
+- [Durable run reservations](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/gateway/platforms/api_server_run_idempotency.py)
+- [API adapter, SSE framing and agent construction](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/gateway/platforms/api_server.py)
+- [Tool execution context binding](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/model_tools.py) and [approval ContextVars](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/tools/approval_context.py)
+- [Custom provider resolution](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/hermes_cli/runtime_provider_backends.py)
+- [MCP tool call path](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/tools/mcp_tool_handlers.py) and [connection headers](https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/tools/mcp_tool_transport.py)
 - [Official API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server) and [native plugin documentation](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)

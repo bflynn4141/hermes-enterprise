@@ -541,7 +541,8 @@ def register(ctx):
         partner_program = assigned_program
     elif partner_program != assigned_program:
         raise BridgeError("Partner Program policy differs from the authenticated Enterprise assignment.")
-    # Hermes 0.21.3 has no skills.auto_load. The pinned plugin API freezes
+    # Native skills.auto_load stays unused: it could load unreviewed skills,
+    # and 0.21.3 profiles never had it. The pinned plugin API freezes
     # registered sections into each new session's system prompt before the
     # first model call, so the verified SKILL.md text is pinned here. Only this
     # plugin is enabled in a governed profile; the launcher and managed Cloud
