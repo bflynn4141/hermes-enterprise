@@ -1095,6 +1095,7 @@ describe('the adapter', () => {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     });
     adapter.dispose();
   });
@@ -1420,6 +1421,7 @@ describe('the adapter', () => {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     } } });
     const source = { id: mockUuid(60), label: 'Program.md', kind: 'source' as const, sha256: 'a'.repeat(64), icon: 'context' };
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: source });
@@ -1440,6 +1442,7 @@ describe('the adapter', () => {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     } } });
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
       id: mockUuid(61), label: 'Partner Program Guide', kind: 'source', source_kind: 'library_source',
@@ -1463,6 +1466,7 @@ describe('the adapter', () => {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     } } });
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
       id: mockUuid(70), label: 'composer-upload.txt', kind: 'source', source_kind: 'agent_file',
@@ -1486,6 +1490,7 @@ describe('the adapter', () => {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     } } });
     store.dispatch({ type: 'session/attach', id: SESSION, attachment: {
       id: mockUuid(62), label: 'dropped.pdf', icon: 'context',

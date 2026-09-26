@@ -82,7 +82,11 @@ jobs:
     name: pg_dump to R2
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: production
+    # Its own environment, not `production`: production requires a reviewer,
+    # and a nightly job that waits for someone to click approve is a nightly
+    # job that does not run. `backups` has no reviewer and deploys only from
+    # protected branches, so a pull request branch cannot reach these secrets.
+    environment: backups
     # Never on a pull request, and never on a fork: the secrets below are the
     # ones that read production.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -92,7 +96,12 @@ jobs:
 
       - name: Dump
         env:
-          PGSSLMODE: require
+          # Verify Neon's certificate against the runner's system trust store.
+          # libpq otherwise looks for ~/.postgresql/root.crt, which a runner
+          # does not have, and every scheduled dump from Sep 16 to Sep 23 2026
+          # failed on exactly that. `system` requires verify-full.
+          PGSSLMODE: verify-full
+          PGSSLROOTCERT: system
           DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
         run: |
           set -euo pipefail

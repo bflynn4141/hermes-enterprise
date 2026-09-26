@@ -1,6 +1,6 @@
 # Human decisions and effects
 
-Decision-route, effect, receipt, history, and document choices D1 through D11.
+Decision-route, effect, receipt, history, and document choices D1 through D12.
 
 [Back to the decision index](../DECISIONS.md).
 
@@ -124,6 +124,9 @@ because three copies of a promise drift.
 **Guards.** Origin, CSRF, step-up, and the reviewer role the effect requires —
 not Admin. Executing is not deciding; it is the separate act the decision handed
 to somebody else.
+
+**Amended September 20, 2026.** This still holds in production. Development and
+staging answer `simulated` instead; see D12.
 
 ---
 
@@ -274,6 +277,33 @@ approved to be version 1 of.
 **Versions and the render are sibling routes** (`/documents/:id/versions`,
 `/documents/:id/render`) rather than keys in the entity, for the same reason as
 D1: `documentEntitySchema` is `.strict()`.
+
+---
+
+## D12. Outside production, Execute answers `simulated`
+
+**Decided September 20, 2026.** The project owner asked for payment, signature
+and mail-send outcomes that feel real in a demo without becoming production
+capabilities. The legacy effects ledger gains a third answer to Execute:
+`simulated`. `EFFECT_EXECUTOR_MODE=simulated` in development and staging makes
+the route invent a reference (`SIM-PAY-7F3A2C`), a one-line summary and a short
+provider-style timeline, all written to `enforcement_result` under
+`status = 'simulated'`. Production pins the mode to `unavailable` in code
+(`effectExecutorMode`) as well as in `wrangler.jsonc`, and a unit test holds
+each.
+
+**Why a new status rather than `executed` behind a flag.** The approvals design
+is only worth anything if the row that says what happened is telling the truth.
+`executed` would let every reader, including History, the Inbox receipt and any
+future export, infer a real payment. `simulated` forces each of them to handle
+it as its own case, which is what the client does with one Simulated pill on
+each row while the receipt copy itself reads like a settled provider event. The
+bootstrap advertises `capabilities.effect_executor` so an older Worker is read
+as `unavailable`, fail-closed. CONVENTIONS invariant 5 is untouched: no provider
+is called. Details: [Effect simulation](../EFFECT-SIMULATION.md).
+
+**Would change it if.** A real executor lands for one kind. That kind would gain
+`executed`, and its simulation would be removed rather than kept beside it.
 
 ---
 

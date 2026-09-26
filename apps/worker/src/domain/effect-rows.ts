@@ -11,9 +11,9 @@
 // on carries the sentence explaining that nothing happened. Neither is an error
 // string: both are the product telling the truth about a boundary it does not
 // cross.
-import type { EffectKind } from '@hermes/shared';
+import { effectSimulationSchema, type EffectKind, type EffectSimulation } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
-import { EFFECT_LABELS, EFFECT_UNAVAILABLE_REASON } from './effects.js';
+import { EFFECT_LABELS, EFFECT_SIMULATED_REASON, EFFECT_UNAVAILABLE_REASON } from './effects.js';
 import { requestAudiencePredicate } from './audience.js';
 
 export interface EffectRow {
@@ -27,13 +27,14 @@ export interface EffectRow {
   assignee_id: string | null;
   assignee_name: string | null;
   cancelled_reason: string | null;
+  enforcement_result: unknown;
   created_at: Date;
 }
 
 const SELECT = `
   SELECT e.id, e.request_id, e.decision_id, e.kind, e.status, e.required_role,
          e.approvals_required, e.assignee_id, u.name AS assignee_name,
-         e.cancelled_reason, e.created_at
+         e.cancelled_reason, e.enforcement_result, e.created_at
     FROM effects e
     LEFT JOIN users u ON u.id = e.assignee_id`;
 
@@ -84,6 +85,8 @@ export function effectReason(row: Pick<EffectRow, 'status' | 'required_role' | '
   switch (row.status) {
     case 'cancelled':
       return row.cancelled_reason ?? 'Cancelled by a later version';
+    case 'simulated':
+      return EFFECT_SIMULATED_REASON;
     case 'unavailable':
     case 'failed':
     case 'executed':
@@ -97,8 +100,17 @@ export function effectReason(row: Pick<EffectRow, 'status' | 'required_role' | '
   }
 }
 
+/** The simulation record, only on a `simulated` row and only if it parses. */
+export function effectSimulation(row: Pick<EffectRow, 'status' | 'enforcement_result'>): EffectSimulation | null {
+  if (row.status !== 'simulated') return null;
+  const result = row.enforcement_result as { simulation?: unknown } | null;
+  const parsed = effectSimulationSchema.safeParse(result?.simulation);
+  return parsed.success ? parsed.data : null;
+}
+
 export function toEffectEntity(row: EffectRow): Record<string, unknown> {
   return {
+    simulation: effectSimulation(row),
     id: row.id,
     request_id: row.request_id,
     kind: row.kind,

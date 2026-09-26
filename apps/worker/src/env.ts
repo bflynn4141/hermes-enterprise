@@ -48,6 +48,14 @@ export interface Env {
   MODEL_GATEWAY_MODE: string;
   /** '1' refuses to create new Workflow instances (engine-version runbook). */
   ENGINE_PAUSED: string;
+  /**
+   * 'unavailable' | 'simulated'. How Execute on a legacy effect answers.
+   * `simulated` writes a synthetic payment, signature or delivery record with
+   * status `simulated`, never `executed`, and contacts no provider. The code
+   * ignores this variable entirely when ENVIRONMENT is `production`
+   * (`effectExecutorMode`), so production always answers `unavailable`.
+   */
+  EFFECT_EXECUTOR_MODE?: string;
   /** Comma-separated list; a WebSocket upgrade or command needs a match. */
   ALLOWED_ORIGINS: string;
   /**
@@ -183,6 +191,11 @@ export interface Env {
   SENTRY_DSN?: string;
   /** The one passcode the request-access form accepts. Compared in constant time. */
   DEMO_ACCESS_PASSCODE?: string;
+  /**
+   * Set only on a pull-request preview, as a secret, by scripts/preview.mjs.
+   * Its presence turns on the passcode gate in src/preview-gate.ts.
+   */
+  PREVIEW_PASSCODE?: string;
   /** Server-side Raindrop ingestion credential. Never exposed to the client. */
   RAINDROP_WRITE_KEY?: string;
   /**

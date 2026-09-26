@@ -291,6 +291,8 @@ export interface AppState {
     automatedTriggers: boolean;
     memberInvitationMode: 'legacy_delivery' | 'setup_only';
     memberRoleTemplates: MemberRoleTemplate[];
+    /** How Execute on a legacy effect answers. Older Workers are read as `unavailable`. */
+    effectExecutor: 'unavailable' | 'simulated';
   };
   entities: EntityCache;
   sessions: Record<string, SessionState>;
@@ -386,6 +388,7 @@ export function initialState(): AppState {
       automatedTriggers: false,
       memberInvitationMode: 'legacy_delivery',
       memberRoleTemplates: [],
+      effectExecutor: 'unavailable',
     },
     entities: emptyEntities(),
     sessions: {},

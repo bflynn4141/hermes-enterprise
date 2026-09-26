@@ -72,7 +72,7 @@ runtime graph.
 | --- | --- |
 | WorkOS and local fake authentication, workspace creation, invitations, membership, step-up, and revocation | A hosted deployment needs configured WorkOS credentials and webhook or poller settings |
 | Private sessions, the official Hermes run loop, streaming, Stop, Guide, Queue, Retry, recovery, traces, and model selection | A hosted run needs verified Hermes capacity and a connected Nous Portal account |
-| Guarded requests, decisions, immutable evidence, receipts, history, role handoffs, and draft documents | Outreach, payment, access grants, and signatures remain recorded effects for a person to execute; this repository does not execute them |
+| Guarded requests, decisions, immutable evidence, receipts, history, role handoffs, and draft documents | Outreach, payment, access grants, and signatures remain recorded effects for a person to execute; this repository does not execute them. Outside production, Execute records a `simulated` outcome instead ([Effect simulation](EFFECT-SIMULATION.md)) |
 | Upload validation, extraction, R2 storage, HTML rendering, retention hooks, and subject erasure | PDF rendering is unavailable under workerd, so documents expose the HTML render and an explicit PDF status |
 | Durable event delivery through outbox rows, jobs, queues, Workflows, cron, and hibernating WebSockets | Optional external services fail without changing canonical product state |
 | Local scripted-provider development, mock browser tests, disposable live-stack tests, staging, and production configuration | Mock and scripted flows are clearly separated from live model behavior |
@@ -566,10 +566,15 @@ GET  /w/:ws/effects
 POST /w/:ws/effects/:id/execute
 ```
 
-Execute answers, every time:
+In production, Execute answers, every time:
 
 > Not executed. This build sends nothing, pays nothing, grants nothing and signs
 > nothing.
+
+Development and staging set `EFFECT_EXECUTOR_MODE=simulated`, so Execute moves
+the row to `simulated` with an invented `SIM-*` reference and timeline and still
+contacts nothing. `effectExecutorMode` ignores the variable in production. See
+[Effect simulation](EFFECT-SIMULATION.md).
 
 That is not a stub waiting to be filled in. There is no SMTP client, no payment
 provider, no signature provider and no webhook that would reach one, and there
@@ -688,7 +693,9 @@ curl -s -H "$AUTH" "http://localhost:8787/w/$WS/history/counts"
 E=$(curl -s -H "$AUTH" "http://localhost:8787/w/$WS/requests/$R/effects" | jq -r .items[0].id)
 curl -s -X POST -H "$AUTH" -H "$ORIGIN" -H 'content-type: application/json' -d '{}' \
   http://localhost:8787/w/$WS/effects/$E/execute
-# {"status":"unavailable","reason":"Not executed. This build sends nothing, ..."}
+# Local development runs EFFECT_EXECUTOR_MODE=simulated:
+# {"status":"simulated","enforcement_result":{"simulation":{"reference":"SIM-ACC-...", ...}}}
+# Production answers {"status":"unavailable","reason":"Not executed. This build sends nothing, ..."}
 ```
 
 **How fake auth satisfies step-up and CSRF in development.** `AUTH_MODE=fake`
@@ -913,7 +920,8 @@ separates current references from dated delivery evidence.
 3. **Effects are separate from decisions.** A decision records what a human
    decided. What that implies — an access grant, an email, a payment, a
    signature — is a separate `effects` row that a human with the required role
-   executes. In the pilot every execution returns `unavailable`.
+   executes. In production every execution returns `unavailable`; outside
+   production it may return `simulated` ([EFFECT-SIMULATION.md](EFFECT-SIMULATION.md)).
 4. **Counts are derived.** `v_inbox_count`, `v_pending_grants`,
    `v_created_documents`, `v_decision_count` and `v_session_status` are views.
    There is no counter to drift.
