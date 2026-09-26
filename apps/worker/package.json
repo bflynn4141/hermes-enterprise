@@ -19,21 +19,21 @@
   },
   "dependencies": {
     "@hermes/shared": "workspace:*",
-    "@sentry/cloudflare": "10.74.0",
+    "@sentry/cloudflare": "10.75.3",
     "@workos-inc/node": "10.13.0",
-    "drizzle-orm": "0.45.2",
-    "hono": "4.13.7",
+    "drizzle-orm": "0.45.3",
+    "hono": "4.13.8",
     "pg": "8.23.0",
     "unpdf": "1.8.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.22.0",
-    "@cloudflare/workers-types": "5.20260915.1",
-    "@types/node": "26.5.1",
+    "@cloudflare/workers-types": "5.20260918.1",
+    "@types/node": "26.6.1",
     "@types/pg": "8.23.1",
     "typescript": "5.9.3",
     "vitest": "4.1.11",
-    "wrangler": "4.131.2"
+    "wrangler": "4.135.0"
   }
 }
