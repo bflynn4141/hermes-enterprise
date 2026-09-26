@@ -43,6 +43,9 @@ async function seedApprovalFixture(): Promise<ApprovalFixture> {
     );
     adminMemberId = existing.rows.find((row) => row.user_id === base.adminId)!.id;
     reviewerMemberId = existing.rows.find((row) => row.user_id === base.memberId)!.id;
+    // A custom role for the role-selector steps below (decision C92: a member
+    // holds only roles the workspace has).
+    await c.query(`INSERT INTO workspace_roles (workspace_id, slug, name) VALUES ($1, 'budget', 'Budget')`, [base.workspaceId]);
     const inserted = await c.query<{ id: string }>(
       `INSERT INTO members (workspace_id, user_id, role, reviewer_roles) VALUES
         ($1, $2, 'member', ARRAY['budget']), ($1, $3, 'member', ARRAY[]::text[])
