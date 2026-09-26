@@ -1181,10 +1181,12 @@ export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavail
       ? 'Unavailable · nothing sent, paid, granted or signed'
       : effect.status === 'cancelled'
         ? 'Cancelled'
-        : executor === 'simulated'
-          ? `Waiting on the ${effect.required_role} role`
-          : `Pending · no executor · needs the ${effect.required_role} role`;
-  return effect.reason ? `${base} · ${effect.reason}` : base;
+        : effect.confirmations && effect.confirmations.recorded > 0
+          ? `${effect.confirmations.recorded} of ${effect.confirmations.required} ${effect.required_role} confirmations`
+          : executor === 'simulated'
+            ? `Waiting on the ${effect.required_role} role`
+            : `Pending · no executor · needs the ${effect.required_role} role`;
+  return effect.reason && !effect.confirmations?.recorded ? `${base} · ${effect.reason}` : base;
 }
 
 /**
@@ -1239,7 +1241,10 @@ export function LegacyEffectsPanel({
             {simulated && (effect.status === 'simulated' || effect.status === 'pending') && (
               <span className="pill illustrative" title={SIMULATED_EFFECT_HONESTY}>Simulated</span>
             )}
-            {effect.status === 'pending' && (
+            {effect.status === 'pending' && effect.confirmations?.by_viewer && (
+              <span className="meta" data-testid="effect-awaiting-second">Waiting on another {effect.required_role} member</span>
+            )}
+            {effect.status === 'pending' && !effect.confirmations?.by_viewer && (
               <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>
                 {busy === effect.id ? (simulated ? 'Executing…' : 'Recording…') : action}
               </Button>

@@ -284,6 +284,15 @@ export const effectEntitySchema = z
     reason: z.string().max(200).nullable(),
     /** Optional for rolling compatibility with Workers deployed before simulation existed. */
     simulation: effectSimulationSchema.nullable().optional(),
+    /** Only on effects that need more than one distinct holder, such as a payment. */
+    confirmations: z
+      .object({
+        required: z.number().int().min(2),
+        recorded: z.number().int().min(0),
+        by_viewer: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type EffectEntity = z.infer<typeof effectEntitySchema>;

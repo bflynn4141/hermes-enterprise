@@ -494,7 +494,7 @@ function agreementPayload(): Record<string, unknown> {
     number: AGREEMENT_NUMBER,
     version_label: 'v1 · Standard services template',
     parties: [
-      { name: 'Nous Research, Inc.', email: 'finance@nous.example' },
+      { name: 'Hermes Teams Demo Co.', email: 'finance@hermes-teams-demo.example' },
       { name: 'Robin Studio LLC', email: 'robin@robinstudio.example' },
     ],
     effective_dates: { from: 'Nov 1, 2026', to: 'Dec 31, 2026' },

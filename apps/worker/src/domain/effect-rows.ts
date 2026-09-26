@@ -29,12 +29,16 @@ export interface EffectRow {
   cancelled_reason: string | null;
   enforcement_result: unknown;
   created_at: Date;
+  /** Who has confirmed a multi-person effect (0071), oldest first. */
+  confirmed_by: string[];
 }
 
 const SELECT = `
   SELECT e.id, e.request_id, e.decision_id, e.kind, e.status, e.required_role,
          e.approvals_required, e.assignee_id, u.name AS assignee_name,
-         e.cancelled_reason, e.enforcement_result, e.created_at
+         e.cancelled_reason, e.enforcement_result, e.created_at,
+         ARRAY(SELECT c.user_id::text FROM effect_confirmations c
+                WHERE c.effect_id = e.id ORDER BY c.created_at) AS confirmed_by
     FROM effects e
     LEFT JOIN users u ON u.id = e.assignee_id`;
 
@@ -81,7 +85,10 @@ export async function loadEffect(tx: Tx, effectId: string, audienceUserId?: stri
 }
 
 /** The sentence under an effect's label: what it is waiting for, or what happened. */
-export function effectReason(row: Pick<EffectRow, 'status' | 'required_role' | 'assignee_name' | 'cancelled_reason'>): string {
+export function effectReason(
+  row: Pick<EffectRow, 'status' | 'required_role' | 'assignee_name' | 'cancelled_reason'>
+    & Partial<Pick<EffectRow, 'approvals_required' | 'confirmed_by'>>,
+): string {
   switch (row.status) {
     case 'cancelled':
       return row.cancelled_reason ?? 'Cancelled by a later version';
@@ -94,6 +101,9 @@ export function effectReason(row: Pick<EffectRow, 'status' | 'required_role' | '
     case 'assigned':
     case 'pending':
     default:
+      if ((row.approvals_required ?? 1) > 1 && (row.confirmed_by?.length ?? 0) > 0) {
+        return `${row.confirmed_by!.length} of ${row.approvals_required} ${row.required_role} confirmations · Nothing executed`;
+      }
       return row.assignee_name
         ? `Waiting on ${row.assignee_name} · ${row.required_role} · Nothing executed`
         : `Waiting on a ${row.required_role} reviewer · Nothing executed`;
@@ -108,8 +118,21 @@ export function effectSimulation(row: Pick<EffectRow, 'status' | 'enforcement_re
   return parsed.success ? parsed.data : null;
 }
 
-export function toEffectEntity(row: EffectRow): Record<string, unknown> {
+/**
+ * `viewerId` answers "have I already confirmed this?", so the Inbox can say it
+ * is waiting on someone else instead of offering the same person a second vote.
+ */
+export function toEffectEntity(row: EffectRow, viewerId?: string): Record<string, unknown> {
   return {
+    ...(row.approvals_required > 1
+      ? {
+          confirmations: {
+            required: row.approvals_required,
+            recorded: row.confirmed_by.length,
+            by_viewer: viewerId !== undefined && row.confirmed_by.includes(viewerId),
+          },
+        }
+      : {}),
     simulation: effectSimulation(row),
     id: row.id,
     request_id: row.request_id,

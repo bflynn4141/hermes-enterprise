@@ -141,6 +141,7 @@ interface SettingsRow {
   max_concurrent_runs: number;
   flags: Record<string, unknown>;
   timezone: string;
+  legal_name: string | null;
 }
 
 const DEFAULTS: SettingsRow = {
@@ -151,12 +152,13 @@ const DEFAULTS: SettingsRow = {
   max_concurrent_runs: 3,
   flags: {},
   timezone: 'UTC',
+  legal_name: null,
 };
 
 async function readSettings(tx: Tx, workspaceId: string): Promise<SettingsRow> {
   const { rows } = await tx.query<SettingsRow>(
     `SELECT default_model_id, default_effort, default_runtime,
-            daily_token_cap::text AS daily_token_cap, max_concurrent_runs, flags, timezone
+            daily_token_cap::text AS daily_token_cap, max_concurrent_runs, flags, timezone, legal_name
        FROM workspace_settings WHERE workspace_id = $1`,
     [workspaceId],
   );
@@ -213,6 +215,7 @@ function settingsView(
       warn: caps.warn,
     },
     timezone: settings.timezone,
+    legal_name: settings.legal_name,
     // Defaults and caps are part of ordinary run behavior, and notifications
     // belong to the current user. Feature flags, the network allowlist and a
     // pending workspace deletion are administrative configuration state.
@@ -256,6 +259,7 @@ interface PatchBody {
   timezone?: unknown;
   flags?: unknown;
   fetch_url_allowlist?: unknown;
+  legal_name?: unknown;
   notifications?: { approvals?: unknown; blocked?: unknown; digest?: unknown };
 }
 
@@ -268,6 +272,7 @@ const WORKSPACE_FIELDS = [
   'timezone',
   'flags',
   'fetch_url_allowlist',
+  'legal_name',
 ] as const;
 
 const EFFORTS = ['low', 'medium', 'high', 'max'] as const;
@@ -383,14 +388,24 @@ async function applyWorkspaceFields(env: Env, work: TenantWork, body: PatchBody)
     next.flags = { ...next.flags, fetch_url_allowlist: readHosts(body.fetch_url_allowlist) };
     changed.push('fetch_url_allowlist');
   }
+  if ('legal_name' in body) {
+    // The party name on agreements. Blank or null clears it, and documents
+    // fall back to the workspace name.
+    const legalName = typeof body.legal_name === 'string' ? body.legal_name.trim() : body.legal_name;
+    if (legalName !== null && legalName !== '' && (typeof legalName !== 'string' || legalName.length > 200)) {
+      throw new RouteError('legal_name must be text of at most 200 characters, or null', 'bad_legal_name', 422);
+    }
+    next.legal_name = legalName ? legalName : null;
+    changed.push('legal_name');
+  }
 
   if (changed.length === 0) return changed;
 
   await work.tx.query(
     `INSERT INTO workspace_settings
        (workspace_id, default_model_id, default_effort, default_runtime,
-        daily_token_cap, max_concurrent_runs, flags, timezone)
-     VALUES ($1, $2, $3, $4, $5::bigint, $6, $7::jsonb, $8)
+        daily_token_cap, max_concurrent_runs, flags, timezone, legal_name)
+     VALUES ($1, $2, $3, $4, $5::bigint, $6, $7::jsonb, $8, $9)
      ON CONFLICT (workspace_id) DO UPDATE SET
        default_model_id = EXCLUDED.default_model_id,
        default_effort = EXCLUDED.default_effort,
@@ -399,6 +414,7 @@ async function applyWorkspaceFields(env: Env, work: TenantWork, body: PatchBody)
        max_concurrent_runs = EXCLUDED.max_concurrent_runs,
        flags = EXCLUDED.flags,
        timezone = EXCLUDED.timezone,
+       legal_name = EXCLUDED.legal_name,
        updated_at = now()`,
     [
       work.workspaceId,
@@ -409,6 +425,7 @@ async function applyWorkspaceFields(env: Env, work: TenantWork, body: PatchBody)
       next.max_concurrent_runs,
       JSON.stringify(next.flags),
       next.timezone,
+      next.legal_name,
     ],
   );
   return changed;

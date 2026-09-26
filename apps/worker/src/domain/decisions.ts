@@ -39,6 +39,7 @@ import {
 } from '@hermes/shared';
 import { publishEvents, enqueueJob } from '../jobs.js';
 import type { Tx } from '../db/client.js';
+import { workspaceLegalName } from './legal-name.js';
 import { type TenantWork } from '../routes/tenant.js';
 import { RouteError } from '../routes/errors.js';
 import { plannedEffects } from './effects.js';
@@ -286,7 +287,7 @@ async function prepareContractorAgreement(
     number,
     version_label: 'draft',
     parties: [
-      { name: 'Nous Research' },
+      { name: await workspaceLegalName(work.tx, work.workspaceId) },
       email ? { name, email } : { name },
     ],
     sections: [{
