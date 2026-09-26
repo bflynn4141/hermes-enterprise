@@ -2385,6 +2385,7 @@ export const ALL_TABLES = {
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,
+  effect_confirmations: effectConfirmations,
   request_notes: requestNotes,
   approval_resources: approvalResources,
   approval_policies: approvalPolicies,
