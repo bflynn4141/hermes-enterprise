@@ -23,7 +23,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from enterprise_bridge.packages import packaged_skills
-from enterprise_bridge.runtime_policy import build_skill_prompt_sections
+from enterprise_bridge.runtime_policy import RUNTIME_REVISION, build_skill_prompt_sections
 
 PACKAGES = packaged_skills()
 LEGACY_PARTNER_PACKAGE = PACKAGES["enterprise_bridge:partner-program-screening"]
@@ -411,7 +411,7 @@ def main():
             )
             partner_readiness = json.loads((profile / "home/runtime-readiness.json").read_text())
             assert partner_readiness["agent_id"] == partner_agent_id, partner_readiness
-            assert partner_readiness["runtime_revision"] == "f97608f178d1ffeca59860195ab7da295f7c8e5f"
+            assert partner_readiness["runtime_revision"] == RUNTIME_REVISION
             assert partner_readiness["skills"] == [{
                 "name": PARTNER_PACKAGE["name"], "version": PARTNER_PACKAGE["version"],
                 "artifact_digest": PARTNER_PACKAGE["artifact_digest"],
