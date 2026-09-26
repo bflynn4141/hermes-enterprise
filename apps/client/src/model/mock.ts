@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentDirectoryEntry, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -110,6 +110,8 @@ interface MockOptions {
   providerKeysLocked?: boolean;
   /** Browser-only fixture for the Admin capacity step-up and lifecycle flow. */
   runtimeCapacityStepUp?: boolean;
+  /** Admin → Roles writes answer `reauth_required` until the step-up cookie is set. */
+  roleWritesStepUp?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -381,7 +383,7 @@ export function createMockBackend(input: MockOptions = {}) {
   }
 
   const members: MemberEntity[] = [
-    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
+    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['partnerships', 'access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
     ...(empty ? [] : [
       { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance', 'agent_admin'], joined_at: iso(-5000), version: 1 },
     ]),
@@ -773,6 +775,38 @@ export function createMockBackend(input: MockOptions = {}) {
     });
     return items;
   };
+
+  /**
+   * Workspace roles, mirroring the server: five built-ins, custom roles an
+   * Admin adds, and membership stored as slugs in `members.reviewer_roles`, so
+   * who holds a role is always read from the members, never kept twice.
+   */
+  type MockRole = Omit<WorkspaceRole, 'members' | 'agents'>;
+  const builtinRole = (index: number, slug: (typeof BUILTIN_ROLE_SLUGS)[number], name: string, description: string, agentTemplate: WorkspaceRole['agent_template'] = null): MockRole =>
+    ({ id: mockUuid(1_400 + index), slug, name, description, builtin: true, agent_template: agentTemplate });
+  const roles: MockRole[] = [
+    builtinRole(0, 'partnerships', 'Partnerships', 'Screens partner applicants, gathers evidence, and hands confirmed work to Finance.', 'partnerships-agent'),
+    builtinRole(1, 'finance', 'Finance', 'Reviews invoices and agreements handed over from Partnerships, and confirms payments.', 'finance-agent'),
+    builtinRole(2, 'access', 'Access reviewer', 'Confirms access grants for admitted partners.'),
+    builtinRole(3, 'legal', 'Legal', 'Reviews agreements before they are signed.'),
+    builtinRole(4, 'shared_intelligence_reviewer', 'Shared Intelligence reviewer', 'Approves what agents may publish to Shared Intelligence.'),
+  ];
+  let nextRoleId = 1_420;
+  // Same rule as apps/worker/src/domain/roles.ts `slugForRoleName`.
+  const roleSlugFor = (name: string): string => {
+    const base = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+    return /^[a-z]/.test(base) ? base : `role-${base}`.slice(0, 32);
+  };
+  const roleView = (role: MockRole): WorkspaceRole => ({
+    ...role,
+    members: members
+      .filter((member) => member.status === 'active' && member.user_id && member.reviewer_roles.includes(role.slug))
+      .map((member) => ({ user_id: member.user_id!, name: member.name }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    agents: agentDirectory()
+      .filter((agent) => agent.role?.team.slug === role.slug)
+      .map((agent) => ({ agent_id: agent.id, name: agent.name, principal: { user_id: agent.role!.principal.user_id, name: agent.role!.principal.name } })),
+  });
 
   const history = empty
     ? []
@@ -1698,6 +1732,56 @@ export function createMockBackend(input: MockOptions = {}) {
         members.splice(index, 1);
         return new Response(null, { status: 204 });
       }
+    }
+    if (path === `/w/${WS}/roles` || path.startsWith(`/w/${WS}/roles/`)) {
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      if (method === 'GET' && p('/roles')) return json({ items: roles.map(roleView) });
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_roles_stepup=1');
+      if (options.roleWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      if (method === 'POST' && p('/roles')) {
+        const parsed = workspaceRoleCreateSchema.safeParse(body);
+        if (!parsed.success) return fail(422, 'invalid_body', 'Name the role.');
+        const slug = roleSlugFor(parsed.data.name);
+        if (roles.some((role) => role.slug === slug || role.name.toLowerCase() === parsed.data.name.toLowerCase())) return fail(409, 'role_exists', 'A role with that name exists.');
+        const role: MockRole = { id: mockUuid(nextRoleId++), slug, name: parsed.data.name, description: parsed.data.description, builtin: false, agent_template: null };
+        roles.push(role);
+        return json(roleView(role), 201);
+      }
+      const roleMatch = match(new RegExp(`^/w/${WS}/roles/([^/]+)(/members)?$`));
+      const role = roleMatch ? roles.find((row) => row.id === roleMatch[1]) : undefined;
+      if (!roleMatch || !role) return fail(404, 'not_found');
+      if (roleMatch[2] && method === 'PUT') {
+        const parsed = workspaceRoleMembersSchema.safeParse(body);
+        if (!parsed.success) return fail(422, 'invalid_body');
+        const wanted = new Set(parsed.data.user_ids);
+        const active = members.filter((member) => member.status === 'active' && member.user_id);
+        if ([...wanted].some((id) => !active.some((member) => member.user_id === id))) return fail(422, 'unknown_member', 'Only active members can hold a role.');
+        const viewer = active.find((member) => member.user_id === USER);
+        if (viewer && viewer.reviewer_roles.includes(role.slug) !== wanted.has(USER)) return fail(409, 'self_change', 'Another Admin changes your own roles.');
+        for (const member of active) {
+          const holds = member.reviewer_roles.includes(role.slug);
+          if (holds === wanted.has(member.user_id!)) continue;
+          member.reviewer_roles = holds ? member.reviewer_roles.filter((slug) => slug !== role.slug) : [...member.reviewer_roles, role.slug];
+          member.version += 1;
+        }
+        return json(roleView(role));
+      }
+      if (!roleMatch[2] && method === 'PATCH') {
+        const parsed = workspaceRolePatchSchema.safeParse(body);
+        if (!parsed.success) return fail(422, 'invalid_body');
+        if (role.builtin && parsed.data.name !== undefined && parsed.data.name !== role.name) return fail(422, 'builtin_role_name', 'Built-in roles keep their name.');
+        if (parsed.data.name !== undefined && roles.some((row) => row.id !== role.id && row.name.toLowerCase() === parsed.data.name!.toLowerCase())) return fail(409, 'role_exists', 'A role with that name exists.');
+        if (parsed.data.name !== undefined) role.name = parsed.data.name;
+        if (parsed.data.description !== undefined) role.description = parsed.data.description;
+        return json(roleView(role));
+      }
+      if (!roleMatch[2] && method === 'DELETE') {
+        if (role.builtin) return fail(422, 'builtin_role', 'Built-in roles cannot be deleted.');
+        if (roleView(role).members.length > 0) return fail(409, 'role_in_use', 'Someone holds this role.');
+        roles.splice(roles.indexOf(role), 1);
+        return new Response(null, { status: 204 });
+      }
+      return fail(405, 'method_not_allowed');
     }
     if (p('/invitations') && method === 'GET') return seat === 'admin' ? page(invitations) : fail(403, 'admin_required');
     if (p('/invitations') && method === 'POST') {

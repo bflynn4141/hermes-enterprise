@@ -328,7 +328,8 @@ export const memberEntitySchema = z
     email: z.string().max(200),
     role: memberRoleSchema,
     status: z.enum(['active', 'invited', 'expired', 'inactive']),
-    reviewer_roles: z.array(z.string().max(32)).max(8).default([]),
+    /** Slugs of the workspace roles this person holds (decision C92). */
+    reviewer_roles: z.array(z.string().max(32)).max(32).default([]),
     joined_at: z.iso.datetime({ offset: true }).nullable(),
     version: z.number().int().min(0).default(0),
   })

@@ -1523,3 +1523,41 @@ then proves the directory body contains none of them, the Admin can toggle
 approval and pause a skill (recorded as the Admin), the parked call stays
 hidden and undecidable, sessions and instructions stay 404, a stale sign-in is
 refused, and a Member still cannot configure or read another person's agent.
+
+## C92. Roles are workspace data; holding one is what a reviewer tag was
+
+**Decided September 26, 2026** (roles-and-agents plan, piece 2).
+
+- `workspace_roles` (migration 0072) is each workspace's catalog of roles:
+  built-in Partnerships, Finance, Access reviewer, Legal and Shared
+  Intelligence reviewer, seeded by a trigger on every new workspace, plus any
+  an Admin adds. A role has a name, a description of the responsibility, and
+  optionally the agent template its agents use.
+- Holding a role is its slug in `members.reviewer_roles`. That column already
+  gated effects, the Finance decision rule and approval policy role selectors,
+  so every existing check keeps working; a trigger now refuses a slug the
+  workspace has no role for, and another refuses deleting a role someone
+  holds. Existing free-text tags were lowercased and kept as custom roles.
+- Many people may hold a role. `enterprise_teams` stays the handoff lane (one
+  person and one agent per side) and now references its role by slug; making
+  lanes general is piece 5.
+- A person's job role persists: accepting an invitation grants the role whose
+  agent template the invitation chose, and binding a lane grants that lane's
+  role to its person (Finance already did; Partnerships now does too).
+- `/w/:ws/roles` lists, adds, renames (custom only; built-ins keep their names
+  because lanes and effects describe them), describes, staffs and removes
+  roles. It is Admin-only, writes need a recent sign-in, and nobody changes
+  their own roles, as with `PATCH /members/:id`.
+
+**Why.** Brian decided reviewer tags merge into roles and that many people
+hold a role. Keeping membership in the existing column made the merge a data
+model change with no change to any authority check, instead of a rewrite of
+every one.
+
+**Evidence.** `test/db/roles.test.ts` covers the built-ins and their
+backfilled holders, Admin-only reads and step-up on writes, custom role
+lifecycle, many holders, `self_change`, `unknown_member`, the member route and
+database refusing an unknown role, lane binding recording Partnerships, and a
+workspace with roles, lanes and holders still deleting.
+`test/db/member-agent-coordination.test.ts` checks an accepted invitee holds
+their job role.
