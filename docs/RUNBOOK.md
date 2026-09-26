@@ -527,29 +527,55 @@ Roll out a runtime change in this order:
    new launcher in the `stable` ring. Roll back by restoring the previous
    launcher and binding together; never relabel an unverified process.
 
-### Re-pinning managed Hermes Cloud instances
+### Validating a new Hermes release
 
 Hermes Cloud moves an instance to its latest image when the instance restarts,
 and the management API can only move forward (`update_image`). The managed
-plugin requires one exact Hermes version, so a Cloud release refuses every run
-until the repo is re-pinned. The symptom is a 503 `native_readiness_unavailable`
-on submit while capabilities still pass. Check `/api/status` on each instance
-(it needs no login) to see the version it runs.
+plugin accepts only the releases listed in
+`runtime/hermes/enterprise_bridge/runtimes.py`, so an instance that restarts
+onto an unlisted release refuses every run. The symptom is a 503
+`native_readiness_unavailable` on submit while capabilities still pass. Check
+`/api/status` on each instance (it needs no login) to see the version it runs.
 
-After the re-pin merges, update each instance from a dashboard session:
+The `Hermes release watch` workflow checks upstream every day at 13:00 UTC. When
+the latest release is not on the list, it opens one issue, "Hermes <tag> is
+out: validate it before Cloud instances restart". The issue says which relied-on
+modules changed, which toolsets appeared or disappeared, and which governed
+config defaults changed, and whether the install, the plugin tests and both
+probes pass with the release added. The same workflow reads each instance's
+`/api/status` from the `HERMES_CLOUD_STATUS_HOSTS` secret (`label=hostname`,
+comma-separated) and opens a separate issue when one runs an unlisted release.
+It closes both issues once they no longer apply.
+
+To validate a release, fetch it into an upstream clone and add it:
+
+```sh
+python3 runtime/hermes/scripts/hermes_release.py check --repo <clone> --candidate <sha>
+python3 runtime/hermes/scripts/hermes_release.py add --repo <clone> --revision <sha>
+python3 runtime/hermes/install.py   # then both probes, as in runtime/hermes/README.md
+```
+
+`add` makes the release the primary pin in `runtimes.py`, the connector map,
+`contract.json` and `install.py`, and keeps the older releases, because
+instances that have not restarted still run them. Drop an older release once
+no instance can run it. Adding a release changes the plugin bytes, so after it
+merges, approve the new plugin revision and digest in `wrangler.jsonc` (as in
+#171) and update each instance from a dashboard session *before* it restarts:
 
 1. Install the plugin at the merge commit:
    `POST /api/dashboard/agent-plugins/install` with
    `{identifier: "https://github.com/bflynn4141/hermes-enterprise.git#runtime/hermes/enterprise_bridge", ref: <merge sha>, enable: true, force: true}`.
-2. Write `HERMES_ENTERPRISE_SOURCE_REVISION`, `HERMES_ENTERPRISE_PLUGIN_REVISION`
-   and `HERMES_ENTERPRISE_PLUGIN_SHA256` with `PUT /api/env {key, value}`.
-   The management API's `update_env` accepts these keys, but the instance's
-   `.env` values win, so it changes nothing on its own.
-3. Diff `toolsets.TOOLSETS` and the config defaults between the two releases.
-   Add new toolsets to `agent.disabled_toolsets`, and set any governed key
-   whose default changed explicitly, through `GET`/`PUT /api/config/raw`.
-   Compare the file line by line before and after the write. (0.21.5 added
-   `a2a`, `setup` and `stt`, and flipped `gateway.multiplex_profiles` to true.)
+2. Write `HERMES_ENTERPRISE_PLUGIN_REVISION` and `HERMES_ENTERPRISE_PLUGIN_SHA256`
+   with `PUT /api/env {key, value}`. `HERMES_ENTERPRISE_SOURCE_REVISION` may name
+   any listed release. The management API's `update_env` accepts these keys,
+   but the instance's `.env` values win, so it changes nothing on its own.
+3. Apply what `check` reported. Add new toolsets to `agent.disabled_toolsets`,
+   and set any governed key whose default changed explicitly, through
+   `GET`/`PUT /api/config/raw`. Compare the file line by line before and after
+   the write. (0.21.5 added `a2a`, `setup` and `stt`, and flipped
+   `gateway.multiplex_profiles` to true. `a2a` and `stt` register at runtime
+   rather than in `toolsets.py`, so `check` cannot list them; readiness still
+   refuses a config that leaves any toolset enabled.)
 4. Stop and then start the instance through the management API. Its `restart`
    call times out while the stop continues, and the start is lost. Readiness
    is confirmed only when `/api/logs?file=agent` shows "Cloud-managed
@@ -585,6 +611,7 @@ sequence is `docs/WORKOS-PRODUCTION-CHECKLIST.md`.
 | `STAGING_URL` | variable | staging | the smoke test |
 | `PRODUCTION_URL` | variable | production | the smoke test |
 | `BACKUP_R2_BUCKET` | variable | production | the backup upload |
+| `HERMES_CLOUD_STATUS_HOSTS` | secret | none | the release watch's instance check, as `label=hostname,…` |
 
 ---
 
