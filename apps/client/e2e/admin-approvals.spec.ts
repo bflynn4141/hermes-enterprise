@@ -1,0 +1,173 @@
+import { expect, test, type Page } from '@playwright/test';
+
+// Admin → Approvals against the mock backend, which mirrors the server's
+// approval routes: seven rules at their defaults, the same refusals, member
+// roles kept on members, and invitations that carry the roles a person gets
+// when they join. Run on its own port: E2E_PORT=4231.
+const app = (page: Page) => page.getByRole('region', { name: 'Application' });
+const shots = process.env.ADMIN_APPROVALS_SCREENSHOTS;
+
+/** The app pane scrolls on its own, so a tall viewport is what gets a whole page into one shot. */
+async function shoot(page: Page, name: string, height = 1900): Promise<void> {
+  if (!shots) return;
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: size.width, height });
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${shots}/${name}.png` });
+  await page.setViewportSize(size);
+}
+
+test('an Admin reads who approves what, changes Payment to three Finance people, and resets it', async ({ page }) => {
+  await page.setViewportSize({ width: 1840, height: 1000 });
+  await page.goto('/#admin/Approvals');
+  const pane = app(page);
+  await expect(pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Approvals', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(pane.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
+  await expect(pane.getByText('Who approves business decisions and the actions that follow them. This is separate from the command safety checks Hermes agents ask for.')).toBeVisible();
+  await expect(pane.getByText('Changes apply to work already waiting as well as new work.')).toBeVisible();
+
+  const decisions = pane.getByRole('list', { name: 'Decisions' });
+  const actions = pane.getByRole('list', { name: 'Actions after approval' });
+  await expect(decisions.getByRole('listitem')).toHaveCount(3);
+  await expect(actions.getByRole('listitem')).toHaveCount(4);
+  await expect(decisions.getByRole('button', { name: /^Approve an invoice draft/ })).toContainText('Invoices handed over from Partnerships also go to the Finance person on that handoff.');
+  const payment = actions.getByRole('button', { name: /^Pay an approved invoice/ });
+  await expect(payment).toContainText('Finance · 2 different people · Default');
+  await expect(actions.getByRole('button', { name: /^Grant access/ })).toContainText('Access reviewer · Default');
+  await shoot(page, 'approvals-list');
+
+  await payment.click();
+  await expect(page).toHaveURL(/#admin\/Approvals\/payment$/);
+  await expect(pane.getByRole('heading', { name: 'Pay an approved invoice', exact: true })).toBeVisible();
+  const who = pane.getByRole('region', { name: 'Who can approve' });
+  await expect(who.getByRole('checkbox', { name: /^Finance/ })).toBeChecked();
+  await expect(who.getByRole('checkbox', { name: /^Finance/ })).toHaveAccessibleName(/Alex Rivera/);
+  await expect(who.getByRole('checkbox', { name: /^Admins/ })).not.toBeChecked();
+  await expect(who.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
+  await expect(who.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await who.getByRole('combobox', { name: 'How many different people' }).selectOption('3');
+  await expect(who.getByRole('switch', { name: 'Can the person who approved the request also do this?' })).toHaveAttribute('aria-checked', 'true');
+  await who.getByRole('button', { name: 'Save' }).click();
+  await expect(who.getByRole('status')).toHaveText('Saved.');
+  await expect(who.getByRole('button', { name: 'Reset to default' })).toBeVisible();
+  await shoot(page, 'approvals-action-rule', 1300);
+
+  await pane.getByRole('button', { name: '← Approvals' }).click();
+  await expect(payment).toContainText('Finance · 3 different people');
+  await expect(payment).not.toContainText('Default');
+
+  await payment.click();
+  await who.getByRole('button', { name: 'Reset to default' }).click();
+  await expect(who.getByRole('status')).toHaveText('Back to the default.');
+  await expect(who.getByRole('combobox', { name: 'How many different people' })).toHaveValue('2');
+  await expect(who.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
+  await pane.getByRole('button', { name: '← Approvals' }).click();
+  await expect(payment).toContainText('Finance · 2 different people · Default');
+
+  // Roles and approvals read as one system.
+  await pane.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Roles', exact: true }).click();
+  await expect(pane.getByRole('list', { name: 'Roles' }).getByRole('button', { name: /^Finance/ })).toContainText('Approves Pay an approved invoice');
+});
+
+test('a decision takes one person, needs someone to approve it, and warns about a role nobody holds', async ({ page }) => {
+  await page.setViewportSize({ width: 1840, height: 1000 });
+  // An old link to the page it replaced still lands here.
+  await page.goto('/#admin/Inbox%20rules');
+  const pane = app(page);
+  await expect(pane.getByRole('heading', { name: 'Approvals', exact: true })).toBeVisible();
+  await pane.getByRole('list', { name: 'Decisions' }).getByRole('button', { name: /^Approve an invoice draft/ }).click();
+  await expect(page).toHaveURL(/#admin\/Approvals\/invoice$/);
+  const who = pane.getByRole('region', { name: 'Who can approve' });
+  await expect(who.getByRole('combobox', { name: 'How many different people' })).toHaveCount(0);
+  const requester = who.getByRole('switch', { name: 'Can the person whose agent prepared this approve it?' });
+  await expect(requester).toHaveAttribute('aria-checked', 'true');
+
+  await who.getByRole('checkbox', { name: /^Admins/ }).uncheck();
+  await expect(who.getByRole('alert')).toHaveText('Choose at least one group who can approve.');
+  await expect(who.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+  await who.getByRole('checkbox', { name: /^Legal/ }).check();
+  await expect(who).toContainText('Nobody holds Legal yet, so this will wait until someone does.');
+  await who.getByRole('checkbox', { name: /^Finance/ }).check();
+  await requester.click();
+  await expect(requester).toHaveAttribute('aria-checked', 'false');
+  await expect(who.getByRole('button', { name: 'Save' })).toBeEnabled();
+  await shoot(page, 'approvals-decision-rule', 1300);
+  await who.getByRole('button', { name: 'Save' }).click();
+  await expect(who.getByRole('status')).toHaveText('Saved.');
+  await pane.getByRole('button', { name: '← Approvals' }).click();
+  await expect(pane.getByRole('list', { name: 'Decisions' }).getByRole('button', { name: /^Approve an invoice draft/ }))
+    .toContainText('Finance or Legal · the person whose agent prepared it can’t approve it');
+
+  // Narrow: the rule still reads at phone width.
+  await page.setViewportSize({ width: 430, height: 900 });
+  await expect(pane.getByRole('list', { name: 'Decisions' })).toBeVisible();
+  const overflow = await pane.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await shoot(page, 'approvals-list-narrow', 2400);
+});
+
+test('inviting a member with Finance shows what they will be able to approve', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+  await pane.getByRole('button', { name: 'Invite member' }).click();
+  const invite = page.getByRole('dialog', { name: 'Invite member' });
+  await expect(invite.getByText('Can approve: Nothing yet')).toBeVisible();
+  await invite.getByRole('textbox', { name: 'Work email' }).fill('robin@example.com');
+  await invite.getByRole('checkbox', { name: 'Finance' }).check();
+  await expect(invite.getByText('Can approve: Pay an approved invoice')).toBeVisible();
+  if (shots) await page.screenshot({ path: `${shots}/invite-with-roles.png` });
+  await invite.getByRole('button', { name: 'Send invitation' }).click();
+  await expect(invite).toHaveCount(0);
+  const card = pane.getByRole('listitem').filter({ hasText: 'robin@example.com' });
+  await expect(card).toContainText('Gets Finance when they join');
+});
+
+test('an Admin changes a member’s roles in Manage and sees what they can approve update', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+
+  await pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' }).getByRole('button', { name: 'Manage' }).click();
+  const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
+  const line = manage.getByText(/^Can approve:/);
+  await expect(manage.getByRole('checkbox', { name: 'Finance' })).toBeChecked();
+  await expect(line).toContainText('Pay an approved invoice');
+  await expect(manage.getByRole('button', { name: 'Save roles' })).toBeDisabled();
+  await manage.getByRole('checkbox', { name: 'Finance' }).uncheck();
+  await manage.getByRole('checkbox', { name: 'Access reviewer' }).check();
+  await expect(line).not.toContainText('Pay an approved invoice');
+  await expect(line).toContainText('Grant access to an admitted partner');
+  if (shots) await page.screenshot({ path: `${shots}/manage-with-roles.png` });
+  await manage.getByRole('button', { name: 'Save roles' }).click();
+  await expect(manage.getByRole('status')).toHaveText('Roles updated.');
+  await manage.getByRole('button', { name: 'Done' }).click();
+  await expect(pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' })).toContainText('Access reviewer');
+
+  // Your own roles are read-only here.
+  await pane.getByRole('listitem').filter({ hasText: 'Maya Chen' }).getByRole('button', { name: 'Manage' }).click();
+  const you = page.getByRole('dialog', { name: 'Maya Chen' });
+  await expect(you).toContainText('Roles: Partnerships, Access reviewer. Another Admin changes your own roles.');
+  await expect(you.getByRole('checkbox')).toHaveCount(0);
+  await expect(you.getByText(/^Can approve:/)).toContainText('Admit a partner applicant');
+});
+
+test('a rule change without a recent sign-in offers one and keeps the draft', async ({ page }) => {
+  await page.goto('/?approvals=stepup#admin/Approvals/signature');
+  const who = app(page).getByRole('region', { name: 'Who can approve' });
+  await who.getByRole('checkbox', { name: /^Legal/ }).check();
+  await who.getByRole('button', { name: 'Save' }).click();
+  await expect(who.getByRole('alert')).toContainText('Changing who approves needs a recent sign-in.');
+  await expect(who.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await expect(who.getByRole('checkbox', { name: /^Legal/ })).toBeChecked();
+});
+
+test('a Member has no Approvals page', async ({ page }) => {
+  await page.goto('/?seat=member#admin/Approvals');
+  const pane = app(page);
+  await expect(pane.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(pane.getByRole('list', { name: 'Decisions' })).toHaveCount(0);
+});

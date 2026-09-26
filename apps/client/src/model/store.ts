@@ -26,6 +26,7 @@ import {
   type StreamEvent,
   type SessionSnapshot,
 } from '@hermes/shared';
+import { ADMIN_VIEW_ALIASES } from './constants.js';
 
 const PERSONAL_SETTINGS_VIEWS = new Set(['Notifications', 'Slack account', 'Data and privacy']);
 const LEGACY_ADMIN_SETTINGS_VIEWS = new Set([
@@ -40,13 +41,15 @@ const LEGACY_ADMIN_SETTINGS_VIEWS = new Set([
 export function authorisedRef(role: 'admin' | 'member', object: Ref, agentId?: string | null): Ref {
   if (agentId === null && object.section === 'agents') return INBOX;
   if (object.section === 'admin') {
-    return role === 'admin' ? object : { section: 'settings', view: 'Notifications' };
+    if (role !== 'admin') return { section: 'settings', view: 'Notifications' };
+    const renamed = object.view ? ADMIN_VIEW_ALIASES[object.view] : undefined;
+    return renamed ? { ...object, view: renamed } : object;
   }
   if (object.section !== 'settings') return object;
   const view = object.view ?? 'Notifications';
   if (LEGACY_ADMIN_SETTINGS_VIEWS.has(view)) {
     return role === 'admin'
-      ? { section: 'admin', view }
+      ? { section: 'admin', view: ADMIN_VIEW_ALIASES[view] ?? view }
       : { section: 'settings', view: 'Notifications' };
   }
   return PERSONAL_SETTINGS_VIEWS.has(view)

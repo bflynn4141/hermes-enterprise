@@ -23,7 +23,7 @@ export const ADMIN_SETTINGS_GROUPS = [
     items: [
       { id: 'Organization', label: 'Organization' },
       { id: 'Roles', label: 'Roles' },
-      { id: 'Inbox rules', label: 'Inbox rules' },
+      { id: 'Approvals', label: 'Approvals' },
       { id: 'Data and privacy', label: 'Data & privacy' },
       { id: 'Usage', label: 'Usage' },
     ],
@@ -50,12 +50,17 @@ export const ADMIN_SETTINGS_GROUPS = [
   },
 ] as const;
 
+/** Admin pages that were renamed; an old link still lands on the page it meant. */
+export const ADMIN_VIEW_ALIASES: Readonly<Record<string, string>> = {
+  'Inbox rules': 'Approvals',
+};
+
 export const ADMIN_SETTINGS_VIEWS = ADMIN_SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.id));
 export type AdminSettingsView = (typeof ADMIN_SETTINGS_VIEWS)[number];
 export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   Organization: 'Organization',
   Roles: 'Roles',
-  'Inbox rules': 'Inbox rules',
+  Approvals: 'Approvals',
   'Data and privacy': 'Data & privacy',
   Usage: 'Usage',
   'All agents': 'All agents',

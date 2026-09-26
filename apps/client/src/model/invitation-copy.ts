@@ -38,6 +38,10 @@ export function invitationFailureMessage(error: unknown): string {
                     ? 'That invitation no longer exists. Refresh the member list.'
                     : error.reason === 'not_resendable' || error.reason === 'already_accepted'
                       ? 'That invitation can no longer be resent. Refresh the member list.'
+                      : error.reason === 'unknown_role'
+                        ? 'One of those roles no longer exists. Reload and try again.'
+                        : error.reason === 'too_many_roles'
+                          ? 'A person can hold at most 32 roles.'
                 : 'Could not record the invitation. Try again.';
   return withReference(message, error);
 }
