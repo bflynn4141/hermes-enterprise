@@ -190,7 +190,7 @@ describe('enterprise runtime tool boundary', () => {
     expect(store.turns).toHaveLength(1);
     expect(store.events).toHaveLength(0);
   });
-  it('replays identical results without another proposal or event and rejects argument changes', async () => {
+  it('replays identical results without another proposal or event and runs a reused id with new arguments as a new call', async () => {
     const store = db();
     const input = call('propose_instruction', { body: 'Always cite sources.', sources: [] });
     const first = await dispatchRuntimeCall(store, workspaceId, agentId, input);
@@ -200,8 +200,10 @@ describe('enterprise runtime tool boundary', () => {
     expect(store.instructions).toHaveLength(1);
     expect(store.turns).toHaveLength(3);
     expect(store.turns[1]?.turn).toBe(store.turns[2]?.turn);
-    await expect(dispatchRuntimeCall(store, workspaceId, agentId, { ...input, arguments: { body: 'Different instructions.' } })).rejects.toMatchObject({ reason: 'runtime_call_conflict' });
-    expect(store.instructions).toHaveLength(1);
+    // The first call completed, so a later turn reusing its provider id is a new call.
+    const later = await dispatchRuntimeCall(store, workspaceId, agentId, { ...input, arguments: { body: 'Different instructions.', sources: [] } });
+    expect(later.reply).toMatchObject({ ok: true });
+    expect(store.instructions).toHaveLength(2);
   });
   it('rechecks capabilities before even returning a previously allowed result', async () => {
     const store = db();

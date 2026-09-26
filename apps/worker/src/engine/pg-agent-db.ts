@@ -805,6 +805,15 @@ export class PgAgentDb implements AgentDb {
         [this.workspaceId, input.requestId, input.body, input.runId, input.toolCallId],
       );
       const created = inserted.rows[0]?.id;
+      // The outbox guard (migrations 0013, 0065) lets the agent role publish
+      // about a request only when a run proposed it. A note on a request a
+      // person or intake created still saves; it just appears on the next
+      // read instead of live, rather than failing the whole call.
+      const announceable = created ? (await q<{ agent_written: boolean }>(
+        `SELECT run_id IS NOT NULL AS agent_written FROM requests WHERE workspace_id = $1 AND id = $2`,
+        [this.workspaceId, input.requestId],
+      )).rows[0]?.agent_written === true : false;
+      if (created && !announceable) return { noteId: created, created: true, events: [] };
       if (created) {
         // A note changes what the review pane shows without changing the
         // request's status, which is exactly what `entity.updated` is for. It

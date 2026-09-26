@@ -88,9 +88,12 @@ const valueOf = (body: Line[], key: string): string | undefined =>
   body.find((line) => line.key === key)?.value;
 
 describe('the workflow files', () => {
-  it('exist, and cover CI, both deploys, the backup and the workspace link', () => {
+  it('exist, and cover CI, both deploys, the backup, the workspace link and the release watch', () => {
     expect(files.sort()).toEqual(
-      ['backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml', 'workspace-link.yml'].sort(),
+      [
+        'backup-nightly.yml', 'ci.yml', 'deploy-production.yml', 'deploy-staging.yml',
+        'hermes-release-watch.yml', 'workspace-link.yml',
+      ].sort(),
     );
   });
 
@@ -133,7 +136,18 @@ describe('the workflow files', () => {
       expect(text, `${file} does not declare permissions`).toContain('permissions:');
       // The pipeline is inside the BYOK trust boundary; a workflow that can
       // write to the repository is a workflow that can change what deploys.
-      expect(text, `${file} grants write permissions`).not.toMatch(/permissions:[\s\S]{0,200}write/);
+      // The release watch may write issues, which cannot change what deploys.
+      const checked = file === 'hermes-release-watch.yml' ? text.replace(/^ {6}issues: write\n/gm, '') : text;
+      expect(checked, `${file} grants write permissions`).not.toMatch(/permissions:[\s\S]{0,200}write/);
+    }
+  });
+
+  it('never hand a write token to the job that runs a new upstream release', () => {
+    const watch = jobs(read('hermes-release-watch.yml'));
+    const runsUpstream = [...watch].filter(([, body]) => body.some((line) => line.value.includes('install.py')));
+    expect(runsUpstream.map(([name]) => name)).toEqual(['release']);
+    for (const [name, body] of runsUpstream) {
+      expect(body.some((line) => line.value === 'write'), `${name} holds a write permission`).toBe(false);
     }
   });
 

@@ -93,7 +93,7 @@ class BridgeTests(unittest.TestCase):
             wallet.write_text('{"private":"never-return-this"}')
             pathlib.Path(directory, "runtime-readiness.json").write_text(json.dumps({
                 "schema_version": 1,
-                "runtime_revision": "345cd2b057a452236de401d3534b8502a7465e8d",
+                "runtime_revision": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
                 "plugin": {"name": "enterprise_bridge", "version": "1.7.0"},
                 "workspace_id": "workspace-1",
                 "agent_id": "agent-1",

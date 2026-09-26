@@ -54,7 +54,7 @@ describe('GET /health', () => {
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
       },
       enterprise_contract: {
-        schema_version: 1, source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+        schema_version: 1, source_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
         release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
       },
     }));
@@ -92,7 +92,7 @@ describe('GET /health', () => {
         run_stop: { method: 'POST', path: '/v1/runs/{run_id}/stop' },
       },
       enterprise_contract: {
-        schema_version: 1, source_revision: '345cd2b057a452236de401d3534b8502a7465e8d',
+        schema_version: 1, source_revision: 'f97608f178d1ffeca59860195ab7da295f7c8e5f',
         release_ring: 'stable', terminal_errors: { supported: true, schema_version: 1 },
       },
     })));
