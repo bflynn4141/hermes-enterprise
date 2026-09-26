@@ -19,7 +19,7 @@
   "dependencies": {
     "@hermes/shared": "workspace:*",
     "@hermes/motion-components": "workspace:*",
-    "motion": "13.3.0",
+    "motion": "13.4.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "4.6.5"
@@ -28,7 +28,7 @@
     "@playwright/test": "1.63.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "esbuild": "0.25.12",
+    "esbuild": "0.28.2",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   }

@@ -23,11 +23,11 @@
     "glimm": "0.3.1",
     "iconoir-react": "7.12.1",
     "liveline": "0.0.7",
-    "shadow-plugin": "2.1.0",
+    "shadow-plugin": "2.1.1",
     "tailwind-merge": "3.7.0"
   },
   "peerDependencies": {
-    "motion": "13.3.0",
+    "motion": "13.4.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -35,8 +35,8 @@
     "@tailwindcss/cli": "4.3.3",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "esbuild": "0.25.10",
-    "motion": "13.3.0",
+    "esbuild": "0.28.2",
+    "motion": "13.4.1",
     "postcss": "8.5.28",
     "postcss-prefix-selector": "2.2.1",
     "react": "19.3.0",
