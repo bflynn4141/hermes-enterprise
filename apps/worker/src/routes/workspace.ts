@@ -26,6 +26,7 @@ import {
 import { executableMemberSetupRoles } from '../member-provisioning/service.js';
 import { effectExecutorMode } from '../domain/effects.js';
 import type { EffectExecutorMode } from '@hermes/shared';
+import { loadApprovalViewer } from '../domain/approval-routing.js';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -175,7 +176,7 @@ export async function loadBootstrap(
     [userId, agent?.id ?? null],
   );
 
-  const requests = await loadVisiblePendingRequests(tx, workspaceId, userId, viewerRole, reviewerRoles);
+  const requests = await loadVisiblePendingRequests(tx, workspaceId, await loadApprovalViewer(tx, workspaceId, userId, viewerRole));
 
   // A catalog row is offered only when this workspace holds a verified key for
   // the row's provider. "Add a provider key in Settings to start" is an empty

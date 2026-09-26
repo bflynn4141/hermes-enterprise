@@ -40,14 +40,15 @@
 // in the client. The status code carries the same information and is the older
 // convention for it (docs/DECISIONS.md, D-3).
 import type { Context } from 'hono';
-import { decisionResultSchema, type Decision } from '@hermes/shared';
+import { decisionResultSchema, mayApprove, type Decision } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
 import { RouteError } from './errors.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { recordDecision } from '../domain/decisions.js';
 import { FINANCE_DECIDABLE_SQL } from '../domain/finance-decidable.js';
+import { approverLabel, loadApprovalViewer } from '../domain/approval-routing.js';
 
 interface DecisionBody {
   decision?: string;
@@ -55,6 +56,47 @@ interface DecisionBody {
   expected_version?: unknown;
   expected_payload_hash?: unknown;
 }
+
+/**
+ * Who may record this decision: the workspace's rule for the request's kind
+ * (decision C93), or, for a handoff request, the Finance person it was handed
+ * to. When the rule says so, the person whose agent prepared the request may
+ * not decide it, whatever else they hold.
+ */
+async function requireDecider(work: TenantWork, requestId: string): Promise<void> {
+  const { rows } = await work.tx.query<{
+    kind: string; subject_key: string | null; requester_id: string | null; handed_to_viewer: boolean;
+  }>(
+    `SELECT r.kind, r.subject_key,
+            (SELECT s.owner_id FROM sessions s WHERE s.id = r.session_id) AS requester_id,
+            ${FINANCE_DECIDABLE_SQL} AND EXISTS (
+              SELECT 1 FROM request_audiences ra WHERE ra.request_id = r.id AND ra.user_id = $3
+            ) AS handed_to_viewer
+       FROM requests r
+      WHERE r.workspace_id = $1 AND r.id = $2`,
+    [work.workspaceId, requestId, work.userId],
+  );
+  const request = rows[0];
+  // Unknown requests and kinds without a rule keep the old answer; the
+  // decision itself then refuses them with its own reason.
+  if (!request || !isDecisionKey(request.kind)) {
+    work.requireAdmin('recording a decision');
+    return;
+  }
+  const viewer = await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
+  const rule = viewer.routes[request.kind].rule;
+  if (!rule.allow_requester && request.requester_id === work.userId) {
+    throw new RouteError('your agent prepared this, so someone else approves it', 'own_request', 403);
+  }
+  const byRule = mayApprove(rule, { role: work.role, reviewer_roles: viewer.reviewerRoles });
+  const byHandoff = request.handed_to_viewer && viewer.reviewerRoles.includes('finance');
+  if (byRule || byHandoff) return;
+  if (rule.admins && rule.roles.length === 0) work.requireAdmin('recording a decision');
+  throw new RouteError(`this needs ${approverLabel(rule, viewer.roleNames)}`, 'approver_required', 403);
+}
+
+const isDecisionKey = (kind: string): kind is 'application' | 'invoice' | 'agreement' =>
+  kind === 'application' || kind === 'invoice' || kind === 'agreement';
 
 export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: true });
@@ -70,19 +112,7 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
   const note = typeof input.note === 'string' && input.note.trim().length > 0 ? input.note.slice(0, 4000) : null;
 
   const outcome = await inWorkspace(c, async (work) => {
-    if (work.role !== 'admin') {
-      const finance = await work.tx.query(
-        `SELECT 1
-           FROM requests r
-           JOIN request_audiences ra ON ra.workspace_id=r.workspace_id AND ra.request_id=r.id
-           JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=ra.user_id
-          WHERE r.workspace_id=$1 AND r.id=$2
-            AND ${FINANCE_DECIDABLE_SQL}
-            AND ra.user_id=$3 AND 'finance'=ANY(m.reviewer_roles) AND m.status='active'`,
-        [work.workspaceId, requestId, work.userId],
-      );
-      if (!finance.rows[0]) work.requireAdmin('recording a decision');
-    }
+    await requireDecider(work, requestId);
     requireStepUp(work.session);
     return recordDecision(work, requestId, decision, note, input);
   });

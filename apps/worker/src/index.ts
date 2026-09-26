@@ -48,6 +48,7 @@ import {
 import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
 import { listAdminAgents } from './routes/admin-agents.js';
 import { createWorkspaceRole, deleteWorkspaceRole, listWorkspaceRoles, patchWorkspaceRole, putWorkspaceRoleMembers } from './routes/roles.js';
+import { listApprovalRoutes, putApprovalRoute, resetApprovalRoute } from './routes/approval-routes.js';
 import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
@@ -523,6 +524,9 @@ app.post('/w/:ws/roles', createWorkspaceRole);
 app.patch('/w/:ws/roles/:id', patchWorkspaceRole);
 app.put('/w/:ws/roles/:id/members', putWorkspaceRoleMembers);
 app.delete('/w/:ws/roles/:id', deleteWorkspaceRole);
+app.get('/w/:ws/approval-routes', listApprovalRoutes);
+app.put('/w/:ws/approval-routes/:key', putApprovalRoute);
+app.delete('/w/:ws/approval-routes/:key', resetApprovalRoute);
 app.get('/w/:ws/agents/:agent/permissions', getAgentPermissions);
 app.patch('/w/:ws/agents/:agent/permissions', patchAgentPermissions);
 app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOperation);

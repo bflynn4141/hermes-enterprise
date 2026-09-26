@@ -43,6 +43,7 @@ import { workspaceLegalName } from './legal-name.js';
 import { type TenantWork } from '../routes/tenant.js';
 import { RouteError } from '../routes/errors.js';
 import { plannedEffects } from './effects.js';
+import { loadApprovalRoutes } from './approval-routing.js';
 import { REQUEST_AUDIENCE_PREDICATE } from './requests.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';
 
@@ -450,7 +451,12 @@ export async function recordDecision(
   // Effects: recorded, never executed
   // ---------------------------------------------------------------------
   const effectIds: string[] = [];
-  for (const planned of plannedEffects(request.kind, decision)) {
+  const routes = await loadApprovalRoutes(work.tx, work.workspaceId);
+  for (const base of plannedEffects(request.kind, decision)) {
+    // Who carries it out and how many people it takes come from the
+    // workspace's rule (decision C93); the rule is read again at each press.
+    const rule = routes[base.kind].rule;
+    const planned = { ...base, requiredRole: rule.roles[0] ?? 'admin', approvalsRequired: rule.approvals_required };
     const assignee = await assigneeFor(work.tx, work.workspaceId, planned.requiredRole, work.userId);
     const { rows } = await work.tx.query<{ id: string }>(
       `INSERT INTO effects

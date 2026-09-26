@@ -361,7 +361,7 @@ export const invitationEntitySchema = z
     provisioning: memberProvisioningOperationSchema.nullable().optional(),
     role_template_key: memberRoleTemplateSchema.optional(),
     /** Workspace roles the person receives on joining (decision C93). */
-    role_slugs: z.array(z.string().max(32)).max(32).default([]),
+    role_slugs: z.array(z.string().max(32)).max(32).optional(),
     version: z.number().int().min(0).default(0),
   })
   .strict();

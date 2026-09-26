@@ -37,6 +37,7 @@ import { requestAudiencePredicate } from '../domain/audience.js';
 import { deletePrefix } from '../storage/r2.js';
 import { documentPrefix } from '../documents/keys.js';
 import { loadVisiblePendingRequests } from '../domain/requests.js';
+import { loadApprovalViewer } from '../domain/approval-routing.js';
 
 const historyPage = paginatedSchema(eventRowSchema);
 const HISTORY_LIMIT = 100;
@@ -108,16 +109,10 @@ export async function historyCounts(c: Context<{ Bindings: Env }>): Promise<Resp
                  AND ${requestAudiencePredicate('r.id', '$2')}) AS documents`,
       [work.workspaceId, work.userId],
     );
-    const authority = await work.tx.query<{ reviewer_roles: string[] }>(
-      `SELECT reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
-      [work.workspaceId, work.userId],
-    );
     const inbox = await loadVisiblePendingRequests(
       work.tx,
       work.workspaceId,
-      work.userId,
-      work.role,
-      authority.rows[0]?.reviewer_roles ?? [],
+      await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role),
     );
     return {
       ...(rows[0] ?? { decisions: 0, approved: 0, declined: 0, pending_grants: 0, documents: 0 }),
