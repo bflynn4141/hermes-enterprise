@@ -1,7 +1,7 @@
 # Official Hermes Agent runtime
 
 Hermes Enterprise now has an execution adapter for the official Nous runtime,
-pinned to `345cd2b057a452236de401d3534b8502a7465e8d` (package 0.21.3).
+pinned to `f97608f178d1ffeca59860195ab7da295f7c8e5f` (package 0.21.5, release v2026.9.24).
 The Worker remains the enterprise control plane and system of record.
 
 ## Identity and state
@@ -83,8 +83,8 @@ The official runtime loads a narrow enterprise plugin. The plugin also registers
 reviewed, read-only enterprise skills. The Worker returns an agent-scoped
 non-secret skill manifest before startup; the plugin verifies the assigned
 package bytes against it and pins that text into every new session's system
-prompt through Hermes's plugin prompt-section API (the pinned 0.21.3 release has
-no `skills.auto_load`). Non-secret values travel in `skills.config`. It
+prompt through Hermes's plugin prompt-section API (native `skills.auto_load`
+stays unused so no unreviewed skill loads). Non-secret values travel in `skills.config`. It
 gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
