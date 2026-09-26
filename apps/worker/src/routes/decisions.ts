@@ -47,6 +47,7 @@ import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
 import { RouteError } from './errors.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { recordDecision } from '../domain/decisions.js';
+import { FINANCE_DECIDABLE_SQL } from '../domain/finance-decidable.js';
 
 interface DecisionBody {
   decision?: string;
@@ -76,12 +77,7 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
            JOIN request_audiences ra ON ra.workspace_id=r.workspace_id AND ra.request_id=r.id
            JOIN members m ON m.workspace_id=r.workspace_id AND m.user_id=ra.user_id
           WHERE r.workspace_id=$1 AND r.id=$2
-            AND (
-              (r.kind='invoice' AND r.payload ? 'workflow_provenance')
-              -- The subject key, not the payload: only the admit decision writes
-              -- this prefix, while an agent can put any provenance in a payload.
-              OR (r.kind='agreement' AND r.subject_key LIKE 'partner-contractor-agreement:%')
-            )
+            AND ${FINANCE_DECIDABLE_SQL}
             AND ra.user_id=$3 AND 'finance'=ANY(m.reviewer_roles) AND m.status='active'`,
         [work.workspaceId, requestId, work.userId],
       );

@@ -7,7 +7,7 @@ import { loadPartnerWorkflowViewV2 } from '../../src/partner-workflow/v2.js';
 import type { TenantWork } from '../../src/routes/tenant.js';
 import { asUser, makeEnv } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
-import { applicationPayload, INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
+import { applicationPayload, INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
 
 async function configuredFixture() {
   const fx = await seedWorkspace();
@@ -234,5 +234,90 @@ describe('handoffs table', () => {
       }
     });
     expect(listed.in_motion.map((item) => item.open_request_id)).toEqual([genuineId]);
+  });
+
+  it('keeps an invoice whose payload claims the partner workflow Admin-only', async () => {
+    const fx = await configuredFixture();
+    // What an agent could once have proposed: a real-looking provenance block
+    // under an agent subject key.
+    const forgedId = await seedRequest(fx, 'invoice', {
+      label: 'INV-FORGED',
+      payload: { ...invoicePayload('INV-FORGED'), workflow_provenance: { handoff_id: randomUUID() } },
+      subjectKey: 'name:forged',
+    });
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `UPDATE members SET reviewer_roles = ARRAY['finance']::text[] WHERE workspace_id=$1 AND user_id=$2`,
+        [fx.workspaceId, fx.memberId],
+      );
+      await client.query(
+        `INSERT INTO request_audiences (workspace_id, request_id, user_id, purpose) VALUES ($1,$2,$3,'owner')`,
+        [fx.workspaceId, forgedId, fx.memberId],
+      );
+      await client.query('COMMIT');
+    });
+
+    const env = makeEnv();
+    const decided = await asUser(env.env, fx.memberId, `/w/${fx.workspaceId}/requests/${forgedId}/decisions`, {
+      method: 'POST',
+      headers: INBOX_HEADERS,
+      body: { decision: 'approve' },
+    });
+    expect(decided.status).toBe(403);
+    expect(await decided.json()).toMatchObject({ reason: 'admin_required' });
+
+    // The Inbox agrees: it is not this Finance member's decision.
+    const detail = await asUser(env.env, fx.memberId, `/w/${fx.workspaceId}/requests/${forgedId}`);
+    expect(await detail.json()).toMatchObject({
+      decision_summary: { approval_requirement: { pending_for_viewer: false, current: [{ label: 'Workspace Admin' }] } },
+    });
+  });
+
+  it('names the workspace legal name as the first party of the agreement admit creates', async () => {
+    const fx = await configuredFixture();
+    const env = makeEnv();
+    const patched = await asUser(env.env, fx.adminId, `/w/${fx.workspaceId}/settings`, {
+      method: 'PATCH',
+      body: { legal_name: '  Hermes Teams Demo Co.  ' },
+    });
+    expect(await patched.json()).toMatchObject({ legal_name: 'Hermes Teams Demo Co.' });
+
+    const applicationId = await seedRequest(fx, 'application', {
+      label: 'Nova Partner',
+      payload: applicationPayload('Nova Partner', 'Contractor'),
+    });
+    const parties = await withClient('app', async (client) => {
+      await client.query('BEGIN');
+      try {
+        await setTenant(client, fx.workspaceId, fx.adminId);
+        await client.query(
+          `UPDATE handoffs SET admission_state='enabled', enabled_by=$2, enabled_at=now()
+            WHERE workspace_id=$1 AND key='contractor-agreements'`,
+          [fx.workspaceId, fx.adminId],
+        );
+        const work = {
+          tx: client,
+          workspaceId: fx.workspaceId,
+          userId: fx.adminId,
+          role: 'admin' as const,
+          session: { sid: randomUUID(), authenticated_at: new Date().toISOString() },
+          jobs: [] as string[],
+          requireAdmin: () => undefined,
+        } as unknown as TenantWork;
+        await recordDecision(work, applicationId, 'approve', null);
+        const row = (await client.query<{ payload: { parties: { name: string }[] } }>(
+          `SELECT payload FROM requests WHERE workspace_id=$1 AND subject_key=$2`,
+          [fx.workspaceId, `partner-contractor-agreement:${applicationId}`],
+        )).rows[0]!;
+        await client.query('COMMIT');
+        return row.payload.parties.map((party) => party.name);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+    expect(parties).toEqual(['Hermes Teams Demo Co.', 'Nova Partner']);
   });
 });

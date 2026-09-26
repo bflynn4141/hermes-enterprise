@@ -23,6 +23,7 @@ import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
 import { loadApprovalListProjection } from './approvals.js';
 import { decisionSummary } from './request-summary.js';
+import { FINANCE_DECIDABLE_SQL, financeWorkflowRequest } from './finance-decidable.js';
 import { requestAudiencePredicate } from './audience.js';
 
 export interface RequestRow {
@@ -31,6 +32,8 @@ export interface RequestRow {
   status: string;
   label: string;
   payload: Record<string, unknown> | null;
+  /** Server-assigned; see domain/finance-decidable.ts. Optional for callers that predate it. */
+  subject_key?: string | null;
   session_id: string | null;
   run_id: string | null;
   created_at: Date;
@@ -56,7 +59,7 @@ export interface RequestRow {
 
 /** Every column the shaping needs, plus the latest note and the decision. */
 export const REQUEST_SELECT = `
-  SELECT r.id, r.kind, r.status, r.label, r.payload, r.session_id, r.run_id, r.created_at,
+  SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key, r.session_id, r.run_id, r.created_at,
          EXTRACT(EPOCH FROM r.updated_at)::int AS version,
          (SELECT n.body FROM request_notes n
            WHERE n.request_id = r.id ORDER BY n.created_at DESC, n.id DESC LIMIT 1) AS note,
@@ -117,15 +120,8 @@ export const REQUEST_REVIEWABLE_PREDICATE = `(r.status <> 'pending' OR r.kind <>
      AND reviewable_approval.expires_at > now()
 ))`;
 
-export const financeWorkflowRequest = (row: Pick<RequestRow, 'kind' | 'payload'>): boolean =>
-  row.kind === 'invoice'
-  && !!row.payload
-  && typeof row.payload === 'object'
-  && !Array.isArray(row.payload)
-  && 'workflow_provenance' in row.payload;
-
 export function canDecideLegacyRequest(
-  row: Pick<RequestRow, 'kind' | 'payload'>,
+  row: Pick<RequestRow, 'kind' | 'subject_key'>,
   role: string,
   reviewerRoles: readonly string[],
 ): boolean {
@@ -169,8 +165,8 @@ export async function loadVisiblePendingRequests(
   role: string,
   reviewerRoles: readonly string[],
 ): Promise<{ rows: PendingRequestRow[]; pendingForMe: number; pendingForOthers: number }> {
-  const pending = await tx.query<PendingRequestRow>(
-    `SELECT r.id, r.kind, r.status, r.label, r.payload,
+  const pending = await tx.query<PendingRequestRow & Pick<RequestRow, 'subject_key'>>(
+    `SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key,
             (SELECT hidden_at FROM request_presentations presentation
               WHERE presentation.request_id=r.id AND presentation.user_id=$2) AS presentation_hidden_at
        FROM requests r
@@ -181,7 +177,7 @@ export async function loadVisiblePendingRequests(
           ${REQUEST_ACTIVE_PRESENTATION_PREDICATE}
           OR r.kind='approval'
           OR ($3::boolean AND r.kind<>'task')
-          OR ($4::boolean AND r.kind='invoice' AND r.payload ? 'workflow_provenance')
+          OR ($4::boolean AND ${FINANCE_DECIDABLE_SQL})
         )
       ORDER BY r.created_at DESC`,
     [workspaceId, userId, role === 'admin', reviewerRoles.includes('finance')],
@@ -196,7 +192,9 @@ export async function loadVisiblePendingRequests(
       ? await loadApprovalListProjection(tx, request.id, userId)
       : null;
     if (requestPresentationHidden(request, approval, canDecide)) continue;
-    rows.push(request);
+    // The subject key decides authority here; it is not part of what bootstrap shows.
+    const { subject_key: _subjectKey, ...visible } = request;
+    rows.push(visible);
     if (request.kind === 'approval') {
       if (approval?.pending_for_viewer) pendingForMe += 1;
       else pendingForOthers += 1;

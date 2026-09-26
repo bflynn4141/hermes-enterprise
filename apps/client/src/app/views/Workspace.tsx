@@ -1504,6 +1504,51 @@ function OrganizationCloudConnection() {
   return <CloudConnection status={connection} available={connection.available} busy={busy} error={error} onConnect={() => { void connect(); }} />;
 }
 
+/** The party name agreements use. Unset means the workspace name. */
+function LegalNameRow({ workspaceName, legalName, admin, onSave }: {
+  workspaceName: string;
+  legalName: string | null;
+  admin: boolean;
+  onSave: (legalName: string | null) => Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = (): void => {
+    setBusy(true);
+    setError(null);
+    void onSave(draft.trim() || null)
+      .then(() => setEditing(false))
+      .catch(() => setError('Could not save the legal name. Try again.'))
+      .finally(() => setBusy(false));
+  };
+  if (editing) {
+    return (
+      <div className="kv" data-testid="legal-name-editor">
+        <label className="field grow">
+          <span>Legal name on agreements</span>
+          <input value={draft} maxLength={200} placeholder={workspaceName} onChange={(event) => setDraft(event.target.value)} />
+        </label>
+        <Button disabled={busy} onClick={() => setEditing(false)}>Cancel</Button>
+        <Button primary disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
+        {error && <p className="meta" role="alert">{error}</p>}
+      </div>
+    );
+  }
+  return (
+    <div className="kv">
+      <span className="grow">Legal name</span>
+      <span className="meta">{legalName ?? `${workspaceName} (workspace name)`}</span>
+      {admin && (
+        <Button link onClick={() => { setDraft(legalName ?? ''); setEditing(true); }}>
+          Edit
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function OrganizationTab() {
   const state = useAppState();
   const adapter = useAdapter();
@@ -1584,6 +1629,12 @@ function OrganizationTab() {
           )}
         </div>
       ))}
+      <LegalNameRow
+        workspaceName={state.workspace.name}
+        legalName={view?.legal_name ?? null}
+        admin={admin}
+        onSave={(legalName) => adapter.rest.patchSettings(state.workspace.id, { legal_name: legalName }).then(setView)}
+      />
       </AdminSettingsCard>
 
       {admin && (

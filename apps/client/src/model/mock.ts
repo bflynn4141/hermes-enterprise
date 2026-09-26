@@ -255,7 +255,7 @@ export function createMockBackend(input: MockOptions = {}) {
         subject: 'Robin Studio',
         label: 'INV-SAMPLE-014',
         payload: {
-          kind: 'invoice', number: 'INV-SAMPLE-014', total_minor: 120000, currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Nous Research' }, issue_date: '2026-09-12', due_date: '2026-09-26',
+          kind: 'invoice', number: 'INV-SAMPLE-014', total_minor: 120000, currency: 'USD', payee: { name: 'Robin Studio' }, payer: { name: 'Hermes Teams Demo Co.' }, issue_date: '2026-09-12', due_date: '2026-09-26',
           notes: 'Sample invoice for the local fixture. No provider call, payment, or email occurs.',
           lines: [{ id: 'l1', label: 'Partner enablement workshop', short: 'Workshop', qty: 1, amount_minor: 120000, date: '2026-09-08', source_ids: [mockUuid(619)] }],
           workflow_provenance: {
@@ -315,7 +315,7 @@ export function createMockBackend(input: MockOptions = {}) {
           }), decided_at: iso(-3), decided_by_name: 'Maya Chen' },
           request(REQ_PRIYA_AGREEMENT, 'agreement', 'pending', 'Priya Nair', 'Priya Nair', {
             kind: 'agreement', number: 'AGR-PRIYA-001', version_label: 'draft',
-            parties: [{ name: 'Nous Research' }, { name: 'Priya Nair' }],
+            parties: [{ name: 'Hermes Teams Demo Co.' }, { name: 'Priya Nair' }],
             sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
             workflow_provenance: { handoff_key: 'contractor-agreements', source_application_id: REQ_PRIYA, admitted_partner: { name: 'Priya Nair' } },
           }),
@@ -870,6 +870,7 @@ export function createMockBackend(input: MockOptions = {}) {
     defaults: { model_id: DEFAULT_MODEL_ID, effort: DEFAULT_EFFORT as string | null, runtime: 'cloud' },
     caps: { daily_token_cap: empty ? null : (500_000 as number | null), max_concurrent_runs: 3, tokens_today: empty ? 0 : 351_800, active_runs: 0, warn: false },
     timezone: 'UTC',
+    legal_name: 'Hermes Teams Demo Co.' as string | null,
     flags: approvalScenario ? { approval_demo: true } : {} as Record<string, unknown>,
     fetch_url_allowlist: [] as string[],
     notifications: { approvals: true, blocked: true, digest: false },
@@ -1549,7 +1550,7 @@ export function createMockBackend(input: MockOptions = {}) {
             kind: 'agreement',
             number: `AGR-${agreementId.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
             version_label: 'draft',
-            parties: [{ name: 'Nous Research' }, { name }],
+            parties: [{ name: 'Hermes Teams Demo Co.' }, { name }],
             sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
             workflow_provenance: {
               handoff_key: 'contractor-agreements',
@@ -2370,6 +2371,8 @@ export function createMockBackend(input: MockOptions = {}) {
         if ('daily_token_cap' in caps) settingsView.caps.daily_token_cap = caps.daily_token_cap === null ? null : Number(caps.daily_token_cap);
         if ('max_concurrent_runs' in caps) settingsView.caps.max_concurrent_runs = Number(caps.max_concurrent_runs);
         if (caps.notifications) settingsView.notifications = { ...settingsView.notifications, ...(caps.notifications as Record<string, boolean>) };
+        const legal = body as { legal_name?: unknown };
+        if ('legal_name' in legal) settingsView.legal_name = typeof legal.legal_name === 'string' && legal.legal_name.trim() ? legal.legal_name.trim() : null;
       }
       return json(settingsView);
     }

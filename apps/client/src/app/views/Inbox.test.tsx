@@ -365,6 +365,25 @@ describe('legacy effect execute honesty', () => {
     expect(html).toContain('Pending · no executor · needs the access role');
   });
 
+  it('shows a payment waiting on a second Finance holder once this viewer has confirmed', () => {
+    const payment: EffectEntity = {
+      ...pending,
+      kind: 'payment',
+      required_role: 'finance',
+      label: 'Pay the invoice',
+      confirmations: { required: 2, recorded: 1, by_viewer: true },
+    };
+    expect(legacyEffectStatusLabel(payment)).toBe('1 of 2 finance confirmations');
+    const mine = renderToStaticMarkup(<LegacyEffectsPanel effects={[payment]} />);
+    expect(mine).toContain('Waiting on another finance member');
+    expect(mine).not.toContain('>Record attempt</button>');
+    // The second holder still gets the button.
+    const theirs = renderToStaticMarkup(
+      <LegacyEffectsPanel effects={[{ ...payment, confirmations: { required: 2, recorded: 1, by_viewer: false } }]} />,
+    );
+    expect(theirs).toContain('>Record attempt</button>');
+  });
+
   it('keeps unavailable outcomes explicit before implying any external work happened', () => {
     expect(legacyEffectStatusLabel(unavailable)).toContain('nothing sent, paid, granted or signed');
     const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[unavailable]} />);

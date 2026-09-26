@@ -1,7 +1,7 @@
 // The effects ledger, the honest execute route, and the guarded re-version.
 import { describe, expect, it } from 'vitest';
 import { asUser, makeEnv, readTenant } from './harness.js';
-import { seedWorkspace, withClient, type Fixture } from './helpers.js';
+import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { fetchReviewBinding, INBOX_HEADERS, invoicePayload, seedRequest } from './m4-fixtures.js';
 
 function env() {
@@ -108,10 +108,31 @@ describe('executing an effect', () => {
     const requestId = await seedRequest(fx, 'invoice');
     const [sendId, paymentId] = await approve(e, fx, requestId);
 
-    const response = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/effects/${paymentId}/execute`, {
+    // A payment needs two different Finance holders: the first press is a
+    // confirmation, and pressing again does not count twice.
+    const press = (userId: string) => asUser(simulated, userId, `/w/${fx.workspaceId}/effects/${paymentId}/execute`, {
       method: 'POST',
       body: {},
     });
+    const first = await press(fx.adminId);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      status: 'pending',
+      simulation: null,
+      confirmations: { required: 2, recorded: 1, by_viewer: true },
+    });
+    expect(await (await press(fx.adminId)).json()).toMatchObject({
+      status: 'pending',
+      confirmations: { required: 2, recorded: 1, by_viewer: true },
+    });
+    await withClient('owner', async (c) => {
+      await c.query('BEGIN');
+      await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE members SET reviewer_roles = ARRAY['finance'] WHERE workspace_id = $1 AND user_id = $2`, [fx.workspaceId, fx.memberId]);
+      await c.query('COMMIT');
+    });
+
+    const response = await press(fx.memberId);
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       status: string;
@@ -125,6 +146,7 @@ describe('executing an effect', () => {
     // The invoice fixture is USD 900.00 to Robin Ellis; the summary reads like a receipt while `status` and `reason` say simulated.
     expect(body.simulation?.summary).toBe('USD 900.00 to Robin Ellis · Settled');
     expect(body.simulation?.steps.length).toBeGreaterThanOrEqual(3);
+    expect(body).toMatchObject({ confirmations: { required: 2, recorded: 2, by_viewer: true } });
 
     // A second press returns the same simulated row and appends no second audit row.
     const again = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/effects/${paymentId}/execute`, {

@@ -208,11 +208,11 @@ export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Respons
 
 export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise<Response> {
   const requestId = pathUuid(c, 'id');
-  const rows = await inWorkspace(c, async (work) => {
+  const { rows, viewerId } = await inWorkspace(c, async (work) => {
     if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
-    return effectRows(work.tx, { requestId, audienceUserId: work.userId });
+    return { rows: await effectRows(work.tx, { requestId, audienceUserId: work.userId }), viewerId: work.userId };
   });
-  return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
+  return c.json(effectPage.parse({ items: rows.map((row) => toEffectEntity(row, viewerId)), cursor: null, total: rows.length }));
 }
 
 export async function listRequestDocuments(c: Context<{ Bindings: Env }>): Promise<Response> {

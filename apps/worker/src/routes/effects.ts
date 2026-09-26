@@ -62,10 +62,11 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
         .filter((value) => (EFFECT_STATUSES as readonly string[]).includes(value))
     : undefined;
 
-  const rows = await inWorkspace(c, (work) =>
-    effectRows(work.tx, { ...(status && status.length > 0 ? { status } : {}), audienceUserId: work.userId }),
-  );
-  return c.json(effectPage.parse({ items: rows.map(toEffectEntity), cursor: null, total: rows.length }));
+  const { rows, viewerId } = await inWorkspace(c, async (work) => ({
+    rows: await effectRows(work.tx, { ...(status && status.length > 0 ? { status } : {}), audienceUserId: work.userId }),
+    viewerId: work.userId,
+  }));
+  return c.json(effectPage.parse({ items: rows.map((row) => toEffectEntity(row, viewerId)), cursor: null, total: rows.length }));
 }
 
 /** Does this member hold the role the effect needs? */
@@ -89,8 +90,11 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
   requireCsrf(c);
   const effectId = pathUuid(c, 'id');
 
-  const row = await inWorkspace(c, async (work) => {
+  const { row, viewerId } = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
+    // Held for the whole press, so two holders confirming at the same moment
+    // cannot both see the count reach its quorum and both execute.
+    await work.tx.query(`SELECT 1 FROM effects WHERE id = $1 FOR UPDATE`, [effectId]);
     const effect = await loadEffect(work.tx, effectId, work.userId);
     if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
 
@@ -107,7 +111,38 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
 
     // Recorded once. A second press finds the row already answered and
     // returns it rather than appending a second identical audit row.
-    if (effect.status === 'unavailable' || effect.status === 'simulated') return effect;
+    if (effect.status === 'unavailable' || effect.status === 'simulated') return { row: effect, viewerId: work.userId };
+
+    // A payment needs two different Finance holders. Each press records one
+    // confirmation; the same person pressing again changes nothing. Only the
+    // press that completes the count goes on to execute.
+    if (effect.approvals_required > 1) {
+      await work.tx.query(
+        `INSERT INTO effect_confirmations (workspace_id, effect_id, user_id)
+         VALUES ($1, $2, $3) ON CONFLICT (effect_id, user_id) DO NOTHING`,
+        [work.workspaceId, effectId, work.userId],
+      );
+      const { rows } = await work.tx.query<{ confirmations: number }>(
+        `SELECT count(*)::int AS confirmations FROM effect_confirmations WHERE effect_id = $1`,
+        [effectId],
+      );
+      if ((rows[0]?.confirmations ?? 0) < effect.approvals_required) {
+        work.jobs.push(
+          ...(await publishEvents(work.tx, work.workspaceId, [
+            {
+              kind: 'entity.updated',
+              payload: {
+                entity_type: 'effect',
+                entity_id: effectId,
+                ref: { section: 'inbox', view: 'request', id: effect.request_id },
+                version: null,
+              },
+            },
+          ])),
+        );
+        return { row: (await loadEffect(work.tx, effectId, work.userId)) ?? effect, viewerId: work.userId };
+      }
+    }
 
     const mode = effectExecutorMode(c.env);
     const enforcement =
@@ -147,10 +182,10 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
     );
 
     const updated = await loadEffect(work.tx, effectId, work.userId);
-    return updated ?? effect;
+    return { row: updated ?? effect, viewerId: work.userId };
   });
 
-  return c.json(effectEntitySchema.parse(toEffectEntity(row)));
+  return c.json(effectEntitySchema.parse(toEffectEntity(row, viewerId)));
 }
 
 /**
