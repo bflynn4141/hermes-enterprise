@@ -1,0 +1,23 @@
+.admin-roles-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.015); }
+.admin-roles-list li + li { border-top: 1px solid var(--line); }
+.admin-roles-row { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 16px 20px; border: 0; background: transparent; color: var(--body); text-align: left; font: inherit; cursor: pointer; }
+.admin-roles-row:hover { background: rgba(255,255,255,.025); }
+.admin-roles-row:focus-visible { outline: 2px solid #9B9AE0; outline-offset: -2px; }
+.admin-roles-name { font-size: 15px; line-height: 22px; font-weight: 500; }
+.admin-roles-description { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 70ch; }
+.admin-roles-facts { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.admin-roles-fact-label { display: inline-block; min-width: 56px; color: var(--muted); }
+.admin-roles-textarea { width: 100%; min-height: 76px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); font: inherit; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; }
+.admin-roles-textarea:focus { border-color: #9B9AE0; }
+.admin-roles-people { display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; min-width: 0; }
+.admin-roles-person { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 14px; border-bottom: 1px solid var(--line); }
+.admin-roles-person:last-child { border-bottom: 0; }
+.admin-roles-person input { accent-color: #6E64FF; width: 16px; height: 16px; flex: 0 0 auto; }
+.admin-roles-person input:disabled + span { color: var(--muted); }
+.admin-roles-person-note { color: var(--muted); font-size: 13px; }
+.admin-roles-problem, .admin-settings-card-footer .admin-roles-problem { color: #ffc7cb; }
+.admin-roles-actions { display: flex; gap: 8px; margin-left: auto; }
+.admin-roles-error { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; color: #ffc7cb; }
+@container app-pane (max-width: 560px) {
+  .admin-roles-row { padding: 14px 16px; }
+}

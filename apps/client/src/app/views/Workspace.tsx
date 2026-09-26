@@ -11,7 +11,7 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, InsightCards } from '@hermes/motion-components';
-import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport } from '@hermes/shared';
+import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
@@ -31,6 +31,7 @@ import { Markdown } from '../chat/Markdown.js';
 import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
 import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
+import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -172,6 +173,17 @@ export function Members() {
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   useEffect(() => { if (!admin && tab !== 'all') setTab('all'); }, [admin, tab]);
+  // Role names for each person's role slugs. Admin only, like the slugs
+  // themselves; if the list cannot load, the cards simply show no roles.
+  const [roles, setRoles] = useState<WorkspaceRole[]>([]);
+  useEffect(() => {
+    if (!admin) { setRoles([]); return; }
+    let live = true;
+    void adapter.rest.listRoles(state.workspace.id)
+      .then((list) => { if (live) setRoles(list.items); })
+      .catch(() => { if (live) setRoles([]); });
+    return () => { live = false; };
+  }, [adapter, admin, state.workspace.id]);
   const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
   const setupRoles = state.capabilities.memberRoleTemplates;
   const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
@@ -244,6 +256,7 @@ export function Members() {
             <div className="member-card-list" role="list">
               {all.map((member) => {
                 const status = memberStatusLabel(member.status);
+                const roleNames = admin ? roleNamesFor(member, roles) : [];
                 return (
                   <div className="member-card" role="listitem" key={member.id}>
                     <div className="member-card-identity">
@@ -260,7 +273,10 @@ export function Members() {
                       <Pill>{member.role === 'admin' ? 'Admin' : 'Member'}</Pill>
                       <Pill tone={statusTone(status)}>{status}</Pill>
                     </div>
-                    <p className="member-card-summary">{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</p>
+                    <div className="member-card-summary">
+                      {roleNames.length > 0 && <span className="member-card-roles">{roleNames.join(', ')}</span>}
+                      <span>{member.joined_at ? `Joined ${new Date(member.joined_at).toLocaleDateString()}` : 'Not joined yet'}</span>
+                    </div>
                     {admin && <div className="member-card-actions"><Button onClick={() => {
                       setNotice(null);
                       setManageNotice(null);
@@ -1050,6 +1066,7 @@ export function AdminSettings({ view, id = null }: { view: string; id?: string |
   const panel = (
     <div className="admin-settings-view">
       {selected === 'Organization' && <OrganizationTab />}
+      {selected === 'Roles' && <AdminRoles roleId={id} />}
       {selected === 'Inbox rules' && <InboxRulesTab />}
       {selected === 'All agents' && <AdminAgents agentId={id} />}
       {selected === 'Agents' && <AgentsTab />}

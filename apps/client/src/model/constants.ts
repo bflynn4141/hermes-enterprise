@@ -22,6 +22,7 @@ export const ADMIN_SETTINGS_GROUPS = [
     label: 'Organization',
     items: [
       { id: 'Organization', label: 'Organization' },
+      { id: 'Roles', label: 'Roles' },
       { id: 'Inbox rules', label: 'Inbox rules' },
       { id: 'Data and privacy', label: 'Data & privacy' },
       { id: 'Usage', label: 'Usage' },
@@ -53,6 +54,7 @@ export const ADMIN_SETTINGS_VIEWS = ADMIN_SETTINGS_GROUPS.flatMap((group) => gro
 export type AdminSettingsView = (typeof ADMIN_SETTINGS_VIEWS)[number];
 export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   Organization: 'Organization',
+  Roles: 'Roles',
   'Inbox rules': 'Inbox rules',
   'Data and privacy': 'Data & privacy',
   Usage: 'Usage',
