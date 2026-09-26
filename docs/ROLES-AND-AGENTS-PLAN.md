@@ -56,8 +56,8 @@ break that guarantee. Instructions and skill settings stay editable, as today.
 
 | # | Piece | What you can try | Status |
 |---|---|---|---|
-| 0 | Safety fixes: Finance authority from server-written subject keys, not payloads; the two-person payment rule enforced; a workspace legal name instead of a hardcoded party. | Nothing new to click; closes known gaps first. | In progress (decision C90) |
-| 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | In progress |
+| 0 | Safety fixes: Finance authority from server-written subject keys, not payloads; the two-person payment rule enforced; a workspace legal name instead of a hardcoded party. | Nothing new to click; closes known gaps first. | Done, #184 (C90) |
+| 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | Done, #185 (C91) |
 | 2 | Roles as data: a roles table seeded with Partnerships and Finance replaces the fixed checks; job roles persist on members; many people per role; invitations pick from the table; reviewer tags become role membership. | No visible change; unblocks 3–5. | Next |
 | 3 | Approval routing screen over the existing policy engine: per approval type, the deciding role or people, steps, quorum and self-review. | "Invoices over $5k need two Finance approvals," routed live. | |
 | 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Set up a third role's agent from the UI. | |

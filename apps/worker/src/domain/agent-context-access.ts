@@ -6,6 +6,11 @@ import { RouteError } from '../routes/errors.js';
  * scoped agents are shared. Missing/revoked bindings never imply sharing. No GET repairs
  * ownership or creates a grant. Both bindings must agree when both exist. */
 export async function requireAgentContextAccess(work: TenantWork, agentId: string): Promise<void> {
+  if (!(await hasAgentContextAccess(work, agentId))) throw new RouteError('No accessible agent context', 'not_found', 404);
+}
+
+/** The same rule as `requireAgentContextAccess`, as an answer instead of a refusal. */
+export async function hasAgentContextAccess(work: TenantWork, agentId: string): Promise<boolean> {
   const result = await work.tx.query(
     `SELECT a.id FROM agents a
       WHERE a.workspace_id=$1 AND a.id=$2
@@ -22,5 +27,5 @@ export async function requireAgentContextAccess(work: TenantWork, agentId: strin
            WHERE ta.workspace_id=a.workspace_id AND ta.agent_id=a.id AND ta.principal_user_id<>$3)`,
     [work.workspaceId, agentId, work.userId],
   );
-  if (!result.rows[0]) throw new RouteError('No accessible agent context', 'not_found', 404);
+  return result.rows.length > 0;
 }

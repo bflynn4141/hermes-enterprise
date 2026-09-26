@@ -6,6 +6,8 @@ import {
   type HandoffDetail,
   type HandoffInMotionItem,
   type HandoffLane,
+  type AgentDirectoryEntry,
+  type MemberEntity,
   type PartnerWorkflowSetup,
   type PartnerWorkflowViewV2,
   type RequestEntity,
@@ -23,23 +25,75 @@ function workflowError(error: unknown): string {
   return error.message || 'Could not complete that action.';
 }
 
+interface PickerOption { value: string; label: string }
+
+/**
+ * People who can hold a role: active members the server identified by user id.
+ * Admins receive user ids from `/members`; the form is Admin-only.
+ */
+export function personOptions(members: readonly MemberEntity[]): PickerOption[] {
+  return members.filter((member) => member.status === 'active' && member.user_id)
+    .map((member) => ({ value: member.user_id!, label: member.name || member.email }));
+}
+
+/** Agents, named with the person each works for so two "Iris" agents are told apart. */
+export function agentOptions(agents: readonly AgentDirectoryEntry[]): PickerOption[] {
+  return agents.map((agent) => ({ value: agent.id, label: agent.owner ? `${agent.name} · ${agent.owner.name}` : agent.name }));
+}
+
+/** The same distinctness the server enforces, as copy a person can act on. */
+export function setupProblem(value: { partnershipsUser: string; partnershipsAgent: string; financeUser: string; financeAgent: string }): string | null {
+  if (value.partnershipsUser && value.partnershipsUser === value.financeUser) return 'Partnerships and Finance need different people.';
+  if (value.partnershipsAgent && value.partnershipsAgent === value.financeAgent) return 'Partnerships and Finance need different agents.';
+  return null;
+}
+
+function Picker({ label, value, options, loading, onChange }: { label: string; value: string; options: PickerOption[]; loading: boolean; onChange: (value: string) => void }) {
+  return <label><span>{label}</span>
+    <select required value={value} disabled={loading} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{loading ? 'Loading…' : 'Choose'}</option>
+      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+  </label>;
+}
+
 function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved: (view: PartnerWorkflowViewV2) => void }) {
   const adapter = useAdapter();
   const state = useAppState();
   const reduce = useReducedMotion();
+  const [people, setPeople] = useState<PickerOption[] | null>(null);
+  const [agents, setAgents] = useState<PickerOption[] | null>(null);
   const [partnershipsUser, setPartnershipsUser] = useState(state.user.id);
   const [partnershipsAgent, setPartnershipsAgent] = useState(state.agent.id ?? '');
   const [financeUser, setFinanceUser] = useState('');
   const [financeAgent, setFinanceAgent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const valid = Boolean(partnershipsUser && partnershipsAgent && financeUser && financeAgent && partnershipsUser !== financeUser && partnershipsAgent !== financeAgent);
+  useEffect(() => {
+    let live = true;
+    void Promise.all([adapter.rest.listMembers(state.workspace.id), adapter.rest.adminAgents(state.workspace.id)])
+      .then(([members, directory]) => {
+        if (!live) return;
+        setPeople(personOptions(members.items));
+        setAgents(agentOptions(directory.items));
+        // Start from the roles already saved, so re-saving is a small change.
+        for (const agent of directory.items) {
+          if (agent.role?.team.slug === 'partnerships') { setPartnershipsAgent(agent.id); setPartnershipsUser(agent.role.principal.user_id); }
+          if (agent.role?.team.slug === 'finance') { setFinanceAgent(agent.id); setFinanceUser(agent.role.principal.user_id); }
+        }
+      })
+      .catch(() => { if (live) { setPeople([]); setAgents([]); setError('Could not load people and agents. Close and try again.'); } });
+    return () => { live = false; };
+  }, [adapter, state.workspace.id]);
+  const problem = setupProblem({ partnershipsUser, partnershipsAgent, financeUser, financeAgent });
+  const valid = Boolean(partnershipsUser && partnershipsAgent && financeUser && financeAgent && !problem);
+  const loading = people === null || agents === null;
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     if (!valid) return;
     const body: PartnerWorkflowSetup = {
-      partnerships: { principal_user_id: partnershipsUser.trim(), agent_id: partnershipsAgent.trim() },
-      finance: { principal_user_id: financeUser.trim(), agent_id: financeAgent.trim() },
+      partnerships: { principal_user_id: partnershipsUser, agent_id: partnershipsAgent },
+      finance: { principal_user_id: financeUser, agent_id: financeAgent },
     };
     setBusy(true);
     setError(null);
@@ -58,11 +112,12 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
         <Button small onClick={onClose}>Close</Button>
       </header>
       <div className="partner-form-grid">
-        <label><span>Partnerships employee</span><input required value={partnershipsUser} onChange={(event) => setPartnershipsUser(event.target.value)} /></label>
-        <label><span>Partnerships agent</span><input required value={partnershipsAgent} onChange={(event) => setPartnershipsAgent(event.target.value)} /></label>
-        <label><span>Finance employee</span><input required value={financeUser} onChange={(event) => setFinanceUser(event.target.value)} /></label>
-        <label><span>Finance agent</span><input required value={financeAgent} onChange={(event) => setFinanceAgent(event.target.value)} /></label>
+        <Picker label="Partnerships person" value={partnershipsUser} options={people ?? []} loading={loading} onChange={setPartnershipsUser} />
+        <Picker label="Partnerships agent" value={partnershipsAgent} options={agents ?? []} loading={loading} onChange={setPartnershipsAgent} />
+        <Picker label="Finance person" value={financeUser} options={people ?? []} loading={loading} onChange={setFinanceUser} />
+        <Picker label="Finance agent" value={financeAgent} options={agents ?? []} loading={loading} onChange={setFinanceAgent} />
       </div>
+      {problem && <p className="partner-error" role="alert">{problem}</p>}
       {error && <p className="partner-error" role="alert">{error}</p>}
       <footer>
         <span className="meta" />

@@ -12,6 +12,12 @@ export const agentPermissionsSchema = z.object({
   agent_id: z.uuid(), revision: z.number().int().nonnegative(),
   operations: z.array(z.object({ id: z.string(), label: z.string(), description: z.string(), tool_names: z.array(z.string()), require_human_approval: z.boolean() })),
   pending_approvals: z.array(z.object({ id: z.uuid(), operation_id: z.string(), tool_name: z.string(), arguments: z.record(z.string(), z.unknown()), run_id: z.uuid(), created_at: z.string() })),
+  /**
+   * False when an Admin governs another member's private agent: the switches
+   * are theirs to change, but waiting actions carry that agent's run content
+   * and stay with the people who may read it.
+   */
+  pending_approvals_visible: z.boolean().default(true),
 });
 export type AgentPermissions = z.infer<typeof agentPermissionsSchema>;
 export function agentOperationForTool(name: string) { return AGENT_OPERATION_CATALOG.find((operation) => (operation.tool_names as readonly string[]).includes(name)); }

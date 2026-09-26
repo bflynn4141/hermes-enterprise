@@ -81,11 +81,11 @@ test('a second employee is invited, joins, and is bound as Finance; admission st
   await expect(workflow.getByText('Employee and agent not assigned')).toHaveCount(2);
   await workflow.getByRole('button', { name: 'Configure roles' }).click();
   const setup = workflow.getByRole('form', { name: 'Configure employee roles' });
-  await setup.getByLabel('Partnerships employee user ID').fill(fixture.adminId);
-  await setup.getByLabel('Partnerships Hermes agent ID').fill(fixture.agentId);
-  await setup.getByLabel('Finance employee user ID').fill(joinerId);
-  await setup.getByLabel('Finance Hermes agent ID').fill(financeAgentId);
-  await setup.getByRole('button', { name: 'Save role assignments' }).click();
+  await setup.getByLabel('Partnerships person').selectOption(fixture.adminId);
+  await setup.getByLabel('Partnerships agent').selectOption(fixture.agentId);
+  await setup.getByLabel('Finance person').selectOption(joinerId);
+  await setup.getByLabel('Finance agent').selectOption(financeAgentId);
+  await setup.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(workflow.getByText('Role assignments saved. Native readiness is shown above.')).toBeVisible({ timeout: 15_000 });
   await expect(workflow.getByText('Alex Rivera · Iris', { exact: true })).toBeVisible();
   await expect(workflow.getByText('Fresh Admin · Iris', { exact: true })).toBeVisible();

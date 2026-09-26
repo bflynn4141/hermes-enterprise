@@ -208,18 +208,23 @@ describe('agent configuration read boundaries', () => {
       body: { text: 'Must not cross owners.', expected_current_id: null },
     });
     expect(deniedInstructionWrite.status).toBe(404);
-    const deniedPermissionWrite = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${memberAgentId}/permissions`, {
+    // Approval switches and skill assignments are governance, not content: an
+    // Admin reaches a member's agent there (this one has no operations and no
+    // such assignment, so there is nothing to change) while its instructions
+    // above stay private. test/db/agent-directory.test.ts covers the rest.
+    const governedPermissionWrite = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${memberAgentId}/permissions`, {
       method: 'PATCH',
       body: { revision: 0, operation_id: 'prepare_drafts', require_human_approval: true },
     });
-    expect(deniedPermissionWrite.status).toBe(404);
-    const deniedAssignmentWrite = await asUser(
+    expect(governedPermissionWrite.status).toBe(409);
+    expect(await governedPermissionWrite.json()).toMatchObject({ reason: 'operation_unavailable' });
+    const missingAssignmentWrite = await asUser(
       env,
       fx.adminId,
       `/w/${fx.workspaceId}/agents/${memberAgentId}/skill-assignments/${randomUUID()}`,
       { method: 'PATCH', body: { revision: 1, state: 'paused' } },
     );
-    expect(deniedAssignmentWrite.status).toBe(404);
+    expect(missingAssignmentWrite.status).toBe(404);
 
     const stored = await readTenant(fx.workspaceId, fx.adminId, (client) => client.query<{ agent_id: string; key: string; value: string }>(
       `SELECT agent_id,key,value FROM agent_context_fields WHERE workspace_id=$1 ORDER BY key`, [fx.workspaceId],

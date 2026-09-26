@@ -1495,3 +1495,31 @@ previous checks), and checks the agreement's first party.
 `test/db/effects.test.ts` walks the payment through a first confirmation, a
 repeated press that does not count, and a second holder's press.
 `test/unit/engine-redteam.test.ts` covers the refused proposal.
+
+## C91. Admins govern every agent, not its conversations
+
+**Decided September 26, 2026.** An Admin may change the role and the
+permissions of any agent in the workspace, including another member's private
+agent, and must never read that agent's conversations. `GET /w/:ws/admin/agents`
+lists every agent with its owner, role binding, enterprise skill assignments,
+runtime placement (an instance label, never a hostname or credential) and the
+operations that require approval. The operation-approval switches
+(`GET`/`PATCH /agents/:agent/permissions`) and skill assignments
+(`/agents/:agentId/skill-assignments`) now use
+`requireAgentGovernanceAccess`: content access as before, or an Admin without it.
+In the second case the permissions view omits parked calls entirely
+(`pending_approvals_visible: false`, not even a count) and every change needs a
+fresh step-up, the same bar as changing a member's role.
+
+**What stays owner-only.** `requireAgentConfigAccess` is unchanged and still
+guards sessions, messages, runs, traces, context notes, instructions and the
+decision on a parked call, because each of those carries what the agent has
+done. Governance access is granted route by route; it is not a looser version of
+the content check.
+
+**Evidence.** `test/db/agent-directory.test.ts` seeds a member's private agent
+with a session, a message, a live run, a parked call and a Cloud instance URL,
+then proves the directory body contains none of them, the Admin can toggle
+approval and pause a skill (recorded as the Admin), the parked call stays
+hidden and undecidable, sessions and instructions stay 404, a stale sign-in is
+refused, and a Member still cannot configure or read another person's agent.
