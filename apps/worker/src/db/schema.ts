@@ -620,6 +620,24 @@ export const enterpriseSkillAssignmentRevisions = pgTable(
   (t) => [unique('enterprise_skill_assignment_revisions_key').on(t.assignmentId, t.revision)],
 );
 
+// 0072: the workspace's roles. Membership is the role slug in
+// `members.reviewer_roles`; `enterprise_teams` below is a role's handoff lane.
+export const workspaceRoles = pgTable(
+  'workspace_roles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    builtin: boolean('builtin').notNull().default(false),
+    agentTemplateKey: text('agent_template_key'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('workspace_roles_workspace_slug_key').on(t.workspaceId, t.slug)],
+);
+
 export const enterpriseTeams = pgTable(
   'enterprise_teams',
   {
@@ -2332,6 +2350,7 @@ export const ALL_TABLES = {
   agent_skills: agentSkills,
   enterprise_skill_assignments: enterpriseSkillAssignments,
   enterprise_skill_assignment_revisions: enterpriseSkillAssignmentRevisions,
+  workspace_roles: workspaceRoles,
   enterprise_teams: enterpriseTeams,
   enterprise_team_agents: enterpriseTeamAgents,
   enterprise_skill_artifacts: enterpriseSkillArtifacts,

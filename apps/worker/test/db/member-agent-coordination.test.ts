@@ -180,8 +180,9 @@ describe('invitation-derived member and agent coordination', () => {
     const persisted = await readTenant(fixture.workspaceId, fixture.adminId, async (client) => {
       const joiner = await client.query<{
         member_id: string; agent_id: string; status: string; responsibility: string; setup_step: string;
+        reviewer_roles: string[];
       }>(
-        `SELECT m.id AS member_id, ao.agent_id, a.status, a.responsibility, a.setup_step
+        `SELECT m.id AS member_id, ao.agent_id, a.status, a.responsibility, a.setup_step, m.reviewer_roles
            FROM members m
            JOIN agent_owners ao ON ao.member_id=m.id AND ao.workspace_id=m.workspace_id
            JOIN agents a ON a.id=ao.agent_id
@@ -243,6 +244,8 @@ describe('invitation-derived member and agent coordination', () => {
     expect(bootstrap.agent.id).toBe(seeded.preflightAgentId);
     expect(bootstrap.agent.provisioning_status).toBe('ready');
     expect(persisted.joiner).toMatchObject({ status: 'draft', responsibility: 'Partner Program', setup_step: 'identity' });
+    // The invitation's job role outlives it (decision C92).
+    expect(persisted.joiner.reviewer_roles).toEqual(['partnerships']);
     expect(persisted.capacity).toMatchObject({
       id: seeded.capacityId,
       state: 'assigned',

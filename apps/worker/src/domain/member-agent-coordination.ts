@@ -19,6 +19,7 @@ import {
 import { RouteError } from '../routes/errors.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
+import { grantRole, roleSlugForTemplate } from './roles.js';
 
 interface JoinCoordinationInput {
   readonly env: Env;
@@ -376,6 +377,11 @@ export async function coordinateAcceptedMember(input: JoinCoordinationInput): Pr
     input.tx, input.workspaceId, input.invitationId, { requireReadyOperation: true },
   );
   const iris = await createOwnedIris(input, role);
+  // The job role the Admin chose on the invitation outlives the invitation
+  // (decision C92). It grants the person that role; the agent's schedule and
+  // lane binding still wait for an Admin, as createOwnedIris explains.
+  const jobRole = await roleSlugForTemplate(input.tx, input.workspaceId, role.roleTemplateKey);
+  if (jobRole) await grantRole(input.tx, input.workspaceId, input.joiningUserId, jobRole);
   const firstSearchRequestId = iris.created && role.roleTemplateKey === 'partnerships-agent'
     ? await createStarterItems(input, iris.agentId, iris.sessionId)
     : null;

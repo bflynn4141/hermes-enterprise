@@ -50,6 +50,7 @@ import {
   requestMemberProvisioningCancellation,
 } from '../member-provisioning/service.js';
 import type { MemberRoleTemplate } from '@hermes/shared';
+import { roleSlugs } from '../domain/roles.js';
 
 export type MemberRole = 'admin' | 'member';
 
@@ -1007,10 +1008,14 @@ export async function patchMember(c: Context<{ Bindings: Env }>): Promise<Respon
     }
 
     if (Array.isArray(input.reviewer_roles)) {
-      await work.tx.query(`UPDATE members SET reviewer_roles = $2 WHERE id = $1`, [
-        member.id,
-        input.reviewer_roles.filter((role) => typeof role === 'string').slice(0, 10),
-      ]);
+      // Reviewer roles are workspace roles now (decision C92): each must name one.
+      const requested = [...new Set(input.reviewer_roles.filter((role) => typeof role === 'string'))].slice(0, 10);
+      const known = await roleSlugs(work.tx, work.workspaceId);
+      const unknown = requested.filter((role) => !known.has(role));
+      if (unknown.length > 0) {
+        throw new RouteError(`this workspace has no role called ${unknown.join(', ')}`, 'unknown_role', 422);
+      }
+      await work.tx.query(`UPDATE members SET reviewer_roles = $2 WHERE id = $1`, [member.id, requested]);
     }
 
     if ((input.role === 'admin' || input.role === 'member') && input.role !== member.role) {

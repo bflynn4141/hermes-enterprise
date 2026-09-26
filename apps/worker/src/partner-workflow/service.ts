@@ -29,6 +29,7 @@ import {
 } from '../enterprise-skills/role-instructions.js';
 import { ensurePartnerInvoicesHandoff } from '../handoffs/service.js';
 import { PartnerWorkflowError } from './errors.js';
+import { grantRole } from '../domain/roles.js';
 
 export { PartnerWorkflowError };
 
@@ -447,12 +448,7 @@ export async function configureAcceptedFinanceMember(
   await applyFinanceRoleInstructions(
     tx, workspaceId, input.agentId, input.principalUserId, configuredBy,
   );
-  await tx.query(
-    `UPDATE members
-        SET reviewer_roles=(SELECT ARRAY(SELECT DISTINCT unnest(reviewer_roles || ARRAY['finance']::text[])))
-      WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
-    [workspaceId, input.principalUserId],
-  );
+  await grantRole(tx, workspaceId, input.principalUserId, 'finance');
   await pauseOtherRoleSkills(tx, workspaceId, input.agentId, PARTNER_INVOICE_REVIEW_DEFINITION.key);
   await assignRoleSkill(
     tx, workspaceId, financeTeam.id, input.agentId, configuredBy,
@@ -489,12 +485,10 @@ export async function configurePartnerWorkflow(
   // grants this human the existing Finance reviewer role. It does not grant
   // the agent approval authority; the guarded human route still records every
   // decision and downstream payment remains a separate two-reviewer effect.
-  await tx.query(
-    `UPDATE members
-        SET reviewer_roles=(SELECT ARRAY(SELECT DISTINCT unnest(reviewer_roles || ARRAY['finance']::text[])))
-      WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
-    [workspaceId, input.finance.principal_user_id],
-  );
+  await grantRole(tx, workspaceId, input.finance.principal_user_id, 'finance');
+  // Binding a lane records the person's job role (decision C92). Partnerships
+  // grants no decision authority; it is who the lane's work belongs to.
+  await grantRole(tx, workspaceId, input.partnerships.principal_user_id, 'partnerships');
   await pauseOtherRoleSkills(
     tx, workspaceId, input.partnerships.agent_id, PARTNER_PROGRAM_MULTI_PARTY_DEFINITION.key,
   );
