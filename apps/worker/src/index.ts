@@ -46,6 +46,7 @@ import {
   saveInstruction,
 } from './routes/agent-config.js';
 import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
+import { listAdminAgents } from './routes/admin-agents.js';
 import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
 import { appShellOrUnknownRoute } from './routes/spa.js';
 import { sharedSession } from './routes/shares.js';
@@ -512,6 +513,10 @@ app.delete('/w/:ws/admin/runtime-discovery-grants/:grantId', revokeRuntimeDiscov
 app.get('/w/:ws/traces', listTraces);
 app.get('/w/:ws/traces/:runId', getTrace);
 app.get('/w/:ws/skills', listSkills);
+// Every agent, for an Admin: role, skills, placement and approval switches.
+// Governance only; no session, message or run content (decision: Admins set an
+// agent's role and permissions but do not read its conversations).
+app.get('/w/:ws/admin/agents', listAdminAgents);
 app.get('/w/:ws/agents/:agent/permissions', getAgentPermissions);
 app.patch('/w/:ws/agents/:agent/permissions', patchAgentPermissions);
 app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOperation);

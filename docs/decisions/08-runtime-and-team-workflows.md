@@ -1462,3 +1462,31 @@ matrix.
 **Decided September 20, 2026.** A governed cross-team workflow is modeled as a workspace-scoped `handoffs` row (key, teams, crossing allowlist, ordered steps, admission state and readiness attestation) rather than as implicit settings on `partner_workflow_settings` alone. Migration `0069_handoffs.sql` backfills the Partnerships → Finance workflow as `contractor-agreements` (admit applicant → Finance reviews the contractor agreement), adds nullable `handoff_id` foreign keys on `partner_workflow_settings` and invoice-instance `partner_handoffs`, and keeps `partner_workflow_settings` synchronized through a trigger so historical readers and rollout code continue to work.
 
 **Why.** Library navigation, API discovery, and future workflows need one durable object to name, admit, and render. The Handoffs UI routes work through Inbox application and agreement requests rather than invoice intake forms. When admission is enabled, approving an application creates one pending Finance agreement draft linked by `workflow_provenance` (`partner-contractor-agreement:{applicationId}`); Handoffs In motion shows the pair. Admission reads and writes go through the handoff row; the settings table remains a compatibility mirror updated on every handoff admission change. Existing `POST /w/:ws/partner-workflow/*` routes are unchanged; list/detail live at `GET /w/:ws/handoffs` and `GET /w/:ws/handoffs/:id`. The client mounts the redesigned page on Library → Handoffs.
+
+## C90. Admins govern every agent, not its conversations
+
+**Decided September 26, 2026.** An Admin may change the role and the
+permissions of any agent in the workspace, including another member's private
+agent, and must never read that agent's conversations. `GET /w/:ws/admin/agents`
+lists every agent with its owner, role binding, enterprise skill assignments,
+runtime placement (an instance label, never a hostname or credential) and the
+operations that require approval. The operation-approval switches
+(`GET`/`PATCH /agents/:agent/permissions`) and skill assignments
+(`/agents/:agentId/skill-assignments`) now use
+`requireAgentGovernanceAccess`: content access as before, or an Admin without it.
+In the second case the permissions view omits parked calls entirely
+(`pending_approvals_visible: false`, not even a count) and every change needs a
+fresh step-up, the same bar as changing a member's role.
+
+**What stays owner-only.** `requireAgentConfigAccess` is unchanged and still
+guards sessions, messages, runs, traces, context notes, instructions and the
+decision on a parked call, because each of those carries what the agent has
+done. Governance access is granted route by route; it is not a looser version of
+the content check.
+
+**Evidence.** `test/db/agent-directory.test.ts` seeds a member's private agent
+with a session, a message, a live run, a parked call and a Cloud instance URL,
+then proves the directory body contains none of them, the Admin can toggle
+approval and pause a skill (recorded as the Admin), the parked call stays
+hidden and undecidable, sessions and instructions stay 404, a stale sign-in is
+refused, and a Member still cannot configure or read another person's agent.

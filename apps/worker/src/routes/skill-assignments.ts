@@ -1,3 +1,6 @@
+// Enterprise skill assignments are governance: an Admin may read and change
+// their state, config and schedule on any agent in the workspace. None of it
+// is run content (src/domain/agent-governance-access.ts).
 import type { Context } from 'hono';
 import {
   enterpriseSkillAssignmentPageSchema,
@@ -5,16 +8,16 @@ import {
   enterpriseSkillAssignmentUpdateSchema,
 } from '@hermes/shared';
 import type { Env } from '../env.js';
-import { requireCsrf, requireOrigin } from '../auth.js';
+import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { listEnterpriseSkillAssignments, updateEnterpriseSkillAssignment } from '../enterprise-skills/service.js';
 import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
 import { RouteError } from './errors.js';
-import { requireAgentConfigAccess } from '../domain/agent-config-access.js';
+import { requireAgentGovernanceAccess } from '../domain/agent-governance-access.js';
 
 export async function listSkillAssignments(c: Context<{ Bindings: Env }>): Promise<Response> {
   const agentId = pathUuid(c, 'agentId');
   const items = await inWorkspace(c, async (work) => {
-    await requireAgentConfigAccess(work, agentId);
+    await requireAgentGovernanceAccess(work, agentId);
     return listEnterpriseSkillAssignments(
       c.env, work.tx, work.workspaceId, agentId, work.role === 'admin' ? work.userId : null,
     );
@@ -26,7 +29,7 @@ export async function getSkillAssignment(c: Context<{ Bindings: Env }>): Promise
   const agentId = pathUuid(c, 'agentId');
   const assignmentId = pathUuid(c, 'id');
   const entity = await inWorkspace(c, async (work) => {
-    await requireAgentConfigAccess(work, agentId);
+    await requireAgentGovernanceAccess(work, agentId);
     const items = await listEnterpriseSkillAssignments(
       c.env, work.tx, work.workspaceId, agentId, work.role === 'admin' ? work.userId : null,
     );
@@ -46,7 +49,8 @@ export async function patchSkillAssignment(c: Context<{ Bindings: Env }>): Promi
   if (!parsed.success) throw new RouteError('skill assignment configuration is invalid', 'bad_body', 400);
   const entity = await inWorkspace(c, async (work) => {
     work.requireAdmin('configuring an enterprise skill');
-    await requireAgentConfigAccess(work, agentId);
+    const access = await requireAgentGovernanceAccess(work, agentId);
+    if (!access.conversations) requireStepUp(work.session);
     // Ensure legacy deployments have a concrete row before applying the patch.
     await listEnterpriseSkillAssignments(c.env, work.tx, work.workspaceId, agentId, work.userId);
     try {
