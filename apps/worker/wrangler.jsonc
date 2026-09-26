@@ -28,12 +28,15 @@
   // 405 before they were added, so the create-workspace and accept-invitation
   // routes were unreachable rather than broken. `/shared/*` is here so a share
   // link reaches the Worker's own catch-all, which answers a navigation with
-  // the app and a fetch with JSON. See decision F1.
+  // the app and a fetch with JSON. `/demo/*` is here for the same reason: the
+  // request-access page is a navigation, but its form posts to
+  // `/demo/request-access`, which the assets binding would answer with 405.
+  // See decision F1.
   "assets": {
     "directory": "../client/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/internal/*", "/integrations/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+    "run_worker_first": ["/health", "/internal/*", "/integrations/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
   },
 
   "vars": {
@@ -190,7 +193,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
       },
       "vars": {
         "ENVIRONMENT": "staging",
@@ -234,8 +237,17 @@
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.
-        "HERMES_ENTERPRISE_PLUGIN_REVISION": "ca8b89192f5320845f259369a907b766de0cfc97",
-        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:922bfa57af420429fcee71f9cec770d4af6bfbd743c67249521b265ef2b86a5a",
+        "HERMES_ENTERPRISE_PLUGIN_REVISION": "6f2182db485a237e27954cef24e9f6880ed4c14b",
+        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:3900bcca172e1aa46165c2d3de2eec97785577098817cf4d2916070a9eaa5a18",
+        // The public request-access page (`/demo`). The workspace id is the
+        // "Hermes Teams Demo" workspace on staging (the same workspace
+        // the deploy preflight checks, CONTEXT_PREFLIGHT_WORKSPACE_ID). With
+        // it unset the route answers `demo_access_not_configured`. The
+        // domain allowlist admits only exact `@nousresearch.com` addresses;
+        // the passcode remains a second gate. The passcode itself is a secret
+        // (RUNBOOK §12), never a var.
+        "DEMO_ACCESS_WORKSPACE_ID": "8cb93c4c-6af3-41cd-bae5-94f849b4976b",
+        "DEMO_ACCESS_ALLOWED_DOMAINS": "nousresearch.com",
         "R2_BUCKET": "hermes-uploads-staging"
       },
       // The backup bucket is bound only where it exists; `backup_uploads` logs
@@ -305,7 +317,7 @@
         "directory": "../client/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*"]
+        "run_worker_first": ["/health", "/internal/*", "/api/*", "/w/*", "/auth/*", "/workspaces", "/invitations/*", "/shared/*", "/demo/*"]
       },
       "vars": {
         "ENVIRONMENT": "production",

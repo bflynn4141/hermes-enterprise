@@ -72,7 +72,7 @@ function WorkflowSetupForm({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 }
 
-/** "Partnerships · Maya Chen · Iris". Unassigned lanes just show the team. */
+/** "Partnerships · Maya Chen · Scout". Unassigned lanes just show the team. */
 function laneLabel(lane: HandoffLane): string {
   return [lane.team.name, lane.person, lane.agent].filter(Boolean).join(' · ');
 }

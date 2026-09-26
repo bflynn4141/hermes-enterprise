@@ -25,7 +25,7 @@ import type { RunErrorInput } from '../engine/agent-db.js';
 import { TOOL_RESULT_TRUNCATION_MARKER } from '../engine/constants.js';
 import { inWorkspace, pathUuid } from './tenant.js';
 import { VISIBLE } from './sessions.js';
-import { RouteError } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const tracePage = paginatedSchema(traceEntitySchema);
 const LIST_LIMIT = 100;

@@ -1,6 +1,6 @@
 # Partnerships and Finance native rollout
 
-This runbook installs two dedicated Hermes 0.21.3 profiles for the governed partner-invoice workflow while keeping existing Partnerships 1.7 profiles restartable. It does not create an employee, buy provider capacity, change a hosted profile, enable a schedule, or admit a workspace.
+This runbook installs two dedicated Hermes 0.21.5 profiles for the governed partner-invoice workflow while keeping existing Partnerships 1.7 profiles restartable. It does not create an employee, buy provider capacity, change a hosted profile, enable a schedule, or admit a workspace.
 
 ## Required bindings
 
@@ -93,8 +93,9 @@ The native probe launches the actual pinned HTTP gateway and AIAgent under dispo
 
 The second probe runs the ordinary Cloud supervisor command with local Worker
 and model fixtures. It verifies gate-first startup, failed plugin registration,
-stale readiness removal, live boot-bound health, provider escape rejection,
-post-202 provider gating, restart closure after the managed flag is lost, and
+stale readiness removal, live boot-bound health, selected-model switching on
+the governed proxy, provider escape rejection, post-202 provider gating,
+restart closure after the managed flag is lost, and
 startup/post-ready plugin-byte drift closure. It does not install anything on
 Cloud or prove a real provider completion.
 

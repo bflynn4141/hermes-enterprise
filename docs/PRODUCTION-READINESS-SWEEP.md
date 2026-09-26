@@ -4,7 +4,7 @@ September 15, 2026 · Active delivery plan
 
 ## Outcome
 
-Turn the current interview/demo application into a production-shaped Hermes Enterprise build without deleting useful test coverage or silently presenting simulated capabilities as live. This work answers three questions:
+Turn the current demo application into a production-shaped Hermes Enterprise build without deleting useful test coverage or silently presenting simulated capabilities as live. This work answers three questions:
 
 1. Which prototype, QA, fixture and placeholder paths are still present, and can any of them reach a deployed user?
 2. Can people authenticate through WorkOS using email and enterprise SSO with safe sessions and workspace membership?
@@ -24,7 +24,7 @@ The remaining work is production validation and gap closure: hosted AuthKit must
 
 The app launches the official Hermes gateway and `AIAgent`, uses `/v1/runs`, native sessions, idempotent submission, SSE plus status reconciliation, stop and steer, one isolated profile per enterprise agent, a scoped model proxy and an allowlisted enterprise plugin. The bridge prevents the model from claiming workspace/run identity and keeps human decisions in enterprise routes.
 
-The installed source pin is `345cd2b057a452236de401d3534b8502a7465e8d`, the `v2026.9.14` release commit that Hermes Cloud runs (package 0.21.3). An earlier pin one day newer than the release failed the managed digest check on Cloud (September 20, 2026). Do not upgrade based on the version string alone: compare commits and API/tool-context behavior, then rerun the native gateway probe. Current official docs now cover durable run idempotency, per-profile API keys, single-consumer SSE, `/v1/runs/{id}/approval`, approval transports and middleware. Business approvals in the Enterprise Inbox are separate from Hermes dangerous-tool approval and must not be conflated.
+The installed source pin is `f97608f178d1ffeca59860195ab7da295f7c8e5f`, the `v2026.9.24` release commit that Hermes Cloud runs (package 0.21.5). Cloud moved instances from `v2026.9.14` (0.21.3, `345cd2b`) to this release when they restarted on September 24–25, 2026, and the exact-version gate refused every run until the re-pin. An earlier pin one day newer than the release failed the managed digest check on Cloud (September 20, 2026). Do not upgrade based on the version string alone: compare commits and API/tool-context behavior, then rerun the native gateway probe. Current official docs now cover durable run idempotency, per-profile API keys, single-consumer SSE, `/v1/runs/{id}/approval`, approval transports and middleware. Business approvals in the Enterprise Inbox are separate from Hermes dangerous-tool approval and must not be conflated.
 
 ### QA artifacts are not automatically defects
 

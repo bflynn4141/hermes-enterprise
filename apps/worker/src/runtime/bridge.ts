@@ -12,7 +12,8 @@ import { isProviderAllowed } from '../model/allowed.js';
 import { ATTRIBUTION_HEADERS, OPENROUTER_BASE } from '../model/openrouter.js';
 import { NOUS_PORTAL_BASE, NOUS_PORTAL_HEADERS } from '../model/nous.js';
 import type { ProviderMessage } from '../model/types.js';
-import { pathUuid, RouteError } from '../routes/tenant.js';
+import { pathUuid } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import {
   actualRuntimeCostUsd,
   meterRuntimeResponse,
@@ -22,7 +23,7 @@ import {
   type RuntimeBudgetReservation,
   type ProviderStreamObservation,
 } from './budget.js';
-import { logEvent } from '../keys/redact.js';
+import { logError, logEvent } from '../keys/redact.js';
 import { requireResolvedBridgeAuth, type RuntimeBinding } from './config.js';
 import { RuntimeDb, type RuntimeCallRecord } from './store.js';
 import { PARTNER_PROGRAM_TOOLS, preflightDiscoveryManifest, runtimeSkillManifestsForAgent } from './skills.js';
@@ -129,9 +130,32 @@ function canonical(value: unknown): string {
   if (object(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
-async function durableCallId(call: RuntimeCall): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${call.runtime_run_id}:${call.tool_call_id}`));
+async function durableCallId(call: RuntimeCall, slot = 0): Promise<string> {
+  // Slot 0 keeps the original key so existing records still replay.
+  const key = `${call.runtime_run_id}:${call.tool_call_id}${slot === 0 ? '' : `#${slot}`}`;
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
   return `hermes-${[...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+const MAX_CALL_ID_SLOTS = 64;
+function sameCall(record: RuntimeCallRecord, call: RuntimeCall): boolean {
+  return record.call.name === call.name && canonical(JSON.parse(record.call.arguments)) === canonical(call.arguments);
+}
+/**
+ * Providers such as DeepSeek number tool calls per response (`call_0`,
+ * `call_1`, …), so a native tool call id recurs in later model turns of the
+ * same run. A completed call is never retried with different arguments — its
+ * result already went back to the model — so a later call that reuses the id
+ * with another tool or arguments takes the next free slot. The same call
+ * replays; an unfinished call named with different arguments still conflicts.
+ */
+async function resolveCallSlot(db: BridgeDb, runId: string, call: RuntimeCall): Promise<{ callId: string; existing: RuntimeCallRecord | null }> {
+  for (let slot = 0; slot < MAX_CALL_ID_SLOTS; slot += 1) {
+    const callId = await durableCallId(call, slot);
+    const existing = await db.runtimeCall(runId, callId);
+    if (!existing || sameCall(existing, call)) return { callId, existing };
+    if (existing.result === null || existing.result === undefined) break;
+  }
+  throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
 }
 function requireActive(run: EngineRunRow | null, workspaceId: string, agentId: string): asserts run is EngineRunRow {
   if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || !['working', 'waiting'].includes(run.status)) {
@@ -169,11 +193,7 @@ async function dispatchRuntimeApprovalCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const callId = await durableCallId(call);
-    const existing = await db.runtimeCall(run.id, callId);
-    if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
-      throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
-    }
+    const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
@@ -285,11 +305,7 @@ export async function dispatchRuntimeCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const callId = await durableCallId(call);
-    const existing = await db.runtimeCall(run.id, callId);
-    if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
-      throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
-    }
+    const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
@@ -444,6 +460,25 @@ async function publish(env: Env, workspaceId: string, result: CallResult): Promi
     if (workspace.length) await env.WORKSPACE_HUB.get(env.WORKSPACE_HUB.idFromName(workspaceId)).publish(workspace);
   } catch { /* The outbox is authoritative. */ }
 }
+// Refusals the model can act on. The plugin turns any status other than 200,
+// 202 or its retried 409s into one generic "rejected", so these travel as a
+// failed tool result the model can read. `mapping_pending` (retried by the
+// plugin), `runtime_run_inactive` and authentication keep their statuses.
+const MODEL_CORRECTABLE_REFUSALS = new Set(['runtime_tool_forbidden', 'runtime_run_waiting', 'runtime_call_conflict']);
+export function modelVisibleRefusal(error: unknown, toolName: string): CallReply | null {
+  if (error instanceof RouteError) {
+    return MODEL_CORRECTABLE_REFUSALS.has(error.reason)
+      ? { ok: false, content: `${error.message} (${error.reason})` }
+      : null;
+  }
+  // The tool's transaction rolled back, so nothing was saved and a new call is
+  // safe. The error itself stays in the Worker log; the model gets guidance.
+  return {
+    ok: false,
+    content: `The server could not run ${toolName} with these arguments, and nothing was saved. `
+      + 'Check that every id is complete and the arguments match the tool schema, then try once more.',
+  };
+}
 export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Response> {
   const { workspaceId, agentId } = await authenticate(c);
   const call = parseRuntimeCall(await body(c));
@@ -454,6 +489,13 @@ export async function callRuntimeTool(c: Context<{ Bindings: Env }>): Promise<Re
     });
     await publish(c.env, workspaceId, result);
     return c.json(result.reply, 'status' in result.reply ? 202 : 200);
+  } catch (error) {
+    const reply = modelVisibleRefusal(error, call.name);
+    if (!reply) throw error;
+    const fields = { at: 'runtime.tool_refused', workspace_id: workspaceId, agent_id: agentId, tool: call.name };
+    if (error instanceof RouteError) logEvent({ ...fields, reason: error.reason });
+    else logError({ ...fields, reason: 'tool_error', error });
+    return c.json(reply, 200);
   } finally { await db.close(); }
 }
 

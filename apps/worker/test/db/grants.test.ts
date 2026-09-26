@@ -131,6 +131,7 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'events', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'auth_sessions', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'rate_counters', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'demo_access_requests', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'session_shares', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'workos_sync', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'workos_events_cursor', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },

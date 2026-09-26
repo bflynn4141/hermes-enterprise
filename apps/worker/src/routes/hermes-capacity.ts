@@ -13,7 +13,8 @@ import {
 } from '../runtime/discovery-grants.js';
 import { newRuntimeBearer, runtimeCredentialDigest } from '../runtime/credentials.js';
 import { POOL_CONTROL_NAMESPACE } from '../hermes-cloud/capacity.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 
 const inputSchema = z.object({
   cloud_agent_id: z.string().trim().min(1).max(200),

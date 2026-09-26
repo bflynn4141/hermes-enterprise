@@ -50,7 +50,8 @@ import { allowedProviders, requireAllowedProvider } from '../model/allowed.js';
 import { openRouterFixtureEnabled, openRouterFixtureFetch } from '../model/openrouter-dev.js';
 import { nousPortalFixtureEnabled, nousPortalFixtureFetch } from '../model/nous-dev.js';
 import type { AdapterOptions } from '../model/types.js';
-import { RouteError, inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 
 /**
  * Five verifications an hour, per the plan's rate-limit table.

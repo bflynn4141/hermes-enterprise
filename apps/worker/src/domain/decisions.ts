@@ -39,7 +39,8 @@ import {
 } from '@hermes/shared';
 import { publishEvents, enqueueJob } from '../jobs.js';
 import type { Tx } from '../db/client.js';
-import { RouteError, type TenantWork } from '../routes/tenant.js';
+import { type TenantWork } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 import { plannedEffects } from './effects.js';
 import { REQUEST_AUDIENCE_PREDICATE } from './requests.js';
 import { PARTNER_INVOICE_REVIEW_DEFINITION } from '../enterprise-skills/registry.js';

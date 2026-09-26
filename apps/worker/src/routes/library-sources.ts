@@ -2,7 +2,8 @@ import { librarySourceSchema } from '@hermes/shared';
 import type { Context } from 'hono';
 import type { Env } from '../env.js';
 import { requireAgentContextAccess } from '../domain/agent-context-access.js';
-import { inWorkspace, RouteError } from './tenant.js';
+import { inWorkspace } from './tenant.js';
+import { RouteError } from './errors.js';
 
 interface LibrarySourceRow {
   id: string;

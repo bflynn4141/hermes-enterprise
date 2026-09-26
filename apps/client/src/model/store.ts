@@ -202,7 +202,7 @@ export interface SessionState {
   lastActivity: number;
   carried: { from: string; context: string } | null;
   /**
-   * Whether this title is the client's guess or the person's word (C34).
+   * Whether this title is the client's guess or the person's word (C34b).
    *
    * A session starts `auto`: the first turn names it, and the run that follows
    * may rename it again once it knows what it was about. A manual rename moves
@@ -308,7 +308,18 @@ export interface AppState {
   };
   settings: Record<string, unknown>;
   cursors: { session: Record<string, bigint>; workspace: bigint };
-  connection: { session: LinkState; workspace: LinkState; authRefreshedAt: number };
+  connection: {
+    session: LinkState;
+    workspace: LinkState;
+    authRefreshedAt: number;
+    /**
+     * The server's `authenticated_at` as epoch ms, or null before the first
+     * `/auth/session`. Decision routes require it to be within the Worker's
+     * step-up window, so a view can say so before the click instead of after
+     * the 401.
+     */
+    authenticatedAt: number | null;
+  };
   ui: UiState;
   ready: boolean;
 }
@@ -383,7 +394,7 @@ export function initialState(): AppState {
     counts: { inbox: 0, pendingForMe: 0, pendingForOthers: 0, pendingGrants: 0, createdDocuments: 0, decisions: 0 },
     settings: {},
     cursors: { session: {}, workspace: 0n },
-    connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0 },
+    connection: { session: emptyLink(), workspace: emptyLink(), authRefreshedAt: 0, authenticatedAt: null },
     ui: {
       irisPanel: 'open',
       irisWidth: null,
@@ -436,7 +447,7 @@ export function sessionFrom(row: Session): SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// Session titles (decision C34)
+// Session titles (decision C34b)
 // ---------------------------------------------------------------------------
 
 /** What `POST /w/:ws/sessions` names a session with nothing to go on. */
@@ -491,7 +502,7 @@ const RUN_WORDS: Record<string, string> = {
  * Not "New session": that is the name of the control that creates one, and two
  * buttons a keystroke apart with the same accessible name is a sidebar where
  * "New session" means two different things — which is how the three identical
- * rows read in the first place (decision C34). The stored title is untouched;
+ * rows read in the first place (decision C34b). The stored title is untouched;
  * this is what the row says until the first turn names it.
  */
 export const UNTITLED_SESSION = 'Untitled session';
@@ -572,7 +583,7 @@ export type Action =
   | { type: 'list/invalidate'; key: string }
   | { type: 'cursor/advance'; stream: 'workspace' | 'session'; sessionId?: string; id: bigint }
   | { type: 'link/state'; kind: 'session' | 'workspace'; patch: Partial<LinkState> }
-  | { type: 'auth/refreshed'; at: number }
+  | { type: 'auth/refreshed'; at: number; authenticatedAt?: number | null }
   | { type: 'auth/evicted' }
   | { type: 'counts/set'; patch: Partial<AppState['counts']> }
   | { type: 'settings/merge'; patch: Record<string, unknown> }
@@ -909,7 +920,7 @@ export function reduce(state: AppState, action: Action): AppState {
             scrollTop: existing.scrollTop,
             unread: existing.unread,
             ...(existing.settingsPending || existing.settingsError ? { model: existing.model, effort: existing.effort } : {}),
-            // Two title races, both lost without this (decision C34). A manual
+            // Two title races, both lost without this (decision C34b). A manual
             // rename is sticky: the row that re-delivers the old title must not
             // undo it. And a local auto-title beats the server's placeholder,
             // because the PATCH that carries it may not have landed yet.
@@ -1304,7 +1315,14 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, connection, ui: { ...state.ui, banner } };
     }
     case 'auth/refreshed':
-      return { ...state, connection: { ...state.connection, authRefreshedAt: action.at } };
+      return {
+        ...state,
+        connection: {
+          ...state.connection,
+          authRefreshedAt: action.at,
+          ...(action.authenticatedAt !== undefined ? { authenticatedAt: action.authenticatedAt } : {}),
+        },
+      };
     case 'auth/evicted': {
       const settings = state.settings as Record<string, unknown>;
       const personalSettings = Object.fromEntries(
@@ -1359,6 +1377,18 @@ export function reduce(state: AppState, action: Action): AppState {
  * function is what lets the reducer tests drive the store with real contract
  * events rather than hand-built actions.
  */
+/**
+ * One more request needs review. `pendingForMe` is what the sidebar shows when
+ * the server sent it, and a decision decrements both; a creation that only
+ * touched `inbox` left the badge where it was while the pane gained a row.
+ */
+function countsPlusOne(counts: AppState['counts']): Partial<AppState['counts']> {
+  return {
+    inbox: counts.inbox + 1,
+    ...(counts.pendingForMe !== undefined ? { pendingForMe: counts.pendingForMe + 1 } : {}),
+  };
+}
+
 export function actionsFor(event: StreamEvent, state: AppState): Action[] {
   const id = BigInt(event.id);
   const sessionId = event.session_id;
@@ -1479,7 +1509,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
         if (unseen && kind === 'request') {
           out.push({ type: 'list/prepend', key: 'inbox:needs-review', id: p.entity_id });
           out.push({ type: 'list/prepend', key: 'requests', id: p.entity_id });
-          out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+          out.push({ type: 'counts/set', patch: countsPlusOne(state.counts) });
         }
       }
       break;
@@ -1553,7 +1583,7 @@ export function actionsFor(event: StreamEvent, state: AppState): Action[] {
       // The proposing session also emits `run.focus`. If that stream arrived
       // first, it already inserted the request and incremented the badge.
       // Count the request once across the two streams.
-      if (!alreadyKnown) out.push({ type: 'counts/set', patch: { inbox: state.counts.inbox + 1 } });
+      if (!alreadyKnown) out.push({ type: 'counts/set', patch: countsPlusOne(state.counts) });
       break;
     }
     case 'decision.recorded': {

@@ -17,7 +17,8 @@ import {
   reviseApproval,
   routeApproval,
 } from '../domain/approvals.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid } from './tenant.js';
+import { RouteError } from './errors.js';
 import { getApprovalEvidence } from '../domain/approval-evidence.js';
 
 const humanContext = (work: Parameters<Parameters<typeof inWorkspace>[1]>[0]) => ({

@@ -123,6 +123,8 @@ import {
   undeleteResultSchema,
   authWorkspacesSchema,
   type AuthWorkspacesResponse,
+  invitationPreviewSchema,
+  type InvitationPreview,
   type DecideApprovalInput,
   type ReviseApprovalInput,
   type RouteApprovalInput,
@@ -629,6 +631,11 @@ export function createRest(options: RestOptions) {
      * so the shell renders with no second round trip (server decision F2).
      */
     acceptInvitation: (token: string) => request('POST', `/invitations/${encodeURIComponent(token)}/accept`, bootstrapSchema, {}),
+    /**
+     * The workspace's name and role behind a token, so the join page can say
+     * what it is joining. Same token, same refusals as the accept.
+     */
+    previewInvitation: (token: string) => request('GET', `/invitations/${encodeURIComponent(token)}`, invitationPreviewSchema) as Promise<InvitationPreview>,
 
     setFocusRef: (workspaceId: string, sessionId: string, ref: Ref | null) => request('PATCH', `${ws(workspaceId)}/sessions/${sessionId}`, sessionSchema, { focus_ref: ref }),
   };

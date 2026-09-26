@@ -54,7 +54,13 @@ describe('agent operation permissions',()=>{
       expect((await asUser(e,fx.adminId,`${path(fx)}/approvals/${id}`,{method:'POST',body:{decision:'approved'}})).status).toBe(200);
       const completed=await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call);expect(completed.reply).toMatchObject({ok:true});
       expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual(completed.reply);
-      await expect(dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,{...call,arguments:{body:'Not reviewed'}})).rejects.toMatchObject({reason:'runtime_call_conflict'});
+      // The same native id with other arguments is a new call (providers reuse
+      // per-response ids). It never inherits the earlier approval: with
+      // approval back On it parks for a fresh human decision and writes nothing.
+      expect((await asUser(e,fx.adminId,path(fx),{method:'PATCH',body:{revision:2,operation_id:'prepare_drafts',require_human_approval:true}})).status).toBe(200);
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,{...call,arguments:{body:'Not reviewed'}})).reply).toEqual({status:'pending'});
+      const pending=await (await asUser(e,fx.adminId,path(fx))).json() as {pending_approvals:{id:string}[]};
+      expect(pending.pending_approvals.map((approval)=>approval.id)).not.toContain(id);
       const count=await readTenant(fx.workspaceId,fx.adminId,c=>c.query('SELECT count(*)::int AS count FROM instruction_versions WHERE run_id=$1',[runId]));
       expect(count.rows[0].count).toBe(1);
     }finally{await db.close();}

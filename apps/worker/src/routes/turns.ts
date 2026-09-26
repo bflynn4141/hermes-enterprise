@@ -47,9 +47,9 @@ import {
   inWorkspace,
   jsonBody,
   pathUuid,
-  RouteError,
   type TenantWork,
 } from './tenant.js';
+import { RouteError } from './errors.js';
 import { VISIBLE } from './sessions.js';
 import { logEvent } from '../keys/redact.js';
 import { parseExpectedSettings, requireExpectedSettings } from '../domain/session-settings.js';
@@ -494,7 +494,7 @@ export async function createTurn(c: Context<{ Bindings: Env }>): Promise<Respons
     // The first turn names the session, here rather than from the client: a
     // name written by the route survives a reload and a second device, and
     // the provenance it records is what lets a finished run rename it later
-    // without ever touching a name a person chose (decision C34).
+    // without ever touching a name a person chose (decision C34b).
     const provisionalTitle = autoTitleFrom(text);
     if (provisionalTitle) {
       await work.tx.query(

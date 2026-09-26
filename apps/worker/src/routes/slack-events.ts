@@ -4,7 +4,7 @@ import { runJobsAfterCommit, withWorkspaceTransaction } from '../jobs.js';
 import { enqueueSlackIngest, type SlackMessageEventPayload } from '../integrations/slack/ingest.js';
 import { slackConfig, slackInstallKey } from '../integrations/slack/config.js';
 import { sha256Hex, verifySlackRequest } from '../integrations/slack/security.js';
-import { RouteError } from './tenant.js';
+import { RouteError } from './errors.js';
 import { lookupSlackWorkspace } from './slack.js';
 
 const record = (value: unknown): Record<string, unknown> | null =>

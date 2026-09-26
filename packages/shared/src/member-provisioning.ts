@@ -82,6 +82,9 @@ export function memberProvisioningPresentation(
   if (value.delivery === 'failed' && value.issue === 'delivery_rejected') {
     return result('Invite not sent', 'Check the email address before resending.', 'attention', 'resend');
   }
+  if (value.delivery === 'failed' && value.issue === 'readiness_failed') {
+    return result('Invite not sent', 'Their reserved agent capacity was lost before the invitation went out. Resend to reserve it again.', 'attention', 'resend');
+  }
   if (value.issue !== null || value.preparation === 'failed' || value.delivery === 'failed') {
     return result('Needs attention', 'Setup or invitation delivery could not finish.', 'attention', 'contact_admin');
   }

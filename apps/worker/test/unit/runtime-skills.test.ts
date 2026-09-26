@@ -50,7 +50,7 @@ describe('enterprise Hermes skills', () => {
     });
     expect(JSON.stringify(skill)).not.toContain('must-not-enter-the-manifest');
     expect(runtimeSkillCards(env, agentId)).toEqual([expect.objectContaining({
-      id: 'managed:partner-program-screening', adopted: true, shared_by: 'Hermes Enterprise',
+      id: 'managed:partner-program-screening', adopted: true, shared_by: 'Hermes Teams Demo',
     })]);
   });
 });

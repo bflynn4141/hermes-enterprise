@@ -44,7 +44,7 @@ import { messageSchema, sharedSessionSchema } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { connect, type Tx } from '../db/client.js';
 import { withWorkspaceTransaction } from '../jobs.js';
-import { RouteError } from './tenant.js';
+import { RouteError } from './errors.js';
 import { isNavigation, serveAppShell } from './spa.js';
 
 /** `sharedSessionSchema.messages` is capped at 500; so is the query. */

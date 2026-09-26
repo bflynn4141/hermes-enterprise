@@ -4,7 +4,8 @@
 # credential; the only strings that look like one are the local Docker Postgres
 # password in the example env files and test helpers, an explicitly invalid
 # mock Nous key used to exercise the rejected-credential state, one public
-# control-secret test vector, and one pinned public-source checksum (the api_server digest, re-pinned to v2026.9.14).
+# control-secret test vector, and one pinned public-source checksum (the api_server digest, re-pinned to v2026.9.14), and the
+# staging demo workspace uuid.
 #
 # The allowlist is deliberately narrow: each credential-shaped entry matches
 # one exact public literal, so a real secret pasted next to it still fails.
@@ -23,7 +24,9 @@ regexes = [
   '''POSTGRES_PASSWORD: postgres''',
   '''nous-invalid-test-key-0000''',
   '''0123456789abcdefghijklmnopqrstuvwxyzABCDEFG''',
-  '''7ec405dc2a59789582ad9f61a189a41079e621f14642d3c9dc754e312616a868''',
+  '''fa83a20bd4f9f3a90a3ac010db0a68f548259587946ea80b81b2f3253bafd5ec''',
+  # The staging demo workspace id (a uuid, also the deploy preflight target).
+  '''8cb93c4c-6af3-41cd-bae5-94f849b4976b''',
 ]
 paths = [
   '''pnpm-lock\.yaml''',

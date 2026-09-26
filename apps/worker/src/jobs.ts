@@ -15,13 +15,9 @@ import { approvalFinalizedHookSchema } from '@hermes/shared';
 import type { Env } from './env.js';
 import { connect, type Role, type Tx } from './db/client.js';
 import { optionalWorkosPort } from './auth/workos.js';
-import { loadApprovalView } from './domain/approvals.js';
-import { runReceiptJob } from './runs/receipt.js';
 import { runAttemptInstanceId } from './runs/instance-id.js';
 import { admitApprovalContinuation } from './runtime/continuation.js';
 import { runBackupUploads } from './storage/backup.js';
-import { runCapWarningJob } from './ops/cap-warning.js';
-import { runEventsExport } from './ops/events-export.js';
 import { runReverifyJob, type ReverifyPayload } from './keys/reverify.js';
 import { logError } from './keys/redact.js';
 import type { AdapterOptions } from './model/types.js';
@@ -417,6 +413,23 @@ async function runEvict(env: Env, job: Job): Promise<void> {
 }
 
 /**
+ * The WorkOS user id behind one of our user ids, or `undefined` when the
+ * person has no WorkOS identity yet (seeded Admins, fake-auth development).
+ * WorkOS only uses it to name the inviter in the email, so an unsigned
+ * invitation is the right fallback and never a reason to refuse delivery.
+ */
+async function workosInviterId(env: Env, workspaceId: string, userId: string | undefined): Promise<string | undefined> {
+  if (!userId) return undefined;
+  if (userId.startsWith('user_')) return userId;
+  const { rows } = await withWorkspaceTransaction(env, workspaceId, (tx) => tx.query<{ workos_user_id: string | null }>(
+    `SELECT workos_user_id FROM users WHERE id = $1`,
+    [userId],
+  ));
+  const id = rows[0]?.workos_user_id ?? null;
+  return id && id.startsWith('user_') ? id : undefined;
+}
+
+/**
  * `workos_sync`: the WorkOS-side write, after ours committed.
  *
  * Order matters and is the plan's: our transaction first, WorkOS second. If
@@ -553,15 +566,32 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
         ].includes(persistedTerminalReason)) {
           return { deliver: false, done: false, failure: persistedTerminalReason };
         }
-        if (env.AGENT_RUNTIME === 'hermes') {
+        // A setup-first invitation is delivered only while its operation is
+        // still `ready` and the exact reservation behind it is current, on any
+        // runtime: the reservation is what the recipient is being promised.
+        // Legacy rows check the same thing on the Hermes runtime only.
+        const setupBacked = await tx.query<{ id: string }>(
+          `SELECT id FROM member_provisioning_operations WHERE workspace_id=$1 AND invitation_id=$2`,
+          [job.workspace_id, invitationId],
+        );
+        if (env.AGENT_RUNTIME === 'hermes' || setupBacked.rows.length > 0) {
           const { capacityRoleForInvitation, hasCurrentReservedCapacityForInvitation } =
             await import('./hermes-cloud/capacity.js');
-          const role = await capacityRoleForInvitation(
-            tx, job.workspace_id, invitationId, { requireReadyOperation: true },
-          );
-          if (!await hasCurrentReservedCapacityForInvitation(
-            env, tx, job.workspace_id, invitationId, role,
-          )) {
+          let current = false;
+          try {
+            const role = await capacityRoleForInvitation(
+              tx, job.workspace_id, invitationId, { requireReadyOperation: true },
+            );
+            current = await hasCurrentReservedCapacityForInvitation(
+              env, tx, job.workspace_id, invitationId, role,
+            );
+          } catch (error) {
+            // An operation that stopped being ready between queueing and this
+            // claim is the same fact as a lost reservation: fail closed, never
+            // send an email for capacity nobody holds.
+            if ((error as { reason?: string }).reason !== 'invitation_capacity_unavailable') throw error;
+          }
+          if (!current) {
             return { deliver: false, done: false, failure: 'iris_capacity_reservation_missing' };
           }
         }
@@ -592,6 +622,11 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
       }
       invitationLog(deliverable.done ? 'delivery_already_resolved' : 'pending_and_reservation_rechecked', true);
       if (deliverable.deliver) {
+        // The payload names the inviter by our user id; WorkOS wants its own.
+        // A Hermes uuid there is answered with `entity_not_found` and the
+        // invitation is refused outright, so resolve it here and send the
+        // invitation unsigned when the inviter never signed in through WorkOS.
+        const inviterUserId = await workosInviterId(env, job.workspace_id, payload.inviter_user_id);
         let sent: Awaited<ReturnType<typeof port.sendInvitation>>;
         try {
           invitationLog('provider_attempted', true);
@@ -601,7 +636,7 @@ async function runWorkosSync(env: Env, job: Job): Promise<void> {
                 email: payload.email,
                 organizationId: payload.organization_id,
                 roleSlug: payload.role,
-                inviterUserId: payload.inviter_user_id,
+                ...(inviterUserId ? { inviterUserId } : {}),
                 expiresInDays: 7,
               });
           invitationLog('provider_accepted', true);
@@ -725,6 +760,7 @@ async function runRender(env: Env, job: Job): Promise<void> {
 async function runApprovalContinue(env: Env, job: Job): Promise<void> {
   const hook = approvalFinalizedHookSchema.parse(job.payload);
   if (hook.workspace_id !== job.workspace_id) throw new Error('approval_continue_workspace_mismatch');
+  const { loadApprovalView } = await import('./domain/approvals.js');
 
   const admission = await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const current = await loadApprovalView(tx, hook.request_id, null);
@@ -792,7 +828,7 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
     case 'receipt':
       // The two lines a decision leaves in the originating session, keyed on
       // `decision_id` so a replay writes nothing. See src/runs/receipt.ts.
-      await runReceiptJob(env, job);
+      await (await import('./runs/receipt.js')).runReceiptJob(env, job);
       return;
     case 'render':
       // The job row is the durable half and the queue message is the working
@@ -805,11 +841,11 @@ export async function runJob(env: Env, job: Job, adapterOptions: AdapterOptions 
       // Spend crossed 80 percent of the workspace's daily token cap. Re-reads
       // the caps rather than trusting the payload: a cap raised in the minute
       // since it was queued means the right answer is to do nothing.
-      await runCapWarningJob(env, job);
+      await (await import('./ops/cap-warning.js')).runCapWarningJob(env, job);
       return;
     case 'events_export':
       // The weekly CSV of one workspace's audit trail into the backup bucket.
-      await runEventsExport(env, job);
+      await (await import('./ops/events-export.js')).runEventsExport(env, job);
       return;
     case 'approval_continue':
       await runApprovalContinue(env, job);

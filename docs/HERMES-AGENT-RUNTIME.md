@@ -1,7 +1,7 @@
 # Official Hermes Agent runtime
 
 Hermes Enterprise now has an execution adapter for the official Nous runtime,
-pinned to `345cd2b057a452236de401d3534b8502a7465e8d` (package 0.21.3).
+pinned to `f97608f178d1ffeca59860195ab7da295f7c8e5f` (package 0.21.5, release v2026.9.24).
 The Worker remains the enterprise control plane and system of record.
 
 ## Identity and state
@@ -83,8 +83,8 @@ The official runtime loads a narrow enterprise plugin. The plugin also registers
 reviewed, read-only enterprise skills. The Worker returns an agent-scoped
 non-secret skill manifest before startup; the plugin verifies the assigned
 package bytes against it and pins that text into every new session's system
-prompt through Hermes's plugin prompt-section API (the pinned 0.21.3 release has
-no `skills.auto_load`). Non-secret values travel in `skills.config`. It
+prompt through Hermes's plugin prompt-section API (native `skills.auto_load`
+stays unused so no unreviewed skill loads). Non-secret values travel in `skills.config`. It
 gets runtime run and call IDs from native ContextVars, not model arguments. The Worker maps those IDs
 to the current agent/run/attempt, then rechecks mode and tool permissions. A
 repeated call returns its stored result; changed arguments under the same ID are
@@ -228,7 +228,7 @@ staging profile whose `enterprise_url` points back to staging. The temporary
 tunnel and its Worker secrets were removed after the proof.
 
 Hermes Cloud is the selected managed-hosting target. A Medium instance named
-`iris-enterprise-staging` is running in the **Brian Interview Demo** Portal
+`iris-enterprise-staging` is running in the **Hermes Teams Demo** Portal
 organization on Hermes `0.21.3`. The official Cloud management MCP provides
 instance lifecycle and configuration tools through interactive OAuth/PKCE.
 It does not issue a separate service API key or client secret. This authorizes
@@ -371,7 +371,7 @@ not a tunnel to a laptop.
 
 **Revalidated September 17, 2026.** Current Hermes, Cloudflare and durable
 execution documentation still supports this split. The broader comparison and
-migration triggers are recorded in [C71](DECISIONS.md#c71-keep-cloudflare-worker-and-workflows-around-the-official-hermes-runtime).
+migration triggers are recorded in [C71](decisions/08-runtime-and-team-workflows.md#c71-keep-cloudflare-worker-and-workflows-around-the-official-hermes-runtime).
 
 The Worker remains the right boundary for the current product, but its role is
 narrow: authenticate people and channels, enforce workspace and approval

@@ -136,8 +136,13 @@ only while the workspace holds a verified, unreserved Finance instance
 (`Settings → Runtime capacity`, role Finance). `POST /w/:ws/invitations` with
 `role_template_key: 'finance-agent'` answers 409 `member_setup_role_unavailable`
 otherwise, so no setup operation is created that is known to fail. The setup
-job reserves that exact instance for the invitation, acceptance promotes it to
-the member's agent, and a resend keeps the reservation it already holds. The
+job reserves that exact instance for the invitation and, once that reservation
+is verified current, queues the WorkOS invitation email in the same transaction;
+WorkOS creating the invitation is also what lets a brand-new person sign up
+through AuthKit. The invitee then sees the invitation on their workspace picker
+and on a join page that names the workspace and job role. Acceptance promotes
+the instance to the member's agent, and a resend keeps the reservation it
+already holds and re-queues delivery only once the successor is ready. The
 role is advertised per workspace in `bootstrap.capabilities.member_invitations`.
 
 Invitation onboarding may create the compatibility Iris profile, so a new

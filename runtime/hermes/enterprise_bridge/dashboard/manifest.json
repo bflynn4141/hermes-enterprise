@@ -2,6 +2,13 @@
   "name": "enterprise_bridge",
   "label": "Enterprise bridge",
   "description": "Authenticated Hermes Runs connector for the enterprise control plane.",
+  "icon": "Puzzle",
   "version": "1.7.0",
+  "tab": {
+    "path": "/enterprise-bridge",
+    "position": "after:plugins"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
   "api": "plugin_api.py"
 }

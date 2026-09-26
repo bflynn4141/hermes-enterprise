@@ -33,6 +33,23 @@ export interface RuntimeSkillManifest {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
+/** Hermes config.yaml cannot hold a null leaf: `save_config` strips every
+ * value equal to its (absent) default, so `search_after: null` never survives
+ * a dashboard save. The runtime compares its pinned settings byte-for-byte
+ * against this manifest config, so serve the YAML-representable projection.
+ * The grant digest is computed from the stored config and is unaffected. */
+function withoutNullLeaves<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => withoutNullLeaves(item)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== null)
+        .map(([key, item]) => [key, withoutNullLeaves(item)]),
+    ) as T;
+  }
+  return value;
+}
+
 function partnerManifest(
   config: Record<string, unknown>,
   assignment?: EnterpriseSkillAssignment | null,
@@ -63,13 +80,13 @@ function partnerManifest(
     grant_expires_at: preflight?.expiresAt?.toISOString() ?? null,
     capability_grants: assignment?.capability_grants ?? PARTNER_PROGRAM_DEFINITION.defaultCapabilityGrants,
     auto_load: true,
-    config: {
+    config: withoutNullLeaves({
       partner_program: {
         ...config,
         screening_dimensions: ['Track Record', 'Capacity', 'Fit'],
         human_review_required: true,
       },
-    },
+    }),
   };
 }
 
@@ -89,14 +106,14 @@ function financeManifest(config: Record<string, unknown>, assignment?: Enterpris
     grant_expires_at: null,
     capability_grants: assignment?.capability_grants ?? PARTNER_INVOICE_REVIEW_DEFINITION.defaultCapabilityGrants,
     auto_load: true,
-    config: {
+    config: withoutNullLeaves({
       invoice_review: {
         ...config,
         connector: 'enterprise-partner-records',
         human_review_required: true,
         payment_execution_available: false,
       },
-    },
+    }),
   };
 }
 
@@ -215,7 +232,7 @@ export function runtimeSkillCard(assignment: EnterpriseSkillAssignment): {
     id: `managed:${assignment.skill_key}`,
     name: assignment.name,
     version: `v${assignment.version}`,
-    shared_by: 'Hermes Enterprise',
+    shared_by: 'Hermes Teams Demo',
     description: assignment.description,
     detail: state + (assignment.skill_key === PARTNER_INVOICE_REVIEW_DEFINITION.key
       ? 'Checks a Finance-private invoice against an explicitly shared engagement reference, flags duplicates or missing context, and prepares a human decision. It cannot approve or pay.'

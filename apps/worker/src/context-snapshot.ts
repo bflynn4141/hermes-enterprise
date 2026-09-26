@@ -2,7 +2,8 @@
 // never a subsequently edited setting or a replaced/deleted storage object.
 import { MAX_CONTEXT_SOURCE_CHARS, selectedSourcesSchema } from '@hermes/shared';
 import type { Env } from './env.js';
-import { RouteError, type TenantWork } from './routes/tenant.js';
+import { type TenantWork } from './routes/tenant.js';
+import { RouteError } from './routes/errors.js';
 import { textKey } from './storage/keys.js';
 import { requireAgentContextAccess } from './domain/agent-context-access.js';
 export async function captureContext(

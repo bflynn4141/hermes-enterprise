@@ -13,7 +13,7 @@ test('Finance sees the chain and only admitted partners', async ({ page }) => {
   await page.goto('/?partnerWorkflow=1&workflowRole=finance&seat=member');
   const pane = await openHandoffs(page);
   await expect(pane.getByRole('heading', { name: 'Contractor agreements', exact: true })).toBeVisible();
-  await expect(pane.getByText('Partnerships · Maya Chen · Iris')).toBeVisible();
+  await expect(pane.getByText('Partnerships · Maya Chen · Scout')).toBeVisible();
   await expect(pane.getByText('Finance · Alex Rivera · Ledger')).toBeVisible();
   await expect(pane.getByText('Live', { exact: true })).toBeVisible();
   await expect(pane.getByRole('switch')).toHaveCount(0);
@@ -34,7 +34,7 @@ test('Partnerships sees admitted partners waiting on Finance', async ({ page }) 
   await page.getByRole('combobox', { name: 'Workspace section' }).selectOption('library');
   const pane = app(page);
   await pane.getByRole('tab', { name: 'Handoffs' }).click();
-  await expect(pane.getByText('Partnerships · Maya Chen · Iris')).toBeVisible();
+  await expect(pane.getByText('Partnerships · Maya Chen · Scout')).toBeVisible();
   await expect(pane.getByText('Priya Nair', { exact: true })).toBeVisible();
   await expect(pane.getByText('Waiting on Finance')).toBeVisible();
   await expect(pane.getByText('Leah Martinez', { exact: true })).toHaveCount(0);
@@ -64,7 +64,7 @@ test('Finance sees where an agreement came from', async ({ page }) => {
   const pane = await openHandoffs(page);
   await pane.getByRole('button', { name: 'Review' }).click();
   await expect(pane.getByRole('heading', { name: /^Agreement AGR-PRIYA-001/ })).toBeVisible();
-  await expect(pane.getByText(/^Admitted by Maya Chen · via Iris/)).toBeVisible();
+  await expect(pane.getByText(/^Admitted by Maya Chen · via Scout/)).toBeVisible();
   await pane.getByRole('button', { name: 'Open application' }).click();
   await expect(pane.getByRole('heading', { name: 'Priya Nair' })).toBeVisible();
 });

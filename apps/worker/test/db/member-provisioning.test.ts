@@ -1,10 +1,45 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { asUser, makeEnv } from './harness.js';
-import { client, seedWorkspace, setTenant, withClient } from './helpers.js';
-import { drainJobs, runJobsAfterCommit } from '../../src/jobs.js';
+import { asUser, call, clearFakeWorkOS, makeEnv, useFakeWorkOS } from './harness.js';
+import { client, seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
+import { drainJobs, runJobsAfterCommit, withWorkspaceTransaction } from '../../src/jobs.js';
 import { FINANCE_CAPACITY_ROLE } from '../../src/runtime/discovery-grants.js';
 import { hermesEnv, seedCapacity } from './capacity-fixture.js';
+import { queueSetupInvitationDelivery } from '../../src/member-provisioning/service.js';
+import { FakeWorkOS, seal, signAccessToken } from '../stubs/fake-workos.js';
+import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../../src/auth/cookies.js';
+import type { Env } from '../../src/env.js';
+
+/** The Hermes runtime with deployed WorkOS auth, the shape staging runs. */
+const workosHermesEnv = (overrides: Partial<Env> = {}): Env => hermesEnv({
+  AUTH_MODE: 'workos', WORKOS_API_KEY: 'sk_test', WORKOS_CLIENT_ID: 'client_test',
+  WORKOS_COOKIE_PASSWORD: 'a'.repeat(32), HERMES_MEMBER_PROVISIONING_ENABLED: '1',
+  ...overrides,
+} as Partial<Env>);
+
+async function linkOrganization(fx: Fixture): Promise<string> {
+  const organizationId = `org_${randomUUID().slice(0, 12)}`;
+  await withClient('owner', (c) => c.query(
+    `INSERT INTO workspace_directory (workspace_id, workos_organization_id) VALUES ($1, $2)
+     ON CONFLICT (workspace_id) DO UPDATE SET workos_organization_id = EXCLUDED.workos_organization_id`,
+    [fx.workspaceId, organizationId],
+  ));
+  return organizationId;
+}
+
+/** A sealed WorkOS session for the fixture's Admin, the way members.test.ts builds one. */
+async function asWorkOSAdmin(fx: Fixture, env: Env, path: string, options: { method?: string; body?: unknown } = {}): Promise<Response> {
+  const email = await withClient('owner', async (c) =>
+    (await c.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [fx.adminId])).rows[0]!.email);
+  const workosUserId = `user_${fx.adminId.replace(/-/g, '').slice(0, 12)}`;
+  const accessToken = await signAccessToken({ sub: workosUserId, sid: `session_${fx.adminId}` });
+  const sealedSession = seal({ accessToken, user: { id: workosUserId, email, emailVerified: true } });
+  const csrf = 'test-csrf-token';
+  return call(env, path, {
+    ...options,
+    headers: { cookie: `${SESSION_COOKIE}=${encodeURIComponent(sealedSession)}; ${CSRF_COOKIE}=${csrf}`, [CSRF_HEADER]: csrf },
+  });
+}
 
 async function seedQueuedProvisioningJob(
   fx: Awaited<ReturnType<typeof seedWorkspace>>,
@@ -37,7 +72,7 @@ async function seedQueuedProvisioningJob(
 }
 
 describe('durable member provisioning', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); clearFakeWorkOS(); });
 
   it('rejects a flag-off setup request before any invitation side effect', async () => {
     const fx = await seedWorkspace();
@@ -501,7 +536,10 @@ describe('durable member provisioning', () => {
     const successor = await response.json() as {
       id: string; provisioning: { preparation: string; issue: string | null };
     };
-    expect(successor.provisioning).toMatchObject({ preparation: 'queued', issue: 'readiness_failed' });
+    // The response is re-read after the re-queued setup job ran: the lost
+    // reservation demoted `ready`, and with no Cloud connection the successor
+    // is honestly waiting rather than reported as the transient `queued`.
+    expect(successor.provisioning).toMatchObject({ preparation: 'awaiting_connection', issue: 'cloud_not_connected', delivery: 'not_queued' });
     await withClient('app', async c => {
       await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
       expect((await c.query(
@@ -590,6 +628,241 @@ describe('durable member provisioning', () => {
         .toEqual([{ count: 1 }]);
       expect((await c.query(`SELECT cancellation FROM member_provisioning_operations WHERE invitation_id=$1`, [invitation.id])).rows)
         .toEqual([{ cancellation: 'none' }]);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('hands a verified-ready setup to WorkOS delivery exactly once, and never before readiness', async () => {
+    const fx = await seedWorkspace();
+    const fake = await useFakeWorkOS(new FakeWorkOS());
+    const env = workosHermesEnv();
+    const organizationId = await linkOrganization(fx);
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const email = 'finance-delivered@example.test';
+    // The Admin signed in through WorkOS once, so the users row carries the
+    // WorkOS id; the email must name that id, never our uuid.
+    const adminWorkosUserId = `user_${fx.adminId.replace(/-/g, '').slice(0, 12)}`;
+    await withClient('owner', async (c) => {
+      await c.query('UPDATE users SET workos_user_id = $2 WHERE id = $1', [fx.adminId, adminWorkosUserId]);
+    });
+
+    const created = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
+      email, role: 'member', role_template_key: 'finance-agent',
+    } });
+    const body = await created.text();
+    expect(created.status, body).toBe(201);
+    const invitation = JSON.parse(body) as { id: string; delivery_status: string; provisioning: { preparation: string; delivery: string } };
+    // The route's own after-commit job reserved capacity, queued delivery and
+    // ran it: the response is re-read, so it reports what WorkOS answered.
+    expect(invitation.delivery_status).toBe('delivered');
+    expect(invitation.provisioning).toMatchObject({ preparation: 'ready', delivery: 'sent' });
+    // The drain is global, so another test's queued job can reach this fake;
+    // count only the sends for this invitation's address.
+    const sendsForThisInvitation = () => fake.calls.filter((entry) => entry.method === 'sendInvitation'
+      && (entry.argument as { email?: string }).email === email);
+    const sends = sendsForThisInvitation();
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.argument).toMatchObject({
+      email, organizationId, roleSlug: 'member', expiresInDays: 7, inviterUserId: adminWorkosUserId,
+    });
+
+    // Draining again finds nothing to send twice.
+    await drainJobs(env, 50);
+    expect(sendsForThisInvitation()).toHaveLength(1);
+
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(
+        `SELECT delivery_status, delivery_error, workos_invitation_id IS NOT NULL AS delivered_id,
+                expires_at > now() + interval '6 days' AS clock_started
+           FROM invitations WHERE id=$1`, [invitation.id],
+      )).rows).toEqual([{ delivery_status: 'delivered', delivery_error: null, delivered_id: true, clock_started: true }]);
+      expect((await c.query(
+        `SELECT payload->>'action' AS action, done_at IS NOT NULL AS done FROM jobs
+          WHERE kind='workos_sync' AND payload->>'invitation_id'=$1`, [invitation.id],
+      )).rows).toEqual([{ action: 'send_invitation', done: true }]);
+      // The seven-day clock started at the handoff, not at creation.
+      expect((await c.query(
+        `SELECT next_at > now() + interval '6 days' AS scheduled FROM jobs
+          WHERE kind='hermes_invitation_expire' AND key=$1 AND done_at IS NULL`, [`invitation-expire:${invitation.id}`],
+      )).rows).toEqual([{ scheduled: true }]);
+      expect((await c.query(
+        `SELECT state, reserved_invitation_id FROM hermes_cloud_capacity WHERE id=$1`, [capacityId],
+      )).rows).toEqual([{ state: 'reserved', reserved_invitation_id: invitation.id }]);
+      // The invitation directory carries the address digest for the picker.
+      expect((await c.query(
+        `SELECT count(*)::int AS rows FROM invitation_directory
+          WHERE invitation_id=$1 AND email_digest=hermes_invitation_email_digest($2)`, [invitation.id, email],
+      )).rows).toEqual([{ rows: 2 }]);
+      await c.query('COMMIT');
+    });
+
+    // The Members list reads the same truth.
+    const listed = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations`);
+    const items = (await listed.json() as { items: Array<{ id: string; delivery_status: string; provisioning: { delivery: string } }> }).items;
+    expect(items.find((row) => row.id === invitation.id)).toMatchObject({ delivery_status: 'delivered', provisioning: { delivery: 'sent' } });
+  });
+
+  it('queues delivery at the handoff with the clock started, and keeps fake auth on not_required', async () => {
+    const fx = await seedWorkspace();
+    await linkOrganization(fx);
+    const seeded = await seedQueuedProvisioningJob(fx, 'handoff@example.test');
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE member_provisioning_operations SET preparation='ready' WHERE id=$1`, [seeded.operationId]);
+      await c.query('COMMIT');
+    });
+
+    // AUTH_MODE=fake: the invitation id is the join token, nothing is queued.
+    const fakeMode = await withWorkspaceTransaction(hermesEnv(), fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      hermesEnv(), tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(fakeMode).toBeNull();
+
+    const env = workosHermesEnv();
+    const jobId = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      env, tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(jobId).not.toBeNull();
+    // Readiness re-observed later does not queue a second send.
+    const again = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      env, tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(again).toBeNull();
+
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT delivery_status FROM invitations WHERE id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ delivery_status: 'queued' }]);
+      expect((await c.query(
+        `SELECT payload->>'action' AS action, payload->>'inviter_user_id' AS inviter FROM jobs
+          WHERE kind='workos_sync' AND payload->>'invitation_id'=$1`, [seeded.invitationId],
+      )).rows).toEqual([{ action: 'send_invitation', inviter: fx.adminId }]);
+      expect((await c.query(
+        `SELECT count(*)::int AS count FROM jobs WHERE kind='hermes_invitation_expire' AND key=$1`,
+        [`invitation-expire:${seeded.invitationId}`],
+      )).rows).toEqual([{ count: 1 }]);
+      expect((await c.query(`SELECT status FROM workos_sync WHERE resource_type='invitation' AND resource_id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ status: 'pending' }]);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('sends the invitation unsigned when the inviter has no WorkOS identity, rather than refusing it', async () => {
+    const fx = await seedWorkspace();
+    const fake = await useFakeWorkOS(new FakeWorkOS());
+    const env = workosHermesEnv();
+    const organizationId = await linkOrganization(fx);
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const seeded = await seedQueuedProvisioningJob(fx, 'unsigned-inviter@example.test', 'finance-agent');
+    await withClient('owner', async (c) => {
+      // A seeded Admin who never signed in through WorkOS.
+      await c.query('UPDATE users SET workos_user_id = NULL WHERE id = $1', [fx.adminId]);
+    });
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE hermes_cloud_capacity SET state='reserved', reserved_invitation_id=$2 WHERE id=$1`, [capacityId, seeded.invitationId]);
+      await c.query(`UPDATE member_provisioning_operations SET preparation='ready' WHERE id=$1`, [seeded.operationId]);
+      await c.query('COMMIT');
+    });
+    const deliveryJobId = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      env, tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(deliveryJobId).not.toBeNull();
+    await drainJobs(env, 50);
+
+    // The drain is global; count only this invitation's sends.
+    const sends = fake.calls.filter((entry) => entry.method === 'sendInvitation'
+      && (entry.argument as { email?: string }).email === 'unsigned-inviter@example.test');
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.argument).toMatchObject({ email: 'unsigned-inviter@example.test', organizationId, roleSlug: 'member' });
+    expect(sends[0]!.argument).not.toHaveProperty('inviterUserId');
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT delivery_status, delivery_error FROM invitations WHERE id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ delivery_status: 'delivered', delivery_error: null }]);
+      await c.query('COMMIT');
+    });
+  });
+
+  it('fails delivery closed when the reservation is lost before the send job runs', async () => {
+    const fx = await seedWorkspace();
+    const fake = await useFakeWorkOS(new FakeWorkOS());
+    const env = workosHermesEnv();
+    const organizationId = await linkOrganization(fx);
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const seeded = await seedQueuedProvisioningJob(fx, 'lost-reservation@example.test', 'finance-agent');
+
+    // Readiness verified: the setup job reserves and queues delivery — but
+    // the delivery job is held back here so the reservation can be lost first.
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE hermes_cloud_capacity SET state='reserved', reserved_invitation_id=$2 WHERE id=$1`, [capacityId, seeded.invitationId]);
+      await c.query(`UPDATE member_provisioning_operations SET preparation='ready' WHERE id=$1`, [seeded.operationId]);
+      await c.query('COMMIT');
+    });
+    const deliveryJobId = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => queueSetupInvitationDelivery(
+      env, tx, { workspaceId: fx.workspaceId, invitationId: seeded.invitationId, inviterUserId: fx.adminId },
+    ));
+    expect(deliveryJobId).not.toBeNull();
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      await c.query(`UPDATE hermes_cloud_capacity SET state='available', reserved_invitation_id=NULL WHERE id=$1`, [capacityId]);
+      await c.query('COMMIT');
+    });
+
+    await runJobsAfterCommit(env, fx.workspaceId, [deliveryJobId!]);
+    expect(fake.calls.filter((entry) => entry.method === 'sendInvitation')).toHaveLength(0);
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT delivery_status, delivery_error, workos_invitation_id FROM invitations WHERE id=$1`, [seeded.invitationId])).rows)
+        .toEqual([{ delivery_status: 'failed', delivery_error: 'iris_capacity_reservation_missing', workos_invitation_id: null }]);
+      // Terminal: the job is finished, not retried into a send.
+      expect((await c.query(`SELECT done_at IS NOT NULL AS done FROM jobs WHERE id=$1`, [deliveryJobId])).rows).toEqual([{ done: true }]);
+      await c.query('COMMIT');
+    });
+    // The Members card names the cause so the Admin is offered a resend.
+    const listed = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations`);
+    const items = (await listed.json() as { items: Array<{ id: string; provisioning: { delivery: string; issue: string | null } }> }).items;
+    expect(items.find((row) => row.id === seeded.invitationId)?.provisioning).toMatchObject({ delivery: 'failed', issue: 'readiness_failed' });
+    expect(organizationId).toBeTruthy();
+  });
+
+  it('resends by transferring the reservation and re-queues delivery only once the successor is ready', async () => {
+    const fx = await seedWorkspace();
+    const fake = await useFakeWorkOS(new FakeWorkOS());
+    const env = workosHermesEnv();
+    await linkOrganization(fx);
+    const [capacityId] = await seedCapacity(fx, env, 1, FINANCE_CAPACITY_ROLE);
+    const email = 'finance-resend@example.test';
+    const created = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations`, { method: 'POST', body: {
+      email, role: 'member', role_template_key: 'finance-agent',
+    } });
+    const original = await created.json() as { id: string; delivery_status: string };
+    expect(original.delivery_status).toBe('delivered');
+
+    const resend = await asWorkOSAdmin(fx, env, `/w/${fx.workspaceId}/invitations/${original.id}/resend`, { method: 'POST', body: {} });
+    const resendBody = await resend.text();
+    expect(resend.status, resendBody).toBe(201);
+    const successor = JSON.parse(resendBody) as { id: string; delivery_status: string; provisioning: { preparation: string; delivery: string } };
+    expect(successor.id).not.toBe(original.id);
+    expect(successor.delivery_status).toBe('delivered');
+    expect(successor.provisioning).toMatchObject({ preparation: 'ready', delivery: 'sent' });
+    // One fresh send for the original, one provider resend for the successor.
+    expect(fake.calls.filter((entry) => entry.method === 'sendInvitation')).toHaveLength(1);
+    expect(fake.calls.filter((entry) => entry.method === 'resendInvitation')).toHaveLength(1);
+
+    await withClient('app', async c => {
+      await c.query('BEGIN'); await setTenant(c, fx.workspaceId, fx.adminId);
+      expect((await c.query(`SELECT status, superseded_by FROM invitations WHERE id=$1`, [original.id])).rows)
+        .toEqual([{ status: 'resent', superseded_by: successor.id }]);
+      expect((await c.query(`SELECT state, reserved_invitation_id FROM hermes_cloud_capacity WHERE id=$1`, [capacityId])).rows)
+        .toEqual([{ state: 'reserved', reserved_invitation_id: successor.id }]);
+      expect((await c.query(`SELECT invitation_id, preparation FROM member_provisioning_operations`)).rows)
+        .toEqual([{ invitation_id: successor.id, preparation: 'ready' }]);
+      expect((await c.query(
+        `SELECT payload->>'action' AS action FROM jobs WHERE kind='workos_sync' AND payload->>'invitation_id'=$1`, [successor.id],
+      )).rows).toEqual([{ action: 'resend_invitation' }]);
       await c.query('COMMIT');
     });
   });

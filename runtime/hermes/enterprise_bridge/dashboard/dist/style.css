@@ -1,0 +1,131 @@
+.enterprise-bridge-page {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 28px 24px 48px;
+  color: var(--color-foreground);
+}
+
+.enterprise-bridge-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.enterprise-bridge-heading h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+
+.enterprise-bridge-heading p,
+.enterprise-bridge-status-row p,
+.enterprise-bridge-note p {
+  margin: 6px 0 0;
+  color: var(--color-muted-foreground);
+  line-height: 1.55;
+}
+
+.enterprise-bridge-card,
+.enterprise-bridge-note {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-card);
+}
+
+.enterprise-bridge-card {
+  padding: 24px;
+}
+
+.enterprise-bridge-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.enterprise-bridge-status-row h2,
+.enterprise-bridge-note h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 620;
+}
+
+.enterprise-bridge-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--color-muted-foreground);
+}
+
+.enterprise-bridge-dot.is-ready {
+  background: #22a06b;
+  box-shadow: 0 0 0 4px rgb(34 160 107 / 14%);
+}
+
+.enterprise-bridge-dot.is-unavailable {
+  background: var(--color-destructive);
+}
+
+.enterprise-bridge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 24px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-border);
+}
+
+.enterprise-bridge-detail {
+  min-width: 0;
+  padding: 16px;
+  background: var(--background-base);
+}
+
+.enterprise-bridge-detail dt {
+  margin-bottom: 5px;
+  color: var(--color-muted-foreground);
+  font-size: 13px;
+}
+
+.enterprise-bridge-detail dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enterprise-bridge-note {
+  margin-top: 16px;
+  padding: 20px 24px;
+}
+
+@media (max-width: 720px) {
+  .enterprise-bridge-page {
+    padding: 20px 16px 36px;
+  }
+
+  .enterprise-bridge-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .enterprise-bridge-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .enterprise-bridge-grid {
+    grid-template-columns: 1fr;
+  }
+}

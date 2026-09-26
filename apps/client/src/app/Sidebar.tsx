@@ -20,6 +20,7 @@ import { Avatar, MenuItem, Popover, Toggle } from './ui/primitives.js';
 import { DEV_USERS } from '../model/auth.js';
 import { sessionRowTitle, sessionStatusLabel, visibleSessions } from '../model/store.js';
 import { requestComposerFocus } from './panel.js';
+import { useBump } from './fresh.js';
 
 const SECTIONS: { key: string; label: string; icon: string; ref: Ref }[] = [
   { key: 'agents', label: 'Agents', icon: 'iris', ref: OV },
@@ -49,13 +50,15 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     nav(ref);
   };
 
+  const inboxCount = state.counts.pendingForMe ?? state.counts.inbox;
+  // `SidebarNav` owns the count's markup, so the bump is an attribute on the
+  // grid cell and the stylesheet finds the number beneath it.
+  const inboxBump = useBump(inboxCount);
   const navItems = sections.map((section) => ({
     key: section.key,
     label: section.label,
     icon: <Glass name={section.icon} size={18} />,
-    ...(section.key === 'inbox' && (state.counts.pendingForMe ?? state.counts.inbox)
-      ? { count: String(state.counts.pendingForMe ?? state.counts.inbox) }
-      : {}),
+    ...(section.key === 'inbox' && inboxCount ? { count: String(inboxCount) } : {}),
   }));
 
   const sessions = visibleSessions(state);
@@ -115,7 +118,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
     // `SidebarNav` renders its own <aside> with its own collapse control; this
     // wrapper is the grid cell. It clips during the shared width transition so
     // neither state can paint over the neighboring pane (decision C36).
-    <aside ref={sidebarRef} className={`sidebar hermes-ui${state.agent.id ? '' : ' is-agentless'}`} aria-label="Workspace navigation">
+    <aside ref={sidebarRef} className={`sidebar hermes-ui${state.agent.id ? '' : ' is-agentless'}`} aria-label="Workspace navigation" data-bump={inboxBump || undefined}>
       {phone ? <div className="phone-navigation">
         <select aria-label="Workspace section" value={state.ui.app.section}
           onChange={(event) => {

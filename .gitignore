@@ -3,8 +3,22 @@ node_modules/
 dist/
 !apps/client/dist/
 !apps/client/dist/**
+!packages/motion-components/dist/
+!packages/motion-components/dist/**
+!runtime/hermes/enterprise_bridge/dashboard/dist/
+!runtime/hermes/enterprise_bridge/dashboard/dist/**
 coverage/
 *.tsbuildinfo
+
+# Project-local worktrees and tool state. These directories can contain nested
+# repositories, dependency trees, or credentials and must never be staged.
+/work/
+/~/
+/.agentcash/
+
+# Playwright screenshots are generated evidence. CI retains them as artifacts;
+# only the curated public images under docs/assets belong in Git.
+/apps/client/qa/
 
 # Local secrets and local environment. The .example files beside them are
 # committed and are the documentation of what a deployment needs.

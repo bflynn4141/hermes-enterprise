@@ -4,7 +4,7 @@
 import type { ApprovalProposal, ApprovalType, ApprovalView } from '@hermes/shared';
 import type { ApprovalProposerContext } from './approvals.js';
 import { proposeApproval } from './approvals.js';
-import { RouteError } from '../routes/tenant.js';
+import { RouteError } from '../routes/errors.js';
 
 export interface ApprovalDemoFixtureOptions {
   readonly requesterOwnerMemberId: string;

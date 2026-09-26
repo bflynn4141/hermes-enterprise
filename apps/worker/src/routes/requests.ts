@@ -26,7 +26,8 @@ import {
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
-import { inWorkspace, jsonBody, pathUuid, RouteError, type TenantWork } from './tenant.js';
+import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
+import { RouteError } from './errors.js';
 import {
   canDecideLegacyRequest,
   loadRequest,

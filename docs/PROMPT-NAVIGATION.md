@@ -32,7 +32,7 @@ filters on reload. On small screens the link also switches to the App pane.
 Earlier the pane followed Iris while "Following Iris" was on, and manual
 navigation "pinned" it until Follow was pressed again. That state machine was
 the one piece of the interface that moved without the person touching it, and
-it is gone (DECISIONS, C34 continued and the September 20 entry beside it).
+it is gone (DECISIONS, C34b continued and the September 20 entry beside it).
 Ask-mode permissions are unchanged: Ask does not offer `set_focus`.
 
 ## Contract and guardrails

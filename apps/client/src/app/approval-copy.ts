@@ -1,4 +1,5 @@
 import type { ApprovalType, ApprovalView, RequestEntity } from '@hermes/shared';
+import { STEP_UP_MAX_AGE_MS } from '../model/constants.js';
 
 interface ApprovalMeta {
   label: string;
@@ -113,6 +114,88 @@ export function approvalEffectCopy(view: ApprovalView): string {
   if (view.payload.approval_type === 'team_commitment') return 'Accepts responsibility · Work remains separate';
   if (view.payload.approval_type === 'deliverable') return 'Records acceptance of this result';
   return 'Records this authorization';
+}
+
+// ---------------------------------------------------------------------------
+// Result copy: the server's enum values, said in words a reviewer would use.
+// Unknown values (an older client against a newer Worker) fall back to the raw
+// value with underscores removed rather than to an empty label.
+// ---------------------------------------------------------------------------
+
+const humanize = (value: string): string => {
+  const words = value.replaceAll('_', ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Unknown';
+};
+
+const AUTHORIZATION_LABELS: Record<string, string> = {
+  pending: 'Waiting for review',
+  approved: 'Approved',
+  declined: 'Declined',
+  changes_requested: 'Changes requested',
+  expired: 'Expired',
+  superseded: 'Superseded',
+  withdrawn: 'Withdrawn',
+};
+
+const WORK_LABELS: Record<string, string> = {
+  waiting: 'Waiting',
+  ready: 'Ready to start',
+  admitted: 'Work started',
+  completed: 'No follow-on work',
+  cancelled: 'Cancelled',
+  blocked: 'Blocked',
+  refused: 'Refused',
+};
+
+const EFFECT_LABELS: Record<string, string> = {
+  unavailable: 'No external effect',
+  waiting: 'Waiting',
+  not_required: 'Not required',
+  executed: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+export const approvalStatusLabel = (status: string): string => AUTHORIZATION_LABELS[status] ?? humanize(status);
+export const approvalWorkLabel = (status: string): string => WORK_LABELS[status] ?? humanize(status);
+export const approvalEffectLabel = (status: string): string => EFFECT_LABELS[status] ?? humanize(status);
+
+const WORK_REASONS: Record<string, string> = {
+  no_runtime_continuation_requested: 'This approval did not ask for any work to run afterwards.',
+  approval_type_has_no_runtime_executor: 'The authorization is recorded; nothing runs automatically for this kind of approval.',
+  reviewed_resource_is_mutable: 'A reviewed resource can still change, so work was not started. Submit a new revision with a fixed version.',
+  resource_binding_hook_changed: 'A reviewed resource changed after approval, so work was not started. Submit a new revision.',
+};
+
+/** One plain sentence for a `work.reason`; a code the client does not know is humanized, a sentence is passed through. */
+export function approvalWorkReason(reason: string | null): string | null {
+  if (!reason) return null;
+  const known = WORK_REASONS[reason];
+  if (known) return known;
+  return /^[a-z0-9_]+$/.test(reason) ? `${humanize(reason)}.` : reason;
+}
+
+export function formatMinor(minor: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: minor % 100 === 0 ? 0 : 2 }).format(minor / 100);
+  } catch {
+    return `${(minor / 100).toFixed(2)} ${currency}`;
+  }
+}
+
+/** "Search started · $0.15 cap" once a run_plan continuation is actually admitted; null otherwise. */
+export function approvalWorkStartedLine(view: ApprovalView): string | null {
+  if (view.payload.approval_type !== 'run_plan' || view.work.status !== 'admitted') return null;
+  const budget = view.payload.details.budget;
+  return `Search started · ${formatMinor(budget.cap_minor, budget.currency)} cap`;
+}
+
+/**
+ * Whether the decision routes would answer `reauth_required` right now. Null
+ * (no `/auth/session` yet) is unknown, not stale: the 401 path stays the authority.
+ */
+export function decisionSignInStale(authenticatedAt: number | null, now = Date.now()): boolean {
+  return authenticatedAt !== null && now - authenticatedAt > STEP_UP_MAX_AGE_MS;
 }
 
 export function requestActionLabel(request: RequestEntity): string {

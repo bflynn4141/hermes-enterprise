@@ -19,6 +19,8 @@ export interface MockStreamOptions {
   /** Wall clock for `at`; advances 250 ms per event so ordering is visible. */
   readonly startedAt?: Date;
   readonly modelId?: string;
+  /** The request `proposes_request` creates. Defaults to the fixture id the snapshots use. */
+  readonly requestId?: string;
 }
 
 /** Deterministic v4-shaped uuids, so snapshots do not churn between runs. */
@@ -104,7 +106,7 @@ export function mockRunStream(scenario: MockScenario = 'completed', options: Moc
   const trace = options.traceId ?? DEFAULTS.traceId;
   const modelId = options.modelId ?? DEFAULTS.modelId;
   const messageId = mockUuid(10);
-  const requestId = mockUuid(11);
+  const requestId = options.requestId ?? mockUuid(11);
   const b = new Builder(ws, session, trace, options.firstId ?? 1n, options.startedAt ?? new Date('2026-10-12T09:49:00.000Z'));
 
   const steps = [
