@@ -1,6 +1,6 @@
 # Runtime and team workflow decisions
 
-Current runtime, recovery, observability, team workflow, and managed-capacity decisions C48 through C88.
+Current runtime, recovery, observability, team workflow, and managed-capacity decisions C48 through C89.
 
 [Back to the decision index](../DECISIONS.md).
 
@@ -1456,3 +1456,9 @@ assigned skill prompt, and rechecks live readiness and health before exercising
 the existing post-ready drift closures. Hosted acceptance still requires a
 fresh gateway boot and successful staging runs across the intended demo model
 matrix.
+
+## C89. Handoff is a first-class object
+
+**Decided September 20, 2026.** A governed cross-team workflow is modeled as a workspace-scoped `handoffs` row (key, teams, crossing allowlist, ordered steps, admission state and readiness attestation) rather than as implicit settings on `partner_workflow_settings` alone. Migration `0069_handoffs.sql` backfills the Partnerships → Finance workflow as `contractor-agreements` (admit applicant → Finance reviews the contractor agreement), adds nullable `handoff_id` foreign keys on `partner_workflow_settings` and invoice-instance `partner_handoffs`, and keeps `partner_workflow_settings` synchronized through a trigger so historical readers and rollout code continue to work.
+
+**Why.** Library navigation, API discovery, and future workflows need one durable object to name, admit, and render. The Handoffs UI routes work through Inbox application and agreement requests rather than invoice intake forms. When admission is enabled, approving an application creates one pending Finance agreement draft linked by `workflow_provenance` (`partner-contractor-agreement:{applicationId}`); Handoffs In motion shows the pair. Admission reads and writes go through the handoff row; the settings table remains a compatibility mirror updated on every handoff admission change. Existing `POST /w/:ws/partner-workflow/*` routes are unchanged; list/detail live at `GET /w/:ws/handoffs` and `GET /w/:ws/handoffs/:id`. The client mounts the redesigned page on Library → Handoffs.

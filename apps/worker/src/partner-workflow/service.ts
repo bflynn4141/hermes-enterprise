@@ -27,13 +27,10 @@ import {
   FINANCE_ROLE_INSTRUCTIONS,
   PARTNER_PROGRAM_BOOTSTRAP_INSTRUCTIONS,
 } from '../enterprise-skills/role-instructions.js';
+import { ensurePartnerInvoicesHandoff } from '../handoffs/service.js';
+import { PartnerWorkflowError } from './errors.js';
 
-export class PartnerWorkflowError extends Error {
-  constructor(readonly reason: string, message: string) {
-    super(message);
-    this.name = 'PartnerWorkflowError';
-  }
-}
+export { PartnerWorkflowError };
 
 const DEFAULT_PARTNERSHIPS_CONFIG = {
   source: 'github',
@@ -541,11 +538,7 @@ export async function configurePartnerWorkflow(
       reviewers: [{ kind: 'member', member_id: financeMemberId }], quorum: 1,
     }])],
   );
-  await tx.query(
-    `INSERT INTO partner_workflow_settings (workspace_id,admission_state)
-     VALUES ($1,'disabled') ON CONFLICT (workspace_id) DO NOTHING`,
-    [workspaceId],
-  );
+  await ensurePartnerInvoicesHandoff(tx, workspaceId, partnershipsTeam.id, financeTeam.id);
   return loadPartnerWorkflowView(tx, workspaceId);
 }
 

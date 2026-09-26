@@ -28,6 +28,7 @@ import { useWorkspaceLists } from './lists.js';
 import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
+import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
 import {
   ApprovalRequest,
   approvalActionLabel,
@@ -956,6 +957,7 @@ export function DocumentView({
   const sourceIds = [...new Set([...lines.flatMap((item) => item.sourceIds), ...sections.flatMap((item) => item.sourceIds)])];
   const workflowProvenance = record(payload.workflow_provenance);
   const handoffId = text(workflowProvenance.handoff_id);
+  const sourceApplicationId = workflowProvenance.handoff_key === 'contractor-agreements' ? text(workflowProvenance.source_application_id) : null;
   const financeScoped = request.decision_summary?.approval_requirement.current.some((step) => step.label === 'Finance reviewer') === true
     || Object.keys(workflowProvenance).length > 0;
   const sharedPartner = record(workflowProvenance.shared_partner);
@@ -1007,6 +1009,7 @@ export function DocumentView({
           <h1 id={`document-decision-${request.id}`}>{readonly ? status : 'Your decision'}</h1>
           <h2>{isInvoice ? `Invoice from ${payeeName}` : `Agreement ${number}`}</h2>
           <span className="meta">{isInvoice ? number : versionLabel}</span>
+          {sourceApplicationId && <AgreementOrigin sourceApplicationId={sourceApplicationId} />}
           <dl className="legacy-document-facts">
             {isInvoice ? <>
               <div><dt>Amount</dt><dd>{amount}</dd></div>
@@ -1348,6 +1351,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
           <span className="meta">{request.decided_by_name ?? state.user.name} · Reviewer</span>
         </div>
         <Panel selected icon={KIND_ICON[request.kind] ?? 'context'} title={title} subtitle={sub} right={<span className="meta">{request.decided_at ? new Date(request.decided_at).toLocaleString() : ''}</span>} />
+        {request.kind === 'application' && request.status === 'admitted' && <AdmissionHandoff request={request} />}
         <h2 className="section-title">What this implies</h2>
         <LegacyEffectsPanel
           effects={effects}

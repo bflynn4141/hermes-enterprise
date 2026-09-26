@@ -63,8 +63,14 @@ describe('document payloads', () => {
       version_label: 'v1',
       parties: [{ name: 'Nous Partner Program' }, { name: 'Robin Ellis' }],
       sections: [{ id: '1', heading: '1. Services and delivery', body: 'One remote workshop on Oct 22.', source_ids: [] }],
+      workflow_provenance: {
+        handoff_key: 'contractor-agreements',
+        source_application_id: '00000000-0000-4000-8000-000000000001',
+        admitted_partner: { name: 'Robin Ellis' },
+      },
     });
     expect(parsed.sections).toHaveLength(1);
+    expect(parsed.workflow_provenance?.handoff_key).toBe('contractor-agreements');
   });
 
   it('dispatches on the request kind', () => {

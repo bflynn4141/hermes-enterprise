@@ -1854,6 +1854,34 @@ html[data-reduce-motion="true"] .stream-caret { animation: none; }
 }
 html[data-reduce-motion="true"] .partner-workflow-form { scroll-behavior: auto; }
 
+/* Handoffs: one chain row (who hands to whom) and one list-row per partner in motion.
+   The track is five unlabeled dots; the longer seam after the first dot is where
+   work crosses from Partnerships to Finance. Labels live in each dot's title. */
+.handoff-chain { flex-wrap: wrap; }
+.handoff-chain .row-main { flex: 1 1 220px; }
+.handoff-chain h2 { font: inherit; }
+.handoff-route { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.handoff-route svg { color: var(--muted); }
+.handoff-track { display: flex; align-items: center; margin: 0; padding: 0; list-style: none; flex-shrink: 0; }
+.handoff-track li { display: flex; align-items: center; }
+.handoff-track li:not(:last-child)::after { content: ''; width: 10px; height: 1px; background: var(--line-strong); }
+.handoff-track li:first-child::after { width: 18px; }
+.handoff-track li[data-state="done"]:not(:last-child)::after { background: #73CBA2; }
+.handoff-track i { display: block; width: 9px; height: 9px; border: 2px solid var(--line-strong); border-radius: 50%; background: var(--context); }
+.handoff-track li[data-state="done"] i { border-color: #73CBA2; background: #73CBA2; }
+.handoff-track li[data-state="current"] i { border-color: #9B9AE0; box-shadow: 0 0 0 3px rgba(155,154,224,.15); }
+.handoff-panel { align-items: center; }
+.handoff-panel .panel-body { gap: 10px; }
+.handoff-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.handoff-origin svg { flex-shrink: 0; }
+.agent-handoff-chip { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(13, 9, 52, .44); color: var(--muted); font-size: 13px; line-height: 18px; }
+.agent-handoff-chip button { padding: 0; border: 0; background: transparent; color: var(--body); font: inherit; text-decoration: underline; cursor: pointer; }
+@media (max-width: 600px) {
+  .handoff-row { flex-wrap: wrap; }
+  .handoff-row .row-main { flex-basis: 100%; }
+  .handoff-row .handoff-track { margin-left: 48px; }
+}
+
 /* Recovery uses immediate server states. Countdown text has no motion or live
    announcement loop; the existing button focus/hover feedback is sufficient. */
 .agent-recovery { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 16px 0; border-top: 1px solid var(--line); }

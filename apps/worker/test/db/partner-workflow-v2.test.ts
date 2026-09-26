@@ -31,6 +31,8 @@ import {
   publishConfirmedPartnerInvoiceReview,
   submitPartnerInvoiceIntake,
 } from '../../src/partner-workflow/v2.js';
+import { loadHandoffDetail, loadHandoffsList, readHandoffAdmission } from '../../src/handoffs/service.js';
+import { loadPartnerWorkflowViewV2 } from '../../src/partner-workflow/v2.js';
 import { asUser, makeEnv } from './harness.js';
 import { seedWorkspace, setTenant, withClient, type Fixture } from './helpers.js';
 import { INBOX_HEADERS } from './m4-fixtures.js';
@@ -203,10 +205,10 @@ async function workflowFixture(): Promise<WorkflowFixture> {
       checked_at: checkedAt,
     }]));
     await client.query(
-      `UPDATE partner_workflow_settings
+      `UPDATE handoffs
           SET admission_state='enabled',enabled_by=$2,enabled_at=now(),readiness=$3::jsonb,
               readiness_checked_at=now()
-        WHERE workspace_id=$1`,
+        WHERE workspace_id=$1 AND key='contractor-agreements'`,
       [fx.workspaceId, fx.adminId, JSON.stringify(readiness)],
     );
   });
@@ -243,6 +245,51 @@ async function addSource(fx: WorkflowFixture, label: string, text: string): Prom
          VALUES ($1,$2,$3,$4,$5,$6,'text/plain',$7,'ready','ready',$8,$9,$10,now())`,
         [attachmentId, fx.workspaceId, sessionId, `${label}.txt`, storageKey,
           Buffer.byteLength(text), sha256, text.length, Math.ceil(text.length / 4), fx.adminId],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
+  return { attachmentId, sha256, sessionId, seedRunId, storageKey, text };
+}
+
+async function addForeignSource(
+  fx: WorkflowFixture,
+  label: string,
+  text: string,
+  ownerId: string,
+): Promise<SourceFixture> {
+  const attachmentId = randomUUID();
+  const sessionId = randomUUID();
+  const seedRunId = randomUUID();
+  const sha256 = createHash('sha256').update(text).digest('hex');
+  const storageKey = `w/${fx.workspaceId}/uploads/${attachmentId}`;
+  fx.storedText.set(`${storageKey}.txt`, text);
+
+  await withClient('owner', async (client) => {
+    await client.query('BEGIN');
+    try {
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `INSERT INTO sessions (id,workspace_id,owner_id,agent_id,title,model_id,mode)
+         VALUES ($1,$2,$3,$4,$5,'deepseek-flash','work')`,
+        [sessionId, fx.workspaceId, ownerId, fx.agentId, `${label} source`],
+      );
+      await client.query(
+        `INSERT INTO runs
+           (id,workspace_id,session_id,agent_id,status,model_id,client_turn_id,trace_id,ended_at)
+         VALUES ($1,$2,$3,$4,'completed','deepseek-flash',$5,$6,now())`,
+        [seedRunId, fx.workspaceId, sessionId, fx.agentId, `seed-${seedRunId}`, randomUUID()],
+      );
+      await client.query(
+        `INSERT INTO attachments
+           (id,workspace_id,session_id,name,storage_key,size_bytes,mime,sha256,status,
+            extraction_status,text_length,token_estimate,uploaded_by,completed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,'text/plain',$7,'ready','ready',$8,$9,$10,now())`,
+        [attachmentId, fx.workspaceId, sessionId, `${label}.txt`, storageKey,
+          Buffer.byteLength(text), sha256, text.length, Math.ceil(text.length / 4), ownerId],
       );
       await client.query('COMMIT');
     } catch (error) {
@@ -450,6 +497,56 @@ async function decideInvoice(
 }
 
 describe('Partnerships + Finance exact-authority workflow v2', () => {
+  it('creates a first-class contractor-agreements handoff when roles are configured', async () => {
+    const fx = await workflowFixture();
+    await appTransaction(fx, fx.adminId, async (client) => {
+      const admission = await readHandoffAdmission(client, fx.workspaceId);
+      expect(admission.handoff_id).toBeTruthy();
+      const view = await loadPartnerWorkflowViewV2(client, fx.workspaceId, fx.adminId);
+      const list = await loadHandoffsList(client, fx.workspaceId, fx.adminId, view);
+      expect(list).toHaveLength(1);
+      expect(list[0]?.key).toBe('contractor-agreements');
+      const detail = await loadHandoffDetail(client, fx.workspaceId, list[0]!.id, view);
+      expect(detail.steps).toHaveLength(5);
+      expect(detail.crossing).toHaveLength(3);
+      expect(detail.lanes).toHaveLength(2);
+      expect(detail.in_motion).toHaveLength(0);
+      expect(detail.crossing.map((item) => item.key)).toEqual([
+        'admitted_partner',
+        'contractor_agreement',
+        'final_acknowledgment',
+      ]);
+    });
+  });
+
+  it('rejects engagement and invoice sources outside the Partnerships principal session', async () => {
+    const fx = await workflowFixture();
+    const foreign = await addForeignSource(
+      fx,
+      'foreign-terms',
+      'Terms uploaded outside the Partnerships principal session.',
+      fx.memberId,
+    );
+    await expect(appTransaction(fx, fx.adminId, (client) =>
+      proposePartnerEngagementAuthorization(client, fx.env, fx.workspaceId, fx.adminId, {
+        input_provenance: 'customer',
+        partner: { id: fx.candidateId, name: 'Private Partner LLC' },
+        reference: 'ENG-FOREIGN-SESSION',
+        purpose: 'One externally agreed partner workshop.',
+        currency: 'USD',
+        authorized_total_minor: AMOUNT_MINOR,
+        valid_from: ACTIVE_FROM,
+        valid_until: ACTIVE_UNTIL,
+        one_invoice: true,
+        permitted_evidence_excerpt: foreign.text,
+        source: { attachment_id: foreign.attachmentId, expected_sha256: foreign.sha256 },
+        idempotency_key: 'foreign-session-terms',
+      }, []),
+    )).rejects.toMatchObject({
+      reason: 'partnerships_principal_required',
+    } satisfies Partial<PartnerWorkflowError>);
+  });
+
   it('turns exact human-authorized terms into one immutable intake, checked draft and safe acknowledgment', async () => {
     const fx = await workflowFixture();
     const termsSource = await addSource(fx, 'engagement', 'Exactly one workshop is authorized for USD 1,200.00.');

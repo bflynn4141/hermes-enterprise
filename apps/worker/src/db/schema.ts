@@ -1296,11 +1296,35 @@ export const partnerRecords = pgTable(
   (t) => [unique('partner_records_idempotency_key').on(t.workspaceId, t.teamId, t.ownerAgentId, t.kind, t.idempotencyKey)],
 );
 
+export const handoffs = pgTable(
+  'handoffs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id').notNull(),
+    key: text('key').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    fromTeamId: uuid('from_team_id').notNull(),
+    toTeamId: uuid('to_team_id').notNull(),
+    crossing: jsonb('crossing').notNull().default([]),
+    steps: jsonb('steps').notNull().default([]),
+    admissionState: text('admission_state').notNull().default('disabled'),
+    enabledBy: uuid('enabled_by'),
+    enabledAt: ts('enabled_at'),
+    readiness: jsonb('readiness').notNull().default({}),
+    readinessCheckedAt: ts('readiness_checked_at'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [unique('handoffs_workspace_key').on(t.workspaceId, t.key)],
+);
+
 export const partnerHandoffs = pgTable(
   'partner_handoffs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     workspaceId: uuid('workspace_id').notNull(),
+    handoffId: uuid('handoff_id'),
     fromTeamId: uuid('from_team_id').notNull(),
     toTeamId: uuid('to_team_id').notNull(),
     sourceRecordId: uuid('source_record_id').notNull(),
@@ -1407,6 +1431,7 @@ export const requestAudiences = pgTable(
 
 export const partnerWorkflowSettings = pgTable('partner_workflow_settings', {
   workspaceId: uuid('workspace_id').primaryKey(),
+  handoffId: uuid('handoff_id'),
   admissionState: text('admission_state').notNull().default('disabled'),
   enabledBy: uuid('enabled_by'),
   enabledAt: ts('enabled_at'),
@@ -2323,6 +2348,7 @@ export const ALL_TABLES = {
   partner_contact_enrichments: partnerContactEnrichments,
   partner_engagements: partnerEngagements,
   partner_records: partnerRecords,
+  handoffs,
   partner_handoffs: partnerHandoffs,
   partner_workflow_executions: partnerWorkflowExecutions,
   partner_agent_messages: partnerAgentMessages,

@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { CodeBlock, ContextCards, DiffTable, Flowchart, ThinkingState } from '@hermes/motion-components';
-import { CTX, CTX_DEST, HISTORY, INBOX, OV, REQ, SKILLS_VIEW, TRACE, TRACES, type AgentFile, type ContextField, type InstructionVersion, type RequestEntity, type SkillVersion, type TraceEntity, type Ref } from '@hermes/shared';
+import { CTX, CTX_DEST, HISTORY, INBOX, LIB, OV, REQ, SKILLS_VIEW, TRACE, TRACES, type AgentFile, type ContextField, type InstructionVersion, type RequestEntity, type SkillVersion, type TraceEntity, type Ref } from '@hermes/shared';
 import { useAdapter, useAppState, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, KIND_ICON } from '../ui/icons.js';
 import { Ack, Button, Dialog, EmptyState, IrisMark, Panel, Skeleton, Tabs } from '../ui/primitives.js';
@@ -169,13 +169,20 @@ function AgentActivityPanel({ traces }: { traces: readonly TraceEntity[] }) {
 
 export function AgentOverview() {
   const state = useAppState();
+  const adapter = useAdapter();
   const nav = useNav();
   const lists = useWorkspaceLists();
   const admin = useIsAdmin();
   const agent = agentName(state);
+  const [handoffChip, setHandoffChip] = useState(false);
   const pending = lists.requests.filter((request) => request.status === 'pending' && matchesReviewerFilter(request, 'for_me'));
   const destination = rows<ContextField>(state, LIST_KEYS.contextFields, 'context_field').find((field) => field.field === 'destination');
   const blocked = destination ? !destination.value : false;
+  useEffect(() => {
+    void adapter.rest.listHandoffs(state.workspace.id)
+      .then((items) => setHandoffChip(items.some((item) => item.viewer_role !== 'unrelated')))
+      .catch(() => setHandoffChip(false));
+  }, [adapter.rest, state.workspace.id]);
   if (lists.loading) return <div className="scroll"><div className="app-body"><Skeleton rows={4} /></div></div>;
 
   return (
@@ -183,6 +190,12 @@ export function AgentOverview() {
       <div className="app-body">
         <AgentHead full />
         <AgentTabsRow value="overview" />
+        {handoffChip && (
+          <p className="agent-handoff-chip">
+            Part of · Contractor agreements · Partnerships → Finance ·
+            <button type="button" onClick={() => nav(LIB('handoffs'))}>Open Handoffs</button>
+          </p>
+        )}
         <AgentActivityPanel traces={lists.traces} />
         <div className="row" style={{ height: 32 }}>
           <h2 className="section-title">{admin ? 'Needs you' : 'Assigned to you'}</h2>

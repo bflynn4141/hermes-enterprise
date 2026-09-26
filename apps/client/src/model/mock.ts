@@ -37,6 +37,8 @@ const REQ_LEAH = mockUuid(11);
 const REQ_OWEN = mockUuid(12);
 const REQ_INVOICE = mockUuid(13);
 const REQ_AGREEMENT = mockUuid(14);
+const REQ_PRIYA = mockUuid(730);
+const REQ_PRIYA_AGREEMENT = mockUuid(731);
 const DOC_INVOICE = mockUuid(30);
 const KEY_ID = mockUuid(40);
 const TRACE_LEAH = mockUuid(50);
@@ -306,6 +308,18 @@ export function createMockBackend(input: MockOptions = {}) {
           missing: ['Human review', 'Independent verification of demo claims'],
           benefits: ['Partner directory listing', 'Program Slack access'],
         }),
+        ...(options.partnerWorkflow ? [
+          { ...request(REQ_PRIYA, 'application', 'admitted', 'Priya Nair', 'Priya Nair', {
+            kind: 'application', applicant: { name: 'Priya Nair' }, proposed_role: 'Delivery Partner', score: 88, score_max: 100,
+            criteria: [], sources: demoProfileSources, missing: [], benefits: ['Partner directory listing'],
+          }), decided_at: iso(-3), decided_by_name: 'Maya Chen' },
+          request(REQ_PRIYA_AGREEMENT, 'agreement', 'pending', 'Priya Nair', 'Priya Nair', {
+            kind: 'agreement', number: 'AGR-PRIYA-001', version_label: 'draft',
+            parties: [{ name: 'Nous Research' }, { name: 'Priya Nair' }],
+            sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
+            workflow_provenance: { handoff_key: 'contractor-agreements', source_application_id: REQ_PRIYA, admitted_partner: { name: 'Priya Nair' } },
+          }),
+        ] : []),
         request(REQ_INVOICE, 'invoice', 'pending', invoiceFixture.subject, invoiceFixture.label, invoiceFixture.payload),
         request(REQ_AGREEMENT, 'agreement', 'pending', 'Robin Ellis', 'AGR-2026-004', { number: 'AGR-2026-004', sections: [{ id: 'scope', heading: 'Scope', body: 'One partner workshop on Oct 22–23, with materials prepared in advance.', source_ids: [] }, { id: 'fees', heading: 'Fees', body: 'USD 1,200, payable 14 days after an accepted delivery statement.', source_ids: [DOC_INVOICE, mockUuid(699)] }, { id: 'term', heading: 'Term', body: 'Effective on signature by both parties; either party may end it with 14 days notice.', source_ids: [] }] }),
       ];
@@ -1039,7 +1053,8 @@ export function createMockBackend(input: MockOptions = {}) {
     const approval = approvalViews.get(row.id);
     if (approval) return { ...row, payload: approval.payload as unknown as Record<string, unknown>, approval: approvalProjection(approval) };
     if (story) return row;
-    const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+    const financeScoped = (row.kind === 'invoice' && 'workflow_provenance' in row.payload)
+      || (row.kind === 'agreement' && (row.payload.workflow_provenance as { handoff_key?: string } | undefined)?.handoff_key === 'contractor-agreements');
     // Preserve the older Worker response shape for the existing legacy Member
     // browser fixture. The scoped Finance fixture exercises the new projection.
     if (!financeScoped && seat === 'member') return row;
@@ -1517,7 +1532,7 @@ export function createMockBackend(input: MockOptions = {}) {
       }
       if (rest === '/decisions' && method === 'POST') {
         if (!row) return fail(404, 'not_found');
-        const financeScoped = row.kind === 'invoice' && 'workflow_provenance' in row.payload;
+        const financeScoped = (row.kind === 'invoice' || row.kind === 'agreement') && 'workflow_provenance' in row.payload;
         if (!story && seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
         if (row.status !== 'pending') return fail(409, 'already_decided', 'Already decided');
         const decision = body.decision === 'decline' ? 'decline' : 'approve';
@@ -1526,6 +1541,23 @@ export function createMockBackend(input: MockOptions = {}) {
         row.version += 1;
         row.decided_at = iso(1);
         row.decided_by_name = viewerName;
+        if (!story && decision === 'approve' && row.kind === 'application' && options.partnerWorkflow && partnerAdmissionEnabled) {
+          const applicant = (row.payload as { applicant?: { name?: string; email?: string } }).applicant;
+          const name = applicant?.name ?? row.label;
+          const agreementId = mockUuid(700 + requests.length);
+          requests.unshift(request(agreementId, 'agreement', 'pending', name, name, {
+            kind: 'agreement',
+            number: `AGR-${agreementId.replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+            version_label: 'draft',
+            parties: [{ name: 'Nous Research' }, { name }],
+            sections: [{ id: 'scope', heading: 'Scope', body: 'Independent contractor engagement.', source_ids: [] }],
+            workflow_provenance: {
+              handoff_key: 'contractor-agreements',
+              source_application_id: id,
+              admitted_partner: { name, ...(applicant?.email ? { email: applicant.email } : {}) },
+            },
+          }));
+        }
         if (story) {
           row.decided_at = new Date().toISOString();
           if (row.decision_summary) row.decision_summary = { ...row.decision_summary, approval_requirement: { ...row.decision_summary.approval_requirement, completed_steps: 1, remaining_approvals: 0, current: [], pending_for_viewer: false } };
@@ -1830,6 +1862,125 @@ export function createMockBackend(input: MockOptions = {}) {
       partnerAdmissionEnabled = body.enabled === true;
       return fetchImpl(new URL(`/w/${WS}/partner-workflow`, url.origin), { method: 'GET' });
     }
+    const handoffsListMatch = match(new RegExp(`^/w/${WS}/handoffs(?:/([^/]+))?$`));
+    if (handoffsListMatch && method === 'GET') {
+      const configured = partnerConfigured;
+      const viewerRole = configured ? workflowRole : seat === 'admin' ? 'admin' : 'unrelated';
+      const handoffId = mockUuid(615);
+      if (!configured) return json([]);
+      const listItem = {
+        id: handoffId,
+        key: 'contractor-agreements',
+        name: 'Contractor agreements · Partnerships → Finance',
+        description: 'After Partnerships admits an applicant, Finance reviews the independent contractor agreement. Private team context stays private; only the admitted partner identity, the agreement draft, and the final acknowledgment cross teams.',
+        from_team: { id: mockUuid(620), slug: 'partnerships', name: 'Partnerships' },
+        to_team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
+        admission_state: partnerAdmissionEnabled ? 'enabled' : 'disabled',
+        viewer_role: viewerRole,
+        counts: { in_motion: 0, waiting_on_viewer: 0 },
+      };
+      if (!handoffsListMatch[1]) return json([listItem]);
+      if (handoffsListMatch[1] !== handoffId) return fail(404, 'handoff_not_found');
+      const canSeeWork = configured && (workflowRole === 'partnerships' || workflowRole === 'finance');
+      const readiness = workflowRole === 'unrelated' ? [] : [
+        { role: 'partnerships', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-program-screening', skill_version: '1.8.0', artifact_digest: hashForMock(71), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
+        { role: 'finance', configured: true, assignment_state: 'active', native_status: partnerProfilesVerified ? 'ready' : 'not_ready', skill_key: 'partner-invoice-review', skill_version: '1.0.1', artifact_digest: hashForMock(72), missing: partnerProfilesVerified ? [] : ['skill', 'tools', 'provider'] },
+      ];
+      const lanes = workflowRole === 'unrelated' ? [] : [
+        { team: listItem.from_team, person: 'Maya Chen', agent: partnershipsAgentName, agent_id: AGENT, skill: 'Partner program screening', readiness: readiness[0]!, notes: ['Admit', partnershipsAgentName, 'Off', '1.8.0'] },
+        { team: listItem.to_team, person: 'Alex Rivera', agent: 'Ledger', agent_id: FINANCE_AGENT, skill: 'Agreement review', readiness: readiness[1]!, notes: ['Review', 'Ledger', 'Off', '1.0.1'] },
+      ];
+      return json({
+        handoff: {
+          id: handoffId,
+          key: 'contractor-agreements',
+          name: listItem.name,
+          description: listItem.description,
+          admission_state: listItem.admission_state,
+          enabled_at: partnerAdmissionEnabled ? iso(-3600) : null,
+          viewer_role: viewerRole,
+        },
+        lanes,
+        crossing: [
+          { key: 'admitted_partner', label: 'Admitted partner', direction: 'forward' },
+          { key: 'contractor_agreement', label: 'Contractor agreement draft', direction: 'forward' },
+          { key: 'final_acknowledgment', label: 'Final acknowledgment', direction: 'return' },
+        ],
+        steps: [
+          { index: 1, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Screens and admits the applicant', note: 'Human decision in Inbox' },
+          { index: 2, owner: { team_slug: 'partnerships', kind: 'person' }, label: 'Prepares the independent contractor agreement', note: 'Draft for Finance review' },
+          { index: 3, owner: { team_slug: 'finance', kind: 'agent' }, label: 'Prepares agreement evidence for the reviewer', note: 'Evidence only · cannot approve' },
+          { index: 4, owner: { team_slug: 'finance', kind: 'person' }, label: 'Approves or declines the contractor agreement', note: 'Human decision in Inbox' },
+          { index: 5, owner: { team_slug: 'finance', kind: 'person', return_team_slug: 'partnerships' }, label: 'One acknowledgment returns: agreement draft saved, or declined', note: 'Nothing is signed, paid, or sent' },
+        ],
+        actions: {
+          configure: seat === 'admin',
+          set_admission: seat === 'admin',
+          propose_engagement: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          submit_invoice: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          correct_invoice: configured && partnerAdmissionEnabled && workflowRole === 'partnerships',
+          view_finance_review: configured && partnerAdmissionEnabled && workflowRole === 'finance',
+        },
+        configured,
+        readiness,
+        partner_options: canSeeWork ? [{ id: mockUuid(611), name: 'Robin Studio', source: 'engagement' }, { id: mockUuid(617), name: 'Northstar Labs', source: 'candidate' }] : [],
+        engagements: canSeeWork ? partnerEngagements : [],
+        in_motion: (() => {
+          if (!canSeeWork) return [];
+          const stageKeys = ['terms_recorded', 'finance_verifying', 'invoice', 'decision', 'acknowledged'] as const;
+          const stageLabels = ['Admit', 'Prep', 'Review', 'Decide', 'Done'];
+          const stagesFor = (current: typeof stageKeys[number]) => stageKeys.map((key, idx) => ({
+            key,
+            label: stageLabels[idx]!,
+            state: (idx < stageKeys.indexOf(current) ? 'done' : idx === stageKeys.indexOf(current) ? 'current' : 'pending') as 'done' | 'current' | 'pending',
+          }));
+          const apps = requests.filter((row) => row.kind === 'application' && row.status === 'admitted');
+          const agreements = requests.filter((row) => {
+            const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string; source_application_id?: string } }).workflow_provenance;
+            return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+          });
+          const byApp = new Map(agreements.map((row) => {
+            const source = (row.payload as { workflow_provenance?: { source_application_id?: string } }).workflow_provenance?.source_application_id;
+            return [source ?? row.id, row] as const;
+          }));
+          const items = [];
+          for (const app of apps) {
+            const agreement = byApp.get(app.id);
+            if (agreement) {
+              items.push({
+                id: agreement.id,
+                kind: 'agreement' as const,
+                title: app.label,
+                subtitle: 'Agreement ready for review',
+                stage: 'decision' as const,
+                stages: stagesFor('decision'),
+                handoff: null,
+                engagement: null,
+                open_request_id: agreement.id,
+              });
+            }
+          }
+          return items.slice(0, 25);
+        })(),
+        connector: {
+          name: 'enterprise-partner-records', shared_code: true, enforcement: 'server',
+          summary: 'Shared identity and approved engagement evidence only; private research and invoice data stay team-scoped.',
+        },
+        counts: { in_motion: canSeeWork ? requests.filter((row) => {
+          const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
+          return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+        }).length : 0, waiting_on_viewer: canSeeWork
+          ? (workflowRole === 'partnerships'
+            ? 0
+            : workflowRole === 'finance'
+              ? requests.filter((row) => {
+                const provenance = (row.payload as { workflow_provenance?: { handoff_key?: string } }).workflow_provenance;
+                return row.kind === 'agreement' && provenance?.handoff_key === 'contractor-agreements' && row.status === 'pending';
+              }).length
+              : 0)
+          : 0 },
+      });
+    }
     if (p('/partner-workflow') && method === 'GET') {
       const configured = partnerConfigured;
       const canSeeWork = configured && (workflowRole === 'partnerships' || workflowRole === 'finance');
@@ -1862,7 +2013,7 @@ export function createMockBackend(input: MockOptions = {}) {
             id: FINANCE_AGENT, name: 'Ledger', principal_user_id: MEMBER_USER, principal_name: 'Alex Rivera',
             team: { id: mockUuid(621), slug: 'finance', name: 'Finance' },
             role_template: { key: 'finance-agent', name: 'Finance agent', version: '1.0.1' },
-            skill_key: 'partner-invoice-review', skill_name: 'Partner invoice review', skill_version: '1.0.1',
+            skill_key: 'partner-invoice-review', skill_name: 'Agreement review', skill_version: '1.0.1',
             assignment_id: mockUuid(623), assignment_revision: 1, assignment_state: 'active', schedule_enabled: false,
             capabilities: ['partner.shared.read', 'partner.invoice.read', 'partner.invoice.review.prepare'],
           },

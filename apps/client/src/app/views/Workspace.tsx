@@ -505,6 +505,7 @@ export function Library({ view, id }: { view: string; id: string | null }) {
           <h1 className="display-32">Library</h1>
         </div>
         <Tabs tabs={LIBRARY_TABS} value={view} onChange={(next) => nav(LIB(next))} label="Library sections" />
+        {view === 'handoffs' && <PartnerWorkflow />}
         {view === 'skills' && <LibrarySkills />}
         {view === 'documents' && <LibraryDocuments />}
         {/* Connections and Shared Intelligence are independent, reviewed Library workflows. */}
@@ -679,7 +680,6 @@ function LibrarySkills() {
   }, [adapter.rest, agentId, state.workspace.id]);
   return (
     <div className="col">
-      <PartnerWorkflow />
       {error && <p className="meta action-error" role="alert">{error}</p>}
       {lists.skills.length === 0 && <EmptyState icon="skill" title="No shared skills yet" />}
       {lists.skills.map((skill) => {

@@ -27,6 +27,7 @@ import { proposeApproval } from '../domain/approvals.js';
 import { enqueueJob } from '../jobs.js';
 import { readExtractedText } from '../storage/text.js';
 import { submitTurn, type TurnSession } from '../runs/submit.js';
+import { readHandoffAdmission } from '../handoffs/service.js';
 import { PartnerWorkflowError, snapshotPartnerRunGrants } from './service.js';
 import {
   PARTNER_INVOICE_REVIEW_DEFINITION,
@@ -90,17 +91,8 @@ async function actors(tx: Tx, workspaceId: string): Promise<{ partnerships: Work
 }
 
 async function requireAdmission(tx: Tx, workspaceId: string): Promise<void> {
-  const settings = (await tx.query<{
-    admission_state: string;
-    readiness: Record<string, {
-      agent_id?: string; assignment_id?: string; assignment_revision?: number;
-      skill_version?: string; artifact_digest?: string;
-    }>;
-  }>(
-    `SELECT admission_state,readiness FROM partner_workflow_settings WHERE workspace_id=$1 FOR SHARE`,
-    [workspaceId],
-  )).rows[0];
-  if (settings?.admission_state !== 'enabled') {
+  const settings = await readHandoffAdmission(tx, workspaceId, 'share');
+  if (settings.admission_state !== 'enabled') {
     throw new PartnerWorkflowError('workflow_admission_disabled', 'New partner invoice admissions are disabled until both native roles are ready.');
   }
   const assignments = await tx.query<{
@@ -664,16 +656,17 @@ async function createIntake(
   });
   const revision = predecessor ? predecessor.revision + 1 : 1;
   const lineageRootId = predecessor?.lineageRootId ?? handoffId;
+  const definitionHandoffId = (await readHandoffAdmission(tx, workspaceId, 'none')).handoff_id;
   await tx.query(
     `INSERT INTO partner_handoffs
-       (id,workspace_id,from_team_id,to_team_id,source_record_id,source_record_revision,
+       (id,workspace_id,handoff_id,from_team_id,to_team_id,source_record_id,source_record_revision,
         invoice_record_id,invoice_record_revision,projection,source_session_id,requested_by,status,
         simulated,idempotency_key,revision,lineage_root_id,supersedes_handoff_id,payload_hash,
         input_provenance,
         delivery_status,validation_status,agent_explanation_status,human_decision_status,acknowledgment_status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,'queued',false,$12,$13,$14,$15,$16,
-             $17,'queued','queued','queued','not_ready','pending')`,
-    [handoffId, workspaceId, role.partnerships.team_id, role.finance.team_id,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,'queued',false,$13,$14,$15,$16,$17,
+             $18,'queued','queued','queued','not_ready','pending')`,
+    [handoffId, workspaceId, definitionHandoffId, role.partnerships.team_id, role.finance.team_id,
       engagement.record_id, engagement.revision, invoiceRecordId, invoiceRecordRevision,
       JSON.stringify(projection), provenance.session.id, userId, input.idempotency_key,
       revision, lineageRootId, predecessor?.id ?? null, payloadHash, input.input_provenance],
@@ -976,16 +969,8 @@ export async function loadPartnerWorkflowViewV2(
        JOIN enterprise_skill_artifacts art ON art.id=esa.artifact_id
       WHERE eta.workspace_id=$1 ORDER BY et.slug DESC`, [workspaceId],
   );
-  const settings = (await tx.query<{
-    admission_state: 'disabled' | 'enabled';
-    readiness: Record<string, {
-      agent_id?: string; assignment_id?: string; assignment_revision?: number;
-      skill_version?: string; artifact_digest?: string;
-    }>;
-  }>(
-    `SELECT admission_state,readiness FROM partner_workflow_settings WHERE workspace_id=$1`, [workspaceId],
-  )).rows[0];
-  const admissionState = settings?.admission_state ?? 'disabled';
+  const settings = await readHandoffAdmission(tx, workspaceId, 'none');
+  const admissionState = settings.admission_state;
   const canSeePrivate = viewerRole === 'partnerships' || viewerRole === 'finance';
   const engagements = canSeePrivate ? (await tx.query<{
     id: string; revision: number; authorization_hash: string; status: string; partner_id: string;
@@ -1044,7 +1029,7 @@ export async function loadPartnerWorkflowViewV2(
   } as const;
   const roleReady = (slug: 'partnerships' | 'finance') => {
     const row = agents.rows.find((agent) => agent.team_slug === slug);
-    const attested = settings?.readiness?.[slug];
+    const attested = settings.readiness?.[slug];
     const definition = expectedDefinitions[slug];
     return Boolean(row && attested && row.assignment_state === 'active'
       && row.skill_key === definition.key && row.skill_version === definition.version
@@ -1079,7 +1064,7 @@ export async function loadPartnerWorkflowViewV2(
     })),
     readiness: viewerRole === 'unrelated' ? [] : (['partnerships','finance'] as const).map((slug) => {
       const row = agents.rows.find((agent) => agent.team_slug === slug);
-      const attested = settings?.readiness?.[slug];
+      const attested = settings.readiness?.[slug];
       const ready = roleReady(slug);
       return {
         role: slug, configured: Boolean(row), assignment_state: row?.assignment_state ?? 'missing',

@@ -405,7 +405,7 @@ export function initialState(): AppState {
       app: OVERVIEW,
       inboxTab: 'needs-review',
       historyTab: 'decisions',
-      libraryTab: 'skills',
+      libraryTab: 'handoffs',
       settingsTab: 'Notifications',
       reduceMotion: false,
       pane: 'chat',
@@ -685,7 +685,7 @@ function uiForRef(ui: UiState, app: Ref): UiState {
       ? { inboxTab: app.view === 'rules' ? 'rules' : app.filters?.status === 'resolved' ? 'resolved' : 'needs-review' }
       : {}),
     ...(app.section === 'history' && ['all', 'decisions', 'blocked'].includes(historyView) ? { historyTab: historyView } : {}),
-    ...(app.section === 'library' ? { libraryTab: app.view ?? 'skills' } : {}),
+    ...(app.section === 'library' ? { libraryTab: app.view ?? 'handoffs' } : {}),
     ...(app.section === 'settings' ? { settingsTab: app.view ?? 'Notifications' } : {}),
   };
 }
