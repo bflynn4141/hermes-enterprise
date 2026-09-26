@@ -510,7 +510,7 @@ model-authored button carrying a human-only command before anything renders it.
 ## Decisions and effects
 
 This is the part the whole repository is arranged around. A decision is made by
-a person, in one transaction, through one route, and the things it implies are
+a person, in one transaction, through a guarded route, and the things it implies are
 recorded rather than performed.
 
 ### The route
@@ -897,10 +897,15 @@ separates current references from dated delivery evidence.
 
 ## The invariants, in one place
 
-1. **Decisions only through the guarded route.** `POST /w/:ws/requests/:id/decisions`
-   is the only path that changes a request's status, and the only writer of
-   `decisions`. Five guards in front of it, one transaction behind it; nothing
-   else may take its place.
+1. **Decisions only through the guarded routes.** A person's decision reaches
+   a request through one of two routes. `POST /w/:ws/requests/:id/decisions`
+   is the only writer of `decisions`, with five guards in front of it and one
+   transaction behind it. Typed approvals (invoices, agreements, record
+   changes) use `POST /w/:ws/requests/:id/approval/decisions`, which runs the
+   same Origin, surface, CSRF and step-up guards and then the approval's own
+   reviewer rules: an active member, not the requester when the policy forbids
+   self-review, and eligible for the current step. The agent role can reach
+   neither.
 2. **The agent role never decides.** The `agent` database role has no INSERT on
    `decisions`, `effects`, `members`, `invitations` or `jobs`, and no UPDATE on
    `requests` or `jobs`. A trigger limits what it may publish to the outbox to

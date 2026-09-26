@@ -42,7 +42,7 @@ describe('invitation diagnostics copy', () => {
   });
 
   it.each([
-    ['iris_capacity_unavailable', 'No verified Iris profile is available'],
+    ['iris_capacity_unavailable', 'No verified agent profile is available'],
     ['member_setup_role_unavailable', 'Finance agent setup is not available yet'],
     ['not_configured', 'not connected to WorkOS invitation delivery'],
     ['rate_limited', 'Too many invitation attempts'],

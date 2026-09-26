@@ -39,7 +39,7 @@ function EvidenceReference({ item, binding, load }: {
   };
   return <details className="approval-evidence-reference" onToggle={(event) => { if (event.currentTarget.open && status === 'idle') fetchEvidence(); }}>
     <summary>{item.label}</summary>
-    {(evidence?.note ?? item.note) && <p><strong>Iris’s note</strong><br />{evidence?.note ?? item.note}</p>}
+    {(evidence?.note ?? item.note) && <p><strong>Agent’s note</strong><br />{evidence?.note ?? item.note}</p>}
     <p className="meta">Reference: {item.ref ?? item.id} · {item.kind}</p>
     {binding && <p className="meta">{binding.version ?? 'Version unavailable'}{binding.reason ? ` · ${binding.reason}` : ''}{binding.sha256 ? ` · Bound digest ${binding.sha256}` : ' · Digest unavailable'}</p>}
     {status === 'loading' && <p role="status">Loading stored evidence…</p>}

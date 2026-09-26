@@ -193,7 +193,7 @@ test.describe('members write feedback', () => {
     const lena = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
     await lena.getByRole('button', { name: 'Resend' }).click();
     await expect(app.getByRole('alert')).toHaveText(
-      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+      `No verified agent profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
     );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
@@ -206,7 +206,7 @@ test.describe('members write feedback', () => {
     await email.fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
     await expect(invite.getByRole('alert')).toHaveText(
-      `No verified Iris profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+      `No verified agent profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
     );
     await expect(email).toHaveValue('new.member@example.com');
     await invite.getByRole('button', { name: 'Cancel' }).click();

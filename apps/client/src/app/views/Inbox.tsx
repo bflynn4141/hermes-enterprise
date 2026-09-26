@@ -137,7 +137,7 @@ function requestAction(request: RequestEntity): string {
   if (request.kind === 'application') return 'Review applicant';
   if (request.kind === 'invoice' || request.kind === 'agreement') return requestActionLabel(request);
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
-  if (request.kind === 'task') return 'Work with Iris';
+  if (request.kind === 'task') return 'Work with your agent';
   return 'Review request';
 }
 
@@ -479,9 +479,9 @@ function TaskView({ request }: { request: RequestEntity }) {
     nav(CTX);
   };
   return <div className="scroll"><div className="app-body">
-    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{request.label}</h1><p className="meta">Partner Program Iris</p></div></div>
-    <Panel selected icon="context" title="Define the evidence Iris should look for" subtitle={text(payload.description) ?? 'Add target industries, stages, geographies, signals, exclusions, and source material.'} />
-    <div className="app-footer" style={{ marginInline: -28 }}><div className="col grow" style={{ gap: 3 }}><span className="f-title">No search starts from this task</span><span className="f-sub">The separate $0.15 approval in Inbox is the only action that can start the paid search.</span></div><Button onClick={openIris}>{text(payload.action_label) ?? 'Work with Iris'}</Button></div>
+    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{request.label}</h1><p className="meta">Partner Program</p></div></div>
+    <Panel selected icon="context" title="Define the evidence your agent should look for" subtitle={text(payload.description) ?? 'Add target industries, stages, geographies, signals, exclusions, and source material.'} />
+    <div className="app-footer" style={{ marginInline: -28 }}><div className="col grow" style={{ gap: 3 }}><span className="f-title">No search starts from this task</span><span className="f-sub">The separate $0.15 approval in Inbox is the only action that can start the paid search.</span></div><Button onClick={openIris}>{text(payload.action_label) ?? 'Work with your agent'}</Button></div>
   </div></div>;
 }
 
@@ -694,7 +694,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
                 <div className="row">
                   <h2 className="section-title" id="sources-heading">Sources used</h2>
                   <span className="grow" />
-                  <span className="meta">{isDemo ? 'Illustrative' : 'Cited by Iris'}</span>
+                  <span className="meta">{isDemo ? 'Illustrative' : `Cited by ${screeningAgent}`}</span>
                 </div>
                 <div className="source-grid" role="list">
                   {sources.map((item) => (
@@ -716,7 +716,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
                   <strong>{takeaway}</strong>
                   <span className="meta">
                     {sources.length > 0
-                      ? `${sources.length} ${isDemo ? 'illustrative sources' : 'sources cited by Iris'}`
+                      ? `${sources.length} ${isDemo ? 'illustrative sources' : `sources cited by ${screeningAgent}`}`
                       : 'No linked source supports this takeaway yet'}
                   </span>
                 </div>
@@ -754,7 +754,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
         />
       </div>
       <Dialog open={report} title={`${name} · screening report`} onClose={() => setReport(false)} actions={<Button onClick={() => setReport(false)}>Back to review</Button>}>
-        <p className="meta">Iris mapped each cited signal to the review criteria. Gaps stay visible.</p>
+        <p className="meta">{screeningAgent} mapped each cited signal to the review criteria. Gaps stay visible.</p>
         {criteria.map((criterion) => (
           <div key={criterion.label} className="col report-criterion">
             <div className="row"><span>{criterion.label}</span><span className="grow" /><span>{criterion.points}/{criterion.maximum}</span></div>
@@ -764,7 +764,7 @@ function ApplicationView({ request }: { request: RequestEntity }) {
       </Dialog>
       <Dialog open={!!source} title={source?.name ?? ''} onClose={() => setSource(null)} actions={<Button onClick={() => setSource(null)}>Close</Button>}>
         <p>{source?.note}</p>
-        <p className="meta">{isDemo ? 'Illustrative source for this local demo.' : 'Source cited by Iris. Check it against the original before you decide.'}</p>
+        <p className="meta">{isDemo ? 'Illustrative source for this local demo.' : `Source cited by ${screeningAgent}. Check it against the original before you decide.`}</p>
       </Dialog>
     </>
   );

@@ -71,7 +71,7 @@ export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
 export const STARTERS = [
   'What needs me before the partner work can move forward?',
   'Screen the newest applicant',
-  'Summarize what Iris did this week',
+  'Summarize what you did this week',
 ] as const;
 
 /** Copy strings from the spec's §7 table. Exact, and asserted by the e2e suite. */

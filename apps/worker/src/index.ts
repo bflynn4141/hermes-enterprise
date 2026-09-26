@@ -439,8 +439,10 @@ app.delete('/w/:ws/files/:id', deleteFile);
 
 // The Inbox, the decision, the effects ledger, History and the Library.
 //
-// `POST /w/:ws/requests/:id/decisions` is the only route in this table that
-// moves a request out of `pending`, and it is the only writer of `decisions`.
+// `POST /w/:ws/requests/:id/decisions` is the only writer of `decisions`.
+// Typed approvals move a request out of `pending` through
+// `POST /w/:ws/requests/:id/approval/decisions`, behind the same Origin,
+// surface, CSRF and step-up guards plus the approval's reviewer rules.
 // Five guards in front of it (see src/routes/decisions.ts) and one transaction
 // behind it (src/domain/decisions.ts).
 app.get('/w/:ws/requests', listRequests);

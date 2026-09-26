@@ -28,7 +28,7 @@ describe('refusalFor', () => {
     expect(refusal.actionable).toBe(false);
   });
 
-  it('says Iris is paused, and that the draft is kept', () => {
+  it('says the agent is paused, and that the draft is kept', () => {
     const refusal = refusalFor(new RestError(503, 'engine_paused', ''));
     expect(refusal.text).toMatch(/paused/i);
     expect(refusal.text).toMatch(/draft/i);

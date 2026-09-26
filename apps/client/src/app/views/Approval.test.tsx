@@ -68,7 +68,7 @@ describe('approval decision copy', () => {
     const view = [...approvalFixtures().views.values()][0]!;
     view.payload.evidence[0]!.ref = 'javascript:alert(1)';
     const html = renderToStaticMarkup(<ApprovalEvidence view={view} />);
-    expect(html).toContain('Iris’s note');
+    expect(html).toContain('Agent’s note');
     expect(html).toContain('Reference:');
     expect(html).not.toContain('href=');
     view.payload.evidence = [];

@@ -283,7 +283,7 @@ export function RuntimeCapacityTab() {
           <span className="runtime-step-number" aria-hidden="true">1</span>
           <div>
             <h3 id="runtime-prepare-heading">Prepare discovery</h3>
-            <p>Use a new permanent identity. Existing Iris identities are rejected to protect their current runtime binding.</p>
+            <p>Use a new permanent identity. Existing agent identities are rejected to protect their current runtime binding.</p>
           </div>
         </header>
         <form className="runtime-capacity-form" autoComplete="off" onSubmit={(event) => void prepare(event)}>
