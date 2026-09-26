@@ -130,9 +130,32 @@ function canonical(value: unknown): string {
   if (object(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
-async function durableCallId(call: RuntimeCall): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${call.runtime_run_id}:${call.tool_call_id}`));
+async function durableCallId(call: RuntimeCall, slot = 0): Promise<string> {
+  // Slot 0 keeps the original key so existing records still replay.
+  const key = `${call.runtime_run_id}:${call.tool_call_id}${slot === 0 ? '' : `#${slot}`}`;
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
   return `hermes-${[...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+const MAX_CALL_ID_SLOTS = 64;
+function sameCall(record: RuntimeCallRecord, call: RuntimeCall): boolean {
+  return record.call.name === call.name && canonical(JSON.parse(record.call.arguments)) === canonical(call.arguments);
+}
+/**
+ * Providers such as DeepSeek number tool calls per response (`call_0`,
+ * `call_1`, …), so a native tool call id recurs in later model turns of the
+ * same run. A completed call is never retried with different arguments — its
+ * result already went back to the model — so a later call that reuses the id
+ * with another tool or arguments takes the next free slot. The same call
+ * replays; an unfinished call named with different arguments still conflicts.
+ */
+async function resolveCallSlot(db: BridgeDb, runId: string, call: RuntimeCall): Promise<{ callId: string; existing: RuntimeCallRecord | null }> {
+  for (let slot = 0; slot < MAX_CALL_ID_SLOTS; slot += 1) {
+    const callId = await durableCallId(call, slot);
+    const existing = await db.runtimeCall(runId, callId);
+    if (!existing || sameCall(existing, call)) return { callId, existing };
+    if (existing.result === null || existing.result === undefined) break;
+  }
+  throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
 }
 function requireActive(run: EngineRunRow | null, workspaceId: string, agentId: string): asserts run is EngineRunRow {
   if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId || run.stopRequested || !['working', 'waiting'].includes(run.status)) {
@@ -170,11 +193,7 @@ async function dispatchRuntimeApprovalCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const callId = await durableCallId(call);
-    const existing = await db.runtimeCall(run.id, callId);
-    if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
-      throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
-    }
+    const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
@@ -286,11 +305,7 @@ export async function dispatchRuntimeCall(
     await db.lockRun(run.id);
     run = await db.findRuntimeRun(call.runtime_run_id, agentId);
     requireActive(run, workspaceId, agentId);
-    const callId = await durableCallId(call);
-    const existing = await db.runtimeCall(run.id, callId);
-    if (existing && (existing.call.name !== call.name || canonical(JSON.parse(existing.call.arguments)) !== canonical(call.arguments))) {
-      throw new RouteError('The tool call id already names different arguments.', 'runtime_call_conflict', 409);
-    }
+    const { callId, existing } = await resolveCallSlot(db, run.id, call);
     if (isResponseOnlyRecoveryInput(run.recoveryInput)
         && existing?.result !== null && existing?.result !== undefined) {
       const envelope = JSON.parse(existing.result) as { data?: { error?: unknown } };
