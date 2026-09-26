@@ -66,8 +66,8 @@ export function ProviderConnect({
           <strong>Nous Portal connected</strong>
           <span>
             {status.modelCount === null
-              ? 'Iris can now use the models available to this workspace.'
-              : `${status.modelCount} model${status.modelCount === 1 ? '' : 's'} ${status.modelCount === 1 ? 'is' : 'are'} ready for Iris.`}
+              ? 'Your agents can now use the models available to this workspace.'
+              : `${status.modelCount} model${status.modelCount === 1 ? '' : 's'} ${status.modelCount === 1 ? 'is' : 'are'} ready for your agents.`}
           </span>
         </div>
         {onDone && <Button primary onClick={onDone}>Done</Button>}

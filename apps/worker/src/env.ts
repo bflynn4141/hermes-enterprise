@@ -191,6 +191,11 @@ export interface Env {
   SENTRY_DSN?: string;
   /** The one passcode the request-access form accepts. Compared in constant time. */
   DEMO_ACCESS_PASSCODE?: string;
+  /**
+   * Set only on a pull-request preview, as a secret, by scripts/preview.mjs.
+   * Its presence turns on the passcode gate in src/preview-gate.ts.
+   */
+  PREVIEW_PASSCODE?: string;
   /** Server-side Raindrop ingestion credential. Never exposed to the client. */
   RAINDROP_WRITE_KEY?: string;
   /**

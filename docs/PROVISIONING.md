@@ -1,5 +1,12 @@
 # Provisioning accounts, keys and settings for Hermes Enterprise
 
+> **Historical procedure.** This records how the hosted environments were first
+> provisioned in September 2026. Two things have changed since: the repository
+> is public, and Nous Portal is the only inference provider (decision C55 in
+> [runtime and team workflows](decisions/08-runtime-and-team-workflows.md)), not
+> OpenRouter. For current configuration, use the [runbook](RUNBOOK.md) and
+> [Cloud management](CLOUD-MANAGEMENT.md).
+
 This is an operator procedure for whoever provisions the hosted environments (a browser plus a terminal on a machine with this repository checked out). It covers everything in RUNBOOK.md sections 11 to 13 that needs a dashboard or a credential, in the order the dependencies require. Read RUNBOOK.md and README.md first; this file tells you *how to click and type*, those tell you *why*.
 
 Repository: `<local checkout of this repository>` (pnpm monorepo; the Worker lives in `apps/worker`).

@@ -994,7 +994,9 @@ function SavedDocument({ id }: { id: string }) {
         <span className="grow" />
         <span className="meta">Saved document · Reopening cannot create it again</span>
       </div>
-      {requestRecord.data ? <DocumentView request={requestRecord.data} document={record.data} readOnly /> : <Skeleton rows={4} />}
+      {requestRecord.data ? <DocumentView request={requestRecord.data} document={record.data} readOnly />
+        : requestRecord.state === 'loading' ? <Skeleton rows={4} />
+          : <EmptyState icon="invoice" title="Review unavailable" detail="The request behind this document is not visible to you." />}
     </div>
   );
 }
@@ -1189,7 +1191,7 @@ function EmailTab() {
           <div className="kv"><span className="grow">Discovery</span><span className="meta">{connection
             ? connection.discovery_enabled ? `New candidates every ${discoveryCadence}` : 'Automated discovery is off'
             : 'Available after connection status loads'}</span></div>
-          <div className="kv"><span className="grow">Drafts</span><span className="meta">Iris prepares personalized copy for Inbox review</span></div>
+          <div className="kv"><span className="grow">Drafts</span><span className="meta">The agent prepares personalized copy for Inbox review</span></div>
           <div className="kv"><span className="grow">Sending</span><span className="meta">{connection
             ? sendingEnabled ? 'Exact approved revision only' : 'Draft-only until enabled by the operator'
             : 'The current sending mode could not be loaded'}</span></div>
@@ -2125,7 +2127,7 @@ function ProviderKeysTab() {
         <EmptyState
           icon="key"
           title="Provider connection details are protected"
-          detail="Iris can keep using a saved Nous Portal connection in the background. Sign in again only to view or change connection settings."
+          detail="Your agents can keep using a saved Nous Portal connection in the background. Sign in again only to view or change connection settings."
           action={<Button onClick={revealConnectionStatus}>Sign in to manage</Button>}
         />
       ) : keys.length === 0 ? (

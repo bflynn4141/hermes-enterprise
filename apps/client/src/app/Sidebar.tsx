@@ -214,7 +214,7 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
             onChange={(value) => dispatch({ type: 'ui/set', patch: { reduceMotion: value } })}
           />
         </div>
-        {__AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
+        {__MOCK__ && isWalkthrough() ? <WalkthroughSwitcher current={state.user.name} /> : __AUTH_MODE__ === 'fake' && <DevAccountSwitcher />}
         <div className="divider" />
         <button type="button" className="menu-item small" onClick={() => window.location.assign(adapter.auth.signOutUrl())}>
           <Icon name="external" />
@@ -224,6 +224,39 @@ export function Sidebar({ phone = false }: { phone?: boolean }) {
         </button>
       </Popover>
     </aside>
+  );
+}
+
+const isWalkthrough = (): boolean => new URL(window.location.href).searchParams.get('walkthrough') === '1';
+
+/**
+ * The recorded walkthrough's two people (`model/walkthrough.ts`). Switching
+ * reloads the page as the other person; the story itself is kept.
+ */
+function WalkthroughSwitcher({ current }: { current: string }) {
+  const people = [
+    { person: 'maya', name: 'Maya Chen', role: 'Partnerships' },
+    { person: 'alex', name: 'Alex Rivera', role: 'Finance' },
+  ] as const;
+  return (
+    <>
+      <div className="divider" />
+      <span className="p-meta" style={{ padding: '4px 12px' }}>Switch to</span>
+      {people.filter((entry) => entry.name !== current).map((entry) => (
+        <button
+          key={entry.person}
+          type="button"
+          className="menu-item small"
+          onClick={() => void import('../model/walkthrough.js').then((module) => module.switchWalkthroughPerson(entry.person))}
+        >
+          <Avatar person={{ name: entry.name }} size={22} />
+          <span className="mi-body">
+            <span>{entry.name}</span>
+            <span className="p-meta">{entry.role}</span>
+          </span>
+        </button>
+      ))}
+    </>
   );
 }
 

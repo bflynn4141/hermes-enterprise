@@ -66,7 +66,7 @@ export function refusalFor(error: unknown): Refusal {
 
     case 'engine_paused':
       return {
-        text: message || 'Iris is paused. Nothing was sent, and your draft is still here.',
+        text: message || 'The agent is paused. Nothing was sent, and your draft is still here.',
         action: null,
         actionable: false,
       };

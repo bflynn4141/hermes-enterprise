@@ -8,15 +8,18 @@ first; they are the part that cannot be renegotiated in a pull request.
 These are properties of the system, not preferences. Each one has a test, and
 the test is the thing to keep passing.
 
-1. **A decision is recorded only by the guarded decision route.**
-   `POST /w/:ws/requests/:id/decisions` (M4) is the only path that changes a
-   request's status. Legacy requests require an Admin session; a governed
+1. **A decision is recorded only by the guarded decision routes.**
+   `POST /w/:ws/requests/:id/decisions` (M4) is the only writer of
+   `decisions`. Typed approvals move a request out of `pending` through
+   `POST /w/:ws/requests/:id/approval/decisions`, which applies the same
+   step-up, surface, Origin and CSRF guards plus the approval policy's
+   reviewer rules. Legacy requests require an Admin session; a governed
    Finance invoice additionally allows only its named active audience member
    with the Finance reviewer role. Both paths require step-up freshness, an
    `X-Requested-From: inbox` header, an allowlisted `Origin` and a CSRF token,
    and it does everything in one transaction. No other route, job, queue
    consumer, cron handler or tool may write `decisions` or move a request out of
-   `pending`.
+   `pending`; a new path that does needs the same guards and its own tests.
 
 2. **The `agent` role never decides.** Three layers, and all three stay:
    * the database grants (`migrations/0004_grants.sql`, asserted by

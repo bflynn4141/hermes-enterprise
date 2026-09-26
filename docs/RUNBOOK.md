@@ -604,13 +604,13 @@ sequence is `docs/WORKOS-PRODUCTION-CHECKLIST.md`.
 | `CLOUDFLARE_API_TOKEN` | secret | staging, production | the deploy. **Scoped to this Worker**, not an account token |
 | `CLOUDFLARE_ACCOUNT_ID` | secret | staging, production | the deploy |
 | `MIGRATIONS_DATABASE_URL` | secret | staging, production | `scripts/migrate.mjs`, as `owner` on the target branch |
-| `BACKUP_DATABASE_URL` | secret | production | `pg_dump`. **Read-only role** |
-| `BACKUP_R2_ACCOUNT_ID` | secret | production | the backup upload |
-| `BACKUP_R2_ACCESS_KEY_ID` | secret | production | **write-only on the backups bucket** |
-| `BACKUP_R2_SECRET_ACCESS_KEY` | secret | production | as above |
+| `BACKUP_DATABASE_URL` | secret | backups | `pg_dump`. **Read-only role** |
+| `BACKUP_R2_ACCOUNT_ID` | secret | backups | the backup upload |
+| `BACKUP_R2_ACCESS_KEY_ID` | secret | backups | **write-only on the backups bucket** |
+| `BACKUP_R2_SECRET_ACCESS_KEY` | secret | backups | as above |
 | `STAGING_URL` | variable | staging | the smoke test |
 | `PRODUCTION_URL` | variable | production | the smoke test |
-| `BACKUP_R2_BUCKET` | variable | production | the backup upload |
+| `BACKUP_R2_BUCKET` | variable | backups | the backup upload |
 | `HERMES_CLOUD_STATUS_HOSTS` | secret | none | the release watch's instance check, as `label=hostname,…` |
 
 ---

@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('the demo request-access page invites with email and passcode on one form', async ({ page }) => {
   await page.goto('/demo');
   await expect(page.getByRole('banner').getByText('Hermes Teams Demo')).toBeVisible();
-  await expect(page.getByRole('heading', { name: /See how a named team runs Iris/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /See a team work with role agents/ })).toBeVisible();
 
   await page.getByPlaceholder('you@company.com').fill('guest@nous.example');
   await page.getByPlaceholder('Passcode').fill('demo-pass');

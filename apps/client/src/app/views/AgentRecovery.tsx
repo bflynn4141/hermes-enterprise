@@ -53,14 +53,14 @@ export function createRecoverySubmitter(send: (input: AgentWakeInput) => Promise
 function errorCopy(error: unknown, mutation: boolean): string {
   if (error instanceof RestError) {
     if (error.reason === 'unknown_route') return 'Recovery controls are unavailable on this server. Refresh after the update finishes.';
-    if (error.signedOut) return 'Sign in again to check or resume Iris.';
+    if (error.signedOut) return 'Sign in again to check or resume the agent.';
     if (error.reason === 'forbidden' || error.status === 403) return 'You do not have permission to resume this task.';
     if (error.reason === 'contract_violation') return 'The recovery response could not be read. Refresh to check the current status.';
     if (error.status < 500) return error.message;
   }
   return mutation
     ? 'Could not confirm the request. Refresh status or try again; the same request will be reused.'
-    : 'Could not refresh Iris’s status. Try again shortly.';
+    : 'Could not refresh the agent’s status. Try again shortly.';
 }
 
 /** Refreshes the existing cache without resetting navigation, drafts or transcript. */
@@ -111,7 +111,7 @@ export function useAgentRecovery(runId?: string) {
     const initialActive = !lastSignature.current && (next.state === 'working' || next.state === 'queued');
     if (refresh && (forceRefresh || initialActive || (lastSignature.current && signature !== lastSignature.current))) {
       void refreshRecoveryContext(adapter, store, workspaceId, agentId!, next, initialActive && !forceRefresh).catch(() => {
-        if (mounted.current) setError('Iris’s status is current, but the task details could not refresh. Refresh status to try again.');
+        if (mounted.current) setError('The agent’s status is current, but the task details could not refresh. Refresh status to try again.');
       });
     }
     lastSignature.current = signature;

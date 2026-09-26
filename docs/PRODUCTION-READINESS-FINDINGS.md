@@ -116,6 +116,7 @@ The integrated Inbox still labels its seeded payment account, signature and file
 - **Impact:** local Iris can use the official Hermes Agent while hosted deployments remain on the legacy runtime path.
 - **Disposition:** do not flip the flag until per-agent profile supervision, secret distribution, health checks, network isolation and rollback are provisioned. Track as an operational launch gate.
 - **Owner:** runtime compliance/operations, after the exact pin audit.
+- **Update, September 23, 2026:** resolved. Staging and production both set `AGENT_RUNTIME=hermes` and run on Hermes Cloud instances; see [Cloud management](CLOUD-MANAGEMENT.md).
 
 ### Production migration tooling replays the full catalog
 
