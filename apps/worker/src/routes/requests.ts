@@ -39,9 +39,10 @@ import {
   type RequestRow,
 } from '../domain/requests.js';
 import { loadApprovalListProjection } from '../domain/approvals.js';
-import { effectRows, toEffectEntity } from '../domain/effect-rows.js';
+import { effectRows, toEffectEntity, withLiveRequirement } from '../domain/effect-rows.js';
 import { loadVersions, toDocumentEntity } from '../documents/service.js';
 import { enqueueRequestTriage, JEV_MODEL_ID } from '../inbox-triage/service.js';
+import { loadApprovalRoutes, loadApprovalViewer, requestApproverLabel, type ApprovalViewer } from '../domain/approval-routing.js';
 
 const LIST_LIMIT = 100;
 const TRIAGE_ENQUEUE_LIMIT = 5;
@@ -59,13 +60,9 @@ function statusFilter(raw: string | undefined): string[] {
     .filter((value): value is string => (REQUEST_STATUSES as readonly string[]).includes(value));
 }
 
-async function reviewerRoles(work: TenantWork): Promise<string[]> {
-  const { rows } = await work.tx.query<{ reviewer_roles: string[] }>(
-    `SELECT reviewer_roles FROM members WHERE workspace_id=$1 AND user_id=$2 AND status='active'`,
-    [work.workspaceId, work.userId],
-  );
-  return rows[0]?.reviewer_roles ?? [];
-}
+/** The viewer's approval authority: their roles and the workspace's rules (decision C93). */
+const approvalViewer = (work: TenantWork): Promise<ApprovalViewer> =>
+  loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
 
 export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Response> {
   const statuses = statusFilter(c.req.query('status'));
@@ -104,7 +101,7 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
       baseWhere.push(`r.label ILIKE $${baseValues.length}`);
     }
 
-    const roles = await reviewerRoles(work);
+    const viewer = await approvalViewer(work);
     const visible: Array<ReturnType<typeof requestEntitySchema.parse>> = [];
     const jobs: string[] = [];
     let before: { createdAt: Date; id: string } | null = null;
@@ -156,7 +153,8 @@ export async function listRequests(c: Context<{ Bindings: Env }>): Promise<Respo
           row,
           approval,
           triageActive,
-          canDecideLegacyRequest(row, work.role, roles),
+          canDecideLegacyRequest(row, viewer),
+          requestApproverLabel(viewer, row),
         ));
         if (visibility === 'all' || item.presentation.hidden === (visibility === 'hidden')) {
           visible.push(item);
@@ -195,14 +193,15 @@ export async function getRequest(c: Context<{ Bindings: Env }>): Promise<Respons
   const result = await inWorkspace(c, async (work) => {
     const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, role: work.role, reviewerRoles: await reviewerRoles(work) };
+    return { row, approval, viewer: await approvalViewer(work) };
   });
   if (!result.row) throw new RouteError('no such request', 'unknown_request', 404);
   return c.json(requestEntitySchema.parse(toRequestEntity(
     result.row,
     result.approval,
     c.env.INBOX_TRIAGE_MODE === 'active',
-    canDecideLegacyRequest(result.row, result.role, result.reviewerRoles),
+    canDecideLegacyRequest(result.row, result.viewer),
+    requestApproverLabel(result.viewer, result.row),
   )));
 }
 
@@ -210,7 +209,9 @@ export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise
   const requestId = pathUuid(c, 'id');
   const { rows, viewerId } = await inWorkspace(c, async (work) => {
     if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
-    return { rows: await effectRows(work.tx, { requestId, audienceUserId: work.userId }), viewerId: work.userId };
+    const routes = await loadApprovalRoutes(work.tx, work.workspaceId);
+    const found = await effectRows(work.tx, { requestId, audienceUserId: work.userId });
+    return { rows: found.map((row) => withLiveRequirement(row, routes)), viewerId: work.userId };
   });
   return c.json(effectPage.parse({ items: rows.map((row) => toEffectEntity(row, viewerId)), cursor: null, total: rows.length }));
 }
@@ -252,7 +253,7 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
     );
     const row = await loadRequest(work.tx, requestId, work.userId);
     const approval = row?.kind === 'approval' ? await loadApprovalListProjection(work.tx, requestId, work.userId) : null;
-    return { row, approval, role: work.role, reviewerRoles: await reviewerRoles(work) };
+    return { row, approval, viewer: await approvalViewer(work) };
   });
 
   if (!row.row) throw new RouteError('no such request', 'unknown_request', 404);
@@ -260,7 +261,8 @@ export async function createRequestNote(c: Context<{ Bindings: Env }>): Promise<
     row.row,
     row.approval,
     c.env.INBOX_TRIAGE_MODE === 'active',
-    canDecideLegacyRequest(row.row, row.role, row.reviewerRoles),
+    canDecideLegacyRequest(row.row, row.viewer),
+    requestApproverLabel(row.viewer, row.row),
   )), 201);
 }
 
@@ -299,8 +301,8 @@ export async function patchRequestPresentation(c: Context<{ Bindings: Env }>): P
     const approval = row.kind === 'approval'
       ? await loadApprovalListProjection(work.tx, requestId, work.userId)
       : null;
-    const roles = await reviewerRoles(work);
-    const canDecide = canDecideLegacyRequest(row, work.role, roles);
+    const viewer = await approvalViewer(work);
+    const canDecide = canDecideLegacyRequest(row, viewer);
     const requiredForViewer = requestRequiredForViewer(row, approval, canDecide);
     if (input.hidden && requiredForViewer) {
       throw new RouteError(
@@ -338,7 +340,7 @@ export async function patchRequestPresentation(c: Context<{ Bindings: Env }>): P
 
     const updated = await loadRequest(work.tx, requestId, work.userId);
     if (!updated) throw new RouteError('no such request', 'unknown_request', 404);
-    return toRequestEntity(updated, approval, c.env.INBOX_TRIAGE_MODE === 'active', canDecide);
+    return toRequestEntity(updated, approval, c.env.INBOX_TRIAGE_MODE === 'active', canDecide, requestApproverLabel(viewer, updated));
   });
 
   return c.json(requestEntitySchema.parse(result));

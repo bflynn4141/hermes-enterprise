@@ -1,0 +1,20 @@
+/* Admin → Approvals. The list rows, checklist and problem lines reuse the
+   Admin → Roles classes (admin-roles.css); only what Roles has no need for
+   lives here. */
+.admin-approvals-group { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.admin-approvals-group > header h3 { margin: 0; font-size: 17px; line-height: 24px; font-weight: 500; }
+.admin-approvals-group > header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 65ch; }
+.admin-approvals-rule { margin-top: 4px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.admin-approvals-default { color: var(--muted); }
+.admin-approvals-choice { display: flex; flex-direction: column; gap: 1px; padding: 8px 0; }
+.admin-settings-card-body > p.admin-approvals-warning { color: #E7C27D; }
+.admin-approvals-count { min-width: 72px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); font: inherit; font-size: 14px; outline: none; }
+.admin-approvals-count:focus { border-color: #9B9AE0; }
+.member-approvals { display: flex; flex-direction: column; gap: 8px; }
+.member-approvals-roles { display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; min-width: 0; }
+.member-approvals-roles legend { padding: 0; margin-bottom: 4px; font-size: 13px; color: var(--body); }
+.member-approvals-role { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 14px; border-bottom: 1px solid var(--line); }
+.member-approvals-role:last-child { border-bottom: 0; }
+.member-approvals-role input { accent-color: #6E64FF; width: 16px; height: 16px; flex: 0 0 auto; }
+.member-approvals-line { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.member-approvals-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

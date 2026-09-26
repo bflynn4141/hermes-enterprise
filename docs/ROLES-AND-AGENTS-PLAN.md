@@ -59,14 +59,40 @@ break that guarantee. Instructions and skill settings stay editable, as today.
 | 0 | Safety fixes: Finance authority from server-written subject keys, not payloads; the two-person payment rule enforced; a workspace legal name instead of a hardcoded party. | Nothing new to click; closes known gaps first. | Done, #184 (C90) |
 | 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | Done, #185 (C91) |
 | 2 | Roles as data: a roles table seeded with Partnerships and Finance replaces the fixed checks; job roles persist on members; many people per role; invitations pick from the table; reviewer tags become role membership. | Admin → Roles: see who holds each role, add roles, staff them. Unblocks 3–5. | Done (C92) |
-| 3 | Approval routing screen over the existing policy engine: per approval type, the deciding role or people, steps, quorum and self-review. | "Invoices over $5k need two Finance approvals," routed live. | |
+| 3 | Approval routing screen over the existing policy engine: per approval type, the deciding role or people, steps, quorum and self-review. | Payments need three Finance people; a new member's roles say what they can approve. | Done (C93) |
 | 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Set up a third role's agent from the UI. | |
 | 5 | Configurable handoffs: role to role, chosen trigger and request type, more than two lanes. | Wire a new cross-role flow without code. | Wait for a second real workflow |
+
+## How this relates to Nous
+
+Checked September 26, 2026 against the Nous Portal Business page, the Hermes
+Agent security docs and Hermes Agent v2026.9.24 source.
+
+- **Account roles.** A Nous Portal organization has Owner, Admin and Member;
+  owners and admins manage roles, spend caps and API keys. Our workspace roles
+  are Admin and Member. If we read a Nous `org_role`, Owner and Admin both
+  map to our Admin. Nous gates billing on server capabilities such as
+  `can_change_plan` rather than role names, and we should do the same for
+  anything Nous-billed.
+- **Functional roles, agent roles and approval routing.** Nous documents none.
+  Our role catalog (C92) and approval rules (C93) are our own layer; skill
+  frontmatter has no role field.
+- **"Approvals" in Hermes** means an agent asking a person before a dangerous
+  command (`approvals.mode`, `cron_mode`, `unattended_mode`). Our plugin sets
+  those keys to deny for managed profiles. Our Approvals screen is about
+  business decisions, and its copy says so.
+- **Member-proposed shared skills** wait for an Nous org admin's approval;
+  that is separate from our Library skills and we do not claim it is the same
+  flow.
 
 ## Known gaps carried into later pieces
 
 - Parked tool-call decisions (operation approvals) have no step-up, and
   `propose_approval` is not covered by the operation switches.
 - `docs/APPROVAL-EXPANSION-STATUS.md` predates the shipped routes and runtime.
-- Legacy request kinds (application, invoice, agreement) route by hardcoded
-  rules rather than policies; piece 3 should move them onto policies.
+- Decisions take one person in this version; multi-person decisions would
+  need votes on legacy requests like typed approvals have.
+- Approval requests raised by workflows (outreach drafts, record changes,
+  Shared Intelligence) keep their own seeded policies and are not on the
+  Approvals screen yet.
+- Amount thresholds ("over $5k") are not supported yet.

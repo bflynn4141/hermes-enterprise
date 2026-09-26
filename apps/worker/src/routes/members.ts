@@ -50,7 +50,7 @@ import {
   requestMemberProvisioningCancellation,
 } from '../member-provisioning/service.js';
 import { MAX_ROLES_PER_MEMBER, type MemberRoleTemplate } from '@hermes/shared';
-import { roleSlugs } from '../domain/roles.js';
+import { grantRole, roleSlugs } from '../domain/roles.js';
 
 export type MemberRole = 'admin' | 'member';
 
@@ -93,14 +93,22 @@ export async function mirrorMembership(tx: Tx, membership: MirrorMembership): Pr
 
   let acceptedInvitation: MirroredMembership['acceptedInvitation'] = null;
   if (membership.email && membership.status === 'active') {
-    const accepted = await tx.query<{ id: string }>(
+    const accepted = await tx.query<{ id: string; role_slugs: string[] }>(
       `UPDATE invitations SET status = 'accepted', accepted_by = $3
         WHERE workspace_id = $1 AND email = lower($2) AND status = 'pending'
-        RETURNING id`,
+        RETURNING id, role_slugs`,
       [membership.workspaceId, membership.email, membership.userId],
     );
     const invitation = accepted.rows[0];
-    if (invitation) acceptedInvitation = { id: invitation.id };
+    if (invitation) {
+      acceptedInvitation = { id: invitation.id };
+      // The roles the Admin chose when inviting (decision C93). A role removed
+      // since then is skipped rather than failing the person's sign-in.
+      const known = await roleSlugs(tx, membership.workspaceId);
+      for (const slug of invitation.role_slugs ?? []) {
+        if (known.has(slug)) await grantRole(tx, membership.workspaceId, membership.userId, slug);
+      }
+    }
   }
   return { memberId: id, acceptedInvitation };
 }
@@ -297,7 +305,7 @@ export async function listInvitations(c: Context<{ Bindings: Env }>): Promise<Re
 }
 
 interface InvitationRow {
-  id: string; email: string; role: string; status: string; expires_at: Date; created_at: Date;
+  id: string; email: string; role: string; status: string; expires_at: Date; created_at: Date; role_slugs: string[];
   delivery_status: string; workos_invitation_id: string | null;
   operation_id: string | null; operation_workspace_id: string; operation_revision: number;
   preparation: MemberProvisioningOperation['preparation']; cancellation: MemberProvisioningOperation['cancellation'];
@@ -312,7 +320,7 @@ interface InvitationRow {
  */
 async function invitationRows(work: TenantWork, invitationId?: string): Promise<InvitationRow[]> {
   const { rows } = await work.tx.query<InvitationRow>(
-      `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status,
+      `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.delivery_status, i.role_slugs,
               i.workos_invitation_id,
               op.id AS operation_id, op.workspace_id AS operation_workspace_id,
               op.revision AS operation_revision, op.preparation,
@@ -380,6 +388,7 @@ function invitationItem(work: TenantWork, row: InvitationRow): unknown {
       ? 'expired'
       : row.status,
     invited_at: row.created_at.toISOString(),
+    role_slugs: row.role_slugs ?? [],
     ...(work.role === 'admin' ? {
       delivery_status: row.delivery_status,
       delivery_reason: row.delivery_reason,
@@ -419,7 +428,13 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
   try {
     requireOrigin(c, { required: false });
     requireCsrf(c);
-    const input = await jsonBody<{ email?: string; role?: string; role_template_key?: string }>(c);
+    const input = await jsonBody<{ email?: string; role?: string; role_template_key?: string; role_slugs?: unknown }>(c);
+    const requestedRoles = Array.isArray(input.role_slugs)
+      ? [...new Set(input.role_slugs.filter((slug): slug is string => typeof slug === 'string'))]
+      : [];
+    if (requestedRoles.length > MAX_ROLES_PER_MEMBER) {
+      throw new RouteError(`a person holds at most ${MAX_ROLES_PER_MEMBER} roles`, 'too_many_roles', 422);
+    }
     const email = (input.email ?? '').trim().toLowerCase();
     const role: MemberRole = input.role === 'admin' ? 'admin' : 'member';
     if (input.role_template_key !== undefined && input.role_template_key !== 'partnerships-agent' && input.role_template_key !== 'finance-agent') {
@@ -446,8 +461,13 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
       work.requireAdmin('inviting someone');
       await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.invite);
       checkpoint = 'admin_and_rate_admitted';
+      const known = await roleSlugs(work.tx, work.workspaceId);
+      const unknownRoles = requestedRoles.filter((slug) => !known.has(slug));
+      if (unknownRoles.length > 0) {
+        throw new RouteError(`this workspace has no role called ${unknownRoles.join(', ')}`, 'unknown_role', 422);
+      }
       return inviteInTransaction(c.env, work, {
-        email, role, roleTemplateKey, preparing, correlationId, actorUserId: work.userId,
+        email, role, roleTemplateKey, roleSlugs: requestedRoles, preparing, correlationId, actorUserId: work.userId,
       }, (name, invitationId) => {
         checkpoint = name;
         if (invitationId) trackedInvitationId = invitationId;
@@ -570,6 +590,8 @@ export interface InvitationInput {
   readonly email: string;
   readonly role: MemberRole;
   readonly roleTemplateKey: MemberRoleTemplate;
+  /** Workspace roles granted on joining (decision C93); validated by the caller. */
+  readonly roleSlugs?: readonly string[];
   /** `memberProvisioningEnabled(env)`, read once by the caller. */
   readonly preparing: boolean;
   readonly correlationId: string;
@@ -605,6 +627,7 @@ export async function inviteInTransaction(
   onCheckpoint: InvitationCheckpoint = () => undefined,
 ): Promise<InvitationOutcome> {
   const { email, role, roleTemplateKey, preparing, correlationId, actorUserId } = input;
+  const roleSlugsToGrant = [...(input.roleSlugs ?? [])];
   // Advertising and admission share the same executable boundary. Keep the
   // Finance schema value readable for persisted history, but never create a
   // known-doomed operation: Finance is admitted only while this workspace
@@ -635,8 +658,8 @@ export async function inviteInTransaction(
     id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
   }>(
     `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by,
-                              status, accepted_by, delivery_status)
-     VALUES ($1, $2, $3, now() + interval '7 days', $4, $5, $6, $7)
+                              status, accepted_by, delivery_status, role_slugs)
+     VALUES ($1, $2, $3, now() + interval '7 days', $4, $5, $6, $7, $8)
      ON CONFLICT (workspace_id, email) WHERE status = 'pending' DO NOTHING
      RETURNING id, status, created_at, delivery_status, delivery_error`,
     [
@@ -647,6 +670,7 @@ export async function inviteInTransaction(
       alreadyMember ? 'accepted' : 'pending',
       alreadyMember?.user_id ?? null,
       alreadyMember || preparing ? 'not_required' : env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
+      roleSlugsToGrant,
     ],
   );
   let row = rows[0];
@@ -771,6 +795,7 @@ export async function inviteInTransaction(
       role,
       status: row.status,
       invited_at: row.created_at.toISOString(),
+      role_slugs: roleSlugsToGrant,
       delivery_status: row.delivery_status,
       delivery_reason: mapDeliveryReason(row.delivery_error),
       ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
@@ -801,8 +826,9 @@ export async function resendInTransaction(
     workos_invitation_id: string | null;
     role_template_key: MemberRoleTemplate | null;
     role_template_version: string | null;
+    role_slugs: string[];
   }>(
-    `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id,
+    `SELECT i.id, i.email, i.role, i.status, i.workos_invitation_id, i.role_slugs,
             op.role_template_key,op.role_template_version
        FROM invitations i
        LEFT JOIN member_provisioning_operations op
@@ -845,8 +871,8 @@ export async function resendInTransaction(
   const created = await work.tx.query<{
     id: string; created_at: Date; delivery_status: string; delivery_error: string | null;
   }>(
-    `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by, delivery_status)
-     VALUES ($1, $2, $3, now() + interval '7 days', $4, $5)
+    `INSERT INTO invitations (workspace_id, email, role, expires_at, invited_by, delivery_status, role_slugs)
+     VALUES ($1, $2, $3, now() + interval '7 days', $4, $5, $6)
      RETURNING id, created_at, delivery_status, delivery_error`,
     [
       work.workspaceId,
@@ -854,6 +880,7 @@ export async function resendInTransaction(
       invitation.role,
       work.userId,
       setupBacked ? 'not_required' : env.AUTH_MODE === 'workos' ? 'queued' : 'not_required',
+      invitation.role_slugs,
     ],
   );
   const row = created.rows[0];
@@ -930,6 +957,7 @@ export async function resendInTransaction(
     role: invitation.role,
     status: 'pending',
     invited_at: row.created_at.toISOString(),
+    role_slugs: invitation.role_slugs,
     delivery_status: row.delivery_status,
     delivery_reason: mapDeliveryReason(row.delivery_error),
     ...(provisioning ? { provisioning, role_template_key: invitation.role_template_key! } : {}),

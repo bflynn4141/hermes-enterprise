@@ -29,6 +29,7 @@ import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
+import { approvalRefusalMessage } from './approval-routes.js';
 import {
   ApprovalRequest,
   approvalActionLabel,
@@ -489,7 +490,13 @@ function TaskView({ request }: { request: RequestEntity }) {
 function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: { request: RequestEntity; title: string; detail: string; approveLabel: string; declineLabel: string }) {
   const adapter = useAdapter();
   const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
-  const financeScoped = request.decision_summary?.approval_requirement.current[0]?.label === 'Finance reviewer';
+  const approverLabel = request.decision_summary?.approval_requirement.current[0]?.label;
+  const financeScoped = approverLabel === 'Finance reviewer';
+  // The workspace's approval rules name who decides (decision C93); the two
+  // labels the product had before keep their own sentences.
+  const notEligibleTitle = financeScoped
+    ? 'The assigned Finance reviewer records this decision'
+    : approverLabel && approverLabel !== 'Workspace Admin' ? `This needs ${approverLabel}` : EMPTY.adminOnly;
   const [confirmDecline, setConfirmDecline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -509,7 +516,7 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
     return (
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
-          <span className="f-title">{financeScoped ? 'The assigned Finance reviewer records this decision' : EMPTY.adminOnly}</span>
+          <span className="f-title">{notEligibleTitle}</span>
           <span className="f-sub">You can read the request and its evidence.</span>
         </div>
       </div>
@@ -529,7 +536,8 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
         adapter.ensure('request', request.id);
         setError('This draft needs a fresh review. Review the latest version before deciding again.');
       } else {
-        setError(reason === 'already_decided' ? 'Already decided' : reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record the decision. Try again.');
+        setError(approvalRefusalMessage(caught)
+          ?? (reason === 'already_decided' ? 'Already decided' : reason === 'not_admin' ? EMPTY.adminOnly : 'Could not record the decision. Try again.'));
       }
     } finally {
       setBusy(false);
@@ -1319,11 +1327,10 @@ export function Receipt({ request }: { request: RequestEntity }) {
           return;
         }
         setNotice(
-          error.reason === 'role_required'
-            ? `Recording this attempt needs the ${effect.required_role} role.`
-            : error.reason === 'effect_cancelled'
+          approvalRefusalMessage(caught)
+            ?? (error.reason === 'effect_cancelled'
               ? 'A later version of this document cancelled that effect.'
-              : 'Could not record that attempt. Try again.',
+              : 'Could not record that attempt. Try again.'),
         );
       })
       .finally(() => setBusy(null));

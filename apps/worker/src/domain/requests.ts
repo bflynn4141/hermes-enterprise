@@ -23,7 +23,8 @@ import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
 import { loadApprovalListProjection } from './approvals.js';
 import { decisionSummary } from './request-summary.js';
-import { FINANCE_DECIDABLE_SQL, financeWorkflowRequest } from './finance-decidable.js';
+import { FINANCE_DECIDABLE_SQL } from './finance-decidable.js';
+import { decidableKinds, mayDecideRequest, type ApprovalViewer } from './approval-routing.js';
 import { requestAudiencePredicate } from './audience.js';
 
 export interface RequestRow {
@@ -34,6 +35,8 @@ export interface RequestRow {
   payload: Record<string, unknown> | null;
   /** Server-assigned; see domain/finance-decidable.ts. Optional for callers that predate it. */
   subject_key?: string | null;
+  /** Whose agent prepared it: the owner of the request's session (decision C93). */
+  requester_id?: string | null;
   session_id: string | null;
   run_id: string | null;
   created_at: Date;
@@ -59,7 +62,9 @@ export interface RequestRow {
 
 /** Every column the shaping needs, plus the latest note and the decision. */
 export const REQUEST_SELECT = `
-  SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key, r.session_id, r.run_id, r.created_at,
+  SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key,
+         (SELECT requester.owner_id FROM sessions requester WHERE requester.id = r.session_id) AS requester_id,
+         r.session_id, r.run_id, r.created_at,
          EXTRACT(EPOCH FROM r.updated_at)::int AS version,
          (SELECT n.body FROM request_notes n
            WHERE n.request_id = r.id ORDER BY n.created_at DESC, n.id DESC LIMIT 1) AS note,
@@ -120,12 +125,12 @@ export const REQUEST_REVIEWABLE_PREDICATE = `(r.status <> 'pending' OR r.kind <>
      AND reviewable_approval.expires_at > now()
 ))`;
 
+/** May this viewer decide this legacy request? The approval rules say (decision C93). */
 export function canDecideLegacyRequest(
-  row: Pick<RequestRow, 'kind' | 'subject_key'>,
-  role: string,
-  reviewerRoles: readonly string[],
+  row: Pick<RequestRow, 'kind' | 'subject_key' | 'requester_id'>,
+  viewer: ApprovalViewer,
 ): boolean {
-  return role === 'admin' || (financeWorkflowRequest(row) && reviewerRoles.includes('finance'));
+  return mayDecideRequest(viewer, row);
 }
 
 /**
@@ -161,12 +166,12 @@ type PendingRequestRow = Pick<
 export async function loadVisiblePendingRequests(
   tx: Tx,
   workspaceId: string,
-  userId: string,
-  role: string,
-  reviewerRoles: readonly string[],
+  viewer: ApprovalViewer,
 ): Promise<{ rows: PendingRequestRow[]; pendingForMe: number; pendingForOthers: number }> {
-  const pending = await tx.query<PendingRequestRow & Pick<RequestRow, 'subject_key'>>(
+  const { userId, role, reviewerRoles } = viewer;
+  const pending = await tx.query<PendingRequestRow & Pick<RequestRow, 'subject_key' | 'requester_id'>>(
     `SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key,
+            (SELECT requester.owner_id FROM sessions requester WHERE requester.id = r.session_id) AS requester_id,
             (SELECT hidden_at FROM request_presentations presentation
               WHERE presentation.request_id=r.id AND presentation.user_id=$2) AS presentation_hidden_at
        FROM requests r
@@ -178,22 +183,23 @@ export async function loadVisiblePendingRequests(
           OR r.kind='approval'
           OR ($3::boolean AND r.kind<>'task')
           OR ($4::boolean AND ${FINANCE_DECIDABLE_SQL})
+          OR r.kind = ANY ($5::text[])
         )
       ORDER BY r.created_at DESC`,
-    [workspaceId, userId, role === 'admin', reviewerRoles.includes('finance')],
+    [workspaceId, userId, role === 'admin', reviewerRoles.includes('finance'), decidableKinds(viewer)],
   );
 
   const rows: PendingRequestRow[] = [];
   let pendingForMe = 0;
   let pendingForOthers = 0;
   for (const request of pending.rows) {
-    const canDecide = canDecideLegacyRequest(request, role, reviewerRoles);
+    const canDecide = canDecideLegacyRequest(request, viewer);
     const approval = request.kind === 'approval'
       ? await loadApprovalListProjection(tx, request.id, userId)
       : null;
     if (requestPresentationHidden(request, approval, canDecide)) continue;
     // The subject key decides authority here; it is not part of what bootstrap shows.
-    const { subject_key: _subjectKey, ...visible } = request;
+    const { subject_key: _subjectKey, requester_id: _requesterId, ...visible } = request;
     rows.push(visible);
     if (request.kind === 'approval') {
       if (approval?.pending_for_viewer) pendingForMe += 1;
@@ -308,7 +314,7 @@ function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjec
   return result;
 }
 
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false): Record<string, unknown> {
+export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false, reviewerLabel?: string): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
@@ -332,7 +338,7 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
-    decision_summary: decisionSummary(row, approval, canDecideLegacy),
+    decision_summary: decisionSummary(row, approval, canDecideLegacy, reviewerLabel),
     triage: triageOf(row, triageActive, approval),
     provenance: {
       kind: row.provenance_kind ?? 'unknown',

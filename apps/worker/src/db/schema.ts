@@ -163,6 +163,8 @@ export const invitations = pgTable('invitations', {
   invitedBy: uuid('invited_by'),
   deliveryStatus: text('delivery_status').notNull().default('not_required'),
   deliveryError: text('delivery_error'),
+  // 0073: workspace roles granted when the person joins.
+  roleSlugs: text('role_slugs').array().notNull().default([]),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
@@ -1835,6 +1837,24 @@ export const approvalVotes = pgTable('approval_votes', {
   recordedAt: now('recorded_at'),
 });
 
+// 0073: an Admin's rule for who approves one kind of work. Not
+// `approval_routes` below, which re-routes a single approval request.
+export const approvalRouteRules = pgTable(
+  'approval_route_rules',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    routeKey: text('route_key').notNull(),
+    admins: boolean('admins').notNull(),
+    roles: text('roles').array().notNull().default([]),
+    approvalsRequired: integer('approvals_required').notNull(),
+    allowRequester: boolean('allow_requester').notNull(),
+    updatedBy: uuid('updated_by'),
+    createdAt: now('created_at'),
+    updatedAt: now('updated_at'),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.routeKey] })],
+);
+
 export const approvalRoutes = pgTable('approval_routes', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -2412,6 +2432,7 @@ export const ALL_TABLES = {
   approval_revisions: approvalRevisions,
   approval_votes: approvalVotes,
   approval_routes: approvalRoutes,
+  approval_route_rules: approvalRouteRules,
   approval_commands: approvalCommands,
   attachments,
   documents,

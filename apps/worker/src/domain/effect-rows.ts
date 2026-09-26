@@ -13,6 +13,8 @@
 // cross.
 import { effectSimulationSchema, type EffectKind, type EffectSimulation } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
+import type { RouteRules } from './approval-routing.js';
+import type { ApprovalRouteKey } from '@hermes/shared';
 import { EFFECT_LABELS, EFFECT_SIMULATED_REASON, EFFECT_UNAVAILABLE_REASON } from './effects.js';
 import { requestAudiencePredicate } from './audience.js';
 
@@ -116,6 +118,20 @@ export function effectSimulation(row: Pick<EffectRow, 'status' | 'enforcement_re
   const result = row.enforcement_result as { simulation?: unknown } | null;
   const parsed = effectSimulationSchema.safeParse(result?.simulation);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * The number of people an effect needs is the workspace's current rule for
+ * its kind (decision C93), not the count stamped when it was created, so a
+ * changed rule applies to everything already waiting.
+ */
+export function withLiveRequirement(row: EffectRow, routes: RouteRules): EffectRow {
+  const route = routes[row.kind as ApprovalRouteKey];
+  // Who it waits on follows the rule too, so the Inbox never names a role
+  // that no longer carries it out.
+  return route
+    ? { ...row, approvals_required: route.rule.approvals_required, required_role: route.rule.roles[0] ?? 'admin' }
+    : row;
 }
 
 /**

@@ -155,6 +155,19 @@ export async function deleteWorkspaceRole(c: Context<{ Bindings: Env }>): Promis
     const current = await requireRole(work, roleId);
     if (current.builtin) throw new RouteError('built-in roles cannot be removed', 'builtin_role', 422);
     if (current.members.length > 0) throw new RouteError('someone still holds this role', 'role_in_use', 409);
+    const routed = await work.tx.query<{ route_key: string }>(
+      `SELECT route_key FROM approval_route_rules WHERE workspace_id = $1 AND $2 = ANY (roles)`,
+      [work.workspaceId, current.slug],
+    );
+    if (routed.rows.length > 0) {
+      throw new RouteError('approvals still go to this role; change them in Approvals first', 'role_routed', 409);
+    }
+    // A pending invitation's copy of the slug goes with the role.
+    await work.tx.query(
+      `UPDATE invitations SET role_slugs = array_remove(role_slugs, $2)
+        WHERE workspace_id = $1 AND status = 'pending' AND $2 = ANY (role_slugs)`,
+      [work.workspaceId, current.slug],
+    );
     // Removed members keep their old row; their copy of the slug goes with the role.
     await work.tx.query(
       `UPDATE members SET reviewer_roles = array_remove(reviewer_roles, $2)

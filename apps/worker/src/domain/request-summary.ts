@@ -105,14 +105,16 @@ function approvalSummary(row: RequestRow, approval: ApprovalListProjection): Req
   };
 }
 
-export function decisionSummary(row: RequestRow, approval: ApprovalListProjection | null, canDecideLegacy = false): RequestDecisionSummary {
+export function decisionSummary(row: RequestRow, approval: ApprovalListProjection | null, canDecideLegacy = false, reviewerLabel?: string): RequestDecisionSummary {
   if (row.kind === 'approval' && approval) {
     const summary = approvalSummary(row, approval);
     if (summary) return summary;
   }
   const payload = record(row.payload);
   const needsDecision = row.status === 'pending' && ['application', 'invoice', 'agreement'].includes(row.kind);
-  const legacyReviewerLabel = financeWorkflowRequest(row) ? 'Finance reviewer' : 'Workspace Admin';
+  // Callers that know the workspace's approval rules pass the label; the
+  // fallback is the label before routing was configurable.
+  const legacyReviewerLabel = reviewerLabel ?? (financeWorkflowRequest(row) ? 'Finance reviewer' : 'Workspace Admin');
   const single = {
     mode: 'single' as const,
     completed_steps: row.status === 'pending' ? 0 : 1,

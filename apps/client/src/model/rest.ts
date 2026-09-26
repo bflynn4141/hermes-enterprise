@@ -20,6 +20,10 @@ import {
   workspaceRoleSchema,
   type WorkspaceRoleCreate,
   type WorkspaceRolePatch,
+  approvalRouteListSchema,
+  approvalRouteSchema,
+  type ApprovalRouteKey,
+  type ApprovalRouteUpdate,
   approvalEvidenceViewSchema,
   type ApprovalEvidenceView,
   agentRecoveryViewSchema,
@@ -491,8 +495,11 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/partner-workflow/handoffs/${handoffId}/result`, partnerHandoffResultSchema) as Promise<PartnerHandoffResult>,
 
     // --- members and invitations ---
-    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member'; role_template_key?: 'partnerships-agent' | 'finance-agent' }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
+    /** `role_slugs` are workspace roles the person receives when they join. */
+    invite: (workspaceId: string, body: { email: string; role: 'admin' | 'member'; role_template_key?: 'partnerships-agent' | 'finance-agent'; role_slugs?: string[] }) => request('POST', `${ws(workspaceId)}/invitations`, invitationEntitySchema, body),
     setMemberRole: (workspaceId: string, id: string, role: 'admin' | 'member') => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { role }),
+    /** Replaces the workspace roles a member holds. Needs a recent sign-in; never your own row. */
+    setMemberRoles: (workspaceId: string, id: string, roleSlugs: string[]) => request('PATCH', `${ws(workspaceId)}/members/${id}`, memberEntitySchema, { reviewer_roles: roleSlugs }),
     removeMember: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/members/${id}`),
 
     // --- workspace roles (Admin only; writes need a recent sign-in) ---
@@ -502,6 +509,12 @@ export function createRest(options: RestOptions) {
     /** Replaces who holds the role with exactly these people. */
     setRoleMembers: (workspaceId: string, id: string, userIds: string[]) => request('PUT', `${ws(workspaceId)}/roles/${id}/members`, workspaceRoleSchema, { user_ids: userIds }),
     deleteRole: (workspaceId: string, id: string) => send('DELETE', `${ws(workspaceId)}/roles/${id}`),
+
+    // --- approval routing (Admin only; writes need a recent sign-in) ---
+    listApprovalRoutes: (workspaceId: string) => request('GET', `${ws(workspaceId)}/approval-routes`, approvalRouteListSchema),
+    updateApprovalRoute: (workspaceId: string, key: ApprovalRouteKey, rule: ApprovalRouteUpdate) => request('PUT', `${ws(workspaceId)}/approval-routes/${key}`, approvalRouteSchema, rule),
+    /** Back to the rule the product had before it was editable. */
+    resetApprovalRoute: (workspaceId: string, key: ApprovalRouteKey) => request('DELETE', `${ws(workspaceId)}/approval-routes/${key}`, approvalRouteSchema),
     /**
      * A resend writes a *new* invitation and supersedes the old one, so the
      * server answers with the successor row; "Reinvite" on an expired row is

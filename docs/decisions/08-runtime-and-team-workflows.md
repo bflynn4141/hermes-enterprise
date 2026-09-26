@@ -1561,3 +1561,49 @@ database refusing an unknown role, lane binding recording Partnerships, and a
 workspace with roles, lanes and holders still deleting.
 `test/db/member-agent-coordination.test.ts` checks an accepted invitee holds
 their job role.
+
+## C93. Admins route approvals to roles
+
+**Decided September 26, 2026** (roles-and-agents plan, piece 3).
+
+- Seven kinds of work have an approval rule: three decisions on a request an
+  agent prepared (admit a partner, approve an invoice draft, approve an
+  agreement draft) and four actions after approval (pay, grant access, sign,
+  send). The catalog and defaults live in
+  `packages/shared/src/approval-routing.ts`; an Admin's changes are rows in
+  `approval_route_rules` (migration 0073).
+- A rule names who may approve (Admins, and/or holders of workspace roles),
+  how many different people must (actions only; a decision is one person's
+  call in this version), and whether the person whose agent prepared the
+  request (decisions) or who approved it (actions) may do it themself.
+- The defaults are exactly what was enforced before, so nothing changes until
+  an Admin edits a rule. Handoff requests still also go to the Finance person
+  on the handoff; the screen shows that as the rule's workflow note.
+- The decision route, the Inbox counts and "can I decide this", the reviewer
+  label, effect creation and effect execution all read the rule through
+  `domain/approval-routing.ts`. Actions check the rule at each press, so a
+  change applies to work already waiting.
+- Invitations carry `role_slugs`, granted when the person joins, so an Admin
+  sets what a new member can approve when inviting them. Editing a member's
+  roles is the existing `PATCH /members/:id`.
+- The database refuses a rule nobody can meet, a multi-person decision, a
+  rule naming a role that does not exist, and deleting a role a rule names.
+
+**Why.** Brian asked for an approval routing screen and for approvals to be
+set when a member is added or edited. Roles (C92) are how people are grouped,
+so rules name roles rather than people, and a person's approvals follow from
+the roles they hold.
+
+**Relation to Nous.** Nous defines Portal organization roles (Owner, Admin,
+Member) and Hermes Agent's command approvals (an agent asking before a
+dangerous command). It publishes no schema for functional roles or for routing
+business approvals, so this is our own layer above theirs. The UI calls these
+business approvals and never uses Hermes' command-approval wording. See
+`docs/ROLES-AND-AGENTS-PLAN.md`.
+
+**Evidence.** `test/db/approval-routes.test.ts` covers the defaults,
+Admin-only access and step-up, refused rules, routing a decision to a role and
+away from Admins, the requester rule, action authority, separation of approver
+and payer, confirmations counted against the current rule, a routed role that
+cannot be deleted, and invitation roles granted on joining. The full database
+suite (745 tests) passes.
