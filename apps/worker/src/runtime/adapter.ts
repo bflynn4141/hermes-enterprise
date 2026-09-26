@@ -7,7 +7,7 @@ import { buildSystemPrompt } from '../engine/prompt.js';
 import { allowedTools } from '../engine/tools.js';
 import { extractBlocks } from '../engine/blocks.js';
 import type { ProviderMessage } from '../model/types.js';
-import { HermesClient, HermesApiError, HermesCapabilitiesError, HermesContractError, terminalHermesStatus, type HermesStatus } from './client.js';
+import { HermesClient, MANAGED_READINESS_INCOMPLETE, hermesApiFailureMessage, hermesFailureKind, terminalHermesStatus, type HermesStatus } from './client.js';
 import { StreamBuffer } from './stream-buffer.js';
 import type { RuntimeSkillManifest } from './skills.js';
 import { classifyHermesFailure } from './errors.js';
@@ -168,7 +168,7 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
         deps.managedRuntimeIdentity,
         deps.skillSnapshot ?? [],
       )) {
-        throw new Error('managed_runtime_readiness_incomplete');
+        throw new Error(MANAGED_READINESS_INCOMPLETE);
       }
     }
     return Date.now();
@@ -645,16 +645,24 @@ export async function runHermesAttempt(deps: RuntimeDeps, step: EngineStep, inpu
   } catch (error) {
     if (remoteId && !terminal) await client.stop(remoteId).catch(() => undefined);
     await nativeToolControl.close?.(true).catch(() => undefined);
-    const contractViolation = error instanceof HermesContractError || error instanceof HermesCapabilitiesError;
+    const failureKind = hermesFailureKind(error);
+    const contractViolation = failureKind === 'contract_violation';
     const detail: RunErrorInput = contractViolation
       ? {
           class: 'permanent', retryable: false, reason: 'hermes_contract_violation',
           message: 'This Hermes runtime needs an Enterprise compatibility update before it can continue.',
         }
-      : {
-          class: 'transient', retryable: true, reason: 'hermes_unavailable',
-          message: error instanceof HermesApiError ? error.message : 'The Hermes runtime is unavailable. Retry to reconnect.',
-        };
+      : failureKind === 'not_ready'
+        ? {
+            // A booting runtime clears this on its own; a runtime whose
+            // version or plugin no longer matches needs an admin update.
+            class: 'transient', retryable: true, reason: 'hermes_runtime_not_ready',
+            message: "This agent's runtime didn't pass its safety check, so it can't start work.",
+          }
+        : {
+            class: 'transient', retryable: true, reason: 'hermes_unavailable',
+            message: hermesApiFailureMessage(error) ?? 'The Hermes runtime is unavailable. Retry to reconnect.',
+          };
     if (contractViolation) {
       try {
         deps.onTerminalFailure?.({

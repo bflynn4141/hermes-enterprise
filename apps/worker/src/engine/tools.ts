@@ -165,6 +165,16 @@ export interface ToolDefinitionEntry {
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Models often copy the eight-character prefix a summary shows. Postgres
+ * rejects that as a uuid, which used to surface as an opaque server error;
+ * say what the id must be so the model can look it up and retry.
+ */
+const requestIdProblem = (id: string): ToolOutcome | null => UUID.test(id) ? null : {
+  ok: false,
+  error: `request_id must be the full request id (a UUID) returned by list_requests or get_request; "${id.slice(0, 40)}" is not one`,
+};
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 
 async function sha256Hex(input: string): Promise<string> {
@@ -346,6 +356,8 @@ const getRequest: ToolDefinitionEntry = {
   input_schema: OBJECT({ request_id: { type: 'string' } }, ['request_id']),
   async run(args, ctx) {
     const id = str(args.request_id);
+    const malformed = requestIdProblem(id);
+    if (malformed) return malformed;
     const row = await ctx.reads.getRequest(id);
     if (!row) return { ok: false, error: `no request ${id} in this workspace` };
     return { ok: true, data: row, focus: { ref: refFor('request', id), entityType: 'request', entityId: id } };
@@ -731,8 +743,14 @@ const saveReviewNote: ToolDefinitionEntry = {
     const requestId = str(args.request_id);
     const body = str(args.body).slice(0, 4000);
     if (!requestId || !body) return { ok: false, error: 'request_id and body are both required' };
+    const malformed = requestIdProblem(requestId);
+    if (malformed) return malformed;
     const problem = plainTextError('body', body);
     if (problem) return problem;
+    // Only a request this agent can read can carry its note.
+    if (!await ctx.reads.getRequest(requestId)) {
+      return { ok: false, error: `No request ${requestId} in this workspace. Use list_requests to find the right id.` };
+    }
     const { noteId, created, events } = await ctx.writes.saveReviewNote({
       runId: ctx.run.id,
       toolCallId: ctx.toolCallId,

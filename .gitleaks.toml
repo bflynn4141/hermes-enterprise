@@ -24,7 +24,7 @@ regexes = [
   '''POSTGRES_PASSWORD: postgres''',
   '''nous-invalid-test-key-0000''',
   '''0123456789abcdefghijklmnopqrstuvwxyzABCDEFG''',
-  '''7ec405dc2a59789582ad9f61a189a41079e621f14642d3c9dc754e312616a868''',
+  '''fa83a20bd4f9f3a90a3ac010db0a68f548259587946ea80b81b2f3253bafd5ec''',
   # The staging demo workspace id (a uuid, also the deploy preflight target).
   '''8cb93c4c-6af3-41cd-bae5-94f849b4976b''',
 ]

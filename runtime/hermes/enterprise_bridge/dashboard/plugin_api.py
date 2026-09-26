@@ -70,7 +70,12 @@ SSE_HEADERS = {
 }
 CONTRACT_VERSION = 1
 TERMINAL_ERROR_SCHEMA_VERSION = 1
-SOURCE_REVISION = "345cd2b057a452236de401d3534b8502a7465e8d"
+# Hermes version -> official source revision, one entry per validated release
+# in ../runtimes.py (kept equal by test). This module loads on its own inside
+# the dashboard process, so it carries the map rather than importing it.
+SUPPORTED_SOURCE_REVISIONS = {
+    "0.21.5": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
+}
 TERMINAL_ERROR_CODES = {
     "provider_auth": ("auth", False, "provider", "The selected model connection needs attention."),
     "provider_quota": ("quota", False, "provider", "The selected model account has no available quota."),
@@ -82,15 +87,26 @@ TERMINAL_ERROR_CODES = {
 }
 
 
+def _running_hermes_version():
+    import hermes_cli
+    return getattr(hermes_cli, "__version__", None)
+
+
 def runtime_contract():
-    if os.environ.get("HERMES_ENTERPRISE_SOURCE_REVISION", "").strip() != SOURCE_REVISION:
+    # The operator attests the set of reviewed releases; the connector reports
+    # the one actually running, because Cloud can move an instance forward to
+    # another validated release on restart.
+    if os.environ.get("HERMES_ENTERPRISE_SOURCE_REVISION", "").strip() not in SUPPORTED_SOURCE_REVISIONS.values():
         raise RuntimeError("enterprise connector source revision is not attested")
+    source_revision = SUPPORTED_SOURCE_REVISIONS.get(_running_hermes_version())
+    if source_revision is None:
+        raise RuntimeError("enterprise connector is running an unvalidated Hermes release")
     ring = os.environ.get("HERMES_ENTERPRISE_RELEASE_RING", "stable").strip().lower()
     if ring not in {"canary", "stable"}:
         raise RuntimeError("enterprise connector release ring is invalid")
     return {
         "schema_version": CONTRACT_VERSION,
-        "source_revision": SOURCE_REVISION,
+        "source_revision": source_revision,
         "release_ring": ring,
         "terminal_errors": {"supported": True, "schema_version": TERMINAL_ERROR_SCHEMA_VERSION},
     }

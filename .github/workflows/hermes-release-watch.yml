@@ -1,0 +1,262 @@
+name: Hermes release watch
+
+# Hermes Cloud moves an instance to the newest official release whenever it
+# restarts, and the plugin refuses any release it has not validated
+# (runtime/hermes/enterprise_bridge/runtimes.py). This watch finds a new
+# release before an instance does: it compares it with the primary validated
+# release, adds it in this workspace only, runs the install, the plugin tests
+# and both probes, and opens one issue with the results. A pull request that
+# changes the watch rehearses the whole path against an older release instead
+# and opens nothing.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream release tag to check (default is the latest release)
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/hermes-release-watch.yml
+      - runtime/hermes/scripts/hermes_release.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-release-watch-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: NousResearch/hermes-agent
+  REHEARSAL_TAG: v2026.9.21
+
+jobs:
+  # Runs freshly published upstream code, so it holds a read-only token.
+  release:
+    name: Check the latest Hermes release
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      validated: ${{ steps.release.outputs.validated }}
+      report: ${{ steps.report.outputs.report }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            tag="$REHEARSAL_TAG"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)"
+          fi
+          [[ "$tag" =~ ^v[0-9][0-9.]*$ ]] || { echo "Unexpected release tag: $tag" >&2; exit 1; }
+          sha="$(gh api "repos/$UPSTREAM/commits/$tag" --jq .sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Unexpected commit for $tag: $sha" >&2; exit 1; }
+          validated="$(jq --arg sha "$sha" '.supported_source_revisions | index($sha) != null' runtime/hermes/contract.json)"
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "validated=$validated"
+            echo "pinned=$(jq -r .source_revision runtime/hermes/contract.json)"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$validated" = true ]; then
+            echo "Hermes $tag (\`${sha:0:12}\`) is already a validated release." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fetch the pinned and candidate commits
+        if: steps.release.outputs.validated == 'false'
+        env:
+          PINNED: ${{ steps.release.outputs.pinned }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          git init -q "$RUNNER_TEMP/upstream"
+          git -C "$RUNNER_TEMP/upstream" fetch -q --depth 1 "https://github.com/$UPSTREAM.git" "$PINNED" "$SHA"
+
+      - name: Compare it with the primary validated release
+        if: steps.release.outputs.validated == 'false'
+        env:
+          SHA: ${{ steps.release.outputs.sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: >-
+          python3 runtime/hermes/scripts/hermes_release.py check --repo "$RUNNER_TEMP/upstream"
+          --candidate "$SHA" --tag "$TAG" > "$RUNNER_TEMP/check.md"
+
+      - name: Add it as the primary validated release in this workspace
+        id: add
+        if: steps.release.outputs.validated == 'false'
+        continue-on-error: true
+        env:
+          SHA: ${{ steps.release.outputs.sha }}
+        run: python3 runtime/hermes/scripts/hermes_release.py add --repo "$RUNNER_TEMP/upstream" --revision "$SHA"
+
+      - name: Install it with its locked dependencies
+        id: install
+        if: steps.add.outcome == 'success'
+        continue-on-error: true
+        run: python -m pip install uv==0.10.0 && python runtime/hermes/install.py --python-version 3.12
+
+      - name: Run the plugin tests against it
+        id: tests
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: runtime/hermes/.state/venv/bin/python -m unittest discover -s runtime/hermes/tests -p 'test_*.py'
+
+      - name: Probe the native gateway
+        id: native
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          runtime/hermes/.state/venv/bin/python runtime/hermes/tests/probe_native.py
+          --source runtime/hermes/.state/source --python runtime/hermes/.state/venv/bin/python
+
+      - name: Probe the Cloud-managed gateway
+        id: managed
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: >-
+          PYTHONPATH="$PWD/runtime/hermes/.state/source" runtime/hermes/.state/venv/bin/python
+          runtime/hermes/tests/probe_cloud_managed.py
+          --source runtime/hermes/.state/source --python runtime/hermes/.state/venv/bin/python
+
+      - name: Write the report
+        id: report
+        if: steps.release.outputs.validated == 'false'
+        env:
+          ADD: ${{ steps.add.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+          NATIVE: ${{ steps.native.outcome }}
+          MANAGED: ${{ steps.managed.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          result() { case "$1" in success) echo pass;; failure) echo fail;; *) echo "not run";; esac; }
+          {
+            cat "$RUNNER_TEMP/check.md"
+            echo
+            echo "| Step with this release added | Result |"
+            echo "| --- | --- |"
+            echo "| Add it to the validated releases | $(result "$ADD") |"
+            echo "| Install with locked dependencies | $(result "$INSTALL") |"
+            echo "| Plugin tests | $(result "$TESTS") |"
+            echo "| Native gateway probe | $(result "$NATIVE") |"
+            echo "| Cloud-managed gateway probe | $(result "$MANAGED") |"
+            echo
+            echo "Run: $RUN_URL"
+          } > "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          delimiter="report_$(openssl rand -hex 16)"
+          { echo "report<<$delimiter"; cat "$RUNNER_TEMP/report.md"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+
+  # Writes issues only; it never checks out or runs upstream code.
+  report:
+    name: Open or close the validation issue
+    needs: release
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.release.outputs.tag }}
+      VALIDATED: ${{ needs.release.outputs.validated }}
+      REPORT: ${{ needs.release.outputs.report }}
+    steps:
+      - name: Keep one open issue for the newest unvalidated release
+        run: |
+          suffix=": validate it before Cloud instances restart"
+          title="Hermes $TAG is out$suffix"
+          open="$(gh issue list --state open --limit 100 --json number,title)"
+          # Close issues for releases that are validated now or superseded.
+          jq -r --arg suffix "$suffix" --arg title "$title" --arg validated "$VALIDATED" \
+            '.[] | select((.title | endswith($suffix)) and (.title != $title or $validated == "true")) | .number' <<< "$open" |
+            while read -r number; do
+              gh issue close "$number" --comment "Hermes $TAG is the latest release; validated: $VALIDATED."
+            done
+          [ "$VALIDATED" = false ] || exit 0
+          {
+            echo "Hermes Cloud moves an instance to the newest release when it restarts, and the plugin refuses a"
+            echo "release it has not validated. Validate this one before any instance restarts: see"
+            echo "\"Validating a new Hermes release\" in docs/RUNBOOK.md."
+            echo
+            echo "$REPORT"
+          } > body.md
+          existing="$(jq -r --arg title "$title" '.[] | select(.title == $title) | .number' <<< "$open" | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
+
+  # Hostnames stay in a secret, which Actions masks, because run logs and
+  # issues are public. Each entry is label=hostname; reports name the label.
+  instances:
+    name: Check Cloud instance versions
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      STATUS_HOSTS: ${{ secrets.HERMES_CLOUD_STATUS_HOSTS }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Compare each instance's Hermes version with the validated releases
+        run: |
+          if [ -z "$STATUS_HOSTS" ]; then
+            echo "The HERMES_CLOUD_STATUS_HOSTS secret is not set; skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          validated="$(python3 -c 'import sys; sys.path.insert(0, "runtime/hermes/scripts"); import hermes_release; print(" ".join(hermes_release.validated_runtimes()))')"
+          findings=""
+          IFS=',' read -ra entries <<< "$STATUS_HOSTS"
+          for entry in "${entries[@]}"; do
+            label="$(echo "${entry%%=*}" | xargs)"
+            host="$(echo "${entry#*=}" | xargs)"
+            version="$(curl -fsS --max-time 15 "https://$host/api/status" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || true)"
+            if [ -z "$version" ]; then
+              findings+="- $label did not report a version (stopped or unreachable)"$'\n'
+            elif [[ " $validated " != *" $version "* ]]; then
+              findings+="- $label runs Hermes $version"$'\n'
+            fi
+          done
+          title="A Cloud instance is running a Hermes release the plugin has not validated"
+          existing="$(gh issue list --state open --limit 100 --json number,title | jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -1)"
+          if [ -z "$findings" ]; then
+            echo "Every instance runs a validated release ($validated)." >> "$GITHUB_STEP_SUMMARY"
+            [ -z "$existing" ] || gh issue close "$existing" --comment "Every instance runs a validated release again."
+            exit 0
+          fi
+          {
+            echo "Validated releases: $validated. The plugin refuses runs on any other release."
+            echo
+            printf '%s' "$findings"
+            echo
+            echo "See \"Validating a new Hermes release\" in docs/RUNBOOK.md."
+          } > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
