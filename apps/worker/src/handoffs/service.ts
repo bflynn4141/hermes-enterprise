@@ -219,7 +219,7 @@ async function buildInMotion(
             updated_at
        FROM requests
       WHERE workspace_id=$1 AND kind='agreement'
-        AND payload #>> '{workflow_provenance,handoff_key}' = 'contractor-agreements'
+        AND subject_key LIKE 'partner-contractor-agreement:%'
         AND status IN ('pending','drafted','declined')
       ORDER BY updated_at DESC
       LIMIT 25`,

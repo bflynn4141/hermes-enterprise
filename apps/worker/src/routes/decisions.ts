@@ -78,7 +78,9 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
           WHERE r.workspace_id=$1 AND r.id=$2
             AND (
               (r.kind='invoice' AND r.payload ? 'workflow_provenance')
-              OR (r.kind='agreement' AND r.payload #>> '{workflow_provenance,handoff_key}' = 'contractor-agreements')
+              -- The subject key, not the payload: only the admit decision writes
+              -- this prefix, while an agent can put any provenance in a payload.
+              OR (r.kind='agreement' AND r.subject_key LIKE 'partner-contractor-agreement:%')
             )
             AND ra.user_id=$3 AND 'finance'=ANY(m.reviewer_roles) AND m.status='active'`,
         [work.workspaceId, requestId, work.userId],

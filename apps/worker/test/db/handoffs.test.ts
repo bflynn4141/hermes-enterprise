@@ -5,8 +5,9 @@ import { loadHandoffDetail, loadHandoffsList, readHandoffAdmission } from '../..
 import { configurePartnerWorkflow } from '../../src/partner-workflow/service.js';
 import { loadPartnerWorkflowViewV2 } from '../../src/partner-workflow/v2.js';
 import type { TenantWork } from '../../src/routes/tenant.js';
+import { asUser, makeEnv } from './harness.js';
 import { seedWorkspace, setTenant, withClient } from './helpers.js';
-import { applicationPayload, seedRequest } from './m4-fixtures.js';
+import { applicationPayload, INBOX_HEADERS, seedRequest } from './m4-fixtures.js';
 
 async function configuredFixture() {
   const fx = await seedWorkspace();
@@ -140,5 +141,98 @@ describe('handoffs table', () => {
         throw error;
       }
     });
+  });
+
+  it('lets a Finance member decide only the agreement admit created, not a lookalike an agent proposed', async () => {
+    const fx = await configuredFixture();
+    const applicationId = await seedRequest(fx, 'application', {
+      label: 'Nova Partner',
+      payload: applicationPayload('Nova Partner', 'Contractor'),
+    });
+    let genuineId = '';
+    let genuine: Record<string, unknown> = {};
+    await withClient('app', async (client) => {
+      await client.query('BEGIN');
+      try {
+        await setTenant(client, fx.workspaceId, fx.adminId);
+        await client.query(
+          `UPDATE handoffs SET admission_state='enabled', enabled_by=$2, enabled_at=now()
+            WHERE workspace_id=$1 AND key='contractor-agreements'`,
+          [fx.workspaceId, fx.adminId],
+        );
+        await client.query(
+          `UPDATE members SET reviewer_roles = ARRAY['finance']::text[] WHERE workspace_id=$1 AND user_id=$2`,
+          [fx.workspaceId, fx.memberId],
+        );
+        const work = {
+          tx: client,
+          workspaceId: fx.workspaceId,
+          userId: fx.adminId,
+          role: 'admin' as const,
+          session: { sid: randomUUID(), authenticated_at: new Date().toISOString() },
+          jobs: [] as string[],
+          requireAdmin: () => undefined,
+        } as unknown as TenantWork;
+        await recordDecision(work, applicationId, 'approve', null);
+        const row = (await client.query<{ id: string; payload: Record<string, unknown> }>(
+          `SELECT id, payload FROM requests WHERE workspace_id=$1 AND subject_key=$2`,
+          [fx.workspaceId, `partner-contractor-agreement:${applicationId}`],
+        )).rows[0]!;
+        genuineId = row.id;
+        genuine = row.payload;
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+
+    // Same provenance in the payload, but the subject key an agent proposal gets.
+    const lookalikeId = await seedRequest(fx, 'agreement', {
+      label: 'Nova Partner',
+      payload: genuine,
+      subjectKey: 'name:lookalike',
+    });
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(
+        `INSERT INTO request_audiences (workspace_id, request_id, user_id, purpose) VALUES ($1,$2,$3,'owner')`,
+        [fx.workspaceId, lookalikeId, fx.memberId],
+      );
+      await client.query('COMMIT');
+    });
+
+    const env = makeEnv();
+    const decideAsFinance = (requestId: string) =>
+      asUser(env.env, fx.memberId, `/w/${fx.workspaceId}/requests/${requestId}/decisions`, {
+        method: 'POST',
+        headers: INBOX_HEADERS,
+        body: { decision: 'approve' },
+      });
+
+    const lookalike = await decideAsFinance(lookalikeId);
+    expect(lookalike.status).toBe(403);
+    expect(await lookalike.json()).toMatchObject({ reason: 'admin_required' });
+
+    // The genuine one clears the permission check and stops at the review binding.
+    const allowed = await decideAsFinance(genuineId);
+    expect(await allowed.json()).toMatchObject({ reason: 'review_binding_required' });
+
+    const listed = await withClient('app', async (client) => {
+      await client.query('BEGIN');
+      try {
+        await setTenant(client, fx.workspaceId, fx.memberId);
+        const view = await loadPartnerWorkflowViewV2(client, fx.workspaceId, fx.memberId);
+        const list = await loadHandoffsList(client, fx.workspaceId, fx.memberId, view);
+        const detail = await loadHandoffDetail(client, fx.workspaceId, list[0]!.id, view);
+        await client.query('COMMIT');
+        return detail;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+    expect(listed.in_motion.map((item) => item.open_request_id)).toEqual([genuineId]);
   });
 });
