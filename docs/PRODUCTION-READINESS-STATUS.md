@@ -35,7 +35,7 @@ Three internal read-only subagents completed client, server and repository sweep
 ## Remaining production gates
 
 - Staging AuthKit is configured for invite-only access and the real hosted page and one application-wide invitation delivery have been verified. Complete invitation acceptance, callback/session/MFA/logout, organization reconciliation and workspace creation, then attach and exercise a real enterprise SSO connection using [the acceptance checklist](WORKOS-PRODUCTION-CHECKLIST.md).
-- Provision one hosted Hermes profile per agent with a unique supervisor/fence, whole-process sandbox, private network route, credential rotation, logs/metrics, profile erasure and backup/restore. Staging/production correctly remain on the legacy runtime until this exists.
+- Provision one hosted Hermes profile per agent with a unique supervisor/fence, whole-process sandbox, private network route, credential rotation, logs/metrics, profile erasure and backup/restore. Staging/production correctly remain on the legacy runtime until this exists. *(Update, September 23, 2026: both now set `AGENT_RUNTIME=hermes` and run on Hermes Cloud instances; see `apps/worker/wrangler.jsonc` and [Cloud management](CLOUD-MANAGEMENT.md).)*
 - Implement full immutable attachment delivery or a governed attachment-read tool. The current live path rejects nonempty attachments rather than pretending Iris read them.
 - Extend per-call reservations to ordinary runs, add durable orphan reconciliation, and integrate real payment/signature/mail/PDF executors. Approval and execution remain separate states.
 - Persist onboarding agent name/instructions through a real create/update route; remove or server-source unsupported email-notification/privacy claims.
