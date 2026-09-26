@@ -1,13 +1,14 @@
 -- 0073: approval routing (roles-and-agents plan, piece 3; decision C93).
 --
--- One row per rule an Admin has changed. A rule says who may approve one kind
+-- One row per rule an Admin has changed. (`approval_routes`, from 0022, is
+-- something else: an Admin re-routing one approval request to a reviewer.) A rule says who may approve one kind
 -- of work (Admins, and/or holders of workspace roles), how many different
 -- people must, and whether the person whose agent prepared the request (for a
 -- decision) or who approved it (for an action) may do so themself. A missing
 -- row means the default in packages/shared/src/approval-routing.ts, which is
 -- what the product enforced before this table existed.
 
-CREATE TABLE IF NOT EXISTS approval_routes (
+CREATE TABLE IF NOT EXISTS approval_route_rules (
   workspace_id       uuid NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
   route_key          text NOT NULL CHECK (route_key IN (
                        'application', 'invoice', 'agreement',
@@ -21,23 +22,23 @@ CREATE TABLE IF NOT EXISTS approval_routes (
   updated_at         timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, route_key),
   -- A rule nobody can satisfy would strand every request of its kind.
-  CONSTRAINT approval_routes_someone_approves CHECK (admins OR cardinality(roles) > 0),
+  CONSTRAINT approval_route_rules_someone_approves CHECK (admins OR cardinality(roles) > 0),
   -- A decision closes a request in one step in this version.
-  CONSTRAINT approval_routes_decision_single CHECK (
+  CONSTRAINT approval_route_rules_decision_single CHECK (
     route_key NOT IN ('application', 'invoice', 'agreement') OR approvals_required = 1)
 );
-DROP TRIGGER IF EXISTS approval_routes_updated_at ON approval_routes;
-CREATE TRIGGER approval_routes_updated_at BEFORE UPDATE ON approval_routes
+DROP TRIGGER IF EXISTS approval_route_rules_updated_at ON approval_route_rules;
+CREATE TRIGGER approval_route_rules_updated_at BEFORE UPDATE ON approval_route_rules
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-ALTER TABLE approval_routes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE approval_routes FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tenant_isolation ON approval_routes;
-CREATE POLICY tenant_isolation ON approval_routes
+ALTER TABLE approval_route_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approval_route_rules FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON approval_route_rules;
+CREATE POLICY tenant_isolation ON approval_route_rules
   USING (workspace_id = app_workspace_id())
   WITH CHECK (workspace_id = app_workspace_id());
-GRANT SELECT, INSERT, UPDATE, DELETE ON approval_routes TO app;
-REVOKE ALL ON approval_routes FROM agent;
+GRANT SELECT, INSERT, UPDATE, DELETE ON approval_route_rules TO app;
+REVOKE ALL ON approval_route_rules FROM agent;
 
 -- The roles a person receives when they join.
 ALTER TABLE invitations
@@ -55,7 +56,7 @@ AS $$
    LIMIT 1;
 $$;
 
-CREATE OR REPLACE FUNCTION approval_routes_roles_exist()
+CREATE OR REPLACE FUNCTION approval_route_rules_roles_exist()
   RETURNS trigger
   LANGUAGE plpgsql
 AS $$
@@ -67,9 +68,9 @@ BEGIN
   RETURN NEW;
 END
 $$;
-DROP TRIGGER IF EXISTS approval_routes_roles_exist ON approval_routes;
-CREATE TRIGGER approval_routes_roles_exist BEFORE INSERT OR UPDATE OF roles ON approval_routes
-  FOR EACH ROW EXECUTE FUNCTION approval_routes_roles_exist();
+DROP TRIGGER IF EXISTS approval_route_rules_roles_exist ON approval_route_rules;
+CREATE TRIGGER approval_route_rules_roles_exist BEFORE INSERT OR UPDATE OF roles ON approval_route_rules
+  FOR EACH ROW EXECUTE FUNCTION approval_route_rules_roles_exist();
 
 CREATE OR REPLACE FUNCTION invitations_roles_exist()
   RETURNS trigger
@@ -100,7 +101,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM members m WHERE m.workspace_id = OLD.workspace_id AND OLD.slug = ANY (m.reviewer_roles)) THEN
     RAISE EXCEPTION 'role % is still held', OLD.slug USING ERRCODE = '23503';
   END IF;
-  IF EXISTS (SELECT 1 FROM approval_routes a WHERE a.workspace_id = OLD.workspace_id AND OLD.slug = ANY (a.roles)) THEN
+  IF EXISTS (SELECT 1 FROM approval_route_rules a WHERE a.workspace_id = OLD.workspace_id AND OLD.slug = ANY (a.roles)) THEN
     RAISE EXCEPTION 'approvals still route to role %', OLD.slug USING ERRCODE = '23503';
   END IF;
   RETURN OLD;

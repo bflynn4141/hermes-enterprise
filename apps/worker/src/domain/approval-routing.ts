@@ -33,7 +33,7 @@ interface RouteRow {
 export async function loadApprovalRoutes(tx: Tx, workspaceId: string): Promise<RouteRules> {
   const { rows } = await tx.query<RouteRow>(
     `SELECT route_key, admins, roles, approvals_required, allow_requester, updated_at
-       FROM approval_routes WHERE workspace_id = $1`,
+       FROM approval_route_rules WHERE workspace_id = $1`,
     [workspaceId],
   );
   const saved = new Map(rows.map((row) => [row.route_key, row]));

@@ -47,6 +47,8 @@ const DIAGNOSTIC_CHECKPOINTS = new Set([
   'local_delivery_commit_failed',
 ]);
 const DIAGNOSTIC_REASONS = new Set([
+  // Roles chosen on the invitation (decision C93).
+  'unknown_role', 'too_many_roles',
   'bad_body', 'bad_id', 'bad_email', 'admin_required', 'rate_limited', 'not_configured',
   'bad_role_template', 'member_setup_unavailable', 'member_setup_role_unavailable',
   'invitation_mode_conflict', 'invitation_role_conflict',
@@ -88,6 +90,8 @@ export function logInvitationDiagnostic(input: InvitationDiagnostic): void {
 }
 
 const ROUTE_REASONS = new Set([
+  // Roles chosen on the invitation (decision C93).
+  'unknown_role', 'too_many_roles',
   'bad_body',
   'bad_id',
   'bad_email',

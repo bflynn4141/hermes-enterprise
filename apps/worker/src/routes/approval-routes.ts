@@ -39,7 +39,7 @@ async function audit(work: TenantWork): Promise<void> {
     [work.workspaceId, work.userId],
   );
   work.jobs.push(...(await publishEvents(work.tx, work.workspaceId, [
-    { kind: 'entity.updated', payload: { entity: 'approval_routes', id: work.workspaceId, reason: 'approval_routes_changed' } },
+    { kind: 'entity.updated', payload: { entity: 'approval_route_rules', id: work.workspaceId, reason: 'approval_routes_changed' } },
   ])));
 }
 
@@ -74,7 +74,7 @@ export async function putApprovalRoute(c: Context<{ Bindings: Env }>): Promise<R
       throw new RouteError(`this workspace has no role called ${unknown.join(', ')}`, 'unknown_role', 422);
     }
     await work.tx.query(
-      `INSERT INTO approval_routes (workspace_id, route_key, admins, roles, approvals_required, allow_requester, updated_by)
+      `INSERT INTO approval_route_rules (workspace_id, route_key, admins, roles, approvals_required, allow_requester, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (workspace_id, route_key) DO UPDATE SET
          admins = EXCLUDED.admins, roles = EXCLUDED.roles,
@@ -98,7 +98,7 @@ export async function resetApprovalRoute(c: Context<{ Bindings: Env }>): Promise
     work.requireAdmin('changing who approves');
     requireStepUp(work.session);
     const removed = await work.tx.query(
-      `DELETE FROM approval_routes WHERE workspace_id = $1 AND route_key = $2`,
+      `DELETE FROM approval_route_rules WHERE workspace_id = $1 AND route_key = $2`,
       [work.workspaceId, key],
     );
     if ((removed.rowCount ?? 0) > 0) await audit(work);
