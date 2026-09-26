@@ -19,7 +19,7 @@
 // subject rows — a request still `pending`, an effect still `pending` or
 // `assigned` — never from a flag on the event, because an event is a fact about
 // the past and "is this still blocked" is a question about the present.
-import { EFFECT_LABELS, EFFECT_UNAVAILABLE_REASON } from './effects.js';
+import { EFFECT_LABELS, EFFECT_SIMULATED_REASON, EFFECT_UNAVAILABLE_REASON } from './effects.js';
 import type { Tx } from '../db/client.js';
 import type { EffectKind } from '@hermes/shared';
 import { requestAudiencePredicate } from './audience.js';
@@ -46,6 +46,7 @@ export interface HistoryRow {
   effect_id: string | null;
   effect_kind: string | null;
   effect_status: string | null;
+  effect_simulation_summary: string | null;
   effect_role: string | null;
   effect_cancelled_reason: string | null;
   document_id: string | null;
@@ -72,6 +73,7 @@ const SELECT = `
          f.status          AS effect_status,
          f.required_role   AS effect_role,
          f.cancelled_reason AS effect_cancelled_reason,
+         f.enforcement_result -> 'simulation' ->> 'summary' AS effect_simulation_summary,
          e.document_id,
          doc.kind          AS document_kind,
          doc.version       AS document_version,
@@ -292,9 +294,15 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       break;
 
     case 'effect.executed':
-      text = `${actor} tried ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
-      detail = EFFECT_UNAVAILABLE_REASON;
-      status = row.effect_status ?? 'unavailable';
+      if (row.effect_status === 'simulated') {
+        text = `${actor} simulated ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
+        detail = row.effect_simulation_summary ?? EFFECT_SIMULATED_REASON;
+        status = 'simulated';
+      } else {
+        text = `${actor} tried ${EFFECT_LABELS[row.effect_kind as EffectKind] ?? 'an effect'}`;
+        detail = EFFECT_UNAVAILABLE_REASON;
+        status = row.effect_status ?? 'unavailable';
+      }
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 

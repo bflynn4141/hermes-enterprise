@@ -148,7 +148,10 @@ exact admission, privacy, and handoff rules.
 The demo stops after a person records a decision. It never sends outreach,
 transfers funds, grants access, or signs documents. The app records any intended
 follow-up as a separate effect, and an authorized person completes that action
-outside the demo.
+outside the demo. On the hosted demo, pressing Execute on one of those effects
+records an invented outcome labelled Simulated; nothing is sent, paid, granted,
+or signed, and production never offers it. See
+[Effect simulation](docs/EFFECT-SIMULATION.md).
 
 Approval saves HTML documents as unsigned, unsent drafts. See
 [Architecture](docs/ARCHITECTURE.md#what-is-implemented-and-intentionally-limited) for the full

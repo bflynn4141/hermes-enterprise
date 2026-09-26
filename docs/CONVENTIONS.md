@@ -36,7 +36,13 @@ the test is the thing to keep passing.
    decided. Anything that crosses a system boundary as a result — an access
    grant, an email, a payment, a signature — is an `effects` row in `pending`
    that a human with the required role executes. A decision never executes one.
-   In the pilot every execution returns `unavailable` with honest copy.
+   In production every execution returns `unavailable` with honest copy. A
+   non-production environment may instead answer `simulated`: a synthetic
+   reference and timeline under a status that is deliberately not `executed`,
+   labelled as simulated on every surface. `effectExecutorMode` ignores the
+   switch under `production`, and `test/unit/effect-simulation.test.ts` and
+   `test/unit/engine-config.test.ts` hold both halves. See
+   [EFFECT-SIMULATION.md](EFFECT-SIMULATION.md).
 
 4. **Counts are derived from views.** `v_inbox_count`, `v_pending_grants`,
    `v_created_documents`, `v_decision_count`, `v_session_status`. Never add a
@@ -46,6 +52,9 @@ the test is the thing to keep passing.
 5. **No real outreach, payment or signature code.** No SMTP, no payment
    provider, no signature provider, no webhook that triggers one. Not behind a
    flag, not "just for testing". The row records the requirement; a human acts.
+   The simulated executor in invariant 3 is not an exception: it contacts
+   nothing, invents its record inside the tenant transaction, and writes
+   `simulated`, never `executed`.
 
 6. **Every cross-system side effect after a commit is a `jobs` row**, written in
    the same transaction as the change, with a key containing a uuid.

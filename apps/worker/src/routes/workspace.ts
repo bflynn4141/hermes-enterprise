@@ -24,6 +24,8 @@ import {
   loadVisiblePendingRequests,
 } from '../domain/requests.js';
 import { executableMemberSetupRoles } from '../member-provisioning/service.js';
+import { effectExecutorMode } from '../domain/effects.js';
+import type { EffectExecutorMode } from '@hermes/shared';
 
 /** The replay window. Older cursors get `resync` instead of a partial page. */
 const MAX_REPLAY_PAGE = 500;
@@ -57,6 +59,7 @@ export async function loadBootstrap(
   allowed: readonly string[],
   automatedTriggers = false,
   memberProvisioning = false,
+  effectExecutor: EffectExecutorMode = 'unavailable',
 ): Promise<Bootstrap> {
   const workspace = await tx.query<WorkspaceRow>(
     `SELECT w.id, w.name, w.jurisdiction,
@@ -265,6 +268,7 @@ export async function loadBootstrap(
       provisioning_status: agent.provisioning_status,
     } : null,
     capabilities: {
+      effect_executor: effectExecutor,
       email_ingress: false,
       // Only explicitly selected, hash-bound agent sources are accepted.
       turn_attachments: true,
@@ -303,6 +307,7 @@ export async function bootstrap(c: Context<{ Bindings: Env }>): Promise<Response
     (tx) => loadBootstrap(
       tx, workspaceId, session.userId, allowedProviders(c.env), c.env.AUTOMATED_TRIGGERS_ENABLED === '1',
       c.env.HERMES_MEMBER_PROVISIONING_ENABLED === '1',
+      effectExecutorMode(c.env),
     ),
   );
   return c.json({ ...body, sessions: body.sessions.map((row) => ({ ...row,

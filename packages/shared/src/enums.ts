@@ -58,14 +58,21 @@ export const RESULTING_STATUS: Readonly<Record<LegacyRequestKind, Readonly<Recor
  * An effect is the row that records a side effect a decision *implies*. It is
  * never executed as a consequence of the decision: the decision commits, the
  * effect sits in `pending`, and a human with the required role executes it.
- * Legacy effect execution returns `unavailable`. Approved communications may
- * use the separate governed Gmail outbox when configured; this ledger route
- * never proves delivery, payment, signature, or access changes.
+ * Legacy effect execution returns `unavailable`, or `simulated` where a
+ * non-production environment enables the simulated executor. `simulated` is
+ * its own status so that no reader can mistake it for `executed`: nothing left
+ * the system. Approved communications may use the separate governed Gmail
+ * outbox when configured; this ledger route never proves delivery, payment,
+ * signature, or access changes.
  */
 export const EFFECT_KINDS = ['access_grant', 'email_send', 'payment', 'signature'] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
 
-export const EFFECT_STATUSES = ['pending', 'assigned', 'executed', 'cancelled', 'unavailable', 'failed'] as const;
+export const EFFECT_STATUSES = ['pending', 'assigned', 'executed', 'cancelled', 'unavailable', 'failed', 'simulated'] as const;
+
+/** Where the legacy effect ledger sends an Execute press. Production is always `unavailable`. */
+export const EFFECT_EXECUTOR_MODES = ['unavailable', 'simulated'] as const;
+export type EffectExecutorMode = (typeof EFFECT_EXECUTOR_MODES)[number];
 export type EffectStatus = (typeof EFFECT_STATUSES)[number];
 
 /** Reviewer roles that gate an effect. A member can hold several. */

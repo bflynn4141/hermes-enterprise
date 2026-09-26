@@ -60,6 +60,18 @@ describe('the scripted-provider switch', () => {
   });
 });
 
+describe('the simulated effect executor', () => {
+  it('is on in development and staging, so a demo can follow an invoice to the end', () => {
+    expect((config.vars as Record<string, string>).EFFECT_EXECUTOR_MODE).toBe('simulated');
+    expect((envs['staging']?.vars as Record<string, string>).EFFECT_EXECUTOR_MODE).toBe('simulated');
+  });
+
+  it('is never simulated in production, in the config and not only in code', () => {
+    const vars = envs['production']?.vars as Record<string, string> | undefined;
+    expect(vars?.EFFECT_EXECUTOR_MODE).toBe('unavailable');
+  });
+});
+
 describe('the local database test boundary', () => {
   it('routes the aggregate suite through the isolated database launcher', () => {
     const command = readWorkerPackage().scripts?.['test'] ?? '';

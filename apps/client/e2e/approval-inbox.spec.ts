@@ -220,6 +220,9 @@ test.describe('enterprise approval inbox', () => {
   test('all ten specialized approval previews are traversable through one review shell', async ({ page }) => {
     const app = await openInbox(page);
     await pickReviewer(app, 'All');
+    // Sample and test rows keep their chip; operational and unrecorded origins carry none.
+    await expect(app.getByText('Sample', { exact: true }).first()).toBeVisible();
+    await expect(app.getByText('Origin not recorded')).toHaveCount(0);
     for (const approval of APPROVAL_CASES) {
       await openRequest(app, new RegExp(approval.subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await expect(app.getByRole('heading', { name: 'Your decision' })).toBeVisible();

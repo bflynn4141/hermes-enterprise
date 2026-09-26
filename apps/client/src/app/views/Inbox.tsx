@@ -323,7 +323,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                       </span>
                       <span className="inbox-item-preview">{requestPreview(request)}</span>
                       <span className="inbox-item-signals">
-                        <span className={`provenance-chip provenance-${request.provenance.kind}`}>{PROVENANCE_LABELS[request.provenance.kind]}</span>
+                        {(request.provenance.kind === 'sample' || request.provenance.kind === 'test') && <span className={`provenance-chip provenance-${request.provenance.kind}`}>{PROVENANCE_LABELS[request.provenance.kind]}</span>}
                         {request.presentation.hidden && <span className="provenance-chip">Hidden from my Inbox</span>}
                         {request.triage?.status === 'complete' ? (
                           <span className={`priority-chip priority-${request.triage.band}`}>{request.triage.band}</span>
@@ -370,7 +370,7 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                   <Icon name="arrow" size={16} className="back-arrow" /> Inbox
                 </Button>
                 <span className="grow" />
-                {selected && <><span className={`pill provenance-${selected.provenance.kind}`}>{PROVENANCE_LABELS[selected.provenance.kind]}</span><span className="pill">{requestType(selected)}</span><RequestPresentationAction request={selected} /></>}
+                {selected && <>{(selected.provenance.kind === 'sample' || selected.provenance.kind === 'test') && <span className={`pill provenance-${selected.provenance.kind}`}>{PROVENANCE_LABELS[selected.provenance.kind]}</span>}<span className="pill">{requestType(selected)}</span><RequestPresentationAction request={selected} /></>}
               </div>
               <RequestDetail id={selectedId} />
             </motion.div>
@@ -892,12 +892,21 @@ export function DocumentView({
   readOnly,
   embedded,
   effects = [],
+  effectActions,
 }: {
   request: RequestEntity;
   document?: DocumentEntity | null;
   readOnly?: boolean;
   embedded?: boolean;
   effects?: EffectEntity[];
+  /** When the receipt owns this view, the effects become actionable rows rather than a static disclosure. */
+  effectActions?: {
+    busy: string | null;
+    reauthed: boolean;
+    notice: string | null;
+    executor: 'unavailable' | 'simulated';
+    onRecordAttempt: (effect: EffectEntity) => void;
+  };
 }) {
   const adapter = useAdapter();
   const state = useAppState();
@@ -1097,7 +1106,50 @@ export function DocumentView({
           </dl>
           <Button link onClick={() => nav(HISTORY())}>Open workspace History</Button>
         </details>
-        {readonly && saved && !declined && <details className="legacy-disclosure"><summary>Downstream actions unavailable</summary><p className="meta">{isInvoice ? 'Payment and email execution are unavailable. No money was moved or email sent.' : 'Signing and email execution are unavailable. No signature was applied or email sent.'}</p>{effects.length > 0 && <ul>{effects.map((effect) => <li key={effect.id}><span>{effect.label}</span><span className="meta">{effect.status === 'cancelled' ? 'Cancelled' : 'Not executed'}</span></li>)}</ul>}</details>}
+        {readonly && saved && !declined && effectActions && (
+          <div className="col" style={{ gap: 10 }}>
+            <h2 className="section-title">What this implies</h2>
+            <LegacyEffectsPanel
+              effects={effects}
+              busy={effectActions.busy}
+              reauthed={effectActions.reauthed}
+              notice={effectActions.notice}
+              executor={effectActions.executor}
+              onRecordAttempt={effectActions.onRecordAttempt}
+            />
+          </div>
+        )}
+        {readonly && saved && !declined && !effectActions && (() => {
+          const anySimulated = effects.some((effect) => effect.status === 'simulated');
+          return (
+            <details className="legacy-disclosure">
+              <summary>{anySimulated ? 'Downstream actions simulated' : 'Downstream actions unavailable'}</summary>
+              <p className="meta">
+                {anySimulated
+                  ? SIMULATED_EFFECT_HONESTY
+                  : isInvoice
+                    ? 'Payment and email execution are unavailable. No money was moved or email sent.'
+                    : 'Signing and email execution are unavailable. No signature was applied or email sent.'}
+              </p>
+              {effects.length > 0 && (
+                <ul>
+                  {effects.map((effect) => (
+                    <li key={effect.id}>
+                      <span>{effect.label}</span>
+                      <span className="meta">
+                        {effect.status === 'cancelled'
+                          ? 'Cancelled'
+                          : effect.status === 'simulated'
+                            ? `Simulated · ${effect.simulation?.reference ?? 'no reference'}`
+                            : 'Not executed'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          );
+        })()}
       </div>
       {readonly ? <div className="app-footer legacy-document-footer"><div className="col grow"><span className="f-title">{status}</span><span className="f-sub">{resolved && !saved ? 'No document was approved, signed, paid or sent.' : saved ? isInvoice ? 'Invoice saved. No payment or email is sent.' : 'Agreement saved unsigned. Nothing is signed or sent.' : consequence}</span></div><Button onClick={() => nav(LIB('documents'))}>Open Library</Button></div>
         : <DecisionFooter request={request} title={decisionLabel} detail={consequence} approveLabel={decisionLabel} declineLabel="Decline" />}
@@ -1109,14 +1161,26 @@ export function DocumentView({
 export const LEGACY_EFFECT_HONESTY =
   'Legacy effects have no executor here. Recording an attempt does not send mail, move money, grant access, or apply a signature. Approved email delivery uses a separate governed outbox when configured; this record is not a delivery receipt.';
 
+/**
+ * Copy shown when this environment simulates effects. It says what the word
+ * "simulated" means so nobody reads a settled-looking timeline as a payment.
+ */
+export const SIMULATED_EFFECT_HONESTY =
+  'Simulated effects. Nothing is sent, paid, granted or signed; each row says so on the right.';
+
 /** Status line for a legacy ledger effect — never implies an external action completed. */
-export function legacyEffectStatusLabel(effect: EffectEntity): string {
+export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavailable' | 'simulated' = 'unavailable'): string {
+  if (effect.status === 'simulated') {
+    return effect.simulation?.summary ?? 'Simulated · nothing sent, paid, granted or signed';
+  }
   const base =
     effect.status === 'unavailable'
       ? 'Unavailable · nothing sent, paid, granted or signed'
       : effect.status === 'cancelled'
         ? 'Cancelled'
-        : `Pending · no executor · needs the ${effect.required_role} role`;
+        : executor === 'simulated'
+          ? `Waiting on the ${effect.required_role} role`
+          : `Pending · no executor · needs the ${effect.required_role} role`;
   return effect.reason ? `${base} · ${effect.reason}` : base;
 }
 
@@ -1129,19 +1193,24 @@ export function LegacyEffectsPanel({
   busy = null,
   reauthed = false,
   notice = null,
+  executor = 'unavailable',
   onRecordAttempt,
 }: {
   effects: readonly EffectEntity[];
   busy?: string | null;
   reauthed?: boolean;
   notice?: string | null;
+  /** From bootstrap capabilities. `simulated` relabels the button and the honesty copy. */
+  executor?: 'unavailable' | 'simulated';
   onRecordAttempt?: (effect: EffectEntity) => void;
 }) {
-  const showsHonesty = effects.some((effect) => effect.status === 'pending' || effect.status === 'unavailable');
+  const simulated = executor === 'simulated' || effects.some((effect) => effect.status === 'simulated');
+  const showsHonesty = effects.some((effect) => effect.status === 'pending' || effect.status === 'unavailable' || effect.status === 'simulated');
+  const action = simulated ? 'Execute' : 'Record attempt';
   return (
     <>
-      {reauthed && <p className="meta">Re-authenticated — press Record attempt again to continue.</p>}
-      {showsHonesty && (
+      {reauthed && <p className="meta">Re-authenticated — press {action} again to continue.</p>}
+      {showsHonesty && !simulated && (
         <p className="meta" style={{ maxWidth: 760 }} data-testid="legacy-effect-honesty">
           {LEGACY_EFFECT_HONESTY}
         </p>
@@ -1153,11 +1222,23 @@ export function LegacyEffectsPanel({
             <Glass name="context" size={22} className="row-icon" />
             <div className="row-main">
               <span className="t">{effect.label}</span>
-              <span className="s">{legacyEffectStatusLabel(effect)}</span>
+              <span className="s">{legacyEffectStatusLabel(effect, executor)}</span>
+              {effect.status === 'simulated' && effect.simulation && (
+                <ol className="meta" data-testid="effect-simulation-steps" style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {effect.simulation.steps.map((step) => (
+                    <li key={`${step.at}-${step.label}`}>
+                      {step.label} · <time dateTime={step.at}>{new Date(step.at).toLocaleTimeString()}</time>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
+            {simulated && (effect.status === 'simulated' || effect.status === 'pending') && (
+              <span className="pill illustrative" title={SIMULATED_EFFECT_HONESTY}>Simulated</span>
+            )}
             {effect.status === 'pending' && (
               <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>
-                {busy === effect.id ? 'Recording…' : 'Record attempt'}
+                {busy === effect.id ? (simulated ? 'Executing…' : 'Recording…') : action}
               </Button>
             )}
           </div>
@@ -1240,7 +1321,16 @@ export function Receipt({ request }: { request: RequestEntity }) {
       .finally(() => setBusy(null));
   };
 
-  if (documentRequest) return <DocumentView request={request} readOnly effects={effects} />;
+  if (documentRequest) {
+    return (
+      <DocumentView
+        request={request}
+        readOnly
+        effects={effects}
+        effectActions={{ busy, reauthed, notice, executor: state.capabilities.effectExecutor, onRecordAttempt: recordAttempt }}
+      />
+    );
+  }
 
   const title = declined ? `${request.subject ?? request.label} · Declined` : requestStatusLabel(request).split(' · ')[0]!;
   const sub = requestStatusLabel(request).split(' · ').slice(1).join(' · ');
@@ -1264,6 +1354,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
           busy={busy}
           reauthed={reauthed}
           notice={notice}
+          executor={state.capabilities.effectExecutor}
           onRecordAttempt={recordAttempt}
         />
         {request.note && !documentRequest && (

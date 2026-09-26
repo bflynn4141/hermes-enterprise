@@ -55,6 +55,7 @@ describe('GET /w/:ws/bootstrap', () => {
         turn_attachments: boolean;
         automated_triggers: boolean;
         member_invitations: { mode: string; role_templates: string[] };
+        effect_executor: string;
       };
       sessions: { id: string; agent_id: string }[];
       counts: Record<string, number>;
@@ -72,6 +73,7 @@ describe('GET /w/:ws/bootstrap', () => {
       turn_attachments: true,
       automated_triggers: false,
       member_invitations: { mode: 'legacy_delivery', role_templates: [] },
+      effect_executor: 'unavailable',
     });
     expect(body.sessions).toContainEqual(expect.objectContaining({ id: fx.sessionId, agent_id: fx.agentId }));
     expect(body.counts).toEqual({ inbox: 0, pending_grants: 0, created_documents: 0, decisions: 0, pending_for_me: 0, pending_for_others: 0 });

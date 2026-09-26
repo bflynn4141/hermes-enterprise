@@ -101,6 +101,83 @@ describe('executing an effect', () => {
     });
   });
 
+  it('answers simulated, never executed, when the environment enables the simulated executor', async () => {
+    const fx = await seedWorkspace();
+    const e = env();
+    const simulated = { ...e.env, ENVIRONMENT: 'development', EFFECT_EXECUTOR_MODE: 'simulated' };
+    const requestId = await seedRequest(fx, 'invoice');
+    const [sendId, paymentId] = await approve(e, fx, requestId);
+
+    const response = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/effects/${paymentId}/execute`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      status: string;
+      reason: string;
+      simulation: { reference: string; summary: string; steps: { label: string; at: string }[] } | null;
+    };
+    expect(body.status).toBe('simulated');
+    expect(body.status).not.toBe('executed');
+    expect(body.reason).toMatch(/^Simulated\./);
+    expect(body.simulation?.reference).toMatch(/^SIM-PAY-[0-9A-F]{6}$/);
+    // The invoice fixture is USD 900.00 to Robin Ellis; the summary reads like a receipt while `status` and `reason` say simulated.
+    expect(body.simulation?.summary).toBe('USD 900.00 to Robin Ellis · Settled');
+    expect(body.simulation?.steps.length).toBeGreaterThanOrEqual(3);
+
+    // A second press returns the same simulated row and appends no second audit row.
+    const again = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/effects/${paymentId}/execute`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(((await again.json()) as { simulation: { reference: string } }).simulation.reference).toBe(body.simulation?.reference);
+
+    // The send effect stays pending: simulating one effect does not simulate its siblings.
+    const list = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/effects?status=pending`);
+    expect(((await list.json()) as { items: { id: string }[] }).items.map((item) => item.id)).toContain(sendId);
+
+    await readTenant(fx.workspaceId, fx.adminId, async (c) => {
+      const { rows } = await c.query<{ status: string; enforcement_result: { result: string; simulation: unknown } }>(
+        `SELECT status, enforcement_result FROM effects WHERE id = $1`,
+        [paymentId],
+      );
+      expect(rows[0]?.status).toBe('simulated');
+      expect(rows[0]?.enforcement_result.result).toBe('simulated');
+      const executed = await c.query(`SELECT 1 FROM effects WHERE status = 'executed'`);
+      expect(executed.rowCount).toBe(0);
+      const audit = await c.query(`SELECT 1 FROM events WHERE kind = 'effect.executed' AND effect_id = $1`, [paymentId]);
+      expect(audit.rowCount).toBe(1);
+    });
+
+    // History says simulated, in the row's own summary.
+    const history = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/history`);
+    const items = ((await history.json()) as { items: { kind: string; text: string; detail: string; status: string }[] }).items;
+    const row = items.find((item) => item.kind === 'effect.executed');
+    expect(row?.status).toBe('simulated');
+    expect(row?.text).toMatch(/simulated Pay the invoice/);
+    expect(row?.detail).toBe(body.simulation?.summary);
+  });
+
+  it('stays unavailable, with no simulation record, when the variable is unset', async () => {
+    // Production is refused at the auth boundary under the fake-auth harness, so
+    // the production pin is asserted in test/unit/effect-simulation.test.ts and
+    // the wrangler configuration in test/unit/engine-config.test.ts. This test
+    // covers the other half: no variable means the honest answer.
+    const fx = await seedWorkspace();
+    const e = env();
+    const plain = { ...e.env, EFFECT_EXECUTOR_MODE: undefined };
+    const requestId = await seedRequest(fx, 'application');
+    const [effectId] = await approve(e, fx, requestId);
+
+    const response = await asUser(plain, fx.adminId, `/w/${fx.workspaceId}/effects/${effectId}/execute`, {
+      method: 'POST',
+      body: {},
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: 'unavailable', simulation: null });
+  });
+
   it('refuses somebody who does not hold the role the effect needs', async () => {
     const fx = await seedWorkspace();
     const e = env();

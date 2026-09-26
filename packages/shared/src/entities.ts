@@ -255,6 +255,23 @@ export const decisionEntitySchema = z
   .strict();
 export type DecisionEntity = z.infer<typeof decisionEntitySchema>;
 
+/**
+ * What a simulated execution recorded. Present only when `status` is
+ * `simulated`. Every field is invented by the server at execution time; none
+ * of it came from a bank, a signing service or a mail provider.
+ */
+export const effectSimulationSchema = z
+  .object({
+    /** A visibly synthetic reference such as `SIM-PAY-7F3A2C`. */
+    reference: z.string().max(40),
+    /** One line for the receipt: "USD 900.00 to Robin Ellis · simulated settlement". */
+    summary: z.string().max(200),
+    /** The pretend provider timeline, oldest first. */
+    steps: z.array(z.object({ label: z.string().max(80), at: z.iso.datetime({ offset: true }) }).strict()).max(6),
+  })
+  .strict();
+export type EffectSimulation = z.infer<typeof effectSimulationSchema>;
+
 export const effectEntitySchema = z
   .object({
     id: uuidSchema,
@@ -263,8 +280,10 @@ export const effectEntitySchema = z
     status: effectStatusSchema,
     required_role: z.string().max(32),
     label: z.string().max(200),
-    /** The honest pilot copy: why nothing executed. */
+    /** The honest pilot copy: why nothing executed, or that it was simulated. */
     reason: z.string().max(200).nullable(),
+    /** Optional for rolling compatibility with Workers deployed before simulation existed. */
+    simulation: effectSimulationSchema.nullable().optional(),
   })
   .strict();
 export type EffectEntity = z.infer<typeof effectEntitySchema>;

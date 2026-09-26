@@ -112,6 +112,12 @@ export const bootstrapSchema = z
             role_templates: z.array(memberRoleTemplateSchema).min(1),
           }).strict(),
         ]).optional(),
+        /**
+         * How this Worker answers Execute on a legacy effect. Absent on older
+         * Workers, which is read as `unavailable`. Production never advertises
+         * `simulated`; a unit test holds the configuration to that.
+         */
+        effect_executor: z.enum(['unavailable', 'simulated']).optional(),
       })
       .strict(),
     /** Replay cursors: the client asks for events after these. */
