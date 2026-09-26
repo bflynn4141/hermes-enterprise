@@ -13,6 +13,7 @@ SPEC = importlib.util.spec_from_file_location("enterprise_bridge_cloud_control",
 cloud = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(cloud)
+PRIMARY = "f97608f178d1ffeca59860195ab7da295f7c8e5f"
 
 RUN_ID = "run_" + "a" * 32
 
@@ -202,7 +203,8 @@ class CloudControlTests(unittest.TestCase):
             captured["timeout"] = timeout
             return Response(200, {"object": "hermes.api_server.capabilities"})
 
-        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": cloud.SOURCE_REVISION}), \
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": PRIMARY}), \
+                patch.object(cloud, "_running_hermes_version", return_value="0.21.5"), \
                 patch.object(control.opener, "open", side_effect=open_request):
             status, body = control.dispatch({"operation": "capabilities"})
         self.assertEqual(status, 200)
@@ -219,7 +221,8 @@ class CloudControlTests(unittest.TestCase):
 
     def test_connector_rejects_a_conflicting_native_contract(self):
         control = self.control()
-        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": cloud.SOURCE_REVISION}), \
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": PRIMARY}), \
+                patch.object(cloud, "_running_hermes_version", return_value="0.21.5"), \
                 patch.object(control, "_request", return_value=(200, {
                     "object": "hermes.api_server.capabilities",
                     "enterprise_contract": {"schema_version": 99},
@@ -227,6 +230,25 @@ class CloudControlTests(unittest.TestCase):
             status, body = control.dispatch({"operation": "capabilities"})
         self.assertEqual(status, 502)
         self.assertNotIn("schema_version", json.dumps(body))
+
+    def test_connector_reports_the_validated_release_actually_running(self):
+        control = self.control()
+        runtimes = {"0.21.5": PRIMARY, "0.21.6": "b" * 40}
+        with patch.object(cloud, "SUPPORTED_SOURCE_REVISIONS", runtimes), \
+                patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": PRIMARY}), \
+                patch.object(cloud, "_running_hermes_version", return_value="0.21.6"), \
+                patch.object(control, "_request", return_value=(200, {"object": "hermes.api_server.capabilities"})):
+            status, body = control.dispatch({"operation": "capabilities"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["enterprise_contract"]["source_revision"], "b" * 40)
+
+    def test_connector_refuses_an_unvalidated_running_release(self):
+        control = self.control()
+        with patch.dict("os.environ", {"HERMES_ENTERPRISE_SOURCE_REVISION": PRIMARY}), \
+                patch.object(cloud, "_running_hermes_version", return_value="0.21.9"), \
+                patch.object(control, "_request", return_value=(200, {"object": "hermes.api_server.capabilities"})):
+            with self.assertRaisesRegex(RuntimeError, "unvalidated Hermes release"):
+                control.dispatch({"operation": "capabilities"})
 
     def test_connector_requires_an_explicit_reviewed_source_attestation(self):
         control = self.control()

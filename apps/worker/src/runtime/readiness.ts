@@ -1,3 +1,4 @@
+import runtimeContract from '../../../../runtime/hermes/contract.json';
 import type { EnterpriseSkillAssignment } from '@hermes/shared';
 import {
   assignmentToolNames,
@@ -17,7 +18,14 @@ import {
   toolsForSkillVersion,
 } from '../enterprise-skills/registry.js';
 
-export const HERMES_NATIVE_REVISION = 'f97608f178d1ffeca59860195ab7da295f7c8e5f';
+/** The primary pin: what the local launcher installs and tests attest. */
+export const HERMES_NATIVE_REVISION: string = runtimeContract.source_revision;
+/**
+ * Every official release the plugin is validated against. Hermes Cloud moves
+ * an instance to the newest release on restart, so a runtime may attest any
+ * listed revision, never an unlisted one.
+ */
+export const SUPPORTED_NATIVE_REVISIONS: ReadonlySet<string> = new Set(runtimeContract.supported_source_revisions);
 export const ENTERPRISE_BRIDGE_VERSION = '1.7.0';
 /** Exact native MCP name emitted by managed Partnerships profiles. */
 export const AGENTCASH_MCP_TOOL = 'mcp__agentcash__fetch';
@@ -92,7 +100,7 @@ function matchesManagedRuntimeIdentity(
     cleanOrigin(readiness.enterpriseUrl) === cleanOrigin(expected.enterpriseUrl) &&
     /^[0-9a-f]{40}$/.test(expected.pluginRevision ?? '') &&
     /^sha256:[0-9a-f]{64}$/.test(expected.pluginArtifactDigest ?? '') &&
-    readiness.runtimeRevision === HERMES_NATIVE_REVISION &&
+    SUPPORTED_NATIVE_REVISIONS.has(readiness.runtimeRevision ?? '') &&
     readiness.plugin?.name === 'enterprise_bridge' &&
     readiness.plugin.version === ENTERPRISE_BRIDGE_VERSION &&
     readiness.plugin.revision === expected.pluginRevision &&
@@ -124,7 +132,7 @@ export function matchesEnterpriseReadiness(
     return readiness.nativeCronDisabled && readiness.agentCashEnabled && readiness.agentCashWalletPresent;
   }
   if (!assignment.artifact_digest || assignment.state !== 'active' ||
-      readiness.runtimeRevision !== HERMES_NATIVE_REVISION ||
+      !SUPPORTED_NATIVE_REVISIONS.has(readiness.runtimeRevision ?? '') ||
       readiness.plugin?.name !== 'enterprise_bridge' ||
       readiness.plugin.version !== ENTERPRISE_BRIDGE_VERSION ||
       readiness.version !== ENTERPRISE_BRIDGE_VERSION ||
@@ -247,7 +255,7 @@ export function matchesLegacyCapacityAttestation(
 ): boolean {
   const expectedTools = [...PARTNER_PROGRAM_TOOLS, 'skill_view', AGENTCASH_MCP_TOOL];
   return (!expected || matchesManagedRuntimeIdentity(readiness, expected)) &&
-    readiness.runtimeRevision === HERMES_NATIVE_REVISION &&
+    SUPPORTED_NATIVE_REVISIONS.has(readiness.runtimeRevision ?? '') &&
     readiness.plugin?.name === 'enterprise_bridge' &&
     readiness.plugin.version === ENTERPRISE_BRIDGE_VERSION &&
     readiness.version === ENTERPRISE_BRIDGE_VERSION &&

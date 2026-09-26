@@ -16,9 +16,9 @@ import uuid
 from datetime import datetime, timezone
 
 from .packages import PLUGIN_NAME, PLUGIN_VERSION
+from .runtimes import PRIMARY_VERSION, RUNTIMES
 from .runtime_policy import (
     NativePolicyState,
-    RUNTIME_REVISION,
     actual_plugin_attestation,
     actual_skill_attestation,
     actual_skill_prompt_attestation,
@@ -36,18 +36,8 @@ from .runtime_policy import (
 
 
 FLAG = "HERMES_ENTERPRISE_CLOUD_MANAGED"
-EXPECTED_HERMES_VERSION = "0.21.5"
-SOURCE_DIGESTS = {
-    "agent.conversation_loop": "c93ee86e1da583abc7cc57417380cd71241ae028c04a4cb8456580b52ffbf3d8",
-    "gateway.platforms.api_server": "fa83a20bd4f9f3a90a3ac010db0a68f548259587946ea80b81b2f3253bafd5ec",
-    "hermes_cli.plugins": "51c7fdd506b187c8713e706a7b264614902b28039e79875770e4b120180b423c",
-    "hermes_cli.plugins_dispatch": "fd1185e23edb80234e3f816a2fbbf990cdab37a3bf5c3d98b38337c7dd50e330",
-    "hermes_cli.plugins_loader": "8f5761948f135faf5f75c112fcd0a819d8c44eb0652dcbc46517563961764ac3",
-    "hermes_cli.runtime_provider": "8013320d5b8b393f1a21d7b7858b638772b9aaf1fe15718e9c85bc4a1c785d64",
-    "hermes_cli.tools_config": "113274934cd85734005e04acc2b86216899ccde6db9eb632660eec784ee71fb7",
-    "model_tools": "5d5a947d84f31f1ba4ef5267e28154b819e8f957a0b378739696f1ac305e1509",
-    "cron.jobs": "24cbaf90ccec442ca34cf8ad200f30bed9de6ea74b90b7ae62d6f963aaf38763",
-}
+EXPECTED_HERMES_VERSION = PRIMARY_VERSION
+SOURCE_DIGESTS = RUNTIMES[PRIMARY_VERSION]["source_digests"]
 AGENTCASH_SERVER = {
     "command": "npx",
     "args": ["--yes", "agentcash@0.17.1"],
@@ -152,13 +142,21 @@ def _clean_url(raw, *, loopback_http=False):
     return raw.rstrip("/")
 
 
+def detected_runtime():
+    """The validated release matching the installed Hermes, or a closed failure."""
+    import hermes_cli
+    version = getattr(hermes_cli, "__version__", None)
+    runtime = RUNTIMES.get(version) if isinstance(version, str) else None
+    if runtime is None:
+        raise RuntimeError("Cloud-managed Enterprise requires Hermes " + " or ".join(RUNTIMES))
+    return version, runtime
+
+
 def validate_native_source():
     """Prove the source files whose private seams this plugin relies on."""
-    import hermes_cli
-    if getattr(hermes_cli, "__version__", None) != EXPECTED_HERMES_VERSION:
-        raise RuntimeError("Cloud-managed Enterprise requires Hermes " + EXPECTED_HERMES_VERSION)
+    _version, runtime = detected_runtime()
     paths = {}
-    for module_name, expected in SOURCE_DIGESTS.items():
+    for module_name, expected in runtime["source_digests"].items():
         module = importlib.import_module(module_name)
         source = inspect.getsourcefile(module)
         if not source:
@@ -447,6 +445,7 @@ def _initializer(settings, state, enterprise_tool_names):
         manager = get_plugin_manager()
         with manager._discovery_lock:
             pass
+        version, runtime = detected_runtime()
         source_paths = validate_native_source()
         identity = _validate_identity(settings)
         assignment = load_enterprise_skills(
@@ -499,6 +498,7 @@ def _initializer(settings, state, enterprise_tool_names):
         }
         attestation = write_runtime_attestation(
             pathlib.Path(os.environ["HERMES_HOME"]), metadata, plugin, skills, names,
+            runtime_revision=runtime["revision"],
         )
         expected_config_digest = sha256_path(config_path)
         expected_skill_digests = {item["name"]: item["content_digest"] for item in skills}
@@ -527,7 +527,7 @@ def _initializer(settings, state, enterprise_tool_names):
             if sha256_path(config_path) != expected_config_digest:
                 raise RuntimeError("Managed Hermes config changed after readiness")
             for source_name, path in source_paths.items():
-                if sha256_path(path) != SOURCE_DIGESTS[source_name]:
+                if sha256_path(path) != runtime["source_digests"][source_name]:
                     raise RuntimeError("Pinned Hermes source changed after readiness")
             current_skills = actual_skill_attestation(
                 manager, assignment["manifests"], pathlib.Path(__file__).parent,
@@ -560,7 +560,7 @@ def _initializer(settings, state, enterprise_tool_names):
         )
         logging.info(
             "Cloud-managed Enterprise runtime ready: Hermes %s (%s), %d governed tools",
-            EXPECTED_HERMES_VERSION, RUNTIME_REVISION[:12], len(attestation["tools"]),
+            version, runtime["revision"][:12], len(attestation["tools"]),
         )
     except Exception as error:
         state.mark_failed(error)
