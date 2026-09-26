@@ -127,7 +127,11 @@ export function effectSimulation(row: Pick<EffectRow, 'status' | 'enforcement_re
  */
 export function withLiveRequirement(row: EffectRow, routes: RouteRules): EffectRow {
   const route = routes[row.kind as ApprovalRouteKey];
-  return route ? { ...row, approvals_required: route.rule.approvals_required } : row;
+  // Who it waits on follows the rule too, so the Inbox never names a role
+  // that no longer carries it out.
+  return route
+    ? { ...row, approvals_required: route.rule.approvals_required, required_role: route.rule.roles[0] ?? 'admin' }
+    : row;
 }
 
 /**

@@ -111,7 +111,9 @@ describe('approval rules', () => {
     expect(own.status).toBe(403);
     expect(await own.json()).toMatchObject({ reason: 'own_request' });
     const detail = await asUser(env(), fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}`);
-    expect(await detail.json()).toMatchObject({ decision_summary: { approval_requirement: { pending_for_viewer: false } } });
+    expect(await detail.json()).toMatchObject({
+      decision_summary: { approval_requirement: { pending_for_viewer: false, current: [{ label: 'Admins or Legal, not you: your agent prepared this' }] } },
+    });
     expect((await decide(fx, fx.memberId, requestId)).status).toBe(201);
   });
 
@@ -145,7 +147,13 @@ describe('approval rules', () => {
     const [, paymentId] = ((await approved.json()) as { effect_ids: string[] }).effect_ids;
     await setRule(fx, 'payment', { admins: false, roles: ['finance'], approvals_required: 3, allow_requester: true });
     const first = await send(fx, fx.adminId, 'POST', `/effects/${paymentId}/execute`, {});
-    expect(await first.json()).toMatchObject({ status: 'pending', confirmations: { required: 3, recorded: 1 } });
+    expect(await first.json()).toMatchObject({ status: 'pending', required_role: 'finance', confirmations: { required: 3, recorded: 1 } });
+    // Hand payments to Legal: waiting payments now say so.
+    await holds(fx, fx.memberId, ['legal']);
+    await setRule(fx, 'payment', { admins: false, roles: ['legal'], approvals_required: 1, allow_requester: true });
+    const list = await send(fx, fx.adminId, 'GET', `/requests/${requestId}/effects`);
+    expect(((await list.json()) as { items: { id: string; required_role: string }[] }).items.find((item) => item.id === paymentId))
+      .toMatchObject({ required_role: 'legal' });
   });
 
   it('keep a routed role from being deleted', async () => {

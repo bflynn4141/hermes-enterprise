@@ -131,8 +131,18 @@ export function approverLabel(rule: Pick<ApprovalRouteRule, 'admins' | 'roles'>,
 }
 
 /** The label a legacy request shows for whose decision it is. */
-export function requestApproverLabel(viewer: ApprovalViewer, row: { kind: string; subject_key?: string | null }): string {
+export function requestApproverLabel(
+  viewer: ApprovalViewer,
+  row: { kind: string; subject_key?: string | null; requester_id?: string | null },
+): string {
   if (financeWorkflowRequest(row)) return 'Finance reviewer';
   if (!DECISION_KEYS.includes(row.kind)) return 'Workspace Admin';
-  return approverLabel(viewer.routes[row.kind as ApprovalRouteKey].rule, viewer.roleNames);
+  const rule = viewer.routes[row.kind as ApprovalRouteKey].rule;
+  const label = approverLabel(rule, viewer.roleNames);
+  // Otherwise an Admin looking at their own agent's request would read
+  // "Workspace Admin" and not see why they cannot decide it.
+  if (!rule.allow_requester && row.requester_id && row.requester_id === viewer.userId) {
+    return `${label}, not you: your agent prepared this`;
+  }
+  return label;
 }
