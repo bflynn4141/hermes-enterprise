@@ -280,7 +280,7 @@ function RoleDetail({ role, onSaved, onDeleted }: { role: WorkspaceRole; onSaved
 
     <AdminSettingsCard
       title="People"
-      description={`Everyone checked here holds ${role.name} and can decide its approvals.`}
+      description={`Everyone checked here holds ${role.name}.`}
       footer={<>
         {holdersProblem !== null ? <Problem error={holdersProblem} /> : <p role="status">{holdersState === 'saved' && !holdersChanged ? 'Saved.' : ''}</p>}
         <Button primary disabled={!holdersChanged || holdersState === 'saving'} onClick={saveHolders}>{holdersState === 'saving' ? 'Saving…' : 'Save'}</Button>

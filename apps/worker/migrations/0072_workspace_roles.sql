@@ -15,7 +15,7 @@
 CREATE TABLE IF NOT EXISTS workspace_roles (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id       uuid NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
-  slug               text NOT NULL CHECK (slug ~ '^[a-z][a-z0-9_-]{0,47}$'),
+  slug               text NOT NULL CHECK (slug ~ '^[a-z][a-z0-9_-]{0,31}$'),
   name               text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
   description        text NOT NULL DEFAULT '' CHECK (char_length(description) <= 500),
   builtin            boolean NOT NULL DEFAULT false,
@@ -90,13 +90,14 @@ BEGIN
   END LOOP;
 
   -- Tags were free text. Lowercase them, and keep each distinct valid one as
-  -- a custom role so nobody silently loses what they held.
+  -- a custom role so nobody silently loses what they held. 32 characters is
+  -- what the member entity has always carried per tag.
   UPDATE members
      SET reviewer_roles = ARRAY(SELECT DISTINCT lower(tag) FROM unnest(reviewer_roles) tag
-                                 WHERE lower(tag) ~ '^[a-z][a-z0-9_-]{0,47}$')
+                                 WHERE lower(tag) ~ '^[a-z][a-z0-9_-]{0,31}$')
    WHERE reviewer_roles IS DISTINCT FROM
          ARRAY(SELECT DISTINCT lower(tag) FROM unnest(reviewer_roles) tag
-                WHERE lower(tag) ~ '^[a-z][a-z0-9_-]{0,47}$');
+                WHERE lower(tag) ~ '^[a-z][a-z0-9_-]{0,31}$');
   INSERT INTO workspace_roles (workspace_id, slug, name)
   SELECT DISTINCT m.workspace_id, tag, left(initcap(replace(replace(tag, '_', ' '), '-', ' ')), 80)
     FROM members m, unnest(m.reviewer_roles) tag
@@ -133,6 +134,9 @@ CREATE OR REPLACE FUNCTION members_roles_exist()
 AS $$
 DECLARE missing text;
 BEGIN
+  IF cardinality(NEW.reviewer_roles) > 32 THEN
+    RAISE EXCEPTION 'a member holds at most 32 roles' USING ERRCODE = '23514';
+  END IF;
   SELECT tag INTO missing
     FROM unnest(COALESCE(NEW.reviewer_roles, '{}'::text[])) tag
    WHERE NOT EXISTS (SELECT 1 FROM workspace_roles r WHERE r.workspace_id = NEW.workspace_id AND r.slug = tag)

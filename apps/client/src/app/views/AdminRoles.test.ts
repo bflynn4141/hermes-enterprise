@@ -100,16 +100,16 @@ describe('the mock roles routes, through the real client', () => {
   it('creates, renames, staffs and deletes a custom role, and keeps members in step', async () => {
     const { rest, ws } = setup();
     const created = await rest.createRole(ws, { name: 'Vendor review', description: 'Checks new vendors.' });
-    expect(created).toMatchObject({ slug: 'vendor_review', builtin: false, members: [] });
+    expect(created).toMatchObject({ slug: 'vendor-review', builtin: false, members: [] });
     expect(await reason(rest.createRole(ws, { name: 'vendor review', description: '' }))).toBe('role_exists');
 
     const renamed = await rest.updateRole(ws, created.id, { name: 'Vendor checks' });
-    expect(renamed).toMatchObject({ name: 'Vendor checks', slug: 'vendor_review' });
+    expect(renamed).toMatchObject({ name: 'Vendor checks', slug: 'vendor-review' });
 
     const alex = (await rest.listMembers(ws)).items.find((row) => row.name === 'Alex Rivera')!;
     const staffed = await rest.setRoleMembers(ws, created.id, [alex.user_id!]);
     expect(staffed.members.map((person) => person.name)).toEqual(['Alex Rivera']);
-    expect((await rest.listMembers(ws)).items.find((row) => row.id === alex.id)?.reviewer_roles).toContain('vendor_review');
+    expect((await rest.listMembers(ws)).items.find((row) => row.id === alex.id)?.reviewer_roles).toContain('vendor-review');
     expect(await reason(rest.deleteRole(ws, created.id))).toBe('role_in_use');
 
     await rest.setRoleMembers(ws, created.id, []);

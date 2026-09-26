@@ -25,7 +25,10 @@ export const BUILTIN_ROLE_SLUGS = ['partnerships', 'finance', 'access', 'legal',
 export type BuiltinRoleSlug = (typeof BUILTIN_ROLE_SLUGS)[number];
 
 /** Lowercase, starting with a letter; underscores kept for existing tags. */
-export const roleSlugSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,47}$/);
+export const roleSlugSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/);
+
+/** How many roles one person may hold; the member entity carries them all. */
+export const MAX_ROLES_PER_MEMBER = 32;
 
 const personSchema = z.object({
   user_id: uuidSchema,

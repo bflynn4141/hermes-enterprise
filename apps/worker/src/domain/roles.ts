@@ -4,8 +4,9 @@
 // `members.reviewer_roles`, which every existing authority check already
 // reads. This module is the one place that reads the catalog and changes who
 // holds what, so the member trigger and these functions agree.
-import type { WorkspaceRole } from '@hermes/shared';
+import { MAX_ROLES_PER_MEMBER, type WorkspaceRole } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
+import { RouteError } from '../routes/errors.js';
 
 interface RoleRow {
   id: string;
@@ -98,8 +99,8 @@ export async function roleSlugs(tx: Tx, workspaceId: string): Promise<Set<string
 
 /** A role slug from its display name: "Partner Success" becomes `partner-success`. */
 export function slugForRoleName(name: string): string | null {
-  const slug = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
-  return /^[a-z][a-z0-9_-]{0,47}$/.test(slug) ? slug : null;
+  const slug = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(slug) ? slug : null;
 }
 
 /** Adds a role to one active member; holding it twice is holding it once. */
@@ -134,13 +135,16 @@ export async function setRoleHolders(
   userIds: readonly string[],
 ): Promise<{ added: string[]; removed: string[] }> {
   const wanted = new Set(userIds);
-  const { rows } = await tx.query<{ user_id: string; holds: boolean }>(
-    `SELECT user_id, $2 = ANY (reviewer_roles) AS holds
+  const { rows } = await tx.query<{ user_id: string; holds: boolean; held: number }>(
+    `SELECT user_id, $2 = ANY (reviewer_roles) AS holds, cardinality(reviewer_roles) AS held
        FROM members WHERE workspace_id = $1 AND status = 'active'
        FOR UPDATE`,
     [workspaceId, slug],
   );
   const added = rows.filter((row) => !row.holds && wanted.has(row.user_id)).map((row) => row.user_id);
+  if (rows.some((row) => !row.holds && wanted.has(row.user_id) && row.held >= MAX_ROLES_PER_MEMBER)) {
+    throw new RouteError(`a person holds at most ${MAX_ROLES_PER_MEMBER} roles`, 'too_many_roles', 422);
+  }
   const removed = rows.filter((row) => row.holds && !wanted.has(row.user_id)).map((row) => row.user_id);
   if (added.length > 0) {
     await tx.query(

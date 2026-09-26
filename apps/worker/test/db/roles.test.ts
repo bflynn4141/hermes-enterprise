@@ -74,6 +74,12 @@ describe('workspace roles', () => {
     const duplicate = await send(fx, fx.adminId, 'POST', '/roles', { name: 'partner success' });
     expect(duplicate.status).toBe(409);
     expect(await duplicate.json()).toMatchObject({ reason: 'role_exists' });
+    // Same name as a built-in under a different slug is still the same name.
+    const lookalike = await send(fx, fx.adminId, 'POST', '/roles', { name: 'access REVIEWER' });
+    expect(lookalike.status).toBe(409);
+    // Slugs stop at 32 characters, what a member entity carries per role.
+    const long = await send(fx, fx.adminId, 'POST', '/roles', { name: 'Regional partner enablement and onboarding lead' });
+    expect(((await long.json()) as WorkspaceRole).slug).toBe('regional-partner-enablement-and');
 
     const renamed = await send(fx, fx.adminId, 'PATCH', `/roles/${role.id}`, { name: 'Partner Care' });
     expect(await renamed.json()).toMatchObject({ slug: 'partner-success', name: 'Partner Care' });

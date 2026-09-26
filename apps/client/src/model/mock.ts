@@ -792,9 +792,10 @@ export function createMockBackend(input: MockOptions = {}) {
     builtinRole(4, 'shared_intelligence_reviewer', 'Shared Intelligence reviewer', 'Approves what agents may publish to Shared Intelligence.'),
   ];
   let nextRoleId = 1_420;
+  // Same rule as apps/worker/src/domain/roles.ts `slugForRoleName`.
   const roleSlugFor = (name: string): string => {
-    const base = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    return (/^[a-z]/.test(base) ? base : `role_${base}`).slice(0, 48).replace(/_+$/, '');
+    const base = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+    return /^[a-z]/.test(base) ? base : `role-${base}`.slice(0, 32);
   };
   const roleView = (role: MockRole): WorkspaceRole => ({
     ...role,

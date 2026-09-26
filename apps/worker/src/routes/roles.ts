@@ -31,6 +31,15 @@ async function requireRole(work: TenantWork, roleId: string) {
   return role;
 }
 
+/** Two roles called "Access reviewer" would be told apart only by a hidden slug. */
+async function refuseDuplicateName(work: TenantWork, name: string, exceptId?: string): Promise<void> {
+  const { rows } = await work.tx.query(
+    `SELECT 1 FROM workspace_roles WHERE workspace_id = $1 AND lower(name) = lower($2) AND id IS DISTINCT FROM $3::uuid`,
+    [work.workspaceId, name, exceptId ?? null],
+  );
+  if (rows.length > 0) throw new RouteError('a role with that name already exists', 'role_exists', 409);
+}
+
 async function audit(work: TenantWork): Promise<void> {
   await work.tx.query(
     `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind) VALUES ($1, 'user', $2, 'settings.changed')`,
@@ -59,6 +68,7 @@ export async function createWorkspaceRole(c: Context<{ Bindings: Env }>): Promis
     requireStepUp(work.session);
     const slug = slugForRoleName(input.name);
     if (!slug) throw new RouteError('a role name needs a letter to start with', 'bad_role_name', 422);
+    await refuseDuplicateName(work, input.name);
     const inserted = await work.tx.query<{ id: string }>(
       `INSERT INTO workspace_roles (workspace_id, slug, name, description)
        VALUES ($1, $2, $3, $4)
@@ -88,6 +98,7 @@ export async function patchWorkspaceRole(c: Context<{ Bindings: Env }>): Promise
     if (current.builtin && input.name !== undefined && input.name !== current.name) {
       throw new RouteError('built-in roles keep their name', 'builtin_role_name', 422);
     }
+    if (input.name !== undefined) await refuseDuplicateName(work, input.name, roleId);
     await work.tx.query(
       `UPDATE workspace_roles SET name = COALESCE($3, name), description = COALESCE($4, description)
         WHERE workspace_id = $1 AND id = $2`,

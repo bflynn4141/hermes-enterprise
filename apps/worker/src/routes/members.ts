@@ -49,7 +49,7 @@ import {
   rebindMemberProvisioningOperation,
   requestMemberProvisioningCancellation,
 } from '../member-provisioning/service.js';
-import type { MemberRoleTemplate } from '@hermes/shared';
+import { MAX_ROLES_PER_MEMBER, type MemberRoleTemplate } from '@hermes/shared';
 import { roleSlugs } from '../domain/roles.js';
 
 export type MemberRole = 'admin' | 'member';
@@ -1009,7 +1009,10 @@ export async function patchMember(c: Context<{ Bindings: Env }>): Promise<Respon
 
     if (Array.isArray(input.reviewer_roles)) {
       // Reviewer roles are workspace roles now (decision C92): each must name one.
-      const requested = [...new Set(input.reviewer_roles.filter((role) => typeof role === 'string'))].slice(0, 10);
+      const requested = [...new Set(input.reviewer_roles.filter((role) => typeof role === 'string'))];
+      if (requested.length > MAX_ROLES_PER_MEMBER) {
+        throw new RouteError(`a person holds at most ${MAX_ROLES_PER_MEMBER} roles`, 'too_many_roles', 422);
+      }
       const known = await roleSlugs(work.tx, work.workspaceId);
       const unknown = requested.filter((role) => !known.has(role));
       if (unknown.length > 0) {
