@@ -1,0 +1,17 @@
+.admin-agents-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.015); }
+.admin-agents-list li + li { border-top: 1px solid var(--line); }
+.admin-agents-row { display: flex; align-items: center; gap: 16px; width: 100%; padding: 16px 20px; border: 0; background: transparent; color: var(--body); text-align: left; font: inherit; cursor: pointer; }
+.admin-agents-row:hover { background: rgba(255,255,255,.025); }
+.admin-agents-row:focus-visible { outline: 2px solid #9B9AE0; outline-offset: -2px; }
+.admin-agents-row-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 4px; min-width: 0; }
+.admin-agents-name { font-size: 15px; line-height: 22px; font-weight: 500; }
+.admin-agents-facts { color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.admin-agents-status { flex-shrink: 0; color: var(--muted); font-size: 13px; }
+.admin-agents-skill + .admin-agents-skill { border-top: 1px solid var(--line); padding-top: 16px; }
+.admin-agents-skill-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.admin-agents-skill-row p { margin: 4px 0 0; font-size: 13px; }
+.admin-agents-notice { margin: 0; color: var(--muted); font-size: 14px; }
+.admin-agents-error { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; color: #ffc7cb; }
+@container app-pane (max-width: 560px) {
+  .admin-agents-row { flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; }
+}

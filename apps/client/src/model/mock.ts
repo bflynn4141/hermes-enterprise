@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, type AgentDirectoryEntry, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -666,7 +666,11 @@ export function createMockBackend(input: MockOptions = {}) {
     data_boundary: 'Only completed runs you own are shown. A proposal uses verified excerpts from final user-visible messages; private traces, tool arguments/results, hidden reasoning, credentials, and other members\' work stay out.',
   });
   const confirmedNotes: ContextNote[] = [];
-  const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [] };
+  const agentPermissions: AgentPermissions = { agent_id: AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: false })), pending_approvals: [], pending_approvals_visible: true };
+  // Alex's private Finance agent as an Admin who does not own it sees it: the
+  // switches are there, and whatever is waiting behind them is not.
+  const ledgerPermissions: AgentPermissions = { agent_id: FINANCE_AGENT, revision: 0, operations: AGENT_OPERATION_CATALOG.filter((operation) => operation.id === 'prepare_drafts').map((operation) => ({ ...operation, tool_names: [...operation.tool_names], require_human_approval: true })), pending_approvals: [], pending_approvals_visible: seat !== 'admin' };
+  const permissionsFor = (agentId: string): AgentPermissions => agentId === FINANCE_AGENT ? ledgerPermissions : agentPermissions;
   if (options.pendingAgentApproval) agentPermissions.pending_approvals.push({ id: mockUuid(890), operation_id: 'save_review_notes', tool_name: 'save_review_note', arguments: { note: 'Mock review: evidence is incomplete.' }, run_id: mockUuid(891), created_at: iso() });
 
   const contextFields: { id: string; field: string; label: string; value: string | null; scope: 'reply' | 'future' | null; version: number }[] = [
@@ -717,6 +721,57 @@ export function createMockBackend(input: MockOptions = {}) {
       { path: 'max_candidates', label: 'Candidates per run', description: 'Maximum candidates per discovery run.', kind: 'integer', required: true, minimum: 1, maximum: 10, options: [] },
     ],
     updated_at: iso(),
+  };
+
+  let ledgerAssignment: EnterpriseSkillAssignment = {
+    id: mockUuid(73),
+    agent_id: FINANCE_AGENT,
+    agent_name: 'Ledger',
+    team: { id: mockUuid(74), slug: 'finance', name: 'Finance' },
+    skill_key: 'partner-invoice-review',
+    runtime_name: 'enterprise_bridge:partner-invoice-review',
+    name: 'Partner invoice review',
+    version: '1.0.1',
+    artifact_digest: null,
+    description: 'Check partner invoices against authorized terms and prepare them for Finance review.',
+    state: 'active',
+    revision: 1,
+    config: { duplicate_window_days: 90 },
+    capability_grants: ['partner.invoice.review'],
+    schedule: { enabled: false, interval_minutes: 360 },
+    human_review_required: true,
+    config_fields: [
+      { path: 'duplicate_window_days', label: 'Duplicate window', description: 'How many days of Finance records are checked for the same invoice number, payee and amount.', kind: 'integer', required: true, minimum: 1, maximum: 3650, options: [] },
+    ],
+    updated_at: iso(),
+  };
+  /** Admin → Agents. Configuration only, like the server: no session, run or waiting-action content. */
+  const agentDirectory = (): AgentDirectoryEntry[] => {
+    const maya = members.find((member) => member.id === MAYA_MEMBER);
+    const alex = members.find((member) => member.id === ALEX_MEMBER);
+    const required = (permissions: AgentPermissions) => permissions.operations
+      .filter((operation) => operation.require_human_approval)
+      .map((operation) => ({ id: operation.id, label: operation.label }));
+    const person = (member: MemberEntity | undefined) => member?.user_id ? { member_id: member.id, user_id: member.user_id, name: member.name } : null;
+    const items: AgentDirectoryEntry[] = [{
+      id: AGENT, name: partnershipsAgentName, responsibility: options.partnerWorkflow ? 'Partnerships Manager' : 'Partner Program',
+      status: 'started', context_scope: 'private', owner: person(maya),
+      role: partnerConfigured && maya?.user_id ? { team: { slug: 'partnerships', name: 'Partnerships' }, role_template_key: 'partnerships-agent', principal: person(maya)! } : null,
+      skills: [{ assignment_id: skillAssignment.id, skill_key: skillAssignment.skill_key, name: skillAssignment.name, version: skillAssignment.version, state: skillAssignment.state }],
+      runtime: { source: 'cloud_capacity', label: 'hermes-pool-03', state: 'connected' },
+      approvals: { revision: agentPermissions.revision, required: required(agentPermissions) },
+      viewer: { can_configure: true, can_view_conversations: true },
+    }];
+    if (alex?.user_id) items.push({
+      id: FINANCE_AGENT, name: 'Ledger', responsibility: 'Finance review',
+      status: 'started', context_scope: 'private', owner: person(alex),
+      role: partnerConfigured ? { team: { slug: 'finance', name: 'Finance' }, role_template_key: 'finance-agent', principal: person(alex)! } : null,
+      skills: [{ assignment_id: ledgerAssignment.id, skill_key: ledgerAssignment.skill_key, name: ledgerAssignment.name, version: ledgerAssignment.version, state: ledgerAssignment.state }],
+      runtime: { source: 'cloud_capacity', label: 'hermes-pool-04', state: 'connected' },
+      approvals: { revision: ledgerPermissions.revision, required: required(ledgerPermissions) },
+      viewer: { can_configure: true, can_view_conversations: false },
+    });
+    return items;
   };
 
   const history = empty
@@ -1723,18 +1778,27 @@ export function createMockBackend(input: MockOptions = {}) {
       if (old) confirmedNotes.splice(confirmedNotes.indexOf(old), 1, note); else confirmedNotes.push(note);
       return json(note);
     }
-    const permissionsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/permissions(?:/approvals/([^/]+))?$`));
+    const permissionsMatch = match(new RegExp(`^/w/${WS}/agents/(${AGENT}|${FINANCE_AGENT})/permissions(?:/approvals/([^/]+))?$`));
     if (permissionsMatch) {
-      if (method === 'GET') return json(agentPermissions);
+      const permissions = permissionsFor(permissionsMatch[1]!);
+      if (method === 'GET') return json(permissions);
       if (seat !== 'admin') return fail(403, 'not_admin');
       if (options.agentSettings === 'fail') return fail(503, 'fixture_write_failed');
       if (method === 'PATCH') {
-        if (options.agentSettings === 'conflict' || body.revision !== agentPermissions.revision) return fail(409, 'stale_revision');
-        const operation = agentPermissions.operations.find((row) => row.id === body.operation_id);
+        if (options.agentSettings === 'conflict' || body.revision !== permissions.revision) return fail(409, 'stale_revision');
+        const operation = permissions.operations.find((row) => row.id === body.operation_id);
         if (!operation) return fail(400, 'unknown_operation');
-        operation.require_human_approval = body.require_human_approval === true; agentPermissions.revision++;
-      } else agentPermissions.pending_approvals = agentPermissions.pending_approvals.filter((row) => row.id !== permissionsMatch[1]);
-      return json(agentPermissions);
+        operation.require_human_approval = body.require_human_approval === true; permissions.revision++;
+      } else {
+        if (!permissions.pending_approvals_visible) return fail(404, 'not_found');
+        permissions.pending_approvals = permissions.pending_approvals.filter((row) => row.id !== permissionsMatch[2]);
+      }
+      return json(permissions);
+    }
+    if (p('/admin/agents') && method === 'GET') {
+      if (seat !== 'admin') return fail(403, 'admin_required');
+      const items = agentDirectory();
+      return json({ items, total: items.length });
     }
     if (p('/files') && method === 'GET') return page(storedSources);
     if (p('/library-sources') && method === 'GET') return page(librarySources);
@@ -2089,20 +2153,23 @@ export function createMockBackend(input: MockOptions = {}) {
         return json({ superseded_handoff_id: handoff.id, handoff_id: successor.id, handoff_revision: 1, intake_event_id: mockUuid(651), payload_hash: hashForMock(82), source_run_id: RUN, finance_run_id: mockUuid(652), input_provenance: inputProvenance, created: true }, 201);
       }
     }
-    const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/${AGENT}/skill-assignments(?:/([^/]+))?$`));
+    const skillAssignmentsMatch = match(new RegExp(`^/w/${WS}/agents/(${AGENT}|${FINANCE_AGENT})/skill-assignments(?:/([^/]+))?$`));
     if (skillAssignmentsMatch) {
-      if (!skillAssignmentsMatch[1] && method === 'GET') return page([skillAssignment]);
-      if (skillAssignmentsMatch[1] === skillAssignment.id && method === 'PATCH') {
-        if (body.revision !== skillAssignment.revision) return fail(409, 'stale_revision');
-        skillAssignment = {
-          ...skillAssignment,
+      const ledger = skillAssignmentsMatch[1] === FINANCE_AGENT;
+      const current = ledger ? ledgerAssignment : skillAssignment;
+      if (!skillAssignmentsMatch[2] && method === 'GET') return page([current]);
+      if (skillAssignmentsMatch[2] === current.id && method === 'PATCH') {
+        if (body.revision !== current.revision) return fail(409, 'stale_revision');
+        const next: EnterpriseSkillAssignment = {
+          ...current,
           ...(body.state ? { state: body.state as 'active' | 'paused' } : {}),
           ...(body.config && typeof body.config === 'object' ? { config: body.config as Record<string, unknown> } : {}),
           ...(body.schedule && typeof body.schedule === 'object' ? { schedule: body.schedule as EnterpriseSkillAssignment['schedule'] } : {}),
-          revision: skillAssignment.revision + 1,
+          revision: current.revision + 1,
           updated_at: new Date().toISOString(),
         };
-        return json(skillAssignment);
+        if (ledger) ledgerAssignment = next; else skillAssignment = next;
+        return json(next);
       }
       return fail(404, 'not_found');
     }

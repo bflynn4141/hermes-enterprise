@@ -42,13 +42,13 @@ export function AppPane({ narrow, active, paneRef, firstRun = null }: { narrow: 
     }
     if (app.section === 'inbox') return app.view === 'request' ? <RequestReview id={app.id ?? null} /> : <InboxList />;
     if (app.section === 'members') return <Members />;
-    if (app.section === 'admin') return <AdminSettings view={app.view ?? 'Organization'} />;
+    if (app.section === 'admin') return <AdminSettings view={app.view ?? 'Organization'} id={app.id ?? null} />;
     if (app.section === 'history') return <History />;
     if (app.section === 'library') return <Library view={app.view ?? 'handoffs'} id={app.id ?? null} />;
     if (app.section === 'settings') return <Settings view={app.view ?? 'Notifications'} />;
     return <AgentOverview />;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, app.view]);
+  }, [key, app.view, app.id]);
 
   const agentView = app.section === 'agents';
   const requestView = app.section === 'inbox' && app.view === 'request';

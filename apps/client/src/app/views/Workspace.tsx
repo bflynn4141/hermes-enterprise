@@ -30,6 +30,7 @@ import { cloudConnectionErrorMessage, type CloudConnectionStatus } from '../../m
 import { Markdown } from '../chat/Markdown.js';
 import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
 import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
+import { AdminAgents } from './AdminAgents.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -1042,7 +1043,7 @@ export function Settings({ view }: { view: string }) {
   );
 }
 
-export function AdminSettings({ view }: { view: string }) {
+export function AdminSettings({ view, id = null }: { view: string; id?: string | null }) {
   const admin = useIsAdmin();
   const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
   if (!admin) return null;
@@ -1050,6 +1051,7 @@ export function AdminSettings({ view }: { view: string }) {
     <div className="admin-settings-view">
       {selected === 'Organization' && <OrganizationTab />}
       {selected === 'Inbox rules' && <InboxRulesTab />}
+      {selected === 'All agents' && <AdminAgents agentId={id} />}
       {selected === 'Agents' && <AgentsTab />}
       {selected === 'Slack' && <SlackTab />}
       {selected === 'Email' && <EmailTab />}

@@ -25,7 +25,7 @@ test('Admin owns workspace controls while Settings stays personal', async ({ pag
   await expect(app.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
   await expect(adminNav.getByRole('button', { name: 'Workspace details', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page).toHaveURL(/#admin\/Organization$/);
-  await expect(adminNav.getByRole('button')).toHaveCount(10);
+  await expect(adminNav.getByRole('button')).toHaveCount(11);
   await expect(adminNav.getByText('Agents', { exact: true })).toBeVisible();
   await expect(adminNav.getByText('Connections', { exact: true })).toBeVisible();
   await expect(adminNav.getByText('Intelligence', { exact: true })).toBeVisible();

@@ -30,6 +30,7 @@ export const ADMIN_SETTINGS_GROUPS = [
   {
     label: 'Agents',
     items: [
+      { id: 'All agents', label: 'All agents' },
       { id: 'Agents', label: 'Agent defaults' },
       { id: 'Provider keys', label: 'Model providers' },
       { id: 'Runtime capacity', label: 'Agent capacity' },
@@ -55,6 +56,7 @@ export const ADMIN_SETTINGS_LABELS: Readonly<Record<string, string>> = {
   'Inbox rules': 'Inbox rules',
   'Data and privacy': 'Data & privacy',
   Usage: 'Usage',
+  'All agents': 'All agents',
   Agents: 'Agent defaults',
   'Provider keys': 'Model providers',
   'Runtime capacity': 'Agent capacity',

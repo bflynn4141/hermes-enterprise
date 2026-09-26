@@ -50,7 +50,7 @@ export interface AuthAdapter {
    * that fake mode has a step-up of its own; the type keeps the null so a
    * caller written against the old seam still compiles.
    */
-  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key' | 'slack' | 'gmail' | 'runtime_capacity'): string | null;
+  stepUpUrl(returnTo: string, reason: 'decision' | 'provider_key' | 'slack' | 'gmail' | 'runtime_capacity' | 'agent_governance'): string | null;
   devUser(): string | null;
   setDevUser(id: string): void;
 }
