@@ -85,7 +85,12 @@ describe('official runtime on the restricted agent role', () => {
       expect(history.recent.map((turn) => turn.role)).toEqual(['user', 'assistant', 'tool']);
       const { rows } = await first.runtimeQuery<{ count: string }>('SELECT count(*)::text AS count FROM instruction_versions WHERE run_id=$1', [id]);
       expect(rows[0]?.count).toBe('1');
-      await expect(dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, { ...call, arguments: { body: 'Mutated instructions.' } })).rejects.toMatchObject({ reason: 'runtime_call_conflict' });
+      // After completion, the same native id with other arguments is a later
+      // turn's new call (providers reuse per-response ids); it runs once more.
+      const later = await dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, { ...call, arguments: { body: 'Mutated instructions.', sources: [] } });
+      expect(later.reply).toMatchObject({ ok: true });
+      const after = await first.runtimeQuery<{ count: string }>('SELECT count(*)::text AS count FROM instruction_versions WHERE run_id=$1', [id]);
+      expect(after.rows[0]?.count).toBe('2');
     } finally { await first.close(); await second.close(); }
   });
   it('answers a note on a malformed, unknown or foreign request with a reason the model can act on', async () => {
@@ -115,6 +120,30 @@ describe('official runtime on the restricted agent role', () => {
       expect(saved.events.filter((event) => event.kind === 'entity.updated')).toEqual([]);
       const { rows } = await store.runtimeQuery<{ count: string }>('SELECT count(*)::text AS count FROM request_notes WHERE request_id=$1', [own]);
       expect(rows[0]?.count).toBe('1');
+    } finally { await store.close(); }
+  });
+  it('treats a native call id reused by a later model turn as a new call, never as a mutated retry', async () => {
+    const fx = await seedWorkspace(); const store = makeDb(fx);
+    try {
+      const { id, remote } = await mappedRun(fx, store);
+      // DeepSeek-style providers number calls per response, so a later turn's
+      // first call reuses `call_0` after the earlier call already completed.
+      const call = (name: string, args: Record<string, unknown>) => ({ runtime_run_id: remote, tool_call_id: 'call_0', name, arguments: args });
+      expect((await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call('list_requests', {}))).reply).toMatchObject({ ok: true });
+      const second = await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call('propose_instruction', { body: 'Use published evidence.', sources: [] }));
+      expect(second.reply).toMatchObject({ ok: true });
+      const third = await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call('propose_instruction', { body: 'Cite the source.', sources: [] }));
+      expect(third.reply).toMatchObject({ ok: true });
+      // A replayed completed call still replays instead of running twice.
+      const replay = await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, call('propose_instruction', { body: 'Use published evidence.', sources: [] }));
+      expect(replay.reply).toEqual(second.reply);
+      const { rows } = await store.runtimeQuery<{ count: string }>('SELECT count(*)::text AS count FROM instruction_versions WHERE run_id=$1', [id]);
+      expect(rows[0]?.count).toBe('2');
+      // An unfinished call named by the same id still refuses different arguments.
+      const question = { runtime_run_id: remote, tool_call_id: 'call_7', name: 'ask_for_context', arguments: { key: 'deadline', question: 'When?' } };
+      expect((await dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, question)).reply).toEqual({ status: 'pending' });
+      await expect(dispatchRuntimeCall(store, fx.workspaceId, fx.agentId, { ...question, arguments: { key: 'deadline', question: 'Changed?' } }))
+        .rejects.toMatchObject({ reason: 'runtime_call_conflict' });
     } finally { await store.close(); }
   });
   it('rolls back both the tool write and its reserved trace when the callback fails', async () => {
