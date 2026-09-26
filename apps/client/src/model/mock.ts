@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -112,6 +112,8 @@ interface MockOptions {
   runtimeCapacityStepUp?: boolean;
   /** Admin → Roles writes answer `reauth_required` until the step-up cookie is set. */
   roleWritesStepUp?: boolean;
+  /** Approval rule and member role writes answer `reauth_required` until the step-up cookie is set. */
+  approvalWritesStepUp?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
    * (decision C39): headings, bold, a list, a table, inline and fenced code, a
@@ -383,9 +385,9 @@ export function createMockBackend(input: MockOptions = {}) {
   }
 
   const members: MemberEntity[] = [
-    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['partnerships', 'access', 'workspace_owner'], joined_at: iso(-4000), version: 1 },
+    { id: MAYA_MEMBER, user_id: USER, name: 'Maya Chen', email: 'maya@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['partnerships', 'access'], joined_at: iso(-4000), version: 1 },
     ...(empty ? [] : [
-      { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance', 'agent_admin'], joined_at: iso(-5000), version: 1 },
+      { id: ALEX_MEMBER, user_id: MEMBER_USER, name: 'Alex Rivera', email: 'alex@nous.example', role: 'admin' as const, status: 'active' as const, reviewer_roles: ['finance'], joined_at: iso(-5000), version: 1 },
     ]),
   ];
   // Pending invitations live here, not in the accepted-members mirror. Keeping
@@ -807,6 +809,25 @@ export function createMockBackend(input: MockOptions = {}) {
       .filter((agent) => agent.role?.team.slug === role.slug)
       .map((agent) => ({ agent_id: agent.id, name: agent.name, principal: { user_id: agent.role!.principal.user_id, name: agent.role!.principal.name } })),
   });
+
+  /**
+   * Approval routing, mirroring apps/worker/src/routes/approval-routes.ts: a
+   * saved rule per key, the catalog default otherwise, and the same refusals
+   * in the same order.
+   */
+  const savedApprovalRules = new Map<ApprovalRouteKey, { rule: ApprovalRouteRule; updated_at: string }>();
+  const approvalRouteViews = (): ApprovalRoute[] => APPROVAL_ROUTES.map((definition) => {
+    const saved = savedApprovalRules.get(definition.key);
+    const rule = saved?.rule ?? definition.default;
+    return {
+      key: definition.key, kind: definition.kind, label: definition.label, description: definition.description,
+      workflow_note: definition.workflow_note,
+      rule: { ...rule, roles: [...rule.roles] },
+      is_default: !saved,
+      updated_at: saved?.updated_at ?? null,
+    };
+  });
+  const approvalRouteView = (key: ApprovalRouteKey): ApprovalRoute => approvalRouteViews().find((route) => route.key === key)!;
 
   const history = empty
     ? []
@@ -1724,7 +1745,19 @@ export function createMockBackend(input: MockOptions = {}) {
       if (index < 0) return fail(404, 'not_found');
       const row = members[index]!;
       if (method === 'PATCH') {
-        row.role = body.role === 'admin' ? 'admin' : 'member';
+        // Same order as apps/worker/src/routes/members.ts `patchMember`.
+        if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+        const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+        if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+        if (row.user_id === viewerUserId) return fail(409, 'self_change', 'nobody changes their own role');
+        if (Array.isArray(body.reviewer_roles)) {
+          const requested = [...new Set(body.reviewer_roles.filter((slug): slug is string => typeof slug === 'string'))];
+          if (requested.length > MAX_ROLES_PER_MEMBER) return fail(422, 'too_many_roles', `a person holds at most ${MAX_ROLES_PER_MEMBER} roles`);
+          const unknown = requested.filter((slug) => !roles.some((role) => role.slug === slug));
+          if (unknown.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknown.join(', ')}`);
+          row.reviewer_roles = requested;
+        }
+        if (body.role === 'admin' || body.role === 'member') row.role = body.role;
         row.version += 1;
         return json(row);
       }
@@ -1778,13 +1811,57 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!roleMatch[2] && method === 'DELETE') {
         if (role.builtin) return fail(422, 'builtin_role', 'Built-in roles cannot be deleted.');
         if (roleView(role).members.length > 0) return fail(409, 'role_in_use', 'Someone holds this role.');
+        if ([...savedApprovalRules.values()].some((saved) => saved.rule.roles.includes(role.slug))) {
+          return fail(409, 'role_routed', 'approvals still go to this role; change them in Approvals first');
+        }
+        // A pending invitation's copy of the slug goes with the role.
+        for (const invitation of invitations) {
+          if (invitation.status === 'pending' && invitation.role_slugs?.includes(role.slug)) {
+            invitation.role_slugs = invitation.role_slugs.filter((slug) => slug !== role.slug);
+          }
+        }
         roles.splice(roles.indexOf(role), 1);
         return new Response(null, { status: 204 });
       }
       return fail(405, 'method_not_allowed');
     }
+    if (path === `/w/${WS}/approval-routes` || path.startsWith(`/w/${WS}/approval-routes/`)) {
+      if (method === 'GET' && p('/approval-routes')) {
+        return seat === 'admin' ? json({ items: approvalRouteViews() }) : fail(403, 'admin_required', 'Admin required.');
+      }
+      const routeMatch = match(new RegExp(`^/w/${WS}/approval-routes/([^/]+)$`));
+      if (!routeMatch || (method !== 'PUT' && method !== 'DELETE')) return fail(405, 'method_not_allowed');
+      const key = routeMatch[1] as ApprovalRouteKey;
+      if (!(APPROVAL_ROUTE_KEYS as readonly string[]).includes(key)) return fail(404, 'unknown_route', 'there is no approval called that');
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+      if (method === 'DELETE') {
+        if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+        if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+        savedApprovalRules.delete(key);
+        return json(approvalRouteView(key));
+      }
+      const parsed = approvalRouteUpdateSchema.safeParse(body);
+      if (!parsed.success) return fail(422, 'bad_rule', 'that is not a valid approval rule');
+      const rule = { ...parsed.data, roles: [...new Set(parsed.data.roles)] };
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+      if (!rule.admins && rule.roles.length === 0) return fail(422, 'no_approver', 'choose at least one group who can approve');
+      if (approvalRouteDefinition(key).kind === 'decision' && rule.approvals_required !== 1) {
+        return fail(422, 'decision_single_approver', 'one person makes this decision');
+      }
+      const unknown = rule.roles.filter((slug) => !roles.some((role) => role.slug === slug));
+      if (unknown.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknown.join(', ')}`);
+      savedApprovalRules.set(key, { rule, updated_at: iso(0) });
+      return json(approvalRouteView(key));
+    }
     if (p('/invitations') && method === 'GET') return seat === 'admin' ? page(invitations) : fail(403, 'admin_required');
     if (p('/invitations') && method === 'POST') {
+      // Same order as apps/worker/src/routes/members.ts `createInvitation`:
+      // the count before anything else, unknown roles once the Admin is known.
+      const requestedRoles = Array.isArray(body.role_slugs)
+        ? [...new Set(body.role_slugs.filter((slug): slug is string => typeof slug === 'string'))]
+        : [];
+      if (requestedRoles.length > MAX_ROLES_PER_MEMBER) return fail(422, 'too_many_roles', `a person holds at most ${MAX_ROLES_PER_MEMBER} roles`);
       if (!setupOnly && body.role_template_key !== undefined) {
         return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
       }
@@ -1798,9 +1875,13 @@ export function createMockBackend(input: MockOptions = {}) {
           trace_id: mockUuid(399),
         }, 409);
       }
+      if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      const unknownRoles = requestedRoles.filter((slug) => !roles.some((role) => role.slug === slug));
+      if (unknownRoles.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknownRoles.join(', ')}`);
       const row: InvitationEntity = {
         id: mockUuid(220 + invitations.length), email: String(body.email ?? ''),
         role: body.role === 'admin' ? 'admin' : 'member', status: 'pending', invited_at: iso(0),
+        role_slugs: requestedRoles,
         delivery_status: setupOnly ? 'not_required' : 'queued',
         ...(setupOnly ? {
           role_template_key: 'partnerships-agent' as const,

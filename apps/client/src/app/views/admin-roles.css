@@ -6,7 +6,7 @@
 .admin-roles-name { font-size: 15px; line-height: 22px; font-weight: 500; }
 .admin-roles-description { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 70ch; }
 .admin-roles-facts { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.admin-roles-fact-label { display: inline-block; min-width: 56px; color: var(--muted); }
+.admin-roles-fact-label { display: inline-block; min-width: 68px; color: var(--muted); }
 .admin-roles-textarea { width: 100%; min-height: 76px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); font: inherit; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; }
 .admin-roles-textarea:focus { border-color: #9B9AE0; }
 .admin-roles-people { display: flex; flex-direction: column; margin: 0; padding: 0; border: 0; min-width: 0; }

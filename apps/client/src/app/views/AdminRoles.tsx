@@ -6,11 +6,12 @@
 // Admin cannot add or remove themself: another Admin changes their roles, the
 // same rule as the member role switch.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ADMIN, BUILTIN_ROLE_SLUGS, LIB, type MemberEntity, type WorkspaceRole } from '@hermes/shared';
+import { ADMIN, BUILTIN_ROLE_SLUGS, LIB, type ApprovalRoute, type MemberEntity, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { useWorkspaceLists } from './lists.js';
+import { approvalsForRole } from './approval-routes.js';
 import './admin-roles.css';
 
 export const ADMIN_ROLES_VIEW = 'Roles';
@@ -60,6 +61,7 @@ export function roleErrorMessage(error: unknown): string {
     case 'builtin_role_name': return 'Built-in roles keep their name.';
     case 'builtin_role': return 'Built-in roles cannot be deleted.';
     case 'role_in_use': return 'Remove everyone from this role before deleting it.';
+    case 'role_routed': return 'Approvals still go to this role. Change them in Approvals first.';
     case 'unknown_member': return 'Someone on the list is no longer an active member. Reload and try again.';
     default: return 'Could not save. Nothing was changed. Try again.';
   }
@@ -90,8 +92,12 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
   const [roles, setRoles] = useState<WorkspaceRole[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // What each role approves, so roles and approvals read as one system. Only
+  // a hint here: if the rules cannot load, the rows simply leave it out.
+  const [routes, setRoutes] = useState<ApprovalRoute[]>([]);
   const load = useCallback(() => {
     setError(null);
+    void adapter.rest.listApprovalRoutes(state.workspace.id).then((list) => setRoutes(list.items)).catch(() => setRoutes([]));
     return adapter.rest.listRoles(state.workspace.id)
       .then((list) => setRoles(list.items))
       .catch(() => setError('Could not load the roles. Try again.'));
@@ -128,6 +134,7 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
     <ul className="admin-roles-list" aria-label="Roles">
       {sortRoles(roles).map((role) => {
         const agents = roleAgents(role);
+        const approves = approvalsForRole(routes, role.slug);
         return <li key={role.id}>
           <button type="button" className="admin-roles-row" onClick={() => nav({ ...ADMIN(ADMIN_ROLES_VIEW), id: role.id })}>
             <span className="admin-roles-name">{role.name}</span>
@@ -135,6 +142,7 @@ export function AdminRoles({ roleId }: { roleId: string | null }) {
             <span className="admin-roles-facts">
               <span><span className="admin-roles-fact-label">People</span> {roleHolders(role)}</span>
               {agents && <span><span className="admin-roles-fact-label">Agents</span> {agents}</span>}
+              {approves.length > 0 && <span><span className="admin-roles-fact-label">Approves</span> {approves.join(', ')}</span>}
             </span>
           </button>
         </li>;

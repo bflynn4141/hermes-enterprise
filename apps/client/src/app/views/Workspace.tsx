@@ -11,11 +11,11 @@
 // is not one.
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { FilterTable, InsightCards } from '@hermes/motion-components';
-import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
+import { ADMIN, CTX, LIB, MEMBERS, REQ, SETTINGS, memberProvisioningPresentation, type ApprovalRoute, type DataPrivacy, type DocumentEntity, type EnterpriseSkillAssignment, type EventRow, type InboundEmailConnection, type InboundEmailThreadImport, type InvitationEntity, type LibrarySource, type MaskedProviderKey, type MemberEntity, type MemberRoleTemplate, type OutboundEmailConnection, type SettingsView, type SlackConnection, type UsageRange, type UsageReport, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch, useEntity, useIsAdmin, useNav } from '../store-context.js';
 import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, MenuItem, Panel, Skeleton, Tabs, Toggle } from '../ui/primitives.js';
-import { ADMIN_SETTINGS_GROUPS, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
+import { ADMIN_SETTINGS_GROUPS, ADMIN_VIEW_ALIASES, DEFAULT_PROVIDER, EMPTY, LIBRARY_TABS, PROVIDER_CHOICES, SETTINGS_TABS } from '../../model/constants.js';
 import { LIST_KEYS, agentName, catalogRows, memberCounts, requestStatusLabel } from '../selectors.js';
 import { storeStepUp } from '../../model/auth.js';
 import { useWorkspaceLists } from './lists.js';
@@ -32,6 +32,9 @@ import { AdminSharedIntelligence } from './AdminSharedIntelligence.js';
 import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
+import { AdminApprovals } from './AdminApprovals.js';
+import { CanApprove, RoleChecklist, knownRoleSlugs } from './MemberRoles.js';
+import { memberRolesErrorMessage, needsSignIn } from './approval-routes.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
 /**
@@ -151,6 +154,9 @@ const invitationStatusLabel = (status: InvitationEntity['status']): string =>
 /** The pill's tone, and the only thing about a person this screen colours. */
 const statusTone = (label: string): string => (label === 'Joined' ? 'ok' : label === 'Expired' || label === 'Bounced' ? 'warn' : 'muted');
 
+/** Manage dialog notices that report success rather than a problem. */
+const MANAGE_OK = new Set(['Role updated.', 'Roles updated.']);
+
 function Pill({ children, tone = 'muted' }: { children: ReactNode; tone?: string }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
 }
@@ -172,6 +178,10 @@ export function Members() {
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  // Roles chosen in the Invite dialog, and the draft of a managed member's roles.
+  const [inviteRoles, setInviteRoles] = useState<string[]>([]);
+  const [manageRoles, setManageRoles] = useState<string[]>([]);
+  const [rolesProblem, setRolesProblem] = useState<unknown>(null);
   useEffect(() => { if (!admin && tab !== 'all') setTab('all'); }, [admin, tab]);
   // Role names for each person's role slugs. Admin only, like the slugs
   // themselves; if the list cannot load, the cards simply show no roles.
@@ -184,6 +194,17 @@ export function Members() {
       .catch(() => { if (live) setRoles([]); });
     return () => { live = false; };
   }, [adapter, admin, state.workspace.id]);
+  // Who approves what, for the "Can approve" lines. Admin only, like the page
+  // it comes from; if it cannot load, the lines are left out rather than guessed.
+  const [routes, setRoutes] = useState<ApprovalRoute[] | null>(null);
+  useEffect(() => {
+    if (!admin) { setRoutes(null); return; }
+    let live = true;
+    void adapter.rest.listApprovalRoutes(state.workspace.id)
+      .then((list) => { if (live) setRoutes(list.items); })
+      .catch(() => { if (live) setRoutes(null); });
+    return () => { live = false; };
+  }, [adapter, admin, state.workspace.id]);
   const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
   const setupRoles = state.capabilities.memberRoleTemplates;
   const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
@@ -194,6 +215,28 @@ export function Members() {
   const invitations = lists.invitations.filter((row) => row.status === 'pending' || row.status === 'expired');
   const person = manage ? all.find((member) => member.id === manage) ?? null : null;
   const isYou = person?.user_id === state.user.id;
+  const heldRoles = person ? knownRoleSlugs(person.reviewer_roles, roles) : [];
+  const draftRoles = knownRoleSlugs(manageRoles, roles);
+  const rolesChanged = draftRoles.length !== heldRoles.length || draftRoles.some((slug) => !heldRoles.includes(slug));
+  const stepUp = () => {
+    const url = adapter.auth.stepUpUrl(window.location.href, 'workspace_roles');
+    if (url) window.location.assign(url);
+  };
+  const saveRoles = () => {
+    if (!person) return;
+    setPending(`member:roles:${person.id}`);
+    setManageNotice(null);
+    setRolesProblem(null);
+    void adapter.rest
+      .setMemberRoles(state.workspace.id, person.id, draftRoles)
+      .then((next) => {
+        adapter.invalidateList('members');
+        setManageRoles(next.reviewer_roles);
+        setManageNotice('Roles updated.');
+      })
+      .catch(setRolesProblem)
+      .finally(() => setPending(null));
+  };
   const invitationsChanged = () => {
     adapter.invalidateList('invitations');
     adapter.invalidateList('members');
@@ -234,6 +277,7 @@ export function Members() {
           {admin && <Button onClick={() => {
             setNotice(null);
             setInviteError(null);
+            setInviteRoles([]);
             setInvite(true);
           }}>Invite member</Button>}
         </div>
@@ -280,6 +324,8 @@ export function Members() {
                     {admin && <div className="member-card-actions"><Button onClick={() => {
                       setNotice(null);
                       setManageNotice(null);
+                      setRolesProblem(null);
+                      setManageRoles(member.reviewer_roles);
                       setManage(member.id);
                     }}>Manage</Button></div>}
                   </div>
@@ -297,6 +343,7 @@ export function Members() {
                 : null;
               const status = provisioning?.label ?? invitationStatusLabel(row.status);
               const delivery = invitationDeliveryMessage(row);
+              const invitedRoles = roleNamesFor({ reviewer_roles: row.role_slugs ?? [] }, roles);
               return (
                 <div className="member-card member-invitation-card" role="listitem" key={row.id}>
                   <div className="member-card-identity">
@@ -307,6 +354,7 @@ export function Members() {
                         {row.provisioning && row.provisioning.delivery === 'not_queued' ? 'Setup requested' : 'Invited'}{' '}
                         {new Date(row.invited_at).toLocaleDateString()}
                       </span>
+                      {invitedRoles.length > 0 && <span className="member-card-roles">Gets {invitedRoles.join(', ')} when they join</span>}
                     </div>
                   </div>
                   <div className="member-card-facts">
@@ -375,14 +423,19 @@ export function Members() {
                 onClick={() => {
                   setPending('invite');
                   setInviteError(null);
-                  const request = setupOnly && selectedJobRole
-                    ? { email, role: 'member' as const, role_template_key: selectedJobRole }
-                    : { email, role: 'member' as const };
+                  const roleSlugs = knownRoleSlugs(inviteRoles, roles);
+                  const request = {
+                    email,
+                    role: 'member' as const,
+                    ...(setupOnly && selectedJobRole ? { role_template_key: selectedJobRole } : {}),
+                    ...(roleSlugs.length ? { role_slugs: roleSlugs } : {}),
+                  };
                   void adapter.rest
                     .invite(state.workspace.id, request)
                     .then((created) => {
                       invitationsChanged();
                       setEmail('');
+                      setInviteRoles([]);
                       setInvite(false);
                       setTab('invites');
                       showAck(invitationSuccessMessage(created));
@@ -412,6 +465,10 @@ export function Members() {
           {setupOnly && !setupRoles.includes('finance-agent') && <p className="meta">
             Finance appears here once a verified Finance instance is added under Admin → Agent capacity.
           </p>}
+          {roles.length > 0 && <div className="member-approvals">
+            <RoleChecklist roles={roles} selected={inviteRoles} disabled={pending === 'invite'} onChange={setInviteRoles} />
+            <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: inviteRoles }} />
+          </div>}
           {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
         </Dialog>
         <Dialog
@@ -422,6 +479,7 @@ export function Members() {
             setManage(null);
             setConfirmRemove(false);
             setManageNotice(null);
+            setRolesProblem(null);
           }}
           actions={
             confirmRemove ? (
@@ -464,7 +522,13 @@ export function Members() {
             {person?.email} · {person?.status}
           </p>
           {isYou ? (
-            <p>Your role is Admin. Another Admin changes it; you cannot remove yourself.</p>
+            <>
+              <p>Your role is Admin. Another Admin changes it; you cannot remove yourself.</p>
+              {roles.length > 0 && person && <div className="member-approvals">
+                <p className="member-approvals-line">Roles: {roleNamesFor(person, roles).join(', ') || 'None'}. Another Admin changes your own roles.</p>
+                <CanApprove routes={routes} person={person} />
+              </div>}
+            </>
           ) : confirmRemove ? (
             <p>{person?.name} loses access to this workspace. Nothing outside it changes and no email is sent from here.</p>
           ) : (
@@ -475,7 +539,7 @@ export function Members() {
                     key={role}
                     checked={person?.role === role}
                     disabled={pending?.startsWith('member:')}
-                    sub={role === 'admin' ? 'Manages members, keys and decisions' : 'Works with agents; cannot decide'}
+                    sub={role === 'admin' ? 'Manages members, keys and settings' : 'Works with agents; approves only what their roles allow'}
                     onClick={() => {
                       if (!person) return;
                       setPending(`member:role:${person.id}`);
@@ -494,6 +558,29 @@ export function Members() {
                   </MenuItem>
                 ))}
               </div>
+              {roles.length > 0 && person && <div className="member-approvals">
+                <RoleChecklist
+                  roles={roles}
+                  selected={draftRoles}
+                  disabled={pending?.startsWith('member:')}
+                  onChange={(next) => {
+                    setManageRoles(next);
+                    setManageNotice(null);
+                    setRolesProblem(null);
+                  }}
+                />
+                <CanApprove routes={routes} person={{ role: person.role, reviewer_roles: draftRoles }} />
+                <div className="member-approvals-actions">
+                  {rolesProblem !== null
+                    ? <p className="meta action-error" role="alert">
+                      {memberRolesErrorMessage(rolesProblem)} {needsSignIn(rolesProblem) && <Button link onClick={stepUp}>Sign in again</Button>}
+                    </p>
+                    : <span />}
+                  <Button disabled={!rolesChanged || pending?.startsWith('member:')} onClick={saveRoles}>
+                    {pending === `member:roles:${person.id}` ? 'Saving…' : 'Save roles'}
+                  </Button>
+                </div>
+              </div>}
               <div className="row">
                 <span className="meta grow">Role changes apply to this workspace only and are recorded in History.</span>
                 <Button link disabled={pending?.startsWith('member:')} onClick={() => {
@@ -505,7 +592,7 @@ export function Members() {
               </div>
             </>
           )}
-          {manageNotice && <p className={`meta${manageNotice === 'Role updated.' ? '' : ' action-error'}`} role={manageNotice === 'Role updated.' ? 'status' : 'alert'}>{manageNotice}</p>}
+          {manageNotice && <p className={`meta${MANAGE_OK.has(manageNotice) ? '' : ' action-error'}`} role={MANAGE_OK.has(manageNotice) ? 'status' : 'alert'}>{manageNotice}</p>}
         </Dialog>
       </div>
     </div>
@@ -1061,13 +1148,14 @@ export function Settings({ view }: { view: string }) {
 
 export function AdminSettings({ view, id = null }: { view: string; id?: string | null }) {
   const admin = useIsAdmin();
-  const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === view)) ? view : 'Organization';
+  const current = ADMIN_VIEW_ALIASES[view] ?? view;
+  const selected = ADMIN_SETTINGS_GROUPS.some((group) => group.items.some((item) => item.id === current)) ? current : 'Organization';
   if (!admin) return null;
   const panel = (
     <div className="admin-settings-view">
       {selected === 'Organization' && <OrganizationTab />}
       {selected === 'Roles' && <AdminRoles roleId={id} />}
-      {selected === 'Inbox rules' && <InboxRulesTab />}
+      {selected === 'Approvals' && <AdminApprovals routeKey={id} />}
       {selected === 'All agents' && <AdminAgents agentId={id} />}
       {selected === 'Agents' && <AgentsTab />}
       {selected === 'Slack' && <SlackTab />}
@@ -1763,28 +1851,6 @@ function OrganizationTab() {
         {reauthed && <p className="meta">Re-authenticated — confirm to continue.</p>}
         <p>The workspace stops being scheduled for destruction. Sessions stay read-only until somebody puts them back deliberately: a cancel that silently resumed every run would resume runs that have been stopped for days against a world that moved on.</p>
       </Dialog>
-    </>
-  );
-}
-
-function InboxRulesTab() {
-  return (
-    <>
-      <header className="admin-detail-heading"><div><h2>Inbox rules</h2><p>Human approval requirements for workspace actions.</p></div></header>
-      <AdminSettingsCard title="Required reviews" description="Admissions, documents, and external actions require a human.">
-      {[
-        ['Program admission and benefits', 'Admin'],
-        ['Document creation', 'Admin'],
-        ['Payment', 'Admin + Finance'],
-        ['Signing and external sending', 'Separate review'],
-      ].map(([rule, who]) => (
-        <div className="kv" key={rule}>
-          <span className="grow">{rule}</span>
-          <span className="meta">{who}</span>
-        </div>
-      ))}
-      </AdminSettingsCard>
-      <p className="meta">These approval requirements are enforced automatically and cannot be turned off here.</p>
     </>
   );
 }
