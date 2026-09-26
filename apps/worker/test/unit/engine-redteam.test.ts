@@ -93,6 +93,29 @@ describe('a model that tries to decide', () => {
     expect(db.requests).toHaveLength(1);
     expect(db.requests[0]?.status).toBe('pending');
   });
+
+  it('cannot claim a request came from a handoff: workflow_provenance is server-owned', async () => {
+    const db = new FakeAgentDb();
+    await runHarness(
+      [
+        {
+          events: [
+            toolCall('call_1', 'propose_request', {
+              kind: 'application',
+              payload: { ...APPLICATION, workflow_provenance: { handoff_key: 'contractor-agreements' } },
+            }),
+            usage(),
+            stop('tool_use'),
+          ],
+        },
+        { events: [textDelta('Done.'), usage(), stop('end_turn')] },
+      ],
+      { db },
+    );
+    expect(db.requests).toHaveLength(0);
+    const toolTurn = db.turns.find((t) => t.toolCallId === 'call_1');
+    expect(String(toolTurn?.providerMessage.content)).toMatch(/workflow_provenance is set by the server/);
+  });
 });
 
 describe('injected instructions inside applicant text', () => {

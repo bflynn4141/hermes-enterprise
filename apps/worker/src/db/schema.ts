@@ -192,6 +192,8 @@ export const workspaceSettings = pgTable('workspace_settings', {
   maxConcurrentRuns: integer('max_concurrent_runs').notNull().default(3),
   flags: jsonb('flags').notNull().default({}),
   timezone: text('timezone').notNull().default('UTC'),
+  // 0071: the party name documents use. Null means the workspace name.
+  legalName: text('legal_name'),
   updatedAt: now('updated_at'),
 });
 
@@ -1073,6 +1075,19 @@ export const effects = pgTable('effects', {
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
+
+// 0071: one row per distinct holder who pressed Execute. The effect runs when
+// these reach `approvals_required`.
+export const effectConfirmations = pgTable(
+  'effect_confirmations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    effectId: uuid('effect_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.effectId, t.userId] })],
+);
 
 export const requestNotes = pgTable('request_notes', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -2370,6 +2385,7 @@ export const ALL_TABLES = {
   partner_screening_run_candidates: partnerScreeningRunCandidates,
   decisions,
   effects,
+  effect_confirmations: effectConfirmations,
   request_notes: requestNotes,
   approval_resources: approvalResources,
   approval_policies: approvalPolicies,

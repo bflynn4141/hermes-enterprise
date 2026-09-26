@@ -131,6 +131,8 @@ export const settingsViewSchema = z
       })
       .strict(),
     timezone: z.string().max(64),
+    /** The party name on agreements; null means the workspace name. */
+    legal_name: z.string().max(200).nullable().default(null),
     flags: z.record(z.string(), z.unknown()),
     fetch_url_allowlist: z.array(z.string().max(200)).max(100),
     notifications: notificationSettingsSchema,

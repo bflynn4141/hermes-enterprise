@@ -603,6 +603,12 @@ const proposeRequest: ToolDefinitionEntry = {
     if (kind === 'approval' || kind === 'task') {
       return { ok: false, error: 'enterprise approvals must use propose_approval so policy and authorization are server-derived', permanent: true };
     }
+    // Provenance is written by the server when it creates a handoff request.
+    // The Inbox and decision route no longer read it for authority, but an
+    // agent-supplied copy would still misdescribe where a request came from.
+    if (args.payload && typeof args.payload === 'object' && 'workflow_provenance' in args.payload) {
+      return { ok: false, error: 'workflow_provenance is set by the server; remove it and propose the request again' };
+    }
     let payload: unknown;
     try {
       payload = parseRequestPayload(kind, args.payload);

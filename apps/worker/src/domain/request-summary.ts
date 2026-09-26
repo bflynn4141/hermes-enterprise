@@ -2,6 +2,7 @@
 // comes from the authenticated tenant role or the snapshotted approval policy.
 import { approvalPayloadSchema, type ApprovalListProjection, type RequestDecisionSummary } from '@hermes/shared';
 import type { RequestRow } from './requests.js';
+import { financeWorkflowRequest } from './finance-decidable.js';
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -111,9 +112,7 @@ export function decisionSummary(row: RequestRow, approval: ApprovalListProjectio
   }
   const payload = record(row.payload);
   const needsDecision = row.status === 'pending' && ['application', 'invoice', 'agreement'].includes(row.kind);
-  const legacyReviewerLabel = row.kind === 'invoice' && 'workflow_provenance' in payload
-    ? 'Finance reviewer'
-    : 'Workspace Admin';
+  const legacyReviewerLabel = financeWorkflowRequest(row) ? 'Finance reviewer' : 'Workspace Admin';
   const single = {
     mode: 'single' as const,
     completed_steps: row.status === 'pending' ? 0 : 1,

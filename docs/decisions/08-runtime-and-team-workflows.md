@@ -1463,7 +1463,40 @@ matrix.
 
 **Why.** Library navigation, API discovery, and future workflows need one durable object to name, admit, and render. The Handoffs UI routes work through Inbox application and agreement requests rather than invoice intake forms. When admission is enabled, approving an application creates one pending Finance agreement draft linked by `workflow_provenance` (`partner-contractor-agreement:{applicationId}`); Handoffs In motion shows the pair. Admission reads and writes go through the handoff row; the settings table remains a compatibility mirror updated on every handoff admission change. Existing `POST /w/:ws/partner-workflow/*` routes are unchanged; list/detail live at `GET /w/:ws/handoffs` and `GET /w/:ws/handoffs/:id`. The client mounts the redesigned page on Library → Handoffs.
 
-## C90. Admins govern every agent, not its conversations
+## C90. Authority comes from server-written keys; payments need two people
+
+**Decided September 26, 2026** (roles-and-agents plan, piece 0; see
+`docs/ROLES-AND-AGENTS-PLAN.md`).
+
+- A Finance reviewer, not only an Admin, may decide a legacy request only when
+  its `subject_key` is `partner-invoice-handoff:` or
+  `partner-contractor-agreement:`. `domain/finance-decidable.ts` holds the rule
+  once, and the decision route, the Inbox counts, "can I decide this" and the
+  reviewer label all use it. The payload's `workflow_provenance` no longer
+  grants anything, and `propose_request` refuses an agent payload that carries
+  it.
+- A payment effect executes only after two distinct holders of the Finance role
+  press Execute. Each press is a row in `effect_confirmations` (migration
+  0071); the same person pressing twice counts once, and the effect row is
+  locked for the press so two holders cannot both complete the count.
+- Agreements name the workspace's `legal_name` (Admin setting, falling back to
+  the workspace name) as the first party instead of a hardcoded company.
+
+**Why.** An agent can write any payload, including one copied from a real
+handoff, so a payload field cannot confer authority; only server code can
+produce those subject-key prefixes (`engine/tools.ts` `subjectKeyFor`). The
+two-person payment rule had been stored in `effects.approvals_required` since
+0002 but never checked. The hardcoded party would have been wrong for every
+workspace but one.
+
+**Evidence.** `test/db/handoffs.test.ts` keeps an invoice with forged
+provenance Admin-only at the route and in the Inbox (it fails against the
+previous checks), and checks the agreement's first party.
+`test/db/effects.test.ts` walks the payment through a first confirmation, a
+repeated press that does not count, and a second holder's press.
+`test/unit/engine-redteam.test.ts` covers the refused proposal.
+
+## C91. Admins govern every agent, not its conversations
 
 **Decided September 26, 2026.** An Admin may change the role and the
 permissions of any agent in the workspace, including another member's private
