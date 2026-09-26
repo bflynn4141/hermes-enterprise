@@ -11,6 +11,20 @@ updates:
         dependency-type: production
       development-dependencies:
         dependency-type: development
+    # Majors that need their own migration, not a version bump (Sep 26, 2026, #179).
+    # Remove an entry once its blocker is resolved.
+    ignore:
+      # TypeScript 7 drops baseUrl and the JS compiler API that
+      # scripts/check-import-cycles.mjs uses, and rejects side-effect .css imports.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      # @cloudflare/vitest-pool-workers supports only Vitest 4.
+      - dependency-name: vitest
+        update-types: [version-update:semver-major]
+      # Sentry 11 replaces sendDefaultPii with dataCollection, which collects user
+      # data unless set; src/ops/sentry.ts depends on that staying off.
+      - dependency-name: '@sentry/cloudflare'
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
