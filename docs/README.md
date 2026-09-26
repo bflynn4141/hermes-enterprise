@@ -23,7 +23,7 @@ dated evidence and proposals that may no longer describe current behavior.
 | Hermes runtime | [Official runtime integration](HERMES-AGENT-RUNTIME.md), [cloud management](CLOUD-MANAGEMENT.md), [enterprise skills](ENTERPRISE-SKILLS.md) |
 | Team workflows | [Partnerships and Finance](PARTNER-FINANCE-WORKFLOW.md), [partner screening](PARTNER-SCREENING.md), [inbound email evidence](INBOUND-EMAIL-EVIDENCE.md) |
 | Provider and identity | [Nous Portal OAuth](NOUS-PORTAL-OAUTH.md), [WorkOS production checklist](WORKOS-PRODUCTION-CHECKLIST.md) |
-| Product behavior | [Prompt navigation](PROMPT-NAVIGATION.md), [Iris latency](IRIS-LATENCY.md), [Raindrop observability](RAINDROP-OBSERVABILITY.md) |
+| Product behavior | [Product walkthrough](WALKTHROUGH.md), [prompt navigation](PROMPT-NAVIGATION.md), [Iris latency](IRIS-LATENCY.md), [Raindrop observability](RAINDROP-OBSERVABILITY.md) |
 
 ## Dated delivery evidence and proposals
 

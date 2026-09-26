@@ -53,6 +53,13 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
     const { createMockBackend } = await import('./model/mock.js');
     const params = new URL(window.location.href).searchParams;
     const recovery = params.get('recovery');
+    // A reset starts the story over once; the address keeps playing it, so a
+    // person switch (a reload) does not reset it again.
+    if (params.get('walkthrough') === 'reset') {
+      const next = new URL(window.location.href);
+      next.searchParams.set('walkthrough', '1');
+      window.history.replaceState(null, '', next);
+    }
     const backend = createMockBackend({
       agentless: params.get('agent') === 'none',
       agentSettings: params.get('agentSettings') === 'fail' ? 'fail' : params.get('agentSettings') === 'conflict' ? 'conflict' : params.has('agentSettings') ? 'ok' : undefined,
@@ -83,6 +90,7 @@ async function buildAdapter(workspaceId: string): Promise<Adapter> {
         : params.get('workflowRole') === 'finance' ? 'finance'
           : params.get('workflowRole') === 'unrelated' ? 'unrelated'
             : params.get('workflowRole') === 'admin' ? 'admin' : undefined,
+      walkthrough: params.get('walkthrough') === 'reset' ? 'reset' : params.get('walkthrough') === '1' ? 'play' : undefined,
       workflowActivation: params.get('workflowActivation') === 'native-mismatch' ? 'native-mismatch'
         : params.get('workflowActivation') === 'binding-drift' ? 'binding-drift'
           : params.get('workflowActivation') === 'success' ? 'success' : undefined,

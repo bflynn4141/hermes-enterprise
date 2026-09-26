@@ -1,7 +1,5 @@
 # Hermes Teams Demo
 
-https://github.com/user-attachments/assets/ca65510c-e7b3-47cc-8caf-b80d9a4b95d5
-
 Most teams want to work with Hermes, but they do not know how to fit an agent
 into the way their organization already works. Some teams use one agent. Others
 coordinate several. Hermes Teams gives either group one workspace where it can
@@ -26,6 +24,18 @@ During workspace setup, the creator chooses the first agent's name. The product
 does not require a fixed agent name. Each role keeps its own sessions and private
 context; only the approved handoff fields cross between Partnerships and
 Finance.
+
+## Product Walkthrough
+
+https://github.com/user-attachments/assets/b9d864c0-0ead-41e5-8e37-3d6cc326100b
+
+Maya runs Partnerships with an agent called Scout. Scout finds and scores
+workshop partners, and Maya approves one and hands the deal to Finance. Alex
+reviews it in Finance with an agent called Ledger, which drafts the services
+agreement. After Alex approves it, the agreement comes back to Maya, ready to
+sign. The recording uses the real interface with scripted agent replies and
+fictional data; [Product walkthrough](docs/WALKTHROUGH.md) explains what is
+scripted.
 
 ## Try the hosted demo
 

@@ -994,7 +994,9 @@ function SavedDocument({ id }: { id: string }) {
         <span className="grow" />
         <span className="meta">Saved document · Reopening cannot create it again</span>
       </div>
-      {requestRecord.data ? <DocumentView request={requestRecord.data} document={record.data} readOnly /> : <Skeleton rows={4} />}
+      {requestRecord.data ? <DocumentView request={requestRecord.data} document={record.data} readOnly />
+        : requestRecord.state === 'loading' ? <Skeleton rows={4} />
+          : <EmptyState icon="invoice" title="Review unavailable" detail="The request behind this document is not visible to you." />}
     </div>
   );
 }
