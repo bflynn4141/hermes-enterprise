@@ -3033,7 +3033,7 @@ function PrivacyTab({ adminControls = false }: { adminControls?: boolean }) {
           <div className="stat-grid">
             <div className="stat">
               <span className="k">Removed from Hermes</span>
-              <span className="v">{privacy.erasure.tombstone === 'immediate' ? 'Right away' : privacy.erasure.tombstone}</span>
+              <span className="v">{privacy.erasure.tombstone === 'immediate' ? 'Right away' : 'Soon after you ask'}</span>
             </div>
             <div className="stat">
               <span className="k">Database recovery history</span>
