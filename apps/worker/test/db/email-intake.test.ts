@@ -171,6 +171,13 @@ async function approve(fx: Seeded, userId: string, requestId: string): Promise<A
   return await response.json() as ApprovalView;
 }
 
+/** The History page as the seeded Admin sees it. */
+async function historyItems(fx: { workspaceId: string; adminId: string }): Promise<{ kind: string; text: string; status: string; request_id: string | null }[]> {
+  const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/history`);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { items: { kind: string; text: string; status: string; request_id: string | null }[] }).items;
+}
+
 describe('email intake', () => {
   beforeAll(() => { created.length = 0; });
 
@@ -318,6 +325,9 @@ describe('email intake', () => {
     ))[0];
     expect(after).toMatchObject({ state: 'simulated', effect_status: 'simulated' });
     expect(after?.provider_message_id).toMatch(/^SIM-/u);
+    // History says plainly that nothing left.
+    const simulatedRow = (await historyItems(fx)).find((row) => row.kind === 'outbound_email.simulated');
+    expect(simulatedRow).toMatchObject({ text: 'Practice send: Reply to Priya Raman', status: 'Not sent' });
 
     // In production the same row waits for a real sender instead.
     await finishRun(fx, runId);
@@ -401,6 +411,10 @@ describe('email intake', () => {
     expect((await asUser(env, fx.adminId, complete, { method: 'POST', headers: INBOX_HEADERS })).status).toBe(204);
     const status = (await scoped<{ status: string }>(fx.workspaceId, `SELECT status FROM requests WHERE id=$1`, [handoff.request_id]))[0]?.status;
     expect(status).toBe('approved');
+    // History reads it as a transfer to a team, and as finished once handled.
+    const rows = (await historyItems(fx)).filter((row) => row.request_id === handoff.request_id);
+    expect(rows.find((row) => row.kind === 'request.created')).toMatchObject({ text: expect.stringMatching(/ handed “Invoice NW-9” to Finance$/u), status: 'Handled' });
+    expect(rows.find((row) => row.kind === 'email_handoff.completed')).toMatchObject({ text: expect.stringMatching(/ marked “Invoice NW-9” handled$/u), status: 'Handled' });
   });
 
   it('deletes the stored copies and withdraws the agent tools when the inbox is removed', async () => {

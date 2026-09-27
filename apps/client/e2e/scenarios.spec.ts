@@ -11,7 +11,6 @@
 // need the worker: they assert what the *server* does. They are listed in the
 // spec and land with the M2 routes; `E2E_BASE_URL` points this config at them.
 import { expect, test } from '@playwright/test';
-import { mockUuid } from '@hermes/shared';
 
 const EMPTY_WORKSPACE = '/?data=empty&key=none';
 const SEEDED = '/';
@@ -193,7 +192,7 @@ test.describe('members write feedback', () => {
     const lena = app.getByRole('listitem').filter({ hasText: 'lena@nous.example' });
     await lena.getByRole('button', { name: 'Resend' }).click();
     await expect(app.getByRole('alert')).toHaveText(
-      `No verified agent profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+      'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.',
     );
     await expect(app.getByText('Invitation resent')).toHaveCount(0);
 
@@ -206,7 +205,7 @@ test.describe('members write feedback', () => {
     await email.fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
     await expect(invite.getByRole('alert')).toHaveText(
-      `No verified agent profile is available. Add ready capacity, then try again. Reference: ${mockUuid(399)}.`,
+      'There is no agent ready for a new member. Add one under Admin → Agent capacity, then try again.',
     );
     await expect(email).toHaveValue('new.member@example.com');
     await invite.getByRole('button', { name: 'Cancel' }).click();
@@ -230,7 +229,7 @@ test.describe('members write feedback', () => {
     await app.getByRole('button', { name: 'Invite member' }).click();
     const invite = page.getByRole('dialog', { name: 'Invite member' });
     await expect(invite.getByText('Job role')).toHaveCount(0);
-    await expect(invite.getByText('Capacity is reserved automatically. Email delivery status is confirmed after the invitation is recorded.')).toBeVisible();
+    await expect(invite.getByText('Hermes sets aside an agent for them. Their card shows whether the invitation email was sent.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('new.member@example.com');
     await invite.getByRole('button', { name: 'Send invitation' }).click();
 
@@ -238,7 +237,7 @@ test.describe('members write feedback', () => {
     await expect(app.getByText('new.member@example.com')).toBeVisible();
     await expect(app.getByText('Invitation queued')).toBeVisible();
     const created = app.getByRole('listitem').filter({ hasText: 'new.member@example.com' });
-    await expect(created.getByText('Email delivery queued')).toBeVisible();
+    await expect(created.getByText('Invitation email waiting to send')).toBeVisible();
     await expect(created.getByText('Setting up agent')).toHaveCount(0);
   });
 
@@ -253,7 +252,7 @@ test.describe('members write feedback', () => {
     await expect(invite.getByRole('option', { name: 'Finance' })).toHaveCount(0);
     await invite.getByRole('combobox').selectOption('partnerships-agent');
     await expect(invite.getByRole('combobox')).toHaveValue('partnerships-agent');
-    await expect(invite.getByText('Hermes prepares verified capacity in the background. No invitation email is queued until setup is verified.')).toBeVisible();
+    await expect(invite.getByText('Hermes sets up an agent for them first. The invitation email goes out once it is ready.')).toBeVisible();
     await invite.getByRole('textbox', { name: 'Work email' }).fill('partnerships.setup@example.com');
     await invite.getByRole('button', { name: 'Start setup' }).click();
 
@@ -263,7 +262,7 @@ test.describe('members write feedback', () => {
     await expect(created.getByText('Setting up agent').first()).toBeVisible();
     await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
     await expect(created.getByText('Partnerships', { exact: true })).toBeVisible();
-    await expect(created.getByText('Email delivery queued')).toHaveCount(0);
+    await expect(created.getByText('Invitation email waiting to send')).toHaveCount(0);
   });
 
   test('flag-off existing setup is shown as paused and remains cancellable', async ({ page }) => {

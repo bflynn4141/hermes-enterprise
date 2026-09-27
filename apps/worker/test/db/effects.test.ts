@@ -172,13 +172,14 @@ describe('executing an effect', () => {
       expect(audit.rowCount).toBe(1);
     });
 
-    // History says simulated, in the row's own summary.
+    // History says it was a practice run, in the row's own summary.
     const history = await asUser(simulated, fx.adminId, `/w/${fx.workspaceId}/history`);
     const items = ((await history.json()) as { items: { kind: string; text: string; detail: string; status: string }[] }).items;
     const row = items.find((item) => item.kind === 'effect.executed');
-    expect(row?.status).toBe('simulated');
-    expect(row?.text).toMatch(/simulated Pay the invoice/);
-    expect(row?.detail).toBe(body.simulation?.summary);
+    expect(row?.status).toBe('Practice run');
+    expect(row?.text).toMatch(/did a practice run of the payment/);
+    expect(row?.detail).toContain(body.simulation?.summary);
+    expect(row?.detail).toMatch(/Nothing really happened/);
   });
 
   it('stays unavailable, with no simulation record, when the variable is unset', async () => {

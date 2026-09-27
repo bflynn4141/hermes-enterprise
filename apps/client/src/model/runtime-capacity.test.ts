@@ -88,8 +88,8 @@ describe('runtime capacity contracts', () => {
   it('never includes an untrusted server error or secret in operator copy', () => {
     const error = new RestError(409, 'capacity_not_ready', 'control-secret private@example.test', null, 'trace-safe');
     const copy = runtimeCapacityErrorMessage(error, 'register');
-    expect(copy).toContain('did not prove');
-    expect(copy).toContain('trace-safe');
+    expect(copy).toContain('did not pass');
+    expect(copy).not.toContain('trace-safe');
     expect(copy).not.toContain('control-secret');
     expect(copy).not.toContain('private@example.test');
   });

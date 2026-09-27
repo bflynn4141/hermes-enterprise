@@ -10,14 +10,14 @@ test('Connections keeps Gmail read evidence separate from the outbound sender', 
   await pane.getByRole('tab', { name: 'Connections' }).click();
 
   await expect(pane.getByText(/Read-only Gmail · iris-evidence@example.com/)).toBeVisible();
-  await expect(pane.getByText('Separate gmail.readonly consent')).toBeVisible();
-  await expect(pane.getByText(/Outbound sender · iris-partners@example.com/)).toBeVisible();
-  await expect(pane.getByText('Read permission is never reused as send permission.')).toBeVisible();
-  await expect(pane.getByText('This is an operator proof, not a finished end-user thread picker.', { exact: false })).toBeVisible();
+  await expect(pane.getByText('Read only', { exact: true })).toBeVisible();
+  await expect(pane.getByText(/Sending from iris-partners@example.com/)).toBeVisible();
+  await expect(pane.getByText('Permission to read is never used to send.', { exact: false })).toBeVisible();
+  await expect(pane.getByText('Saving never sends email.', { exact: false })).toBeVisible();
 
-  await pane.getByLabel('Gmail thread ID').fill('thread_1234');
-  await pane.getByRole('button', { name: 'Import evidence' }).click();
-  await expect(pane.getByText('Thread imported as immutable Library evidence.')).toBeVisible();
-  await expect(pane.getByText(/Sent 0 messages/)).toBeVisible();
+  await pane.getByLabel('Conversation ID').fill('thread_1234');
+  await pane.getByRole('button', { name: 'Save to Library' }).click();
+  await expect(pane.getByText(/Saved to your Library\./)).toBeVisible();
+  await expect(pane.getByText(/Nothing was sent\./)).toBeVisible();
   await expect(pane.getByText('1', { exact: true }).first()).toBeVisible();
 });

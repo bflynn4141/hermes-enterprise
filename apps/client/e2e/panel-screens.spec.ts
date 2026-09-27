@@ -112,7 +112,7 @@ const PAGES: { key: string; go: (page: Page) => Promise<void>; ready: (page: Pag
       await nav(page, 'Library').click();
       await app(page).getByRole('tab', { name: 'Connections' }).click();
     },
-    ready: async (page) => void (await expect(app(page).getByText('Connect read-only Gmail evidence')).toBeVisible()),
+    ready: async (page) => void (await expect(app(page).getByText('Connect read-only Gmail', { exact: true })).toBeVisible()),
   },
   {
     key: 'library-intelligence',

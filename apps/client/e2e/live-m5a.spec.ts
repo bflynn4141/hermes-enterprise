@@ -300,7 +300,7 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await expect(
     app.getByText('Estimated, billed by your provider. These figures are our arithmetic over published prices; your provider invoices your own key and is the authority.'),
   ).toBeVisible({ timeout: 20_000 });
-  await expect(app.getByText('Tokens', { exact: true })).toBeVisible();
+  await expect(app.getByText('Model usage', { exact: true })).toBeVisible();
 
   // The number is the run's, not zero: this is the regression test for the
   // shape mismatch that used to make every usage call a `contract_violation`.
@@ -309,7 +309,7 @@ test('M4 · Settings → Usage shows the run\'s tokens and the server\'s disclai
   await expect(app.getByText(total.toLocaleString(), { exact: true }).first()).toBeVisible();
 
   // By session and by key are the same report, regrouped client-side.
-  await app.getByRole('tab', { name: 'By session' }).click();
+  await app.getByRole('tab', { name: 'By conversation' }).click();
   await expect(app.getByText('M4 usage').first()).toBeVisible();
   await context.close();
 });
@@ -474,8 +474,8 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   await expect(app.getByText('No documents created yet.')).toBeVisible();
   // Connections now report the real, unconfigured state of each source.
   await app.getByRole('tab', { name: 'Connections' }).click();
-  await expect(app.getByText('Read-only Gmail is not configured')).toBeVisible();
-  await expect(app.getByText('Outbound sender is not connected')).toBeVisible();
+  await expect(app.getByText('Read-only Gmail is not available yet')).toBeVisible();
+  await expect(app.getByText('No sending account connected')).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Usage');
   await expect(app.getByText('No usage yet')).toBeVisible({ timeout: 15_000 });
@@ -486,13 +486,13 @@ async function sweepEmptyStates(page: Page): Promise<void> {
   // is the honest shape: "no models" would be wrong, and a silent list of
   // disabled rows would be worse. Only Nous Portal rows are listed, because the
   // others are not offered by this deployment at all (decision R12).
-  await expect(app.getByRole('radio', { name: /Catalog sync required/ })).toBeDisabled();
-  await expect(app.getByText('Daily token cap')).toBeVisible();
+  await expect(app.getByRole('radio', { name: /Check the Nous Portal connection/ })).toBeDisabled();
+  await expect(app.getByText('Daily usage limit')).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Data & privacy');
   await expect(app.getByText('No provider is configured, so no prompt text leaves this workspace.')).toBeVisible({ timeout: 15_000 });
   // The retention facts are the server's and are there with or without a key.
-  await expect(app.getByText('Database point-in-time history')).toBeVisible();
+  await expect(app.getByText('Database recovery history').first()).toBeVisible();
   await expect(app.getByText('Erasure is therefore complete 30 days after you ask', { exact: false })).toBeVisible();
 
   await openAdminPage(page, 'Organization', 'Workspace details');

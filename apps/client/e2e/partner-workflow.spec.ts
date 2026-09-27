@@ -126,7 +126,7 @@ for (const fixture of [
     const live = pane.getByRole('switch', { name: 'Handoff live' });
     await expect(live).not.toBeChecked();
     await live.click();
-    await expect(pane.getByRole('alert')).toHaveText('The native profiles did not match. The handoff remains disabled.');
+    await expect(pane.getByRole('alert')).toHaveText('One of the agents is not fully set up for its role yet. The handoff stays off.');
     await expect(live).not.toBeChecked();
   });
 }

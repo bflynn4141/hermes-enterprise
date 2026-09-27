@@ -21,7 +21,7 @@ async function openRuntimeCapacity(page: Page): Promise<ReturnType<Page['getByRo
   await page.getByRole('button', { name: 'Admin', exact: true }).click();
   const app = page.getByRole('region', { name: 'Application' });
   await app.getByRole('navigation', { name: 'Admin settings' }).getByRole('button', { name: 'Agent capacity', exact: true }).click();
-  await expect(app.getByRole('heading', { name: 'Hermes capacity' })).toBeVisible();
+  await expect(app.getByRole('heading', { name: 'Agent capacity' })).toBeVisible();
   return app;
 }
 
@@ -32,41 +32,41 @@ test.describe('Hermes runtime capacity setup', () => {
     expect(stepUpRequests()).toBe(1);
     await expect(page).toHaveURL(/runtimeCapacity=stepup/);
 
-    await app.getByLabel('Profile role').selectOption('finance-agent');
-    await app.getByLabel('Permanent Agent UUID').first().fill(ENTERPRISE_AGENT_ID);
-    await app.getByRole('button', { name: 'Prepare credential' }).click();
+    await app.getByLabel('Job role').selectOption('finance-agent');
+    await app.getByLabel('Agent ID', { exact: true }).fill(ENTERPRISE_AGENT_ID);
+    await app.getByRole('button', { name: 'Create setup code' }).click();
 
-    const credential = app.getByRole('group', { name: 'New discovery credential' });
+    const credential = app.getByRole('group', { name: 'New setup code' });
     await expect(credential).toBeVisible();
     await expect(credential.locator('code')).toHaveText('d'.repeat(64));
-    await credential.getByRole('button', { name: 'Hide credential' }).click();
+    await credential.getByRole('button', { name: 'Hide setup code' }).click();
     await expect(credential).toHaveCount(0);
     await app.getByRole('button', { name: 'Refresh' }).click();
     await expect(app.getByText('d'.repeat(64))).toHaveCount(0);
 
     await app.getByLabel('Cloud agent ID', { exact: true }).fill('cmu5pw0yq0006gm0a7e2njary');
     await expect(app.locator('.runtime-grant-state strong').filter({ hasText: /^Finance$/ })).toBeVisible();
-    await app.getByLabel('Instance name').fill('Finance pool 1');
-    await app.getByLabel('Connector HTTPS URL').fill('https://not-ready.example.test/plugin');
-    await app.getByLabel('Connector control secret').fill(CONTROL_SECRET);
-    await app.getByRole('button', { name: 'Verify and add' }).click();
-    await expect(app.getByRole('alert')).toContainText('did not prove the required Cloud and Enterprise readiness');
-    await expect(app.getByLabel('Connector control secret')).toHaveValue(CONTROL_SECRET);
+    await app.getByLabel('Name for this agent').fill('Finance pool 1');
+    await app.getByLabel('Connection address').fill('https://not-ready.example.test/plugin');
+    await app.getByLabel('Connection secret').fill(CONTROL_SECRET);
+    await app.getByRole('button', { name: 'Check and add' }).click();
+    await expect(app.getByRole('alert')).toContainText('did not pass Hermes’s checks');
+    await expect(app.getByLabel('Connection secret')).toHaveValue(CONTROL_SECRET);
 
-    await app.getByLabel('Connector HTTPS URL').fill('https://ready.example.test/plugin');
-    await app.getByRole('button', { name: 'Verify and add' }).click();
-    await expect(app.getByText('Finance pool 1 passed live readiness checks')).toBeVisible();
-    await expect(app.getByLabel('Connector control secret')).toHaveValue('');
-    await expect(app.getByText('Verified and available')).toBeVisible();
+    await app.getByLabel('Connection address').fill('https://ready.example.test/plugin');
+    await app.getByRole('button', { name: 'Check and add' }).click();
+    await expect(app.getByText('Finance pool 1 passed every check')).toBeVisible();
+    await expect(app.getByLabel('Connection secret')).toHaveValue('');
+    await expect(app.getByText('Ready for a new member', { exact: true }).first()).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-desktop.png'), fullPage: true });
 
-    await app.getByRole('button', { name: 'Revoke' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Revoke discovery credential?' });
-    await expect(dialog).toContainText('will be quarantined');
-    await dialog.getByRole('button', { name: 'Revoke' }).click();
-    await expect(app.getByText('Discovery credential revoked.')).toBeVisible();
-    await expect(app.getByText('Revoked', { exact: true })).toBeVisible();
-    await expect(app.getByText(/Available · plugin/)).toHaveCount(0);
+    await app.getByRole('button', { name: 'Remove' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Remove this agent?' });
+    await expect(dialog).toContainText('taken out of use');
+    await dialog.getByRole('button', { name: 'Remove' }).click();
+    await expect(app.getByText('Removed.', { exact: true })).toBeVisible();
+    await expect(app.getByText('Removed', { exact: true })).toBeVisible();
+    await expect(app.getByText(/plugin/)).toHaveCount(0);
   });
 
   test('keeps the complete setup usable at a narrow viewport', async ({ context, page }, testInfo) => {
@@ -74,9 +74,9 @@ test.describe('Hermes runtime capacity setup', () => {
     await satisfyStepUp(context, page);
     const app = await openRuntimeCapacity(page);
 
-    await expect(app.getByRole('heading', { name: 'Prepare discovery' })).toBeVisible();
-    await expect(app.getByRole('heading', { name: 'Verify and add capacity' })).toBeVisible();
-    await expect(app.getByRole('button', { name: 'Prepare credential' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Create a setup code' })).toBeVisible();
+    await expect(app.getByRole('heading', { name: 'Connect and check the agent' })).toBeVisible();
+    await expect(app.getByRole('button', { name: 'Create setup code' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('runtime-capacity-narrow.png'), fullPage: true });
     const contentOverflow = await app.locator('.runtime-capacity').evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(contentOverflow).toBeLessThanOrEqual(1);
