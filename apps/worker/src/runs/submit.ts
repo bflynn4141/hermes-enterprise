@@ -88,6 +88,18 @@ export async function submitTurn(input: {
    * to the suggestion tools (C98); the session's own mode is left alone.
    */
   readonly runMode?: 'intake';
+  /**
+   * Server-authored only. What the conversation shows for this turn when it
+   * differs from what the model receives: a received email appears as an
+   * email card, while `text` (the agent's instructions around the untrusted
+   * email) goes to the model only. A `kind` also keeps the turn out of later
+   * turns' history.
+   */
+  readonly display?: {
+    readonly kind: 'email';
+    readonly text: string;
+    readonly blocks: readonly { readonly type: 'card'; readonly title: string; readonly subtitle: string }[];
+  };
   /** Server-authored only; browser and external channel bodies cannot set it. */
   readonly turnAuthor?: {
     readonly id: string;
@@ -188,10 +200,11 @@ export async function submitTurn(input: {
     [session.id],
   );
   const seq = seqRow.rows[0]?.seq ?? 0;
+  const shown = input.display ?? null;
   const message = await tx.query<{ id: string }>(
-    `INSERT INTO messages (workspace_id, session_id, seq, role, text, status, run_id, turn)
-     VALUES ($1,$2,$3,'user',$4,'complete',$5,0) RETURNING id`,
-    [workspaceId, session.id, seq, text, runId],
+    `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status, run_id, turn)
+     VALUES ($1,$2,$3,'user',$4,$5,$6::jsonb,'complete',$7,0) RETURNING id`,
+    [workspaceId, session.id, seq, shown?.kind ?? null, shown?.text ?? text, JSON.stringify(shown?.blocks ?? []), runId],
   );
   await tx.query(
     `INSERT INTO run_turns (workspace_id, run_id, turn, seq, role, provider_message)
@@ -209,7 +222,7 @@ export async function submitTurn(input: {
     traceId,
     payload: {
       message_id: message.rows[0]?.id ?? '', session_id: session.id, seq,
-      role: 'user', kind: null, text, blocks: [], status: 'complete', run_id: runId,
+      role: 'user', kind: shown?.kind ?? null, text: shown?.text ?? text, blocks: shown?.blocks ?? [], status: 'complete', run_id: runId,
     },
   }])));
   return {

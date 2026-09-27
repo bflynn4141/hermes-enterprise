@@ -178,7 +178,12 @@ export type CreateEmailInboxInput = z.infer<typeof createEmailInboxInputSchema>;
  */
 export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
   id: true, received_at: true, subject: true, sender: true, status: true, request_ids: true,
-}).extend({ can_retry: z.boolean() });
+}).extend({
+  can_retry: z.boolean(),
+  /** Hermes will try again by itself shortly (a provider was busy). */
+  retrying: z.boolean().default(false),
+  problem: z.enum(['provider_busy', 'needs_setup', 'no_owner', 'inbox_paused', 'other']).nullable().default(null),
+});
 export type InboundEmailListItem = z.infer<typeof inboundEmailListItemSchema>;
 
 export const inboundEmailListSchema = z.object({

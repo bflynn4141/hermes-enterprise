@@ -22,14 +22,14 @@ import { Glass, Icon, KIND_ICON } from '../ui/icons.js';
 import { Ack, Avatar, Button, Dialog, EmptyState, Panel, Skeleton, Tabs, fmtMoney } from '../ui/primitives.js';
 import { EMPTY } from '../../model/constants.js';
 import './legacy-documents.css';
-import { requestActionLabel } from '../approval-copy.js';
+import { emailReplyDetails, emailReplyFlagged, requestActionLabel } from '../approval-copy.js';
 import { agentName, requestStatusLabel } from '../selectors.js';
 import { useWorkspaceLists } from './lists.js';
 import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
-import { EmailMessageView } from './EmailMessage.js';
+import { EmailCautions, EmailMessageView } from './EmailMessage.js';
 import { useStepUp } from './use-step-up.js';
 import { approvalRefusalMessage } from './approval-routes.js';
 import {
@@ -87,15 +87,25 @@ function SourceMark({ source, size = 26 }: { source: ApplicantSource; size?: num
 export const isEmailHandoff = (request: RequestEntity): boolean =>
   request.kind === 'task' && (request.payload as { task_type?: unknown } | null)?.task_type === 'email_handoff';
 
+/** The team a hand-off came from or went to, by its name when the hand-off recorded one. */
+function handoffRole(request: RequestEntity, side: 'from' | 'to'): string {
+  const payload = record(request.payload);
+  return text(payload[`${side}_role_name`]) ?? roleWords(text(payload[`${side}_role_slug`]));
+}
+
 function requestType(request: RequestEntity): string {
   if (request.kind === 'application') return 'Application';
   if (request.kind === 'invoice') return 'Invoice';
-  if (request.kind === 'task') return isEmailHandoff(request) ? 'Email hand-off' : 'Setup task';
+  if (request.kind === 'task') return isEmailHandoff(request) ? `Handed to ${handoffRole(request, 'to')}` : 'Setup task';
   if (request.kind === 'approval') return approvalTypeLabel(request);
   return 'Signature';
 }
 
 function requestPreview(request: RequestEntity): string {
+  // A reply is previewed by the email it answers, like a mail client's subject line.
+  const reply = emailReplyDetails(request);
+  if (reply?.subject) return reply.subject.replace(/^(re:\s*)+/iu, '');
+  if (isEmailHandoff(request)) return (text(record(request.payload).description) ?? '').split('\n\n')[0] ?? '';
   if (request.decision_summary?.primary) return request.decision_summary.primary;
   const payload = record(request.payload);
   if (request.kind === 'application') {
@@ -131,21 +141,26 @@ const REASON_LABELS: Record<string, string> = {
 };
 
 function approvalThreshold(request: RequestEntity): string | null {
-  if (request.kind === 'task') return null;
+  if (request.kind === 'task' || request.status !== 'pending') return null;
   const requirement = request.decision_summary?.approval_requirement;
   if (!requirement) return null;
-  if (request.status !== 'pending') return `${requirement.completed_steps}/${requirement.total_steps} steps complete`;
-  if (requirement.current.length) return requirement.current.map((step) => `${step.approvals_recorded}/${step.quorum} ${step.label}`).join(' · ');
-  return requirement.remaining_approvals === 1 ? '1 approval required' : `${requirement.remaining_approvals} approvals required`;
+  const remaining = requirement.remaining_approvals;
+  if (remaining <= 0) return null;
+  const recorded = requirement.current.reduce((sum, step) => sum + step.approvals_recorded, 0);
+  if (recorded > 0) return `${recorded} of ${recorded + remaining} approved`;
+  return remaining === 1 ? 'Needs 1 approval' : `Needs ${remaining} approvals`;
 }
+
+const PRIORITY_WORDS: Record<string, string> = { urgent: 'Urgent', high: 'High priority', normal: 'Normal', low: 'Low priority' };
 
 function requestAction(request: RequestEntity): string {
   if (isEmailHandoff(request) && request.status !== 'pending') return 'Handled';
   if (request.status !== 'pending') return requestStatusLabel(request);
   if (request.kind === 'application') return 'Review applicant';
   if (request.kind === 'invoice' || request.kind === 'agreement') return requestActionLabel(request);
+  if (emailReplyDetails(request) && request.approval?.pending_for_viewer) return 'Reply ready';
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
-  if (request.kind === 'task') return isEmailHandoff(request) ? 'Read and mark handled' : 'Work with your agent';
+  if (request.kind === 'task') return isEmailHandoff(request) ? `From ${handoffRole(request, 'from')} · Mark handled` : 'Work with your agent';
   return 'Review request';
 }
 
@@ -334,14 +349,13 @@ function InboxSurface({ selectedId }: { selectedId: string | null }) {
                       <span className="inbox-item-signals">
                         {(request.provenance.kind === 'sample' || request.provenance.kind === 'test') && <span className={`provenance-chip provenance-${request.provenance.kind}`}>{PROVENANCE_LABELS[request.provenance.kind]}</span>}
                         {request.presentation.hidden && <span className="provenance-chip">Hidden from my Inbox</span>}
-                        {request.triage?.status === 'complete' ? (
-                          <span className={`priority-chip priority-${request.triage.band}`}>{request.triage.band}</span>
+                        {emailReplyFlagged(request) && <span className="reason-chip reason-caution">Check the sender</span>}
+                        {request.triage?.status === 'complete' && PRIORITY_WORDS[request.triage.band] ? (
+                          <span className={`priority-chip priority-${request.triage.band}`}>{PRIORITY_WORDS[request.triage.band]}</span>
                         ) : (!request.triage || request.triage.status === 'pending') && activeTab === 'needs-review' && sort === 'priority' ? (
-                          <motion.span className="priority-chip priority-assessing" aria-label="Assessing priority" animate={reducedMotion ? undefined : { opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.5, repeat: Infinity }}>Assessing</motion.span>
-                        ) : activeTab === 'needs-review' && sort === 'priority' ? (
-                          <span className="priority-chip priority-assessing">Unranked</span>
+                          <motion.span className="priority-chip priority-assessing" aria-label="Sorting by priority" animate={reducedMotion ? undefined : { opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.5, repeat: Infinity }}>Sorting…</motion.span>
                         ) : null}
-                        {request.triage?.reason_codes.slice(0, 2).map((reason) => <span className="reason-chip" key={reason}>{REASON_LABELS[reason] ?? titleCaseLabel(reason)}</span>)}
+                        {request.triage?.reason_codes.slice(0, 2).filter((reason) => REASON_LABELS[reason]).map((reason) => <span className="reason-chip" key={reason}>{REASON_LABELS[reason]}</span>)}
                       </span>
                       <span className="inbox-item-meta">
                         <span>{requestType(request)}</span>
@@ -526,24 +540,29 @@ function EmailHandoffView({ request }: { request: RequestEntity }) {
   const handled = request.status !== 'pending';
   const description = text(payload.description) ?? '';
   const [summary, ...rest] = description.split('\n\n');
+  const to = handoffRole(request, 'to');
+  const from = handoffRole(request, 'from');
+  const agent = agentName(state);
+  const title = request.label.startsWith(`${to}: `) ? request.label.slice(to.length + 2) : request.label;
   return <div className="scroll"><div className="app-body">
-    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{request.label}</h1><p className="meta">Handed over from {roleWords(text(payload.from_role_slug))} · {handled ? 'Handled' : 'Waiting for you'}</p></div></div>
+    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{title}</h1><p className="meta">Handed to {to} from {from} · {handled ? 'Handled' : 'Waiting for your team'}</p></div></div>
     <section className="email-reply-draft" aria-label="Why this was handed to you">
-      <h2>From the agent</h2>
+      <h2>{agent}’s note</h2>
       <p style={{ margin: 0, fontSize: 15, lineHeight: '23px' }}>{summary}</p>
       {rest.length > 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--muted)' }}>{rest.join('\n\n')}</p>}
-      <p className="email-reply-rule">This is for your team to look at. The agent cannot pay, sign or reply from here.</p>
+      <p className="email-reply-rule">{agent} can’t pay, sign or reply from here. Your team decides what happens next.</p>
     </section>
+    {email && <div style={{ marginTop: 20 }}><EmailCautions facts={email.sender} heading="Check before acting on this" /></div>}
     <section className="email-reply-context" style={{ marginTop: 20 }} aria-label="The email">
-      <h2>The email</h2>
+      <h2>Original email</h2>
       {loadState === 'loading' && <Skeleton rows={3} label="Loading the email" />}
       {loadState === 'unavailable' && <p className="meta">The original email is no longer stored.</p>}
-      {email && <EmailMessageView email={email} />}
+      {email && <EmailMessageView email={email} agentName={agent} showCautions={false} />}
     </section>
     <div className="app-footer" style={{ marginInline: -28 }}>
       <div className="col grow" style={{ gap: 3 }}>
         <span className="f-title">{handled ? 'Marked handled' : 'Mark it handled when your team is done'}</span>
-        <span className="f-sub">{problem ? (needsSignIn(problem) ? 'Closing this needs a recent sign-in.' : 'Could not close this. Try again.') : 'Nothing is paid or sent by closing it.'}</span>
+        <span className="f-sub">{problem ? (needsSignIn(problem) ? 'Please sign in again to close this.' : "Couldn't close this. Try again.") : 'Closing it doesn’t pay or send anything.'}</span>
       </div>
       {problem !== null && needsSignIn(problem) && <Button onClick={signIn}>Sign in again</Button>}
       {!handled && <Button primary disabled={busy} onClick={() => void complete()}>{busy ? 'Closing…' : 'Mark handled'}</Button>}
@@ -953,8 +972,8 @@ function PartnerResultEvidence({ handoffId, fallback }: { handoffId: string; fal
   };
   useEffect(load, [adapter.rest, state.workspace.id, handoffId]);
 
-  if (failed) return <><div className="partner-evidence-unavailable"><p>Authorized workflow evidence is unavailable for this account or changed after review.</p><Button small onClick={load}>Try again</Button></div>{fallback}</>;
-  if (!result) return fallback || <Skeleton rows={3} label="Loading authorized workflow evidence" />;
+  if (failed) return <><div className="partner-evidence-unavailable"><p>What Hermes checked isn't available for this account, or it changed after review.</p><Button small onClick={load}>Try again</Button></div>{fallback}</>;
+  if (!result) return fallback || <Skeleton rows={3} label="Loading what Hermes checked" />;
   const explanation = result.outcome.agent_explanation === 'completed'
     ? 'Finance agent explanation ready'
     : result.outcome.agent_explanation === 'failed' || result.outcome.agent_explanation === 'stopped'
@@ -964,10 +983,10 @@ function PartnerResultEvidence({ handoffId, fallback }: { handoffId: string; fal
     <div className="partner-result-evidence">
       <p className="partner-provenance-summary"><InputProvenanceBadge value={result.input_provenance} /><span>{result.input_provenance === 'sample' ? 'Use this decision for demonstration only.' : result.input_provenance === 'customer' ? 'This review uses customer-provided input.' : 'Historical provenance is unavailable; this is not labeled as customer data.'}</span></p>
       <details className="legacy-disclosure">
-        <summary>Authorized workflow evidence ({result.checks.length} checks)</summary>
-        <p className="meta">{explanation} · Human decision {result.outcome.human_decision.replaceAll('_', ' ')}</p>
+        <summary>What Hermes checked ({result.checks.length})</summary>
+        <p className="meta">{explanation}</p>
         <ul className="partner-result-checks">
-          {result.checks.map((check) => <li key={check.code} data-state={check.status}><strong>{check.code.replaceAll('_', ' ')}</strong><span>{check.message}</span></li>)}
+          {result.checks.map((check) => <li key={check.code} data-state={check.status}><span>{check.message}</span></li>)}
         </ul>
         <div className="partner-evidence-grid">
           {([
@@ -1270,8 +1289,8 @@ export function DocumentView({
                         {effect.status === 'cancelled'
                           ? 'Cancelled'
                           : effect.status === 'simulated'
-                            ? `Simulated · ${effect.simulation?.reference ?? 'no reference'}`
-                            : 'Not executed'}
+                            ? 'Test mode · nothing sent'
+                            : 'Not carried out'}
                       </span>
                     </li>
                   ))}
@@ -1289,33 +1308,31 @@ export function DocumentView({
 
 /** Honesty copy shown whenever a legacy effect is pending or already unavailable. */
 export const LEGACY_EFFECT_HONESTY =
-  'Legacy effects have no executor here. Recording an attempt does not send mail, move money, grant access, or apply a signature. Approved email delivery uses a separate governed outbox when configured; this record is not a delivery receipt.';
+  'Hermes doesn’t carry out these actions here. Recording one doesn’t send email, move money, grant access or sign anything.';
 
 /**
  * Copy shown when this environment simulates effects. It says what the word
  * "simulated" means so nobody reads a settled-looking timeline as a payment.
  */
 export const SIMULATED_EFFECT_HONESTY =
-  'Simulated effects. Nothing is sent, paid, granted or signed; each row says so on the right.';
+  'Test mode. Nothing is sent, paid, granted or signed; each line says so on the right.';
 
 /** Status line for a legacy ledger effect — never implies an external action completed. */
 export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavailable' | 'simulated' = 'unavailable'): string {
   if (effect.status === 'simulated') {
-    return effect.simulation?.summary ?? 'Simulated · nothing sent, paid, granted or signed';
+    return effect.simulation?.summary ?? 'Test mode · nothing sent, paid, granted or signed';
   }
-  const base =
-    effect.status === 'unavailable'
-      ? 'Unavailable · nothing sent, paid, granted or signed'
-      : effect.status === 'cancelled'
-        ? 'Cancelled'
-        : effect.confirmations && effect.confirmations.recorded > 0
-          ? effect.approver_label
-            ? `${effect.confirmations.recorded} of ${effect.confirmations.required} confirmations · ${effect.approver_label}`
-            : `${effect.confirmations.recorded} of ${effect.confirmations.required} ${effect.required_role} confirmations`
-          : executor === 'simulated'
-            ? `Waiting on ${effect.approver_label ?? `the ${effect.required_role} role`}`
-            : `Pending · no executor · needs ${effect.approver_label ?? `the ${effect.required_role} role`}`;
-  return effect.reason && !effect.confirmations?.recorded ? `${base} · ${effect.reason}` : base;
+  const role = effect.required_role ? `the ${effect.required_role.replace(/[_-]+/gu, ' ')} role` : 'the right person';
+  if (effect.status === 'unavailable') return 'Not carried out here · nothing sent, paid, granted or signed';
+  if (effect.status === 'cancelled') return 'Cancelled';
+  if (effect.confirmations && effect.confirmations.recorded > 0) {
+    return effect.approver_label
+      ? `${effect.confirmations.recorded} of ${effect.confirmations.required} confirmations · ${effect.approver_label}`
+      : `${effect.confirmations.recorded} of ${effect.confirmations.required} confirmations from ${role}`;
+  }
+  return executor === 'simulated'
+    ? `Waiting on ${effect.approver_label ?? role}`
+    : `Not carried out here · needs ${effect.approver_label ?? role}`;
 }
 
 /**
@@ -1371,7 +1388,7 @@ export function LegacyEffectsPanel({
               <span className="pill illustrative" title={SIMULATED_EFFECT_HONESTY}>Simulated</span>
             )}
             {effect.status === 'pending' && effect.confirmations?.by_viewer && (
-              <span className="meta" data-testid="effect-awaiting-second">{effect.approver_label ? 'Waiting on another person' : `Waiting on another ${effect.required_role} member`}</span>
+              <span className="meta" data-testid="effect-awaiting-second">{effect.approver_label || !effect.required_role ? 'Waiting on another person' : `Waiting on another person in the ${effect.required_role.replace(/[_-]+/gu, ' ')} role`}</span>
             )}
             {effect.status === 'pending' && !effect.confirmations?.by_viewer && (
               <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>
@@ -1506,7 +1523,7 @@ export function Receipt({ request }: { request: RequestEntity }) {
           </Button>
           <Button onClick={() => nav(HISTORY())}>Open History</Button>
         </div>
-        <p className="meta">Recorded decision. Downstream execution — access grants, payment, signing, sending — stays separate and pending.</p>
+        <p className="meta">Your decision is saved. Anything it leads to, like granting access, paying, signing or sending, happens separately.</p>
       </div>
     </div>
   );

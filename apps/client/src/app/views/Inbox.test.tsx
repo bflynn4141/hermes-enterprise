@@ -117,7 +117,7 @@ describe('the Inbox renders the focused view', () => {
     const priority = render({ section: 'inbox', view: 'list', filters: { status: 'pending', reviewer: 'all' } });
     expect(priority).toContain('aria-pressed="true">Priority');
     expect(priority.indexOf('Ada pending')).toBeLessThan(priority.indexOf('Leah pending'));
-    expect(priority).toContain('>urgent<');
+    expect(priority).toContain('>Urgent<');
     expect(priority).toContain('Deadline');
 
     const recent = render({ section: 'inbox', view: 'list', filters: { status: 'pending', reviewer: 'all', sort: 'recent' } });
@@ -357,7 +357,7 @@ describe('legacy effect execute honesty', () => {
 
   it('names who carries an effect out in the server’s words when it sends them', () => {
     const routed = { ...pending, approver_label: 'Admins or Finance' };
-    expect(legacyEffectStatusLabel(routed)).toBe('Pending · no executor · needs Admins or Finance');
+    expect(legacyEffectStatusLabel(routed)).toBe('Not carried out here · needs Admins or Finance');
     expect(legacyEffectStatusLabel(routed, 'simulated')).toBe('Waiting on Admins or Finance');
     const confirming = { ...routed, confirmations: { required: 2, recorded: 1, by_viewer: true } };
     expect(legacyEffectStatusLabel(confirming)).toBe('1 of 2 confirmations · Admins or Finance');
@@ -379,13 +379,13 @@ describe('legacy effect execute honesty', () => {
   });
 
   it('labels pending effects as having no executor and offers Record attempt, never Execute', () => {
-    expect(legacyEffectStatusLabel(pending)).toContain('no executor');
-    expect(legacyEffectStatusLabel(pending)).toBe('Pending · no executor · needs the access role');
+    expect(legacyEffectStatusLabel(pending)).toContain('Not carried out here');
+    expect(legacyEffectStatusLabel(pending)).toBe('Not carried out here · needs the access role');
     const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[pending]} />);
     expect(html).toContain(LEGACY_EFFECT_HONESTY);
     expect(html).toContain('>Record attempt</button>');
     expect(html).not.toContain('>Execute</button>');
-    expect(html).toContain('Pending · no executor · needs the access role');
+    expect(html).toContain('Not carried out here · needs the access role');
   });
 
   it('shows a payment waiting on a second Finance holder once this viewer has confirmed', () => {
@@ -396,9 +396,9 @@ describe('legacy effect execute honesty', () => {
       label: 'Pay the invoice',
       confirmations: { required: 2, recorded: 1, by_viewer: true },
     };
-    expect(legacyEffectStatusLabel(payment)).toBe('1 of 2 finance confirmations');
+    expect(legacyEffectStatusLabel(payment)).toBe('1 of 2 confirmations from the finance role');
     const mine = renderToStaticMarkup(<LegacyEffectsPanel effects={[payment]} />);
-    expect(mine).toContain('Waiting on another finance member');
+    expect(mine).toContain('Waiting on another person in the finance role');
     expect(mine).not.toContain('>Record attempt</button>');
     // The second holder still gets the button.
     const theirs = renderToStaticMarkup(
@@ -411,7 +411,7 @@ describe('legacy effect execute honesty', () => {
     expect(legacyEffectStatusLabel(unavailable)).toContain('nothing sent, paid, granted or signed');
     const html = renderToStaticMarkup(<LegacyEffectsPanel effects={[unavailable]} />);
     expect(html).toContain(LEGACY_EFFECT_HONESTY);
-    expect(html).toContain('Unavailable · nothing sent, paid, granted or signed');
+    expect(html).toContain('Not carried out here · nothing sent, paid, granted or signed');
     expect(html).not.toContain('>Execute</button>');
     expect(html).not.toContain('>Record attempt</button>');
   });

@@ -37,7 +37,7 @@ describe('inboxAgentLabel', () => {
     const noRoleA = agent(12, 'Scout', null, { source: 'cloud_capacity', label: 'hermes-pool-03', state: 'connected' });
     const noRoleB = agent(13, 'Scout', null, { source: 'deployment', label: null, state: 'connected' });
     expect(inboxAgentLabel(noRoleA, [noRoleA, noRoleB])).toBe('Scout · Brian Flynn · hermes-pool-03');
-    expect(inboxAgentLabel(noRoleB, [noRoleA, noRoleB])).toBe('Scout · Brian Flynn · deployment runtime');
+    expect(inboxAgentLabel(noRoleB, [noRoleA, noRoleB])).toBe('Scout · Brian Flynn · Built in');
     expect(inboxAgentLabel(noRoleA, [noRoleA])).toBe('Scout · Brian Flynn');
   });
 });

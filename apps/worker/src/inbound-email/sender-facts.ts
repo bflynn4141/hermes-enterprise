@@ -172,41 +172,41 @@ export function senderFacts(input: SenderFactsInput): SenderFacts {
   const { dmarc, spf, dkim } = input.authentication;
   if (dmarc !== 'pass') {
     warnings.push(warning('authentication_failed', input.authentication.authserv_id
-      ? `The sender's domain did not pass DMARC (dmarc=${dmarc}, spf=${spf}, dkim=${dkim}). The From address may be forged.`
-      : 'Our mail server recorded no authentication result for this message, so the From address is unverified.'));
+      ? `${domain} did not confirm that it sent this email, so the sender may not be who they say they are.`
+      : 'Hermes could not confirm who sent this email, so the sender may not be who they say they are.'));
   }
   const replyTo = input.replyTo?.toLowerCase() ?? null;
   if (replyTo && replyTo !== address && organizationalDomain(domainOf(replyTo)) !== organizationalDomain(domain)) {
-    warnings.push(warning('reply_to_differs', `Replies would go to ${replyTo}, not ${address}. Hermes replies to the From address only.`));
+    warnings.push(warning('reply_to_differs', `The email asks for replies to go to ${replyTo}, a different address from the sender's. Hermes only ever replies to ${address}.`));
   }
   const imitated = lookalikeOf(domain, knownDomains);
   if (imitated) {
-    warnings.push(warning('lookalike_domain', `${domain} looks like ${imitated}, a domain this workspace already knows.`));
+    warnings.push(warning('lookalike_domain', `${domain} looks like ${imitated}, which your team already emails, but it is a different address.`));
   }
   if (input.fromName && !memberAddresses.has(address)) {
     const shown = normalizeName(input.fromName);
     const borrowed = input.members.find((member) => member.name && normalizeName(member.name) === shown);
     if (borrowed) {
-      warnings.push(warning('display_name_impersonation', `The sender uses the name of ${borrowed.name}, a member of this workspace, from an outside address.`));
+      warnings.push(warning('display_name_impersonation', `The sender uses the name of ${borrowed.name}, who is on your team, but writes from an outside address.`));
     }
   }
   if (mentionsPaymentChange(input.visibleText)) {
-    warnings.push(warning('payment_details_change', 'The message mentions bank or payment details. Verify any change by calling a number already on file, never one in this email.'));
+    warnings.push(warning('payment_details_change', 'The email talks about bank or payment details. Confirm any change by calling a number you already have, never one in this email.'));
   }
   if (input.hiddenTextRemovedChars >= 20) {
-    warnings.push(warning('hidden_text_removed', `${input.hiddenTextRemovedChars} characters of hidden text were removed before anyone read it, including the agent.`));
+    warnings.push(warning('hidden_text_removed', 'The email contained hidden text. Hermes removed it before anyone read the email, including the agent.'));
   }
   if (input.mismatchedLinks > 0) {
-    warnings.push(warning('link_text_mismatch', `${input.mismatchedLinks === 1 ? 'A link shows' : `${input.mismatchedLinks} links show`} one web address but goes to another.`));
+    warnings.push(warning('link_text_mismatch', `${input.mismatchedLinks === 1 ? 'A link says one website but opens' : `${input.mismatchedLinks} links say one website but open`} another.`));
   }
   if (input.remoteImagesBlocked > 0) {
-    warnings.push(warning('remote_images_blocked', `${input.remoteImagesBlocked} remote ${input.remoteImagesBlocked === 1 ? 'image was' : 'images were'} not loaded, so the sender cannot tell this was opened.`));
+    warnings.push(warning('remote_images_blocked', `Images from the sender's server were blocked, so they can't tell the email was opened.`));
   }
   if (input.attachmentsRead > 0) {
-    warnings.push(warning('attachments_read', `The agent read the text of ${input.attachmentsRead === 1 ? '1 attachment' : `${input.attachmentsRead} attachments`} as untrusted data, like the email. Text hidden inside a PDF cannot be detected.`));
+    warnings.push(warning('attachments_read', `The agent read ${input.attachmentsRead === 1 ? 'the attachment' : `${input.attachmentsRead} attachments`} with the same care as the email itself.`));
   }
   if (input.attachmentsUnread > 0) {
-    warnings.push(warning('attachments_not_opened', `${input.attachmentsUnread} ${input.attachmentsUnread === 1 ? 'attachment is' : 'attachments are'} listed but not read, because of their type or size.`));
+    warnings.push(warning('attachments_not_opened', `${input.attachmentsUnread === 1 ? 'One attachment was' : `${input.attachmentsUnread} attachments were`} not opened because of their type or size.`));
   }
   return {
     address,

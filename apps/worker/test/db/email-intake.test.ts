@@ -240,7 +240,18 @@ describe('email intake', () => {
     ]);
     expect(email.sender.warnings.map((warning) => warning.code)).toEqual(['attachments_read', 'attachments_not_opened']);
     const runId = await triage(fx, stored.messageId);
-    const prompt = (await scoped<{ text: string }>(fx.workspaceId, `SELECT text FROM messages WHERE run_id=$1 AND role='user'`, [runId]))[0]?.text ?? '';
+    // The model receives the instructions around the email; the conversation
+    // shows an email card, never those instructions.
+    const prompt = (await scoped<{ text: string }>(fx.workspaceId,
+      `SELECT provider_message->>'content' AS text FROM run_turns WHERE run_id=$1 AND role='user'`, [runId]))[0]?.text ?? '';
+    const shown = (await scoped<{ kind: string; text: string; blocks: { type: string; title: string; subtitle: string }[] }>(fx.workspaceId,
+      `SELECT kind, text, blocks FROM messages WHERE run_id=$1 AND role='user'`, [runId]))[0];
+    expect(shown).toMatchObject({
+      kind: 'email',
+      text: 'New email from Priya Raman: Invoice attached',
+      blocks: [{ type: 'card', title: 'Priya Raman <priya@northwind.example>', subtitle: 'Invoice attached' }],
+    });
+    expect(shown?.text).not.toContain('EMAIL-');
     const opening = prompt.indexOf('<<<EMAIL-');
     const closing = prompt.lastIndexOf('>>>');
     const attachment = prompt.indexOf('Invoice NW-9 total 4,800 USD');
@@ -393,6 +404,10 @@ describe('email intake', () => {
     const handoff = await withWorkspaceTransaction(env, fx.workspaceId, (tx) => suggestEmailHandoff({
       tx, workspaceId: fx.workspaceId, jobs: [], env, runId, toolCallId: 'call_handoff', agentId: fx.agentId,
     }, { role_slug: 'finance', summary: 'Invoice from Northwind.', note: 'Check it against the agreement.' }));
+    const task = (await scoped<{ payload: { from_role_name?: string; to_role_name?: string } }>(fx.workspaceId,
+      `SELECT payload FROM requests WHERE id=$1`, [handoff.request_id]))[0]?.payload;
+    // The receiving team sees team names, not the roles' internal keys.
+    expect(task).toMatchObject({ from_role_name: 'Partnerships', to_role_name: 'Finance' });
     // The seeded Admin holds finance; the other member does not.
     expect(handoff.recipients).toBe(1);
     const complete = `/w/${fx.workspaceId}/email/handoffs/${handoff.request_id}/complete`;
@@ -421,7 +436,7 @@ describe('email intake', () => {
     const messageId = await receive(fx);
     const firstRun = await triage(fx, messageId);
     await failRun(fx, firstRun, 'hermes_provider_rate_limited');
-    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true });
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true, problem: 'provider_busy', retrying: false });
 
     // Not a reader: the message does not exist for them.
     expect((await retry(fx, fx.memberId, messageId)).status).toBe(404);
@@ -478,7 +493,7 @@ describe('email intake', () => {
       `SELECT extract(epoch FROM next_at - now())::int AS wait FROM jobs WHERE workspace_id=$1 AND kind='email_triage' AND key=$2`,
       [fx.workspaceId, triageKey(messageId, 3)]))[0];
     expect(waiting?.wait).toBeGreaterThan(240);
-    expect(await listRow(fx, messageId)).toMatchObject({ status: 'received', can_retry: false });
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'received', can_retry: false, retrying: true, problem: null });
     // A second Cron pass in the same minute changes nothing.
     await scheduleEmailTriageRetries(env);
     expect((await messageRow(fx, messageId)).triage_attempt).toBe(3);
@@ -501,7 +516,7 @@ describe('email intake', () => {
     await failRun(fx, runId, 'model_error', 600);
     await scheduleEmailTriageRetries(env);
     expect(await messageRow(fx, messageId)).toMatchObject({ status: 'triaging', triage_attempt: 1, triage_run_id: runId });
-    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true });
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true, problem: 'other' });
   });
 
   it('retries a received email whose job stopped before starting a run, but not one still queued', async () => {

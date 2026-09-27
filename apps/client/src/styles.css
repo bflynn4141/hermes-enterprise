@@ -756,7 +756,8 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
 .inbox-item-date { flex-shrink: 0; color: var(--muted); font-size: 10px; line-height: 14.4px; }
 .inbox-item-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--body); font-size: 10.4px; line-height: 16px; }
 .inbox-item-signals { display: flex; gap: 5px; min-height: 18px; align-items: center; overflow: hidden; }
-.priority-chip, .reason-chip, .provenance-chip { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 9px; line-height: 13px; white-space: nowrap; }
+.priority-chip, .reason-chip, .provenance-chip { display: inline-flex; align-items: center; min-height: 22px; padding: 1px 9px; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.reason-chip.reason-caution { color: #ffd9a8; border-color: rgba(255, 190, 110, .45); }
 .presentation-action { display: inline-flex; align-items: center; gap: 8px; }
 .provenance-operational { color: #C9C6FF; border-color: rgba(170,165,255,.35); }
 .provenance-sample, .provenance-test { color: #F2D49A; border-color: rgba(231,194,125,.35); background: rgba(112,81,28,.12); }
@@ -797,7 +798,7 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
 .approval-current-reviewer > .row > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .approval-current-reviewer strong { font-size: 11.2px; font-weight: 500; }
 .approval-current-reviewer small { color: var(--muted); font-size: 10px; }
-.approval-kicker { display: block; color: #A7A4FF; font-size: 10px; line-height: 14px; }
+.approval-kicker { display: block; color: #B9B6F5; font-size: 13px; line-height: 19px; font-weight: 500; }
 
 .approval-preview { display: flex; flex-direction: column; gap: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background-color: rgba(21,16,71,.5); background-image: var(--panel); }
 .approval-preview h2 { font: 500 20.8px/25px var(--font-display); text-wrap: balance; }
@@ -1006,6 +1007,11 @@ html[data-reduce-motion="true"] .inbox-item[data-highlight]::before { animation:
 .msg-user { align-self: flex-end; min-width: 0; max-width: min(610px, 100%); overflow-wrap: anywhere; padding: 14px 18px; border-radius: 10px; border: 1px solid var(--line); background: var(--chip-bg); font-size: 12.8px; line-height: 19.2px; white-space: pre-wrap; }
 .msg-user .meta-tag { display: block; font-size: 10.4px; line-height: 14.4px; color: var(--muted); margin-bottom: 4px; }
 .msg-user .att { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.msg-email { align-self: flex-start; display: flex; align-items: center; gap: 12px; width: min(100%, 560px); padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--chip-bg); }
+.msg-email-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.msg-email-label { color: var(--muted); font-size: 12.5px; line-height: 18px; }
+.msg-email-body strong { font-size: 14px; line-height: 20px; font-weight: 500; overflow-wrap: anywhere; }
+.msg-email-from { color: var(--muted); font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
 .msg-agent-handoff { align-self: center; width: min(100%, 640px); color: var(--muted); font-size: 11.2px; line-height: 17.6px; }
 .msg-agent-handoff summary { display: flex; justify-content: center; align-items: baseline; gap: 6px; cursor: pointer; list-style: none; }
 .msg-agent-handoff summary::-webkit-details-marker { display: none; }

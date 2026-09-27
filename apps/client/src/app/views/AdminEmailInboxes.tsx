@@ -16,22 +16,52 @@ import './email-message.css';
 
 export const ADMIN_EMAIL_INBOXES_VIEW = 'Inboxes';
 
-const STATUS_WORDS: Record<InboundEmailList['messages'][number]['status'], string> = {
-  received: 'Received',
-  triaging: 'Agent reading',
-  suggested: 'Suggestion waiting',
-  no_action: 'Nothing needed',
-  failed: 'Could not process',
+type MailTone = 'quiet' | 'working' | 'ready' | 'problem';
+
+/**
+ * One email's state in the words of docs/DESIGN.md, with a sentence when a
+ * person needs to know why. The agent is named, because the reader chose it.
+ */
+export function mailState(message: InboundEmailListItem, agent: string): { text: string; tone: MailTone; note: string | null } {
+  if (message.retrying) return { text: 'Trying again soon', tone: 'working', note: `The model was busy. ${agent} will try again in a few minutes.` };
+  switch (message.status) {
+    case 'received': return { text: `Waiting for ${agent}`, tone: 'working', note: null };
+    case 'triaging': return { text: 'Reading', tone: 'working', note: null };
+    case 'suggested': return { text: 'Ready for review', tone: 'ready', note: null };
+    case 'no_action': return message.problem === 'inbox_paused'
+      ? { text: 'Inbox paused', tone: 'quiet', note: 'It arrived while the inbox was paused, so nobody read it.' }
+      : { text: 'No reply needed', tone: 'quiet', note: null };
+    case 'failed': {
+      const why: Record<NonNullable<InboundEmailListItem['problem']>, string> = {
+        provider_busy: `The model was busy, so ${agent} couldn’t read it. Nothing was sent.`,
+        needs_setup: `${agent}’s model needs attention in Model providers. Nothing was sent.`,
+        no_owner: `${agent} has no owner to reply as. Give it an owner in All agents, then try again.`,
+        inbox_paused: 'The inbox is paused. Resume it, then try again.',
+        other: `Something went wrong while ${agent} was reading it. Nothing was sent.`,
+      };
+      return { text: 'Couldn’t read it', tone: 'problem', note: why[message.problem ?? 'other'] };
+    }
+    default: return { text: 'Updated', tone: 'quiet', note: null };
+  }
+}
+
+const receivedAt = (value: string): string => {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return '';
+  const today = new Date();
+  return date.toDateString() === today.toDateString()
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
 export function inboxErrorMessage(error: unknown): string {
   switch ((error as { reason?: string } | null)?.reason) {
-    case 'reauth_required': return 'Changing inboxes needs a recent sign-in.';
-    case 'email_intake_not_configured': return 'This deployment has no receiving email domain yet. An operator sets EMAIL_INTAKE_DOMAIN and Email Routing first.';
+    case 'reauth_required': return 'Please sign in again to change inboxes.';
+    case 'email_intake_not_configured': return 'Role inboxes aren’t turned on for this Hermes yet. Ask the person who runs Hermes for your company to turn them on.';
     case 'agent_owner_missing': return 'That agent has no owner to reply as. Give it an owner in All agents first.';
     case 'unknown_role': return 'That role no longer exists. Reload and try again.';
     case 'unknown_agent': return 'That agent no longer exists. Reload and try again.';
-    default: return 'Could not save. Nothing was changed. Try again.';
+    default: return 'Couldn’t save. Nothing was changed. Try again.';
   }
 }
 
@@ -39,13 +69,13 @@ export function retryErrorMessage(error: unknown): string {
   switch ((error as { reason?: string } | null)?.reason) {
     case 'inbox_paused': return 'This inbox is paused. Resume it, then try again.';
     case 'not_retryable': return 'The agent is already reading this email.';
-    case 'rate_limited': return 'That was a lot of retries at once. Wait a minute and try again.';
-    default: return 'Could not ask the agent again. Try again in a moment.';
+    case 'rate_limited': return 'That was a lot of tries in a row. Wait a minute, then try again.';
+    default: return 'Couldn’t ask the agent again. Try again in a moment.';
   }
 }
 
 function Problem({ error }: { error: unknown }) {
-  const { needsSignIn, signIn } = useStepUp('gmail');
+  const { needsSignIn, signIn } = useStepUp('workspace_roles');
   return <p className="admin-roles-problem" role="alert">
     {inboxErrorMessage(error)} {needsSignIn(error) && <Button link onClick={signIn}>Sign in again</Button>}
   </p>;
@@ -95,22 +125,33 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
     }
   };
   if (list === null) return null;
-  if (list === 'hidden') return <p className="email-inbox-facts">Only the people in this role and the agent’s owner read its mail.</p>;
-  if (list.messages.length === 0) return <p className="email-inbox-facts">No email yet.</p>;
+  if (list === 'hidden') return <p className="email-inbox-facts">Only the people in this role and {inbox.agent.name}’s owner can read this inbox’s email.</p>;
+  if (list.messages.length === 0) return <p className="email-inbox-facts">No email yet. Send one to the address above to try it.</p>;
   return <ul className="email-inbox-messages" aria-label={`Recent email at ${inbox.label}`}>
     {list.messages.slice(0, 5).map((message) => {
       const requestId = message.request_ids[0];
       const subject = message.subject || '(no subject)';
-      return <li key={message.id}>
-        {requestId
-          ? <Button link onClick={() => nav(REQ(requestId))}>{subject}</Button>
-          : <span>{subject}</span>}
-        <span className="state">{STATUS_WORDS[message.status]}</span>
-        <span className="from">{message.sender.name ?? message.sender.address}</span>
-        {message.can_retry && <span className="retry">
-          <Button small disabled={retrying === message.id} aria-label={`Try again: ${subject}`} onClick={() => void retry(message)}>
+      const stateWords = mailState(message, inbox.agent.name);
+      const flagged = message.sender.warnings.some((warning) => warning.severity === 'caution');
+      return <li key={message.id} data-tone={stateWords.tone}>
+        <span className="email-inbox-message-main">
+          {requestId
+            ? <button type="button" className="email-inbox-subject" onClick={() => nav(REQ(requestId))}>{subject}</button>
+            : <span className="email-inbox-subject">{subject}</span>}
+          <span className="email-inbox-sub">
+            {message.sender.name ?? message.sender.address}
+            {flagged && <span className="email-inbox-flag"> · Check the sender</span>}
+          </span>
+        </span>
+        <span className="email-inbox-message-side">
+          <time dateTime={message.received_at}>{receivedAt(message.received_at)}</time>
+          <span className="state" data-tone={stateWords.tone}>{stateWords.text}</span>
+        </span>
+        {(stateWords.note || message.can_retry) && <span className="email-inbox-note">
+          {stateWords.note && <span>{stateWords.note}</span>}
+          {message.can_retry && <Button small disabled={retrying === message.id} aria-label={`Try again: ${subject}`} onClick={() => void retry(message)}>
             {retrying === message.id ? 'Asking…' : 'Try again'}
-          </Button>
+          </Button>}
         </span>}
         {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
       </li>;
@@ -119,10 +160,10 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
 }
 
 const RUNTIME_WORDS: Record<AgentDirectoryEntry['runtime']['source'], string> = {
-  cloud_capacity: 'Cloud runtime',
-  cloud_provisioned: 'Cloud runtime',
-  deployment: 'deployment runtime',
-  none: 'no runtime',
+  cloud_capacity: 'Hermes Cloud',
+  cloud_provisioned: 'Hermes Cloud',
+  deployment: 'Built in',
+  none: 'Not set up',
 };
 
 /**
@@ -242,7 +283,7 @@ export function AdminEmailInboxes() {
     } catch (caught) { setProblem(caught); }
     finally { setBusyId(null); }
   };
-  const roleName = (slug: string): string => roles.find((role) => role.slug === slug)?.name ?? slug;
+  const roleName = (slug: string): string => roles.find((role) => role.slug === slug)?.name ?? inboxes?.find((inbox) => inbox.role_slug === slug)?.label ?? 'This';
 
   if (loadError) return <div role="alert" className="admin-roles-error"><p>Could not load role inboxes. Try again.</p><Button onClick={load}>Try again</Button></div>;
   if (!inboxes) return <Skeleton rows={4} label="Loading role inboxes" />;
@@ -254,7 +295,7 @@ export function AdminEmailInboxes() {
       </div>
       <Button disabled={!domain} onClick={() => setAdding(true)}>Add inbox</Button>
     </header>
-    {!domain && <p className="email-inbox-help">This deployment has no receiving domain yet. An operator sets it up once in Cloudflare Email Routing; see docs/EMAIL-INTAKE.md.</p>}
+    {!domain && <p className="email-inbox-help">Role inboxes aren’t turned on for this Hermes yet. The person who runs Hermes for your company can turn them on.</p>}
     {problem !== null && <Problem error={problem} />}
     {inboxes.length === 0
       ? <EmptyState icon="inbox" title="No role inboxes yet" detail="Add one for Partnerships so partner email reaches its agent." />
@@ -262,25 +303,26 @@ export function AdminEmailInboxes() {
         {inboxes.map((inbox) => <li key={inbox.id}>
           <div className="email-inbox-top">
             <strong>{inbox.label}</strong>
-            <span className="email-inbox-status" data-state={inbox.status}>{inbox.status === 'active' ? 'Receiving' : 'Paused · mail is refused'}</span>
+            <span className="email-inbox-status" data-state={inbox.status}>{inbox.status === 'active' ? 'Receiving' : 'Paused · new email is turned away'}</span>
             <span className="email-inbox-actions">
               <Button small disabled={busyId === inbox.id} onClick={() => void setStatus(inbox, inbox.status === 'active' ? 'paused' : 'active')}>{inbox.status === 'active' ? 'Pause' : 'Resume'}</Button>
               <Button small disabled={busyId === inbox.id} onClick={() => setRemoving(inbox)}>Remove</Button>
             </span>
           </div>
           <CopyAddress address={inbox.address} />
-          <p className="email-inbox-facts">{roleName(inbox.role_slug)} · Read by {inbox.agent.name} · {inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</p>
+          <p className="email-inbox-facts">{roleName(inbox.role_slug)} team · Read by {inbox.agent.name} · {inbox.message_count} {inbox.message_count === 1 ? 'email' : 'emails'}</p>
           <RecentMail inbox={inbox} />
         </li>)}
       </ul>}
-    <AdminSettingsCard title="Getting mail to an inbox" description="Any of these works. Hermes sees only what reaches the address.">
+    <AdminSettingsCard title="Getting email to an inbox" description="Any of these works. Hermes only sees what reaches the address.">
       <div className="email-inbox-help">
         <ol>
-          <li>Copy the address on shared mail, or add it to a group such as partners@.</li>
-          <li>In Google Workspace, route a group’s mail to it (Admin console → Apps → Gmail → Routing → Add more recipients).</li>
-          <li>In Gmail or Outlook, forward selected messages to it with a filter.</li>
+          <li>Copy the address onto shared email, or add it to a group such as partners@.</li>
+          <li>In Google Workspace, send a group’s email to it too: Admin console → Apps → Google Workspace → Gmail → Routing → Add another rule.</li>
+          <li>In Gmail or Outlook, forward chosen emails to it with a filter.</li>
+          <li>Send a test email to the address. It shows up here within a minute.</li>
         </ol>
-        <p>Replies go only to the address that sent the email. Senders the server flags, for a failed domain check, a lookalike domain or new bank details, need a second person to approve.</p>
+        <p>Replies only ever go to the person who sent the email. If something about the sender needs checking, like a lookalike address or new bank details, a second person approves the reply too.</p>
       </div>
     </AdminSettingsCard>
     {adding && <NewInbox roles={roles} agents={agents} onClose={() => setAdding(false)} onCreated={(inbox) => { replace(inbox); setAdding(false); }} />}
@@ -288,7 +330,7 @@ export function AdminEmailInboxes() {
       <Button onClick={() => setRemoving(null)}>Keep it</Button>
       <Button primary disabled={busyId === removing.id} onClick={() => void remove(removing)}>Remove inbox</Button>
     </>}>
-      <p>Mail to {removing.address} will be refused, every email it received will be deleted, and its agent loses the reply tools. Approvals already decided keep their records.</p>
+      <p>New email to {removing.address} will be turned away, every email it received will be deleted, and {removing.agent.name} will stop suggesting replies for it. Decisions already made stay in History.</p>
     </Dialog>}
   </>;
 }

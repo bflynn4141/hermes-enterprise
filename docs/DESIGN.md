@@ -63,12 +63,12 @@ One vocabulary for the Inbox list, Admin → Role inboxes and the email chat:
 |---|---|
 | Stored, not read yet | Waiting for Iris |
 | Agent reading | Reading |
-| Reply drafted, waiting for a person | Reply ready |
-| Handed to another team | Handed to Finance |
+| A reply or hand-off is waiting for people | Ready for review (Inbox rows: "Reply ready") |
 | Agent decided nothing is needed | No reply needed |
 | Waiting for an automatic retry | Trying again soon |
-| Could not be read | Couldn't read it · Try again |
-| Inbox paused | Inbox paused |
+| Could not be read | Couldn't read it, with the reason and Try again |
+| Arrived while the inbox was paused | Inbox paused |
+| A flagged sender, on any row | Check the sender |
 
 The agent's name is used where it is known ("Iris"); otherwise "the agent".
 

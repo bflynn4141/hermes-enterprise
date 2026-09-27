@@ -311,9 +311,9 @@ export async function suggestEmailReply(
   const subject = replySubject(message.subject);
   const consequence = draftOnly
     ? flagged && sendingEnabled
-      ? `Draft only. The server flagged this sender and nobody else in the workspace can be the second approver, so Hermes will not send it. Approving records the reviewed reply; verify the sender and reply from your own mail client.`
-      : 'Draft only. Approving records the reviewed reply; Hermes does not send it.'
-    : `Approving sends this exact reply from ${sender} to ${message.fromAddress}, threaded under their message. Nothing else is sent.`;
+      ? `Hermes won't send this reply. The sender needs checking, and nobody else on your team can be the second approver. Approving saves the reply so you can send it from your own email once you've checked the sender.`
+      : "Approving saves this reply. Hermes won't send it from here."
+    : `Approving sends this reply from ${sender} to ${message.fromAddress}, in the same email thread. Nothing else is sent.`;
   const cautions = message.facts.warnings.filter((warning) => warning.severity === 'caution');
   const approval = await proposeApproval({
     tx,
@@ -362,6 +362,14 @@ export async function suggestEmailReply(
     sendable: !draftOnly,
     reviewers: caution ? 'owner_and_second_person' : 'owner',
   };
+}
+
+async function roleNameOf(tx: Tx, workspaceId: string, slug: string): Promise<string> {
+  const found = await tx.query<{ name: string }>(
+    `SELECT name FROM workspace_roles WHERE workspace_id=$1 AND slug=$2`,
+    [workspaceId, slug],
+  );
+  return found.rows[0]?.name ?? slug.replace(/_/gu, ' ');
 }
 
 /**
@@ -416,6 +424,8 @@ export async function suggestEmailHandoff(
         inbound_email_id: message.id,
         from_role_slug: message.inbox.role_slug,
         to_role_slug: input.role_slug,
+        from_role_name: (await roleNameOf(tx, workspaceId, message.inbox.role_slug)).slice(0, 120),
+        to_role_name: roleName.slice(0, 120),
       }),
       context.runId, message.sessionId, `email-handoff:${context.toolCallId}`,
     ],

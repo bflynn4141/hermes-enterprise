@@ -11,37 +11,64 @@ export const APPROVAL_META: Record<ApprovalType, ApprovalMeta> = {
   run_plan: { label: 'Plan and budget', action: 'Approve plan', icon: 'loop' },
   team_commitment: { label: 'Team commitment', action: 'Accept task', icon: 'people' },
   access: { label: 'Temporary access', action: 'Allow access', icon: 'context' },
-  communication: { label: 'Communication', action: 'Approve send', icon: 'inbox' },
+  communication: { label: 'Email', action: 'Approve and send', icon: 'inbox' },
   shared_learning: { label: 'Shared learning', action: 'Approve publication', icon: 'skill' },
   deliverable: { label: 'Deliverable', action: 'Accept result', icon: 'agreement' },
   data_disclosure: { label: 'Data disclosure', action: 'Allow sharing', icon: 'context' },
   record_change: { label: 'Record change', action: 'Approve change', icon: 'trace' },
   exception: { label: 'Exception', action: 'Allow exception', icon: 'admission' },
-  agent_governance: { label: 'Agent governance', action: 'Approve configuration', icon: 'settings' },
+  agent_governance: { label: 'Agent settings', action: 'Approve settings', icon: 'settings' },
 };
 
 export function approvalType(request: RequestEntity): ApprovalType | null {
   return request.kind === 'approval' ? request.approval?.approval_type ?? null : null;
 }
 
+interface ReplyDetails {
+  draft_only?: boolean;
+  reply_to?: { caution?: boolean } | null;
+  subject?: string | null;
+}
+
+/** The details of a suggested reply to a role-inbox email, or null for any other request. */
+export function emailReplyDetails(request: RequestEntity): ReplyDetails | null {
+  if (approvalType(request) !== 'communication') return null;
+  const details = (request.payload as { details?: ReplyDetails } | null)?.details;
+  return details?.reply_to ? details : null;
+}
+
+/** Whether the server flagged the sender of the email a suggested reply answers. */
+export function emailReplyFlagged(request: RequestEntity): boolean {
+  const reply = emailReplyDetails(request);
+  if (!reply) return false;
+  if (reply.reply_to?.caution) return true;
+  // A flagged sender with nobody to second-check keeps the reply as a draft;
+  // the server's cautions still travel as the evidence note.
+  const evidence = (request.payload as { evidence?: { note?: unknown }[] } | null)?.evidence ?? [];
+  return evidence.some((item) => typeof item.note === 'string' && item.note.length > 0);
+}
+
 export function approvalTypeLabel(request: RequestEntity): string {
   const type = approvalType(request);
+  if (emailReplyDetails(request)) return 'Email reply';
   return type ? APPROVAL_META[type].label : 'Approval';
 }
 
 export function approvalActionLabel(request: RequestEntity): string {
   const type = approvalType(request);
   if (!type) return 'Review request';
+  const reply = emailReplyDetails(request);
+  if (reply) return reply.draft_only || reply.reply_to?.caution ? 'Approve reply' : 'Approve and send';
   const payload = request.payload as { details?: { draft_only?: boolean } };
   return type === 'communication' && payload.details?.draft_only === true ? 'Approve draft' : APPROVAL_META[type].action;
 }
 
 export function approvalPrimaryAction(view: ApprovalView): string {
-  if (isCommunicationDraft(view)) return 'Approve draft';
   // A flagged sender's reply needs two people; the first press sends nothing.
   if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
-    return view.payload.details.reply_to.caution ? 'Approve reply' : 'Approve and send reply';
+    return view.payload.details.draft_only || view.payload.details.reply_to.caution ? 'Approve reply' : 'Approve and send';
   }
+  if (isCommunicationDraft(view)) return 'Approve draft';
   if (view.payload.approval_type !== 'team_commitment'
     || view.payload.context.source.trigger?.kind !== 'member_agent_joined') {
     return APPROVAL_META[view.payload.approval_type].action;
@@ -64,10 +91,10 @@ export function approvalReviewerLabel(request: RequestEntity): string {
       ? `Waiting for ${projection.current_reviewer_names.join(', ')}`
       : 'Waiting on others';
   }
-  if (projection.authorization_status === 'approved' && (request.payload as { details?: { draft_only?: boolean } }).details?.draft_only === true && projection.approval_type === 'communication') return 'Draft approved · Nothing sent';
-  if (projection.authorization_status === 'approved' && projection.effect_status === 'unavailable') return 'Approved · Effect unavailable';
-  if (projection.authorization_status === 'approved' && projection.work_status === 'waiting') return 'Approved · Work waiting';
-  return projection.authorization_status.replaceAll('_', ' ');
+  if (projection.authorization_status === 'approved' && (request.payload as { details?: { draft_only?: boolean } }).details?.draft_only === true && projection.approval_type === 'communication') return 'Approved · Nothing sent';
+  if (projection.authorization_status === 'approved' && projection.effect_status === 'unavailable') return 'Approved · Nothing runs automatically';
+  if (projection.authorization_status === 'approved' && projection.work_status === 'waiting') return 'Approved · Next step waiting';
+  return approvalStatusLabel(projection.authorization_status);
 }
 
 export function matchesReviewerFilter(request: RequestEntity, reviewer: 'for_me' | 'waiting' | 'all'): boolean {
@@ -93,49 +120,53 @@ export function isCommunicationDraft(view: ApprovalView): boolean {
 }
 
 export function approvalDecisionPrompt(view: ApprovalView): string {
-  if (isCommunicationDraft(view)) return 'Approve this message as reviewed copy.';
+  if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
+    const agent = view.identities.requester_agent.name;
+    return view.payload.details.draft_only
+      ? `${agent} suggested this reply. Approving saves it; Hermes won't send it.`
+      : `${agent} suggested this reply. Nothing is sent until you approve it.`;
+  }
+  if (isCommunicationDraft(view)) return 'Approving saves this message. Nothing is sent.';
   const prompts: Record<ApprovalType, string> = {
-    run_plan: 'Authorize this plan within the limits below.',
-    team_commitment: 'Accept the proposed responsibility and scope.',
-    access: 'Authorize the access and expiry shown below.',
-    communication: 'Authorize this exact message and recipients.',
-    shared_learning: 'Authorize publication of this version.',
-    deliverable: 'Accept this result against the requested criteria.',
-    data_disclosure: 'Authorize sharing the listed data with this recipient.',
-    record_change: 'Authorize the exact changes shown below.',
-    exception: 'Authorize this exception within its stated limits.',
-    agent_governance: 'Authorize this agent configuration.',
+    run_plan: 'Approve this plan and the spending limit below.',
+    team_commitment: 'Accept the responsibility and scope below.',
+    access: 'Approve the access below, and when it ends.',
+    communication: 'Approve this exact message and who it goes to.',
+    shared_learning: 'Approve sharing this with the team.',
+    deliverable: 'Accept this result against what was asked for.',
+    data_disclosure: 'Approve sharing the listed information with this recipient.',
+    record_change: 'Approve the exact changes below.',
+    exception: 'Approve this exception within its limits.',
+    agent_governance: 'Approve these agent settings.',
   };
   return prompts[view.payload.approval_type];
 }
 
 export function approvalEffectCopy(view: ApprovalView): string {
-  if (isCommunicationDraft(view)) return 'Review copy only · Nothing is sent';
-  if (view.effect.status === 'simulated') return 'Delivery simulated · Nothing was sent';
+  if (isCommunicationDraft(view)) return 'Approving saves the reply · Nothing is sent';
+  if (view.effect.status === 'simulated') return 'Test mode · Nothing was sent';
   if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
-    return view.effect.status === 'waiting' && view.status === 'pending'
-      ? 'Sends this exact reply after approval · Only to the sender'
-      : 'Records authorization · Delivery is shown below';
+    if (view.status !== 'pending') return 'Your decision is saved · Sending is shown below';
+    return view.payload.details.reply_to.caution
+      ? 'Two people approve this reply · It goes only to the sender'
+      : 'Sends when you approve · Only to the sender';
   }
-  if (view.effect.status === 'unavailable') return 'Records authorization · Execution unavailable';
-  if (view.effect.status === 'executed') return 'External action completed';
-  if (view.effect.kind !== 'none') return 'Records authorization · Execution is separate';
-  if (view.payload.approval_type === 'run_plan') return 'Work can start after all required approvals';
-  if (view.payload.approval_type === 'team_commitment') return 'Accepts responsibility · Work remains separate';
-  if (view.payload.approval_type === 'deliverable') return 'Records acceptance of this result';
-  return 'Records this authorization';
+  if (view.effect.status === 'unavailable') return 'Your decision is saved · Nothing runs automatically';
+  if (view.effect.status === 'executed') return 'Done';
+  if (view.effect.kind !== 'none') return 'Your decision is saved · The action happens separately';
+  if (view.payload.approval_type === 'run_plan') return 'Work starts once everyone has approved';
+  if (view.payload.approval_type === 'team_commitment') return 'Accepts the responsibility · The work happens separately';
+  if (view.payload.approval_type === 'deliverable') return 'Saves that you accepted this result';
+  return 'Saves your decision';
 }
 
 // ---------------------------------------------------------------------------
 // Result copy: the server's enum values, said in words a reviewer would use.
-// Unknown values (an older client against a newer Worker) fall back to the raw
-// value with underscores removed rather than to an empty label.
+// Unknown values (an older client against a newer Worker) fall back to a
+// neutral word, never to the raw value (docs/DESIGN.md).
 // ---------------------------------------------------------------------------
 
-const humanize = (value: string): string => {
-  const words = value.replaceAll('_', ' ').trim();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Unknown';
-};
+const unknownState = (): string => 'Updated';
 
 const AUTHORIZATION_LABELS: Record<string, string> = {
   pending: 'Waiting for review',
@@ -143,7 +174,7 @@ const AUTHORIZATION_LABELS: Record<string, string> = {
   declined: 'Declined',
   changes_requested: 'Changes requested',
   expired: 'Expired',
-  superseded: 'Superseded',
+  superseded: 'Replaced by a newer version',
   withdrawn: 'Withdrawn',
 };
 
@@ -151,27 +182,27 @@ const WORK_LABELS: Record<string, string> = {
   waiting: 'Waiting',
   ready: 'Ready to start',
   admitted: 'Work started',
-  completed: 'No follow-on work',
+  completed: 'Nothing else to do',
   cancelled: 'Cancelled',
   blocked: 'Blocked',
-  refused: 'Refused',
+  refused: 'Not started',
 };
 
 const EFFECT_LABELS: Record<string, string> = {
-  unavailable: 'No external effect',
+  unavailable: 'Nothing runs automatically',
   waiting: 'Waiting',
   not_required: 'Not required',
   executed: 'Done',
   // Outside production a reply to a role inbox is delivered by a simulator
   // (C98, D12); the label never says "sent".
-  simulated: 'Simulated · nothing sent',
+  simulated: 'Test mode · nothing sent',
   failed: 'Failed',
   cancelled: 'Cancelled',
 };
 
-export const approvalStatusLabel = (status: string): string => AUTHORIZATION_LABELS[status] ?? humanize(status);
-export const approvalWorkLabel = (status: string): string => WORK_LABELS[status] ?? humanize(status);
-export const approvalEffectLabel = (status: string): string => EFFECT_LABELS[status] ?? humanize(status);
+export const approvalStatusLabel = (status: string): string => AUTHORIZATION_LABELS[status] ?? unknownState();
+export const approvalWorkLabel = (status: string): string => WORK_LABELS[status] ?? unknownState();
+export const approvalEffectLabel = (status: string): string => EFFECT_LABELS[status] ?? unknownState();
 
 const WORK_REASONS: Record<string, string> = {
   no_runtime_continuation_requested: 'This approval did not ask for any work to run afterwards.',
@@ -180,12 +211,31 @@ const WORK_REASONS: Record<string, string> = {
   resource_binding_hook_changed: 'A reviewed resource changed after approval, so work was not started. Submit a new revision.',
 };
 
-/** One plain sentence for a `work.reason`; a code the client does not know is humanized, a sentence is passed through. */
+/** One plain sentence for a `work.reason`; an unknown code is not shown, a sentence is passed through. */
 export function approvalWorkReason(reason: string | null): string | null {
   if (!reason) return null;
   const known = WORK_REASONS[reason];
   if (known) return known;
-  return /^[a-z0-9_]+$/.test(reason) ? `${humanize(reason)}.` : reason;
+  return /^[a-z0-9_:.-]+$/.test(reason) ? null : reason;
+}
+
+/**
+ * What happened to the approved action, for the result block. The server's
+ * `effect.reason` is operator detail (it can name a simulated delivery id),
+ * so the reviewer gets a sentence chosen from the effect's state instead.
+ */
+export function approvalEffectSentence(view: ApprovalView): string {
+  const reply = view.payload.approval_type === 'communication' && Boolean(view.payload.details.reply_to);
+  switch (view.effect.status) {
+    case 'simulated': return 'This is a test workspace, so nothing was actually sent.';
+    case 'executed': return reply ? 'The reply was sent.' : 'Done.';
+    case 'waiting': return reply ? 'Waiting for a connected Gmail account to send from.' : 'Waiting to run.';
+    case 'failed': return reply ? 'The reply could not be sent. Nothing went out.' : 'This did not run.';
+    case 'unavailable': return 'Nothing runs automatically for this kind of request.';
+    case 'not_required': return 'Nothing else needs to happen.';
+    case 'cancelled': return 'Cancelled before it ran.';
+    default: return 'What happens next is shown here.';
+  }
 }
 
 export function formatMinor(minor: number, currency: string): string {

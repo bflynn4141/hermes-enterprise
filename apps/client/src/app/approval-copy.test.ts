@@ -23,21 +23,21 @@ function legacyRequest(canDecide: boolean, kind: RequestEntity['kind'] = 'invoic
 }
 
 describe('approval result copy', () => {
-  it('names each server state in reviewer words and humanizes an unknown one', () => {
+  it('names each server state in reviewer words and never shows an unknown one raw', () => {
     expect(approvalStatusLabel('pending')).toBe('Waiting for review');
     expect(approvalStatusLabel('changes_requested')).toBe('Changes requested');
     expect(approvalStatusLabel('withdrawn')).toBe('Withdrawn');
     expect(approvalWorkLabel('admitted')).toBe('Work started');
-    expect(approvalWorkLabel('completed')).toBe('No follow-on work');
-    expect(approvalEffectLabel('unavailable')).toBe('No external effect');
+    expect(approvalWorkLabel('completed')).toBe('Nothing else to do');
+    expect(approvalEffectLabel('unavailable')).toBe('Nothing runs automatically');
     expect(approvalEffectLabel('executed')).toBe('Done');
-    expect(approvalWorkLabel('some_future_state')).toBe('Some future state');
+    expect(approvalWorkLabel('some_future_state')).toBe('Updated');
   });
 
   it('turns a work reason code into one sentence and passes a sentence through', () => {
     expect(approvalWorkReason('no_runtime_continuation_requested')).toBe('This approval did not ask for any work to run afterwards.');
     expect(approvalWorkReason('resource_binding_hook_changed')).toMatch(/changed after approval/);
-    expect(approvalWorkReason('profile_missing')).toBe('Profile missing.');
+    expect(approvalWorkReason('profile_missing')).toBeNull();
     expect(approvalWorkReason('The proposal was declined.')).toBe('The proposal was declined.');
     expect(approvalWorkReason(null)).toBeNull();
   });
