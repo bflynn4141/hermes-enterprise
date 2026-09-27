@@ -385,6 +385,13 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 
+    case 'email_triage.retried':
+      text = row.actor_type === 'system' ? 'Hermes asked the inbox agent to read an email again' : `${actor} asked the inbox agent to read an email again`;
+      detail = row.actor_type === 'system' ? 'The model provider was busy · Retried automatically after a wait' : 'The last attempt did not finish';
+      status = 'Retried';
+      ref = null;
+      break;
+
     case 'inbound_email.received':
       text = 'An email arrived at a role inbox';
       detail = 'Stored after sanitizing and sender checks · Handed to the inbox agent';

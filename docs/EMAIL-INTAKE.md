@@ -28,6 +28,31 @@ records the reasoning. This page is the operator and developer reference.
    sent through a connected Gmail sender, waits for one, or, where the effect
    executor is simulated, is recorded as simulated.
 
+## When the agent could not read a message
+
+A triage run can fail for reasons that heal, most often the model provider
+rate-limiting the agent (`hermes_provider_rate_limited`). Each message counts
+its attempts (`triage_attempt`); the triage job's key and the run's client turn
+id carry the number, so every retry is a fresh job and a fresh intake run.
+
+- **Automatically.** Each minute the Cron (`scheduleEmailTriageRetries` in
+  `inbound-email/triage.ts`) finds intake runs that ended with
+  `hermes_provider_rate_limited` or `hermes_provider_unavailable` and puts the
+  message back to `received` with a job that waits 1 minute after the first
+  failure and 5 minutes after the second, or longer if the provider sent
+  Retry-After. After three attempts it stops. Generic run recovery
+  (`runs/recovery.ts`) skips `email-triage:` runs, so nothing else retries them.
+- **By a person.** Admin → Role inboxes shows **Try again** on a message whose
+  run failed before suggesting anything, or whose job failed before starting a
+  run. The button calls `POST /w/:ws/email/messages/:id/retry`, which anyone
+  who may read the message can use (Origin and CSRF checked, 10 a minute). It
+  answers 409 `not_retryable` while a run is working or an automatic retry is
+  waiting, and 409 `inbox_paused` for a paused inbox.
+
+Suggestion tools find their message by `triage_run_id`, so after a retry the
+failed run can no longer attach anything to the message. Each retry writes an
+`email_triage.retried` event naming the failed run.
+
 ## What the reviewer can trust
 
 | Shown on the card | Where it comes from |
@@ -107,7 +132,8 @@ records that walkthrough end to end.
 
 - `email_inboxes`, `email_inbox_directory`, `inbound_email_messages`
   (migration 0076). Message content columns are immutable to the app role;
-  only triage bookkeeping changes.
+  only triage bookkeeping changes (status, run, error, suggestions and, since
+  0077, `triage_attempt`).
 - `outbound_email_outbox` gains `inbound_message_id`, `in_reply_to`,
   `references_header` and a `simulated` state; approval effects gain
   `simulated`.

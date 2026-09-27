@@ -27,6 +27,7 @@ import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction } from '../job
 import { attachmentBytes, readAttachmentText, type ReadAttachment } from './attachments.js';
 import { plainTextEmail, sanitizeEmailHtml, type InlineImage } from './sanitize.js';
 import { DEFAULT_AUTHSERV_ID, parseAuthenticationResults, senderFacts } from './sender-facts.js';
+import { emailTriageKey } from './view.js';
 
 /** Well under Cloudflare's 25 MiB limit; attachments are listed, never stored. */
 export const MAX_INBOUND_EMAIL_BYTES = 10 * 1024 * 1024;
@@ -218,7 +219,7 @@ export async function receiveInboundEmail(env: Env, email: IncomingEmail): Promi
       `INSERT INTO events (workspace_id, actor_type, kind) VALUES ($1, 'system', 'inbound_email.received')`,
       [inbox.workspaceId],
     );
-    const job = await enqueueJob(tx, inbox.workspaceId, 'email_triage', `email-triage:${id}`, { message_id: id });
+    const job = await enqueueJob(tx, inbox.workspaceId, 'email_triage', emailTriageKey(id, 1), { message_id: id });
     if (job) jobs.push(job);
     return { id, duplicate: false };
   });

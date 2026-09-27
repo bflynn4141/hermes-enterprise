@@ -171,10 +171,18 @@ export const createEmailInboxInputSchema = z.object({
 }).strict();
 export type CreateEmailInboxInput = z.infer<typeof createEmailInboxInputSchema>;
 
+/**
+ * One row of an inbox's recent mail. `can_retry` is the server's answer to
+ * whether Try again would do anything: the agent's run failed before it
+ * suggested anything, or its job stopped before starting one.
+ */
+export const inboundEmailListItemSchema = inboundEmailViewSchema.pick({
+  id: true, received_at: true, subject: true, sender: true, status: true, request_ids: true,
+}).extend({ can_retry: z.boolean() });
+export type InboundEmailListItem = z.infer<typeof inboundEmailListItemSchema>;
+
 export const inboundEmailListSchema = z.object({
-  messages: z.array(inboundEmailViewSchema.pick({
-    id: true, received_at: true, subject: true, sender: true, status: true, request_ids: true,
-  })).max(100),
+  messages: z.array(inboundEmailListItemSchema).max(100),
 }).strict();
 export type InboundEmailList = z.infer<typeof inboundEmailListSchema>;
 

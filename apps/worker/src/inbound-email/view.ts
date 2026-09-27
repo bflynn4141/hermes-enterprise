@@ -23,6 +23,35 @@ export const DERIVED_EMAIL_STATUS_SQL = `CASE
     ELSE m.status
   END`;
 
+/**
+ * The job key, and the run's client turn id, for one triage attempt. The first
+ * attempt keeps the key intake has always used, so rows stored before retries
+ * existed still match their job.
+ */
+export const emailTriageKey = (messageId: string, attempt: number): string =>
+  attempt <= 1 ? `email-triage:${messageId}` : `email-triage:${messageId}:${attempt}`;
+
+/** `emailTriageKey` in SQL, for the message `m`. */
+const EMAIL_TRIAGE_KEY_SQL = `CASE WHEN m.triage_attempt <= 1 THEN 'email-triage:' || m.id
+    ELSE 'email-triage:' || m.id || ':' || m.triage_attempt END`;
+
+/**
+ * SQL for whether a person may ask the agent to read a message again; `m` is
+ * the message, `i` its inbox and `r` its triage run (LEFT JOIN). Either the
+ * run failed before suggesting anything, or the message is still `received`
+ * but the job for this attempt has finished or already failed once, so it is
+ * either never going to run or waiting out a backoff. A job that is queued or
+ * running without an error is left alone, and so is an automatic retry that
+ * is waiting for its turn.
+ */
+export const EMAIL_RETRYABLE_SQL = `(i.status = 'active' AND cardinality(m.request_ids) = 0 AND (
+    (${DERIVED_EMAIL_STATUS_SQL}) = 'failed'
+    OR (m.status = 'received' AND NOT EXISTS (
+      SELECT 1 FROM jobs j
+       WHERE j.workspace_id = m.workspace_id AND j.kind = 'email_triage' AND j.key = ${EMAIL_TRIAGE_KEY_SQL}
+         AND j.done_at IS NULL AND j.last_error IS NULL))
+  ))`;
+
 interface MessageRow {
   id: string;
   inbox_id: string;

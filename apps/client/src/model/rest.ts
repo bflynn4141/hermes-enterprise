@@ -31,12 +31,14 @@ import {
   type ApprovalEvidenceView,
   emailInboxListSchema,
   emailInboxSchema,
+  inboundEmailListItemSchema,
   inboundEmailListSchema,
   inboundEmailViewSchema,
   type CreateEmailInboxInput,
   type EmailInbox,
   type EmailInboxList,
   type InboundEmailList,
+  type InboundEmailListItem,
   type InboundEmailView,
   agentRecoveryViewSchema,
   agentProvisioningResponseSchema,
@@ -534,6 +536,9 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/email/inboxes/${id}/messages`, inboundEmailListSchema) as Promise<InboundEmailList>,
     getInboundEmail: (workspaceId: string, id: string) =>
       request('GET', `${ws(workspaceId)}/email/messages/${id}`, inboundEmailViewSchema) as Promise<InboundEmailView>,
+    /** Asks the inbox agent to read a message again after a failed attempt. Returns its updated row. */
+    retryInboundEmail: (workspaceId: string, id: string) =>
+      request('POST', `${ws(workspaceId)}/email/messages/${id}/retry`, inboundEmailListItemSchema, {}) as Promise<InboundEmailListItem>,
     /** Closes a hand-off; guarded like a decision (Origin, surface, CSRF, step-up). */
     completeEmailHandoff: (workspaceId: string, requestId: string) =>
       send('POST', `${ws(workspaceId)}/email/handoffs/${requestId}/complete`, {}, { requestedFrom: 'inbox' }),

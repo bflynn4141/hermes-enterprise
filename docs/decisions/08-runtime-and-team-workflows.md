@@ -1898,6 +1898,15 @@ the read-only workflow group at desktop and 430px.
   role's holders and a hand-off's audience, not by Admins as such (roles plan
   decision 1). Removing an inbox deletes its stored messages, withdraws its
   agent's tools and retires its policies.
+- **Retrying a failed read** (added September 27, 2026, after staging's
+  first real message failed with `hermes_provider_rate_limited`). A message
+  numbers its triage attempts; each attempt is a new job and a new intake run
+  rather than a resumed one, because an intake turn has no effects worth
+  keeping and a fresh run cannot inherit anything the failed one did. The
+  Cron retries provider rate limits and outages twice with a 1- then
+  5-minute backoff; generic run recovery skips intake runs so there is one
+  retrier. A person who may read the message can press Try again (Origin and
+  CSRF, no step-up: a retry grants nothing the message's arrival did not).
 
 **Why.** The research behind this (published email-agent incidents such as
 EchoLeak, the Superhuman and Gemini summary cases, and Instinct's first weeks)

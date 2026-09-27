@@ -60,6 +60,8 @@
 .email-inbox-messages li:last-child { border-bottom: 0; }
 .email-inbox-messages .from { color: var(--muted); }
 .email-inbox-messages .state { color: var(--muted); text-align: right; }
+.email-inbox-messages .retry { grid-column: 2; justify-self: end; }
+.email-inbox-messages .problem { grid-column: 1 / -1; margin: 2px 0 0; color: #ffc7cb; font-size: 13px; }
 /* One field per row: side by side, the agent picker cut off the role that tells two same-named agents apart. */
 .email-inbox-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .email-inbox-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }

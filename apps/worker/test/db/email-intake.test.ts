@@ -8,13 +8,16 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   approvalEvidenceViewSchema,
   emailInboxSchema,
+  inboundEmailListItemSchema,
+  inboundEmailListSchema,
   inboundEmailViewSchema,
   type ApprovalView,
 } from '@hermes/shared';
 import type { Env } from '../../src/env.js';
 import { receiveInboundEmail } from '../../src/inbound-email/intake.js';
 import { suggestEmailHandoff, suggestEmailReply } from '../../src/inbound-email/suggestions.js';
-import { runEmailTriageJob } from '../../src/inbound-email/triage.js';
+import { runEmailTriageJob, scheduleEmailTriageRetries } from '../../src/inbound-email/triage.js';
+import { scheduleRunRecovery } from '../../src/runs/recovery.js';
 import { queueApprovedEmail } from '../../src/outbound-email/outbox.js';
 import { runOutboundEmailSendJob } from '../../src/outbound-email/send-job.js';
 import { withWorkspaceTransaction, type Job } from '../../src/jobs.js';
@@ -95,9 +98,12 @@ async function seedInbox(): Promise<Seeded> {
   return { ...fx, adminMemberId, inboxId: inbox.id, address: inbox.address };
 }
 
-async function triage(fx: Seeded, messageId: string): Promise<string> {
+const triageKey = (messageId: string, attempt: number): string =>
+  attempt === 1 ? `email-triage:${messageId}` : `email-triage:${messageId}:${attempt}`;
+
+async function triage(fx: Seeded, messageId: string, attempt = 1): Promise<string> {
   const jobId = (await scoped<{ id: string }>(fx.workspaceId,
-    `SELECT id FROM jobs WHERE workspace_id=$1 AND kind='email_triage' AND key=$2`, [fx.workspaceId, `email-triage:${messageId}`],
+    `SELECT id FROM jobs WHERE workspace_id=$1 AND kind='email_triage' AND key=$2`, [fx.workspaceId, triageKey(messageId, attempt)],
   ))[0]?.id;
   expect(jobId).toBeTruthy();
   await runEmailTriageJob(env, { id: jobId!, workspace_id: fx.workspaceId, kind: 'email_triage', payload: { message_id: messageId } } as unknown as Job);
@@ -115,6 +121,35 @@ async function triage(fx: Seeded, messageId: string): Promise<string> {
  */
 const finishRun = (fx: Seeded, runId: string): Promise<unknown> =>
   scoped(fx.workspaceId, `UPDATE runs SET status='completed', ended_at=now() WHERE workspace_id=$1 AND id=$2`, [fx.workspaceId, runId]);
+
+/** End a run the way the engine does when the provider refuses it. */
+const failRun = (fx: Seeded, runId: string, reason = 'hermes_provider_rate_limited', endedSecondsAgo = 0): Promise<unknown> =>
+  scoped(fx.workspaceId,
+    `UPDATE runs SET status='error', ended_at=now() - ($3 || ' seconds')::interval,
+            error=jsonb_build_object('class', 'transient', 'reason', $4::text, 'retryable', true, 'message', 'The model provider is busy.')
+      WHERE workspace_id=$1 AND id=$2`,
+    [fx.workspaceId, runId, String(endedSecondsAgo), reason]);
+
+async function listRow(fx: Seeded, messageId: string) {
+  const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}/messages`);
+  expect(response.status).toBe(200);
+  return inboundEmailListSchema.parse(await response.json()).messages.find((row) => row.id === messageId);
+}
+
+async function messageRow(fx: Seeded, messageId: string) {
+  return (await scoped<{ status: string; triage_attempt: number; triage_run_id: string | null; triage_error: string | null }>(fx.workspaceId,
+    `SELECT status, triage_attempt, triage_run_id, triage_error FROM inbound_email_messages WHERE id=$1`, [messageId],
+  ))[0]!;
+}
+
+const retry = (fx: Seeded, userId: string, messageId: string, origin?: string | null): Promise<Response> =>
+  asUser(env, userId, `/w/${fx.workspaceId}/email/messages/${messageId}/retry`, { method: 'POST', body: {}, ...(origin === undefined ? {} : { origin }) });
+
+async function receive(fx: Seeded, subject = 'Invoice NW-9'): Promise<string> {
+  const stored = await receiveInboundEmail(env, { to: fx.address, raw: rawEmail({ to: fx.address, from: 'priya@northwind.example', subject, html: '<p>Invoice attached.</p>' }) });
+  if (stored.status !== 'stored') throw new Error('not stored');
+  return stored.messageId;
+}
 
 const suggestReply = (fx: Seeded, runId: string, body = 'Thanks, received.'): Promise<{ request_id: string; sendable: boolean; reviewers: string }> =>
   withWorkspaceTransaction(env, fx.workspaceId, (tx) => suggestEmailReply({
@@ -379,6 +414,129 @@ describe('email intake', () => {
       tools: (await scoped(fx.workspaceId, `SELECT 1 FROM agent_capabilities WHERE workspace_id=$1 AND scope=$2`, [fx.workspaceId, `email-inbox:${fx.inboxId}`])).length,
     };
     expect(left).toEqual({ messages: 0, directory: 0, tools: 0 });
+  });
+
+  it('lets a reader ask the agent again after the provider refused the run, and nobody else', async () => {
+    const fx = await seedInbox();
+    const messageId = await receive(fx);
+    const firstRun = await triage(fx, messageId);
+    await failRun(fx, firstRun, 'hermes_provider_rate_limited');
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true });
+
+    // Not a reader: the message does not exist for them.
+    expect((await retry(fx, fx.memberId, messageId)).status).toBe(404);
+    // A write without an allowlisted Origin is refused before anything else.
+    expect((await retry(fx, fx.adminId, messageId, null)).status).toBe(403);
+    expect((await retry(fx, fx.adminId, messageId, 'https://evil.example')).status).toBe(403);
+    expect((await messageRow(fx, messageId)).triage_attempt).toBe(1);
+
+    const response = await retry(fx, fx.adminId, messageId);
+    expect(response.status, await response.clone().text()).toBe(202);
+    expect(inboundEmailListItemSchema.parse(await response.json())).toMatchObject({ id: messageId, status: 'received', can_retry: false });
+
+    // The request ran the new job after its commit: a second run, its own turn.
+    const after = await messageRow(fx, messageId);
+    expect(after).toMatchObject({ status: 'triaging', triage_attempt: 2, triage_error: null });
+    expect(after.triage_run_id).not.toBe(firstRun);
+    const turn = (await scoped<{ client_turn_id: string; mode: string }>(fx.workspaceId,
+      `SELECT client_turn_id, mode FROM runs WHERE id=$1`, [after.triage_run_id]))[0];
+    expect(turn).toEqual({ client_turn_id: `email-triage:${messageId}:2`, mode: 'intake' });
+    const audit = await scoped<{ actor_type: string; actor_user_id: string; run_id: string }>(fx.workspaceId,
+      `SELECT actor_type, actor_user_id, run_id FROM events WHERE workspace_id=$1 AND kind='email_triage.retried'`, [fx.workspaceId]);
+    expect(audit).toEqual([{ actor_type: 'user', actor_user_id: fx.adminId, run_id: firstRun }]);
+
+    // While the new run works, a second click does nothing.
+    expect(await (await retry(fx, fx.adminId, messageId)).json()).toMatchObject({ reason: 'not_retryable' });
+    expect((await messageRow(fx, messageId)).triage_attempt).toBe(2);
+
+    // The failed run can no longer attach a suggestion to the message; the new one can.
+    await expect(suggestReply(fx, firstRun)).rejects.toMatchObject({ reason: 'not_an_email_run' });
+    const suggestion = await suggestReply(fx, after.triage_run_id!);
+    expect(suggestion.sendable).toBe(true);
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'suggested', can_retry: false, request_ids: [suggestion.request_id] });
+  });
+
+  it('retries a rate-limited triage by itself after a backoff, three attempts at most', async () => {
+    const fx = await seedInbox();
+    const messageId = await receive(fx);
+    const firstRun = await triage(fx, messageId);
+    await failRun(fx, firstRun, 'hermes_provider_rate_limited', 120);
+
+    // Run recovery leaves intake runs alone, so only one thing retries them.
+    await scheduleRunRecovery(env);
+    expect(await scoped(fx.workspaceId, `SELECT 1 FROM jobs WHERE kind='run_recovery' AND key LIKE $1`, [`run-recovery:${firstRun}:%`])).toHaveLength(0);
+
+    // Attempt 1 ended two minutes ago; its one-minute wait is over.
+    expect((await scheduleEmailTriageRetries(env)).retried).toBeGreaterThanOrEqual(1);
+    expect(await messageRow(fx, messageId)).toMatchObject({ status: 'received', triage_attempt: 2, triage_run_id: null });
+    const secondRun = await triage(fx, messageId, 2);
+
+    // Attempt 2 just failed: the next try waits five minutes, and reads as received meanwhile.
+    await failRun(fx, secondRun, 'hermes_provider_rate_limited');
+    await scheduleEmailTriageRetries(env);
+    const waiting = (await scoped<{ wait: number }>(fx.workspaceId,
+      `SELECT extract(epoch FROM next_at - now())::int AS wait FROM jobs WHERE workspace_id=$1 AND kind='email_triage' AND key=$2`,
+      [fx.workspaceId, triageKey(messageId, 3)]))[0];
+    expect(waiting?.wait).toBeGreaterThan(240);
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'received', can_retry: false });
+    // A second Cron pass in the same minute changes nothing.
+    await scheduleEmailTriageRetries(env);
+    expect((await messageRow(fx, messageId)).triage_attempt).toBe(3);
+
+    // Attempt 3 fails too: Hermes stops, and a person can take over.
+    const thirdRun = await triage(fx, messageId, 3);
+    await failRun(fx, thirdRun, 'hermes_provider_rate_limited', 600);
+    await scheduleEmailTriageRetries(env);
+    expect(await messageRow(fx, messageId)).toMatchObject({ status: 'triaging', triage_attempt: 3, triage_run_id: thirdRun });
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true });
+    const automatic = await scoped(fx.workspaceId,
+      `SELECT 1 FROM events WHERE workspace_id=$1 AND kind='email_triage.retried' AND actor_type='system'`, [fx.workspaceId]);
+    expect(automatic).toHaveLength(2);
+  });
+
+  it('leaves a failure that will not heal by waiting for a person', async () => {
+    const fx = await seedInbox();
+    const messageId = await receive(fx);
+    const runId = await triage(fx, messageId);
+    await failRun(fx, runId, 'model_error', 600);
+    await scheduleEmailTriageRetries(env);
+    expect(await messageRow(fx, messageId)).toMatchObject({ status: 'triaging', triage_attempt: 1, triage_run_id: runId });
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'failed', can_retry: true });
+  });
+
+  it('retries a received email whose job stopped before starting a run, but not one still queued', async () => {
+    const fx = await seedInbox();
+    const messageId = await receive(fx);
+    // Intake ran the job after its commit. Put the message back where it sits
+    // between intake and the job's first try.
+    await finishRun(fx, (await messageRow(fx, messageId)).triage_run_id!);
+    await scoped(fx.workspaceId, `UPDATE inbound_email_messages SET status='received', triage_run_id=NULL WHERE id=$1`, [messageId]);
+    await scoped(fx.workspaceId, `UPDATE jobs SET done_at=NULL, locked_until=NULL, last_error=NULL WHERE workspace_id=$1 AND key=$2`,
+      [fx.workspaceId, triageKey(messageId, 1)]);
+    // Queued and not yet tried: leave it to the job.
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'received', can_retry: false });
+    expect((await retry(fx, fx.adminId, messageId)).status).toBe(409);
+
+    // The job failed once and is waiting out its backoff: a person may go ahead.
+    await scoped(fx.workspaceId,
+      `UPDATE jobs SET attempts=1, last_error='run_in_flight', next_at=now() + interval '1 hour' WHERE workspace_id=$1 AND key=$2`,
+      [fx.workspaceId, triageKey(messageId, 1)]);
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'received', can_retry: true });
+
+    // Not while its inbox is paused.
+    await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}`, { method: 'PATCH', body: { status: 'paused' } });
+    expect(await listRow(fx, messageId)).toMatchObject({ can_retry: false });
+    expect(await (await retry(fx, fx.adminId, messageId)).json()).toMatchObject({ reason: 'inbox_paused' });
+    await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/inboxes/${fx.inboxId}`, { method: 'PATCH', body: { status: 'active' } });
+
+    expect((await retry(fx, fx.adminId, messageId)).status).toBe(202);
+    const after = await messageRow(fx, messageId);
+    expect(after).toMatchObject({ status: 'triaging', triage_attempt: 2 });
+
+    // The old job, when its backoff ends, finds the message taken and does nothing.
+    const oldJob = (await scoped<{ id: string }>(fx.workspaceId, `SELECT id FROM jobs WHERE key=$1`, [triageKey(messageId, 1)]))[0]!;
+    await runEmailTriageJob(env, { id: oldJob.id, workspace_id: fx.workspaceId, kind: 'email_triage', payload: { message_id: messageId } } as unknown as Job);
+    expect(await messageRow(fx, messageId)).toMatchObject({ triage_run_id: after.triage_run_id, triage_attempt: 2 });
   });
 
   it('lets only an Admin create an inbox', async () => {
