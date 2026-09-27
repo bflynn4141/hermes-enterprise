@@ -1706,6 +1706,84 @@ confirmer who lost the role. The existing decision, handoff and approval-route
 suites pass unchanged apart from the rule's new field. The full database
 suite (759 tests) passes.
 
+## C96. Admins configure an agent: name, model, skills from the catalog, more approval switches
+
+**Decided September 26, 2026** (roles-and-agents plan, piece 4; see
+`docs/ROLES-AND-AGENTS-PLAN.md`).
+
+- **Name.** `PATCH /w/:ws/admin/agents/:agentId` takes a strict
+  `{ name?, model_id? }`. It is Admin only, uses governance access (C91), and
+  always needs a recent sign-in: renaming another person's agent or changing
+  the model its conversations start with is the same bar as changing a
+  member's role, and one rule is simpler than a second path for the Admin's
+  own agent. It writes a `settings.changed` event, publishes `entity.updated`,
+  returns the agent's directory entry and never reads or returns a session,
+  message, run or parked call. Refusals: `bad_agent_update`, `unknown_agent`,
+  `reauth_required`, `unknown_model`, `provider_not_allowed`.
+- **Model, a default and not a lock.** Migration 0075 adds a nullable
+  `agents.model_id`. A new session for the agent starts from it, falling back
+  to `workspace_settings.default_model_id` when it is unset or no longer
+  runnable (disabled in the catalog, or without tool calling). The session's
+  owner may still change their session's model, and an existing session is
+  never rewritten. Every place a session's model is first chosen (the
+  sessions route, Slack, member onboarding, partner screening automation and
+  the Finance review) reads `domain/agent-model.ts`. The "can this workspace
+  run it" check is one helper, `model/runnable.ts`, now shared by a session's
+  model, the workspace default and an agent's model; an agent on a Hermes
+  runtime is also held to the models the runtime's model proxy routes. The
+  directory shows `model: { id, label, source: 'agent' | 'workspace_default' }`.
+- **Skills from the catalog, at the pinned version.** `GET /w/:ws/skill-catalog`
+  lists what an Admin may assign: one entry per skill, at the version a lane
+  gets today (Partner program screening 1.8.0, Partner invoice review 1.0.1),
+  with its digest, tools and role template. `POST
+  /agents/:agentId/skill-assignments` takes only `{ skill_key }`; the server
+  picks the version, the reviewed artifact, the agent's lane and the role's
+  default settings through the same write the role setup uses. `DELETE
+  /agents/:agentId/skill-assignments/:id` removes one. Both are Admin, governance
+  access and step-up. Refusals: `unknown_skill`, `already_assigned`,
+  `one_active_skill` (readiness admits exactly one active skill),
+  `skill_role_mismatch` (a lane's connector scopes cover its own role's
+  skill), `no_lane`, and `runtime_rebuild_required` when the agent has a Hermes
+  runtime binding, Cloud capacity, a provisioning row or an operator runtime.
+- **Removal keeps the row.** A removed assignment is paused and marked
+  `removed_at` (0075, with a check that a removed row is never active). Run
+  grants and discovery grants reference assignments with `ON DELETE RESTRICT`,
+  and the revision trail is the audit record, so a delete would have failed
+  for any agent that had run and would have erased history. Every assignment
+  reader skips a removed row; assigning the skill again reactivates it.
+- **More approval switches.** The operation catalog adds `request_approval`
+  (`propose_approval`), `publish_handoff` (`publish_partner_invoice_review`)
+  and `read_handoff_results` (`get_partner_handoff_result`). Each defaults to
+  no approval, as before. A Finance agent, which had no switch, now shows one.
+  The native bridge's `propose_approval` path now parks a switched call the
+  way the general dispatch does, with no tool result until a person decides.
+
+**Not in this decision.** Creating an agent stays with the invitation flow: a
+managed agent needs reserved Cloud pool capacity and a fresh readiness proof
+before it exists. An Admin never chooses a skill version.
+
+**Why.** Brian asked for Admins to configure agents from the product. The
+runtime attests the exact bytes of one skill when it starts (C85, C88), so an
+Admin composes from a vetted catalog rather than authoring or pinning skills,
+a managed agent's skill cannot change without a rebuild, and a second active
+skill would make readiness ambiguous. The model is request data at the
+runtime boundary (C88), which is what makes a per-agent default safe; the
+runtime restriction keeps the default inside the models the proxy serves.
+
+**Evidence.** `test/db/agent-directory.test.ts` renames a member's private
+agent and sets its model, proving the response and directory carry none of the
+agent's session, message, run, parked argument or host; refuses a bad body, an
+unknown agent, an unrunnable or runtime-unrouted model, a Member and a stale
+sign-in; and starts a new session on the agent's model while leaving an
+existing session alone and falling back when the model is disabled.
+`test/db/enterprise-skill-assignments.test.ts` covers the catalog, remove and
+re-assign at 1.8.0 with its digest and history, every refusal, the managed
+agent's rebuild refusal, Member and stale sign-in, and the directory following.
+`test/db/agent-operation-permissions.test.ts` proves `request_approval` is off
+by default and, when on, parks a native `propose_approval` call, keeps it parked
+on retry and resumes it after approval. The full database suite (754 tests)
+passes.
+
 ## C97. Everything that grants a role asks what a role change asks
 
 **Decided September 26, 2026** (roles-and-agents cleanup after C90–C93).

@@ -13,8 +13,8 @@ each one ships something a person can try.
 | Area | Today | What an Admin can do |
 |---|---|---|
 | Roles | A catalog per workspace (C92): five built-ins plus any an Admin adds. Many people hold a role, and a member's job role stays on them after they join. Only the handoff lanes are still one person and one agent per side. | Admin → Roles: add, rename (custom roles), describe, staff and remove roles. Set a person's roles when inviting them or in Manage. Changes need a recent sign-in. |
-| Agents | A directory of every agent with its owner, role, skills, runtime and approval switches (C91). No create, rename or delete. | Set any agent's role and permissions without reading its conversations; edit a skill assignment's settings, pause state and schedule; toggle approval for three operations. |
-| Skills | Four packages, defined in code with pinned versions. The runtime proves each skill's exact bytes. | Nothing: no assign, unassign or version change. |
+| Agents | A name and an optional model on the agent (C96); owner, role and skills come from their own tables. No create or delete. | Rename any agent, choose the model its new conversations start with, assign or remove a catalog skill on an agent without a managed runtime, edit a skill's settings, pause state and schedule, and toggle approval for six operations. An Admin cannot open another member's private agent. |
+| Skills | Four packages, defined in code with pinned versions. The runtime proves each skill's exact bytes. | Assign or remove a catalog skill at its pinned version (C96). No version choice, and no change on an agent whose runtime attests its skill. |
 | Approval types | Seven business approvals (three decisions, four actions) routed by workspace rules (C93), plus typed approvals a workflow raises with its own reviewer. | Admin → Approvals: choose Admins and/or roles for each of the seven, how many different people an action needs, and whether the requester may approve. Workflow-raised approvals are listed read-only (C97). |
 | Reviewer roles | Merged into roles (C92): holding a role is what a tag was. | The same as Roles. |
 | Handoffs | A generic-looking table with two lanes, five stages and one seeded Partnerships → Finance handoff. | Pick each lane's person and agent by name, and turn it on or off. Saving the lanes and turning the handoff on need a recent sign-in, and an Admin cannot name themself for Finance (C97). |
@@ -61,7 +61,7 @@ break that guarantee. Instructions and skill settings stay editable, as today.
 | 1 | Admin → Agents directory with owner, role, skills, runtime and approval switches for every agent; Admins set any agent's role and permissions without seeing its conversations; person and agent pickers in the role binding form. | An Admin sees who does what and turns on the Partnerships → Finance handoff in a minute. | Done, #185 (C91) |
 | 2 | Roles as data: a roles table seeded with Partnerships and Finance replaces the fixed checks; job roles persist on members; many people per role; invitations pick from the table; reviewer tags become role membership. | Admin → Roles: see who holds each role, add roles, staff them. Unblocks 3–5. | Done (C92) |
 | 3 | Approval routing screen: per approval type, which roles (and whether Admins) approve, how many different people it needs, one from each group, whether the requester may approve, and for invoices and payments a different rule above an amount. No steps or named people yet. | Payments need three Finance people; a new member's roles say what they can approve. | Done (C93). Invoices and payments can use a different rule above an amount (C94), and decisions can need several people, one from each group (C95). |
-| 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Set up a third role's agent from the UI. | |
+| 4 | Agent configuration: create and rename agents, assign catalog skills (the unused create-assignment schema), a model per agent, approval switches for more operations. | Rename an agent, pick its model, swap its catalog skill, and turn on approval for requesting approvals and handoffs. | Done except creation, which needs reserved capacity; see C96 |
 | 5 | Configurable handoffs: role to role, chosen trigger and request type, more than two lanes. | Wire a new cross-role flow without code. | Wait for a second real workflow |
 
 ## How this relates to Nous
@@ -88,8 +88,13 @@ Agent security docs and Hermes Agent v2026.9.24 source.
 
 ## Known gaps carried into later pieces
 
-- Parked tool-call decisions (operation approvals) have no step-up, and
-  `propose_approval` is not covered by the operation switches.
+- Parked tool-call decisions (operation approvals) have no step-up.
+  (`propose_approval` gained a switch in C96.)
+- Creating an agent from the product. A managed agent needs reserved Cloud
+  pool capacity and a fresh readiness proof before it exists, so creation
+  stays with the invitation flow (C96).
+- Changing the skill of an agent whose Hermes runtime attests it needs a
+  runtime rebuild; the product refuses it with `runtime_rebuild_required`.
 - `docs/APPROVAL-EXPANSION-STATUS.md` predates the shipped routes and runtime.
 - Approval requests raised by workflows (outreach drafts, a new member's first
   search, record changes, Shared Intelligence) keep their own seeded policies.

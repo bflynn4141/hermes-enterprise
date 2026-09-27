@@ -82,6 +82,67 @@ describe('agent operation permissions',()=>{
       expect(count.rows[0].count).toBe(0);
     }finally{await db.close();}
   });
+  it('request_approval is off by default and, when on, parks a native propose_approval call until a person decides (C96)',async()=>{
+    const {fx,runId}=await setup();const {env:e}=makeEnv();
+    const MODEL='openrouter:anthropic/claude-sonnet-5';
+    await withClient('owner',async c=>{await c.query('BEGIN');await setTenant(c,fx.workspaceId,fx.adminId);
+      await c.query(`INSERT INTO agent_capabilities(workspace_id,agent_id,kind,title,tool_names) VALUES($1,$2,'can','Ask',ARRAY['propose_approval'])`,[fx.workspaceId,fx.agentId]);
+      const member=(await c.query<{id:string}>('SELECT id FROM members WHERE workspace_id=$1 AND user_id=$2',[fx.workspaceId,fx.memberId])).rows[0]!.id;
+      await c.query(`INSERT INTO approval_policies(workspace_id,key,version,approval_type,requester_agent_id,max_budget_minor,priority,mode,prevent_self_review,steps)
+        VALUES($1,'runtime-plan',1,'run_plan',$2,500,10,'parallel',true,$3::jsonb)`,[fx.workspaceId,fx.agentId,JSON.stringify([{id:'review',label:'Reviewer',order:0,reviewers:[{kind:'member',member_id:member}],quorum:1}])]);
+      await c.query('UPDATE sessions SET model_id=$2 WHERE id=$1',[fx.sessionId,MODEL]);
+      await c.query('UPDATE runs SET model_id=$2 WHERE id=$1',[runId,MODEL]);
+      await c.query('COMMIT');});
+    const args={label:'Bounded partner research',policy_key:'runtime-plan',target_agent_ids:[],target_member_ids:[],target_resource_ids:[],dependent_request_ids:[],proposal:{
+      kind:'approval',approval_type:'run_plan',summary:'Continue the reviewed partner research plan.',consequence:'Authorize one linked run inside the exact model and spend limits.',evidence:[],illustrative:false,
+      details:{goal:'Produce a cited shortlist.',steps:[{id:'research',label:'Research candidates',agent_id:fx.agentId,output:'Cited shortlist'}],participating_agents:[{agent_id:fx.agentId,role:'Researcher'}],
+        deliverables:['Cited shortlist'],schedule:'Run once after final approval.',budget:{currency:'USD',estimated_min_minor:10,estimated_max_minor:100,cap_minor:500,estimated_input_tokens:500,estimated_output_tokens:200,
+          total_token_cap:2000,call_cap:2,max_output_tokens_per_call:200,max_parallel_calls:1,model_ids:[MODEL],metered_tools:[],retries_included:1,illustrative:false}}}};
+    const listed=await(await asUser(e,fx.adminId,path(fx))).json() as {operations:{id:string;require_human_approval:boolean}[]};
+    expect(listed.operations).toContainEqual(expect.objectContaining({id:'request_approval',require_human_approval:false}));
+    const db=new RuntimeDb(env,fx.workspaceId,'request-approval');
+    const q=<T extends Record<string,unknown>>(sql:string,values:unknown[])=>readTenant(fx.workspaceId,fx.adminId,c=>c.query<T>(sql,values)).then(r=>r.rows);
+    const parked=()=>q<{id:string;operation_id:string;status:string}>('SELECT id,operation_id,status FROM agent_operation_approvals WHERE run_id=$1',[runId]);
+    const run=async()=>(await q<{status:string;waiting_for:string|null}>('SELECT status,waiting_for FROM runs WHERE id=$1',[runId]))[0]!;
+    const approvals=async()=>(await q<{count:number}>(`SELECT count(*)::int AS count FROM requests WHERE workspace_id=$1 AND kind='approval'`,[fx.workspaceId]))[0]!.count;
+    // The bridge stores results under its own call ids, so count every tool result on the run.
+    const toolResults=async()=>(await q<{count:number}>(`SELECT count(*)::int AS count FROM run_turns WHERE run_id=$1 AND role='tool'`,[runId]))[0]!.count;
+    try{
+      const remote=crypto.randomUUID();await db.bindRun(runId,1,remote,fx.sessionId,`agent-${fx.agentId}`);
+      // Default: unchanged. The proposal is created at once and nothing is parked.
+      const unparked=await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,{runtime_run_id:remote,tool_call_id:'default-call',name:'propose_approval',arguments:args});
+      expect(unparked.reply).toMatchObject({ok:true});
+      expect(await parked()).toEqual([]);
+      expect(await approvals()).toBe(1);
+      expect(await run()).toMatchObject({status:'working'});
+      expect(await toolResults()).toBe(1);
+
+      expect((await asUser(e,fx.adminId,path(fx),{method:'PATCH',body:{revision:0,operation_id:'request_approval',require_human_approval:true}})).status).toBe(200);
+      const call={runtime_run_id:remote,tool_call_id:'switched-call',name:'propose_approval',arguments:args};
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual({status:'pending'});
+      const rows=await parked();
+      expect(rows).toEqual([expect.objectContaining({operation_id:'request_approval',status:'pending'})]);
+      const waiting=await run();
+      expect(waiting.status).toBe('waiting');
+      expect(waiting.waiting_for).toBe(`operation_approval:${rows[0]!.id}`);
+      expect(await toolResults()).toBe(1);
+      expect(await approvals()).toBe(1);
+      // A retry before the decision stays parked and writes nothing.
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual({status:'pending'});
+      expect(await approvals()).toBe(1);
+
+      expect((await asUser(e,fx.adminId,`${path(fx)}/approvals/${rows[0]!.id}`,{method:'POST',body:{decision:'approved'}})).status).toBe(200);
+      const resumed=await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call);
+      expect(resumed.reply).toMatchObject({ok:true});
+      expect(await run()).toMatchObject({status:'working',waiting_for:null});
+      expect(await approvals()).toBe(2);
+      expect(await toolResults()).toBe(2);
+      // Replaying the same call returns the stored result and proposes nothing new.
+      expect((await dispatchRuntimeCall(db,fx.workspaceId,fx.agentId,call)).reply).toEqual(resumed.reply);
+      expect(await approvals()).toBe(2);
+      expect(await toolResults()).toBe(2);
+    }finally{await db.close();}
+  });
   it('agent cannot approve itself or alter policy and foreign tenants cannot read pending args',async()=>{
     const {fx,runId}=await setup();const other=await seedWorkspace();const {env:e}=makeEnv();
     await asUser(e,fx.adminId,path(fx),{method:'PATCH',body:{revision:0,operation_id:'prepare_drafts',require_human_approval:true}});

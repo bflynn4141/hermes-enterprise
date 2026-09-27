@@ -1,12 +1,20 @@
 // Supported tool-operation consent, separate from guarded business decisions.
 import { z } from 'zod';
 
+// Every operation defaults to no approval: an agent keeps doing what it did
+// until someone turns a switch on (decision C96). An operation is shown only
+// for an agent whose tools include one of its tool names.
 export const AGENT_OPERATION_CATALOG = [
   { id: 'read_partner_information', label: 'Read partner information', description: 'View candidates and supporting program records.', tool_names: ['list_partner_candidates', 'get_partner_candidate'] },
   { id: 'save_review_notes', label: 'Save review notes', description: 'Record findings on a partner review.', tool_names: ['save_review_note'] },
   { id: 'prepare_drafts', label: 'Prepare drafts', description: 'Prepare workspace requests or proposed instructions for review.', tool_names: ['propose_request', 'propose_instruction'] },
+  { id: 'request_approval', label: 'Request approval', description: 'Ask for a business approval, which then goes to the people the approval rules name.', tool_names: ['propose_approval'] },
+  { id: 'publish_handoff', label: 'Send a handoff', description: 'Hand a confirmed invoice to the Finance agent for review.', tool_names: ['publish_partner_invoice_review'] },
+  { id: 'read_handoff_results', label: 'Read handoff results', description: 'Read the checked result of a handoff sent to this agent.', tool_names: ['get_partner_handoff_result'] },
 ] as const;
-export const operationPermissionPatchSchema = z.object({ revision: z.number().int().nonnegative(), operation_id: z.enum(['read_partner_information', 'save_review_notes', 'prepare_drafts']), require_human_approval: z.boolean() }).strict();
+export type AgentOperationId = (typeof AGENT_OPERATION_CATALOG)[number]['id'];
+const AGENT_OPERATION_IDS = AGENT_OPERATION_CATALOG.map((operation) => operation.id) as [AgentOperationId, ...AgentOperationId[]];
+export const operationPermissionPatchSchema = z.object({ revision: z.number().int().nonnegative(), operation_id: z.enum(AGENT_OPERATION_IDS), require_human_approval: z.boolean() }).strict();
 export const operationApprovalDecisionSchema = z.object({ decision: z.enum(['approved', 'denied']) }).strict();
 export const agentPermissionsSchema = z.object({
   agent_id: z.uuid(), revision: z.number().int().nonnegative(),

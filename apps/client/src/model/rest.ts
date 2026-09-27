@@ -16,6 +16,9 @@ import {
   contextNoteSchema,
   agentPermissionsSchema,
   agentDirectorySchema,
+  agentDirectoryEntrySchema,
+  type AdminAgentPatch,
+  enterpriseSkillCatalogSchema,
   workspaceRoleListSchema,
   workspaceRoleSchema,
   type WorkspaceRoleCreate,
@@ -437,6 +440,9 @@ export function createRest(options: RestOptions) {
     updateContextNote: (workspaceId: string, agentId: string, id: string, body: { title: string; text: string; expected_revision: number }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, contextNoteSchema, body),
     deleteContextNote: (workspaceId: string, agentId: string, id: string, expectedRevision: number) => send('DELETE', `${ws(workspaceId)}/agents/${agentId}/context-notes/${id}`, { expected_revision: expectedRevision }),
     adminAgents: (workspaceId: string) => request('GET', `${ws(workspaceId)}/admin/agents`, agentDirectorySchema),
+    patchAdminAgent: (workspaceId: string, agentId: string, body: AdminAgentPatch) =>
+      request('PATCH', `${ws(workspaceId)}/admin/agents/${agentId}`, agentDirectoryEntrySchema, body),
+    skillCatalog: (workspaceId: string) => request('GET', `${ws(workspaceId)}/skill-catalog`, enterpriseSkillCatalogSchema),
     agentPermissions: (workspaceId: string, agentId: string) => request('GET', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema),
     setAgentPermission: (workspaceId: string, agentId: string, body: { revision: number; operation_id: string; require_human_approval: boolean }) => request('PATCH', `${ws(workspaceId)}/agents/${agentId}/permissions`, agentPermissionsSchema, body),
     decideOperationApproval: (workspaceId: string, agentId: string, id: string, decision: 'approved' | 'denied') => request('POST', `${ws(workspaceId)}/agents/${agentId}/permissions/approvals/${id}`, agentPermissionsSchema, { decision }),
@@ -457,6 +463,10 @@ export function createRest(options: RestOptions) {
       request('GET', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentPageSchema),
     updateSkillAssignment: (workspaceId: string, agentId: string, id: string, body: EnterpriseSkillAssignmentUpdate) =>
       request('PATCH', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`, enterpriseSkillAssignmentSchema, body),
+    createSkillAssignment: (workspaceId: string, agentId: string, skillKey: string) =>
+      request('POST', `${ws(workspaceId)}/agents/${agentId}/skill-assignments`, enterpriseSkillAssignmentSchema, { skill_key: skillKey }),
+    deleteSkillAssignment: (workspaceId: string, agentId: string, id: string) =>
+      send('DELETE', `${ws(workspaceId)}/agents/${agentId}/skill-assignments/${id}`),
     listHandoffs: (workspaceId: string) =>
       optional(() => request('GET', `${ws(workspaceId)}/handoffs`, handoffListSchema), [] as HandoffList),
     getHandoff: (workspaceId: string, handoffId: string) =>

@@ -30,6 +30,7 @@ import {
 import { ensurePartnerInvoicesHandoff } from '../handoffs/service.js';
 import { PartnerWorkflowError } from './errors.js';
 import { grantRole } from '../domain/roles.js';
+import { sessionModelDefaults } from '../domain/agent-model.js';
 
 export { PartnerWorkflowError };
 
@@ -215,9 +216,9 @@ async function assignRoleSkill(
         SET team_id=$4,artifact_id=$5,skill_version=$6,state='active',config=$7::jsonb,
             capability_grants=$8,schedule='{"enabled":false,"interval_minutes":360}'::jsonb,
             approval_policy='{"human_review_required":true}'::jsonb,
-            assigned_by=$9,revision=revision+1
+            assigned_by=$9,revision=revision+1,removed_at=NULL
       WHERE workspace_id=$1 AND agent_id=$2 AND id=$3
-        AND (team_id IS DISTINCT FROM $4 OR artifact_id IS DISTINCT FROM $5
+        AND (removed_at IS NOT NULL OR team_id IS DISTINCT FROM $4 OR artifact_id IS DISTINCT FROM $5
           OR skill_version IS DISTINCT FROM $6 OR state IS DISTINCT FROM 'active'
           OR config IS DISTINCT FROM $7::jsonb OR capability_grants IS DISTINCT FROM $8::text[]
           OR schedule IS DISTINCT FROM '{"enabled":false,"interval_minutes":360}'::jsonb
@@ -225,6 +226,25 @@ async function assignRoleSkill(
     [workspaceId, agentId, row.id, teamId, artifactRow.id, definition.version,
       JSON.stringify(config), grants, assignedBy],
   );
+}
+
+/**
+ * Assign one catalog skill to an agent's lane at its registry version, with
+ * the role template's default settings (decision C96). The Admin route has
+ * already refused a second active skill and a managed runtime; this reuses
+ * the role setup's own write so both paths produce the same row.
+ */
+export async function assignCatalogSkill(
+  tx: Tx,
+  workspaceId: string,
+  teamId: string,
+  agentId: string,
+  assignedBy: string,
+  definition: EnterpriseSkillDefinition<Record<string, unknown>>,
+): Promise<void> {
+  const artifactRow = await artifact(tx, definition);
+  const defaults = definition.roleTemplateKey === 'finance-agent' ? DEFAULT_FINANCE_CONFIG : DEFAULT_PARTNERSHIPS_CONFIG;
+  await assignRoleSkill(tx, workspaceId, teamId, agentId, assignedBy, definition, artifactRow, defaults);
 }
 
 async function pauseOtherRoleSkills(
@@ -1007,23 +1027,20 @@ export async function preparePartnerInvoiceReviewModelTurn(
     )).rows[0];
     if (!session) throw new PartnerWorkflowError('finance_session_mismatch', 'The Finance review session no longer matches its principal and agent.');
   } else {
-    const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
-      `SELECT default_model_id, default_effort, default_runtime FROM workspace_settings WHERE workspace_id=$1`,
-      [workspaceId],
-    );
-    const defaults = settings.rows[0];
+    // The Finance agent's own model when an Admin chose one (decision C96).
+    const defaults = await sessionModelDefaults(tx, workspaceId, row.finance_agent_id);
     if (!defaults) throw new PartnerWorkflowError('workspace_settings_missing', 'Workspace runtime settings are missing.');
     const runtime = financeBinding
       ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(financeBinding.baseUrl) ? 'local' : 'cloud')
-      : defaults.default_runtime;
+      : defaults.runtime;
     session = (await tx.query<TurnSession>(
       `INSERT INTO sessions
          (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, context)
        VALUES ($1,$2,$3,$4,'work',$5,$6,$7,$8::jsonb)
        RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
       [workspaceId, row.finance_principal_id, row.finance_agent_id,
-        `Invoice review · ${projection.partner.name}`, defaults.default_model_id,
-        defaults.default_effort, runtime,
+        `Invoice review · ${projection.partner.name}`, defaults.model_id,
+        defaults.effort, runtime,
         JSON.stringify({ workflow: 'partner_invoice_review', handoff_id: handoffId, simulated: false })],
     )).rows[0];
     if (!session) throw new PartnerWorkflowError('finance_session_failed', 'Could not create the Finance review session.');
@@ -1233,11 +1250,7 @@ export async function processPartnerInvoiceReview(
   }
   const projection = partnerInvoiceHandoffProjectionSchema.parse(row.projection);
   const invoice = invoicePayloadSchema.parse(row.invoice_data);
-  const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
-    `SELECT default_model_id, default_effort, default_runtime FROM workspace_settings WHERE workspace_id=$1`,
-    [workspaceId],
-  );
-  const defaults = settings.rows[0];
+  const defaults = await sessionModelDefaults(tx, workspaceId, row.finance_agent_id);
   if (!defaults) throw new PartnerWorkflowError('workspace_settings_missing', 'Workspace runtime settings are missing.');
   const execution = await tx.query<{ finance_session_id: string | null; finance_run_id: string | null; request_id: string | null }>(
     `SELECT finance_session_id, finance_run_id, request_id FROM partner_workflow_executions WHERE handoff_id=$1`,
@@ -1258,8 +1271,8 @@ export async function processPartnerInvoiceReview(
        VALUES ($1,$2,$3,$4,'work',$5,$6,$7,$8::jsonb)
        RETURNING id`,
       [workspaceId, row.finance_principal_id, row.finance_agent_id,
-        `Invoice review · ${projection.partner.name}`, defaults.default_model_id,
-        defaults.default_effort, defaults.default_runtime,
+        `Invoice review · ${projection.partner.name}`, defaults.model_id,
+        defaults.effort, defaults.runtime,
         JSON.stringify({ workflow: 'partner_invoice_review', handoff_id: handoffId, simulated: row.simulated })],
     );
     sessionId = session.rows[0]?.id ?? null;
@@ -1270,7 +1283,7 @@ export async function processPartnerInvoiceReview(
           trace_id, ended_at)
        VALUES ($1,$2,$3,'completed',$4,$5,$6,$7,now())
        RETURNING id`,
-      [workspaceId, sessionId, row.finance_agent_id, defaults.default_model_id, defaults.default_effort,
+      [workspaceId, sessionId, row.finance_agent_id, defaults.model_id, defaults.effort,
         `partner-invoice-review:${handoffId}`, `partner-invoice-review:${handoffId}`],
     );
     runId = run.rows[0]?.id ?? null;

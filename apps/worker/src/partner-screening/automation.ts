@@ -307,22 +307,25 @@ async function automationSession(
             END AS default_effort,
             ws.default_runtime
        FROM workspace_settings ws
+       LEFT JOIN agents agent ON agent.workspace_id=ws.workspace_id AND agent.id=$4
        JOIN LATERAL (
          SELECT c.model_id, c.effort_map, c.default_effort
            FROM catalog c
           WHERE c.provider=ANY($2::text[])
             AND c.disabled_reason IS NULL AND c.supports_tools
-          ORDER BY (c.model_id=ws.default_model_id) DESC,
+          ORDER BY COALESCE(c.model_id=agent.model_id, false) DESC,
+                   (c.model_id=ws.default_model_id) DESC,
                    (c.model_id=$3) DESC,
                    c.model_id
           LIMIT 1
        ) picked ON true
       WHERE ws.workspace_id=$1`,
-    [workspaceId, [...allowed], DEFAULT_MODEL_ID],
+    [workspaceId, [...allowed], DEFAULT_MODEL_ID, agentId],
   );
   const source = settings.rows[0];
   if (!source) throw new Error('partner_automation_workspace_settings_missing');
-  // Automation follows the workspace policy. Active run snapshots remain fixed.
+  // Automation follows the agent's model when an Admin chose one (C96), else
+  // the workspace policy. Active run snapshots remain fixed.
   const existing = await tx.query<TurnSession>(
     `UPDATE sessions SET model_id=$5, effort=$6
       WHERE id=(SELECT id FROM sessions WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3

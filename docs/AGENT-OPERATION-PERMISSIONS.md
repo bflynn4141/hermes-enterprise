@@ -5,7 +5,11 @@ Admin first. It never grants a tool, changes a run's mode, records a business
 decision, executes an effect, or bypasses a paid-service boundary.
 
 Only configured tools appear. Existing agents default to Off to preserve their
-current behavior. Turning On applies at the next tool attempt, including an
+current behavior. The catalog covers reading partner information, saving
+review notes, preparing drafts, requesting an approval (`propose_approval`),
+sending a handoff (`publish_partner_invoice_review`) and reading a handoff
+result (`get_partner_handoff_result`); the last three were added in C96, all
+Off, so a Finance agent now has a switch. Turning On applies at the next tool attempt, including an
 already-running conversation. Plan-mode previews do not require consent, since
 they do not perform the operation. Read operations still run and can require it.
 

@@ -5,6 +5,7 @@ import type { EngineRunRow } from '../engine/agent-db.js';
 import type { RunErrorInput } from '../engine/agent-db.js';
 import type { ProviderMessage, ToolCall } from '../model/types.js';
 import { RouteError } from '../routes/errors.js';
+import { runtimeModelRouteSql } from '../model/runnable.js';
 import type { ProviderRetryAfter } from './retry-after.js';
 import {
   RuntimeBudgetError,
@@ -261,7 +262,7 @@ export class RuntimeDb extends PgAgentDb implements RuntimeBudgetDb {
   async allowedRuntimeModels(): Promise<{ model_id: string; provider: string; context_length: number | null }[]> {
     const { rows } = await this.runtimeQuery<{ model_id: string; provider: string; context_length: number | null }>(
       `SELECT model_id, provider, context_length FROM catalog
-         WHERE (provider, transport) IN (('openrouter', 'openrouter_chat'), ('nous_portal', 'nous_chat'))
+         WHERE ${runtimeModelRouteSql()}
          AND disabled_reason IS NULL AND supports_tools ORDER BY model_id`);
     return rows;
   }

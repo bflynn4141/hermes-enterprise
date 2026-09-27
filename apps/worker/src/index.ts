@@ -45,8 +45,8 @@ import {
   patchContextField,
   saveInstruction,
 } from './routes/agent-config.js';
-import { getSkillAssignment, listSkillAssignments, patchSkillAssignment } from './routes/skill-assignments.js';
-import { listAdminAgents } from './routes/admin-agents.js';
+import { createSkillAssignment, deleteSkillAssignment, getSkillAssignment, listSkillAssignments, listSkillCatalog, patchSkillAssignment } from './routes/skill-assignments.js';
+import { listAdminAgents, patchAdminAgent } from './routes/admin-agents.js';
 import { createWorkspaceRole, deleteWorkspaceRole, listWorkspaceRoles, patchWorkspaceRole, putWorkspaceRoleMembers } from './routes/roles.js';
 import { listApprovalRoutes, putApprovalRoute, resetApprovalRoute } from './routes/approval-routes.js';
 import { listContextNotes, writeContextNote, deleteContextNote } from './routes/context-notes.js';
@@ -519,6 +519,8 @@ app.get('/w/:ws/skills', listSkills);
 // Governance only; no session, message or run content (decision: Admins set an
 // agent's role and permissions but do not read its conversations).
 app.get('/w/:ws/admin/agents', listAdminAgents);
+app.patch('/w/:ws/admin/agents/:agentId', patchAdminAgent);
+app.get('/w/:ws/skill-catalog', listSkillCatalog);
 app.get('/w/:ws/roles', listWorkspaceRoles);
 app.post('/w/:ws/roles', createWorkspaceRole);
 app.patch('/w/:ws/roles/:id', patchWorkspaceRole);
@@ -533,8 +535,10 @@ app.post('/w/:ws/agents/:agent/permissions/approvals/:approval', decideAgentOper
 app.post('/w/:ws/skills', adoptSkill);
 app.post('/w/:ws/skills/:id/adopt', adoptSkill);
 app.get('/w/:ws/agents/:agentId/skill-assignments', listSkillAssignments);
+app.post('/w/:ws/agents/:agentId/skill-assignments', createSkillAssignment);
 app.get('/w/:ws/agents/:agentId/skill-assignments/:id', getSkillAssignment);
 app.patch('/w/:ws/agents/:agentId/skill-assignments/:id', patchSkillAssignment);
+app.delete('/w/:ws/agents/:agentId/skill-assignments/:id', deleteSkillAssignment);
 app.get('/w/:ws/handoffs', listHandoffs);
 app.get('/w/:ws/handoffs/:handoffId', getHandoff);
 app.get('/w/:ws/partner-workflow', getPartnerWorkflow);
