@@ -7,6 +7,12 @@
 // (inbound-email/view.ts, mayReadInboundEmail). An Admin who is none of those
 // sees counts, not messages.
 //
+// Anyone who may read a message may also ask its agent to read it again after
+// a failed attempt. That is not a decision and grants nothing new: the retry
+// runs the same intake-mode turn, with the same suggestion-only tools, that
+// the message's arrival already started. It still needs an allowlisted Origin
+// and CSRF, like every other write, and is rate-limited per person.
+//
 // Closing a hand-off moves a task out of `pending`, which CONVENTIONS
 // invariant 1 reserves for guarded routes. So it carries the decision route's
 // guards: an allowlisted Origin, `X-Requested-From: inbox`, CSRF and step-up,
@@ -16,17 +22,21 @@ import {
   createEmailInboxInputSchema,
   emailInboxListSchema,
   emailInboxSchema,
+  inboundEmailListItemSchema,
   inboundEmailListSchema,
   inboundEmailViewSchema,
   taskPayloadSchema,
   type EmailInbox,
+  type InboundEmailListItem,
 } from '@hermes/shared';
 import { z } from 'zod';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
+import { consumeRate } from '../auth/rate-limit.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { publishEvents } from '../jobs.js';
-import { DERIVED_EMAIL_STATUS_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
+import { retryEmailTriage } from '../inbound-email/triage.js';
+import { DERIVED_EMAIL_STATUS_SQL, EMAIL_RETRYABLE_SQL, loadInboundEmail, mayReadInboundEmail } from '../inbound-email/view.js';
 import { ensureInboxApprovals, inboxOwner, cautionReplyPolicyKey, replyPolicyKey } from '../inbound-email/suggestions.js';
 import { emailCautionResourceKey, emailInboxResourceKey } from '@hermes/shared';
 import { RouteError } from './errors.js';
@@ -244,33 +254,62 @@ export async function deleteEmailInbox(c: Context<{ Bindings: Env }>): Promise<R
   return c.body(null, 204);
 }
 
+/** Recent messages as list rows; `where` filters `m` with $1 = workspace and $2 = the id it names. */
+async function listItems(work: TenantWork, where: 'inbox' | 'message', id: string): Promise<InboundEmailListItem[]> {
+  const rows = await work.tx.query<{
+    id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[]; can_retry: boolean;
+  }>(
+    `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, ${DERIVED_EMAIL_STATUS_SQL} AS status,
+            ${EMAIL_RETRYABLE_SQL} AS can_retry
+       FROM inbound_email_messages m
+       JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
+       LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
+      WHERE m.workspace_id=$1 AND ${where === 'inbox' ? 'm.inbox_id' : 'm.id'}=$2
+      ORDER BY m.received_at DESC LIMIT 100`,
+    [work.workspaceId, id],
+  );
+  return rows.rows.map((row) => inboundEmailListItemSchema.parse({
+    id: row.id,
+    received_at: row.received_at.toISOString(),
+    subject: row.subject,
+    sender: row.sender_facts,
+    status: row.status,
+    request_ids: row.request_ids.slice(0, 10),
+    can_retry: row.can_retry,
+  }));
+}
+
 export async function listInboxMessages(c: Context<{ Bindings: Env }>): Promise<Response> {
   const inboxId = pathUuid(c, 'id');
   const body = await inWorkspace(c, async (work) => {
     if (!(await mayReadInbox(work, inboxId))) throw new RouteError('no such inbox', 'unknown_inbox', 404);
-    const rows = await work.tx.query<{
-      id: string; received_at: Date; subject: string; sender_facts: unknown; status: string; request_ids: string[];
-    }>(
-      `SELECT m.id, m.received_at, m.subject, m.sender_facts, m.request_ids, ${DERIVED_EMAIL_STATUS_SQL} AS status
-         FROM inbound_email_messages m
-         LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
-        WHERE m.workspace_id=$1 AND m.inbox_id=$2
-        ORDER BY m.received_at DESC LIMIT 100`,
-      [work.workspaceId, inboxId],
-    );
-    return {
-      messages: rows.rows.map((row) => ({
-        id: row.id,
-        received_at: row.received_at.toISOString(),
-        subject: row.subject,
-        sender: row.sender_facts,
-        status: row.status,
-        request_ids: row.request_ids.slice(0, 10),
-      })),
-    };
+    return { messages: await listItems(work, 'inbox', inboxId) };
   });
   c.header('Cache-Control', 'no-store');
   return c.json(inboundEmailListSchema.parse(body));
+}
+
+/**
+ * Try again after a failed triage: the message goes back to `received` and
+ * its agent gets a fresh intake run. Answers 202 with the message's list row;
+ * the new run starts after the commit.
+ */
+export async function retryInboundEmail(c: Context<{ Bindings: Env }>): Promise<Response> {
+  requireOrigin(c, { required: true });
+  requireCsrf(c);
+  const messageId = pathUuid(c, 'id');
+  const item = await inWorkspace(c, async (work) => {
+    if (!(await mayReadInboundEmail(work.tx, work.workspaceId, messageId, work.userId))) {
+      throw new RouteError('no such message', 'unknown_message', 404);
+    }
+    await consumeRate(work.tx, work.userId, work.workspaceId, { action: 'email.retry', limit: 10, windowSeconds: 60 });
+    const jobId = await retryEmailTriage(work.tx, work.workspaceId, messageId, work.userId);
+    if (jobId) work.jobs.push(jobId);
+    const [row] = await listItems(work, 'message', messageId);
+    return row!;
+  });
+  c.header('Cache-Control', 'no-store');
+  return c.json(inboundEmailListItemSchema.parse(item), 202);
 }
 
 export async function getInboundEmail(c: Context<{ Bindings: Env }>): Promise<Response> {

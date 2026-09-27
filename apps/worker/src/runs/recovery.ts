@@ -353,6 +353,9 @@ export async function scheduleRunRecovery(env:Env):Promise<{queued:number}> {
        AND r.created_at>now()-interval '24 hours' AND r.attempt<3 AND NOT r.stop_requested
        AND NOT r.recovery_cancelled AND r.recovery_next_at IS NULL AND (r.recovery_blocked_reason IS NULL OR r.recovery_blocked_reason='payment_result_pending')
        AND NOT s.archived AND NOT s.read_only
+       -- A received email's run is retried from scratch by its own message
+       -- (inbound-email/triage.ts, scheduleEmailTriageRetries), never here.
+       AND r.client_turn_id NOT LIKE 'email-triage:%'
        AND (
          (r.client_turn_id LIKE 'partner-screening:%' AND $2::boolean
           AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.workspace_id=r.workspace_id AND newer.agent_id=r.agent_id

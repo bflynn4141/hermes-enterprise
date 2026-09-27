@@ -6,7 +6,7 @@
 // inbox agent's owner or a holder of its role). Every write needs a recent
 // sign-in, like every other Admin change to who can act.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { REQ, type AgentDirectoryEntry, type EmailInbox, type InboundEmailList, type WorkspaceRole } from '@hermes/shared';
+import { REQ, type AgentDirectoryEntry, type EmailInbox, type InboundEmailList, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, Dialog, EmptyState, Skeleton } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
@@ -35,6 +35,15 @@ export function inboxErrorMessage(error: unknown): string {
   }
 }
 
+export function retryErrorMessage(error: unknown): string {
+  switch ((error as { reason?: string } | null)?.reason) {
+    case 'inbox_paused': return 'This inbox is paused. Resume it, then try again.';
+    case 'not_retryable': return 'The agent is already reading this email.';
+    case 'rate_limited': return 'That was a lot of retries at once. Wait a minute and try again.';
+    default: return 'Could not ask the agent again. Try again in a moment.';
+  }
+}
+
 function Problem({ error }: { error: unknown }) {
   const { needsSignIn, signIn } = useStepUp('gmail');
   return <p className="admin-roles-problem" role="alert">
@@ -57,6 +66,8 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
   const state = useAppState();
   const nav = useNav();
   const [list, setList] = useState<InboundEmailList | null | 'hidden'>(null);
+  // Bumped once after a retry, so the row moves on from "Received" without a reload.
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let live = true;
     void adapter.rest.listInboxMessages(state.workspace.id, inbox.id).then(
@@ -65,19 +76,43 @@ function RecentMail({ inbox }: { inbox: EmailInbox }) {
       () => { if (live) setList('hidden'); },
     );
     return () => { live = false; };
-  }, [adapter, state.workspace.id, inbox.id, inbox.message_count]);
+  }, [adapter, state.workspace.id, inbox.id, inbox.message_count, refresh]);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryProblem, setRetryProblem] = useState<{ id: string; error: unknown } | null>(null);
+  const retry = async (message: InboundEmailListItem): Promise<void> => {
+    setRetrying(message.id);
+    setRetryProblem(null);
+    try {
+      const next = await adapter.rest.retryInboundEmail(state.workspace.id, message.id);
+      setList((current) => current && current !== 'hidden'
+        ? { messages: current.messages.map((row) => row.id === next.id ? next : row) }
+        : current);
+      setTimeout(() => setRefresh((count) => count + 1), 5000);
+    } catch (caught) {
+      setRetryProblem({ id: message.id, error: caught });
+    } finally {
+      setRetrying(null);
+    }
+  };
   if (list === null) return null;
   if (list === 'hidden') return <p className="email-inbox-facts">Only the people in this role and the agent’s owner read its mail.</p>;
   if (list.messages.length === 0) return <p className="email-inbox-facts">No email yet.</p>;
   return <ul className="email-inbox-messages" aria-label={`Recent email at ${inbox.label}`}>
     {list.messages.slice(0, 5).map((message) => {
       const requestId = message.request_ids[0];
+      const subject = message.subject || '(no subject)';
       return <li key={message.id}>
         {requestId
-          ? <Button link onClick={() => nav(REQ(requestId))}>{message.subject || '(no subject)'}</Button>
-          : <span>{message.subject || '(no subject)'}</span>}
+          ? <Button link onClick={() => nav(REQ(requestId))}>{subject}</Button>
+          : <span>{subject}</span>}
         <span className="state">{STATUS_WORDS[message.status]}</span>
         <span className="from">{message.sender.name ?? message.sender.address}</span>
+        {message.can_retry && <span className="retry">
+          <Button small disabled={retrying === message.id} aria-label={`Try again: ${subject}`} onClick={() => void retry(message)}>
+            {retrying === message.id ? 'Asking…' : 'Try again'}
+          </Button>
+        </span>}
+        {retryProblem?.id === message.id && <p className="problem" role="alert">{retryErrorMessage(retryProblem.error)}</p>}
       </li>;
     })}
   </ul>;

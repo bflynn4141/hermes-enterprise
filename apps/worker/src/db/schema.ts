@@ -1688,6 +1688,7 @@ export const inboundEmailMessages = pgTable('inbound_email_messages', {
   status: text('status').notNull().default('received'),
   triageRunId: uuid('triage_run_id'),
   triageError: text('triage_error'),
+  triageAttempt: integer('triage_attempt').notNull().default(1),
   requestIds: uuid('request_ids').array().notNull(),
 });
 

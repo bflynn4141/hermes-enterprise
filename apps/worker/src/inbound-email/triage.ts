@@ -11,12 +11,14 @@
 // mitigation, not the defense. The defense is that the tools cannot choose a
 // recipient and every suggestion waits for a person.
 import { senderFactsSchema, type SenderFacts } from '@hermes/shared';
+import { connect, type Tx } from '../db/client.js';
 import type { Env } from '../env.js';
-import { runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
+import { enqueueJob, runJobsAfterCommit, withWorkspaceTransaction, type Job } from '../jobs.js';
 import { automationSession } from '../partner-screening/automation.js';
 import { RouteError } from '../routes/errors.js';
 import { createRunInstance, submitTurn, type RunInstanceParams } from '../runs/submit.js';
 import { ensureInboxApprovals, inboxOwner } from './suggestions.js';
+import { EMAIL_RETRYABLE_SQL, emailTriageKey } from './view.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MAX_PROMPT_BODY = 20_000;
@@ -24,6 +26,17 @@ const MAX_PROMPT_ATTACHMENT = 12_000;
 
 /** Refusals that will not heal on retry; the message is marked failed instead. */
 const PERMANENT = new Set(['no_key', 'key_invalid', 'key_unverified', 'provider_not_allowed', 'unknown_model', 'engine_paused']);
+
+/**
+ * Run failures Hermes retries on its own: the provider was busy or briefly
+ * down. Anything else waits for a person, who can press Try again once they
+ * have fixed the cause (a key, a model, the agent's owner).
+ */
+const TRANSIENT_RUN_REASONS = ['hermes_provider_rate_limited', 'hermes_provider_unavailable'];
+/** Hermes tries a message at most this many times by itself; a person may always try again. */
+export const MAX_AUTOMATIC_TRIAGE_ATTEMPTS = 3;
+/** The wait after attempt 1 and attempt 2, the same schedule run recovery uses. */
+const AUTOMATIC_BACKOFF_SECONDS = [60, 300];
 
 const RELATIONSHIP_LABEL: Record<SenderFacts['relationship'], string> = {
   internal: 'a member of this workspace',
@@ -96,11 +109,11 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
   let create: RunInstanceParams | null = null;
   await withWorkspaceTransaction(env, job.workspace_id, async (tx) => {
     const found = await tx.query<{
-      status: string; triage_run_id: string | null; subject: string; sender_facts: unknown; body: unknown;
+      status: string; triage_run_id: string | null; triage_attempt: number; subject: string; sender_facts: unknown; body: unknown;
       attachments: unknown; inbox_id: string; address: string; label: string; role_slug: string;
       agent_id: string; inbox_status: string;
     }>(
-      `SELECT m.status, m.triage_run_id, m.subject, m.sender_facts, m.body, m.attachments,
+      `SELECT m.status, m.triage_run_id, m.triage_attempt, m.subject, m.sender_facts, m.body, m.attachments,
               i.id AS inbox_id, i.address, i.label, i.role_slug, i.agent_id, i.status AS inbox_status
          FROM inbound_email_messages m
          JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
@@ -139,7 +152,9 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
         workspaceId: job.workspace_id,
         userId: owner.userId,
         session,
-        clientTurnId: `email-triage:${messageId}`,
+        // Each attempt is its own turn: a retry must not be folded into the
+        // failed run as a duplicate of it.
+        clientTurnId: emailTriageKey(messageId, row.triage_attempt),
         text: emailTriagePrompt({
           inboxLabel: row.label,
           inboxAddress: row.address,
@@ -168,4 +183,106 @@ export async function runEmailTriageJob(env: Env, job: Job): Promise<void> {
   });
   if (jobIds.length > 0) await runJobsAfterCommit(env, job.workspace_id, jobIds);
   if (create) await createRunInstance(env, create);
+}
+
+/**
+ * Start a message's triage over: back to `received`, the next attempt number
+ * and a fresh job. The failed run stays in the inbox session's history. The
+ * suggestion tools find their message by `triage_run_id`, so once it is
+ * cleared nothing the old run might still do can attach to this message.
+ */
+async function restartTriage(
+  tx: Tx,
+  workspaceId: string,
+  message: { id: string; attempt: number; runId: string | null },
+  actor: { userId: string } | 'system',
+  notBefore: Date | null = null,
+): Promise<string | null> {
+  const attempt = message.attempt + 1;
+  await tx.query(
+    `UPDATE inbound_email_messages
+        SET status='received', triage_run_id=NULL, triage_error=NULL, triage_attempt=$3
+      WHERE workspace_id=$1 AND id=$2`,
+    [workspaceId, message.id, attempt],
+  );
+  const jobId = await enqueueJob(tx, workspaceId, 'email_triage', emailTriageKey(message.id, attempt), { message_id: message.id });
+  if (jobId && notBefore && notBefore.getTime() > Date.now()) {
+    await tx.query('UPDATE jobs SET next_at=$2 WHERE id=$1', [jobId, notBefore]);
+    await tx.query('UPDATE job_ready SET next_at=$2 WHERE job_id=$1', [jobId, notBefore]);
+  }
+  await tx.query(
+    `INSERT INTO events (workspace_id, actor_type, actor_user_id, kind, run_id)
+     VALUES ($1, $2, $3, 'email_triage.retried', $4)`,
+    [workspaceId, actor === 'system' ? 'system' : 'user', actor === 'system' ? null : actor.userId, message.runId],
+  );
+  return jobId;
+}
+
+/**
+ * A person's Try again. The caller has already checked that they may read the
+ * message. Returns the job to run after commit (null when an identical job was
+ * already queued).
+ */
+export async function retryEmailTriage(tx: Tx, workspaceId: string, messageId: string, userId: string): Promise<string | null> {
+  const found = await tx.query<{ attempt: number; run_id: string | null; inbox_status: string; retryable: boolean }>(
+    `SELECT m.triage_attempt AS attempt, m.triage_run_id AS run_id, i.status AS inbox_status, ${EMAIL_RETRYABLE_SQL} AS retryable
+       FROM inbound_email_messages m
+       JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id
+       LEFT JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
+      WHERE m.workspace_id=$1 AND m.id=$2
+      FOR UPDATE OF m`,
+    [workspaceId, messageId],
+  );
+  const row = found.rows[0];
+  if (!row) throw new RouteError('no such message', 'unknown_message', 404);
+  if (row.inbox_status !== 'active') throw new RouteError('This inbox is paused. Resume it first.', 'inbox_paused', 409);
+  if (!row.retryable) throw new RouteError('The agent is already reading this email or has finished with it.', 'not_retryable', 409);
+  return restartTriage(tx, workspaceId, { id: messageId, attempt: row.attempt, runId: row.run_id }, { userId });
+}
+
+/**
+ * The Cron's pass over intake runs the provider rate-limited or dropped. Each
+ * one goes back to `received` with a job that waits out the backoff (and any
+ * Retry-After the provider sent), so it reads "Received" rather than failed
+ * while it waits. After MAX_AUTOMATIC_TRIAGE_ATTEMPTS the message stays failed
+ * for a person to retry. Run recovery (runs/recovery.ts) skips intake runs so
+ * that this is the only thing retrying them.
+ */
+export async function scheduleEmailTriageRetries(env: Env): Promise<{ retried: number }> {
+  const client = await connect(env, 'app');
+  let workspaces: string[];
+  try {
+    workspaces = (await client.query<{ workspace_id: string }>(
+      'SELECT DISTINCT target_workspace_id AS workspace_id FROM email_inbox_directory ORDER BY 1',
+    )).rows.map((row) => row.workspace_id);
+  } finally {
+    await client.end();
+  }
+  let retried = 0;
+  for (const workspaceId of workspaces) {
+    await withWorkspaceTransaction(env, workspaceId, async (tx) => {
+      const due = await tx.query<{ id: string; attempt: number; run_id: string; ended_at: Date; not_before: Date | null }>(
+        `SELECT m.id, m.triage_attempt AS attempt, m.triage_run_id AS run_id, r.ended_at, r.recovery_not_before AS not_before
+           FROM inbound_email_messages m
+           JOIN email_inboxes i ON i.workspace_id=m.workspace_id AND i.id=m.inbox_id AND i.status='active'
+           JOIN runs r ON r.workspace_id=m.workspace_id AND r.id=m.triage_run_id
+          WHERE m.workspace_id=$1 AND m.status='triaging' AND cardinality(m.request_ids)=0
+            AND m.triage_attempt < $3
+            AND r.status='error' AND r.error->>'reason' = ANY($2::text[])
+            AND r.ended_at IS NOT NULL AND r.ended_at > now() - interval '24 hours'
+            AND r.recovery_blocked_reason IS DISTINCT FROM 'provider_retry_after_excessive'
+          ORDER BY r.ended_at
+          LIMIT 20
+          FOR UPDATE OF m SKIP LOCKED`,
+        [workspaceId, TRANSIENT_RUN_REASONS, MAX_AUTOMATIC_TRIAGE_ATTEMPTS],
+      );
+      for (const row of due.rows) {
+        const wait = AUTOMATIC_BACKOFF_SECONDS[Math.min(row.attempt, AUTOMATIC_BACKOFF_SECONDS.length) - 1]!;
+        const notBefore = new Date(Math.max(row.ended_at.getTime() + wait * 1000, row.not_before?.getTime() ?? 0));
+        await restartTriage(tx, workspaceId, { id: row.id, attempt: row.attempt, runId: row.run_id }, 'system', notBefore);
+        retried += 1;
+      }
+    });
+  }
+  return { retried };
 }

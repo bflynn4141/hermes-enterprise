@@ -37,6 +37,7 @@ import {
   listEmailInboxes,
   listInboxMessages,
   patchEmailInbox,
+  retryInboundEmail,
 } from './routes/email-intake.js';
 import { RouteError } from './routes/errors.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
@@ -394,6 +395,7 @@ app.patch('/w/:ws/email/inboxes/:id', patchEmailInbox);
 app.delete('/w/:ws/email/inboxes/:id', deleteEmailInbox);
 app.get('/w/:ws/email/inboxes/:id/messages', listInboxMessages);
 app.get('/w/:ws/email/messages/:id', getInboundEmail);
+app.post('/w/:ws/email/messages/:id/retry', retryInboundEmail);
 app.post('/w/:ws/email/handoffs/:id/complete', completeEmailHandoff);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
 app.get('/w/:ws/cloud/connection', getCloudConnection);
@@ -703,6 +705,13 @@ const handler = {
           console.log(JSON.stringify({ at: 'cron.run_recovery', ...recovered }));
         } catch (error) {
           console.log(JSON.stringify({ at: 'cron.run_recovery', ok: false, error: String(error) }));
+        }
+        try {
+          const { scheduleEmailTriageRetries } = await import('./inbound-email/triage.js');
+          const retried = await scheduleEmailTriageRetries(env);
+          console.log(JSON.stringify({ at: 'cron.email_triage_retry', ...retried }));
+        } catch (error) {
+          console.log(JSON.stringify({ at: 'cron.email_triage_retry', ok: false, error: String(error) }));
         }
         try {
           const automated = await enqueueAutomatedPartnerScreening(env, new Date(event.scheduledTime));

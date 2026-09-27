@@ -211,6 +211,7 @@ export const EVENT_KINDS = [
   'inbound_email.received',
   'outbound_email.simulated',
   'email_handoff.completed',
+  'email_triage.retried',
 ] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
