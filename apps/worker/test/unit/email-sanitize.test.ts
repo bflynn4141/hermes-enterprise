@@ -101,9 +101,54 @@ describe('sanitizeEmailHtml', () => {
     expect(svg.html).toBe('');
   });
 
-  it('keeps only layout-safe inline styles', () => {
+  it('keeps readable emphasis without sender-controlled colors or spacing', () => {
     const result = sanitizeEmailHtml('<p style="color:#333; font-weight:bold; position:fixed; background-image:url(x); margin:0 0 8px">t</p>');
-    expect(result.html).toBe('<p style="color:#333;font-weight:bold;margin:0 0 8px">t</p>');
+    expect(result.html).toBe('<p style="font-weight:bold">t</p>');
+  });
+
+  it.each([
+    'color:#fff;background-color:#fff',
+    'color:rgba(255,255,255,0)',
+    'font-size:0.01vw;line-height:0;letter-spacing:-100px',
+    'margin-top:-10000px;text-transform:uppercase',
+    'font-weight:var(--hidden);text-align:inherit',
+    'constructor:foo;__proto__:foo;toString:foo',
+  ])('makes retained text readable despite %s', (style) => {
+    const result = sanitizeEmailHtml(`<p style="${style}">Read these exact words</p>`);
+    expect(result.text).toBe('Read these exact words');
+    expect(result.html).toBe('<p>Read these exact words</p>');
+  });
+
+  it('removes inherited legacy colors as well as inline colors', () => {
+    const result = sanitizeEmailHtml('<table bgcolor="white"><tr><td bgcolor="white"><font color="white">Visible</font></td></tr></table>');
+    expect(result.html).not.toMatch(/color=/u);
+    expect(result.html).toContain('Visible');
+  });
+
+  it.each(['small', 'sub', 'sup'])('keeps deeply nested %s text at a readable size', (tag) => {
+    const result = sanitizeEmailHtml(`<${tag}>`.repeat(30) + 'Visible words' + `</${tag}>`.repeat(30));
+    expect(result.text).toBe('Visible words');
+    expect(result.html).toBe('<span>'.repeat(30) + 'Visible words' + '</span>'.repeat(30));
+  });
+
+  it('falls back to the same plain text when inline images exhaust the HTML budget', () => {
+    const result = sanitizeEmailHtml('<img src="cid:logo"><img src="cid:logo"><p>Do not hide these words</p>', [
+      { contentId: 'logo', mimeType: 'image/png', base64: 'A'.repeat(280_000) },
+    ]);
+    expect(result.html).toBe('');
+    expect(result.text).toBe('Do not hide these words');
+  });
+
+  it('never slices HTML through a tag or entity when escaped text exceeds the budget', () => {
+    const result = sanitizeEmailHtml(`<p>${'&amp;'.repeat(110_000)} tail</p>`);
+    expect(result.html).toBe('');
+    expect(result.text).toBe(`${'&'.repeat(110_000)} tail`);
+  });
+
+  it('uses one text budget for the reviewer and the model', () => {
+    const result = sanitizeEmailHtml(`<p>${'a'.repeat(200_001)}</p>`);
+    expect(result.html).toBe('');
+    expect(result.text).toHaveLength(200_000);
   });
 
   it('turns list items and breaks into readable text', () => {

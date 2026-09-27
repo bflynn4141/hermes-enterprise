@@ -16,8 +16,8 @@
 //   * no element keeps an `href` or a remote `src`: a link becomes its words
 //     plus its real destination as plain text, and a remote image becomes a
 //     short placeholder. Nothing in the output can make a network request;
-//   * inline styles survive only as a short list of layout properties, with no
-//     `url(`, `expression(` or escapes.
+//   * sender-controlled color, size and spacing are removed. Only enumerated
+//     emphasis/alignment values survive, so retained text stays readable.
 //
 // The client renders `html` inside a sandboxed iframe with a Content Security
 // Policy that forbids scripts and every remote load, so a mistake here still
@@ -72,11 +72,15 @@ const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input'
 const ALLOWED = new Set([
   'abbr', 'b', 'blockquote', 'br', 'caption', 'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'div', 'dl', 'dt',
   'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'ins', 'kbd', 'li', 'mark', 'ol', 'p', 'pre', 'q',
-  's', 'samp', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead',
+  's', 'samp', 'span', 'strike', 'strong', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead',
   'tr', 'u', 'ul',
 ]);
 /** Legacy tags written as a neutral equivalent. */
-const RENAMED: Readonly<Record<string, string>> = { font: 'span', center: 'div', a: 'span', tt: 'code', big: 'span' };
+const RENAMED: Readonly<Record<string, string>> = {
+  font: 'span', center: 'div', a: 'span', tt: 'code', big: 'span',
+  // Repeated relative-size tags can conceal text even without CSS.
+  small: 'span', sub: 'span', sup: 'span',
+};
 
 const BLOCK = new Set([
   'address', 'article', 'aside', 'blockquote', 'caption', 'center', 'dd', 'div', 'dl', 'dt', 'footer', 'h1', 'h2',
@@ -86,24 +90,22 @@ const BLOCK = new Set([
 const ALLOWED_ATTRIBUTES: Readonly<Record<string, ReadonlySet<string>>> = {
   '*': new Set(['align', 'dir']),
   img: new Set(['alt', 'width', 'height']),
-  td: new Set(['colspan', 'rowspan', 'valign', 'width', 'height', 'bgcolor']),
-  th: new Set(['colspan', 'rowspan', 'valign', 'width', 'height', 'bgcolor']),
-  table: new Set(['width', 'cellpadding', 'cellspacing', 'border', 'bgcolor']),
-  tr: new Set(['valign', 'bgcolor']),
+  td: new Set(['colspan', 'rowspan', 'valign', 'width', 'height']),
+  th: new Set(['colspan', 'rowspan', 'valign', 'width', 'height']),
+  table: new Set(['width', 'cellpadding', 'cellspacing', 'border']),
+  tr: new Set(['valign']),
   col: new Set(['span', 'width']),
   colgroup: new Set(['span', 'width']),
   ol: new Set(['start', 'type']),
-  font: new Set(['color']),
 };
 
-const STYLE_PROPERTIES = new Set([
-  'color', 'background-color', 'font-weight', 'font-style', 'font-size', 'font-family', 'line-height',
-  'text-align', 'text-decoration', 'text-transform', 'letter-spacing', 'vertical-align', 'white-space',
-  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
-  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
-  'border', 'border-top', 'border-right', 'border-bottom', 'border-left', 'border-color', 'border-style',
-  'border-width', 'border-collapse', 'border-radius', 'width', 'max-width', 'min-width', 'height',
-]);
+// Never retain arbitrary CSS values: even network-free CSS can hide words.
+const STYLE_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
+  'font-weight': new Set(['normal', 'bold', '500', '600', '700', '800', '900']),
+  'font-style': new Set(['normal', 'italic', 'oblique']),
+  'text-align': new Set(['left', 'right', 'center', 'justify']),
+  'border-collapse': new Set(['collapse', 'separate']),
+};
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™',
@@ -276,10 +278,9 @@ export function hiddenByMarkup(attrs: ReadonlyMap<string, string>): boolean {
 function safeStyle(value: string): string | null {
   const kept: string[] = [];
   for (const [property, propertyValue] of parseStyle(value)) {
-    if (!STYLE_PROPERTIES.has(property)) continue;
-    if (/[\\<>"'`]|url\s*\(|expression\s*\(|@import|javascript:|image-set|var\s*\(/iu.test(propertyValue)) continue;
-    if (propertyValue.length > 120) continue;
-    kept.push(`${property}:${propertyValue}`);
+    const normalized = propertyValue.trim().toLowerCase();
+    if (!Object.hasOwn(STYLE_VALUES, property) || !STYLE_VALUES[property]!.has(normalized)) continue;
+    kept.push(`${property}:${normalized}`);
     if (kept.length >= 24) break;
   }
   return kept.length > 0 ? kept.join(';') : null;
@@ -291,7 +292,6 @@ function safeAttributeValue(name: string, value: string): string | null {
   if (['width', 'height', 'colspan', 'rowspan', 'span', 'cellpadding', 'cellspacing', 'border', 'start'].includes(name)) {
     return /^\d{1,4}%?$/u.test(trimmed) ? trimmed : null;
   }
-  if (name === 'bgcolor' || name === 'color') return /^#?[0-9a-z]{1,20}$/iu.test(trimmed) ? trimmed : null;
   if (name === 'align') return /^(left|right|center|justify)$/iu.test(trimmed) ? trimmed.toLowerCase() : null;
   if (name === 'valign') return /^(top|middle|bottom|baseline)$/iu.test(trimmed) ? trimmed.toLowerCase() : null;
   if (name === 'dir') return /^(ltr|rtl|auto)$/iu.test(trimmed) ? trimmed.toLowerCase() : null;
@@ -363,6 +363,7 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
   let hiddenChars = 0;
   let remoteImages = 0;
   let outLength = 0;
+  let htmlOverflow = false;
 
   const suppression = (): Frame['suppressed'] => {
     for (let index = stack.length - 1; index >= 0; index -= 1) {
@@ -379,7 +380,10 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
     return null;
   };
   const write = (value: string): void => {
-    if (outLength >= MAX_HTML) return;
+    if (htmlOverflow || outLength + value.length > MAX_HTML) {
+      htmlOverflow = true;
+      return;
+    }
     out.push(value);
     outLength += value.length;
   };
@@ -510,10 +514,12 @@ export function sanitizeEmailHtml(html: string, inlineImages: readonly InlineIma
   }
   while (stack.length > 0) closeFrame(stack.pop()!);
 
-  const visibleText = tidyText(text.join('')).slice(0, MAX_TEXT);
+  const visibleText = tidyText(text.join(''));
+  // Never display a sliced document while giving the model unseen tail text.
+  // Empty HTML selects the plain-text view in every email surface.
   return {
-    html: out.join('').slice(0, MAX_HTML),
-    text: visibleText,
+    html: htmlOverflow || visibleText.length > MAX_TEXT ? '' : out.join(''),
+    text: visibleText.slice(0, MAX_TEXT),
     hiddenTextRemovedChars: hiddenChars,
     remoteImagesBlocked: remoteImages,
     links,

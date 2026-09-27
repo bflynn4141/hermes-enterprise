@@ -10,6 +10,7 @@ import {
 } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
+import { effectExecutorMode } from '../domain/effects.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import {
   decideApproval,
@@ -52,7 +53,7 @@ export async function createApprovalDecision(c: Context<{ Bindings: Env }>): Pro
   if (!parsed.success) throw new RouteError('the approval decision is invalid', 'bad_approval_decision', 422);
   const outcome = await inWorkspace(c, async (work) => {
     requireStepUp(work.session);
-    return decideApproval(humanContext(work), requestId, parsed.data);
+    return decideApproval({ ...humanContext(work), simulateEmailReplies: effectExecutorMode(c.env) === 'simulated' }, requestId, parsed.data);
   });
   if (outcome.view.status === 'expired') {
     return c.json({ error: 'this approval expired', reason: 'approval_expired' }, 409);

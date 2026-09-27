@@ -174,6 +174,51 @@ async function approve(fx: Seeded, userId: string, requestId: string): Promise<A
 describe('email intake', () => {
   beforeAll(() => { created.length = 0; });
 
+  it.each([
+    '<p style="color:#fff;background-color:#fff">Previously stored words</p>',
+    '<p><br></p>',
+    '<p>Only the first part</p>',
+  ])('makes pre-fix stored messages readable without rewriting their evidence: %s', async (html) => {
+    const fx = await seedInbox();
+    const id = await receive(fx);
+    // Seed a historical body as owner; the application cannot rewrite evidence.
+    await scoped(fx.workspaceId, `UPDATE inbound_email_messages
+      SET body=jsonb_set(jsonb_set(body,'{html}',$2::jsonb),'{text}',$3::jsonb) WHERE id=$1`,
+    [id, JSON.stringify(html), JSON.stringify('Previously stored words')]);
+    const before = await scoped(fx.workspaceId, 'SELECT body,raw_sha256 FROM inbound_email_messages WHERE id=$1', [id]);
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/messages/${id}`);
+    const email = inboundEmailViewSchema.parse(await response.json());
+    expect(email.body.text).toBe('Previously stored words');
+    expect(email.body.html === null || email.body.html === '<p>Previously stored words</p>').toBe(true);
+    expect(await scoped(fx.workspaceId, 'SELECT body,raw_sha256 FROM inbound_email_messages WHERE id=$1', [id])).toEqual(before);
+  });
+
+  it('shows the plaintext alternative whenever blank HTML makes triage use that alternative', async () => {
+    const fx = await seedInbox();
+    const raw = new TextEncoder().encode([
+      'From: priya@northwind.example',
+      `To: ${fx.address}`,
+      'Subject: Multipart visibility regression',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/alternative; boundary="visibility"',
+      '', '--visibility', 'Content-Type: text/plain; charset=utf-8', '',
+      'Words the reviewer must also see. https://northwind.example/invoice',
+      '--visibility', 'Content-Type: text/html; charset=utf-8', '',
+      '<p><br></p>', '--visibility--',
+    ].join('\r\n'));
+    const stored = await receiveInboundEmail(env, { to: fx.address, raw });
+    if (stored.status !== 'stored') throw new Error('not stored');
+    const response = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/email/messages/${stored.messageId}`);
+    const email = inboundEmailViewSchema.parse(await response.json());
+    expect(email.body.html).toBeNull();
+    expect(email.body.text).toBe('Words the reviewer must also see. https://northwind.example/invoice');
+    expect(email.body.links[0]?.href).toBe('https://northwind.example/invoice');
+    const runId = await triage(fx, stored.messageId);
+    const turns = await scoped<{ provider_message: { content: string } }>(fx.workspaceId,
+      `SELECT provider_message FROM run_turns WHERE run_id=$1 AND role='user'`, [runId]);
+    expect(JSON.stringify(turns)).toContain(email.body.text);
+  });
+
   it('stores a sanitized message with server facts and exactly one triage job', async () => {
     const fx = await seedInbox();
     const raw = rawEmail({

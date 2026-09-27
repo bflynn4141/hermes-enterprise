@@ -107,14 +107,38 @@ export async function gmailOAuthCallback(c: Context<{ Bindings: Env }>): Promise
       });
       const pending = await tx.query<{ id: string }>(
         `UPDATE outbound_email_outbox SET account_id=$3,state='queued',last_error=NULL
-          WHERE workspace_id=$1 AND sender_address=$2 AND state='pending_connection'
+          WHERE workspace_id=$1 AND sender_address=$2
+            AND (state='pending_connection' OR (state='queued' AND attempt_count=0 AND EXISTS (
+              SELECT 1 FROM jobs j WHERE j.workspace_id=$1 AND j.kind='outbound_email_send'
+                AND j.key='outbound-email:' || outbound_email_outbox.id AND j.done_at IS NOT NULL
+            )))
           RETURNING id`,
         [state.workspace_id, address, account.id],
       );
       const jobIds: string[] = [];
       for (const row of pending.rows) {
         const jobId = await enqueueJob(tx, state.workspace_id, 'outbound_email_send', `outbound-email:${row.id}`, { outbox_id: row.id });
-        if (jobId) jobIds.push(jobId);
+        if (jobId) {
+          jobIds.push(jobId);
+          continue;
+        }
+        // Older approvals consumed this key while waiting for a mailbox.
+        // Revive only completed jobs for the unsent rows locked above. Keep
+        // active jobs and sent/uncertain deliveries outside this recovery.
+        const revived = await tx.query<{ id: string }>(
+          `UPDATE jobs SET done_at=NULL, locked_until=NULL, last_error=NULL, next_at=now()
+            WHERE workspace_id=$1 AND kind='outbound_email_send' AND key=$2 AND done_at IS NOT NULL
+            RETURNING id`,
+          [state.workspace_id, `outbound-email:${row.id}`],
+        );
+        for (const job of revived.rows) {
+          await tx.query(
+            `INSERT INTO job_ready (job_id,workspace_id,next_at) VALUES ($1,$2,now())
+             ON CONFLICT (job_id) DO UPDATE SET next_at=EXCLUDED.next_at`,
+            [job.id,state.workspace_id],
+          );
+          jobIds.push(job.id);
+        }
       }
       await tx.query(
         `INSERT INTO events (workspace_id,actor_type,actor_user_id,kind)
