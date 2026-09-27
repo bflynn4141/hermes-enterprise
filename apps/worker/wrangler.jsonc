@@ -233,9 +233,10 @@
         "PARTNER_SCREENING_PAID_AUTOMATION_ENABLED": "1",
         // Email execution stays off until a dedicated mailbox is connected and accepted.
         "PARTNER_OUTREACH_EMAIL_MODE": "draft_only",
-        // Email intake (C98): no receiving domain until Email Routing is set up
-        // for this environment, and replies stay drafts until an operator
-        // connects a sender and changes this.
+        // Email intake (C98): Cloudflare Email Routing sends every message for
+        // this subdomain to this Worker's email() handler (catch-all rule).
+        // Replies stay drafts until an operator connects a sender.
+        "EMAIL_INTAKE_DOMAIN": "in.staging.hermes.brianflynn.dev",
         "EMAIL_REPLY_MODE": "draft_only",
         "GMAIL_OUTREACH_ENABLED": "0",
         "GMAIL_EVIDENCE_ENABLED": "0",

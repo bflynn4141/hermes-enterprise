@@ -120,8 +120,10 @@ describe('wrangler.jsonc', () => {
     expect((config.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('send_after_approval');
     for (const scope of Object.values(envs)) {
       expect((scope.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('draft_only');
-      expect((scope.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
     }
+    // Staging receives mail on its own subdomain; production has none yet.
+    expect((envs.staging!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBe('in.staging.hermes.brianflynn.dev');
+    expect((envs.production!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
   });
 
   it('keeps the first member-approved search bounded in every environment', () => {
