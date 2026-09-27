@@ -255,8 +255,10 @@
         "HERMES_ENTERPRISE_PUBLIC_URL": "https://staging.hermes.brianflynn.dev",
         // Exact reviewed managed connector installed for the governed staging rehearsal.
         // Production remains unset and therefore cannot enable this workflow.
-        "HERMES_ENTERPRISE_PLUGIN_REVISION": "6f2182db485a237e27954cef24e9f6880ed4c14b",
-        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:3900bcca172e1aa46165c2d3de2eec97785577098817cf4d2916070a9eaa5a18",
+        // 25af3af (#191) adds the email intake tools for inbox agents (C98);
+        // every Cloud instance was reinstalled at this revision on Sep 27, 2026.
+        "HERMES_ENTERPRISE_PLUGIN_REVISION": "25af3afc9d9671af88a994127f34f8e4be156b6e",
+        "HERMES_ENTERPRISE_PLUGIN_SHA256": "sha256:9e20cc59d9506f10082c1727984acca8da1c4d11782a3396e92c38c7117101b7",
         // The public request-access page (`/demo`). The workspace id is the
         // "Hermes Teams Demo" workspace on staging (the same workspace
         // the deploy preflight checks, CONTEXT_PREFLIGHT_WORKSPACE_ID). With
