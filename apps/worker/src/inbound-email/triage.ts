@@ -245,7 +245,7 @@ export async function retryEmailTriage(tx: Tx, workspaceId: string, messageId: s
   const row = found.rows[0];
   if (!row) throw new RouteError('no such message', 'unknown_message', 404);
   if (row.inbox_status !== 'active') throw new RouteError('This inbox is paused. Resume it first.', 'inbox_paused', 409);
-  if (!row.retryable) throw new RouteError('The agent is already reading this email or has finished with it.', 'not_retryable', 409);
+  if (!row.retryable) throw new RouteError('The agent is already reading this email or has created a suggestion.', 'not_retryable', 409);
   return restartTriage(tx, workspaceId, { id: messageId, attempt: row.attempt, runId: row.run_id }, { userId });
 }
 

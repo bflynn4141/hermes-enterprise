@@ -530,6 +530,26 @@ describe('email intake', () => {
     expect(await listRow(fx, messageId)).toMatchObject({ status: 'suggested', can_retry: false, request_ids: [suggestion.request_id] });
   });
 
+  it('lets a reader retry a completed run with no suggestion, but never one with an existing request', async () => {
+    const fx = await seedInbox();
+    const messageId = await receive(fx, 'Please acknowledge receipt');
+    const firstRun = await triage(fx, messageId);
+    // A native tool transport failure can be followed by a normal final answer.
+    await finishRun(fx, firstRun);
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'no_action', can_retry: true, request_ids: [] });
+    expect((await retry(fx, fx.memberId, messageId)).status).toBe(404);
+    const response = await retry(fx, fx.adminId, messageId);
+    expect(response.status).toBe(202);
+    const after = await messageRow(fx, messageId);
+    expect(after.triage_attempt).toBe(2);
+    expect(after.triage_run_id).not.toBe(firstRun);
+    await expect(suggestReply(fx, firstRun)).rejects.toMatchObject({ reason: 'not_an_email_run' });
+    const suggestion = await suggestReply(fx, after.triage_run_id!);
+    await finishRun(fx, after.triage_run_id!);
+    expect(await listRow(fx, messageId)).toMatchObject({ status: 'suggested', can_retry: false, request_ids: [suggestion.request_id] });
+    expect((await retry(fx, fx.adminId, messageId)).status).toBe(409);
+  });
+
   it('retries a rate-limited triage by itself after a backoff, three attempts at most', async () => {
     const fx = await seedInbox();
     const messageId = await receive(fx);

@@ -31,7 +31,7 @@ export function mailState(message: InboundEmailListItem, agent: string): { text:
     case 'suggested': return { text: 'Ready for review', tone: 'ready', note: null };
     case 'no_action': return message.problem === 'inbox_paused'
       ? { text: 'Inbox paused', tone: 'quiet', note: 'It arrived while the inbox was paused, so nobody read it.' }
-      : { text: 'No reply needed', tone: 'quiet', note: null };
+      : { text: 'No reply suggested', tone: 'quiet', note: message.can_retry ? `You can ask ${agent} to read it again. Nothing will be sent without approval.` : null };
     case 'failed': {
       const why: Record<NonNullable<InboundEmailListItem['problem']>, string> = {
         provider_busy: `The model was busy, so ${agent} couldn’t read it. Nothing was sent.`,
@@ -69,7 +69,7 @@ export function inboxErrorMessage(error: unknown): string {
 export function retryErrorMessage(error: unknown): string {
   switch ((error as { reason?: string } | null)?.reason) {
     case 'inbox_paused': return 'This inbox is paused. Resume it, then try again.';
-    case 'not_retryable': return 'The agent is already reading this email.';
+    case 'not_retryable': return 'The agent is already reading this email or has created a suggestion. Refresh to see its latest status.';
     case 'rate_limited': return 'That was a lot of tries in a row. Wait a minute, then try again.';
     default: return 'Couldn’t ask the agent again. Try again in a moment.';
   }

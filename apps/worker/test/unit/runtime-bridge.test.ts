@@ -112,6 +112,46 @@ describe('official runtime configuration and authentication', () => {
 });
 
 describe('enterprise runtime tool boundary', () => {
+  it.each([
+    ['suggest_reply', 'suggestEmailReply', { summary: 'Acknowledge the email.', body: 'Thank you. We will review this.' }],
+    ['suggest_handoff', 'suggestEmailHandoff', { role_slug: 'finance', summary: 'Review the invoice.', note: 'Please check the invoice.' }],
+  ] as const)('executes %s outside the run lock and replays the recorded result', async (name, method, args) => {
+    const store = db({ mode: 'intake' });
+    store.capabilities = [name];
+    const propose = vi.fn(async () => {
+      if (store.inCallLock) throw new Error('app transaction blocked on the bridge run lock');
+      return { request_id: crypto.randomUUID(), status: 'pending', sendable: false, reviewers: 'owner', recipients: 1 };
+    });
+    Object.assign(store, { [method]: propose });
+    const input = call(name, args);
+    const result = await dispatchRuntimeCall(store, workspaceId, agentId, input);
+    expect(result.reply).toMatchObject({ ok: true });
+    expect((await dispatchRuntimeCall(store, workspaceId, agentId, input)).reply).toEqual(result.reply);
+    expect(propose).toHaveBeenCalledTimes(1);
+    store.capabilities = [];
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, input)).rejects.toMatchObject({ reason: 'runtime_tool_forbidden' });
+    for (const status of ['completed', 'stopped', 'error']) {
+      const terminal = db({ mode: 'intake', status });
+      terminal.capabilities = [name];
+      Object.assign(terminal, { [method]: propose });
+      await expect(dispatchRuntimeCall(terminal, workspaceId, agentId, input)).rejects.toMatchObject({ reason: 'runtime_run_inactive' });
+    }
+    expect(propose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not finalize or resume an email callback after its run stops between phases', async () => {
+    const store = db({ mode: 'intake' });
+    store.capabilities = ['suggest_reply'];
+    Object.assign(store, { suggestEmailReply: async () => {
+      await store.setRunStatus((await store.loadRun())!.id, 'stopped');
+      return { request_id: crypto.randomUUID(), status: 'pending', sendable: false, reviewers: 'owner' };
+    } });
+    await expect(dispatchRuntimeCall(store, workspaceId, agentId, call('suggest_reply', { summary: 'Acknowledge.', body: 'Thank you.' })))
+      .rejects.toMatchObject({ reason: 'runtime_run_inactive' });
+    expect(store.turns.filter((turn) => turn.role === 'tool')).toHaveLength(0);
+    expect((await store.loadRun())!.status).toBe('stopped');
+  });
+
   it('parks exact operation consent without creating spoofable context and resumes once', async () => {
     const store = db();
     let status: 'pending' | 'approved' = 'pending';

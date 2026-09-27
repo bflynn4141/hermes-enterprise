@@ -187,8 +187,8 @@ interface RuntimeCallOptions {
 }
 
 /**
- * Approval proposal is the one tool whose implementation enters the app-role
- * server domain. It must not run while the agent-role transaction holds
+ * Approval and email suggestions enter the app-role server domain. They must
+ * not run while the agent-role transaction holds
  * `runs FOR UPDATE`: inserting the proposal's source-run foreign key needs a
  * key-share lock and would wait on our own outer transaction forever.
  *
@@ -196,7 +196,7 @@ interface RuntimeCallOptions {
  * idempotent proposal operation, then close the trace under the lock again.
  * A crash between phases replays the proposal with its derived idempotency key.
  */
-async function dispatchRuntimeApprovalCall(
+async function dispatchRuntimeProposalCall(
   db: BridgeDb,
   workspaceId: string,
   agentId: string,
@@ -272,9 +272,7 @@ async function dispatchRuntimeApprovalCall(
   return db.withCallLock(agentId, async () => {
     await db.lockRun(prepared.run.id);
     const run = await db.findRuntimeRun(call.runtime_run_id, agentId);
-    if (!run || run.workspaceId !== workspaceId || run.agentId !== agentId) {
-      throw new RouteError('This runtime run is no longer available.', 'runtime_run_inactive', 409);
-    }
+    requireActive(run, workspaceId, agentId);
     const replay = await db.runtimeCall(run.id, prepared.callId);
     if (replay?.result !== null && replay?.result !== undefined) {
       return { run, events: prepared.events, reply: { ok: replay.ok ?? true, content: replay.result } };
@@ -337,8 +335,8 @@ export async function dispatchRuntimeCall(
   db: BridgeDb, workspaceId: string, agentId: string, call: RuntimeCall,
   options: RuntimeCallOptions = {},
 ): Promise<CallResult> {
-  if (call.name === 'propose_approval') {
-    return dispatchRuntimeApprovalCall(db, workspaceId, agentId, call, options);
+  if (['propose_approval', 'suggest_reply', 'suggest_handoff'].includes(call.name)) {
+    return dispatchRuntimeProposalCall(db, workspaceId, agentId, call, options);
   }
   const now = options.now ?? (() => new Date());
   return db.withCallLock(agentId, async () => {

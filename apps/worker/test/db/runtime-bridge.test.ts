@@ -40,6 +40,58 @@ async function mappedRun(fx: Fixture, store: RuntimeDb): Promise<{ id: string; r
 }
 
 describe('official runtime on the restricted agent role', () => {
+  it.each([
+    ['suggest_reply', { summary: 'Acknowledge the email.', body: 'Thank you. We will review this.' }],
+    ['suggest_handoff', { role_slug: 'finance', summary: 'Review the invoice.', note: 'Please check the invoice.' }],
+  ] as const)('%s crosses the app-role boundary without blocking and concurrent callbacks create one request', async (name, args) => {
+    const fx = await seedWorkspace();
+    // Bound the regression: the old dispatcher holds runs FOR UPDATE while
+    // the app connection waits to insert a foreign key referencing that run.
+    const appUrl = new URL(APP_URL);
+    appUrl.searchParams.set('options', '-c statement_timeout=2000');
+    const boundedEnv = { ...env, HYPERDRIVE_APP: { connectionString: appUrl.href } } as Env;
+    const first = new RuntimeDb(boundedEnv, fx.workspaceId, 'trace-email-bridge');
+    const second = new RuntimeDb(boundedEnv, fx.workspaceId, 'trace-email-bridge-replay');
+    try {
+      const { id, remote } = await mappedRun(fx, first);
+      await owner(fx, async (q) => {
+        await q(`UPDATE runs SET mode='intake' WHERE id=$1`, [id]);
+        await q(`INSERT INTO agent_capabilities (workspace_id,agent_id,kind,title,tool_names)
+                 VALUES ($1,$2,'can','Read role inboxes',ARRAY['suggest_reply','suggest_handoff'])`, [fx.workspaceId, fx.agentId]);
+        await q(`INSERT INTO agent_owners (workspace_id,agent_id,member_id)
+                 SELECT $1,$2,id FROM members WHERE workspace_id=$1 AND user_id=$3`, [fx.workspaceId, fx.agentId, fx.adminId]);
+        const inboxId = crypto.randomUUID();
+        await q(`INSERT INTO email_inboxes (id,workspace_id,role_slug,agent_id,address,label)
+                 VALUES ($1,$2,'partnerships',$3,$4,'Partnerships')`, [inboxId, fx.workspaceId, fx.agentId, `${inboxId}@in.example.test`]);
+        const facts = {
+          address: 'sender@example.test', name: 'Sender', domain: 'example.test', relationship: 'new_sender',
+          authentication: { spf: 'pass', dkim: 'pass', dmarc: 'pass', authserv_id: 'mx.cloudflare.net' },
+          reply_to: null, warnings: [],
+        };
+        await q(`INSERT INTO inbound_email_messages
+                 (workspace_id,inbox_id,raw_sha256,raw_size,subject,from_address,sender_facts,body,status,triage_run_id)
+                 VALUES ($1,$2,$3,100,'Please review','sender@example.test',$4::jsonb,'{}'::jsonb,'triaging',$5)`,
+          [fx.workspaceId, inboxId, 'a'.repeat(64), JSON.stringify(facts), id]);
+      });
+      const input = nativeCall(remote, name, args);
+      const [a, b] = await Promise.all([
+        dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, input),
+        dispatchRuntimeCall(second, fx.workspaceId, fx.agentId, input),
+      ]);
+      expect(a.reply).toMatchObject({ ok: true });
+      expect(b.reply).toEqual(a.reply);
+      expect((await dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, input)).reply).toEqual(a.reply);
+      const history = await first.loadHistory(id, 20);
+      expect(history.recent.map((turn) => turn.role)).toEqual(['user', 'assistant', 'tool']);
+      const requests = await owner(fx, (q) => q<{ count: string }>(
+        `SELECT count(*)::text AS count FROM requests WHERE workspace_id=$1 AND run_id=$2`, [fx.workspaceId, id]));
+      expect(requests.rows[0]?.count).toBe('1');
+      await first.setRunStatus(id, 'completed');
+      await expect(dispatchRuntimeCall(first, fx.workspaceId, fx.agentId, input))
+        .rejects.toMatchObject({ reason: 'runtime_run_inactive' });
+    } finally { await first.close(); await second.close(); }
+  });
+
   it('reads a content-free Raindrop snapshot from the canonical terminal trace', async () => {
     const fx = await seedWorkspace(); const store = makeDb(fx);
     try {

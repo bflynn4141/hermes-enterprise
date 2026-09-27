@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { mockUuid, type AgentDirectoryEntry, type WorkspaceRole } from '@hermes/shared';
+import { mockUuid, type AgentDirectoryEntry, type InboundEmailListItem, type WorkspaceRole } from '@hermes/shared';
 import type { Adapter } from '../../model/adapter.js';
 import { createStore, initialState } from '../../model/store.js';
 import { StoreProvider } from '../store-context.js';
-import { NewInbox, inboxAgentLabel, preferredInboxAgent } from './AdminEmailInboxes.js';
+import { NewInbox, inboxAgentLabel, preferredInboxAgent, mailState } from './AdminEmailInboxes.js';
 
 const brian = { member_id: mockUuid(1), user_id: mockUuid(2), name: 'Brian Flynn' };
 
@@ -61,5 +61,15 @@ describe('NewInbox', () => {
     );
     expect(html).toContain(`<option value="${financeIris.id}">Iris · Brian Flynn · Finance</option>`);
     expect(html).toContain(`<option value="${partnershipsIris.id}" selected="">Iris · Brian Flynn · Partnerships</option>`);
+  });
+});
+
+
+describe('mailState', () => {
+  it('does not infer that no reply was needed when a run saved no suggestion', () => {
+    const state = mailState({ status: 'no_action', can_retry: true, problem: null, retrying: false } as InboundEmailListItem, 'Iris');
+    expect(state.text).toBe('No reply suggested');
+    expect(state.note).toContain('ask Iris to read it again');
+    expect(state.note).toContain('Nothing will be sent without approval');
   });
 });

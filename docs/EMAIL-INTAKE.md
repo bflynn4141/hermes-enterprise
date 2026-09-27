@@ -46,11 +46,12 @@ id carry the number, so every retry is a fresh job and a fresh intake run.
   Retry-After. After three attempts it stops. Generic run recovery
   (`runs/recovery.ts`) skips `email-triage:` runs, so nothing else retries them.
 - **By a person.** Admin → Role inboxes shows **Try again** on a message whose
-  run failed before suggesting anything, or whose job failed before starting a
-  run. The button calls `POST /w/:ws/email/messages/:id/retry`, which anyone
+  run failed or completed without saving a suggestion, or whose job failed
+  before starting a run. A completed run alone does not prove the message
+  needed no reply: a tool transport failure can also end that way. The button calls `POST /w/:ws/email/messages/:id/retry`, which anyone
   who may read the message can use (Origin and CSRF checked, 10 a minute). It
   answers 409 `not_retryable` while a run is working or an automatic retry is
-  waiting, and 409 `inbox_paused` for a paused inbox.
+  waiting, or if any reply or hand-off already exists, and 409 `inbox_paused` for a paused inbox.
 
 Suggestion tools find their message by `triage_run_id`, so after a retry the
 failed run can no longer attach anything to the message. Each retry writes an
@@ -63,7 +64,7 @@ first, then the reply marked "Not sent", then the original email. Warnings are
 written by the client from each warning's code and the stored facts, so older
 messages read the same as new ones and no mail-protocol names appear. Admin →
 Role inboxes uses one status vocabulary (Waiting for Iris, Reading, Ready for
-review, No reply needed, Trying again soon, Couldn't read it) and says why a
+review, No reply suggested, Trying again soon, Couldn't read it) and says why a
 read failed.
 
 While Role inboxes is open, its counts and recent messages refresh every five
@@ -194,3 +195,12 @@ records that walkthrough end to end.
 - The scripted development agent's words are fixed; a real model writes its own.
 - Hosted Hermes agents need the pool re-pin above before they answer email.
 - No mailbox sync: Hermes sees only what reaches the address.
+
+## Hosted suggestion transactions
+
+Reply and hand-off tools reserve their runtime call, release the agent-role
+run lock, and then enter the app-role suggestion transaction. They finalize
+the durable result afterward, using the same phased dispatch as approval
+proposals. Holding the run lock during the app write would block the request’s
+source-run foreign-key check and make the bridge time out. Replay uses the
+original call identity so a lost response cannot create another suggestion.
