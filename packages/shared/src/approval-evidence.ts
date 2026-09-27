@@ -1,10 +1,11 @@
 import { z } from 'zod';
+import { inboundEmailViewSchema } from './email-intake.js';
 import { uuidSchema } from './events.js';
 
 /** A read-only projection of one stored record cited by the current approval. */
 export const approvalEvidenceViewSchema = z.object({
   id: uuidSchema,
-  kind: z.enum(['partner_source', 'contact_verification', 'mailbox_thread']),
+  kind: z.enum(['partner_source', 'contact_verification', 'mailbox_thread', 'inbound_email']),
   label: z.string().min(1).max(200),
   note: z.string().max(2000).nullable(),
   source_url: z.url().max(2000).nullable(),
@@ -16,6 +17,8 @@ export const approvalEvidenceViewSchema = z.object({
     label: z.string().min(1).max(200),
     value: z.string().min(1).max(2000),
   }).strict()).max(40),
+  /** The sanitized message a reply answers (C98), rendered inline on the card. */
+  email: inboundEmailViewSchema.optional(),
 }).strict();
 
 export type ApprovalEvidenceView = z.infer<typeof approvalEvidenceViewSchema>;

@@ -1,9 +1,12 @@
-import type { ApprovalPayload } from '@hermes/shared';
+import { hasCaution, senderFactsSchema, type ApprovalPayload } from '@hermes/shared';
 import type { Tx } from '../db/client.js';
+import { RouteError } from '../routes/errors.js';
 
 export interface QueuedEmailOutbox {
   readonly ids: readonly string[];
   readonly state: 'pending_connection' | 'queued';
+  /** A reply to a role inbox, which the send job may simulate outside production (D12, C98). */
+  readonly reply: boolean;
 }
 
 /**
@@ -26,6 +29,7 @@ export async function queueApprovedEmail(
   if (input.payload.approval_type !== 'communication' || input.payload.details.draft_only) return null;
   if (input.payload.details.channel !== 'email') return null;
 
+  const thread = await replyThread(tx, input.workspaceId, input.payload);
   const sender = input.payload.details.sender.address.trim().toLowerCase();
   const account = await tx.query<{ id: string }>(
     `SELECT id FROM outbound_email_accounts
@@ -58,8 +62,8 @@ export async function queueApprovedEmail(
       `INSERT INTO outbound_email_outbox
          (workspace_id,request_id,authorization_revision,authorization_hash,candidate_id,
           account_id,recipient_index,sender_address,recipient_name,recipient_address,
-          subject,body,state)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          subject,body,state,inbound_message_id,in_reply_to,references_header)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (workspace_id,request_id,authorization_revision,authorization_hash,recipient_index)
        DO UPDATE SET id=outbound_email_outbox.id
        RETURNING id`,
@@ -68,9 +72,49 @@ export async function queueApprovedEmail(
         recipient.candidate_id ?? null, accountId, recipientIndex, sender,
         recipient.name, recipient.address.trim().toLowerCase(),
         input.payload.details.subject ?? '', input.payload.details.body, state,
+        thread?.messageId ?? null, thread?.inReplyTo ?? null, thread?.references ?? null,
       ],
     );
     if (inserted.rows[0]) ids.push(inserted.rows[0].id);
   }
-  return { ids, state };
+  return { ids, state, reply: thread !== null };
+}
+
+interface ReplyThread {
+  readonly messageId: string;
+  readonly inReplyTo: string | null;
+  readonly references: string | null;
+}
+
+/**
+ * The received message an approved reply answers (C98), re-read at the moment
+ * of approval. Two properties are checked again here rather than trusted from
+ * the proposal: the reply still goes only to the address that sent the
+ * message, so a revision cannot redirect it, and a flagged sender's reply was
+ * approved under the stricter policy.
+ */
+async function replyThread(tx: Tx, workspaceId: string, payload: ApprovalPayload): Promise<ReplyThread | null> {
+  if (payload.approval_type !== 'communication' || !payload.details.reply_to) return null;
+  const reply = payload.details.reply_to;
+  const found = await tx.query<{ id: string; from_address: string; message_id: string | null; references_header: string | null; sender_facts: unknown }>(
+    `SELECT id, from_address, message_id, references_header, sender_facts
+       FROM inbound_email_messages
+      WHERE workspace_id=$1 AND id=$2 AND inbox_id=$3`,
+    [workspaceId, reply.message_id, reply.inbox_id],
+  );
+  const message = found.rows[0];
+  if (!message) throw new RouteError('The email this reply answers is no longer stored, so the reply was not queued.', 'reply_source_missing', 409);
+  const recipients = payload.details.recipients;
+  if (recipients.length !== 1 || recipients[0]?.address?.trim().toLowerCase() !== message.from_address) {
+    throw new RouteError('A reply can only go to the address that sent the email. Change the recipient back or write a new message.', 'reply_recipient_changed', 409);
+  }
+  const facts = senderFactsSchema.safeParse(message.sender_facts);
+  if (!facts.success || hasCaution(facts.data) !== reply.caution) {
+    throw new RouteError('This reply was reviewed under the wrong rule for its sender. Ask the agent for a new suggestion.', 'reply_caution_mismatch', 409);
+  }
+  const references = [...(message.references_header?.split(/\s+/u) ?? []), ...(message.message_id ? [message.message_id] : [])]
+    .filter((id) => id.length > 0)
+    .slice(-50)
+    .join(' ');
+  return { messageId: message.id, inReplyTo: message.message_id, references: references || null };
 }

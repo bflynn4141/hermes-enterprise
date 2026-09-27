@@ -1,0 +1,69 @@
+/* A received email (C98): the sender's message on a light sheet, the server's
+   checks above it in the app's own colours. The sheet is light because most
+   business email is written for a white page; inverting it would misrender
+   the sender's layout. */
+.email-message { display: flex; flex-direction: column; gap: 12px; }
+.email-message-head { display: flex; align-items: baseline; gap: 12px; }
+.email-message-from { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.email-message-from strong { font-size: 15px; line-height: 22px; font-weight: 500; }
+.email-message-from span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.email-message-head time { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.email-message-checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.email-message-checks span { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; line-height: 18px; border: 1px solid var(--line); color: var(--muted); }
+.email-message-checks span[data-tone="good"] { color: #bff3d6; border-color: rgba(120, 220, 170, .35); }
+.email-message-checks span[data-tone="caution"] { color: #ffd9a8; border-color: rgba(255, 190, 110, .45); }
+.email-message-warnings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.email-message-warnings li { padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.55; }
+.email-message-warnings li[data-severity="caution"] { background: rgba(255, 170, 70, .12); border: 1px solid rgba(255, 190, 110, .4); color: #ffe3bf; }
+.email-message-warnings li[data-severity="info"] { background: rgba(255, 255, 255, .03); border: 1px solid var(--line); color: var(--muted); }
+.email-message-subject { margin: 4px 0 0; font-size: 17px; line-height: 24px; font-weight: 500; }
+.email-frame { display: block; width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; }
+.email-plain { padding: 20px 22px; border-radius: 10px; background: #fff; color: #1d1b2e; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.email-message-extras { display: flex; flex-direction: column; gap: 12px; }
+.email-message-extras h4 { margin: 0 0 6px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.email-message-extras ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.email-message-extras li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.email-message-extras code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.email-message-extras li[data-mismatch] code { color: #ffd9a8; }
+.email-message-extras em { font-style: normal; color: #ffd9a8; font-size: 12px; }
+.email-message-extras small { color: var(--muted); }
+
+/* The agent's side of the card: its reply, separated from the sender's words. */
+.email-reply-context { display: flex; flex-direction: column; gap: 14px; }
+.email-reply-context > h2, .email-reply-draft > h2,
+.approval-shell .email-reply-context > h2, .approval-shell .email-reply-draft > h2 { margin: 0; font-family: var(--font-body); font-size: 15px; line-height: 22px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--body); }
+.email-reply-draft { margin-top: 8px; }
+.email-reply-draft { display: flex; flex-direction: column; gap: 10px; }
+.email-reply-rule { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); font-size: 13px; line-height: 1.55; color: var(--muted); }
+.email-reply-rule[data-tone="caution"] { border-color: rgba(255, 190, 110, .4); color: #ffe3bf; }
+
+/* Admin → Role inboxes */
+.email-inboxes-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; }
+.email-inboxes-list > li { padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; }
+.email-inboxes-list > li + li { border-top: 1px solid var(--line); }
+.email-inbox-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.email-inbox-top strong { font-size: 15px; font-weight: 500; }
+.email-inbox-status { font-size: 12.5px; color: var(--muted); }
+.email-inbox-status[data-state="paused"] { color: #ffd9a8; }
+.email-inbox-address { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.email-inbox-address code { padding: 4px 8px; border-radius: 6px; background: rgba(255, 255, 255, .05); font-size: 13px; overflow-wrap: anywhere; }
+.email-inbox-facts { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.email-inbox-actions { display: flex; gap: 8px; margin-left: auto; }
+.email-inbox-messages { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.email-inbox-messages li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.email-inbox-messages li:last-child { border-bottom: 0; }
+.email-inbox-messages .from { color: var(--muted); }
+.email-inbox-messages .state { color: var(--muted); text-align: right; }
+.email-inbox-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.email-inbox-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.email-inbox-form select, .email-inbox-form input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-solid, #11114f); color: var(--body); font: inherit; font-size: 14px; }
+.email-inbox-help { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 72ch; }
+.email-inbox-help ol { margin: 6px 0 12px; padding-left: 20px; list-style: decimal; }
+.email-inbox-help ol li { margin: 2px 0; }
+.email-inbox-help p { margin: 0; }
+
+@container app-pane (max-width: 560px) {
+  .email-inbox-form { grid-template-columns: minmax(0, 1fr); }
+  .email-inboxes-list > li { padding: 14px 16px; }
+  .email-plain { padding: 16px; }
+}

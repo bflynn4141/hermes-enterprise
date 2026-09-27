@@ -24,6 +24,8 @@ import type {
   ProposeApprovalInput,
   PublishPartnerInvoiceReviewInput,
   RequestKind,
+  SuggestEmailHandoffInput,
+  SuggestEmailReplyInput,
 } from '@hermes/shared';
 import type { Credential, ProviderMessage, Usage } from '../model/types.js';
 
@@ -155,6 +157,23 @@ export interface AgentWrites {
     agentId: string;
     arguments: PublishPartnerInvoiceReviewInput;
   }): Promise<{ handoff_id: string; job_id: string | null; created: boolean }>;
+  /**
+   * Email intake (C98): an app-role operation that reads the message this run
+   * was started for and builds the approval or task itself. The model supplies
+   * words only; recipients and reviewers are server-derived.
+   */
+  suggestEmailReply?(input: {
+    runId: string;
+    agentId: string;
+    toolCallId: string;
+    arguments: SuggestEmailReplyInput;
+  }): Promise<{ request_id: string; status: string; sendable: boolean; reviewers: 'owner' | 'owner_and_second_person' }>;
+  suggestEmailHandoff?(input: {
+    runId: string;
+    agentId: string;
+    toolCallId: string;
+    arguments: SuggestEmailHandoffInput;
+  }): Promise<{ request_id: string; recipients: number }>;
   appendTurn(input: AppendTurnInput): Promise<{ turnId: string; created: boolean }>;
   emit(events: readonly EmitInput[]): Promise<EmittedEvent[]>;
 }

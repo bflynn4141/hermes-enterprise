@@ -198,6 +198,59 @@ const ASK_FOR_CONTEXT = {
 } as const satisfies Script;
 
 /**
+ * A development agent reading a received email (C98). The email triage job
+ * picks this script when MODEL_SCRIPTED=1, so the whole path (intake, sender
+ * facts, suggestion, approval, simulated reply) runs offline. The words are
+ * fixed: they answer the partner invoice email in `docs/EMAIL-INTAKE.md`, and
+ * any other email gets the same canned reply. A real model writes its own.
+ */
+export const EMAIL_TRIAGE_SCRIPT = [
+  {
+    events: [
+      { type: 'text_delta', text: 'Reading the email as untrusted text and the server\'s checks on the sender. ' },
+      {
+        type: 'tool_call',
+        call: {
+          id: 'call_email_reply',
+          name: 'suggest_reply',
+          arguments: JSON.stringify({
+            summary: 'Thank Priya for the September invoice, say Finance will confirm timing, and offer two call slots next week.',
+            body: 'Hi Priya,\n\nThanks for sending over the September invoice. I have passed it to our Finance team, and they will confirm the payment timing with you directly.\n\nFor the co-marketing call, Tuesday or Wednesday afternoon next week works on our side. Send a couple of times that suit you and I will confirm.\n\nBest regards',
+          }),
+        },
+      },
+      { type: 'usage', usage: { input_tokens: 2100, output_tokens: 160, cached_input_tokens: 0, reasoning_tokens: 0 } },
+      { type: 'stop', reason: 'tool_use' },
+    ],
+  },
+  {
+    events: [
+      {
+        type: 'tool_call',
+        call: {
+          id: 'call_email_handoff',
+          name: 'suggest_handoff',
+          arguments: JSON.stringify({
+            role_slug: 'finance',
+            summary: 'Northwind sent their September partnership invoice.',
+            note: 'Please check invoice NW-2026-09 against the Northwind partner agreement before it is scheduled for payment. I only acknowledged receipt; I did not confirm an amount or a date.',
+          }),
+        },
+      },
+      { type: 'usage', usage: { input_tokens: 2400, output_tokens: 90, cached_input_tokens: 0, reasoning_tokens: 0 } },
+      { type: 'stop', reason: 'tool_use' },
+    ],
+  },
+  {
+    events: [
+      { type: 'text_delta', text: 'I suggested a reply for your approval and handed the invoice to Finance. Nothing has been sent.' },
+      { type: 'usage', usage: { input_tokens: 2500, output_tokens: 30, cached_input_tokens: 0, reasoning_tokens: 0 } },
+      { type: 'stop', reason: 'end_turn' },
+    ],
+  },
+] as const satisfies readonly Script[];
+
+/**
  * The scripted scenarios a development turn can ask for.
  *
  * `MODEL_SCRIPTED=1` used to be one fixed two-turn script with no failure
@@ -237,6 +290,7 @@ export const DEV_SCRIPTS: Readonly<Record<string, readonly Script[]>> = {
   navigation_members: navigationScript({ view: 'members' }, 'Members'),
   navigation_context: navigationScript({ view: 'context' }, 'Context'),
   navigation_inbox: navigationScript({ view: 'inbox' }, 'the Inbox'),
+  email_triage: EMAIL_TRIAGE_SCRIPT,
 };
 
 /**

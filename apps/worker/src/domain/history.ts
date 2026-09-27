@@ -371,6 +371,35 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
       break;
 
+    case 'outbound_email.simulated':
+      text = `A reply to ${subject} was simulated`;
+      detail = 'Exact approved reply · This environment simulates delivery; nothing was sent';
+      status = 'Simulated';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'email_handoff.completed':
+      text = `${actor} marked ${subject} handled`;
+      detail = 'Email hand-off closed by a person it was addressed to';
+      status = 'Handled';
+      ref = row.request_id ? { section: 'inbox', view: 'request', id: row.request_id } : null;
+      break;
+
+    case 'inbound_email.received':
+      text = 'An email arrived at a role inbox';
+      detail = 'Stored after sanitizing and sender checks · Handed to the inbox agent';
+      status = 'Received';
+      ref = null;
+      break;
+
+    case 'email_inbox.created':
+    case 'email_inbox.removed':
+      text = `${actor} ${row.kind === 'email_inbox.created' ? 'added' : 'removed'} a role inbox`;
+      detail = row.kind === 'email_inbox.created' ? 'New forwarding address for a role' : 'Its stored emails were deleted';
+      status = row.kind === 'email_inbox.created' ? 'Added' : 'Removed';
+      ref = null;
+      break;
+
     default:
       text = `${actor} · ${row.kind}`;
       detail = '';

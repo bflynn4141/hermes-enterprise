@@ -117,6 +117,15 @@ export interface Env {
   PARTNER_OUTREACH_EMAIL_MODE?: 'draft_only' | 'send_after_approval';
   /** Dedicated Gmail sender used only for exact, human-approved outreach. */
   GMAIL_OUTREACH_ENABLED?: string;
+  /**
+   * Email intake (C98). The domain Cloudflare Email Routing delivers to this
+   * Worker, e.g. `in.example.com`; unset means role inboxes cannot be created.
+   */
+  EMAIL_INTAKE_DOMAIN?: string;
+  /** The authserv-id of our receiving MTA, whose Authentication-Results header alone is trusted. */
+  EMAIL_INTAKE_AUTHSERV_ID?: string;
+  /** Draft-only by default (C81). send_after_approval queues an approved reply in the outbox. */
+  EMAIL_REPLY_MODE?: 'draft_only' | 'send_after_approval';
   GMAIL_CLIENT_ID?: string;
   GMAIL_CLIENT_SECRET?: string;
   GMAIL_STATE_SECRET?: string;

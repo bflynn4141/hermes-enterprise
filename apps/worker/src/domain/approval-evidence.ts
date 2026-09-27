@@ -2,6 +2,7 @@ import { approvalEvidenceViewSchema, approvalPayloadSchema, type ApprovalEvidenc
 import type { Tx } from '../db/client.js';
 import { RouteError } from '../routes/errors.js';
 import { requestAudiencePredicate } from './audience.js';
+import { loadInboundEmail } from '../inbound-email/view.js';
 
 const unavailable = (): never => {
   throw new RouteError('This approval has no available stored evidence with that id.', 'approval_evidence_unavailable', 404);
@@ -131,6 +132,31 @@ export async function getApprovalEvidence(
       || payload.authorization.revision !== approval.authorization_revision
       || payload.context.source.run_id !== approval.source_run_id) return unavailable();
   const base = { id: evidenceId, label: cited.label, note: cited.note ?? null };
+
+  // A reply to a role inbox cites the received message (C98). Whoever can see
+  // this approval can read the email it answers, and nothing else: the
+  // reply_to binding must name this exact evidence id.
+  const replyTo = payload.approval_type === 'communication' ? payload.details.reply_to : undefined;
+  if (replyTo?.message_id === evidenceId) {
+    const stored = await loadInboundEmail(tx, workspaceId, evidenceId);
+    if (!stored || stored.view.inbox.id !== replyTo.inbox_id) return unavailable();
+    const sender = stored.view.sender;
+    return approvalEvidenceViewSchema.parse({
+      ...base,
+      kind: 'inbound_email',
+      source_url: null,
+      fetched_at: stored.view.received_at,
+      source_updated_at: null,
+      verified_at: null,
+      sha256: stored.rawSha256,
+      facts: [
+        { label: 'From', value: sender.name ? `${sender.name} <${sender.address}>` : sender.address },
+        { label: 'Subject', value: stored.view.subject || '(no subject)' },
+        { label: 'Domain checks', value: `DMARC ${sender.authentication.dmarc} · SPF ${sender.authentication.spf} · DKIM ${sender.authentication.dkim}` },
+      ],
+      email: stored.view,
+    });
+  }
 
   const mailbox = (await tx.query<{
     title: string; message_count: number; normalized_sha256: string;

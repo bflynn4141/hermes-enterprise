@@ -38,6 +38,10 @@ export function approvalActionLabel(request: RequestEntity): string {
 
 export function approvalPrimaryAction(view: ApprovalView): string {
   if (isCommunicationDraft(view)) return 'Approve draft';
+  // A flagged sender's reply needs two people; the first press sends nothing.
+  if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
+    return view.payload.details.reply_to.caution ? 'Approve reply' : 'Approve and send reply';
+  }
   if (view.payload.approval_type !== 'team_commitment'
     || view.payload.context.source.trigger?.kind !== 'member_agent_joined') {
     return APPROVAL_META[view.payload.approval_type].action;
@@ -107,6 +111,12 @@ export function approvalDecisionPrompt(view: ApprovalView): string {
 
 export function approvalEffectCopy(view: ApprovalView): string {
   if (isCommunicationDraft(view)) return 'Review copy only · Nothing is sent';
+  if (view.effect.status === 'simulated') return 'Delivery simulated · Nothing was sent';
+  if (view.payload.approval_type === 'communication' && view.payload.details.reply_to) {
+    return view.effect.status === 'waiting' && view.status === 'pending'
+      ? 'Sends this exact reply after approval · Only to the sender'
+      : 'Records authorization · Delivery is shown below';
+  }
   if (view.effect.status === 'unavailable') return 'Records authorization · Execution unavailable';
   if (view.effect.status === 'executed') return 'External action completed';
   if (view.effect.kind !== 'none') return 'Records authorization · Execution is separate';
@@ -152,6 +162,9 @@ const EFFECT_LABELS: Record<string, string> = {
   waiting: 'Waiting',
   not_required: 'Not required',
   executed: 'Done',
+  // Outside production a reply to a role inbox is delivered by a simulator
+  // (C98, D12); the label never says "sent".
+  simulated: 'Simulated · nothing sent',
   failed: 'Failed',
   cancelled: 'Cancelled',
 };

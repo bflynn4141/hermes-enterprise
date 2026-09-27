@@ -29,6 +29,7 @@ import {
   requestStatusSchema,
   runStatusSchema,
   runStepStateSchema,
+  runModeSchema,
   sessionModeSchema,
 } from './enums.js';
 
@@ -491,7 +492,7 @@ export const traceEntitySchema = z
      * fills them and an older server does not; the client renders without
      * them.
      */
-    mode: sessionModeSchema.nullable().optional(),
+    mode: runModeSchema.nullable().optional(),
     model_id: z.string().max(64).nullable().optional(),
     active_ms: z.number().int().min(0).nullable().optional(),
     step_count: z.number().int().min(0).optional(),

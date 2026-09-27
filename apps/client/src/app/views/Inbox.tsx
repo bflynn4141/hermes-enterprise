@@ -13,7 +13,7 @@
 //     decision.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { CTX, HISTORY, INBOX, LIB, OV, REQ, type AgentFile, type Attachment, type DocumentEntity, type EffectEntity, type PartnerHandoffResult, type Ref, type RequestEntity } from '@hermes/shared';
+import { CTX, HISTORY, INBOX, LIB, OV, REQ, type AgentFile, type Attachment, type DocumentEntity, type EffectEntity, type InboundEmailView, type PartnerHandoffResult, type Ref, type RequestEntity } from '@hermes/shared';
 import { SelectionActions } from '@hermes/motion-components';
 import { useAdapter, useAppState, useDispatch, useEntity, useNav } from '../store-context.js';
 import { storeStepUp } from '../../model/auth.js';
@@ -29,6 +29,8 @@ import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
+import { EmailMessageView } from './EmailMessage.js';
+import { useStepUp } from './use-step-up.js';
 import { approvalRefusalMessage } from './approval-routes.js';
 import {
   ApprovalRequest,
@@ -81,10 +83,14 @@ function SourceMark({ source, size = 26 }: { source: ApplicantSource; size?: num
   );
 }
 
+/** A received email an agent put in front of another role (C98). */
+export const isEmailHandoff = (request: RequestEntity): boolean =>
+  request.kind === 'task' && (request.payload as { task_type?: unknown } | null)?.task_type === 'email_handoff';
+
 function requestType(request: RequestEntity): string {
   if (request.kind === 'application') return 'Application';
   if (request.kind === 'invoice') return 'Invoice';
-  if (request.kind === 'task') return 'Setup task';
+  if (request.kind === 'task') return isEmailHandoff(request) ? 'Email hand-off' : 'Setup task';
   if (request.kind === 'approval') return approvalTypeLabel(request);
   return 'Signature';
 }
@@ -134,11 +140,12 @@ function approvalThreshold(request: RequestEntity): string | null {
 }
 
 function requestAction(request: RequestEntity): string {
+  if (isEmailHandoff(request) && request.status !== 'pending') return 'Handled';
   if (request.status !== 'pending') return requestStatusLabel(request);
   if (request.kind === 'application') return 'Review applicant';
   if (request.kind === 'invoice' || request.kind === 'agreement') return requestActionLabel(request);
   if (request.kind === 'approval') return request.approval?.pending_for_viewer ? approvalActionLabel(request) : approvalReviewerLabel(request);
-  if (request.kind === 'task') return 'Work with your agent';
+  if (request.kind === 'task') return isEmailHandoff(request) ? 'Read and mark handled' : 'Work with your agent';
   return 'Review request';
 }
 
@@ -470,7 +477,86 @@ function RequestDetail({ id }: { id: string | null }) {
   return request.kind === 'application' ? <ApplicationView request={request} /> : <DocumentView request={request} />;
 }
 
+/**
+ * An agent handed a received email to this person's role (C98). The email is
+ * read through its own route, which admits only the people it was handed to,
+ * the inbox's role and its agent's owner. Closing it carries the decision
+ * route's guards on the server; here it is one explicit button.
+ */
+/** `shared_intelligence_reviewer` → "Shared intelligence reviewer", for a role the client has no name for. */
+const roleWords = (slug: string | null): string => {
+  if (!slug) return 'another team';
+  const words = slug.replace(/[_-]+/gu, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+function EmailHandoffView({ request }: { request: RequestEntity }) {
+  const adapter = useAdapter();
+  const state = useAppState();
+  const dispatch = useDispatch();
+  const payload = record(request.payload);
+  const emailId = text(payload.inbound_email_id);
+  const [email, setEmail] = useState<InboundEmailView | null>(null);
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<unknown>(null);
+  const { needsSignIn, signIn } = useStepUp('decision');
+  useEffect(() => {
+    if (!emailId) { setLoadState('unavailable'); return undefined; }
+    let live = true;
+    void adapter.rest.getInboundEmail(state.workspace.id, emailId).then(
+      (view) => { if (live) { setEmail(view); setLoadState('ready'); } },
+      () => { if (live) setLoadState('unavailable'); },
+    );
+    return () => { live = false; };
+  }, [adapter, state.workspace.id, emailId]);
+  const complete = async (): Promise<void> => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await adapter.rest.completeEmailHandoff(state.workspace.id, request.id);
+      const updated = await adapter.rest.getRequest(state.workspace.id, request.id);
+      dispatch({ type: 'entity/upsert', kind: 'request', id: updated.id, version: updated.version, data: updated });
+    } catch (caught) {
+      setProblem(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const handled = request.status !== 'pending';
+  const description = text(payload.description) ?? '';
+  const [summary, ...rest] = description.split('\n\n');
+  return <div className="scroll"><div className="app-body">
+    <div className="detail-head"><span><Glass name="context" size={38} /></span><div><h1 className="display-32">{request.label}</h1><p className="meta">Handed over from {roleWords(text(payload.from_role_slug))} · {handled ? 'Handled' : 'Waiting for you'}</p></div></div>
+    <section className="email-reply-draft" aria-label="Why this was handed to you">
+      <h2>From the agent</h2>
+      <p style={{ margin: 0, fontSize: 15, lineHeight: '23px' }}>{summary}</p>
+      {rest.length > 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--muted)' }}>{rest.join('\n\n')}</p>}
+      <p className="email-reply-rule">This is for your team to look at. The agent cannot pay, sign or reply from here.</p>
+    </section>
+    <section className="email-reply-context" style={{ marginTop: 20 }} aria-label="The email">
+      <h2>The email</h2>
+      {loadState === 'loading' && <Skeleton rows={3} label="Loading the email" />}
+      {loadState === 'unavailable' && <p className="meta">The original email is no longer stored.</p>}
+      {email && <EmailMessageView email={email} />}
+    </section>
+    <div className="app-footer" style={{ marginInline: -28 }}>
+      <div className="col grow" style={{ gap: 3 }}>
+        <span className="f-title">{handled ? 'Marked handled' : 'Mark it handled when your team is done'}</span>
+        <span className="f-sub">{problem ? (needsSignIn(problem) ? 'Closing this needs a recent sign-in.' : 'Could not close this. Try again.') : 'Nothing is paid or sent by closing it.'}</span>
+      </div>
+      {problem !== null && needsSignIn(problem) && <Button onClick={signIn}>Sign in again</Button>}
+      {!handled && <Button primary disabled={busy} onClick={() => void complete()}>{busy ? 'Closing…' : 'Mark handled'}</Button>}
+    </div>
+  </div></div>;
+}
+
 function TaskView({ request }: { request: RequestEntity }) {
+  if (record(request.payload).task_type === 'email_handoff') return <EmailHandoffView request={request} />;
+  return <PartnerCriteriaTask request={request} />;
+}
+
+function PartnerCriteriaTask({ request }: { request: RequestEntity }) {
   const nav = useNav();
   const adapter = useAdapter();
   const payload = record(request.payload);

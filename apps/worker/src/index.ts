@@ -29,6 +29,15 @@ import {
   importGmailEvidenceThread,
   startGmailEvidenceOAuth,
 } from './routes/inbound-email.js';
+import {
+  completeEmailHandoff,
+  createEmailInbox,
+  deleteEmailInbox,
+  getInboundEmail,
+  listEmailInboxes,
+  listInboxMessages,
+  patchEmailInbox,
+} from './routes/email-intake.js';
 import { RouteError } from './routes/errors.js';
 import { authSession, callback, login, logout } from './routes/auth.js';
 import { createWorkspace } from './routes/workspaces.js';
@@ -377,6 +386,15 @@ app.post('/w/:ws/integrations/email/gmail/oauth/start', startGmailOAuth);
 app.get('/w/:ws/integrations/email/evidence', getInboundEmailConnection);
 app.post('/w/:ws/integrations/email/evidence/gmail/oauth/start', startGmailEvidenceOAuth);
 app.post('/w/:ws/integrations/email/evidence/threads', importGmailEvidenceThread);
+// Role inboxes that receive forwarded mail (C98). Mail itself arrives through
+// the email() handler below, never through a route.
+app.get('/w/:ws/email/inboxes', listEmailInboxes);
+app.post('/w/:ws/email/inboxes', createEmailInbox);
+app.patch('/w/:ws/email/inboxes/:id', patchEmailInbox);
+app.delete('/w/:ws/email/inboxes/:id', deleteEmailInbox);
+app.get('/w/:ws/email/inboxes/:id/messages', listInboxMessages);
+app.get('/w/:ws/email/messages/:id', getInboundEmail);
+app.post('/w/:ws/email/handoffs/:id/complete', completeEmailHandoff);
 app.post('/w/:ws/provider-connections/nous/start', startNousOAuth);
 app.get('/w/:ws/cloud/connection', getCloudConnection);
 app.post('/w/:ws/cloud/connection/start', startCloudConnection);
@@ -710,6 +728,28 @@ const handler = {
     // never acked: an unknown queue means a deploy is behind, and acking would
     // delete the messages it is behind on.
     await handleQueue(batch, env);
+  },
+
+  /**
+   * Cloudflare Email Routing (C98): mail sent to a role inbox address arrives
+   * here. Only the recipient address is read before the directory lookup;
+   * everything else happens under the resolved workspace's key. A message the
+   * intake cannot place is rejected at SMTP time with a short reason.
+   */
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    void ctx;
+    const { receiveInboundEmail, MAX_INBOUND_EMAIL_BYTES } = await import('./inbound-email/intake.js');
+    if (message.rawSize > MAX_INBOUND_EMAIL_BYTES) {
+      message.setReject('Message too large for this inbox');
+      return;
+    }
+    const raw = new Uint8Array(await new Response(message.raw).arrayBuffer());
+    const outcome = await receiveInboundEmail(env, { to: message.to, raw });
+    // Ids and outcomes only: never an address, subject or body (CONVENTIONS).
+    console.log(JSON.stringify({ at: 'email.intake', status: outcome.status, ...(outcome.status === 'rejected' ? { reason: outcome.reason } : { duplicate: outcome.duplicate }) }));
+    if (outcome.status === 'rejected') {
+      message.setReject(outcome.reason === 'unknown_address' ? 'No such inbox' : 'Message could not be accepted');
+    }
   },
 } satisfies ExportedHandler<Env>;
 

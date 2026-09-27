@@ -200,7 +200,7 @@ export const applicationPayloadSchema = z
 
 export type ApplicationPayload = z.infer<typeof applicationPayloadSchema>;
 
-export const taskPayloadSchema = z.object({
+const partnerCriteriaTaskPayloadSchema = z.object({
   kind: z.literal('task'),
   task_type: z.literal('partner_criteria_setup'),
   description: z.string().trim().min(1).max(4000),
@@ -208,6 +208,28 @@ export const taskPayloadSchema = z.object({
   agent_id: z.uuid(),
   session_id: z.uuid(),
 }).strict();
+
+/**
+ * An agent handed a received email to another role (C98). The email itself
+ * is read from `inbound_email_id`, never copied into the task.
+ */
+export const emailHandoffTaskPayloadSchema = z.object({
+  kind: z.literal('task'),
+  task_type: z.literal('email_handoff'),
+  description: z.string().trim().min(1).max(4000),
+  action_label: z.string().trim().min(1).max(120),
+  agent_id: z.uuid(),
+  session_id: z.uuid(),
+  inbound_email_id: z.uuid(),
+  from_role_slug: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+  to_role_slug: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+}).strict();
+export type EmailHandoffTaskPayload = z.infer<typeof emailHandoffTaskPayloadSchema>;
+
+export const taskPayloadSchema = z.discriminatedUnion('task_type', [
+  partnerCriteriaTaskPayloadSchema,
+  emailHandoffTaskPayloadSchema,
+]);
 export type TaskPayload = z.infer<typeof taskPayloadSchema>;
 
 export const documentPayloadSchema = z.discriminatedUnion('kind', [

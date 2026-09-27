@@ -289,12 +289,18 @@ function outreachDraftInstructions(context: DraftPolicyContext): string {
   ].join(' ');
 }
 
-async function automationSession(
+/**
+ * The server-owned session an automated turn runs in, one per owner, agent
+ * and title. Email intake (C98) reuses it with its own title so its runs stay
+ * out of the partner-screening session.
+ */
+export async function automationSession(
   tx: Tx,
   env: Env,
   workspaceId: string,
   ownerId: string,
   agentId: string,
+  title: string = AUTOMATION_TITLE,
 ): Promise<TurnSession> {
   const allowed = allowedProviders(env);
   const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
@@ -331,7 +337,7 @@ async function automationSession(
       WHERE id=(SELECT id FROM sessions WHERE workspace_id=$1 AND owner_id=$2 AND agent_id=$3
         AND title=$4 AND NOT archived AND NOT read_only ORDER BY created_at LIMIT 1 FOR UPDATE)
       RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
-    [workspaceId,ownerId,agentId,AUTOMATION_TITLE,source.default_model_id,source.default_effort]);
+    [workspaceId,ownerId,agentId,title,source.default_model_id,source.default_effort]);
   if (existing.rows[0]) return existing.rows[0];
   const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
     ? await resolveRuntimeBinding(env, tx, workspaceId, agentId)
@@ -344,7 +350,7 @@ async function automationSession(
      VALUES ($1,$2,$3,$4,'work',$5,$6,$7)
      RETURNING id, agent_id, owner_id, read_only, mode, model_id, effort`,
     [
-      workspaceId, ownerId, agentId, AUTOMATION_TITLE,
+      workspaceId, ownerId, agentId, title,
       source.default_model_id,
       source.default_effort,
       runtime,

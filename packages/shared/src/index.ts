@@ -21,6 +21,7 @@ export * from './attachments.js';
 export * from './slack.js';
 export * from './outbound-email.js';
 export * from './inbound-email.js';
+export * from './email-intake.js';
 export * from './enterprise-skills.js';
 export * from './partner-workflow.js';
 export * from './partner-screening.js';

@@ -1,0 +1,216 @@
+// What the server can say about who sent a message, before any model reads it.
+//
+// Two lessons from the research behind decision C98 shape this file. First,
+// passing SPF, DKIM and DMARC proves a domain signed the mail, not that the
+// person is trustworthy: a hijacked vendor mailbox passes all three. So
+// authentication is one fact among several, and nothing here ever lowers the
+// bar for an action. Second, business email compromise is mostly lookalike
+// domains, a Reply-To that points somewhere else, a display name borrowed
+// from a colleague, and "our bank details have changed". Each of those is a
+// cheap string check, and each becomes a `caution` that routes a suggestion
+// to the stricter approval policy.
+//
+// Only the Authentication-Results header written by our own receiver counts.
+// Anyone can put an `Authentication-Results: …dmarc=pass` header in a message;
+// the receiving MTA prepends its own above whatever the sender wrote, so we
+// take the first header whose authserv-id is the one we configured and ignore
+// the rest.
+import {
+  CAUTION_WARNING_CODES,
+  type EmailAuthResult,
+  type EmailWarning,
+  type EmailWarningCode,
+  type SenderAuthentication,
+  type SenderFacts,
+  type SenderRelationship,
+} from '@hermes/shared';
+
+export const DEFAULT_AUTHSERV_ID = 'mx.cloudflare.net';
+
+const RESULT_WORDS = new Set<EmailAuthResult>(['pass', 'fail', 'softfail', 'neutral', 'none', 'temperror', 'permerror', 'policy']);
+
+/** Parse the trusted Authentication-Results header (RFC 8601). */
+export function parseAuthenticationResults(
+  headers: readonly string[],
+  trustedAuthservId: string = DEFAULT_AUTHSERV_ID,
+): SenderAuthentication {
+  const unknown: SenderAuthentication = { spf: 'unknown', dkim: 'unknown', dmarc: 'unknown', authserv_id: null };
+  const trusted = trustedAuthservId.trim().toLowerCase();
+  for (const header of headers) {
+    const unfolded = header.replace(/\r?\n[\t ]+/gu, ' ').replace(/\([^)]*\)/gu, ' ');
+    const [first, ...methods] = unfolded.split(';');
+    const authservId = first?.trim().split(/\s+/u)[0]?.toLowerCase() ?? '';
+    if (authservId !== trusted) continue;
+    const result: SenderAuthentication = { spf: 'none', dkim: 'none', dmarc: 'none', authserv_id: authservId };
+    const found: Record<'spf' | 'dkim' | 'dmarc', EmailAuthResult[]> = { spf: [], dkim: [], dmarc: [] };
+    for (const method of methods) {
+      const match = /^\s*(spf|dkim|dmarc)\s*=\s*([a-z]+)/iu.exec(method);
+      if (!match) continue;
+      const key = match[1]!.toLowerCase() as 'spf' | 'dkim' | 'dmarc';
+      const word = match[2]!.toLowerCase() as EmailAuthResult;
+      if (RESULT_WORDS.has(word)) found[key].push(word);
+    }
+    // A message can carry several DKIM signatures; one passing is what DMARC
+    // alignment needs, so report the best result for each method.
+    for (const key of ['spf', 'dkim', 'dmarc'] as const) {
+      if (found[key].length === 0) continue;
+      result[key] = found[key].includes('pass') ? 'pass' : found[key][0]!;
+    }
+    return result;
+  }
+  return unknown;
+}
+
+export const domainOf = (address: string): string => address.slice(address.lastIndexOf('@') + 1).toLowerCase();
+
+/** The registrable-ish part used for comparisons: `mail.acme.co.uk` → `acme.co.uk`. */
+export function organizationalDomain(domain: string): string {
+  const labels = domain.toLowerCase().replace(/\.$/u, '').split('.');
+  if (labels.length <= 2) return labels.join('.');
+  const secondLevel = labels[labels.length - 2]!;
+  const twoPartSuffix = ['co', 'com', 'net', 'org', 'gov', 'ac', 'edu'].includes(secondLevel) && labels[labels.length - 1]!.length === 2;
+  return labels.slice(twoPartSuffix ? -3 : -2).join('.');
+}
+
+/** Characters attackers swap in for lookalikes, folded to what they imitate. */
+const CONFUSABLES: Readonly<Record<string, string>> = {
+  '0': 'o', '1': 'l', '3': 'e', '5': 's', '7': 't', '8': 'b', 'і': 'i', 'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p',
+  'с': 'c', 'у': 'y', 'х': 'x', 'ԁ': 'd', 'ɡ': 'g', 'ӏ': 'l', 'ո': 'n',
+};
+
+const skeleton = (domain: string): string =>
+  [...domain.toLowerCase()].map((char) => CONFUSABLES[char] ?? char).join('')
+    .replace(/rn/gu, 'm').replace(/vv/gu, 'w').replace(/-/gu, '');
+
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = previous[0]!;
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const saved = previous[j]!;
+      previous[j] = Math.min(
+        previous[j]! + 1,
+        previous[j - 1]! + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      diagonal = saved;
+    }
+  }
+  return previous[b.length]!;
+}
+
+/**
+ * The known domain this one imitates, if any: same skeleton after folding
+ * confusable characters, or one or two edits away from a domain the workspace
+ * already trusts. An exact match is not a lookalike.
+ */
+export function lookalikeOf(domain: string, knownDomains: Iterable<string>): string | null {
+  const candidate = organizationalDomain(domain);
+  const candidateSkeleton = skeleton(candidate);
+  for (const known of knownDomains) {
+    const trusted = organizationalDomain(known);
+    if (!trusted || trusted === candidate) continue;
+    if (skeleton(trusted) === candidateSkeleton) return trusted;
+    const label = (value: string): string => value.split('.')[0] ?? value;
+    const distance = editDistance(label(candidate), label(trusted));
+    if (label(trusted).length >= 5 && distance >= 1 && distance <= (label(trusted).length >= 8 ? 2 : 1)) return trusted;
+  }
+  return null;
+}
+
+/**
+ * "Our bank details have changed." The single most expensive sentence in
+ * business email; one of these phrases plus an account word is enough to ask
+ * a person to verify by phone before anyone pays.
+ */
+const PAYMENT_CHANGE = /\b(new|updated?|changed?|change of|different)\b[^.\n]{0,60}\b(bank|banking|account|remittance|payment|wire|ach|iban|routing|sort code|swift)\b[^.\n]{0,40}\b(details?|information|info|number|instructions?|account)\b|\b(bank|banking|remittance|payment|wire) (details?|information|instructions?)\b[^.\n]{0,40}\b(have|has) (changed|been updated)\b|\biban\b|\brouting number\b|\bswift( code)?\b/iu;
+
+export function mentionsPaymentChange(text: string): boolean {
+  return PAYMENT_CHANGE.test(text);
+}
+
+export interface SenderFactsInput {
+  readonly fromAddress: string;
+  readonly fromName: string | null;
+  readonly replyTo: string | null;
+  readonly authentication: SenderAuthentication;
+  /** Active member addresses and names in this workspace. */
+  readonly members: readonly { readonly email: string; readonly name: string | null }[];
+  /** Addresses the workspace has received from or sent approved mail to. */
+  readonly knownAddresses: ReadonlySet<string>;
+  readonly visibleText: string;
+  readonly hiddenTextRemovedChars: number;
+  readonly remoteImagesBlocked: number;
+  readonly mismatchedLinks: number;
+  readonly attachmentCount: number;
+}
+
+const warning = (code: EmailWarningCode, detail: string): EmailWarning => ({
+  code,
+  severity: CAUTION_WARNING_CODES.has(code) ? 'caution' : 'info',
+  detail,
+});
+
+const normalizeName = (value: string): string => value.toLowerCase().replace(/["'`]/gu, '').replace(/\s+/gu, ' ').trim();
+
+export function senderFacts(input: SenderFactsInput): SenderFacts {
+  const address = input.fromAddress.toLowerCase();
+  const domain = domainOf(address);
+  const memberAddresses = new Set(input.members.map((member) => member.email.toLowerCase()));
+  const memberDomains = new Set(input.members.map((member) => domainOf(member.email)));
+  const knownDomains = new Set([...memberDomains, ...[...input.knownAddresses].map(domainOf)]);
+  // Free-mail domains are shared by strangers; they never make a sender "internal".
+  const authenticated = input.authentication.dmarc === 'pass';
+  const relationship: SenderRelationship = memberAddresses.has(address) && authenticated
+    ? 'internal'
+    : input.knownAddresses.has(address) ? 'known_contact' : 'new_sender';
+
+  const warnings: EmailWarning[] = [];
+  const { dmarc, spf, dkim } = input.authentication;
+  if (dmarc !== 'pass') {
+    warnings.push(warning('authentication_failed', input.authentication.authserv_id
+      ? `The sender's domain did not pass DMARC (dmarc=${dmarc}, spf=${spf}, dkim=${dkim}). The From address may be forged.`
+      : 'Our mail server recorded no authentication result for this message, so the From address is unverified.'));
+  }
+  const replyTo = input.replyTo?.toLowerCase() ?? null;
+  if (replyTo && replyTo !== address && organizationalDomain(domainOf(replyTo)) !== organizationalDomain(domain)) {
+    warnings.push(warning('reply_to_differs', `Replies would go to ${replyTo}, not ${address}. Hermes replies to the From address only.`));
+  }
+  const imitated = lookalikeOf(domain, knownDomains);
+  if (imitated) {
+    warnings.push(warning('lookalike_domain', `${domain} looks like ${imitated}, a domain this workspace already knows.`));
+  }
+  if (input.fromName && !memberAddresses.has(address)) {
+    const shown = normalizeName(input.fromName);
+    const borrowed = input.members.find((member) => member.name && normalizeName(member.name) === shown);
+    if (borrowed) {
+      warnings.push(warning('display_name_impersonation', `The sender uses the name of ${borrowed.name}, a member of this workspace, from an outside address.`));
+    }
+  }
+  if (mentionsPaymentChange(input.visibleText)) {
+    warnings.push(warning('payment_details_change', 'The message mentions bank or payment details. Verify any change by calling a number already on file, never one in this email.'));
+  }
+  if (input.hiddenTextRemovedChars >= 20) {
+    warnings.push(warning('hidden_text_removed', `${input.hiddenTextRemovedChars} characters of hidden text were removed before anyone read it, including the agent.`));
+  }
+  if (input.mismatchedLinks > 0) {
+    warnings.push(warning('link_text_mismatch', `${input.mismatchedLinks === 1 ? 'A link shows' : `${input.mismatchedLinks} links show`} one web address but goes to another.`));
+  }
+  if (input.remoteImagesBlocked > 0) {
+    warnings.push(warning('remote_images_blocked', `${input.remoteImagesBlocked} remote ${input.remoteImagesBlocked === 1 ? 'image was' : 'images were'} not loaded, so the sender cannot tell this was opened.`));
+  }
+  if (input.attachmentCount > 0) {
+    warnings.push(warning('attachments_not_opened', `${input.attachmentCount} ${input.attachmentCount === 1 ? 'attachment is' : 'attachments are'} listed but not opened or read by the agent.`));
+  }
+  return {
+    address,
+    name: input.fromName?.slice(0, 200) ?? null,
+    domain,
+    relationship,
+    authentication: input.authentication,
+    reply_to: replyTo,
+    warnings,
+  };
+}

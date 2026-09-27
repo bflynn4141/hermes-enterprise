@@ -4,6 +4,9 @@ import {
   approvalProposalSchema,
   approvalViewSchema,
   decideApprovalInputSchema,
+  emailCautionResourceKey,
+  emailInboxResourceKey,
+  emailMessageResourceKey,
   proposeApprovalInputSchema,
   reviseApprovalInputSchema,
   routeApprovalInputSchema,
@@ -314,6 +317,18 @@ function proposalResourceIds(proposal: ApprovalProposal): string[] {
     case 'data_disclosure': return proposal.details.items.map((item) => item.resource_id);
     case 'record_change': return [proposal.details.system_id];
     case 'exception': return [proposal.details.rule_id];
+    case 'communication': {
+      // A reply to a role inbox binds the inbox and the exact received message
+      // (C98). The caution resource is what makes the stricter inbox policy
+      // the only one whose targets match a flagged sender's reply.
+      const reply = proposal.details.reply_to;
+      if (!reply) return [];
+      return [
+        emailInboxResourceKey(reply.inbox_id),
+        emailMessageResourceKey(reply.message_id),
+        ...(reply.caution ? [emailCautionResourceKey(reply.inbox_id)] : []),
+      ];
+    }
     default: return [];
   }
 }
@@ -1217,7 +1232,10 @@ async function finalizeApproval(work: ApprovalWork, row: ApprovalRow, payload: A
     authorizationHash: row.authorization_hash,
     payload,
   });
-  if (queuedEmail?.state === 'queued') {
+  // A reply with no connected sender still gets its job: in a simulated
+  // environment the job records a simulated delivery; otherwise it leaves the
+  // row waiting for a mailbox, exactly as before.
+  if (queuedEmail && (queuedEmail.state === 'queued' || queuedEmail.reply)) {
     for (const outboxId of queuedEmail.ids) {
       const emailJob = await enqueueJob(
         work.tx,

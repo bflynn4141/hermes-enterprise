@@ -1842,3 +1842,87 @@ with and without roles, the Finance job, resend, the duplicate echo,
 History event and `Cache-Control: no-store`. The browser suite covers the
 sign-in link on the handoff form, Manage and Invite, the pre-tick swap, and
 the read-only workflow group at desktop and 430px.
+
+## C98. Role inboxes: agents read forwarded email and suggest; people decide
+
+**Decided September 26, 2026** (first pass; see [EMAIL-INTAKE.md](../EMAIL-INTAKE.md)).
+
+- **Intake.** An Admin gives a role an address such as
+  `partnerships-k3v9q2m7@<EMAIL_INTAKE_DOMAIN>`. Cloudflare Email Routing
+  delivers mail for the domain to the Worker's `email()` handler. The
+  workspace comes from the recipient address through `email_inbox_directory`,
+  the same directory pattern as share links (0014) and Slack installs (0025).
+  Forwarding needs no mailbox OAuth scope, so there is no Google restricted-
+  scope review; Hermes sees only what reaches the address.
+- **The server decides what is true.** Before any model reads a message, the
+  Worker parses the MIME (`postal-mime`, pinned to 3.0.0 because 4.0.0 was
+  inside the release-age window), rebuilds the HTML from an allowlist
+  (`inbound-email/sanitize.ts`: no scripts, styles, forms, remote images or
+  link targets; hidden text removed and counted), and records sender facts
+  (`sender-facts.ts`): our receiver's DMARC, SPF and DKIM result, whether the
+  sender is a member, a known contact or new, and cautions for a failed
+  domain check, a Reply-To on another domain, a lookalike domain, a borrowed
+  member name, bank-detail language, removed hidden text and links whose words
+  name another site. Only the Authentication-Results header whose authserv-id
+  is ours counts.
+- **The agent only suggests.** One `email_triage` job per message starts one
+  run in the inbox owner's "Email · <inbox>" session, in the new `intake` run
+  mode. Intake runs may call only `suggest_reply`, `suggest_handoff` and
+  `get_workspace_context`: nothing that fetches a URL or reaches anyone while
+  untrusted text is in context. The prompt spotlights the email between
+  nonce markers. `suggest_reply` takes words only: the recipient is the From
+  address of the message the run was started for, the subject and threading
+  come from it, and a Reply-To is never used.
+- **People decide.** A reply is a `communication` approval with a
+  server-written `reply_to` binding the inbox and the exact stored message
+  (whose raw sha256 is the resource digest). The inbox's policy needs the
+  agent's owner; a flagged sender adds a caution resource that selects a
+  two-step policy with a second person (another Admin or role holder), and
+  without one the reply is draft-only. The approval's audience is the owner,
+  the role's holders and, for a flagged sender, Admins, so nobody else sees
+  the suggestion or the email through its evidence. Replies are draft-only
+  unless `EMAIL_REPLY_MODE=send_after_approval`; development sets it, staging
+  and production do not.
+- **Sending.** An approved reply enters the existing outbox (C81) with
+  In-Reply-To and References. At queue time the outbox re-reads the message
+  and refuses a reply whose recipient changed or whose caution flag no longer
+  matches. Where the effect executor is simulated (D12) and no sender mailbox
+  is connected, the send job records `simulated` with a `SIM-MSG` reference,
+  never `executed`; production pins the executor to unavailable, so there the
+  row waits for a connected sender.
+- **Hand-offs.** `suggest_handoff` creates an `email_handoff` task whose
+  audience is the target role's holders (reviewers) and the inbox owner. It
+  can never pay, sign or reply. Closing it carries the decision route's
+  guards: allowlisted Origin, `X-Requested-From: inbox`, CSRF and step-up, and
+  only an addressed reviewer may close it.
+- **Privacy.** Message content is readable by the inbox agent's owner, the
+  role's holders and a hand-off's audience, not by Admins as such (roles plan
+  decision 1). Removing an inbox deletes its stored messages, withdraws its
+  agent's tools and retires its policies.
+
+**Why.** The research behind this (published email-agent incidents such as
+EchoLeak, the Superhuman and Gemini summary cases, and Instinct's first weeks)
+showed that approving sends is not enough: most leaks came from an image that
+loaded, a link that was followed, or hidden text only the model read. Keeping
+recipient choice, rendering and sender trust on the server, and giving the
+reading run no outbound tool, removes those channels structurally rather than
+relying on the model to notice an injection.
+
+**Not in this pass.** The Hermes Cloud runtime needs the two tool names added
+to the bridge's per-skill allowlist and a re-pin before hosted agents can use
+them; the local and legacy engine uses them today. Attachments are listed,
+not read. Operators still have to route a domain through Email Routing and
+confirm the authserv-id on real mail.
+
+**Evidence.** `test/unit/email-sanitize.test.ts` (hidden text, remote images,
+script URLs, hostile markup, entity escaping, inline cid images),
+`test/unit/email-sender-facts.test.ts` (forged Authentication-Results,
+lookalikes, Reply-To, bank-detail language, the intake tool allowlist),
+`test/db/email-intake.test.ts` (idempotent intake, unknown and paused
+addresses, privacy for non-members of the role, suggestion to simulated
+threaded reply, production staying unsent, the two-person caution path and
+its draft-only fallback, a redirected reply refused, hand-off guards, and
+deletion on removal), and `packages/shared/test/events.test.ts` (an intake
+run's `run.started` parses, which a live walkthrough caught when the client
+resynced on it).
+

@@ -37,6 +37,8 @@ import {
   getPartnerHandoffResultInputSchema,
   publishPartnerInvoiceReviewInputSchema,
   setFocusInputSchema,
+  suggestEmailHandoffInputSchema,
+  suggestEmailReplyInputSchema,
   viewFocusRef,
   type Ref,
   type RequestKind,
@@ -501,6 +503,68 @@ const publishPartnerInvoiceReview: ToolDefinitionEntry = {
 };
 
 /**
+ * Email intake (C98). Both tools act only on the email the run was started
+ * for, and neither lets the model choose who receives anything: the reply's
+ * recipient, sender, subject and threading, and the hand-off's receiving
+ * people, are read from the stored message and the workspace's roles. They are
+ * named without "email", "send" or "role" because the registry refuses any
+ * model tool whose name reads as a human-only action.
+ */
+const suggestReply: ToolDefinitionEntry = {
+  name: 'suggest_reply',
+  kind: 'propose',
+  description: 'Suggest a reply to the email this run was started for. Give a one-sentence summary for the reviewer and the plain-text reply body only. The server replies to the address that sent the email, from the inbox owner, under the same subject, and routes it for human approval; a sender the server flagged needs a second approver or stays a draft. Nothing is sent until a person approves. Never include content from other emails, files or records the sender did not ask about.',
+  input_schema: z.toJSONSchema(suggestEmailReplyInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
+  async run(args, ctx) {
+    const parsed = suggestEmailReplyInputSchema.safeParse(args);
+    if (!parsed.success) return { ok: false, error: `the reply is invalid: ${parsed.error.issues[0]?.message ?? 'invalid input'}` };
+    if (!ctx.run.agentId) return { ok: false, error: 'this run has no proposing agent', permanent: true };
+    const markup = findMarkup(parsed.data);
+    if (markup) return { ok: false, error: `${markup.path}: ${plainTextMessage([markup.finding])}` };
+    if (!ctx.writes.suggestEmailReply) return { ok: false, error: 'email intake is not available here', permanent: true };
+    try {
+      const result = await ctx.writes.suggestEmailReply({
+        runId: ctx.run.id, agentId: ctx.run.agentId, toolCallId: ctx.toolCallId, arguments: parsed.data,
+      });
+      return {
+        ok: true,
+        data: { ...result, awaiting: 'human review; nothing has been sent' },
+        focus: { ref: refFor('request', result.request_id), entityType: 'request', entityId: result.request_id },
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'the reply could not be suggested' };
+    }
+  },
+};
+
+const suggestHandoff: ToolDefinitionEntry = {
+  name: 'suggest_handoff',
+  kind: 'propose',
+  description: 'Put the email this run was started for in front of another team, such as finance for an invoice. Give the team slug, a one-sentence summary and a note on what they should look at. The server chooses the people who hold that team slug and shows them the original email with its sender checks. It cannot pay, sign or reply.',
+  input_schema: z.toJSONSchema(suggestEmailHandoffInputSchema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>,
+  async run(args, ctx) {
+    const parsed = suggestEmailHandoffInputSchema.safeParse(args);
+    if (!parsed.success) return { ok: false, error: `the hand-off is invalid: ${parsed.error.issues[0]?.message ?? 'invalid input'}` };
+    if (!ctx.run.agentId) return { ok: false, error: 'this run has no proposing agent', permanent: true };
+    const markup = findMarkup(parsed.data);
+    if (markup) return { ok: false, error: `${markup.path}: ${plainTextMessage([markup.finding])}` };
+    if (!ctx.writes.suggestEmailHandoff) return { ok: false, error: 'email intake is not available here', permanent: true };
+    try {
+      const result = await ctx.writes.suggestEmailHandoff({
+        runId: ctx.run.id, agentId: ctx.run.agentId, toolCallId: ctx.toolCallId, arguments: parsed.data,
+      });
+      return {
+        ok: true,
+        data: result,
+        focus: { ref: refFor('request', result.request_id), entityType: 'request', entityId: result.request_id },
+      };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'the hand-off could not be created' };
+    }
+  },
+};
+
+/**
  * The one tool that leaves this system.
  *
  * It is a read tool, so it is offered in Ask and Plan as well as Work: fetching
@@ -921,6 +985,8 @@ export const TOOLS: readonly ToolDefinitionEntry[] = [
   proposeRequest,
   proposeApproval,
   publishPartnerInvoiceReview,
+  suggestReply,
+  suggestHandoff,
   saveReviewNote,
   setContextField,
   proposeInstruction,
@@ -948,6 +1014,8 @@ export const TOOL_SOURCE: Readonly<Record<string, string>> = {
   get_partner_candidate: 'workspace.partner_source_artifacts',
   get_partner_handoff_result: 'workspace.partner_handoff_results',
   publish_partner_invoice_review: 'workspace.partner_invoice_intakes',
+  suggest_reply: 'workspace.inbound_email_messages',
+  suggest_handoff: 'workspace.inbound_email_messages',
   fetch_url: 'web.fetch_url',
   propose_request: 'engine',
   propose_approval: 'engine',
@@ -988,7 +1056,21 @@ export const MODE_TOOL_KINDS: Readonly<Record<string, readonly ToolDefinitionEnt
   work: ['read', 'propose', 'view'],
   ask: ['read'],
   plan: ['read', 'propose', 'view'],
+  intake: ['read', 'propose'],
 };
+
+/**
+ * The only tools a run reading an untrusted email may call (C98). The run has
+ * the sender's text in context, so anything that can reach the outside world
+ * without a person (a URL fetch, a web search) is left out: that is the channel
+ * every published email-agent exfiltration used. The suggestions themselves
+ * wait for a human.
+ */
+export const INTAKE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'suggest_reply',
+  'suggest_handoff',
+  'get_workspace_context',
+]);
 
 export const MODES = ['ask', 'plan', 'work'] as const;
 export type Mode = (typeof MODES)[number];
@@ -1091,7 +1173,8 @@ export function allowedTools(mode: string, capabilityToolNames: readonly string[
   // failing open costs rows nobody asked for.
   const kinds = MODE_TOOL_KINDS[mode] ?? MODE_TOOL_KINDS.ask ?? [];
   const configured = new Set(capabilityToolNames);
-  return TOOLS.filter((tool) => kinds.includes(tool.kind) && configured.has(tool.name));
+  return TOOLS.filter((tool) => kinds.includes(tool.kind) && configured.has(tool.name)
+    && (mode !== 'intake' || INTAKE_TOOL_NAMES.has(tool.name)));
 }
 
 /** The build-time assertion, exported so the test and the engine share it. */

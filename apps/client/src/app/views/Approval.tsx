@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type {
   ApprovalProposal,
   ApprovalView,
+  InboundEmailView,
   RequestEntity,
 } from '@hermes/shared';
 import { useAdapter, useAppState, useDispatch } from '../store-context.js';
@@ -14,6 +15,7 @@ export { APPROVAL_META, approvalType, approvalTypeLabel, approvalActionLabel, ap
 import './approval-review.css';
 import { ApprovalEvidence } from './ApprovalEvidence.js';
 export { ApprovalEvidence } from './ApprovalEvidence.js';
+import { EmailMessageView } from './EmailMessage.js';
 import { clearApprovalRevisionDraft, revisionDraftStorage, saveApprovalRevisionDraft, takeApprovalRevisionDraft, type ApprovalRevisionScope } from '../../model/approval-revision-draft.js';
 import { RestError } from '../../model/rest.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
@@ -147,11 +149,55 @@ function AccessPreview({ view }: { view: ApprovalView }) {
   );
 }
 
+/**
+ * The received email a suggested reply answers (C98), loaded through the
+ * approval's own evidence route so the reader sees exactly the stored
+ * message this revision is bound to.
+ */
+function ReplyContext({ view }: { view: ApprovalView }) {
+  const adapter = useAdapter();
+  const state = useAppState();
+  const messageId = view.payload.approval_type === 'communication' ? view.payload.details.reply_to?.message_id : undefined;
+  const [email, setEmail] = useState<InboundEmailView | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  useEffect(() => {
+    if (!messageId) return undefined;
+    let live = true;
+    setStatus('loading');
+    void adapter.rest.getApprovalEvidence(state.workspace.id, view.request_id, messageId).then(
+      (evidence) => { if (!live) return; setEmail(evidence.email ?? null); setStatus(evidence.email ? 'ready' : 'unavailable'); },
+      () => { if (live) setStatus('unavailable'); },
+    );
+    return () => { live = false; };
+  }, [adapter, state.workspace.id, view.request_id, messageId]);
+  if (!messageId) return null;
+  return <section className="email-reply-context" aria-label="The email this answers">
+    <h2>The email</h2>
+    {status === 'loading' && <Skeleton rows={3} label="Loading the email" />}
+    {status === 'unavailable' && <p className="meta">The original email is no longer stored. Its inbox may have been removed.</p>}
+    {email && status === 'ready' && <EmailMessageView email={email} />}
+  </section>;
+}
+
+/** Who approves and what approving does, for a reply to a role inbox. */
+function replyRule(view: ApprovalView): { tone: 'neutral' | 'caution'; text: string } | null {
+  if (view.payload.approval_type !== 'communication' || !view.payload.details.reply_to) return null;
+  const details = view.payload.details;
+  if (details.reply_to?.caution) {
+    return { tone: 'caution', text: 'Hermes flagged this sender, so two people approve this reply. It goes only to the address that sent the email.' };
+  }
+  if (details.draft_only) return { tone: 'neutral', text: 'Approving saves the reviewed reply. Hermes does not send it.' };
+  return { tone: 'neutral', text: `Approving sends this reply from ${details.sender.address}, threaded under the original email. It goes only to the address that sent it.` };
+}
+
 function CommunicationPreview({ view }: { view: ApprovalView }) {
   if (view.payload.approval_type !== 'communication') return null;
   const details = view.payload.details;
+  const rule = replyRule(view);
   return (
     <div className="approval-preview">
+      {details.reply_to && <ReplyContext view={view} />}
+      {rule && <div className="email-reply-draft"><h2>Suggested reply</h2><p className="email-reply-rule" data-tone={rule.tone}>{rule.text}</p></div>}
       <article className="approval-message">
         <dl>
           <div><dt>From</dt><dd>{details.sender.address ?? 'Sender address not provided'}</dd></div>
@@ -314,7 +360,7 @@ function ResultState({ view }: { view: ApprovalView }) {
         <Icon name="arrow" />
         <span data-state={view.work.status === 'completed' || view.work.status === 'admitted' ? 'done' : 'waiting'}><Icon name={view.work.status === 'completed' || view.work.status === 'admitted' ? 'check' : 'history'} /> <strong>{work}</strong><small>{started ?? approvalWorkReason(view.work.reason) ?? 'Dependent work'}</small></span>
         <Icon name="arrow" />
-        <span data-state={view.effect.status === 'executed' ? 'done' : view.effect.status === 'failed' ? 'failed' : 'waiting'}><Icon name={view.effect.status === 'executed' ? 'check' : 'history'} /> <strong>{effect}</strong><small>{view.effect.reason ?? 'Provider effect'}</small></span>
+        <span data-state={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'done' : view.effect.status === 'failed' ? 'failed' : 'waiting'}><Icon name={view.effect.status === 'executed' || view.effect.status === 'simulated' ? 'check' : 'history'} /> <strong>{effect}</strong><small>{view.effect.reason ?? 'Provider effect'}</small></span>
       </div>
     </section>
   );
@@ -322,7 +368,7 @@ function ResultState({ view }: { view: ApprovalView }) {
 
 export function proposalFrom(view: ApprovalView, summary: string, draft?: { subject: string; body: string }): ApprovalProposal {
   const { context: _context, authorization: _authorization, policy: _policy, resource_bindings: _resourceBindings, ...proposal } = view.payload;
-  if (draft && proposal.approval_type === 'communication' && proposal.details.draft_only && proposal.details.channel === 'email') {
+  if (draft && proposal.approval_type === 'communication' && (proposal.details.draft_only || proposal.details.reply_to) && proposal.details.channel === 'email') {
     return { ...proposal, summary, details: { ...proposal.details, subject: draft.subject.trim(), body: draft.body.trim() } };
   }
   return { ...proposal, summary } as ApprovalProposal;
@@ -368,7 +414,7 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     revision: approval.payload.authorization.revision, hash: approval.payload.authorization.hash,
     authorizationExpiresAt: approval.payload.authorization.expires_at,
     canRevise: approval.capabilities.can_submit_revision && ['pending', 'changes_requested'].includes(approval.status)
-      && approval.payload.approval_type === 'communication' && approval.payload.details.draft_only && approval.payload.details.channel === 'email',
+      && approval.payload.approval_type === 'communication' && (approval.payload.details.draft_only || Boolean(approval.payload.details.reply_to)) && approval.payload.details.channel === 'email',
   });
 
   useEffect(() => {
@@ -410,6 +456,20 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
     );
     return () => { live = false; };
   }, [adapter, state.workspace.id, state.user.id, request.id]);
+
+  // A delivery or another reviewer can change the approval after this card
+  // loaded (C98: a simulated or sent reply). When the request row moves on,
+  // re-read the approval in place, without resetting the card to loading.
+  useEffect(() => {
+    if (loadState !== 'ready') return undefined;
+    let live = true;
+    void adapter.rest.getApproval(state.workspace.id, request.id).then(
+      (approval) => { if (live) setView(approval); },
+      () => undefined,
+    );
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request.version, request.status, request.approval?.effect_status, request.approval?.work_status]);
 
   const syncRequest = async (): Promise<void> => {
     const updated = await adapter.rest.getRequest(state.workspace.id, request.id);
@@ -509,7 +569,9 @@ export function ApprovalRequest({ request }: { request: RequestEntity }) {
   // Saying so before the click is a hint only: the 401 path below stays the
   // authority, and an unknown `authenticated_at` is treated as unknown, not stale.
   const signInStale = !resolved && (canApprove || canDecline || canRequestChanges) && decisionSignInStale(state.connection.authenticatedAt);
-  const editableDraft = view.payload.approval_type === 'communication' && view.payload.details.draft_only && view.payload.details.channel === 'email';
+  // A reply to a role inbox is editable before it is approved, like a draft:
+  // the edit is a new revision, and the server re-checks its recipient (C98).
+  const editableDraft = view.payload.approval_type === 'communication' && (view.payload.details.draft_only || Boolean(view.payload.details.reply_to)) && view.payload.details.channel === 'email';
   const draftChanged = editableDraft && view.payload.approval_type === 'communication' && (revisionSubject.trim() !== (view.payload.details.subject ?? '') || revisionBody.trim() !== view.payload.details.body);
   const invalidRevision = busy || !canRevise || revisionSummary.trim().length === 0 || revisionNote.trim().length === 0 || (editableDraft && revisionBody.trim().length === 0) || (!draftChanged && revisionSummary.trim() === view.payload.summary);
   const partnerWorkflowRecord = view.payload.approval_type === 'record_change' && view.payload.details.system_id === 'enterprise-partner-records';
