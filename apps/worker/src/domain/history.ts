@@ -356,8 +356,14 @@ export function renderHistoryRow(row: HistoryRow): RenderedEvent {
       ref = requestRef;
       break;
 
-    case 'approval.proposed':
-      text = `${actor} proposed ${str(asRecord(row.request_payload).summary) ?? subject}`;
+    case 'approval.proposed': {
+      // Agents suggest; the member they work for is not the author.
+      const proposer = row.agent_name ?? actor;
+      const replyTo = asRecord(asRecord(row.request_payload).details).reply_to;
+      text = replyTo && row.request_label
+        ? `${proposer} suggested a ${row.request_label.charAt(0).toLowerCase()}${row.request_label.slice(1)}`
+        : `${proposer} suggested ${str(asRecord(row.request_payload).summary) ?? subject}`;
+      }
       status = approvalState(row);
       detail = status === 'Needs review' ? 'Waiting for approval · Nothing has happened yet' : 'Suggested for approval';
       ref = requestRef;

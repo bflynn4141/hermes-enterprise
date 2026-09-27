@@ -36,6 +36,15 @@ const base = (overrides: Partial<HistoryRow> = {}): HistoryRow => ({
 const TECHNICAL = /[a-z]+_[a-z]+|\b(?:uuid|oauth|api|token|runtime|workflow|hash|revision|executor|effect|quorum|tenant)\b/i;
 
 describe('renderHistoryRow', () => {
+  it('credits a suggested reply to the agent, not the member it works for', () => {
+    const row = renderHistoryRow(base({
+      kind: 'approval.proposed', actor_type: 'agent', actor_name: 'Maya Chen', agent_name: 'Iris',
+      request_label: 'Reply to Priya Raman',
+      request_payload: { approval_type: 'communication', summary: 'Thank Priya.', details: { reply_to: { inbox_id: 'x', message_id: 'y', caution: false } } },
+    }));
+    expect(row.text).toBe('Iris suggested a reply to Priya Raman');
+  });
+
   it.each(EVENT_KINDS)('renders %s as a sentence with a state word', (kind) => {
     const row = renderHistoryRow(base({ kind }));
     expect(row.text).not.toContain(kind);

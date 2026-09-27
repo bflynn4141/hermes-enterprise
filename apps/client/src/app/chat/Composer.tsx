@@ -160,7 +160,7 @@ export function Composer({ session }: { session: SessionState }) {
                 ? `${readableWaitingLabel(status.waiting_label) ?? 'Waiting'} · Nothing sent`
                 : status.status === 'stopped'
                   ? 'Stopped · Completed work kept'
-                  : emailRun ? `${runErrorSentence(status.error)} · Nothing was sent` : `${runErrorSentence(status.error)} · Completed work kept`}
+                  : emailRun ? 'Couldn’t finish reading this email · Nothing was sent. It can be tried again from Role inboxes.' : `${runErrorSentence(status.error)} · Completed work kept`}
           </span>
           <span className="grow" />
           {approvalWaiting && <Button primary onClick={() => nav({ section: 'agents', view: 'permissions' })}>Review action</Button>}
