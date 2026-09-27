@@ -127,7 +127,7 @@ export const REQUEST_REVIEWABLE_PREDICATE = `(r.status <> 'pending' OR r.kind <>
 
 /** May this viewer decide this legacy request? The approval rules say (decision C93). */
 export function canDecideLegacyRequest(
-  row: Pick<RequestRow, 'kind' | 'subject_key' | 'requester_id'>,
+  row: Pick<RequestRow, 'kind' | 'subject_key' | 'requester_id' | 'payload'>,
   viewer: ApprovalViewer,
 ): boolean {
   return mayDecideRequest(viewer, row);

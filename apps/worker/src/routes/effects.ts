@@ -40,8 +40,8 @@ import type { Tx } from '../db/client.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, pathUuid, type TenantWork } from './tenant.js';
 import { RouteError } from './errors.js';
-import { effectRows, loadEffect, toEffectEntity, withLiveRequirement, type EffectRow } from '../domain/effect-rows.js';
-import { approverLabel, loadApprovalRoutes, loadApprovalViewer } from '../domain/approval-routing.js';
+import { effectRows, effectRule, loadEffect, toEffectEntity, withLiveRequirement, type EffectRow } from '../domain/effect-rows.js';
+import { loadApprovalRoutes, loadApprovalViewer, loadRoleNames, progressComplete, routedLabel, type RoutedRule } from '../domain/approval-routing.js';
 import {
   effectExecutorMode,
   simulateEffect,
@@ -49,7 +49,7 @@ import {
   unavailableEnforcement,
   type SimulationContext,
 } from '../domain/effects.js';
-import { mayApprove, type ApprovalRouteRule, type EffectKind } from '@hermes/shared';
+import { mayApprove, type EffectKind } from '@hermes/shared';
 import { publishEvents } from '../jobs.js';
 
 const effectPage = paginatedSchema(effectEntitySchema);
@@ -64,36 +64,32 @@ export async function listEffects(c: Context<{ Bindings: Env }>): Promise<Respon
     : undefined;
 
   const { rows, viewerId } = await inWorkspace(c, async (work) => {
-    const routes = await loadApprovalRoutes(work.tx, work.workspaceId);
+    const routing = { routes: await loadApprovalRoutes(work.tx, work.workspaceId), roleNames: await loadRoleNames(work.tx, work.workspaceId) };
     const found = await effectRows(work.tx, { ...(status && status.length > 0 ? { status } : {}), audienceUserId: work.userId });
-    return { rows: found.map((row) => withLiveRequirement(row, routes)), viewerId: work.userId };
+    return { rows: found.map((row) => withLiveRequirement(row, routing)), viewerId: work.userId };
   });
   return c.json(effectPage.parse({ items: rows.map((row) => toEffectEntity(row, viewerId)), cursor: null, total: rows.length }));
 }
 
 /**
- * May this member carry out this effect? The workspace's rule for its kind
- * says who, and whether the person who approved the request may do it too
- * (decision C93). Read at the press, so a changed rule applies to effects
- * already waiting.
+ * May this member carry out this effect? The workspace's rule for its kind, at
+ * its invoice's amount, says who, and whether a person who approved the
+ * request may do it too (decisions C93–C95; with a two-person decision, both
+ * approvers count as having approved it). Read at the press, so a changed
+ * rule applies to effects already waiting.
  */
-async function requireEffectApprover(work: TenantWork, effect: EffectRow, rule: ApprovalRouteRule, roleNames: ReadonlyMap<string, string>): Promise<void> {
+async function requireEffectApprover(work: TenantWork, effect: EffectRow, routed: RoutedRule, roleNames: ReadonlyMap<string, string>): Promise<void> {
+  const { rule } = routed;
   const { rows } = await work.tx.query<{ role: string; reviewer_roles: string[] }>(
     `SELECT role, reviewer_roles FROM members WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'`,
     [work.workspaceId, work.userId],
   );
   const member = rows[0];
   if (!member || !mayApprove(rule, member)) {
-    throw new RouteError(`this needs ${approverLabel(rule, roleNames)}`, 'role_required', 403);
+    throw new RouteError(`this needs ${routedLabel(routed, roleNames)}`, 'role_required', 403);
   }
-  if (!rule.allow_requester) {
-    const decision = await work.tx.query<{ decided_by: string | null }>(
-      `SELECT decided_by FROM decisions WHERE id = $1`,
-      [effect.decision_id],
-    );
-    if (decision.rows[0]?.decided_by === work.userId) {
-      throw new RouteError('you approved this request, so someone else carries it out', 'same_person', 403);
-    }
+  if (!rule.allow_requester && effect.decision_approvers.includes(work.userId)) {
+    throw new RouteError('you approved this request, so someone else carries it out', 'same_person', 403);
   }
 }
 
@@ -111,30 +107,37 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
     if (!effect) throw new RouteError('no such effect', 'unknown_effect', 404);
 
     const viewer = await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
-    const rule = viewer.routes[effect.kind as EffectKind].rule;
-    await requireEffectApprover(work, effect, rule, viewer.roleNames);
+    const routed = effectRule(effect, viewer.routes);
+    if (!routed) throw new RouteError('no such effect', 'unknown_effect', 404);
+    await requireEffectApprover(work, effect, routed, viewer.roleNames);
     if (effect.status === 'cancelled') {
       throw new RouteError('this effect was cancelled by a later version', 'effect_cancelled', 409);
     }
 
     // Recorded once. A second press finds the row already answered and
     // returns it rather than appending a second identical audit row.
-    if (effect.status === 'unavailable' || effect.status === 'simulated') return { row: withLiveRequirement(effect, viewer.routes), viewerId: work.userId };
+    if (effect.status === 'unavailable' || effect.status === 'simulated') return { row: withLiveRequirement(effect, viewer), viewerId: work.userId };
 
     // A payment needs two different Finance holders. Each press records one
     // confirmation; the same person pressing again changes nothing. Only the
-    // press that completes the count goes on to execute.
-    if (rule.approvals_required > 1) {
+    // press that completes the count goes on to execute. The count is of
+    // confirmers who still pass the rule now: one who lost the role, or left,
+    // no longer counts (C95).
+    if (routed.rule.approvals_required > 1 || routed.rule.one_from_each) {
       await work.tx.query(
         `INSERT INTO effect_confirmations (workspace_id, effect_id, user_id)
          VALUES ($1, $2, $3) ON CONFLICT (effect_id, user_id) DO NOTHING`,
         [work.workspaceId, effectId, work.userId],
       );
-      const { rows } = await work.tx.query<{ confirmations: number }>(
-        `SELECT count(*)::int AS confirmations FROM effect_confirmations WHERE effect_id = $1`,
-        [effectId],
-      );
-      if ((rows[0]?.confirmations ?? 0) < rule.approvals_required) {
+      const counted = withLiveRequirement((await loadEffect(work.tx, effectId, work.userId)) ?? effect, viewer);
+      const complete = progressComplete({
+        required: counted.approvals_required,
+        recorded: counted.confirmed_by.length,
+        by_viewer: true,
+        covered: counted.covered ?? true,
+        counted: counted.confirmed_by,
+      });
+      if (!complete) {
         work.jobs.push(
           ...(await publishEvents(work.tx, work.workspaceId, [
             {
@@ -148,7 +151,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
             },
           ])),
         );
-        return { row: withLiveRequirement((await loadEffect(work.tx, effectId, work.userId)) ?? effect, viewer.routes), viewerId: work.userId };
+        return { row: counted, viewerId: work.userId };
       }
     }
 
@@ -190,7 +193,7 @@ export async function executeEffect(c: Context<{ Bindings: Env }>): Promise<Resp
     );
 
     const updated = await loadEffect(work.tx, effectId, work.userId);
-    return { row: withLiveRequirement(updated ?? effect, viewer.routes), viewerId: work.userId };
+    return { row: withLiveRequirement(updated ?? effect, viewer), viewerId: work.userId };
   });
 
   return c.json(effectEntitySchema.parse(toEffectEntity(row, viewerId)));

@@ -40,7 +40,7 @@
 // in the client. The status code carries the same information and is the older
 // convention for it (docs/DECISIONS.md, D-3).
 import type { Context } from 'hono';
-import { decisionResultSchema, mayApprove, type Decision } from '@hermes/shared';
+import { decisionResultSchema, type Decision } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
@@ -48,7 +48,7 @@ import { RouteError } from './errors.js';
 import { requireRequestedFrom } from '../domain/guards.js';
 import { recordDecision } from '../domain/decisions.js';
 import { FINANCE_DECIDABLE_SQL } from '../domain/finance-decidable.js';
-import { approverLabel, loadApprovalViewer } from '../domain/approval-routing.js';
+import { decisionRule, isDecisionKind, loadApprovalViewer, mayDecideRequest, routedLabel } from '../domain/approval-routing.js';
 
 interface DecisionBody {
   decision?: string;
@@ -58,16 +58,17 @@ interface DecisionBody {
 }
 
 /**
- * Who may record this decision: the workspace's rule for the request's kind
- * (decision C93), or, for a handoff request, the Finance person it was handed
- * to. When the rule says so, the person whose agent prepared the request may
- * not decide it, whatever else they hold.
+ * Who may record this decision: `mayDecideRequest`, the same answer the Inbox
+ * shows (the workspace's rule for the request's kind at its amount, decisions
+ * C93 and C94, or for a handoff request the Finance person it was handed to).
+ * Only the refusal is worded here. When the rule says so, the person whose
+ * agent prepared the request may not decide it, whatever else they hold.
  */
 async function requireDecider(work: TenantWork, requestId: string): Promise<void> {
   const { rows } = await work.tx.query<{
-    kind: string; subject_key: string | null; requester_id: string | null; handed_to_viewer: boolean;
+    kind: string; subject_key: string | null; payload: unknown; requester_id: string | null; handed_to_viewer: boolean;
   }>(
-    `SELECT r.kind, r.subject_key,
+    `SELECT r.kind, r.subject_key, r.payload,
             (SELECT s.owner_id FROM sessions s WHERE s.id = r.session_id) AS requester_id,
             ${FINANCE_DECIDABLE_SQL} AND EXISTS (
               SELECT 1 FROM request_audiences ra WHERE ra.request_id = r.id AND ra.user_id = $3
@@ -79,24 +80,19 @@ async function requireDecider(work: TenantWork, requestId: string): Promise<void
   const request = rows[0];
   // Unknown requests and kinds without a rule keep the old answer; the
   // decision itself then refuses them with its own reason.
-  if (!request || !isDecisionKey(request.kind)) {
+  if (!request || !isDecisionKind(request.kind)) {
     work.requireAdmin('recording a decision');
     return;
   }
   const viewer = await loadApprovalViewer(work.tx, work.workspaceId, work.userId, work.role);
-  const rule = viewer.routes[request.kind].rule;
-  if (!rule.allow_requester && request.requester_id === work.userId) {
+  if (mayDecideRequest(viewer, request)) return;
+  const routed = decisionRule(viewer.routes, request);
+  if (!routed.rule.allow_requester && request.requester_id === work.userId) {
     throw new RouteError('your agent prepared this, so someone else approves it', 'own_request', 403);
   }
-  const byRule = mayApprove(rule, { role: work.role, reviewer_roles: viewer.reviewerRoles });
-  const byHandoff = request.handed_to_viewer && viewer.reviewerRoles.includes('finance');
-  if (byRule || byHandoff) return;
-  if (rule.admins && rule.roles.length === 0) work.requireAdmin('recording a decision');
-  throw new RouteError(`this needs ${approverLabel(rule, viewer.roleNames)}`, 'approver_required', 403);
+  if (routed.rule.admins && routed.rule.roles.length === 0) work.requireAdmin('recording a decision');
+  throw new RouteError(`this needs ${routedLabel(routed, viewer.roleNames)}`, 'approver_required', 403);
 }
-
-const isDecisionKey = (kind: string): kind is 'application' | 'invoice' | 'agreement' =>
-  kind === 'application' || kind === 'invoice' || kind === 'agreement';
 
 export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Response> {
   requireOrigin(c, { required: true });

@@ -18,3 +18,9 @@
 .member-approvals-role input { accent-color: #6E64FF; width: 16px; height: 16px; flex: 0 0 auto; }
 .member-approvals-line { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .member-approvals-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* The band above an amount: the amount and its currency side by side, the
+   currency narrow; stacked at phone width. */
+.admin-approvals-amount { display: flex; gap: 12px; flex-wrap: wrap; padding-top: 16px; }
+.admin-approvals-amount .field { flex: 1 1 200px; min-width: 0; }
+.admin-approvals-amount .admin-approvals-currency { flex: 0 1 160px; }
+.admin-settings-card-body > p.meta { margin: 8px 0 0; font-size: 13px; line-height: 1.6; }

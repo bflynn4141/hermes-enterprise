@@ -42,7 +42,7 @@ import { loadApprovalListProjection } from '../domain/approvals.js';
 import { effectRows, toEffectEntity, withLiveRequirement } from '../domain/effect-rows.js';
 import { loadVersions, toDocumentEntity } from '../documents/service.js';
 import { enqueueRequestTriage, JEV_MODEL_ID } from '../inbox-triage/service.js';
-import { loadApprovalRoutes, loadApprovalViewer, requestApproverLabel, type ApprovalViewer } from '../domain/approval-routing.js';
+import { loadApprovalRoutes, loadApprovalViewer, loadRoleNames, requestApproverLabel, type ApprovalViewer } from '../domain/approval-routing.js';
 
 const LIST_LIMIT = 100;
 const TRIAGE_ENQUEUE_LIMIT = 5;
@@ -209,9 +209,9 @@ export async function listRequestEffects(c: Context<{ Bindings: Env }>): Promise
   const requestId = pathUuid(c, 'id');
   const { rows, viewerId } = await inWorkspace(c, async (work) => {
     if (!await loadRequest(work.tx, requestId, work.userId)) throw new RouteError('no such request', 'unknown_request', 404);
-    const routes = await loadApprovalRoutes(work.tx, work.workspaceId);
+    const routing = { routes: await loadApprovalRoutes(work.tx, work.workspaceId), roleNames: await loadRoleNames(work.tx, work.workspaceId) };
     const found = await effectRows(work.tx, { requestId, audienceUserId: work.userId });
-    return { rows: found.map((row) => withLiveRequirement(row, routes)), viewerId: work.userId };
+    return { rows: found.map((row) => withLiveRequirement(row, routing)), viewerId: work.userId };
   });
   return c.json(effectPage.parse({ items: rows.map((row) => toEffectEntity(row, viewerId)), cursor: null, total: rows.length }));
 }

@@ -40,16 +40,20 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(page).toHaveURL(/#admin\/Approvals\/payment$/);
   await expect(pane.getByRole('heading', { name: 'Pay an approved invoice', exact: true })).toBeVisible();
   const who = pane.getByRole('region', { name: 'Who can approve' });
+  // A payment has an amount, so the page's one Save sits in the last card.
+  const above = pane.getByRole('region', { name: 'Above an amount' });
   await expect(who.getByRole('checkbox', { name: /^Finance/ })).toBeChecked();
   await expect(who.getByRole('checkbox', { name: /^Finance/ })).toHaveAccessibleName(/Alex Rivera/);
   await expect(who.getByRole('checkbox', { name: /^Admins/ })).not.toBeChecked();
-  await expect(who.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
-  await expect(who.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await expect(above.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
+  await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
   await who.getByRole('combobox', { name: 'How many different people' }).selectOption('3');
+  // One Finance group: "One from each group" has nothing to choose between.
+  await expect(who.getByRole('switch', { name: 'One from each group' })).toHaveCount(0);
   await expect(who.getByRole('switch', { name: 'Can the person who approved the request also do this?' })).toHaveAttribute('aria-checked', 'true');
-  await who.getByRole('button', { name: 'Save' }).click();
-  await expect(who.getByRole('status')).toHaveText('Saved.');
-  await expect(who.getByRole('button', { name: 'Reset to default' })).toBeVisible();
+  await above.getByRole('button', { name: 'Save' }).click();
+  await expect(above.getByRole('status')).toHaveText('Saved.');
+  await expect(above.getByRole('button', { name: 'Reset to default' })).toBeVisible();
   await shoot(page, 'approvals-action-rule', 1300);
 
   await pane.getByRole('button', { name: '← Approvals' }).click();
@@ -57,10 +61,10 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(payment).not.toContainText('Default');
 
   await payment.click();
-  await who.getByRole('button', { name: 'Reset to default' }).click();
-  await expect(who.getByRole('status')).toHaveText('Back to the default.');
+  await above.getByRole('button', { name: 'Reset to default' }).click();
+  await expect(above.getByRole('status')).toHaveText('Back to the default.');
   await expect(who.getByRole('combobox', { name: 'How many different people' })).toHaveValue('2');
-  await expect(who.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
+  await expect(above.getByRole('button', { name: 'Reset to default' })).toHaveCount(0);
   await pane.getByRole('button', { name: '← Approvals' }).click();
   await expect(payment).toContainText('Finance · 2 different people · Default');
 
@@ -69,7 +73,7 @@ test('an Admin reads who approves what, changes Payment to three Finance people,
   await expect(pane.getByRole('list', { name: 'Roles' }).getByRole('button', { name: /^Finance/ })).toContainText('Approves Pay an approved invoice');
 });
 
-test('a decision takes one person, needs someone to approve it, and warns about a role nobody holds', async ({ page }) => {
+test('a decision can take two people, one from each group, needs someone to approve it, and warns about a role nobody holds', async ({ page }) => {
   await page.setViewportSize({ width: 1840, height: 1000 });
   // An old link to the page it replaced still lands here.
   await page.goto('/#admin/Inbox%20rules');
@@ -78,26 +82,34 @@ test('a decision takes one person, needs someone to approve it, and warns about 
   await pane.getByRole('list', { name: 'Decisions' }).getByRole('button', { name: /^Approve an invoice draft/ }).click();
   await expect(page).toHaveURL(/#admin\/Approvals\/invoice$/);
   const who = pane.getByRole('region', { name: 'Who can approve' });
-  await expect(who.getByRole('combobox', { name: 'How many different people' })).toHaveCount(0);
+  const above = pane.getByRole('region', { name: 'Above an amount' });
+  const count = who.getByRole('combobox', { name: 'How many different people' });
+  await expect(count).toHaveValue('1');
   const requester = who.getByRole('switch', { name: 'Can the person whose agent prepared this approve it?' });
   await expect(requester).toHaveAttribute('aria-checked', 'true');
 
   await who.getByRole('checkbox', { name: /^Admins/ }).uncheck();
-  await expect(who.getByRole('alert')).toHaveText('Choose at least one group who can approve.');
-  await expect(who.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await expect(above.getByRole('alert')).toHaveText('Choose at least one group who can approve.');
+  await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
 
   await who.getByRole('checkbox', { name: /^Legal/ }).check();
   await expect(who).toContainText('Nobody holds Legal yet, so this will wait until someone does.');
   await who.getByRole('checkbox', { name: /^Finance/ }).check();
   await requester.click();
   await expect(requester).toHaveAttribute('aria-checked', 'false');
-  await expect(who.getByRole('button', { name: 'Save' })).toBeEnabled();
+  // Two groups and two people: now one from each can be asked for.
+  await expect(who.getByRole('switch', { name: 'One from each group' })).toHaveCount(0);
+  await count.selectOption('2');
+  const each = who.getByRole('switch', { name: 'One from each group' });
+  await each.click();
+  await expect(each).toHaveAttribute('aria-checked', 'true');
+  await expect(above.getByRole('button', { name: 'Save' })).toBeEnabled();
   await shoot(page, 'approvals-decision-rule', 1300);
-  await who.getByRole('button', { name: 'Save' }).click();
-  await expect(who.getByRole('status')).toHaveText('Saved.');
+  await above.getByRole('button', { name: 'Save' }).click();
+  await expect(above.getByRole('status')).toHaveText('Saved.');
   await pane.getByRole('button', { name: '← Approvals' }).click();
   await expect(pane.getByRole('list', { name: 'Decisions' }).getByRole('button', { name: /^Approve an invoice draft/ }))
-    .toContainText('Finance or Legal · the person whose agent prepared it can’t approve it');
+    .toContainText('Finance and Legal · one of each · the person whose agent prepared it can’t approve it');
 
   // Narrow: the rule still reads at phone width.
   await page.setViewportSize({ width: 430, height: 900 });
@@ -105,6 +117,58 @@ test('a decision takes one person, needs someone to approve it, and warns about 
   const overflow = await pane.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await shoot(page, 'approvals-list-narrow', 2400);
+});
+
+test('an invoice over an amount goes to Admins and Finance, one of each, and resets', async ({ page }) => {
+  await page.setViewportSize({ width: 1840, height: 1000 });
+  await page.goto('/#admin/Approvals/invoice');
+  const pane = app(page);
+  const above = pane.getByRole('region', { name: 'Above an amount' });
+  const use = above.getByRole('switch', { name: 'Use a different rule above an amount' });
+  await expect(use).toHaveAttribute('aria-checked', 'false');
+  await expect(above.getByRole('spinbutton', { name: 'Above' })).toHaveCount(0);
+  await use.click();
+
+  const amount = above.getByRole('spinbutton', { name: 'Above' });
+  const currency = above.getByRole('textbox', { name: 'Currency' });
+  await expect(currency).toHaveValue('USD');
+  await expect(above).toContainText('Amounts in another currency use this rule too.');
+  await expect(above.getByRole('alert')).toHaveText('Enter an amount above zero, like 5000.');
+  await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await amount.fill('5000');
+  await currency.fill('usd');
+  await expect(currency).toHaveValue('USD');
+
+  // The band starts as a copy of the base rule: Admins. Add Finance, two people, one of each.
+  await expect(above.getByRole('checkbox', { name: /^Admins/ })).toBeChecked();
+  await above.getByRole('checkbox', { name: /^Finance/ }).check();
+  await above.getByRole('combobox', { name: 'How many different people' }).selectOption('2');
+  await above.getByRole('switch', { name: 'One from each group' }).click();
+  await shoot(page, 'approvals-threshold', 1700);
+  await above.getByRole('button', { name: 'Save' }).click();
+  await expect(above.getByRole('status')).toHaveText('Saved.');
+  await expect(above.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+  // Narrow: the band's fields stack and nothing scrolls sideways.
+  await page.setViewportSize({ width: 430, height: 900 });
+  await expect(amount).toBeVisible();
+  const overflow = await pane.locator('.admin-settings-page').evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await shoot(page, 'approvals-threshold-narrow', 2400);
+  await page.setViewportSize({ width: 1840, height: 1000 });
+
+  await pane.getByRole('button', { name: '← Approvals' }).click();
+  const invoice = pane.getByRole('list', { name: 'Decisions' }).getByRole('button', { name: /^Approve an invoice draft/ });
+  await expect(invoice).toContainText('Admins · over 5,000.00 USD: Admins and Finance, one of each');
+
+  await invoice.click();
+  await expect(amount).toHaveValue('5000');
+  await above.getByRole('button', { name: 'Reset to default' }).click();
+  await expect(above.getByRole('status')).toHaveText('Back to the default.');
+  await expect(use).toHaveAttribute('aria-checked', 'false');
+  await pane.getByRole('button', { name: '← Approvals' }).click();
+  await expect(invoice).toContainText('Admins · Default');
+  await expect(invoice).not.toContainText('over 5,000');
 });
 
 test('inviting a member with Finance shows what they will be able to approve', async ({ page }) => {

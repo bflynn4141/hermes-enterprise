@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -815,14 +815,17 @@ export function createMockBackend(input: MockOptions = {}) {
    * saved rule per key, the catalog default otherwise, and the same refusals
    * in the same order.
    */
-  const savedApprovalRules = new Map<ApprovalRouteKey, { rule: ApprovalRouteRule; updated_at: string }>();
+  const savedApprovalRules = new Map<ApprovalRouteKey, { rule: ApprovalRouteRule; threshold: ApprovalThreshold | null; updated_at: string }>();
   const approvalRouteViews = (): ApprovalRoute[] => APPROVAL_ROUTES.map((definition) => {
     const saved = savedApprovalRules.get(definition.key);
     const rule = saved?.rule ?? definition.default;
+    const threshold = saved?.threshold ?? null;
     return {
       key: definition.key, kind: definition.kind, label: definition.label, description: definition.description,
       workflow_note: definition.workflow_note,
+      amount: definition.amount,
       rule: { ...rule, roles: [...rule.roles] },
+      threshold: threshold ? { ...threshold, rule: { ...threshold.rule, roles: [...threshold.rule.roles] } } : null,
       is_default: !saved,
       updated_at: saved?.updated_at ?? null,
     };
@@ -1811,7 +1814,7 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!roleMatch[2] && method === 'DELETE') {
         if (role.builtin) return fail(422, 'builtin_role', 'Built-in roles cannot be deleted.');
         if (roleView(role).members.length > 0) return fail(409, 'role_in_use', 'Someone holds this role.');
-        if ([...savedApprovalRules.values()].some((saved) => saved.rule.roles.includes(role.slug))) {
+        if ([...savedApprovalRules.values()].some((saved) => saved.rule.roles.includes(role.slug) || saved.threshold?.rule.roles.includes(role.slug))) {
           return fail(409, 'role_routed', 'approvals still go to this role; change them in Approvals first');
         }
         // A pending invitation's copy of the slug goes with the role.
@@ -1842,16 +1845,20 @@ export function createMockBackend(input: MockOptions = {}) {
       }
       const parsed = approvalRouteUpdateSchema.safeParse(body);
       if (!parsed.success) return fail(422, 'bad_rule', 'that is not a valid approval rule');
-      const rule = { ...parsed.data, roles: [...new Set(parsed.data.roles)] };
+      const { threshold: rawThreshold, ...rawRule } = parsed.data;
+      const rule = { ...rawRule, roles: [...new Set(rawRule.roles)] };
+      const threshold = rawThreshold ? { ...rawThreshold, rule: { ...rawThreshold.rule, roles: [...new Set(rawThreshold.rule.roles)] } } : null;
       if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
       if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
-      if (!rule.admins && rule.roles.length === 0) return fail(422, 'no_approver', 'choose at least one group who can approve');
-      if (approvalRouteDefinition(key).kind === 'decision' && rule.approvals_required !== 1) {
-        return fail(422, 'decision_single_approver', 'one person makes this decision');
+      if (threshold && !approvalRouteDefinition(key).amount) return fail(422, 'no_amount_for_route', 'this kind of work has no amount');
+      for (const candidate of threshold ? [rule, threshold.rule] : [rule]) {
+        const problem = ruleProblem(candidate);
+        if (problem === 'no_approver') return fail(422, 'no_approver', 'choose at least one group who can approve');
+        if (problem) return fail(422, problem, 'one from each group needs two or more groups and two or more people');
       }
-      const unknown = rule.roles.filter((slug) => !roles.some((role) => role.slug === slug));
+      const unknown = [...new Set([...rule.roles, ...(threshold?.rule.roles ?? [])])].filter((slug) => !roles.some((role) => role.slug === slug));
       if (unknown.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknown.join(', ')}`);
-      savedApprovalRules.set(key, { rule, updated_at: iso(0) });
+      savedApprovalRules.set(key, { rule, threshold, updated_at: iso(0) });
       return json(approvalRouteView(key));
     }
     if (p('/invitations') && method === 'GET') return seat === 'admin' ? page(invitations) : fail(403, 'admin_required');

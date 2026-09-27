@@ -279,6 +279,8 @@ export const effectEntitySchema = z
     kind: effectKindSchema,
     status: effectStatusSchema,
     required_role: z.string().max(32),
+    /** Who carries it out under the current rule, in words ("Admins or Finance"). Optional for rolling compatibility. */
+    approver_label: z.string().max(200).optional(),
     label: z.string().max(200),
     /** The honest pilot copy: why nothing executed, or that it was simulated. */
     reason: z.string().max(200).nullable(),

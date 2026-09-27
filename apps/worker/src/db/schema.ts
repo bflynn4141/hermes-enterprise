@@ -1109,6 +1109,19 @@ export const effectConfirmations = pgTable(
   (t) => [primaryKey({ columns: [t.effectId, t.userId] })],
 );
 
+// 0074: one row per distinct eligible person who approved a legacy request.
+// The decision is recorded when these reach the rule's count (C95).
+export const decisionConfirmations = pgTable(
+  'decision_confirmations',
+  {
+    workspaceId: uuid('workspace_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    createdAt: now('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.requestId, t.userId] })],
+);
+
 export const requestNotes = pgTable('request_notes', {
   id: uuid('id').primaryKey().defaultRandom(),
   workspaceId: uuid('workspace_id').notNull(),
@@ -1848,11 +1861,16 @@ export const approvalRouteRules = pgTable(
     roles: text('roles').array().notNull().default([]),
     approvalsRequired: integer('approvals_required').notNull(),
     allowRequester: boolean('allow_requester').notNull(),
+    // 0074: a second band above an amount (C94), and one person per group (C95).
+    band: text('band').notNull().default('base'),
+    overMinor: bigint('over_minor', { mode: 'number' }),
+    overCurrency: text('over_currency'),
+    oneFromEach: boolean('one_from_each').notNull().default(false),
     updatedBy: uuid('updated_by'),
     createdAt: now('created_at'),
     updatedAt: now('updated_at'),
   },
-  (t) => [primaryKey({ columns: [t.workspaceId, t.routeKey] })],
+  (t) => [primaryKey({ columns: [t.workspaceId, t.routeKey, t.band] })],
 );
 
 export const approvalRoutes = pgTable('approval_routes', {
@@ -2425,6 +2443,7 @@ export const ALL_TABLES = {
   decisions,
   effects,
   effect_confirmations: effectConfirmations,
+  decision_confirmations: decisionConfirmations,
   request_notes: requestNotes,
   approval_resources: approvalResources,
   approval_policies: approvalPolicies,
