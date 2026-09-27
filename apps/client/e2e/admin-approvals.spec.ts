@@ -199,3 +199,20 @@ test('a Member has no Approvals page', async ({ page }) => {
   await expect(pane.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(pane.getByRole('list', { name: 'Decisions' })).toHaveCount(0);
 });
+
+test('an invitation with roles needs a recent sign-in; a plain one does not', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?approvals=stepup');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+  await pane.getByRole('button', { name: 'Invite member' }).click();
+  const invite = page.getByRole('dialog', { name: 'Invite member' });
+  await invite.getByRole('textbox', { name: 'Work email' }).fill('sam@example.com');
+  await invite.getByRole('checkbox', { name: 'Finance' }).check();
+  await invite.getByRole('button', { name: 'Send invitation' }).click();
+  await expect(invite.getByRole('alert')).toContainText('Inviting someone with roles needs a recent sign-in.');
+  await expect(invite.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await invite.getByRole('checkbox', { name: 'Finance' }).uncheck();
+  await invite.getByRole('button', { name: 'Send invitation' }).click();
+  await expect(invite).toHaveCount(0);
+});

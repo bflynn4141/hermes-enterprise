@@ -1881,6 +1881,11 @@ export function createMockBackend(input: MockOptions = {}) {
         }, 409);
       }
       if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+      // An invitation that grants roles needs a recent sign-in (C97); a plain one does not.
+      const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+      if ((requestedRoles.length > 0 || body.role_template_key === 'finance-agent') && options.approvalWritesStepUp && !stepUpSatisfied) {
+        return fail(401, 'reauth_required', 'Recent sign-in required.');
+      }
       const unknownRoles = requestedRoles.filter((slug) => !roles.some((role) => role.slug === slug));
       if (unknownRoles.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknownRoles.join(', ')}`);
       const row: InvitationEntity = {

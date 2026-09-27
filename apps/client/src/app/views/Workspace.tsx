@@ -172,7 +172,9 @@ export function Members() {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [ack, setAck] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  // The refusal behind `notice`, so a stale sign-in can offer a fresh one.
+  const [noticeProblem, setNoticeProblem] = useState<unknown>(null);
+  const [inviteProblem, setInviteProblem] = useState<unknown>(null);
   const [manageNotice, setManageNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   // Roles chosen in the Invite dialog, and the draft of a managed member's roles.
@@ -254,9 +256,12 @@ export function Members() {
           ? invitationSuccessMessage(result as InvitationEntity)
           : 'Invitation withdrawn');
       })
-      .catch((error: unknown) => setNotice(action === 'resend'
-        ? invitationFailureMessage(error)
-        : 'Could not withdraw that invitation. Try again.'))
+      .catch((error: unknown) => {
+        setNoticeProblem(error);
+        setNotice(action === 'resend'
+          ? invitationFailureMessage(error)
+          : 'Could not withdraw that invitation. Try again.');
+      })
       .finally(() => setPending(null));
   };
 
@@ -271,7 +276,7 @@ export function Members() {
           </span>
           {admin && <Button onClick={() => {
             setNotice(null);
-            setInviteError(null);
+            setInviteProblem(null);
             setInviteRoles([]);
             setInvite(true);
           }}>Invite member</Button>}
@@ -394,7 +399,9 @@ export function Members() {
           </div>
         )}
         {!admin && <p className="meta">Read-only. Roles and removals are an Admin&apos;s.</p>}
-        {notice && <p className="meta action-error" role="alert">{notice}</p>}
+        {notice && <p className="meta action-error" role="alert">
+          {notice}{' '}{needsSignIn(noticeProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+        </p>}
         <Ack show={!!ack} style={{ right: 0, top: -12, position: 'relative' }}>
           {ack}
         </Ack>
@@ -404,20 +411,20 @@ export function Members() {
           onClose={() => {
             if (pending === 'invite') return;
             setInvite(false);
-            setInviteError(null);
+            setInviteProblem(null);
           }}
           actions={
             <>
               <Button disabled={pending === 'invite'} onClick={() => {
                 setInvite(false);
-                setInviteError(null);
+                setInviteProblem(null);
               }}>Cancel</Button>
               <Button
                 primary
                 disabled={pending === 'invite' || !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(email) || (setupOnly && !selectedJobRole)}
                 onClick={() => {
                   setPending('invite');
-                  setInviteError(null);
+                  setInviteProblem(null);
                   const roleSlugs = knownRoleSlugs(inviteRoles, roles);
                   const request = {
                     email,
@@ -435,7 +442,7 @@ export function Members() {
                       setTab('invites');
                       showAck(invitationSuccessMessage(created));
                     })
-                    .catch((error: unknown) => setInviteError(invitationFailureMessage(error)))
+                    .catch(setInviteProblem)
                     .finally(() => setPending(null));
                 }}
               >
@@ -464,7 +471,9 @@ export function Members() {
             <RoleChecklist roles={roles} selected={inviteRoles} disabled={pending === 'invite'} onChange={setInviteRoles} />
             <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: inviteRoles }} />
           </div>}
-          {inviteError && <p className="meta action-error" role="alert">{inviteError}</p>}
+          {inviteProblem !== null && <p className="meta action-error" role="alert">
+            {invitationFailureMessage(inviteProblem)}{' '}{needsSignIn(inviteProblem) && <Button link onClick={signIn}>Sign in again</Button>}
+          </p>}
         </Dialog>
         <Dialog
           open={!!person}

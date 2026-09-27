@@ -459,6 +459,11 @@ export async function createInvitation(c: Context<{ Bindings: Env }>): Promise<R
 
     const result = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('inviting someone');
+      // An invitation that carries roles grants them when the person joins,
+      // so it has the bar `PATCH /members/:id` has (decision C97). A Finance
+      // job grants the Finance role at joining too. A plain invitation keeps
+      // working on an older sign-in.
+      if (invitationGrantsAuthority(requestedRoles, input.role_template_key)) requireStepUp(work.session);
       await consumeRate(work.tx, work.userId, work.workspaceId, LIMITS.invite);
       checkpoint = 'admin_and_rate_admitted';
       const known = await roleSlugs(work.tx, work.workspaceId);
@@ -529,6 +534,17 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
     trackedInvitationId = invitationId;
     const body = await withCapacityGrantQuarantine(c.env, () => inWorkspace(c, async (work) => {
       work.requireAdmin('resending an invitation');
+      // A resend copies the stored roles onto a new invitation, so it asks
+      // what creating one with those roles asks (C97).
+      const stored = await work.tx.query<{ role_slugs: string[] | null; role_template_key: string | null }>(
+        `SELECT i.role_slugs, op.role_template_key
+           FROM invitations i
+           LEFT JOIN member_provisioning_operations op ON op.workspace_id = i.workspace_id AND op.invitation_id = i.id
+          WHERE i.workspace_id = $1 AND i.id = $2`,
+        [work.workspaceId, invitationId],
+      );
+      const prior = stored.rows[0];
+      if (prior && invitationGrantsAuthority(prior.role_slugs ?? [], prior.role_template_key)) requireStepUp(work.session);
       return resendInTransaction(c.env, work, invitationId, correlationId, (name, successorId) => {
         checkpoint = name;
         if (successorId) trackedInvitationId = successorId;
@@ -565,6 +581,11 @@ export async function resendInvitation(c: Context<{ Bindings: Env }>): Promise<R
       invitationId: trackedInvitationId, error,
     });
   }
+}
+
+/** Roles, or the Finance job (which grants the Finance role on joining). */
+function invitationGrantsAuthority(roleSlugs: readonly string[], roleTemplateKey: string | null | undefined): boolean {
+  return roleSlugs.length > 0 || roleTemplateKey === 'finance-agent';
 }
 
 /**
@@ -647,6 +668,13 @@ export async function inviteInTransaction(
     [work.workspaceId, email],
   );
   const alreadyMember = existing.rows[0];
+  // Roles on an invitation are granted on joining, and someone already here
+  // never joins again: storing them would drop them silently, and granting
+  // them here would let an invitation to yourself change your own roles.
+  // Their roles are changed in Manage.
+  if (alreadyMember && roleSlugsToGrant.length > 0) {
+    throw new RouteError('this person is already a member; change their roles in Manage', 'already_member', 409);
+  }
 
   const organizationId = preparing ? null : await workosOrganizationId(work);
   if (!preparing && !alreadyMember && env.AUTH_MODE === 'workos' && !organizationId) {
@@ -675,15 +703,19 @@ export async function inviteInTransaction(
   );
   let row = rows[0];
   let duplicate = false;
+  // What the stored invitation will grant. A duplicate keeps the live
+  // invitation's roles, so the response echoes those, not the new request's.
+  let storedRoleSlugs = roleSlugsToGrant;
   if (!row) {
     const prior = await work.tx.query<{
-      id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null;
+      id: string; status: string; created_at: Date; delivery_status: string; delivery_error: string | null; role_slugs: string[] | null;
     }>(
-      `SELECT id, status, created_at, delivery_status, delivery_error FROM invitations
+      `SELECT id, status, created_at, delivery_status, delivery_error, role_slugs FROM invitations
         WHERE workspace_id=$1 AND email=$2 AND status='pending' FOR UPDATE`,
       [work.workspaceId, email],
     );
     row = prior.rows[0];
+    storedRoleSlugs = prior.rows[0]?.role_slugs ?? [];
     duplicate = true;
   }
   if (!row) throw new RouteError('the invitation could not be stored', 'invite_failed', 409);
@@ -795,7 +827,7 @@ export async function inviteInTransaction(
       role,
       status: row.status,
       invited_at: row.created_at.toISOString(),
-      role_slugs: roleSlugsToGrant,
+      role_slugs: storedRoleSlugs,
       delivery_status: row.delivery_status,
       delivery_reason: mapDeliveryReason(row.delivery_error),
       ...(provisioning ? { provisioning, role_template_key: existingOperation?.role_template_key ?? roleTemplateKey } : {}),
