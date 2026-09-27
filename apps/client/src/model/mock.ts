@@ -112,7 +112,7 @@ interface MockOptions {
   runtimeCapacityStepUp?: boolean;
   /** Admin → Roles writes, and saving the handoff roles or turning it on, answer `reauth_required` until the step-up cookie is set. */
   roleWritesStepUp?: boolean;
-  /** Approval rule and member role writes answer `reauth_required` until the step-up cookie is set. */
+  /** Approval rule writes, member role writes and member removal answer `reauth_required` until the step-up cookie is set. */
   approvalWritesStepUp?: boolean;
   /**
    * `markdown` swaps the seeded reply for one that uses the whole safe subset
@@ -1762,6 +1762,11 @@ export function createMockBackend(input: MockOptions = {}) {
         return json(row);
       }
       if (method === 'DELETE') {
+        // Same order as `removeMember`: Admin, a recent sign-in, never yourself.
+        if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
+        const stepUpSatisfied = typeof document === 'undefined' || document.cookie.includes('hermes_approvals_stepup=1');
+        if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
+        if (row.user_id === viewerUserId) return fail(409, 'self_change', 'nobody removes themselves');
         members.splice(index, 1);
         return new Response(null, { status: 204 });
       }

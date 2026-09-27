@@ -165,6 +165,34 @@ test('a rule change without a recent sign-in offers one and keeps the draft', as
   await expect(who.getByRole('checkbox', { name: /^Legal/ })).toBeChecked();
 });
 
+test('Manage without a recent sign-in offers one for the role switch and Remove, and changes nothing', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?approvals=stepup');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  const pane = app(page);
+  const alex = pane.getByRole('listitem').filter({ hasText: 'Alex Rivera' });
+  await alex.getByRole('button', { name: 'Manage' }).click();
+  const manage = page.getByRole('dialog', { name: 'Alex Rivera' });
+  const roleGroup = manage.getByRole('radiogroup', { name: 'Role' });
+  // Alex is an Admin in the fixture; the switch tries to make them a Member.
+  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
+
+  await roleGroup.getByRole('radio', { name: /^Member/ }).click();
+  await expect(manage.getByRole('alert')).toContainText('Changing someone’s role needs a recent sign-in.');
+  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await expect(roleGroup.getByRole('radio', { name: /^Admin/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(manage.getByRole('status')).toHaveCount(0);
+
+  await manage.getByRole('button', { name: 'Remove…' }).click();
+  await manage.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(manage.getByRole('alert')).toContainText('Removing a member needs a recent sign-in.');
+  await expect(manage.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  await manage.getByRole('button', { name: 'Keep' }).click();
+  await expect(manage.getByRole('alert')).toHaveCount(0);
+  await manage.getByRole('button', { name: 'Done' }).click();
+  await expect(alex).toContainText('Admin');
+});
+
 test('a Member has no Approvals page', async ({ page }) => {
   await page.goto('/?seat=member#admin/Approvals');
   const pane = app(page);

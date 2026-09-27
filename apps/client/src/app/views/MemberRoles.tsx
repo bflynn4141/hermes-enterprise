@@ -4,7 +4,7 @@
 // saving it.
 import type { ApprovalRoute, WorkspaceRole } from '@hermes/shared';
 import { sortRoles } from './AdminRoles.js';
-import { canApproveLine } from './approval-routes.js';
+import { canApproveLine, memberRolesErrorMessage } from './approval-routes.js';
 import './admin-approvals.css';
 
 export function RoleChecklist({ roles, selected, onChange, disabled = false }: {
@@ -36,3 +36,20 @@ export function CanApprove({ routes, person }: { routes: readonly ApprovalRoute[
 /** Only slugs that name a workspace role; the server refuses anything else. */
 export const knownRoleSlugs = (slugs: readonly string[], roles: readonly Pick<WorkspaceRole, 'slug'>[]): string[] =>
   slugs.filter((slug) => roles.some((role) => role.slug === slug));
+
+/** What the Manage dialog was doing when the server refused. */
+export type ManageAction = 'role' | 'roles' | 'remove';
+
+/**
+ * One refusal line for everything the Manage dialog writes. Each of these
+ * writes needs a recent sign-in on the server (`requireStepUp`), so a stale
+ * session gets the step-up sentence and the caller adds "Sign in again".
+ */
+export function manageErrorMessage(action: ManageAction, error: unknown): string {
+  const stale = (error as { reason?: string } | null)?.reason === 'reauth_required';
+  switch (action) {
+    case 'role': return stale ? 'Changing someone’s role needs a recent sign-in.' : 'Could not change this role. Nothing was changed. Try again.';
+    case 'remove': return stale ? 'Removing a member needs a recent sign-in.' : 'Could not remove this member. Their access has not changed. Try again.';
+    case 'roles': return memberRolesErrorMessage(error);
+  }
+}
