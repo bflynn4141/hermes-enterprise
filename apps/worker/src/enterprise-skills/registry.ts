@@ -149,6 +149,22 @@ export const ENTERPRISE_SKILL_VERSION_REGISTRY = new Map<string, EnterpriseSkill
   [`${PARTNER_INVOICE_REVIEW_DEFINITION.key}@${PARTNER_INVOICE_REVIEW_DEFINITION.version}`, PARTNER_INVOICE_REVIEW_DEFINITION],
 ]);
 
+/**
+ * What an Admin may assign from the product (decision C96), one entry per
+ * skill key, at the version a lane gets today: the same pair the role setup
+ * assigns and managed readiness treats as current. The legacy 1.7.0 default in
+ * `ENTERPRISE_SKILL_REGISTRY` stays for ungoverned rollout agents only. An
+ * Admin never chooses a version: the runtime attests these exact bytes.
+ */
+export const ENTERPRISE_SKILL_CATALOG: readonly EnterpriseSkillDefinition<Record<string, unknown>>[] = [
+  PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
+  PARTNER_INVOICE_REVIEW_DEFINITION,
+];
+
+export function catalogSkillDefinition(skillKey: string): EnterpriseSkillDefinition<Record<string, unknown>> | null {
+  return ENTERPRISE_SKILL_CATALOG.find((definition) => definition.key === skillKey) ?? null;
+}
+
 export function enterpriseSkillDefinition(skillKey: string, version: string): EnterpriseSkillDefinition<Record<string, unknown>> | null {
   return ENTERPRISE_SKILL_VERSION_REGISTRY.get(`${skillKey}@${version}`) ?? null;
 }

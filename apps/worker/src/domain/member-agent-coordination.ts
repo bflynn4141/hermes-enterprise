@@ -20,6 +20,7 @@ import { RouteError } from '../routes/errors.js';
 import { proposeApproval } from './approvals.js';
 import { enqueueRequestTriage } from '../inbox-triage/service.js';
 import { grantRole, roleSlugForTemplate } from './roles.js';
+import { sessionModelDefaults } from './agent-model.js';
 
 interface JoinCoordinationInput {
   readonly env: Env;
@@ -291,14 +292,7 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
       [input.workspaceId, agentId],
     );
     const sessionId = crypto.randomUUID();
-    await input.tx.query(
-      `INSERT INTO sessions
-         (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
-       SELECT $1,$2,$3,$4,'Finance Iris','work',default_model_id,default_effort,default_runtime,1,
-              '{"section":"agents","view":"overview"}'::jsonb
-         FROM workspace_settings WHERE workspace_id=$2`,
-      [sessionId, input.workspaceId, input.joiningUserId, agentId],
-    );
+    await insertStarterSession(input, sessionId, agentId, 'Finance Iris', { section: 'agents', view: 'overview' });
     await input.tx.query(
       `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status)
        VALUES ($1,$2,0,'iris','welcome',$3,'[]'::jsonb,'complete')`,
@@ -354,14 +348,7 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
   }
 
   const sessionId = crypto.randomUUID();
-  await input.tx.query(
-    `INSERT INTO sessions
-       (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
-     SELECT $1,$2,$3,$4,'Partner Program Iris','work',default_model_id,default_effort,default_runtime,1,
-            '{"section":"agents","view":"setup","step":"identity"}'::jsonb
-       FROM workspace_settings WHERE workspace_id=$2`,
-    [sessionId, input.workspaceId, input.joiningUserId, agentId],
-  );
+  await insertStarterSession(input, sessionId, agentId, 'Partner Program Iris', { section: 'agents', view: 'setup', step: 'identity' });
   await input.tx.query(
     `INSERT INTO messages (workspace_id, session_id, seq, role, kind, text, blocks, status)
      VALUES ($1,$2,0,'iris','welcome',$3,'[]'::jsonb,'complete')`,
@@ -369,6 +356,25 @@ async function createOwnedIris(input: JoinCoordinationInput, role: CapacityRoleT
      'Your organization has assigned you Iris. Let’s configure your first Partner Program workflow. I’ll help research and screen evidence, then stop for your review before any decision, outreach, access change, signature, commitment, or payment.'],
   );
   return { agentId, sessionId, created: true };
+}
+
+/** The joining member's first session, on the agent's model or the workspace default (C96). */
+async function insertStarterSession(
+  input: JoinCoordinationInput,
+  sessionId: string,
+  agentId: string,
+  title: string,
+  focus: Record<string, string>,
+): Promise<void> {
+  const defaults = await sessionModelDefaults(input.tx, input.workspaceId, agentId);
+  if (!defaults) throw new Error('workspace_settings_missing');
+  await input.tx.query(
+    `INSERT INTO sessions
+       (id, workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime, next_seq, focus_ref)
+     VALUES ($1,$2,$3,$4,$5,'work',$6,$7,$8,1,$9::jsonb)`,
+    [sessionId, input.workspaceId, input.joiningUserId, agentId, title,
+      defaults.model_id, defaults.effort, defaults.runtime, JSON.stringify(focus)],
+  );
 }
 
 /** Consume the invitation's exact pool reservation and create real starter work. */

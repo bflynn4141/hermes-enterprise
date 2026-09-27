@@ -27,7 +27,8 @@ import {
 import type { Env } from '../env.js';
 import { consumeRate, LIMITS } from '../auth/rate-limit.js';
 import { requireCsrf, requireOrigin } from '../auth.js';
-import { requireAllowedProvider } from '../model/allowed.js';
+import { requireRunnableModel } from '../model/runnable.js';
+import { sessionModelDefaults } from '../domain/agent-model.js';
 import { loadSessionSnapshot, projectSessionMessage } from '../domain/session-snapshot.js';
 import { parseExpectedSettings, requireExpectedSettings, validateSessionEffort } from '../domain/session-settings.js';
 import { VISIBLE } from '../domain/session-visibility.js';
@@ -135,8 +136,9 @@ export async function listSessions(c: Context<{ Bindings: Env }>): Promise<Respo
 /**
  * POST /w/:ws/sessions
  *
- * The workspace's defaults decide the model, the effort and the runtime. The
- * request does not get to name a model: a session is what a run is created
+ * The agent's model (when an Admin chose one) or the workspace's defaults
+ * decide the model, the effort and the runtime. The request does not get to
+ * name a model: a session is what a run is created
  * from, and a session pointing at a model the workspace holds no key for is an
  * error that would only surface when someone finally typed a message.
  */
@@ -152,20 +154,6 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
   }
 
   const body = await inWorkspace(c, async (work) => {
-    const settings = await work.tx.query<{
-      default_model_id: string;
-      default_effort: string | null;
-      default_runtime: string;
-    }>(
-      `SELECT default_model_id, default_effort, default_runtime
-         FROM workspace_settings WHERE workspace_id = $1`,
-      [work.workspaceId],
-    );
-    const defaults = settings.rows[0] ?? {
-      default_model_id: 'deepseek-flash',
-      default_effort: null,
-      default_runtime: 'cloud',
-    };
     const mode = input.mode === 'ask' || input.mode === 'plan' ? input.mode : 'work';
 
     // A session belongs to an agent for its whole life. An omitted id resolves
@@ -227,6 +215,13 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
       await requireAgentContextAccess(work, agentId);
     }
 
+    // The agent's own model when an Admin chose one, else the workspace
+    // default (decision C96).
+    const defaults = await sessionModelDefaults(work.tx, work.workspaceId, agentId) ?? {
+      model_id: 'deepseek-flash',
+      effort: null,
+      runtime: 'cloud',
+    };
     const resolvedRuntime = c.env.AGENT_RUNTIME === 'hermes'
       ? await resolveRuntimeBinding(c.env, work.tx, work.workspaceId, agentId)
       : null;
@@ -242,9 +237,9 @@ export async function createSession(c: Context<{ Bindings: Env }>): Promise<Resp
         agentId,
         (input.title ?? '').slice(0, 120),
         mode,
-        defaults.default_model_id,
-        defaults.default_effort,
-        resolvedRuntime ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud') : defaults.default_runtime,
+        defaults.model_id,
+        defaults.effort,
+        resolvedRuntime ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud') : defaults.runtime,
       ],
     );
     const row = rows[0];
@@ -339,34 +334,9 @@ export async function patchSession(c: Context<{ Bindings: Env }>): Promise<Respo
         throw new RouteError('A valid model is required.', 'unknown_model', 422);
       }
       const modelId = input.model_id ?? session.model_id;
-      const { rows: candidates } = await work.tx.query<{
-        offered: boolean; enabled: boolean; provider: string; effort_map: Record<string, unknown> | null; default_effort: string | null;
-      }>(
-        `SELECT c.provider,c.effort_map,c.default_effort,
-                (c.disabled_reason IS NULL AND c.supports_tools) AS enabled,
-                EXISTS (
-                   SELECT 1 FROM workspace_provider_keys k
-                    WHERE k.workspace_id = $1 AND k.provider = c.provider
-                      AND k.status IN ('verified', 'verified_scoped') AND k.revoked_at IS NULL
-                 ) AS offered
-           FROM catalog c WHERE c.model_id = $2`,
-        [work.workspaceId, modelId],
-      );
-      const candidate = candidates[0];
-      // A model the catalog does not have is a 422 in every environment: the
-      // column is a foreign key, and a 23503 would surface as a 500.
-      if (!candidate) throw new RouteError('the catalog does not have that model', 'unknown_model', 422);
-      // A provider this deployment does not offer is its own answer, and it is
-      // given even under `MODEL_SCRIPTED`: the catalog route never listed the
-      // row, so a client that asked for it by id is asking for something the
-      // product does not have (decision R12).
-      requireAllowedProvider(c.env, candidate.provider);
-      // Scripted development has no provider key at all, and refusing there
-      // would make a working local stack look broken — the same exception
-      // `selectors.ts` makes on the client.
-      if (!candidate.enabled || (!candidate.offered && c.env.MODEL_SCRIPTED !== '1')) {
-        throw new RouteError('that model is not available to this workspace', 'unknown_model', 422);
-      }
+      // One copy of "can this workspace run it" for sessions, the workspace
+      // default and an agent's model (src/model/runnable.ts).
+      const candidate = await requireRunnableModel(c.env, work.tx, work.workspaceId, modelId);
       const effort = validateSessionEffort('effort' in input ? input.effort
         : modelId === session.model_id ? session.effort : candidate.default_effort, candidate.effort_map);
       push('model_id', modelId);

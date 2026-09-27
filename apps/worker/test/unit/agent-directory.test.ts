@@ -50,9 +50,12 @@ describe('directory contract', () => {
     const entry = {
       id: AGENT, name: 'Ledger', responsibility: null, status: 'started', context_scope: 'private',
       owner: null, role: null, skills: [], runtime: { source: 'none', label: null, state: 'not_connected' },
+      model: { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', source: 'agent' },
       approvals: { revision: 0, required: [] }, viewer: { can_configure: true, can_view_conversations: false },
     };
     expect(agentDirectoryEntrySchema.safeParse(entry).success).toBe(true);
+    // The model is a label and where it came from, nothing a session said.
+    expect(agentDirectoryEntrySchema.safeParse({ ...entry, model: { ...entry.model, last_used_in: 'session' } }).success).toBe(false);
     for (const extra of ['sessions', 'last_message', 'pending_approvals', 'runs']) {
       expect(agentDirectoryEntrySchema.safeParse({ ...entry, [extra]: [] }).success, extra).toBe(false);
     }

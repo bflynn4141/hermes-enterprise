@@ -8,6 +8,7 @@ import { resolveSlackAccessToken } from './store.js';
 import { callSlackWebApi } from './api.js';
 import { resolveLinkedSlackPrincipal, resolveSlackAgent } from './principal.js';
 import { sha256Hex } from './security.js';
+import { sessionModelDefaults } from '../../domain/agent-model.js';
 
 export interface SlackMessageEventPayload {
   readonly installation_id: string;
@@ -49,23 +50,20 @@ async function sessionForEvent(
   }
   let sessionId = mapped?.session_id ?? null;
   if (!sessionId) {
-    const settings = await tx.query<{ default_model_id: string; default_effort: string | null; default_runtime: string }>(
-      `SELECT default_model_id, default_effort, default_runtime FROM workspace_settings WHERE workspace_id=$1`,
-      [workspaceId],
-    );
-    const defaults = settings.rows[0];
+    // The agent's own model when an Admin chose one (decision C96).
+    const defaults = await sessionModelDefaults(tx, workspaceId, principal.agent_id);
     if (!defaults) throw new Error('workspace_settings_missing');
     const resolvedRuntime = env.AGENT_RUNTIME === 'hermes'
       ? await resolveRuntimeBinding(env, tx, workspaceId, principal.agent_id)
       : null;
     const runtime = resolvedRuntime
       ? (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/])/.test(resolvedRuntime.baseUrl) ? 'local' : 'cloud')
-      : defaults.default_runtime;
+      : defaults.runtime;
     const title = kind === 'direct_message' ? `Slack · ${principal.agent_name}` : `Slack thread · ${input.channel_id}`;
     const created = await tx.query<{ id: string }>(
       `INSERT INTO sessions (workspace_id, owner_id, agent_id, title, mode, model_id, effort, runtime)
        VALUES ($1,$2,$3,$4,'work',$5,$6,$7) RETURNING id`,
-      [workspaceId, principal.user_id, principal.agent_id, title.slice(0, 120), defaults.default_model_id, defaults.default_effort, runtime],
+      [workspaceId, principal.user_id, principal.agent_id, title.slice(0, 120), defaults.model_id, defaults.effort, runtime],
     );
     sessionId = created.rows[0]?.id ?? null;
     if (!sessionId) throw new Error('slack_session_create_failed');

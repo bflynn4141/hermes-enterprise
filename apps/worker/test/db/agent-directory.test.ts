@@ -125,8 +125,9 @@ describe('Admin agent directory', () => {
       expect(text).not.toContain(secret);
     }
     expect(Object.keys(ledger).sort()).toEqual([
-      'approvals', 'context_scope', 'id', 'name', 'owner', 'responsibility', 'role', 'runtime', 'skills', 'status', 'viewer',
+      'approvals', 'context_scope', 'id', 'model', 'name', 'owner', 'responsibility', 'role', 'runtime', 'skills', 'status', 'viewer',
     ]);
+    expect(ledger.model).toEqual({ id: 'nous:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', source: 'workspace_default' });
   });
 
   it('is Admin only', async () => {
@@ -162,7 +163,11 @@ describe('governing a member agent without reading its conversations', () => {
     expect(saved.status).toBe(200);
     expect(await saved.json()).toMatchObject({
       revision: 1,
-      operations: [expect.objectContaining({ id: 'prepare_drafts', require_human_approval: true })],
+      // A Finance agent now has a switch of its own (C96), off by default.
+      operations: [
+        expect.objectContaining({ id: 'prepare_drafts', require_human_approval: true }),
+        expect.objectContaining({ id: 'read_handoff_results', tool_names: ['get_partner_handoff_result'], require_human_approval: false }),
+      ],
       pending_approvals: [],
       pending_approvals_visible: false,
     });
@@ -274,5 +279,116 @@ describe('governing a member agent without reading its conversations', () => {
     // An agent id from another workspace is not governable by this Admin.
     const other = await seedWorkspace();
     expect((await asUser(env, fx.adminId, `/w/${fx.workspaceId}/agents/${other.agentId}/permissions`)).status).toBe(404);
+  });
+});
+
+describe('configuring an agent: name and model (C96)', () => {
+  const agentPath = (fx: { workspaceId: string }, agentId: string) => `/w/${fx.workspaceId}/admin/agents/${agentId}`;
+  // Scripted development needs no provider key, so a catalog row's own
+  // policy is what these tests exercise.
+  const scripted = () => makeEnv({ MODEL_SCRIPTED: '1' });
+
+  it('renames a member’s private agent and sets its model without returning anything it has done', async () => {
+    const fx = await fixture();
+    const { env } = scripted();
+    // Ledger runs on Hermes (it has a provisioning row), so only a model the
+    // runtime's model proxy routes is accepted.
+    const saved = await asUser(env, fx.adminId, agentPath(fx, fx.ledgerId), {
+      method: 'PATCH', body: { name: '  Ledger Two  ', model_id: 'openrouter:anthropic/claude-sonnet-5' },
+    });
+    expect(saved.status).toBe(200);
+    const text = await saved.text();
+    for (const secret of [SECRET_TITLE, SECRET_MESSAGE, SECRET_ARGUMENT, SECRET_HOST, fx.sessionId, fx.runId, fx.approvalId]) {
+      expect(text).not.toContain(secret);
+    }
+    expect(JSON.parse(text)).toMatchObject({
+      id: fx.ledgerId,
+      name: 'Ledger Two',
+      model: { id: 'openrouter:anthropic/claude-sonnet-5', label: 'Anthropic: Claude Sonnet 5', source: 'agent' },
+      viewer: { can_view_conversations: false },
+    });
+
+    const directory = agentDirectorySchema.parse(await (await asUser(env, fx.adminId, `/w/${fx.workspaceId}/admin/agents`)).json());
+    expect(directory.items.find((agent) => agent.id === fx.ledgerId)).toMatchObject({ name: 'Ledger Two', model: { source: 'agent' } });
+    const audit = await readTenant(fx.workspaceId, fx.adminId, (client) => client.query(
+      `SELECT actor_user_id FROM events WHERE kind='settings.changed' AND agent_id=$1`, [fx.ledgerId],
+    ));
+    expect(audit.rows).toContainEqual({ actor_user_id: fx.adminId });
+
+    // Back to the workspace default.
+    const reset = await asUser(env, fx.adminId, agentPath(fx, fx.ledgerId), { method: 'PATCH', body: { model_id: null } });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ name: 'Ledger Two', model: { id: 'nous:anthropic/claude-sonnet-5', source: 'workspace_default' } });
+  });
+
+  it('refuses a bad body, an unknown agent, a model the workspace or the runtime cannot run, a Member and a stale sign-in', async () => {
+    const fx = await fixture();
+    const { env } = scripted();
+    for (const body of [{}, { name: '   ' }, { name: 'x'.repeat(81) }, { name: 'Ok', owner: 'someone' }]) {
+      const refused = await asUser(env, fx.adminId, agentPath(fx, fx.ledgerId), { method: 'PATCH', body });
+      expect(refused.status, JSON.stringify(body)).toBe(422);
+      expect(await refused.json()).toMatchObject({ reason: 'bad_agent_update' });
+    }
+    const other = await seedWorkspace();
+    const unknown = await asUser(env, fx.adminId, agentPath(fx, other.agentId), { method: 'PATCH', body: { name: 'Mine now' } });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toMatchObject({ reason: 'unknown_agent' });
+
+    for (const [agentId, model] of [
+      [fx.agentId, 'no-such-model'],
+      [fx.agentId, 'claude-opus-4-7'], // disabled by the catalog
+      [fx.ledgerId, 'claude-sonnet-4-6'], // runnable, but not through Ledger's runtime
+    ] as const) {
+      const refused = await asUser(env, fx.adminId, agentPath(fx, agentId), { method: 'PATCH', body: { model_id: model } });
+      expect(refused.status, model).toBe(422);
+      expect(await refused.json()).toMatchObject({ reason: 'unknown_model' });
+    }
+    // Iris has no runtime, so a direct-provider model is fine for it.
+    expect((await asUser(env, fx.adminId, agentPath(fx, fx.agentId), { method: 'PATCH', body: { model_id: 'claude-sonnet-4-6' } })).status).toBe(200);
+
+    expect((await asUser(env, fx.memberId, agentPath(fx, fx.ledgerId), { method: 'PATCH', body: { name: 'Mine' } })).status).toBe(403);
+
+    await staleStepUp(fx.adminId);
+    for (const agentId of [fx.ledgerId, fx.agentId]) {
+      const stale = await asUser(env, fx.adminId, agentPath(fx, agentId), { method: 'PATCH', body: { name: 'Renamed' } });
+      expect(stale.status).toBe(401);
+      expect(await stale.json()).toMatchObject({ reason: 'reauth_required' });
+    }
+    const names = await readTenant(fx.workspaceId, fx.adminId, (client) => client.query(
+      'SELECT name FROM agents WHERE id = ANY($1::uuid[]) ORDER BY name', [[fx.agentId, fx.ledgerId]],
+    ));
+    expect(names.rows).toEqual([{ name: 'Iris' }, { name: 'Ledger' }]);
+  });
+
+  it('starts a new session on the agent’s model, leaves existing sessions alone, and lets the owner change it', async () => {
+    const fx = await fixture();
+    const { env } = scripted();
+    expect((await asUser(env, fx.adminId, agentPath(fx, fx.agentId), { method: 'PATCH', body: { model_id: 'claude-sonnet-4-6' } })).status).toBe(200);
+
+    const created = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/sessions`, { method: 'POST', body: { agent_id: fx.agentId } });
+    expect(created.status).toBe(201);
+    const session = await created.json() as { id: string; model_id: string };
+    expect(session.model_id).toBe('claude-sonnet-4-6');
+
+    const existing = await readTenant(fx.workspaceId, fx.adminId, (client) => client.query(
+      'SELECT model_id FROM sessions WHERE id=$1', [fx.sessionId],
+    ));
+    expect(existing.rows[0]).toEqual({ model_id: 'deepseek-flash' });
+
+    const changed = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/sessions/${session.id}`, {
+      method: 'PATCH', body: { model_id: 'openrouter:anthropic/claude-sonnet-5' },
+    });
+    expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ model_id: 'openrouter:anthropic/claude-sonnet-5' });
+
+    // An agent model the catalog later disables falls back to the default.
+    await withClient('owner', async (client) => {
+      await client.query('BEGIN');
+      await setTenant(client, fx.workspaceId, fx.adminId);
+      await client.query(`UPDATE agents SET model_id='claude-opus-4-7' WHERE id=$1`, [fx.agentId]);
+      await client.query('COMMIT');
+    });
+    const fallback = await asUser(env, fx.adminId, `/w/${fx.workspaceId}/sessions`, { method: 'POST', body: { agent_id: fx.agentId } });
+    expect(await fallback.json()).toMatchObject({ model_id: 'nous:anthropic/claude-sonnet-5' });
   });
 });

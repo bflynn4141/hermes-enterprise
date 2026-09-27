@@ -59,12 +59,30 @@ export const enterpriseSkillAssignmentUpdateSchema = z.object({
 }).strict().refine((value) => Object.keys(value).some((key) => key !== 'revision'), { message: 'at least one assignment field is required' });
 export type EnterpriseSkillAssignmentUpdate = z.infer<typeof enterpriseSkillAssignmentUpdateSchema>;
 
+/**
+ * Assign a catalog skill (decision C96). Only the key: the server chooses the
+ * version, artifact, lane and default settings, because the runtime attests
+ * exact skill bytes and an Admin never picks them.
+ */
 export const enterpriseSkillAssignmentCreateSchema = z.object({
-  skill_key: z.string().min(1).max(120),
-  skill_version: z.string().min(1).max(32),
-  team_id: uuidSchema,
-  config: z.record(z.string(), z.unknown()),
-  capability_grants: z.array(z.string().min(1).max(120)).max(64),
-  schedule: enterpriseSkillScheduleSchema.default({ enabled: false, interval_minutes: 360 }),
+  skill_key: z.string().regex(/^[a-z][a-z0-9-]{1,119}$/),
 }).strict();
 export type EnterpriseSkillAssignmentCreate = z.infer<typeof enterpriseSkillAssignmentCreateSchema>;
+
+/** One skill an Admin may assign, at the version a new assignment gets. */
+export const enterpriseSkillCatalogEntrySchema = z.object({
+  key: z.string().min(1).max(120),
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000),
+  version: z.string().min(1).max(32),
+  digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  tools: z.array(z.string().min(1).max(120)).max(64),
+  /** The role template of the lane this skill belongs to. */
+  template: z.string().min(1).max(80),
+}).strict();
+export type EnterpriseSkillCatalogEntry = z.infer<typeof enterpriseSkillCatalogEntrySchema>;
+
+export const enterpriseSkillCatalogSchema = z.object({
+  items: z.array(enterpriseSkillCatalogEntrySchema).max(40),
+}).strict();
+export type EnterpriseSkillCatalog = z.infer<typeof enterpriseSkillCatalogSchema>;

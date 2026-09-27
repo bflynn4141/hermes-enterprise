@@ -3,13 +3,14 @@
 //
 // This is governance data only (see agent-governance-access.ts). The queries
 // below read agents, owners, role bindings, skill assignments, runtime
-// placement and approval policy. They never join sessions, messages, runs,
-// traces or parked tool calls, so nothing a member's agent has done can reach
-// an Admin through this list. `test/db/agent-directory.test.ts` holds that line.
-import { AGENT_OPERATION_CATALOG, agentDirectorySchema, type AgentDirectory, type AgentDirectoryRuntime } from '@hermes/shared';
+// placement, approval policy and the catalog label of the agent's model. They
+// never join sessions, messages, runs, traces or parked tool calls, so nothing
+// a member's agent has done can reach an Admin through this list. `test/db/agent-directory.test.ts` holds that line.
+import { AGENT_OPERATION_CATALOG, agentDirectorySchema, type AgentDirectory, type AgentDirectoryEntry, type AgentDirectoryRuntime } from '@hermes/shared';
 import type { TenantWork } from '../routes/tenant.js';
 import { enterpriseSkillDefinition, ENTERPRISE_SKILL_REGISTRY } from '../enterprise-skills/registry.js';
-import { hasAgentContextAccess } from './agent-context-access.js';
+import { agentsWithContextAccess } from './agent-context-access.js';
+import { AGENT_MODEL_USABLE } from './agent-model.js';
 
 interface AgentRow {
   id: string;
@@ -33,6 +34,10 @@ interface AgentRow {
   binding_ready: boolean | null;
   policy_revision: number | null;
   policy_operations: Record<string, unknown> | null;
+  agent_model_id: string | null;
+  agent_model_label: string | null;
+  default_model_id: string | null;
+  default_model_label: string | null;
 }
 
 interface SkillRow {
@@ -72,7 +77,41 @@ export function runtimePlacement(row: Pick<AgentRow, 'capacity_label' | 'capacit
   return { source, label: row.capacity_label ?? row.provisioning_label ?? null, state };
 }
 
-export async function loadAgentDirectory(work: TenantWork, runtimeAgents: string | undefined): Promise<AgentDirectory> {
+/** The model a new session starts from, as `sessionModelDefaults` resolves it. */
+function directoryModel(row: Pick<AgentRow, 'agent_model_id' | 'agent_model_label' | 'default_model_id' | 'default_model_label'>): AgentDirectoryEntry['model'] {
+  if (row.agent_model_id) return { id: row.agent_model_id, label: row.agent_model_label ?? row.agent_model_id, source: 'agent' };
+  if (row.default_model_id) return { id: row.default_model_id, label: row.default_model_label ?? row.default_model_id, source: 'workspace_default' };
+  return null;
+}
+
+/**
+ * Whether an agent runs on a Hermes runtime that attests its skill at startup:
+ * a Cloud capacity or provisioning row, a runtime binding, or an operator
+ * deployment entry. The directory's placement, for one agent.
+ */
+export async function agentHasManagedRuntime(work: TenantWork, runtimeAgents: string | undefined, agentId: string): Promise<boolean> {
+  const { rows } = await work.tx.query<Pick<AgentRow, 'capacity_label' | 'capacity_state' | 'provisioning_label' | 'provisioning_status' | 'binding_ready'> & { binding: boolean }>(
+    `SELECT cap.instance_name AS capacity_label, cap.state AS capacity_state,
+            prov.instance_name AS provisioning_label, prov.status AS provisioning_status,
+            (rb.ready_at IS NOT NULL) AS binding_ready, (rb.agent_id IS NOT NULL) AS binding
+       FROM agents a
+       LEFT JOIN LATERAL (
+         SELECT c.instance_name, c.state FROM hermes_cloud_capacity c
+          WHERE c.workspace_id=a.workspace_id AND c.assigned_agent_id=a.id
+          ORDER BY c.assigned_at DESC NULLS LAST LIMIT 1
+       ) cap ON true
+       LEFT JOIN agent_provisioning prov ON prov.workspace_id=a.workspace_id AND prov.agent_id=a.id
+       LEFT JOIN agent_runtime_bindings rb ON rb.workspace_id=a.workspace_id AND rb.agent_id=a.id
+      WHERE a.workspace_id=$1 AND a.id=$2`,
+    [work.workspaceId, agentId],
+  );
+  const row = rows[0];
+  if (!row) return false;
+  return row.binding || runtimePlacement(row, deploymentRuntimeAgentIds(runtimeAgents, work.workspaceId).has(agentId)).source !== 'none';
+}
+
+/** Every agent, or just `onlyAgentId` (the entry a write returns). */
+export async function loadAgentDirectory(work: TenantWork, runtimeAgents: string | undefined, onlyAgentId?: string): Promise<AgentDirectory> {
   const agents = await work.tx.query<AgentRow>(
     `SELECT a.id, a.name, a.responsibility, a.status, a.context_scope,
             om.id AS owner_member_id, om.user_id AS owner_user_id, COALESCE(ou.name, ou.email) AS owner_name,
@@ -81,7 +120,9 @@ export async function loadAgentDirectory(work: TenantWork, runtimeAgents: string
             cap.instance_name AS capacity_label, cap.state AS capacity_state,
             prov.instance_name AS provisioning_label, prov.status AS provisioning_status,
             (rb.ready_at IS NOT NULL) AS binding_ready,
-            pol.revision AS policy_revision, pol.operations AS policy_operations
+            pol.revision AS policy_revision, pol.operations AS policy_operations,
+            am.model_id AS agent_model_id, am.label AS agent_model_label,
+            wss.default_model_id, dm.label AS default_model_label
        FROM agents a
        LEFT JOIN agent_owners ao ON ao.workspace_id=a.workspace_id AND ao.agent_id=a.id
        LEFT JOIN members om ON om.workspace_id=ao.workspace_id AND om.id=ao.member_id
@@ -98,21 +139,25 @@ export async function loadAgentDirectory(work: TenantWork, runtimeAgents: string
        LEFT JOIN agent_provisioning prov ON prov.workspace_id=a.workspace_id AND prov.agent_id=a.id
        LEFT JOIN agent_runtime_bindings rb ON rb.workspace_id=a.workspace_id AND rb.agent_id=a.id
        LEFT JOIN agent_operation_policies pol ON pol.workspace_id=a.workspace_id AND pol.agent_id=a.id
-      WHERE a.workspace_id=$1
+       LEFT JOIN catalog am ON am.model_id=a.model_id AND ${AGENT_MODEL_USABLE('am')}
+       LEFT JOIN workspace_settings wss ON wss.workspace_id=a.workspace_id
+       LEFT JOIN catalog dm ON dm.model_id=wss.default_model_id
+      WHERE a.workspace_id=$1 AND ($2::uuid IS NULL OR a.id=$2::uuid)
       ORDER BY lower(a.name), a.id
       LIMIT 500`,
-    [work.workspaceId],
+    [work.workspaceId, onlyAgentId ?? null],
   );
   const skills = await work.tx.query<SkillRow>(
     `SELECT id, agent_id, skill_key, skill_version, state
-       FROM enterprise_skill_assignments WHERE workspace_id=$1 ORDER BY skill_key`,
-    [work.workspaceId],
+       FROM enterprise_skill_assignments
+      WHERE workspace_id=$1 AND removed_at IS NULL AND ($2::uuid IS NULL OR agent_id=$2::uuid)
+      ORDER BY skill_key`,
+    [work.workspaceId, onlyAgentId ?? null],
   );
   const deployment = deploymentRuntimeAgentIds(runtimeAgents, work.workspaceId);
+  const readable = await agentsWithContextAccess(work);
   const items = [];
   for (const row of agents.rows) {
-    // Sequential on purpose: one pg client serialises a transaction.
-    const conversations = await hasAgentContextAccess(work, row.id);
     const operations = row.policy_operations ?? {};
     items.push({
       id: row.id,
@@ -138,12 +183,13 @@ export async function loadAgentDirectory(work: TenantWork, runtimeAgents: string
         state: skill.state,
       })),
       runtime: runtimePlacement(row, deployment.has(row.id)),
+      model: directoryModel(row),
       approvals: {
         revision: row.policy_revision ?? 0,
         required: AGENT_OPERATION_CATALOG.filter((operation) => operations[operation.id] === true)
           .map((operation) => ({ id: operation.id, label: operation.label })),
       },
-      viewer: { can_configure: work.role === 'admin', can_view_conversations: conversations },
+      viewer: { can_configure: work.role === 'admin', can_view_conversations: readable.has(row.id) },
     });
   }
   return agentDirectorySchema.parse({ items, total: items.length });

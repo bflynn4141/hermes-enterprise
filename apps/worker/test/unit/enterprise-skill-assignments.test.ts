@@ -8,12 +8,15 @@ import {
   type SkillQuery,
 } from '../../src/enterprise-skills/service.js';
 import {
+  catalogSkillDefinition,
+  ENTERPRISE_SKILL_CATALOG,
   PARTNER_INVOICE_REVIEW_DEFINITION,
   PARTNER_INVOICE_REVIEW_LEGACY_DEFINITION,
   PARTNER_PROGRAM_DEFINITION,
   PARTNER_PROGRAM_MULTI_PARTY_DEFINITION,
 } from '../../src/enterprise-skills/registry.js';
 import { runtimeSkillManifestsForAgent } from '../../src/runtime/skills.js';
+import { requiresExactEnterpriseAttestation } from '../../src/runtime/readiness.js';
 
 const workspaceId = '11111111-1111-4111-8111-111111111111';
 const agentId = '22222222-2222-4222-8222-222222222222';
@@ -176,5 +179,21 @@ describe('enterprise skill assignments', () => {
     await expect(resolveEnterpriseSkillAssignment(
       financeQuery('9.9.9', `sha256:${'0'.repeat(64)}`), workspaceId, agentId, 'partner-invoice-review',
     )).resolves.toMatchObject({ config: null, problem: expect.stringContaining('Unsupported') });
+  });
+});
+
+describe('the Admin skill catalog (C96)', () => {
+  it('offers one entry per skill at the version managed readiness treats as current', () => {
+    expect(ENTERPRISE_SKILL_CATALOG.map((definition) => `${definition.key}@${definition.version}`)).toEqual([
+      'partner-program-screening@1.8.0',
+      'partner-invoice-review@1.0.1',
+    ]);
+    for (const definition of ENTERPRISE_SKILL_CATALOG) {
+      // A catalog assignment must be admissible by the strict readiness check,
+      // or assigning it would strand the agent.
+      expect(requiresExactEnterpriseAttestation({ skill_key: definition.key, version: definition.version } as never)).toBe(true);
+    }
+    expect(catalogSkillDefinition('partner-program-screening')).toBe(PARTNER_PROGRAM_MULTI_PARTY_DEFINITION);
+    expect(catalogSkillDefinition('partner-program-screening-v1-8')).toBeNull();
   });
 });

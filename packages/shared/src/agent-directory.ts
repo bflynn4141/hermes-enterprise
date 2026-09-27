@@ -46,6 +46,19 @@ export const agentDirectoryRuntimeSchema = z.object({
 }).strict();
 export type AgentDirectoryRuntime = z.infer<typeof agentDirectoryRuntimeSchema>;
 
+/**
+ * The model a new session for this agent starts from (decision C96). `agent`:
+ * an Admin chose it for this agent. `workspace_default`: the agent has none of
+ * its own, or its own is no longer runnable, so the workspace default applies.
+ * A person may still change the model inside their own session.
+ */
+export const agentDirectoryModelSchema = z.object({
+  id: z.string().min(1).max(128),
+  label: z.string().min(1).max(200),
+  source: z.enum(['agent', 'workspace_default']),
+}).strict();
+export type AgentDirectoryModel = z.infer<typeof agentDirectoryModelSchema>;
+
 export const agentDirectoryEntrySchema = z.object({
   id: uuidSchema,
   name: z.string().max(120),
@@ -56,6 +69,7 @@ export const agentDirectoryEntrySchema = z.object({
   role: agentDirectoryRoleSchema.nullable(),
   skills: z.array(agentDirectorySkillSchema).max(40),
   runtime: agentDirectoryRuntimeSchema,
+  model: agentDirectoryModelSchema.nullable(),
   approvals: z.object({
     revision: z.number().int().nonnegative(),
     /** Operations that currently wait for a person before the agent acts. */
@@ -79,3 +93,14 @@ export const agentDirectorySchema = z.object({
   total: z.number().int().nonnegative(),
 }).strict();
 export type AgentDirectory = z.infer<typeof agentDirectorySchema>;
+
+/**
+ * `PATCH /w/:ws/admin/agents/:agentId`: rename an agent and choose the model
+ * its new sessions start from. `model_id: null` goes back to the workspace
+ * default. Strict, so a body cannot reach any other column.
+ */
+export const adminAgentPatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  model_id: z.string().min(1).max(128).nullable().optional(),
+}).strict().refine((value) => value.name !== undefined || value.model_id !== undefined, { message: 'name or model_id is required' });
+export type AdminAgentPatch = z.infer<typeof adminAgentPatchSchema>;

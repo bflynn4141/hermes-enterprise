@@ -260,7 +260,7 @@ function toEntry(row: CatalogQueryRow, allowed: readonly string[] | undefined): 
   });
 }
 
-/** Every row. Still used where the count is known to be small (settings). */
+/** Every row, marked with this workspace's answer. Model choices are validated by `model/runnable.ts`. */
 export async function loadCatalog(
   tx: Tx,
   workspaceId: string,
@@ -275,9 +275,8 @@ export async function loadCatalog(
       ORDER BY c.model_id`,
     [workspaceId],
   );
-  // Marked, never filtered: this is the function the settings route validates a
-  // default model against, and it has to be able to say *why* a model it was
-  // handed cannot be the default (decision R12).
+  // Marked, never filtered, so a caller can say *why* a row cannot be used
+  // (decision R12).
   return rows.map((row) => toEntry(row, allowed));
 }
 

@@ -213,6 +213,8 @@ export const agents = pgTable('agents', {
   status: text('status').notNull().default('draft'),
   setupStep: text('setup_step'),
   startedAt: ts('started_at'),
+  /** Where a new session for this agent starts (0075, C96). Null: the workspace default. */
+  modelId: text('model_id'),
   createdAt: now('created_at'),
   updatedAt: now('updated_at'),
 });
@@ -595,6 +597,8 @@ export const enterpriseSkillAssignments = pgTable(
     approvalPolicy: jsonb('approval_policy').notNull().default({ human_review_required: true }),
     revision: integer('revision').notNull().default(1),
     assignedBy: uuid('assigned_by'),
+    /** An Admin removed this catalog skill (0075, C96). Always paused. */
+    removedAt: ts('removed_at'),
     createdAt: now('created_at'),
     updatedAt: now('updated_at'),
   },

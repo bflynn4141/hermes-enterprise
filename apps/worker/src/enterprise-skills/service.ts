@@ -64,7 +64,7 @@ const ASSIGNMENT_FROM = `
 const SELECT_ASSIGNMENT = `
   SELECT ${ASSIGNMENT_COLUMNS}
   ${ASSIGNMENT_FROM}
-  WHERE esa.workspace_id=$1 AND esa.agent_id=$2 AND esa.skill_key=$3`;
+  WHERE esa.workspace_id=$1 AND esa.agent_id=$2 AND esa.skill_key=$3 AND esa.removed_at IS NULL`;
 
 function publicAssignment(row: AssignmentRow, definition: EnterpriseSkillDefinition<Record<string, unknown>>): EnterpriseSkillAssignment {
   const schedule = enterpriseSkillScheduleSchema.parse(row.schedule);
@@ -195,7 +195,7 @@ export async function listEnterpriseSkillAssignments(
   const { rows } = await tx.query<AssignmentRow>(
     `SELECT ${ASSIGNMENT_COLUMNS}
        ${ASSIGNMENT_FROM}
-      WHERE esa.workspace_id=$1 AND esa.agent_id=$2 ORDER BY esa.skill_key`,
+      WHERE esa.workspace_id=$1 AND esa.agent_id=$2 AND esa.removed_at IS NULL ORDER BY esa.skill_key`,
     [workspaceId, agentId],
   );
   return rows.flatMap((row) => {
@@ -266,7 +266,7 @@ export async function updateEnterpriseSkillAssignment(
   const locked = await tx.query<AssignmentRow>(
     `SELECT ${ASSIGNMENT_COLUMNS}
        ${ASSIGNMENT_FROM}
-      WHERE esa.workspace_id=$1 AND esa.agent_id=$2 AND esa.id=$3 FOR UPDATE OF esa`,
+      WHERE esa.workspace_id=$1 AND esa.agent_id=$2 AND esa.id=$3 AND esa.removed_at IS NULL FOR UPDATE OF esa`,
     [workspaceId, agentId, assignmentId],
   );
   const current = locked.rows[0];
@@ -287,6 +287,29 @@ export async function updateEnterpriseSkillAssignment(
   if (!updated) throw new Error('enterprise_skill_assignment_not_found');
   await insertRevision(tx, workspaceId, updated, changedBy);
   return publicAssignment(updated, definition);
+}
+
+/**
+ * Remove a catalog skill from an agent (decision C96). The row is kept, paused
+ * and marked, because run and discovery grants refer to it and its revisions
+ * are the audit trail; every reader of an assignment skips a removed one.
+ * Returns false when there is no such live assignment.
+ */
+export async function removeEnterpriseSkillAssignment(
+  tx: SkillQuery,
+  workspaceId: string,
+  agentId: string,
+  assignmentId: string,
+): Promise<boolean> {
+  const { rows } = await tx.query<{ id: string }>(
+    `UPDATE enterprise_skill_assignments
+        SET state='paused', schedule=jsonb_set(schedule,'{enabled}','false'::jsonb),
+            removed_at=now(), revision=revision+1
+      WHERE workspace_id=$1 AND agent_id=$2 AND id=$3 AND removed_at IS NULL
+      RETURNING id`,
+    [workspaceId, agentId, assignmentId],
+  );
+  return rows.length > 0;
 }
 
 export function assignmentToolNames(assignment: EnterpriseSkillAssignment | null): string[] {

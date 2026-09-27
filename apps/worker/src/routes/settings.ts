@@ -31,8 +31,7 @@ import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import type { Tx } from '../db/client.js';
 import { enqueueJob, publishEvents } from '../jobs.js';
-import { loadCatalog } from '../model/catalog.js';
-import { allowedProviders, requireAllowedProvider } from '../model/allowed.js';
+import { requireRunnableModel } from '../model/runnable.js';
 import { checkCaps } from '../model/usage.js';
 import { DELETION_SLEEP_DAYS } from '../workflows-long/workspace-deletion.js';
 import { workspaceDeletionInstanceId } from '../workflows-long/index.js';
@@ -320,16 +319,12 @@ async function applyWorkspaceFields(env: Env, work: TenantWork, body: PatchBody)
 
   if ('default_model_id' in body) {
     const modelId = String(body.default_model_id ?? '');
-    // Marked rather than filtered, so that a model of a provider this
-    // deployment does not offer can be refused with *that* reason rather than
-    // with "the catalog does not offer that model", which would send an Admin
-    // looking for a row that is right there (decision R12).
-    const catalog = await loadCatalog(work.tx, work.workspaceId, allowedProviders(env));
-    const row = catalog.find((entry) => entry.model_id === modelId);
-    if (row) requireAllowedProvider(env, row.provider);
-    if (!row || row.disabled_reason !== null) {
-      throw new RouteError('the catalog does not offer that model', 'unknown_model', 422);
-    }
+    // The same question a session's model and an agent's model ask
+    // (src/model/runnable.ts). A provider this deployment does not offer is
+    // refused with *that* reason, not "the catalog does not offer that model",
+    // which would send an Admin looking for a row that is right there (R12).
+    if (!modelId || modelId.length > 128) throw new RouteError('the catalog does not offer that model', 'unknown_model', 422);
+    await requireRunnableModel(env, work.tx, work.workspaceId, modelId);
     next.default_model_id = modelId;
     changed.push('default_model_id');
   }
