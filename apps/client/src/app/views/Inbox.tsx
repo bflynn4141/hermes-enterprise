@@ -29,7 +29,7 @@ import { useFreshIds } from '../fresh.js';
 import { takeInboxHighlight } from '../deep-link.js';
 import { InputProvenanceBadge } from '../input-provenance.js';
 import { AdmissionHandoff, AgreementOrigin } from './PartnerWorkflow.js';
-import { EmailCautions, EmailMessageView } from './EmailMessage.js';
+import { EmailCautions, EmailMessageView, emailCautions } from './EmailMessage.js';
 import { useStepUp } from './use-step-up.js';
 import { approvalRefusalMessage } from './approval-routes.js';
 import {
@@ -455,7 +455,7 @@ function RequestPresentationAction({ request }: { request: RequestEntity }) {
     return <span className="presentation-action"><Button link disabled={busy} onClick={() => void apply(false)}>{busy ? 'Restoring…' : 'Restore'}</Button>{error && <span className="meta" role="alert">{error}</span>}</span>;
   }
   return <>
-    <Button link disabled={required || busy} onClick={() => setOpen(true)}>{required ? 'Required review' : 'Hide'}</Button>
+    <Button link disabled={required || busy} onClick={() => setOpen(true)}>{required ? 'Needs review' : 'Hide'}</Button>
     <Dialog open={open} title="Hide from your Inbox?" onClose={() => !busy && setOpen(false)} actions={<>
       <Button disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
       <Button primary disabled={busy || reason.trim().length < 5} onClick={() => void apply(true)}>{busy ? 'Hiding…' : 'Hide from my Inbox'}</Button>
@@ -552,7 +552,7 @@ function EmailHandoffView({ request }: { request: RequestEntity }) {
       {rest.length > 0 && <p style={{ margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--muted)' }}>{rest.join('\n\n')}</p>}
       <p className="email-reply-rule">{agent} can’t pay, sign or reply from here. Your team decides what happens next.</p>
     </section>
-    {email && <div style={{ marginTop: 20 }}><EmailCautions facts={email.sender} heading="Check before acting on this" /></div>}
+    {email && emailCautions(email.sender).length > 0 && <div style={{ marginTop: 20 }}><EmailCautions facts={email.sender} heading="Check before acting on this" /></div>}
     <section className="email-reply-context" style={{ marginTop: 20 }} aria-label="The email">
       <h2>Original email</h2>
       {loadState === 'loading' && <Skeleton rows={3} label="Loading the email" />}

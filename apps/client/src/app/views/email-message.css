@@ -36,8 +36,8 @@
 
 /* The agent's side of the card: its reply, separated from the sender's words. */
 .email-reply-context { display: flex; flex-direction: column; gap: 14px; }
-.email-reply-context > h2, .email-reply-draft > h2,
-.approval-shell .email-reply-context > h2, .approval-shell .email-reply-draft > h2 { margin: 0; font-family: var(--font-body); font-size: 15px; line-height: 22px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--body); }
+.email-reply-context > h2, .email-reply-draft > h2, .email-reply-heading > h2,
+.approval-shell .email-reply-context > h2, .approval-shell .email-reply-draft > h2, .approval-shell .email-reply-heading > h2 { margin: 0; font-family: var(--font-body); font-size: 15px; line-height: 22px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--body); }
 .email-reply-draft { display: flex; flex-direction: column; gap: 10px; }
 .approval-preview.email-reply { gap: 24px; }
 .email-reply-heading { display: flex; align-items: center; gap: 10px; }
