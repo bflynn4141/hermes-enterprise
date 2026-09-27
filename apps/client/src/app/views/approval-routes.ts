@@ -1,16 +1,28 @@
 // Approval routing copy: the words the Approvals page, the member dialogs and
-// the Inbox use for who approves what (decision C93).
+// the Inbox use for who approves what (decisions C93–C95).
 //
 // Every "Can approve" answer goes through the shared `approvalsFor`, the same
 // helper the server's checks are built on, so a summary here never promises
 // what the decision route would refuse.
-import { approvalsFor, type ApprovalRoute, type ApprovalRouteRule, type WorkspaceRole } from '@hermes/shared';
+import {
+  approvalsFor,
+  approverParts,
+  formatThresholdAmount,
+  MAX_THRESHOLD_MINOR,
+  type ApprovalRoute,
+  type ApprovalRouteRule,
+  type ApprovalThreshold,
+  type WorkspaceRole,
+} from '@hermes/shared';
 
 export const ADMIN_APPROVALS_VIEW = 'Approvals';
 
 export const APPROVALS_SCOPE = 'Who approves business decisions and the actions that follow them. This is separate from the command safety checks Hermes agents ask for.';
 export const APPROVALS_LIVE = 'Changes apply to work already waiting as well as new work.';
 export const NO_APPROVER_MESSAGE = 'Choose at least one group who can approve.';
+export const OTHER_CURRENCY_HINT = 'Amounts in another currency use this rule too.';
+export const AMOUNT_PROBLEM = 'Enter an amount above zero, like 5000.';
+export const CURRENCY_PROBLEM = 'Enter a three-letter currency code, like USD.';
 
 type RoleNames = ReadonlyMap<string, string>;
 
@@ -33,18 +45,49 @@ export const requesterQuestion = (kind: ApprovalRoute['kind']): string => kind =
   ? 'Can the person whose agent prepared this approve it?'
   : 'Can the person who approved the request also do this?';
 
-/** The one-line rule: "Finance · 2 different people", "Admins · the person whose agent prepared it can't approve it". */
-export function ruleSummary(route: Pick<ApprovalRoute, 'kind' | 'rule'>, names: RoleNames): string {
-  const groups = approverGroups(route.rule, names);
-  const parts = [groups.length ? joinOr(groups) : 'Nobody'];
-  if (route.kind === 'action' && route.rule.approvals_required > 1) parts.push(`${route.rule.approvals_required} different people`);
-  if (!route.rule.allow_requester) {
-    parts.push(route.kind === 'decision'
-      ? 'the person whose agent prepared it can’t approve it'
-      : 'the person who approved the request can’t also do this');
-  }
-  return parts.join(' · ');
+const requesterClause = (kind: ApprovalRoute['kind']): string => kind === 'decision'
+  ? 'the person whose agent prepared it can’t approve it'
+  : 'the person who approved the request can’t also do this';
+
+/** One rule as phrases: groups, how many people, and the requester rule. */
+function ruleParts(kind: ApprovalRoute['kind'], rule: ApprovalRouteRule, names: RoleNames): string[] {
+  const parts = approverParts(rule, names);
+  if (!rule.allow_requester) parts.push(requesterClause(kind));
+  return parts;
 }
+
+/**
+ * The one-line rule: "Finance · 2 different people", "Admins · the person whose
+ * agent prepared it can’t approve it", and with a band above an amount
+ * "Admins · over 5,000.00 USD: Admins and Finance, one of each".
+ */
+export function ruleSummary(route: Pick<ApprovalRoute, 'kind' | 'rule'> & { threshold?: ApprovalThreshold | null }, names: RoleNames): string {
+  const base = ruleParts(route.kind, route.rule, names).join(' · ');
+  if (!route.threshold) return base;
+  const over = ruleParts(route.kind, route.threshold.rule, names).join(', ');
+  return `${base} · over ${formatThresholdAmount(route.threshold.over_minor, route.threshold.currency)}: ${over}`;
+}
+
+/** Whether "One from each group" can apply: two or more people and two or more groups. */
+export const canRequireEachGroup = (rule: Pick<ApprovalRouteRule, 'admins' | 'roles' | 'approvals_required'>): boolean =>
+  rule.approvals_required >= 2 && (rule.admins ? 1 : 0) + new Set(rule.roles).size >= 2;
+
+/** A draft with "One from each group" switched off once it can no longer apply, so a saved rule is always valid. */
+export const settleRule = (rule: ApprovalRouteRule): ApprovalRouteRule =>
+  rule.one_from_each && !canRequireEachGroup(rule) ? { ...rule, one_from_each: false } : rule;
+
+/** "5000" → 500000, "5000.5" → 500050; null when it is not a positive amount with at most two decimals. */
+export function amountToMinor(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  const minor = Math.round(Number(trimmed) * 100);
+  return minor >= 1 && minor <= MAX_THRESHOLD_MINOR ? minor : null;
+}
+
+/** 500000 → "5000", 500050 → "5000.5": what the amount field shows for a saved threshold. */
+export const minorToAmount = (minor: number): string => String(minor / 100);
+
+export const validCurrency = (raw: string): boolean => /^[A-Z]{3}$/.test(raw);
 
 export function splitRoutes<T extends Pick<ApprovalRoute, 'kind'>>(routes: readonly T[]): { decisions: T[]; actions: T[] } {
   return { decisions: routes.filter((route) => route.kind === 'decision'), actions: routes.filter((route) => route.kind === 'action') };
@@ -56,9 +99,9 @@ export function canApproveLine(routes: readonly Pick<ApprovalRoute, 'key' | 'lab
   return `Can approve: ${labels.length ? labels.join(', ') : 'Nothing yet'}`;
 }
 
-/** The approvals a role's holders can give because of that role, for Admin → Roles. */
-export function approvalsForRole(routes: readonly Pick<ApprovalRoute, 'label' | 'rule'>[], slug: string): string[] {
-  return routes.filter((route) => route.rule.roles.includes(slug)).map((route) => route.label);
+/** The approvals a role's holders can give because of that role, at some amount, for Admin → Roles. */
+export function approvalsForRole(routes: readonly (Pick<ApprovalRoute, 'label' | 'rule'> & { threshold?: ApprovalThreshold | null })[], slug: string): string[] {
+  return routes.filter((route) => route.rule.roles.includes(slug) || route.threshold?.rule.roles.includes(slug)).map((route) => route.label);
 }
 
 /** Chosen roles nobody holds yet: the rule is valid, but work waits until someone does. */
@@ -72,8 +115,20 @@ export const sameRule = (a: ApprovalRouteRule, b: ApprovalRouteRule): boolean =>
   a.admins === b.admins
   && a.approvals_required === b.approvals_required
   && a.allow_requester === b.allow_requester
+  && a.one_from_each === b.one_from_each
   && a.roles.length === b.roles.length
   && a.roles.every((slug) => b.roles.includes(slug));
+
+export const sameThreshold = (a: ApprovalThreshold | null, b: ApprovalThreshold | null): boolean =>
+  a === null || b === null
+    ? a === b
+    : a.over_minor === b.over_minor && a.currency === b.currency && sameRule(a.rule, b.rule);
+
+/** A route's draft against what is saved: the base rule and the band above an amount. */
+export const sameRouteRules = (
+  a: { rule: ApprovalRouteRule; threshold: ApprovalThreshold | null },
+  b: { rule: ApprovalRouteRule; threshold: ApprovalThreshold | null },
+): boolean => sameRule(a.rule, b.rule) && sameThreshold(a.threshold, b.threshold);
 
 const reasonOf = (error: unknown): string | undefined => (error as { reason?: string } | null)?.reason;
 export const needsSignIn = (error: unknown): boolean => reasonOf(error) === 'reauth_required';
@@ -83,9 +138,10 @@ export function approvalRouteErrorMessage(error: unknown): string {
   switch (reasonOf(error)) {
     case 'reauth_required': return 'Changing who approves needs a recent sign-in.';
     case 'no_approver': return NO_APPROVER_MESSAGE;
-    case 'decision_single_approver': return 'One person makes this decision.';
+    case 'no_amount_for_route': return 'This approval has no amount, so it can’t use a different rule above one. Nothing was changed.';
+    case 'one_from_each_needs_groups': return 'One from each group needs two or more groups and two or more people. Nothing was changed.';
     case 'unknown_role': return 'One of those roles no longer exists. Reload and try again.';
-    case 'bad_rule': return 'That rule is not valid. Nothing was changed.';
+    case 'bad_rule': return 'That rule is not valid. Nothing was changed. Try again.';
     case 'unknown_route': return 'This approval no longer exists. Reload and try again.';
     case 'admin_required': return 'Only an Admin changes who approves.';
     default: return 'Could not save. Nothing was changed. Try again.';

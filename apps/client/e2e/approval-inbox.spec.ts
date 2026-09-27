@@ -397,3 +397,55 @@ test.describe('enterprise approval inbox', () => {
     expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
   });
 });
+
+// Legacy decisions that need two people (C95), against the mock. The mock has
+// one seat per page, so the sample invoice carries an approval Alex Rivera gave
+// earlier: it stands in for the first person, and Maya's press is the second.
+// The agreement has no earlier approval, so Maya's press is the first of two.
+// The rule is changed in Admin → Approvals and the Inbox is reached by a hash
+// change, not a reload, because the mock keeps its state in the page.
+test.describe('decisions that need two people', () => {
+  async function requireTwo(page: Page, key: 'invoice' | 'agreement') {
+    await page.setViewportSize({ width: 1840, height: 1000 });
+    await page.goto(`/#admin/Approvals/${key}`);
+    const pane = page.getByRole('region', { name: 'Application' });
+    await pane.getByRole('region', { name: 'Who can approve' }).getByRole('combobox', { name: 'How many different people' }).selectOption('2');
+    const footer = pane.getByRole('region', { name: key === 'invoice' ? 'Above an amount' : 'Who can approve' });
+    await footer.getByRole('button', { name: 'Save' }).click();
+    await expect(footer.getByRole('status')).toHaveText('Saved.');
+    return pane;
+  }
+  const openRequestById = (page: Page, id: string) => page.evaluate((hash) => { window.location.hash = hash; }, `#inbox/request/${id}`);
+
+  test('an invoice with one approval already recorded is approved by the second person', async ({ page }) => {
+    const pane = await requireTwo(page, 'invoice');
+    await openRequestById(page, mockUuid(13));
+    await expect(pane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
+    await expect(pane.getByText('1 of 2 approvals · Admins, 2 different people', { exact: true })).toBeVisible();
+    await expect(pane.getByText(/Needs Admins, 2 different people\. 1 of 2 approvals recorded\./)).toBeVisible();
+    if (process.env.ADMIN_APPROVALS_SCREENSHOTS) await page.screenshot({ path: `${process.env.ADMIN_APPROVALS_SCREENSHOTS}/decision-second.png` });
+    await pane.getByRole('button', { name: 'Approve invoice draft', exact: true }).click();
+    await expect(pane.getByRole('heading', { name: 'Saved in Library', exact: true })).toBeVisible();
+  });
+
+  test('an agreement waits after the first approval and says so in place of the buttons', async ({ page }) => {
+    const pane = await requireTwo(page, 'agreement');
+    await openRequestById(page, mockUuid(14));
+    await expect(pane.getByRole('heading', { name: 'Your decision' })).toBeVisible();
+    await expect(pane.getByText('0 of 2 approvals · Admins, 2 different people', { exact: true })).toBeVisible();
+    await pane.getByRole('button', { name: 'Approve agreement draft', exact: true }).click();
+    const waiting = pane.getByTestId('decision-waiting');
+    await expect(waiting).toContainText('You approved this. Waiting for one more person.');
+    await expect(waiting).toContainText('1 of 2 approvals recorded.');
+    await expect(pane.getByText('You approved', { exact: true })).toBeVisible();
+    await expect(pane.getByRole('button', { name: 'Approve agreement draft', exact: true })).toHaveCount(0);
+    await expect(pane.getByRole('button', { name: 'Decline', exact: true })).toHaveCount(0);
+    if (process.env.ADMIN_APPROVALS_SCREENSHOTS) await page.screenshot({ path: `${process.env.ADMIN_APPROVALS_SCREENSHOTS}/decision-waiting.png` });
+
+    // Narrow: the waiting line still fits.
+    await page.setViewportSize({ width: 430, height: 900 });
+    await expect(waiting).toBeVisible();
+    const layout = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(layout).toBeLessThanOrEqual(1);
+  });
+});

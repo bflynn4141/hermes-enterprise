@@ -216,6 +216,93 @@ describe('executing an effect', () => {
   });
 });
 
+async function asTenantWrite(fx: Fixture, sql: string, values: unknown[]): Promise<void> {
+  await withClient('owner', async (c) => {
+    await c.query('BEGIN');
+    await setTenant(c, fx.workspaceId, fx.adminId);
+    await c.query(sql, values);
+    await c.query('COMMIT');
+  });
+}
+
+const press = (e: ReturnType<typeof env>, fx: Fixture, userId: string, effectId: string) =>
+  asUser(e.env, userId, `/w/${fx.workspaceId}/effects/${effectId}/execute`, { method: 'POST', body: {} });
+
+describe('who a payment needs, live (C94, C95)', () => {
+  it('takes the band above an amount from the invoice it pays', async () => {
+    const fx = await seedWorkspace();
+    const e = env();
+    // Above 5,000.00 USD, one Admin pays; below, the default two Finance holders.
+    const rule = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/approval-routes/payment`, {
+      method: 'PUT',
+      body: {
+        admins: false, roles: ['finance'], approvals_required: 2, allow_requester: true,
+        threshold: { over_minor: 500_000, currency: 'USD', rule: { admins: true, roles: [], approvals_required: 1, allow_requester: true, one_from_each: false } },
+      },
+    });
+    expect(rule.status).toBe(200);
+    const large = await seedRequest(fx, 'invoice', { label: 'Invoice large', payload: { ...invoicePayload('INV-L'), total_minor: 12_000_000, lines: [{ id: 'l1', label: 'Work', qty: 1, amount_minor: 12_000_000, source_ids: [] }] } });
+    const small = await seedRequest(fx, 'invoice', { label: 'Invoice small' });
+    const [, largePayment] = await approve(e, fx, large);
+    const [, smallPayment] = await approve(e, fx, small);
+
+    // Planned from the band at decision time, and read live after.
+    const planned = await readTenant(fx.workspaceId, fx.adminId, async (c) => (await c.query<{ id: string; approvals_required: number; required_role: string }>(
+      `SELECT id, approvals_required, required_role FROM effects WHERE id = ANY ($1::uuid[])`, [[largePayment, smallPayment]])).rows);
+    expect(planned.find((row) => row.id === largePayment)).toMatchObject({ approvals_required: 1, required_role: 'admin' });
+    expect(planned.find((row) => row.id === smallPayment)).toMatchObject({ approvals_required: 2, required_role: 'finance' });
+    const list = await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/effects?status=pending`);
+    const items = ((await list.json()) as { items: { id: string; required_role: string; approver_label?: string; reason: string; confirmations?: unknown }[] }).items;
+    expect(items.find((item) => item.id === largePayment)).toMatchObject({ required_role: 'admin', approver_label: 'Workspace Admin (over 5,000.00 USD)' });
+    expect(items.find((item) => item.id === largePayment)?.confirmations).toBeUndefined();
+    expect(items.find((item) => item.id === smallPayment)).toMatchObject({ required_role: 'finance', approver_label: 'Finance, 2 different people', confirmations: { required: 2, recorded: 0 } });
+
+    // A Finance holder who is not an Admin cannot pay the large one.
+    await asTenantWrite(fx, `UPDATE members SET reviewer_roles = ARRAY['finance'] WHERE user_id = $1`, [fx.memberId]);
+    const refused = await press(e, fx, fx.memberId, largePayment!);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ reason: 'role_required', error: 'this needs Workspace Admin (over 5,000.00 USD)' });
+    // One Admin press is enough for it; the small one still waits for a second person.
+    expect(await (await press(e, fx, fx.adminId, largePayment!)).json()).toMatchObject({ status: 'unavailable' });
+    expect(await (await press(e, fx, fx.adminId, smallPayment!)).json()).toMatchObject({ status: 'pending', confirmations: { required: 2, recorded: 1 } });
+  });
+
+  it('does not name a stamped assignee who no longer passes the rule', async () => {
+    const fx = await seedWorkspace();
+    const e = env();
+    const requestId = await seedRequest(fx, 'invoice');
+    const [, paymentId] = await approve(e, fx, requestId);
+    const reason = async () => ((await (await asUser(e.env, fx.adminId, `/w/${fx.workspaceId}/requests/${requestId}/effects`)).json()) as { items: { id: string; reason: string }[] })
+      .items.find((item) => item.id === paymentId)?.reason;
+    expect(await reason()).toBe('Waiting on Maya Chen · Finance, 2 different people · Nothing executed');
+    await asTenantWrite(fx, `UPDATE members SET reviewer_roles = ARRAY['access'] WHERE user_id = $1`, [fx.adminId]);
+    expect(await reason()).toBe('Waiting on Finance, 2 different people · Nothing executed');
+  });
+
+  it('stops counting a Finance confirmer who no longer holds the role', async () => {
+    const fx = await seedWorkspace();
+    const e = env();
+    const requestId = await seedRequest(fx, 'invoice');
+    const [, paymentId] = await approve(e, fx, requestId);
+    expect(await (await press(e, fx, fx.adminId, paymentId!)).json()).toMatchObject({ status: 'pending', confirmations: { required: 2, recorded: 1, by_viewer: true } });
+
+    // The Admin gives up Finance; the Member takes it on and presses.
+    await asTenantWrite(fx, `UPDATE members SET reviewer_roles = ARRAY['access'] WHERE user_id = $1`, [fx.adminId]);
+    await asTenantWrite(fx, `UPDATE members SET reviewer_roles = ARRAY['finance'] WHERE user_id = $1`, [fx.memberId]);
+    const second = await press(e, fx, fx.memberId, paymentId!);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ status: 'pending', confirmations: { required: 2, recorded: 1, by_viewer: true } });
+    await readTenant(fx.workspaceId, fx.adminId, async (c) => {
+      expect((await c.query(`SELECT 1 FROM effect_confirmations WHERE effect_id = $1`, [paymentId])).rowCount).toBe(2);
+      expect((await c.query(`SELECT 1 FROM events WHERE kind = 'effect.executed' AND effect_id = $1`, [paymentId])).rowCount).toBe(0);
+    });
+    // The stamped assignee (the Admin) no longer carries it out, so the Inbox does not name them.
+    const list = await asUser(e.env, fx.memberId, `/w/${fx.workspaceId}/requests/${requestId}/effects`);
+    const payment = ((await list.json()) as { items: { id: string; reason: string }[] }).items.find((item) => item.id === paymentId);
+    expect(payment?.reason).toBe('1 of 2 confirmations · Finance, 2 different people · Nothing executed');
+  });
+});
+
 describe('a new document version after the decision', () => {
   it('cancels the pending effects and enqueues a re-render', async () => {
     const fx = await seedWorkspace();

@@ -15,7 +15,7 @@
 //
 // `__MOCK__` is a build-time constant, so a production build drops this module
 // entirely.
-import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
+import { mockRunStream, mockUuid, SCHEMA_VERSION, DEFAULT_MODEL_ID, DEFAULT_EFFORT, messageSchema, sessionSchema, AGENT_OPERATION_CATALOG, BUILTIN_ROLE_SLUGS, APPROVAL_ROUTES, APPROVAL_ROUTE_KEYS, MAX_ROLES_PER_MEMBER, approvalRouteDefinition, approvalRouteUpdateSchema, ruleProblem, effectiveRule, mayApprove, groupsOf, inGroup, approverLabel, bandSuffix, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, workspaceRoleCreateSchema, workspaceRoleMembersSchema, workspaceRolePatchSchema, type AgentDirectoryEntry, type WorkspaceRole, type AgentPermissions, type ContextNote, type AttachmentDetail, type AgentRecoveryView, type StreamEvent } from '@hermes/shared';
 import type { ApprovalView, DocumentEntity, EnterpriseSkillAssignment, InstructionVersion, InvitationEntity, LibrarySource, MaskedProviderKey, MemberEntity, PartnerEngagementSummary, PendingInvitation, PartnerHandoffResult, PartnerWorkflowHandoffV2, PartnerWorkflowViewerRole, Ref, RequestEntity, SharedIntelligenceGoal, SharedIntelligenceProposal, SharedIntelligenceTriageAssessment, SharedIntelligenceWorkspace, TraceEntity } from '@hermes/shared';
 import type { SocketLike } from './hub.js';
 import { APPROVAL_DEMO_REQUEST_IDS, createApprovalDemoFixtures } from './approval-fixtures.js';
@@ -852,19 +852,57 @@ export function createMockBackend(input: MockOptions = {}) {
    * saved rule per key, the catalog default otherwise, and the same refusals
    * in the same order.
    */
-  const savedApprovalRules = new Map<ApprovalRouteKey, { rule: ApprovalRouteRule; updated_at: string }>();
+  const savedApprovalRules = new Map<ApprovalRouteKey, { rule: ApprovalRouteRule; threshold: ApprovalThreshold | null; updated_at: string }>();
   const approvalRouteViews = (): ApprovalRoute[] => APPROVAL_ROUTES.map((definition) => {
     const saved = savedApprovalRules.get(definition.key);
     const rule = saved?.rule ?? definition.default;
+    const threshold = saved?.threshold ?? null;
     return {
       key: definition.key, kind: definition.kind, label: definition.label, description: definition.description,
       workflow_note: definition.workflow_note,
+      amount: definition.amount,
       rule: { ...rule, roles: [...rule.roles] },
+      threshold: threshold ? { ...threshold, rule: { ...threshold.rule, roles: [...threshold.rule.roles] } } : null,
       is_default: !saved,
       updated_at: saved?.updated_at ?? null,
     };
   });
   const approvalRouteView = (key: ApprovalRouteKey): ApprovalRoute => approvalRouteViews().find((route) => route.key === key)!;
+
+  /**
+   * Approvals toward legacy decisions that need several people (C95),
+   * mirroring apps/worker/src/domain/approval-routing.ts. The mock has one
+   * seat per page, so the sample invoice carries an approval Alex Rivera
+   * (Admin, Finance) gave earlier: it stands in for the second person, and
+   * counts only while the saved rule needs two or more people and Alex passes it.
+   */
+  const decisionConfirmations = new Map<string, string[]>(empty || options.partnerWorkflow ? [] : [[REQ_INVOICE, [MEMBER_USER]]]);
+  const activePerson = (userId: string) => members.find((member) => member.user_id === userId && member.status === 'active') ?? null;
+  function legacyRouting(row: MockRequest, viewerId: string) {
+    const route = approvalRouteView(row.kind as ApprovalRouteKey);
+    const payload = row.payload as { total_minor?: unknown; currency?: unknown };
+    const amount = row.kind === 'invoice' && typeof payload.total_minor === 'number'
+      ? { minor: payload.total_minor, currency: typeof payload.currency === 'string' ? payload.currency : '' }
+      : null;
+    const routed = effectiveRule(route, amount);
+    const eligible = (userId: string) => {
+      const person = activePerson(userId);
+      return person !== null && mayApprove(routed.rule, person);
+    };
+    const confirmers = (decisionConfirmations.get(row.id) ?? []).filter(eligible);
+    const counted = routed.rule.approvals_required >= 2 ? confirmers : confirmers.filter((userId) => userId === viewerId);
+    const covered = !routed.rule.one_from_each
+      || groupsOf(routed.rule).every((group) => counted.some((userId) => inGroup(group, activePerson(userId)!)));
+    const names = new Map(roles.map((role) => [role.slug, role.name]));
+    return {
+      label: `${approverLabel(routed.rule, names)}${bandSuffix(route.threshold, routed.reason)}`,
+      required: routed.rule.approvals_required,
+      recorded: counted.length,
+      covered,
+      byViewer: counted.includes(viewerId),
+      canDecide: eligible(viewerId),
+    };
+  }
 
   const history = empty
     ? []
@@ -1207,7 +1245,10 @@ export function createMockBackend(input: MockOptions = {}) {
     // browser fixture. The scoped Finance fixture exercises the new projection.
     if (!financeScoped && seat === 'member') return row;
     const pending = row.status === 'pending';
-    const eligible = pending && (financeScoped ? seat === 'member' : seat === 'admin');
+    const routing = financeScoped ? null : legacyRouting(row, viewerUserId);
+    const eligible = pending && (routing ? routing.canDecide && !routing.byViewer : seat === 'member');
+    const required = routing?.required ?? 1;
+    const recorded = routing?.recorded ?? 0;
     return {
       ...row,
       decision_summary: {
@@ -1218,9 +1259,11 @@ export function createMockBackend(input: MockOptions = {}) {
         facts: [], consequence: null,
         approval_requirement: {
           mode: 'single', completed_steps: pending ? 0 : 1, total_steps: 1,
-          remaining_approvals: pending ? 1 : 0,
-          current: pending ? [{ label: financeScoped ? 'Finance reviewer' : 'Workspace Admin', approvals_recorded: 0, quorum: 1 }] : [],
-          pending_for_viewer: eligible, waiting_on_others: pending && !eligible, expires_at: null,
+          remaining_approvals: pending ? Math.max(required - recorded, routing && !routing.covered ? 1 : 0) : 0,
+          current: pending ? [{ label: routing?.label ?? 'Finance reviewer', approvals_recorded: recorded, quorum: required }] : [],
+          pending_for_viewer: eligible, waiting_on_others: pending && !eligible,
+          ...(pending && routing?.byViewer ? { viewer_approved: true } : {}),
+          expires_at: null,
         },
       },
     };
@@ -1684,6 +1727,21 @@ export function createMockBackend(input: MockOptions = {}) {
         if (!story && seat !== 'admin' && !(financeScoped && seat === 'member')) return fail(403, 'not_admin', 'Admin decision required');
         if (row.status !== 'pending') return fail(409, 'already_decided', 'Already decided');
         const decision = body.decision === 'decline' ? 'decline' : 'approve';
+        if (!story && !financeScoped) {
+          // The saved rule decides, at the invoice's amount, and an approval is
+          // first a confirmation when it needs more people (C95).
+          const routing = legacyRouting(row, viewerUserId);
+          if (!routing.canDecide) return fail(403, 'approver_required', `this needs ${routing.label}`);
+          if (decision === 'approve') {
+            const confirmers = decisionConfirmations.get(id) ?? [];
+            if (!confirmers.includes(viewerUserId)) decisionConfirmations.set(id, [...confirmers, viewerUserId]);
+            const after = legacyRouting(row, viewerUserId);
+            if (after.recorded < after.required || !after.covered) {
+              row.version += 1;
+              return json({ status: 'pending', confirmations: { required: after.required, recorded: after.recorded, by_viewer: true } }, 202);
+            }
+          }
+        }
         const resulting = decision === 'decline' ? 'declined' : row.kind === 'application' ? 'admitted' : row.kind === 'invoice' ? 'created' : 'drafted';
         row.status = resulting;
         row.version += 1;
@@ -1853,7 +1911,7 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!roleMatch[2] && method === 'DELETE') {
         if (role.builtin) return fail(422, 'builtin_role', 'Built-in roles cannot be deleted.');
         if (roleView(role).members.length > 0) return fail(409, 'role_in_use', 'Someone holds this role.');
-        if ([...savedApprovalRules.values()].some((saved) => saved.rule.roles.includes(role.slug))) {
+        if ([...savedApprovalRules.values()].some((saved) => saved.rule.roles.includes(role.slug) || saved.threshold?.rule.roles.includes(role.slug))) {
           return fail(409, 'role_routed', 'approvals still go to this role; change them in Approvals first');
         }
         // A pending invitation's copy of the slug goes with the role.
@@ -1884,16 +1942,20 @@ export function createMockBackend(input: MockOptions = {}) {
       }
       const parsed = approvalRouteUpdateSchema.safeParse(body);
       if (!parsed.success) return fail(422, 'bad_rule', 'that is not a valid approval rule');
-      const rule = { ...parsed.data, roles: [...new Set(parsed.data.roles)] };
+      const { threshold: rawThreshold, ...rawRule } = parsed.data;
+      const rule = { ...rawRule, roles: [...new Set(rawRule.roles)] };
+      const threshold = rawThreshold ? { ...rawThreshold, rule: { ...rawThreshold.rule, roles: [...new Set(rawThreshold.rule.roles)] } } : null;
       if (seat !== 'admin') return fail(403, 'admin_required', 'Admin required.');
       if (options.approvalWritesStepUp && !stepUpSatisfied) return fail(401, 'reauth_required', 'Recent sign-in required.');
-      if (!rule.admins && rule.roles.length === 0) return fail(422, 'no_approver', 'choose at least one group who can approve');
-      if (approvalRouteDefinition(key).kind === 'decision' && rule.approvals_required !== 1) {
-        return fail(422, 'decision_single_approver', 'one person makes this decision');
+      if (threshold && !approvalRouteDefinition(key).amount) return fail(422, 'no_amount_for_route', 'this kind of work has no amount');
+      for (const candidate of threshold ? [rule, threshold.rule] : [rule]) {
+        const problem = ruleProblem(candidate);
+        if (problem === 'no_approver') return fail(422, 'no_approver', 'choose at least one group who can approve');
+        if (problem) return fail(422, problem, 'one from each group needs two or more groups and two or more people');
       }
-      const unknown = rule.roles.filter((slug) => !roles.some((role) => role.slug === slug));
+      const unknown = [...new Set([...rule.roles, ...(threshold?.rule.roles ?? [])])].filter((slug) => !roles.some((role) => role.slug === slug));
       if (unknown.length > 0) return fail(422, 'unknown_role', `this workspace has no role called ${unknown.join(', ')}`);
-      savedApprovalRules.set(key, { rule, updated_at: iso(0) });
+      savedApprovalRules.set(key, { rule, threshold, updated_at: iso(0) });
       return json(approvalRouteView(key));
     }
     if (p('/invitations') && method === 'GET') return seat === 'admin' ? page(invitations) : fail(403, 'admin_required');

@@ -1,5 +1,6 @@
 // Admin → Approvals: who approves each business decision, and each action
-// that follows one (decision C93).
+// that follows one (decisions C93–C95). Invoices and payments may use a
+// different rule above an amount.
 //
 // These are business approvals (an invoice, a payment, a signature), not the
 // command safety checks a Hermes agent asks for before running something; the
@@ -7,39 +8,43 @@
 // this page reads and writes them and explains them in plain words. Writes need
 // a recent sign-in, like changing a member's roles.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ADMIN, MAX_ACTION_APPROVALS, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type WorkspaceRole } from '@hermes/shared';
+import { ADMIN, MAX_APPROVALS, type ApprovalRoute, type ApprovalRouteKey, type ApprovalRouteRule, type ApprovalThreshold, type WorkspaceRole } from '@hermes/shared';
 import { useAdapter, useAppState, useNav } from '../store-context.js';
 import { Button, EmptyState, Skeleton, Toggle } from '../ui/primitives.js';
 import { AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminApprovalsWorkflow } from './AdminApprovalsWorkflow.js';
 import { roleHolders, sortRoles } from './AdminRoles.js';
 import { useWorkspaceLists } from './lists.js';
+import { useStepUp } from './use-step-up.js';
 import {
   ADMIN_APPROVALS_VIEW,
+  AMOUNT_PROBLEM,
   APPROVALS_LIVE,
   APPROVALS_SCOPE,
+  CURRENCY_PROBLEM,
   NO_APPROVER_MESSAGE,
+  OTHER_CURRENCY_HINT,
+  amountToMinor,
   approvalRouteErrorMessage,
-  needsSignIn,
+  canRequireEachGroup,
+  minorToAmount,
   requesterQuestion,
   roleNameMap,
   ruleSummary,
-  sameRule,
+  sameRouteRules,
+  settleRule,
   splitRoutes,
   unheldRoles,
   unheldWarning,
+  validCurrency,
 } from './approval-routes.js';
 import './admin-roles.css';
 import './admin-approvals.css';
 
 function Problem({ error }: { error: unknown }) {
-  const adapter = useAdapter();
-  const stepUp = () => {
-    const url = adapter.auth.stepUpUrl(window.location.href, 'approval_routes');
-    if (url) window.location.assign(url);
-  };
+  const { needsSignIn, signIn } = useStepUp('approval_routes');
   return <p className="admin-roles-problem" role="alert">
-    {approvalRouteErrorMessage(error)} {needsSignIn(error) && <Button link onClick={stepUp}>Sign in again</Button>}
+    {approvalRouteErrorMessage(error)} {needsSignIn(error) && <Button link onClick={signIn}>Sign in again</Button>}
   </p>;
 }
 
@@ -93,7 +98,7 @@ export function AdminApprovals({ routeKey }: { routeKey: string | null }) {
       <p>{APPROVALS_SCOPE}</p>
       <p>{APPROVALS_LIVE}</p>
     </div></header>
-    {group('Decisions', 'Closing a request an agent prepared. One person decides.', decisions)}
+    {group('Decisions', 'Closing a request an agent prepared. One person decides unless you ask for more.', decisions)}
     {group('Actions after approval', 'What happens once a request is approved. These can need more than one person.', actions)}
     <AdminApprovalsWorkflow />
   </>;
@@ -110,31 +115,64 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
   );
   const sorted = useMemo(() => sortRoles(roles), [roles]);
   const [rule, setRule] = useState<ApprovalRouteRule>(route.rule);
+  // The band above an amount. The amount stays the raw text typed, so "5000."
+  // mid-edit is not rewritten under the cursor; it becomes minor units on save.
+  const [bandOn, setBandOn] = useState(route.threshold !== null);
+  const [amount, setAmount] = useState(route.threshold ? minorToAmount(route.threshold.over_minor) : '');
+  const [currency, setCurrency] = useState(route.threshold?.currency ?? 'USD');
+  const [bandRule, setBandRule] = useState<ApprovalRouteRule>(route.threshold?.rule ?? route.rule);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'reset'>('idle');
   const [problem, setProblem] = useState<unknown>(null);
 
-  const decision = route.kind === 'decision';
-  const changed = !sameRule(rule, route.rule);
+  const overMinor = amountToMinor(amount);
+  const threshold: ApprovalThreshold | null = bandOn && overMinor !== null && validCurrency(currency)
+    ? { over_minor: overMinor, currency, rule: bandRule }
+    : null;
+  const bandProblem = !bandOn ? null
+    : overMinor === null ? AMOUNT_PROBLEM
+      : !validCurrency(currency) ? CURRENCY_PROBLEM
+        : !bandRule.admins && bandRule.roles.length === 0 ? NO_APPROVER_MESSAGE
+          : null;
   const nobody = !rule.admins && rule.roles.length === 0;
+  const invalid = nobody || bandProblem !== null;
+  const changed = (bandOn && threshold === null) || !sameRouteRules({ rule, threshold }, { rule: route.rule, threshold: route.threshold });
   const busy = saveState === 'saving';
-  const edit = (next: Partial<ApprovalRouteRule>) => {
+  const touch = () => {
     setSaveState('idle');
     setProblem(null);
-    setRule((current) => ({ ...current, ...next }));
+  };
+  const edit = (next: Partial<ApprovalRouteRule>) => {
+    touch();
+    setRule((current) => settleRule({ ...current, ...next }));
+  };
+  const editBand = (next: Partial<ApprovalRouteRule>) => {
+    touch();
+    setBandRule((current) => settleRule({ ...current, ...next }));
   };
   const finish = (next: ApprovalRoute, done: 'saved' | 'reset') => {
     onSaved(next);
+    // A rule applies to work already waiting, so pending requests this page
+    // has cached are read again with the new rule's label and counts.
+    for (const [id, record] of Object.entries(state.entities.request)) {
+      const cached = record.data as { status?: string; kind?: string } | null;
+      if (cached?.status === 'pending' && cached.kind !== 'approval') adapter.ensure('request', id, true);
+    }
     setRule(next.rule);
+    setBandOn(next.threshold !== null);
+    setAmount(next.threshold ? minorToAmount(next.threshold.over_minor) : '');
+    setCurrency(next.threshold?.currency ?? 'USD');
+    setBandRule(next.threshold?.rule ?? next.rule);
     setSaveState(done);
   };
   const fail = (error: unknown) => {
+    // The draft stays as typed, so a sign-in or a retry does not lose it.
     setProblem(error);
     setSaveState('idle');
   };
   const save = () => {
     setSaveState('saving');
     setProblem(null);
-    const body = { ...rule, roles: [...rule.roles], approvals_required: decision ? 1 : rule.approvals_required };
+    const body = { ...rule, roles: [...rule.roles], threshold: threshold ? { ...threshold, rule: { ...threshold.rule, roles: [...threshold.rule.roles] } } : null };
     void adapter.rest.updateApprovalRoute(state.workspace.id, route.key as ApprovalRouteKey, body)
       .then((next) => finish(next, 'saved'))
       .catch(fail);
@@ -146,8 +184,23 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
       .then((next) => finish(next, 'reset'))
       .catch(fail);
   };
-  const warnings = unheldRoles(rule, roles);
   const status = saveState === 'saved' && !changed ? 'Saved.' : saveState === 'reset' && !changed ? 'Back to the default.' : '';
+  const alert = nobody ? NO_APPROVER_MESSAGE : bandProblem;
+
+  // One Save for the page, in the last card, because the base rule and the
+  // band above an amount are saved together.
+  const footer = <>
+    {problem !== null
+      ? <Problem error={problem} />
+      : alert
+        ? <p role="alert">{alert}</p>
+        : <p role="status">{status || (route.is_default && !changed ? 'This is the default.' : '')}</p>}
+    <div className="admin-roles-actions">
+      {!route.is_default && <Button disabled={busy} onClick={reset}>Reset to default</Button>}
+      <Button primary disabled={!changed || invalid || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
+    </div>
+  </>;
+  const controls = { route, roles, sorted, admins, busy };
 
   return <>
     <div><Button link onClick={() => nav(ADMIN(ADMIN_APPROVALS_VIEW))}>← Approvals</Button></div>
@@ -160,56 +213,102 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
 
     <AdminSettingsCard
       title="Who can approve"
-      description={decision ? 'Anyone in a checked group can make this decision.' : 'Anyone in a checked group can do this.'}
-      footer={<>
-        {problem !== null
-          ? <Problem error={problem} />
-          : nobody
-            ? <p role="alert">{NO_APPROVER_MESSAGE}</p>
-            : <p role="status">{status || (route.is_default && !changed ? 'This is the default.' : '')}</p>}
-        <div className="admin-roles-actions">
-          {!route.is_default && <Button disabled={busy} onClick={reset}>Reset to default</Button>}
-          <Button primary disabled={!changed || nobody || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</Button>
-        </div>
-      </>}
+      description={route.kind === 'decision' ? 'Anyone in a checked group can make this decision.' : 'Anyone in a checked group can do this.'}
+      footer={route.amount ? undefined : footer}
     >
-      <fieldset className="admin-roles-people">
-        <legend className="sr-only">Groups who can approve {route.label}</legend>
-        <label className="admin-roles-person">
-          <input type="checkbox" disabled={busy} checked={rule.admins} onChange={(event) => edit({ admins: event.target.checked })} />
-          <span className="admin-approvals-choice">Admins{' '}<span className="admin-roles-person-note">{admins.length ? admins.join(', ') : 'No Admins yet'}</span></span>
-        </label>
-        {sorted.map((role) => <label key={role.id} className="admin-roles-person">
-          <input
-            type="checkbox"
-            disabled={busy}
-            checked={rule.roles.includes(role.slug)}
-            onChange={(event) => {
-              // Kept in the page's role order, so the summary reads the same whatever order they were ticked in.
-              const next = event.target.checked ? [...rule.roles, role.slug] : rule.roles.filter((slug) => slug !== role.slug);
-              const rank = (slug: string) => { const index = sorted.findIndex((row) => row.slug === slug); return index < 0 ? sorted.length : index; };
-              edit({ roles: [...next].sort((a, b) => rank(a) - rank(b)) });
-            }}
-          />
-          <span className="admin-approvals-choice">{role.name}{' '}<span className="admin-roles-person-note">{roleHolders(role)}</span></span>
-        </label>)}
-      </fieldset>
-      {warnings.map((name) => <p key={name} className="admin-approvals-warning">{unheldWarning(name)}</p>)}
-      {!decision && <label className="kv">
-        <span className="grow">How many different people</span>
-        <select
-          className="admin-approvals-count"
-          disabled={busy}
-          value={rule.approvals_required}
-          onChange={(event) => edit({ approvals_required: Number(event.target.value) })}
-        >
-          {Array.from({ length: MAX_ACTION_APPROVALS }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}
-        </select>
-      </label>}
-      <div className="kv">
-        <span className="grow">{requesterQuestion(route.kind)}</span>
-        <Toggle checked={rule.allow_requester} disabled={busy} label={requesterQuestion(route.kind)} onChange={(value) => edit({ allow_requester: value })} />
-      </div>
+      <RuleControls {...controls} rule={rule} onEdit={edit} legend={`Groups who can approve ${route.label}`} />
     </AdminSettingsCard>
+
+    {route.amount && <AdminSettingsCard
+      title="Above an amount"
+      description="Larger invoices can need different people. This uses the invoice total."
+      footer={footer}
+    >
+      <div className="kv">
+        <span className="grow">Use a different rule above an amount</span>
+        <Toggle
+          checked={bandOn}
+          disabled={busy}
+          label="Use a different rule above an amount"
+          onChange={(value) => {
+            touch();
+            setBandOn(value);
+          }}
+        />
+      </div>
+      {bandOn && <>
+        <div className="admin-approvals-amount">
+          <label className="field">
+            <span>Above</span>
+            <input type="number" min="0" step="0.01" inputMode="decimal" placeholder="5000" value={amount} disabled={busy} aria-invalid={overMinor === null}
+              onChange={(event) => { touch(); setAmount(event.target.value); }} />
+          </label>
+          <label className="field admin-approvals-currency">
+            <span>Currency</span>
+            <input type="text" maxLength={3} autoCapitalize="characters" spellCheck={false} value={currency} disabled={busy} aria-invalid={!validCurrency(currency)}
+              onChange={(event) => { touch(); setCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, '')); }} />
+          </label>
+        </div>
+        <p className="meta">{OTHER_CURRENCY_HINT}</p>
+        <RuleControls {...controls} rule={bandRule} onEdit={editBand} legend={`Groups who can approve ${route.label} above the amount`} />
+      </>}
+    </AdminSettingsCard>}
+  </>;
+}
+
+/** Who, how many, one from each group, and the requester question, for one band of a rule. */
+function RuleControls({ route, roles, sorted, admins, busy, rule, onEdit, legend }: {
+  route: ApprovalRoute;
+  roles: WorkspaceRole[];
+  sorted: WorkspaceRole[];
+  admins: string[];
+  busy: boolean;
+  rule: ApprovalRouteRule;
+  onEdit: (next: Partial<ApprovalRouteRule>) => void;
+  legend: string;
+}) {
+  const warnings = unheldRoles(rule, roles);
+  return <>
+    <fieldset className="admin-roles-people">
+      <legend className="sr-only">{legend}</legend>
+      <label className="admin-roles-person">
+        <input type="checkbox" disabled={busy} checked={rule.admins} onChange={(event) => onEdit({ admins: event.target.checked })} />
+        <span className="admin-approvals-choice">Admins{' '}<span className="admin-roles-person-note">{admins.length ? admins.join(', ') : 'No Admins yet'}</span></span>
+      </label>
+      {sorted.map((role) => <label key={role.id} className="admin-roles-person">
+        <input
+          type="checkbox"
+          disabled={busy}
+          checked={rule.roles.includes(role.slug)}
+          onChange={(event) => {
+            // Kept in the page's role order, so the summary reads the same whatever order they were ticked in.
+            const next = event.target.checked ? [...rule.roles, role.slug] : rule.roles.filter((slug) => slug !== role.slug);
+            const rank = (slug: string) => { const index = sorted.findIndex((row) => row.slug === slug); return index < 0 ? sorted.length : index; };
+            onEdit({ roles: [...next].sort((a, b) => rank(a) - rank(b)) });
+          }}
+        />
+        <span className="admin-approvals-choice">{role.name}{' '}<span className="admin-roles-person-note">{roleHolders(role)}</span></span>
+      </label>)}
+    </fieldset>
+    {warnings.map((name) => <p key={name} className="admin-approvals-warning">{unheldWarning(name)}</p>)}
+    <label className="kv">
+      <span className="grow">How many different people</span>
+      <select
+        className="admin-approvals-count"
+        disabled={busy}
+        value={rule.approvals_required}
+        onChange={(event) => onEdit({ approvals_required: Number(event.target.value) })}
+      >
+        {Array.from({ length: MAX_APPROVALS }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}
+      </select>
+    </label>
+    {canRequireEachGroup(rule) && <div className="kv">
+      <span className="grow">One from each group</span>
+      <Toggle checked={rule.one_from_each} disabled={busy} label="One from each group" onChange={(value) => onEdit({ one_from_each: value })} />
+    </div>}
+    <div className="kv">
+      <span className="grow">{requesterQuestion(route.kind)}</span>
+      <Toggle checked={rule.allow_requester} disabled={busy} label={requesterQuestion(route.kind)} onChange={(value) => onEdit({ allow_requester: value })} />
+    </div>
   </>;
 }

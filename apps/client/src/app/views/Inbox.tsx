@@ -486,14 +486,29 @@ function TaskView({ request }: { request: RequestEntity }) {
   </div></div>;
 }
 
+/** "1 of 2 approvals recorded." for a decision that needs several people (C95), else null. */
+export function approvalProgressLine(requirement: NonNullable<RequestEntity['decision_summary']>['approval_requirement'] | undefined): string | null {
+  const current = requirement?.current[0];
+  if (!current || current.quorum < 2 || current.approvals_recorded < 1) return null;
+  return `${Math.min(current.approvals_recorded, current.quorum)} of ${current.quorum} approvals recorded.`;
+}
+
+/** "You approved this. Waiting for one more person." once the viewer's approval is in. */
+export function viewerApprovedLine(remaining: number): string {
+  return `You approved this. Waiting for ${remaining <= 1 ? 'one more person' : `${remaining} more people`}.`;
+}
+
 /** Shared decision footer. The only place in the client that calls `decide`. */
 function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: { request: RequestEntity; title: string; detail: string; approveLabel: string; declineLabel: string }) {
   const adapter = useAdapter();
-  const eligible = request.decision_summary?.approval_requirement.pending_for_viewer === true;
-  const approverLabel = request.decision_summary?.approval_requirement.current[0]?.label;
+  const requirement = request.decision_summary?.approval_requirement;
+  const eligible = requirement?.pending_for_viewer === true;
+  const approverLabel = requirement?.current[0]?.label;
+  const quorum = requirement?.current[0]?.quorum ?? 1;
+  const progress = approvalProgressLine(requirement);
   const financeScoped = approverLabel === 'Finance reviewer';
-  // The workspace's approval rules name who decides (decision C93); the two
-  // labels the product had before keep their own sentences.
+  // The workspace's approval rules name who decides (decisions C93–C95); the
+  // two labels the product had before keep their own sentences.
   const notEligibleTitle = financeScoped
     ? 'The assigned Finance reviewer records this decision'
     : approverLabel && approverLabel !== 'Workspace Admin' ? `This needs ${approverLabel}` : EMPTY.adminOnly;
@@ -501,6 +516,9 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reauthed, setReauthed] = useState(false);
+  // Set by a 202 until the refreshed request says the same thing.
+  const [approvedHere, setApprovedHere] = useState(false);
+  const viewerApproved = requirement?.viewer_approved === true || (approvedHere && !eligible && request.status === 'pending');
 
   // On return from a step-up redirect the pane re-renders in a confirm state.
   // The intent is read, never replayed.
@@ -512,12 +530,23 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
     }
   }, [adapter, request.id]);
 
+  if (viewerApproved) {
+    return (
+      <div className="app-footer" style={{ marginInline: -28 }} data-testid="decision-waiting">
+        <div className="col grow" style={{ gap: 3 }}>
+          <span className="f-title">{viewerApprovedLine(requirement?.remaining_approvals ?? 1)}</span>
+          <span className="f-sub">{progress ?? 'Nothing is decided until enough people approve.'}</span>
+        </div>
+      </div>
+    );
+  }
+
   if (!eligible) {
     return (
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
           <span className="f-title">{notEligibleTitle}</span>
-          <span className="f-sub">You can read the request and its evidence.</span>
+          <span className="f-sub">{progress ? `${progress} You can read the request and its evidence.` : 'You can read the request and its evidence.'}</span>
         </div>
       </div>
     );
@@ -529,6 +558,7 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
     try {
       const result = await adapter.decide(request.id, decision);
       if (result === 'reauth_required') return;
+      if ('status' in result && result.status === 'pending') setApprovedHere(true);
       adapter.ensure('request', request.id);
     } catch (caught) {
       const reason = (caught as { reason?: string }).reason;
@@ -550,7 +580,7 @@ function DecisionFooter({ request, title, detail, approveLabel, declineLabel }: 
       <div className="app-footer" style={{ marginInline: -28 }}>
         <div className="col grow" style={{ gap: 3 }}>
           <span className="f-title">{reauthed ? 'Re-authenticated — confirm to continue' : title}</span>
-          <span className="f-sub">{error ?? detail}</span>
+          <span className="f-sub">{error ?? [quorum > 1 && approverLabel ? `Needs ${approverLabel}.` : null, progress, detail].filter(Boolean).join(' ')}</span>
         </div>
         <Button disabled={busy} onClick={() => setConfirmDecline(true)}>
           {declineLabel}
@@ -886,8 +916,11 @@ function documentReviewerSummary(request: RequestEntity, financeScoped: boolean,
       ? `Finance review${current.quorum === 1 ? '' : 's'}`
       : current.label === 'Workspace Admin'
         ? `Admin approval${current.quorum === 1 ? '' : 's'}`
-        : current.label;
-    return `${current.approvals_recorded} of ${current.quorum} ${label}`;
+        : null;
+    // A routed label already says how many people ("Finance, 2 different people").
+    return label
+      ? `${current.approvals_recorded} of ${current.quorum} ${label}`
+      : `${current.approvals_recorded} of ${current.quorum} approval${current.quorum === 1 ? '' : 's'} · ${current.label}`;
   }
   const remaining = requirement?.remaining_approvals ?? 1;
   return financeScoped
@@ -1031,7 +1064,7 @@ export function DocumentView({
               {totalMinor !== null && <div><dt>Amount</dt><dd>{amount}</dd></div>}
             </>}
           </dl>
-          {!resolved && <p className="legacy-reviewer"><span>{reviewerSummary}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
+          {!resolved && <p className="legacy-reviewer"><span>{reviewerSummary}</span><span>{eligible && !readOnly ? 'You can approve' : eligible ? 'Approve from Inbox' : request.decision_summary?.approval_requirement.viewer_approved ? 'You approved' : financeScoped ? 'Finance reviewer required' : 'Admin required'}</span></p>}
           {resolved && <p className="legacy-reviewer"><span>{saved ? reviewerSummary : declined ? 'Draft declined' : 'No approval recorded'}</span>{request.decided_by_name && <span>{request.decided_by_name}</span>}</p>}
         </section>
 
@@ -1190,10 +1223,12 @@ export function legacyEffectStatusLabel(effect: EffectEntity, executor: 'unavail
       : effect.status === 'cancelled'
         ? 'Cancelled'
         : effect.confirmations && effect.confirmations.recorded > 0
-          ? `${effect.confirmations.recorded} of ${effect.confirmations.required} ${effect.required_role} confirmations`
+          ? effect.approver_label
+            ? `${effect.confirmations.recorded} of ${effect.confirmations.required} confirmations · ${effect.approver_label}`
+            : `${effect.confirmations.recorded} of ${effect.confirmations.required} ${effect.required_role} confirmations`
           : executor === 'simulated'
-            ? `Waiting on the ${effect.required_role} role`
-            : `Pending · no executor · needs the ${effect.required_role} role`;
+            ? `Waiting on ${effect.approver_label ?? `the ${effect.required_role} role`}`
+            : `Pending · no executor · needs ${effect.approver_label ?? `the ${effect.required_role} role`}`;
   return effect.reason && !effect.confirmations?.recorded ? `${base} · ${effect.reason}` : base;
 }
 
@@ -1250,7 +1285,7 @@ export function LegacyEffectsPanel({
               <span className="pill illustrative" title={SIMULATED_EFFECT_HONESTY}>Simulated</span>
             )}
             {effect.status === 'pending' && effect.confirmations?.by_viewer && (
-              <span className="meta" data-testid="effect-awaiting-second">Waiting on another {effect.required_role} member</span>
+              <span className="meta" data-testid="effect-awaiting-second">{effect.approver_label ? 'Waiting on another person' : `Waiting on another ${effect.required_role} member`}</span>
             )}
             {effect.status === 'pending' && !effect.confirmations?.by_viewer && (
               <Button disabled={busy === effect.id} onClick={() => onRecordAttempt?.(effect)}>

@@ -104,7 +104,7 @@ describe('handoffs table', () => {
         } as unknown as TenantWork;
 
         const outcome = await recordDecision(work, applicationId, 'approve', null);
-        expect(outcome.resulting_status).toBe('admitted');
+        expect(outcome).toMatchObject({ resulting_status: 'admitted' });
 
         const agreement = await client.query<{
           id: string;
