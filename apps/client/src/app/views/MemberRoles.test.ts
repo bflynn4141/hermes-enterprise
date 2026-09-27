@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type { WorkspaceRole } from '@hermes/shared';
 import { RestError } from '../../model/rest.js';
 import { jobLockedRole, manageErrorMessage } from './MemberRoles.js';
 
-const roles = [
+const roles: Pick<WorkspaceRole, 'slug' | 'name' | 'builtin' | 'agent_template'>[] = [
   { slug: 'partnerships', name: 'Partnerships', builtin: true, agent_template: 'partnerships-agent' },
   { slug: 'finance', name: 'Finance', builtin: true, agent_template: 'finance-agent' },
   { slug: 'legal', name: 'Legal', builtin: true, agent_template: null },
