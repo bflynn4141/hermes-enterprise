@@ -174,8 +174,8 @@ test('run limits save explicitly and distinguish zero from no limit', async ({ p
   await recordMockRequests(page);
   await page.goto('/#admin/Agents');
   const app = page.getByRole('region', { name: 'Application' });
-  const daily = app.getByRole('spinbutton', { name: 'Daily token limit' });
-  const concurrent = app.getByRole('spinbutton', { name: 'Concurrent runs' });
+  const daily = app.getByRole('spinbutton', { name: 'Daily usage limit' });
+  const concurrent = app.getByRole('spinbutton', { name: 'Tasks at the same time' });
   await expect(daily).toBeVisible();
   await daily.fill('0');
   await concurrent.fill('3');

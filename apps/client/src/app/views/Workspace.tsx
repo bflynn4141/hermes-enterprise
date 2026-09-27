@@ -2851,7 +2851,10 @@ function privacyErasureLabel(value: string): string {
     'ids only; redaction tested': 'Holds no personal details',
     'account deletion': 'Removed when the account is deleted',
   };
-  return labels[value] ?? 'Removed on request';
+  const known = labels[value];
+  if (known) return known;
+  // Newer servers send plain words; anything that still looks like a code does not reach the screen.
+  return /[_:]/u.test(value) || !/\s/u.test(value) ? 'Removed on request' : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 /**

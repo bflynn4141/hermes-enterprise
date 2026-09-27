@@ -77,23 +77,22 @@ export const ERASURE_TIMING = {
   /** The honest headline: the later of the two. */
   complete_after_days: 30,
   copy:
-    'Erasure tombstones the rows immediately: the person’s text is gone from the product the moment you ' +
-    'ask, and the audit trail keeps only ids. The bytes take longer to disappear from the places that exist ' +
-    'so that we can recover from a failure. Point-in-time database history holds them for 7 days and the ' +
-    'nightly backup for 30, both on fixed expiry rules nobody here can shorten for one record. Erasure is ' +
-    'therefore complete 30 days after you ask, and we will not tell you otherwise.',
+    'When you erase someone, their words disappear from Hermes right away, and the record of what happened ' +
+    'keeps no personal details. Copies kept for recovering from an outage take longer to expire: the database ' +
+    'recovery history keeps them for 7 days and the nightly backup for 30. Those expiry dates are fixed and ' +
+    'nobody can shorten them for one person, so erasure is complete 30 days after you ask.',
 } as const;
 
 /** What the Workflows-state row of the inventory says. Plan section 6. */
 export const RETENTION_FACTS = [
-  { store: 'Requests, notes and documents', retention: 'until tombstoned', erasure: 'redact_subject' },
-  { store: 'Turns, messages and stream events', retention: '90 days', erasure: 'redact_subject plus subject_key search' },
-  { store: 'Uploads, extracted text and rendered documents', retention: 'until deleted', erasure: 'deleted by row' },
-  { store: 'Nightly backup copy', retention: '30 days', erasure: 'expires on the bucket lifecycle rule' },
-  { store: 'Workflow instance state', retention: '30 days after completion', erasure: 'ids only, by rule' },
-  { store: 'Database point-in-time history', retention: '7 days', erasure: 'expires' },
-  { store: 'Logs and error tracking', retention: '7 and 30 days', erasure: 'ids only; redaction tested' },
-  { store: 'Identity provider (WorkOS)', retention: 'authentication data only', erasure: 'account deletion' },
+  { store: 'Requests, notes and documents', retention: 'until erased', erasure: 'personal details removed' },
+  { store: 'Conversations and messages', retention: '90 days', erasure: 'personal details removed, including search' },
+  { store: 'Uploaded files and documents', retention: 'until deleted', erasure: 'deleted' },
+  { store: 'Nightly backup copy', retention: '30 days', erasure: 'expires automatically' },
+  { store: 'Records of finished agent work', retention: '30 days after it finishes', erasure: 'no personal details kept' },
+  { store: 'Database recovery history', retention: '7 days', erasure: 'expires automatically' },
+  { store: 'Logs and error reports', retention: '7 and 30 days', erasure: 'no personal details kept' },
+  { store: 'Sign-in provider (WorkOS)', retention: 'sign-in details only', erasure: 'account deleted' },
 ] as const;
 
 /**
@@ -612,19 +611,20 @@ export async function getDataPrivacy(c: Context<{ Bindings: Env }>): Promise<Res
     return {
       policy: [
         ...POLICY_FACTS,
-        { id: 'jurisdiction', label: 'Jurisdiction', value: jurisdiction },
+        // The value stays the code; the interface says it in words.
+        { id: 'jurisdiction', label: 'Data location', value: jurisdiction },
       ],
       keys,
       retention: RETENTION_FACTS,
       erasure: ERASURE_TIMING,
       /** Where personal data sits when it is not ours. Plan section 7. */
       residency: {
-        identity_provider: 'WorkOS, United States, under Standard Contractual Clauses',
-        database: 'the region this workspace’s Neon project was created in',
-        objects: 'the R2 bucket jurisdiction, set at creation and unchangeable',
+        identity_provider: 'Sign-in (WorkOS): United States, under Standard Contractual Clauses',
+        database: 'Database (Neon): the region chosen when this workspace was created',
+        objects: 'File storage (Cloudflare): the region chosen when storage was created, which cannot change',
         processing:
-          'Workers and Workflow steps run wherever the request lands. Workflow state, queues and logs have ' +
-          'no documented jurisdiction control; the pilot data-processing agreement states this.',
+          'Processing (Cloudflare) runs in the data center nearest each request. Some working data and logs ' +
+          'have no fixed region; the data-processing agreement says so.',
       },
     };
   });

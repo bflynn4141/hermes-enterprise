@@ -260,7 +260,7 @@ test.describe('members write feedback', () => {
     await expect(app.getByText('Agent setup started')).toBeVisible();
     const created = app.getByRole('listitem').filter({ hasText: 'partnerships.setup@example.com' });
     await expect(created.getByText('Setting up agent').first()).toBeVisible();
-    await expect(created.getByText('Hermes is preparing verified capacity in the background.')).toBeVisible();
+    await expect(created.getByText('Hermes is setting up their agent.')).toBeVisible();
     await expect(created.getByText('Partnerships', { exact: true })).toBeVisible();
     await expect(created.getByText('Invitation email waiting to send')).toHaveCount(0);
   });

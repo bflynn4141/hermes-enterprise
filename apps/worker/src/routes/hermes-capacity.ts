@@ -213,7 +213,7 @@ export async function registerHermesCapacity(c: Context<{ Bindings: Env }>): Pro
   const input = parsed.data;
   const url = new URL(input.connector_url);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
-    throw new RouteError('the connector URL must be a clean HTTPS URL', 'bad_capacity', 422);
+    throw new RouteError('Use the address exactly as Hermes Cloud shows it, starting with https://.', 'bad_capacity', 422);
   }
 
   const verified = await inWorkspace(c, async (work) => {

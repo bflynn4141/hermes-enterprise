@@ -75,7 +75,7 @@ export const hermesCapacityInputSchema = z.object({
   connector_url: z.url().max(2048).refine((raw) => {
     const url = new URL(raw);
     return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
-  }, 'Use a clean HTTPS URL without credentials, query parameters, or a fragment.'),
+  }, 'Use the address exactly as Hermes Cloud shows it, starting with https://.'),
   control_secret: z.string().min(24).max(500),
   preflight_agent_id: z.uuid(),
   discovery_grant_id: z.uuid(),
@@ -93,11 +93,11 @@ export function runtimeGrantStatusLabel(grant: Pick<RuntimeDiscoveryGrant, 'stat
     case 'prepared': return 'Prepared';
     case 'linked':
       switch (grant.capacity_state) {
-        case 'available': return 'Verified and available';
+        case 'available': return 'Ready';
         case 'reserved': return 'Reserved';
-        case 'assigning': return 'Assigning';
+        case 'assigning': return 'Being set up';
         case 'assigned': return 'Assigned';
-        case 'quarantined': return 'Quarantined';
+        case 'quarantined': return 'Paused for checks';
         default: return 'Linked';
       }
     case 'consumed': return 'Assigned';

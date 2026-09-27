@@ -95,7 +95,7 @@ export const EMPTY = {
    */
   noKey: 'Connect Nous Portal in Settings to start',
   /** Takes the provider's display name (`providerName`), never its slug (docs/DESIGN.md). */
-  keyRejected: (provider: string) => `Your ${provider} key was rejected. Re-verify or replace it in Admin`,
+  keyRejected: (provider: string) => `Your ${provider} key stopped working. Check or replace it in Admin → Model providers`,
   sessions: 'No sessions yet',
   sessionsArchived: 'No archived sessions',
   overview: (agent: string, automated = false) => automated
