@@ -120,8 +120,10 @@ describe('wrangler.jsonc', () => {
     expect((config.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('send_after_approval');
     for (const scope of Object.values(envs)) {
       expect((scope.vars as Record<string, string>).EMAIL_REPLY_MODE).toBe('draft_only');
-      expect((scope.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
     }
+    // Staging receives mail on its own subdomain; production has none yet.
+    expect((envs.staging!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBe('in.staging.hermes.brianflynn.dev');
+    expect((envs.production!.vars as Record<string, string>).EMAIL_INTAKE_DOMAIN).toBeUndefined();
   });
 
   it('keeps the first member-approved search bounded in every environment', () => {
@@ -158,10 +160,10 @@ describe('wrangler.jsonc', () => {
     const staging = envs.staging!.vars as Record<string, string>;
     const production = envs.production!.vars as Record<string, string>;
     expect(staging.HERMES_ENTERPRISE_PLUGIN_REVISION).toBe(
-      '6f2182db485a237e27954cef24e9f6880ed4c14b',
+      '25af3afc9d9671af88a994127f34f8e4be156b6e',
     );
     expect(staging.HERMES_ENTERPRISE_PLUGIN_SHA256).toBe(
-      'sha256:3900bcca172e1aa46165c2d3de2eec97785577098817cf4d2916070a9eaa5a18',
+      'sha256:9e20cc59d9506f10082c1727984acca8da1c4d11782a3396e92c38c7117101b7',
     );
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_REVISION');
     expect(production).not.toHaveProperty('HERMES_ENTERPRISE_PLUGIN_SHA256');
