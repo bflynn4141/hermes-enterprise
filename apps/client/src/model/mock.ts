@@ -149,6 +149,8 @@ interface MockOptions {
   memberInvitations?: 'legacy_delivery' | 'setup_only';
   /** Existing unfinished setup shown while the deployment is flag-off. */
   pausedMemberSetup?: boolean;
+  /** Setup-only invitations that also offer the Finance job, as with verified Finance capacity. */
+  memberSetupFinance?: boolean;
   /** Explicitly labeled connected Slack fixture for Settings browser coverage. */
   slack?: 'disconnected' | 'connected' | 'unconfigured' | 'unavailable';
   /** Explicitly labeled Gmail fixture for Settings browser coverage. */
@@ -1274,7 +1276,7 @@ export function createMockBackend(input: MockOptions = {}) {
         turn_attachments: Boolean(options.agentSettings),
         automated_triggers: false,
         member_invitations: setupOnly
-          ? { mode: 'setup_only' as const, role_templates: ['partnerships-agent' as const] }
+          ? { mode: 'setup_only' as const, role_templates: options.memberSetupFinance ? ['partnerships-agent' as const, 'finance-agent' as const] : ['partnerships-agent' as const] }
           : { mode: 'legacy_delivery' as const, role_templates: [] },
       },
       heads: { session: head.toString(), workspace: head.toString() },
@@ -1870,7 +1872,7 @@ export function createMockBackend(input: MockOptions = {}) {
       if (!setupOnly && body.role_template_key !== undefined) {
         return fail(409, 'member_setup_unavailable', 'Background member setup is not available in this deployment.');
       }
-      if (setupOnly && body.role_template_key === 'finance-agent') {
+      if (setupOnly && body.role_template_key === 'finance-agent' && !options.memberSetupFinance) {
         return fail(409, 'member_setup_role_unavailable', 'Finance agent setup is not available yet.');
       }
       if (options.memberWrites === 'fail') {
@@ -1894,7 +1896,7 @@ export function createMockBackend(input: MockOptions = {}) {
         role_slugs: requestedRoles,
         delivery_status: setupOnly ? 'not_required' : 'queued',
         ...(setupOnly ? {
-          role_template_key: 'partnerships-agent' as const,
+          role_template_key: body.role_template_key === 'finance-agent' ? 'finance-agent' as const : 'partnerships-agent' as const,
           provisioning: {
             id: mockUuid(320 + invitations.length), workspace_id: WS, revision: 0,
             preparation: 'queued' as const, delivery: 'not_queued' as const,

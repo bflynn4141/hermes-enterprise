@@ -216,3 +216,41 @@ test('an invitation with roles needs a recent sign-in; a plain one does not', as
   await invite.getByRole('button', { name: 'Send invitation' }).click();
   await expect(invite).toHaveCount(0);
 });
+
+test('the Invite dialog ticks the job’s own role and keeps the Admin’s ticks when the job changes', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?memberSetup=finance');
+  await page.getByRole('button', { name: 'Members', exact: true }).click();
+  await app(page).getByRole('button', { name: 'Invite member' }).click();
+  const invite = page.getByRole('dialog', { name: 'Invite member' });
+  const job = invite.getByRole('combobox', { name: 'Job role' });
+  const partnerships = invite.getByRole('checkbox', { name: 'Partnerships', exact: true });
+  const finance = invite.getByRole('checkbox', { name: 'Finance', exact: true });
+  const legal = invite.getByRole('checkbox', { name: 'Legal', exact: true });
+
+  // Partnerships is the first job, and its role comes with it.
+  await expect(partnerships).toBeChecked();
+  await expect(partnerships).toBeDisabled();
+  await expect(partnerships).toHaveAccessibleDescription('Comes with the Partnerships job');
+  await legal.check();
+
+  await job.selectOption({ label: 'Finance' });
+  await expect(finance).toBeChecked();
+  await expect(finance).toBeDisabled();
+  await expect(finance).toHaveAccessibleDescription('Comes with the Finance job');
+  await expect(partnerships).not.toBeChecked();
+  await expect(partnerships).toBeEnabled();
+  await expect(legal).toBeChecked();
+  await expect(invite.getByText(/^Can approve:/)).toContainText('Pay an approved invoice');
+
+  await job.selectOption({ label: 'Partnerships' });
+  await expect(partnerships).toBeChecked();
+  await expect(finance).not.toBeChecked();
+  await expect(finance).toBeEnabled();
+  await expect(legal).toBeChecked();
+  if (shots) await page.screenshot({ path: `${shots}/invite-job-role.png` });
+
+  await page.setViewportSize({ width: 430, height: 900 });
+  const overflow = await invite.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});

@@ -33,7 +33,7 @@ import { AdminDetailLayout, AdminSettingsCard } from './AdminDetailLayout.js';
 import { AdminAgents } from './AdminAgents.js';
 import { AdminRoles, roleNamesFor } from './AdminRoles.js';
 import { AdminApprovals } from './AdminApprovals.js';
-import { CanApprove, RoleChecklist, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
+import { CanApprove, RoleChecklist, jobLockedRole, knownRoleSlugs, manageErrorMessage, type ManageAction } from './MemberRoles.js';
 import { useStepUp } from './use-step-up.js';
 import { AdminRunLimits } from './AdminRunLimits.js';
 
@@ -209,6 +209,11 @@ export function Members() {
   const setupOnly = state.capabilities.memberInvitationMode === 'setup_only';
   const setupRoles = state.capabilities.memberRoleTemplates;
   const selectedJobRole = setupRoles.includes(jobRole) ? jobRole : setupRoles[0] ?? null;
+  // The job's role is granted when the person joins, whatever is ticked, so
+  // the checklist shows it ticked and fixed (C97). It follows the job picker;
+  // the Admin's own ticks stay in `inviteRoles` and survive a job change.
+  const jobRoleLock = jobLockedRole(roles, setupOnly ? selectedJobRole : 'partnerships-agent');
+  const inviteRoleSlugs = knownRoleSlugs(inviteRoles, roles).filter((slug) => slug !== jobRoleLock?.slug);
   const counts = memberCounts(state);
   const all = lists.members;
   // Withdrawn and accepted invitations are history, and History is where they
@@ -425,7 +430,9 @@ export function Members() {
                 onClick={() => {
                   setPending('invite');
                   setInviteProblem(null);
-                  const roleSlugs = knownRoleSlugs(inviteRoles, roles);
+                  // The job's own role is not sent: the job grants it, and sending
+                  // it would make every invitation look like one that grants roles.
+                  const roleSlugs = inviteRoleSlugs;
                   const request = {
                     email,
                     role: 'member' as const,
@@ -468,8 +475,8 @@ export function Members() {
             Finance appears here once a verified Finance instance is added under Admin → Agent capacity.
           </p>}
           {roles.length > 0 && <div className="member-approvals">
-            <RoleChecklist roles={roles} selected={inviteRoles} disabled={pending === 'invite'} onChange={setInviteRoles} />
-            <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: inviteRoles }} />
+            <RoleChecklist roles={roles} selected={inviteRoles} locked={jobRoleLock} disabled={pending === 'invite'} onChange={setInviteRoles} />
+            <CanApprove routes={routes} person={{ role: 'member', reviewer_roles: jobRoleLock ? [...inviteRoleSlugs, jobRoleLock.slug] : inviteRoleSlugs }} />
           </div>}
           {inviteProblem !== null && <p className="meta action-error" role="alert">
             {invitationFailureMessage(inviteProblem)}{' '}{needsSignIn(inviteProblem) && <Button link onClick={signIn}>Sign in again</Button>}
