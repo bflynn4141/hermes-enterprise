@@ -22,9 +22,16 @@
 import type { Tx } from '../db/client.js';
 import type { ApprovalListProjection, RequestKind, RequestTriage } from '@hermes/shared';
 import { loadApprovalListProjection } from './approvals.js';
-import { decisionSummary } from './request-summary.js';
+import { decisionSummary, type DecisionProgressSummary } from './request-summary.js';
 import { FINANCE_DECIDABLE_SQL } from './finance-decidable.js';
-import { decidableKinds, mayDecideRequest, type ApprovalViewer } from './approval-routing.js';
+import {
+  decidableKinds,
+  decisionConfirmersSql,
+  legacyDecisionState,
+  mayDecideRequest,
+  type ApprovalViewer,
+  type Confirmer,
+} from './approval-routing.js';
 import { requestAudiencePredicate } from './audience.js';
 
 export interface RequestRow {
@@ -37,6 +44,8 @@ export interface RequestRow {
   subject_key?: string | null;
   /** Whose agent prepared it: the owner of the request's session (decision C93). */
   requester_id?: string | null;
+  /** Who has approved it so far, with who they are now (C95). */
+  decision_confirmers?: Confirmer[] | null;
   session_id: string | null;
   run_id: string | null;
   created_at: Date;
@@ -64,6 +73,7 @@ export interface RequestRow {
 export const REQUEST_SELECT = `
   SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key,
          (SELECT requester.owner_id FROM sessions requester WHERE requester.id = r.session_id) AS requester_id,
+         CASE WHEN r.status = 'pending' THEN ${decisionConfirmersSql('r.id')} END AS decision_confirmers,
          r.session_id, r.run_id, r.created_at,
          EXTRACT(EPOCH FROM r.updated_at)::int AS version,
          (SELECT n.body FROM request_notes n
@@ -134,6 +144,21 @@ export function canDecideLegacyRequest(
 }
 
 /**
+ * The request as one viewer sees it in the Inbox: its entity, with whether it
+ * still needs them (not once they have approved it, C95), the band-aware
+ * label and the approvals so far.
+ */
+export function toViewerRequestEntity(
+  row: RequestRow,
+  approval: ApprovalListProjection | null,
+  triageActive: boolean,
+  viewer: ApprovalViewer,
+): Record<string, unknown> {
+  const state = legacyDecisionState(viewer, row);
+  return toRequestEntity(row, approval, triageActive, state.actionable, state.label, state.progress);
+}
+
+/**
  * Required work always wins over a user's older presentation preference. A
  * hide can be recorded while a request is waiting on somebody else; routing,
  * role, and sequential-step changes must still surface it when this viewer
@@ -169,9 +194,10 @@ export async function loadVisiblePendingRequests(
   viewer: ApprovalViewer,
 ): Promise<{ rows: PendingRequestRow[]; pendingForMe: number; pendingForOthers: number }> {
   const { userId, role, reviewerRoles } = viewer;
-  const pending = await tx.query<PendingRequestRow & Pick<RequestRow, 'subject_key' | 'requester_id'>>(
+  const pending = await tx.query<PendingRequestRow & Pick<RequestRow, 'subject_key' | 'requester_id' | 'decision_confirmers'>>(
     `SELECT r.id, r.kind, r.status, r.label, r.payload, r.subject_key,
             (SELECT requester.owner_id FROM sessions requester WHERE requester.id = r.session_id) AS requester_id,
+            ${decisionConfirmersSql('r.id')} AS decision_confirmers,
             (SELECT hidden_at FROM request_presentations presentation
               WHERE presentation.request_id=r.id AND presentation.user_id=$2) AS presentation_hidden_at
        FROM requests r
@@ -193,13 +219,14 @@ export async function loadVisiblePendingRequests(
   let pendingForMe = 0;
   let pendingForOthers = 0;
   for (const request of pending.rows) {
-    const canDecide = canDecideLegacyRequest(request, viewer);
+    // Once this viewer has approved, the rest is waiting on others (C95).
+    const canDecide = legacyDecisionState(viewer, request).actionable;
     const approval = request.kind === 'approval'
       ? await loadApprovalListProjection(tx, request.id, userId)
       : null;
     if (requestPresentationHidden(request, approval, canDecide)) continue;
     // The subject key decides authority here; it is not part of what bootstrap shows.
-    const { subject_key: _subjectKey, requester_id: _requesterId, ...visible } = request;
+    const { subject_key: _subjectKey, requester_id: _requesterId, decision_confirmers: _confirmers, ...visible } = request;
     rows.push(visible);
     if (request.kind === 'approval') {
       if (approval?.pending_for_viewer) pendingForMe += 1;
@@ -314,7 +341,14 @@ function triageOf(row: RequestRow, active: boolean, approval: ApprovalListProjec
   return result;
 }
 
-export function toRequestEntity(row: RequestRow, approval: ApprovalListProjection | null = null, triageActive = false, canDecideLegacy = false, reviewerLabel?: string): Record<string, unknown> {
+export function toRequestEntity(
+  row: RequestRow,
+  approval: ApprovalListProjection | null = null,
+  triageActive = false,
+  canDecideLegacy = false,
+  reviewerLabel?: string,
+  progress?: DecisionProgressSummary | null,
+): Record<string, unknown> {
   const payload = asRecord(row.payload);
   const subject = subjectOf(row);
   const title = titleOf(row);
@@ -338,7 +372,7 @@ export function toRequestEntity(row: RequestRow, approval: ApprovalListProjectio
     decided_at: row.decided_at ? row.decided_at.toISOString() : null,
     decided_by_name: row.decided_by_name,
     approval,
-    decision_summary: decisionSummary(row, approval, canDecideLegacy, reviewerLabel),
+    decision_summary: decisionSummary(row, approval, canDecideLegacy, reviewerLabel, progress),
     triage: triageOf(row, triageActive, approval),
     provenance: {
       kind: row.provenance_kind ?? 'unknown',

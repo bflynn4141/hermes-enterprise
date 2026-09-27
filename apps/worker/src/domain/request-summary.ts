@@ -105,7 +105,25 @@ function approvalSummary(row: RequestRow, approval: ApprovalListProjection): Req
   };
 }
 
-export function decisionSummary(row: RequestRow, approval: ApprovalListProjection | null, canDecideLegacy = false, reviewerLabel?: string): RequestDecisionSummary {
+/** The approvals a legacy request has so far and needs (C95). */
+export interface DecisionProgressSummary {
+  readonly required: number;
+  readonly recorded: number;
+  readonly covered: boolean;
+  readonly by_viewer?: boolean;
+}
+
+/**
+ * `canDecideLegacy` is whether the request still needs this viewer: they may
+ * decide it and have not already approved it.
+ */
+export function decisionSummary(
+  row: RequestRow,
+  approval: ApprovalListProjection | null,
+  canDecideLegacy = false,
+  reviewerLabel?: string,
+  progress?: DecisionProgressSummary | null,
+): RequestDecisionSummary {
   if (row.kind === 'approval' && approval) {
     const summary = approvalSummary(row, approval);
     if (summary) return summary;
@@ -115,14 +133,19 @@ export function decisionSummary(row: RequestRow, approval: ApprovalListProjectio
   // Callers that know the workspace's approval rules pass the label; the
   // fallback is the label before routing was configurable.
   const legacyReviewerLabel = reviewerLabel ?? (financeWorkflowRequest(row) ? 'Finance reviewer' : 'Workspace Admin');
+  const required = progress?.required ?? 1;
+  const recorded = progress?.recorded ?? 0;
+  // Enough people but not one from each group still leaves one approval to go.
+  const remaining = Math.max(required - recorded, progress && !progress.covered ? 1 : 0);
   const single = {
     mode: 'single' as const,
     completed_steps: row.status === 'pending' ? 0 : 1,
     total_steps: 1,
-    remaining_approvals: needsDecision ? 1 : 0,
-    current: needsDecision ? [{ label: legacyReviewerLabel, approvals_recorded: 0, quorum: 1 }] : [],
+    remaining_approvals: needsDecision ? remaining : 0,
+    current: needsDecision ? [{ label: legacyReviewerLabel, approvals_recorded: recorded, quorum: required }] : [],
     pending_for_viewer: needsDecision && canDecideLegacy,
     waiting_on_others: needsDecision && !canDecideLegacy,
+    ...(needsDecision && progress?.by_viewer ? { viewer_approved: true } : {}),
     expires_at: null,
   };
   if (row.kind === 'application') {

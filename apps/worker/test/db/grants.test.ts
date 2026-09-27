@@ -121,6 +121,9 @@ const AGENT_MUST_NOT: { table: string; privileges: Privilege[] }[] = [
   { table: 'member_provisioning_operations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'run_sweep_observations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'decisions', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
+  // 0074: an approval toward a multi-person decision is a human act (C95).
+  { table: 'decision_confirmations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { table: 'effect_confirmations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
   { table: 'effects', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'members', privileges: ['INSERT', 'UPDATE', 'DELETE'] },
   { table: 'invitations', privileges: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
@@ -248,6 +251,10 @@ describe('database grants', () => {
     }
     // The app records decisions; it is the only role that may.
     expect(actual.get('decisions')?.has('INSERT')).toBe(true);
+    // Confirmations toward a decision or an action are written once and never edited.
+    for (const table of ['decision_confirmations', 'effect_confirmations']) {
+      expect(actual.get(table)).toEqual(new Set(['SELECT', 'INSERT']));
+    }
   });
 
   it('grants PUBLIC nothing at all', async () => {

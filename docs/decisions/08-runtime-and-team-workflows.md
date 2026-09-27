@@ -1573,8 +1573,8 @@ their job role.
   `packages/shared/src/approval-routing.ts`; an Admin's changes are rows in
   `approval_route_rules` (migration 0073).
 - A rule names who may approve (Admins, and/or holders of workspace roles),
-  how many different people must (actions only; a decision is one person's
-  call in this version), and whether the person whose agent prepared the
+  how many different people must (actions only at first; decisions too since
+  C95), and whether the person whose agent prepared the
   request (decisions) or who approved it (actions) may do it themself.
 - The defaults are exactly what was enforced before, so nothing changes until
   an Admin edits a rule. Handoff requests still also go to the Finance person
@@ -1586,8 +1586,9 @@ their job role.
 - Invitations carry `role_slugs`, granted when the person joins, so an Admin
   sets what a new member can approve when inviting them. Editing a member's
   roles is the existing `PATCH /members/:id`.
-- The database refuses a rule nobody can meet, a multi-person decision, a
-  rule naming a role that does not exist, and deleting a role a rule names.
+- The database refuses a rule nobody can meet, a rule naming a role that
+  does not exist, and deleting a role a rule names. (It also refused a
+  multi-person decision until C95 lifted that.)
 
 **Why.** Brian asked for an approval routing screen and for approvals to be
 set when a member is added or edited. Roles (C92) are how people are grouped,
@@ -1607,3 +1608,100 @@ away from Admins, the requester rule, action authority, separation of approver
 and payer, confirmations counted against the current rule, a routed role that
 cannot be deleted, and invitation roles granted on joining. The full database
 suite (745 tests) passes.
+
+## C94. An invoice or payment can use a different rule above an amount
+
+**Decided September 26, 2026** (roles-and-agents plan, piece 3 follow-up).
+
+- The rules for approving an invoice draft and paying an approved invoice may
+  have a second band: "over 5,000.00 USD, Admins and Finance, one of each".
+  Only those two routes carry an amount (`amount: true` in the catalog); both
+  read the invoice request's `total_minor` and `currency`. Applications have no
+  amount, and an agreement's optional amount stays out of this round.
+- A band is a second `approval_route_rules` row, `band = 'over'`, with
+  `over_minor` and `over_currency` (migration 0074). The primary key is now
+  `(workspace_id, route_key, band)`. The base row never has an amount, and the
+  database refuses a band on any other route. `PUT /approval-routes/:key` takes
+  `threshold` (or `null`) beside the base rule and writes both in one
+  transaction; `DELETE` removes both. New refusal: `no_amount_for_route`.
+- "Over" is strictly greater than the threshold. An amount in another currency
+  takes the band, because without exchange rates the product cannot tell
+  whether it is over, so it fails closed. The Admin screen says so.
+- `effectiveRule` in `packages/shared/src/approval-routing.ts` is the only
+  place that picks the band. The decision route, the Inbox label and counts,
+  effect planning and effect execution all reach it through
+  `domain/approval-routing.ts`, and labels say which band applied:
+  "Legal (over 5,000.00 USD)", "Legal (amounts not in USD)".
+- Effects now describe who carries them out in the rule's words
+  (`approver_label`, for example "Admins or Finance") instead of a role slug,
+  and a stamped assignee who no longer passes the rule is not shown as the
+  person it waits on.
+
+**Why.** Brian's plan listed "over $5k" as the missing piece of approval
+routing. A second band covers the common case (larger amounts need more
+people) without a rules language, and keeping the comparison in one shared
+function means no two surfaces can disagree about which band applies.
+
+**Evidence.** `packages/shared/test/approval-routing.test.ts` covers the band
+choice, including the exact threshold and another currency.
+`test/db/approval-routes.test.ts` saves, reads and resets a band, refuses
+`no_amount_for_route`, `one_from_each_needs_groups` and a band naming an
+unknown role, keeps a role named only by the band from being deleted (route and
+database guard), and decides invoices over, at and under the threshold and in
+another currency with the right people and labels. `test/db/effects.test.ts`
+plans and executes a payment under the band and stops naming a stale assignee.
+
+## C95. A decision can need more than one person
+
+**Decided September 26, 2026.**
+
+- A decision rule may now need up to five different people, like an action.
+  `one_from_each` (decisions and actions) asks for at least one approver from
+  each group the rule names; Admins counts as a group. It needs two or more
+  people and two or more groups (`one_from_each_needs_groups`).
+- Each approval is a row in `decision_confirmations` (migration 0074; RLS,
+  `SELECT, INSERT` for `app`, nothing for `agent`). `recordDecision` inserts it
+  under the existing request-row lock, after the review-binding checks. While
+  too few eligible people have approved, or one from each group is missing, it
+  publishes `entity.updated` for the request and the route answers 202 with
+  `{ status: 'pending', confirmations }`; nothing is decided, planned or saved.
+  The press that completes the count records the decision exactly as a single
+  person's always was (`decided_by` is that press). With the default rules
+  (one person) the first press completes it, so every `decisions`, `effects`,
+  `events`, `documents` and `jobs` row is unchanged.
+- A second press by the same person changes nothing. A decline by any eligible
+  person closes the request at once, including from someone who approved first.
+- Approvals are counted against the rule and the people as they are now: a
+  confirmer counts only while they are an active member who still passes the
+  rule, can still read the request, and is not excluded by the requester rule.
+  The same live re-check now applies to payment confirmations
+  (`effect_confirmations`), which previously counted anyone who had once
+  pressed.
+- When an action's rule keeps "the person who approved the request" out, every
+  approver of a multi-person decision counts as having approved it.
+- `requireDecider` in `routes/decisions.ts` now asks `mayDecideRequest`
+  instead of repeating it, so the route and the Inbox cannot drift.
+- The Inbox shows "1 of 2 approvals recorded." and, after your own approval,
+  "You approved this. Waiting for one more person." in place of the buttons.
+  `approval_requirement` gains an optional `viewer_approved` so that state
+  survives a reload.
+- A governed Partnerships → Finance invoice still requires its named Finance
+  person to be part of the decision: they press, or their approval is one of
+  those that count.
+
+**Why.** "Decisions take one person" was the other gap left open by C93.
+Recording approvals beside the single `decisions` row, instead of turning
+legacy requests into typed approvals with votes, keeps invariant 1 intact (one
+guarded writer, one decision per request) and keeps the default behaviour
+byte-identical.
+
+**Evidence.** `test/db/decision-confirmations.test.ts` walks a two-person
+invoice through a first approval (202, no effects, the Inbox counts for both
+people), a repeated press, and the second person's decision; keeps the
+requester out; refuses completion with two Admins under one from each and
+completes with an Admin and Finance; closes on a decline; stops counting a
+confirmer who lost the role or left; and keeps both approvers out of a payment
+that excludes the approver. `test/db/effects.test.ts` stops counting a Finance
+confirmer who lost the role. The existing decision, handoff and approval-route
+suites pass unchanged apart from the rule's new field. The full database
+suite (759 tests) passes.

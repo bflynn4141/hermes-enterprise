@@ -26,6 +26,14 @@
 //
 // Then one transaction (src/domain/decisions.ts), then the jobs.
 //
+// ## More than one person (C95)
+//
+// When the rule for the request needs several people, an approval is first a
+// confirmation. Until enough eligible people have approved (one from each
+// group, if the rule asks), the answer is 202 with how many have, and nothing
+// is decided. The press that completes the count records the decision as a
+// single person's always did. A decline still closes the request at once.
+//
 // ## Two tabs
 //
 // `decisions.request_id` is UNIQUE and the request row is locked FOR UPDATE, so
@@ -40,7 +48,7 @@
 // in the client. The status code carries the same information and is the older
 // convention for it (docs/DECISIONS.md, D-3).
 import type { Context } from 'hono';
-import { decisionResultSchema, type Decision } from '@hermes/shared';
+import { decisionPendingSchema, decisionResultSchema, type Decision } from '@hermes/shared';
 import type { Env } from '../env.js';
 import { requireCsrf, requireOrigin, requireStepUp } from '../auth.js';
 import { inWorkspace, jsonBody, pathUuid, type TenantWork } from './tenant.js';
@@ -112,6 +120,14 @@ export async function createDecision(c: Context<{ Bindings: Env }>): Promise<Res
     requireStepUp(work.session);
     return recordDecision(work, requestId, decision, note, input);
   });
+
+  // More people must approve (C95): this press is recorded, nothing is decided.
+  if ('pending' in outcome) {
+    return c.json(decisionPendingSchema.parse({
+      status: 'pending',
+      confirmations: { required: outcome.required, recorded: outcome.recorded, by_viewer: true },
+    }), 202);
+  }
 
   const body = decisionResultSchema.parse({
     decision_id: outcome.decision_id,

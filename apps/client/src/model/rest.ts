@@ -108,7 +108,8 @@ import {
 } from '@hermes/shared';
 import {
   authSessionSchema,
-  decisionResultSchema,
+  decisionResponseSchema,
+  type DecisionPending,
   documentEntitySchema,
   eventRowSchema,
   contextFieldSchema,
@@ -387,7 +388,8 @@ export function createRest(options: RestOptions) {
     // here on purpose. A decision that silently did nothing is the one failure
     // this product cannot have, so a missing route surfaces as an error.
     decide: (workspaceId: string, requestId: string, body: { decision: 'approve' | 'decline'; note?: string; expected_version?: number; expected_payload_hash?: `sha256:${string}` }) =>
-      request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResultSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult>,
+      // 202 when the rule needs more people and this approval is one of them (C95).
+      request('POST', `${ws(workspaceId)}/requests/${requestId}/decisions`, decisionResponseSchema, body, { requestedFrom: 'inbox' }) as Promise<DecisionResult | DecisionPending>,
     getApproval: (workspaceId: string, requestId: string) =>
       request('GET', `${ws(workspaceId)}/requests/${requestId}/approval`, approvalViewSchema) as Promise<ApprovalView>,
     getApprovalEvidence: (workspaceId: string, requestId: string, evidenceId: string) =>

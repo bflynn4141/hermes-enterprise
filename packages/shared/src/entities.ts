@@ -11,6 +11,7 @@
 // its tests are the only producers, and they parse through the same schemas, so
 // a drift between mock and server is a test failure rather than a surprise.
 import { z } from 'zod';
+import { decisionPendingSchema } from './approval-routing.js';
 import { memberProvisioningOperationSchema, memberRoleTemplateSchema } from './member-provisioning.js';
 import { runErrorSchema, streamIdSchema, uuidSchema } from './events.js';
 import { blockSchema } from './commands.js';
@@ -198,6 +199,8 @@ export const requestDecisionSummarySchema = z.object({
     }).strict()).max(25),
     pending_for_viewer: z.boolean(),
     waiting_on_others: z.boolean(),
+    /** Legacy decisions that need several people (C95): this viewer already approved. Optional for rolling compatibility. */
+    viewer_approved: z.boolean().optional(),
     expires_at: z.iso.datetime({ offset: true }).nullable(),
   }).strict(),
 }).strict();
@@ -630,6 +633,9 @@ export const decisionResultSchema = z
   .object({ decision_id: uuidSchema, request_id: uuidSchema, resulting_status: requestStatusSchema, effect_ids: z.array(uuidSchema).max(20).default([]) })
   .strict();
 export type DecisionResult = z.infer<typeof decisionResultSchema>;
+
+/** What POST …/decisions answers: the decision (201/200), or 202 while more people must approve (C95). */
+export const decisionResponseSchema = z.union([decisionResultSchema, decisionPendingSchema]);
 
 /**
  * A session share is a bearer capability: possession of the URL is the whole

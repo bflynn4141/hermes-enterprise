@@ -153,6 +153,12 @@ function ApprovalRouteDetail({ route, roles, onSaved }: { route: ApprovalRoute; 
   };
   const finish = (next: ApprovalRoute, done: 'saved' | 'reset') => {
     onSaved(next);
+    // A rule applies to work already waiting, so pending requests this page
+    // has cached are read again with the new rule's label and counts.
+    for (const [id, record] of Object.entries(state.entities.request)) {
+      const cached = record.data as { status?: string; kind?: string } | null;
+      if (cached?.status === 'pending' && cached.kind !== 'approval') adapter.ensure('request', id, true);
+    }
     setRule(next.rule);
     setBandOn(next.threshold !== null);
     setAmount(next.threshold ? minorToAmount(next.threshold.over_minor) : '');

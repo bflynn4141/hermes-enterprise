@@ -20,6 +20,9 @@ the test is the thing to keep passing.
    and it does everything in one transaction. No other route, job, queue
    consumer, cron handler or tool may write `decisions` or move a request out of
    `pending`; a new path that does needs the same guards and its own tests.
+   When a rule needs several people (C95), each approval before the last is a
+   `decision_confirmations` row written by the same route under the same
+   guards; only the press that completes the count writes `decisions`.
 
 2. **The `agent` role never decides.** Three layers, and all three stay:
    * the database grants (`migrations/0004_grants.sql`, asserted by
