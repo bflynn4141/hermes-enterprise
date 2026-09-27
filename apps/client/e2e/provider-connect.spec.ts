@@ -29,7 +29,7 @@ test.describe('Nous Portal connection', () => {
     const portal = dialog.getByRole('link', { name: 'Continue with Nous' });
     await expect(portal).toHaveAttribute('href', 'https://portal.nousresearch.com/api-keys');
     await expect(portal).toHaveAttribute('target', '_blank');
-    await expect(dialog.getByText(/Hosted Nous sign-in is not enabled/)).toBeVisible();
+    await expect(dialog.getByText(/Signing in with Nous is not available/)).toBeVisible();
     await expect(dialog.getByText(/No Nous account access is granted to Hermes/)).toBeVisible();
 
     const key = dialog.getByLabel('Nous Portal API key');

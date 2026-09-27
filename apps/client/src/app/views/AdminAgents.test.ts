@@ -17,8 +17,8 @@ describe('Admin agent directory copy', () => {
     expect(runtimeLabel(ledger.runtime)).toBe('Hermes Cloud · hermes-pool-04');
     expect(runtimeLabel({ source: 'cloud_provisioned', label: 'iris-dana', state: 'setting_up' })).toBe('Hermes Cloud · iris-dana (setting up)');
     expect(runtimeLabel({ source: 'cloud_capacity', label: 'hermes-pool-05', state: 'failed' })).toBe('Hermes Cloud · hermes-pool-05 (needs attention)');
-    expect(runtimeLabel({ source: 'deployment', label: null, state: 'connected' })).toBe('Deployment runtime');
-    expect(runtimeLabel({ source: 'none', label: null, state: 'not_connected' })).toBe('No runtime yet');
+    expect(runtimeLabel({ source: 'deployment', label: null, state: 'connected' })).toBe('This deployment');
+    expect(runtimeLabel({ source: 'none', label: null, state: 'not_connected' })).toBe('Not set up yet');
   });
 
   it('names status and role in plain words', () => {
@@ -36,11 +36,13 @@ describe('configuring an agent', () => {
     expect(agentNameProblem('x'.repeat(81))).toBe('Use 80 characters or fewer.');
   });
 
-  it('turns each refusal into plain words, and keeps the server’s rebuild sentence', () => {
+  it('turns each refusal into plain words, never the server’s sentence', () => {
     expect(agentWriteMessage({ reason: 'reauth_required' }, 'this agent’s model')).toBe('Changing this agent’s model needs a recent sign-in.');
     expect(agentWriteMessage({ reason: 'one_active_skill' }, 'x')).toBe('Pause or remove the current skill first.');
     expect(agentWriteMessage({ reason: 'unknown_model' }, 'x')).toBe('That model isn’t available for this agent. Nothing was changed.');
-    expect(agentWriteMessage({ reason: 'runtime_rebuild_required', message: 'The runtime needs a rebuild first.' }, 'x')).toBe('The runtime needs a rebuild first.');
+    const rebuild = agentWriteMessage({ reason: 'runtime_rebuild_required', message: 'see docs/HERMES-AGENT-RUNTIME.md' } as { reason: string }, 'x');
+    expect(rebuild).toMatch(/set up again/);
+    expect(rebuild).not.toMatch(/docs\/|runtime/i);
     expect(agentWriteMessage({ reason: 'something_new' }, 'x')).toBe('Could not save. Nothing was changed. Try again.');
     expect(agentWriteMessage(null, 'x')).toBe('Could not save. Nothing was changed. Try again.');
   });

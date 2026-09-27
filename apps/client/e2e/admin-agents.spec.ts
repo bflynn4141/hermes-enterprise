@@ -42,9 +42,9 @@ test('an Admin sees every agent and governs a member agent without its conversat
   const skills = pane.getByRole('region', { name: 'Skills' });
   await skills.getByRole('button', { name: 'Configure' }).click();
   await skills.getByLabel('Status').selectOption('paused');
-  await skills.getByRole('button', { name: 'Save revision' }).click();
+  await skills.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(pane.getByText('Skill saved.')).toBeVisible();
-  await expect(skills.getByText('Finance · 1.0.1 · Paused')).toBeVisible();
+  await expect(skills.getByText('Finance · Paused')).toBeVisible();
   if (shots) await page.screenshot({ path: `${shots}/admin-agents-detail.png`, fullPage: true });
 
   await pane.getByRole('button', { name: '← All agents' }).click();
@@ -118,7 +118,7 @@ test('an Admin removes and assigns a catalog skill on an agent without a runtime
   if (shots) await page.screenshot({ path: `${shots}/admin-agents-skills.png`, fullPage: true });
 
   await pane.getByRole('button', { name: '← All agents' }).click();
-  await expect(pane.getByRole('list', { name: 'Agents' }).getByRole('button', { name: /^Scout/ })).toContainText('Partner program screening · No runtime yet');
+  await expect(pane.getByRole('list', { name: 'Agents' }).getByRole('button', { name: /^Scout/ })).toContainText('Partner program screening · Not set up yet');
 });
 
 test('an agent whose runtime attests its skill says it needs a rebuild and offers no retry', async ({ page }) => {

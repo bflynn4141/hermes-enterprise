@@ -5,7 +5,6 @@ import { RestError } from '../../model/rest.js';
 import {
   hermesCapacityInputSchema,
   runtimeDiscoveryGrantInputSchema,
-  runtimeGrantStatusLabel,
   type HermesCapacity,
   type RuntimeCapacityRole,
   type RuntimeDiscoveryGrant,
@@ -21,7 +20,7 @@ function roleProfile(role: RuntimeCapacityRole): {
 } {
   return role === 'finance-agent'
     ? { label: 'Finance', skillKey: 'partner-invoice-review', skillVersion: '1.0.1' }
-    : { label: 'Partnerships P1.7', skillKey: 'partner-program-screening', skillVersion: '1.7.0' };
+    : { label: 'Partnerships', skillKey: 'partner-program-screening', skillVersion: '1.7.0' };
 }
 
 function displayDate(value: string | null): string {
@@ -35,37 +34,67 @@ function displayDate(value: string | null): string {
   });
 }
 
-function withReference(message: string, error: RestError): string {
-  return error.traceId ? `${message} Reference: ${error.traceId}.` : message;
-}
-
+/**
+ * Server reason codes, in words an Admin can act on. Trace ids stay in the
+ * error for support and logs; they are not rendered (docs/DESIGN.md).
+ */
 export function runtimeCapacityErrorMessage(error: unknown, action: 'load' | 'prepare' | 'register' | 'revoke'): string {
-  if (!(error instanceof RestError)) return 'Hermes capacity could not be updated. Try again.';
+  if (!(error instanceof RestError)) return 'That did not work. Nothing changed. Try again.';
   const known: Record<string, string> = {
-    admin_required: 'Only a workspace Admin can manage Hermes capacity.',
-    bad_discovery_grant: 'Enter the permanent Enterprise Agent UUID from the reviewed setup.',
-    discovery_profile_assigned: 'That Agent UUID already belongs to a runtime. Use a new permanent identity.',
-    discovery_grant_exists: 'That profile already has an active discovery credential. Revoke it before rotating.',
-    discovery_profile_mismatch: 'That Agent UUID does not have the reviewed role profile.',
-    discovery_profile_changed: 'The reviewed role profile changed. Revoke this credential and prepare another.',
-    discovery_grant_unavailable: 'That discovery credential is no longer available. Prepare another.',
-    discovery_grant_reserved: 'Withdraw the invitation using this profile before revoking its credential.',
-    discovery_grant_consumed: 'This runtime is already assigned. Rotate its credential from the runtime.',
-    discovery_grant_linked: 'This linked profile must be retired through its current lifecycle.',
-    bad_capacity: 'Check every field. The connector must be a clean HTTPS URL and the control secret must be complete.',
-    capacity_not_ready: 'The connector did not prove the required Cloud and Enterprise readiness. Check the instance and try again.',
-    capacity_exists: 'That Cloud instance is already registered.',
-    not_found: 'That discovery credential no longer exists.',
+    admin_required: 'Only a workspace Admin can add agents.',
+    bad_discovery_grant: 'Enter the agent ID from Hermes Cloud.',
+    discovery_profile_assigned: 'That agent is already in use. Use a new agent.',
+    discovery_grant_exists: 'That agent already has a setup code. Remove it before creating another.',
+    discovery_profile_mismatch: 'That agent is set up for a different job role.',
+    discovery_profile_changed: 'The job role changed after this code was made. Remove it and create another.',
+    discovery_grant_unavailable: 'That setup code can no longer be used. Create another.',
+    discovery_grant_reserved: 'Withdraw the invitation that is using this agent before removing it.',
+    discovery_grant_consumed: 'This agent is already in use by a member.',
+    discovery_grant_linked: 'This agent is in use, so it cannot be removed here.',
+    bad_capacity: 'Check every field. The address must start with https:// and the secret must be complete.',
+    capacity_not_ready: 'The agent did not pass Hermes’s checks. Check it in Hermes Cloud and try again.',
+    capacity_exists: 'That agent is already added.',
+    not_found: 'That setup code no longer exists.',
     csrf_failed: 'Refresh this page and try again.',
   };
   const fallback = action === 'load'
-    ? 'Hermes capacity could not be loaded. Try again.'
+    ? 'Agent capacity could not be loaded. Try again.'
     : action === 'prepare'
-      ? 'The discovery credential could not be prepared. Try again.'
+      ? 'The setup code could not be created. Try again.'
       : action === 'register'
-        ? 'The Cloud instance could not be verified and added. Try again.'
-        : 'The discovery credential could not be revoked. Try again.';
-  return withReference(known[error.reason] ?? fallback, error);
+        ? 'The agent could not be checked and added. Try again.'
+        : 'That could not be removed. Try again.';
+  return known[error.reason] ?? fallback;
+}
+
+/** A setup code's state, in plain words. */
+function grantStateLabel(grant: RuntimeDiscoveryGrant): string {
+  switch (grant.status) {
+    case 'prepared': return 'Waiting for the agent';
+    case 'linked':
+      switch (grant.capacity_state) {
+        case 'available': return 'Ready for a new member';
+        case 'reserved': return 'Set aside for an invitation';
+        case 'assigning': return 'Being given to a member';
+        case 'assigned': return 'In use';
+        case 'quarantined': return 'Taken out of use';
+        default: return 'Connected';
+      }
+    case 'consumed': return 'In use';
+    case 'revoked': return 'Removed';
+    case 'expired': return 'Expired';
+  }
+}
+
+/** Which field a form check failed on, as a sentence; never the schema's own message. */
+function registrationFieldMessage(field: unknown): string {
+  switch (field) {
+    case 'connector_url': return 'Enter the https:// address Hermes Cloud gave you, with nothing after the path.';
+    case 'control_secret': return 'Enter the complete connection secret.';
+    case 'cloud_agent_id': return 'Enter the Cloud agent ID.';
+    case 'instance_name': return 'Give this agent a name.';
+    default: return 'Check every field.';
+  }
 }
 
 function canRevoke(grant: RuntimeDiscoveryGrant): boolean {
@@ -144,7 +173,7 @@ export function RuntimeCapacityTab() {
       role_template_key: roleTemplateKey,
     });
     if (!input.success) {
-      setError('Enter a valid permanent Agent UUID.');
+      setError('Enter the agent ID from Hermes Cloud. It is a long code with dashes.');
       return;
     }
     setBusy('prepare');
@@ -172,7 +201,7 @@ export function RuntimeCapacityTab() {
         expires_at: created.expires_at,
         created_at: created.created_at,
       }, ...(current ?? []).filter((grant) => grant.id !== created.id)]);
-      setNotice('Discovery credential prepared. Copy it into Cloud now; Hermes will not show it again.');
+      setNotice('Setup code created. Copy it into Hermes Cloud now; Hermes will not show it again.');
     } catch (caught) {
       if (caught instanceof RestError && caught.reauthRequired) stepUp();
       else setError(runtimeCapacityErrorMessage(caught, 'prepare'));
@@ -198,7 +227,7 @@ export function RuntimeCapacityTab() {
     setNotice(null);
     setError(null);
     if (!selectedGrant) {
-      setError('Prepare and select a discovery credential first.');
+      setError('Create a setup code first.');
       return;
     }
     const input = hermesCapacityInputSchema.safeParse({
@@ -210,7 +239,7 @@ export function RuntimeCapacityTab() {
       discovery_grant_id: selectedGrant.id,
     });
     if (!input.success) {
-      setError(input.error.issues[0]?.message ?? 'Check every registration field.');
+      setError(registrationFieldMessage(input.error.issues[0]?.path[0]));
       return;
     }
     setBusy('register');
@@ -227,7 +256,7 @@ export function RuntimeCapacityTab() {
         expires_at: null,
       } : grant) ?? []);
       setSelectedGrantId('');
-      setNotice(`${capacity.instance_name} passed live readiness checks and is available for assignment.`);
+      setNotice(`${capacity.instance_name} passed every check and is ready for a new member.`);
     } catch (caught) {
       if (caught instanceof RestError && caught.reauthRequired) stepUp();
       else setError(runtimeCapacityErrorMessage(caught, 'register'));
@@ -252,7 +281,7 @@ export function RuntimeCapacityTab() {
         status: 'revoked',
         capacity_state: grant.linked_capacity_id ? 'quarantined' : grant.capacity_state,
       } : grant) ?? []);
-      setNotice('Discovery credential revoked.');
+      setNotice('Removed.');
     } catch (caught) {
       if (caught instanceof RestError && caught.reauthRequired) stepUp();
       else setError(runtimeCapacityErrorMessage(caught, 'revoke'));
@@ -262,16 +291,16 @@ export function RuntimeCapacityTab() {
   };
 
   if (!admin) {
-    return <EmptyState icon="context" title="Admin decision required" detail="Only a workspace Admin can prepare credentials or register Hermes Cloud capacity." />;
+    return <EmptyState icon="context" title="Admin decision required" detail="Only a workspace Admin can add agents." />;
   }
-  if (!grants) return <Skeleton rows={7} label="Loading Hermes capacity" />;
+  if (!grants) return <Skeleton rows={7} label="Loading agent capacity" />;
 
   return (
     <div className="runtime-capacity">
       <header className="runtime-capacity-heading">
         <div>
-          <h2>Hermes capacity</h2>
-          <p>Prepare one discovery credential, configure the permanent Enterprise Agent UUID on the native runtime, then verify its connector before making it available.</p>
+          <h2>Agent capacity</h2>
+          <p>Add a Hermes Cloud agent so a new member can be given one. Create a one-time setup code for the agent, then connect it and let Hermes check it.</p>
         </div>
       </header>
 
@@ -282,54 +311,54 @@ export function RuntimeCapacityTab() {
         <header>
           <span className="runtime-step-number" aria-hidden="true">1</span>
           <div>
-            <h3 id="runtime-prepare-heading">Prepare discovery</h3>
-            <p>Use a new permanent identity. Existing agent identities are rejected to protect their current runtime binding.</p>
+            <h3 id="runtime-prepare-heading">Create a setup code</h3>
+            <p>Use a new agent. An agent that is already in use cannot be added again.</p>
           </div>
         </header>
         <form className="runtime-capacity-form" autoComplete="off" onSubmit={(event) => void prepare(event)}>
           <label className="runtime-capacity-field runtime-capacity-wide">
-            <span>Profile role</span>
+            <span>Job role</span>
             <select
               value={roleTemplateKey}
               onChange={(event) => setRoleTemplateKey(event.target.value as RuntimeCapacityRole)}
               disabled={busy !== null}
             >
-              <option value="partnerships-agent">Partnerships P1.7</option>
+              <option value="partnerships-agent">Partnerships</option>
               <option value="finance-agent">Finance</option>
             </select>
-            <small>The credential is bound to this exact reviewed role profile.</small>
+            <small>The setup code only works for this job role.</small>
           </label>
           <label className="runtime-capacity-field runtime-capacity-wide">
-            <span>Permanent Agent UUID</span>
+            <span>Agent ID</span>
             <input
               value={preflightAgentId}
               onChange={(event) => setPreflightAgentId(event.target.value.trim())}
-              placeholder="00000000-0000-4000-8000-000000000000"
+              placeholder="Paste the agent ID"
               inputMode="text"
               spellCheck={false}
               autoCapitalize="none"
               disabled={busy !== null}
             />
-            <small>This is the Enterprise identity configured on the native runtime. It stays fixed for the agent.</small>
+            <small>The permanent ID this agent was given in Hermes Cloud.</small>
           </label>
           <footer>
-            <span>Credentials expire after 24 hours until they are linked to verified capacity.</span>
+            <span>A setup code expires after 24 hours unless its agent is connected.</span>
             <Button primary type="submit" disabled={busy !== null || preflightAgentId.length === 0}>
-              {busy === 'prepare' ? 'Preparing…' : 'Prepare credential'}
+              {busy === 'prepare' ? 'Creating…' : 'Create setup code'}
             </Button>
           </footer>
         </form>
 
         {createdCredential && (
-          <div className="runtime-secret" role="group" aria-label="New discovery credential">
+          <div className="runtime-secret" role="group" aria-label="New setup code">
             <div>
-              <strong>Discovery credential</strong>
-              <span>Shown once. Copy it into Cloud, then hide it from this screen.</span>
+              <strong>Setup code</strong>
+              <span>Shown once. Copy it into Hermes Cloud, then hide it.</span>
             </div>
             <code>{createdCredential.bearer}</code>
             <div className="runtime-secret-actions">
-              <Button small onClick={() => void copyCredential()}>{copyFailed ? 'Copy failed · try again' : 'Copy credential'}</Button>
-              <Button small quiet onClick={() => setCreatedCredential(null)}>Hide credential</Button>
+              <Button small onClick={() => void copyCredential()}>{copyFailed ? 'Copy failed · try again' : 'Copy setup code'}</Button>
+              <Button small quiet onClick={() => setCreatedCredential(null)}>Hide setup code</Button>
               <Ack show={copied}>Copied</Ack>
             </div>
           </div>
@@ -340,53 +369,49 @@ export function RuntimeCapacityTab() {
         <header>
           <span className="runtime-step-number" aria-hidden="true">2</span>
           <div>
-            <h3 id="runtime-register-heading">Verify and add capacity</h3>
-            <p>Hermes contacts the connector and checks the live runtime, exact plugin build, permanent identity, tools, and provider before saving it.</p>
+            <h3 id="runtime-register-heading">Connect and check the agent</h3>
+            <p>Hermes contacts the agent and checks its version, its ID, its tools and its model provider before adding it.</p>
           </div>
         </header>
         <form className="runtime-capacity-form" autoComplete="off" onSubmit={(event) => void register(event)}>
           <div className="runtime-capacity-grid">
             <label className="runtime-capacity-field">
-              <span>Discovery grant</span>
+              <span>Setup code</span>
               <select value={selectedGrantId} onChange={(event) => setSelectedGrantId(event.target.value)} disabled={busy !== null || preparedGrants.length === 0}>
-                {preparedGrants.length === 0 && <option value="">Prepare a credential first</option>}
-                {preparedGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.id}</option>)}
+                {preparedGrants.length === 0 && <option value="">Create a setup code first</option>}
+                {preparedGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.role} · created {displayDate(grant.created_at)}</option>)}
               </select>
-            </label>
-            <label className="runtime-capacity-field">
-              <span>Permanent Agent UUID</span>
-              <input value={selectedGrant?.preflight_agent_id ?? ''} readOnly aria-readonly="true" />
             </label>
             <label className="runtime-capacity-field">
               <span>Cloud agent ID</span>
               <input value={cloudAgentId} onChange={(event) => setCloudAgentId(event.target.value)} maxLength={200} autoCapitalize="none" spellCheck={false} disabled={busy !== null} />
             </label>
             <label className="runtime-capacity-field">
-              <span>Instance name</span>
+              <span>Name for this agent</span>
               <input value={instanceName} onChange={(event) => setInstanceName(event.target.value)} maxLength={120} disabled={busy !== null} />
             </label>
             <label className="runtime-capacity-field runtime-capacity-wide">
-              <span>Connector HTTPS URL</span>
+              <span>Connection address</span>
               <input type="url" value={connectorUrl} onChange={(event) => setConnectorUrl(event.target.value.trim())} placeholder="https://connector.example.com" autoCapitalize="none" spellCheck={false} disabled={busy !== null} />
-              <small>No credentials, query parameters, or fragment.</small>
+              <small>The https:// address Hermes Cloud gave you for this agent.</small>
             </label>
             <label className="runtime-capacity-field runtime-capacity-wide">
-              <span>Connector control secret</span>
+              <span>Connection secret</span>
               <input type="password" value={controlSecret} onChange={(event) => setControlSecret(event.target.value)} minLength={24} maxLength={500} autoComplete="new-password" spellCheck={false} disabled={busy !== null} />
-              <small>Use the separate control secret from Cloud. It is cleared from this form as soon as verification succeeds.</small>
+              <small>The secret Hermes Cloud gave you with the address. Hermes clears it from this form once the check passes.</small>
             </label>
           </div>
           <footer>
-            <span>The instance is saved only after the live readiness proof succeeds.</span>
+            <span>Hermes adds the agent only if every check passes.</span>
             <Button primary type="submit" disabled={busy !== null || !selectedGrant}>
-              {busy === 'register' ? 'Verifying…' : 'Verify and add'}
+              {busy === 'register' ? 'Checking…' : 'Check and add'}
             </Button>
           </footer>
         </form>
         {registered && (
           <div className="runtime-capacity-result">
             <strong>{registered.instance_name}</strong>
-            <span>Available · plugin {registered.plugin_version}</span>
+            <span>Ready for a new member</span>
           </div>
         )}
       </section>
@@ -394,28 +419,27 @@ export function RuntimeCapacityTab() {
       <section className="runtime-grants" aria-labelledby="runtime-grants-heading">
         <div className="runtime-grants-title">
           <div>
-            <h3 id="runtime-grants-heading">Discovery credentials</h3>
-            <p>Only prepared credentials and linked, available capacity can be revoked here.</p>
+            <h3 id="runtime-grants-heading">Setup codes and agents</h3>
+            <p>You can remove an unused setup code, or an agent nobody has been given yet.</p>
           </div>
           <Button small onClick={() => void load()} disabled={busy !== null}>Refresh</Button>
         </div>
         {grants.length === 0 ? (
-          <p className="runtime-grants-empty">No discovery credentials yet.</p>
+          <p className="runtime-grants-empty">No setup codes yet.</p>
         ) : grants.map((grant) => (
           <article className="runtime-grant-row" key={grant.id}>
             <div className="runtime-grant-main">
               <div className="runtime-grant-state">
                 <strong>{grant.role}</strong>
                 <span className={`pill ${statusPillClass(grant)}`}>
-                  {runtimeGrantStatusLabel(grant)}
+                  {grantStateLabel(grant)}
                 </span>
               </div>
-              <code>{grant.preflight_agent_id}</code>
-              <span className="meta">Created {displayDate(grant.created_at)} · {grant.capacity_state ? `Cloud state: ${grant.capacity_state}` : `Expires ${displayDate(grant.expires_at)}`}</span>
+              <span className="meta">Created {displayDate(grant.created_at)}{grant.status === 'prepared' ? ` · Expires ${displayDate(grant.expires_at)}` : ''}</span>
             </div>
             {canRevoke(grant) && (
               <Button small disabled={busy !== null} onClick={() => setRevokeTarget(grant)}>
-                {busy === `revoke:${grant.id}` ? 'Revoking…' : 'Revoke'}
+                {busy === `revoke:${grant.id}` ? 'Removing…' : 'Remove'}
               </Button>
             )}
           </article>
@@ -424,17 +448,17 @@ export function RuntimeCapacityTab() {
 
       <Dialog
         open={revokeTarget !== null}
-        title="Revoke discovery credential?"
+        title={revokeTarget?.status === 'linked' ? 'Remove this agent?' : 'Remove this setup code?'}
         onClose={() => busy === null && setRevokeTarget(null)}
         actions={(
           <>
             <Button onClick={() => setRevokeTarget(null)} disabled={busy !== null}>Cancel</Button>
-            <Button primary onClick={() => void revoke()} disabled={busy !== null}>{busy?.startsWith('revoke:') ? 'Revoking…' : 'Revoke'}</Button>
+            <Button primary onClick={() => void revoke()} disabled={busy !== null}>{busy?.startsWith('revoke:') ? 'Removing…' : 'Remove'}</Button>
           </>
         )}
       >
-        <p>This credential stops working immediately. Linked, available capacity will be quarantined and cannot be assigned.</p>
-        {revokeTarget && <code className="runtime-dialog-id">{revokeTarget.preflight_agent_id}</code>}
+        <p>The setup code stops working immediately. If an agent is already connected with it, the agent is taken out of use and cannot be given to anyone.</p>
+        {revokeTarget && <p className="meta">{revokeTarget.role} · created {displayDate(revokeTarget.created_at)}</p>}
       </Dialog>
     </div>
   );
